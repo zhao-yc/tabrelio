@@ -21,6 +21,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.searchPath.read': true, 'postgres.searchPath.apply': true,
   'postgres.queryTimeouts.read': true, 'postgres.queryTimeouts.apply': true,
   'postgres.analyzePreview': true, 'postgres.analyze': true, 'postgres.analyzeDiscard': true,
+  'postgres.schemaManage.read': true, 'postgres.schemaManage.preview': true, 'postgres.schemaManage.apply': true,
   'postgres.createTable.schemas': true, 'postgres.createTable.preview': true, 'postgres.createTable.apply': true,
   'postgres.createTable.copy.preview': true, 'postgres.createTable.copy.apply': true,
   'postgres.createView.preview': true, 'postgres.createView.apply': true,

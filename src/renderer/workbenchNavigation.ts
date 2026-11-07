@@ -1,3 +1,4 @@
+import { postgresIdentifier } from '../shared/postgresSql';
 import { openSqliteObject } from './sqliteNavigation';
 import { tableRenameZh } from './locales/tableRename.zh-CN';
 import type { TableRenameTarget } from '../shared/tableRename';
@@ -23,8 +24,15 @@ export function createWorkbenchNavigation(openDefinition: (target: WorkbenchDefi
   const objectKey = (target: { connectionId: string; database: string; kind: string; name?: string }, exact = false) =>
     JSON.stringify([target.connectionId, target.database, target.kind, exact ? target.name : target.name?.replace(/[A-Z]/g, character => character.toLowerCase())]);
   const retiredDatabases = new Set<string>();
+  const retiredPostgresSchemas = new Map<string, Set<string>>();
   const names = new Map<string, { identity?: string; retired: boolean; ambiguous: boolean }>(), key = (target: TableRenameTarget) => JSON.stringify([target.connectionId, target.database, target.table]);
-  const blocked = (target: WorkbenchTarget) => retiredObjects.has(objectKey(target)) || retiredExactObjects.has(objectKey(target, true)) || retiredDatabases.has(JSON.stringify([target.connectionId, target.database])) || target.kind === 'table' && names.get(key({ connectionId: target.connectionId, database: target.database, table: target.name }))?.retired;
+  const blocked = (target: WorkbenchTarget) => {
+    const database = JSON.stringify([target.connectionId, target.database]);
+    const retiredSchema = target.kind !== 'database' &&
+      [...(retiredPostgresSchemas.get(database) ?? [])].some(prefix => target.name.startsWith(prefix));
+    return retiredSchema || retiredObjects.has(objectKey(target)) || retiredExactObjects.has(objectKey(target, true)) ||
+      retiredDatabases.has(database) || target.kind === 'table' && names.get(key({ connectionId: target.connectionId, database: target.database, table: target.name }))?.retired;
+  };
   /** 保留整个窗口已知的名称身份历史；不同物理表占用过同名时不能靠新一次完成回执抹掉旧URI歧义。 */
   function remember(target: TableRenameTarget, identity: string | undefined, retired: boolean): boolean {
     const id = key(target), previous = names.get(id);
@@ -69,6 +77,14 @@ export function createWorkbenchNavigation(openDefinition: (target: WorkbenchDefi
     },
     /** 整库删除后所有旧种类链接退役；同名重建不能自动继承原收藏或迟到解析的身份。 */
     retireDatabase(target: { connectionId: string; database: string }): void { retiredDatabases.add(JSON.stringify([target.connectionId, target.database])); generation++; },
+    /** Schema 原名下的关系、例程和序列链接在本窗口中一起退役。 */
+    retirePostgresSchema(target: { connectionId: string; database: string; schema: string }): void {
+      const id = JSON.stringify([target.connectionId, target.database]);
+      const retired = retiredPostgresSchemas.get(id) ?? new Set<string>();
+      retired.add(postgresIdentifier(target.schema) + '.');
+      retiredPostgresSchemas.set(id, retired);
+      generation++;
+    },
     /** 仅在完整核验后调用：同一物理身份可重新认可往返名称，未知或不同身份的名称链接继续停用。 */
     completeTableRename(before: TableRenameTarget, after: TableRenameTarget, physicalIdentity: string): boolean {
       generation++;

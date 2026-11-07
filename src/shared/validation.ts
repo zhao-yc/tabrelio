@@ -1,3 +1,4 @@
+import { postgresSchemaReadSchema, postgresSchemaPreviewSchema, postgresSchemaApplySchema } from './postgresSchemaManage';
 import { importBatchChooseSchema, importBatchInvalid, importBatchReleaseSchema, importBatchSchema, validImportBatch } from './fileImportBatch';
 import { importRecordRangeSchema } from './importRecordRange';
 import { excelImportOptionsSchema, excelImportZh, excelRowRangeMessage, excelRowRangeShape, validExcelImport, validExcelRowRange } from './excelTransfer';
@@ -276,6 +277,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableLayout.get': sqliteLayoutTargetSchema, 'sqlite.tableLayout.save': sqliteLayoutSaveSchema, 'sqlite.tableLayout.reset': sqliteLayoutResetSchema,
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
   'postgres.completion': postgresCompletionSchema,
+  'postgres.schemaManage.read': postgresSchemaReadSchema,
+  'postgres.schemaManage.preview': postgresSchemaPreviewSchema,
+  'postgres.schemaManage.apply': postgresSchemaApplySchema,
   'postgres.createTable.schemas': postgresCreateTableSchemasSchema,
   'postgres.createTable.preview': postgresCreateTablePreviewSchema,
   'postgres.createTable.apply': postgresCreateTableApplySchema,

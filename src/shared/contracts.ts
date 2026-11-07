@@ -292,6 +292,9 @@ export interface CommandMap {
   'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetQuery };
   'postgres.completion': { input: import('./postgresCompletion').PostgresCompletionInput; output: import('./postgresCompletion').PostgresCompletionResult };
+  'postgres.schemaManage.read': { input: import('./postgresCreateTable').PostgresCreateTableTarget; output: import('./postgresSchemaManage').PostgresSchemaCatalog };
+  'postgres.schemaManage.preview': { input: import('./postgresSchemaManage').PostgresSchemaPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
+  'postgres.schemaManage.apply': { input: import('zod').infer<typeof import('./postgresSchemaManage').postgresSchemaApplySchema>; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.createTable.schemas': { input: import('./postgresCreateTable').PostgresCreateTableTarget; output: string[] };
   'postgres.createTable.preview': { input: import('./postgresCreateTable').PostgresCreateTableInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.createTable.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

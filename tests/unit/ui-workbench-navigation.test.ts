@@ -154,6 +154,22 @@ describe('收藏与链接的最新显式导航意图', () => {
     request.mockResolvedValueOnce(different);
     await expect(navigation.open(different)).resolves.toBe(true);
   });
+  it('PostgreSQL Schema 改名只退役原库精确命名空间及其迟到导航', async () => {
+    const source = { connectionId: 'c', database: 'pg', kind: 'table', name: '"业务""区"."Report"' } as const;
+    const waiting = pending();
+    request.mockReturnValueOnce(waiting.promise);
+    const opening = navigation.open(source);
+    navigation.retirePostgresSchema({ connectionId: 'c', database: 'pg', schema: '业务"区' });
+    waiting.resolve(source);
+    expect(await opening).toBe(false);
+    await expect(navigation.open({ ...source, kind: 'function', name: '"业务""区"."report"(text)' })).rejects.toThrow('旧对象链接');
+    const unrelated = { ...source, name: '"业务""区2"."Report"' };
+    request.mockResolvedValueOnce(unrelated);
+    await expect(navigation.open(unrelated)).resolves.toBe(true);
+    const otherDatabase = { ...source, database: 'another' };
+    request.mockResolvedValueOnce(otherDatabase);
+    await expect(navigation.open(otherDatabase)).resolves.toBe(true);
+  });
   it('触发器删除退役准确种类，解析替换为已退役目标也在投影前拒绝', async () => {
     const trigger = { connectionId: 'c', database: 'main', kind: 'trigger', name: 'Audit' } as const;
     navigation.retireObject(trigger);

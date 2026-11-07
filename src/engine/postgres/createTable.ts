@@ -28,10 +28,12 @@ import { postgresTableCommentPlan } from './tableComments';
 import { postgresTableIdentityPlan } from './tableIdentity';
 import { postgresTableTriggerPlan } from './tableTriggers';
 import { postgresTablePolicyPlan } from './tablePolicies';
+import { postgresSchemaPlan } from './schemaManage';
+import { postgresSchemaPreviewSchema, type PostgresSchemaPreviewInput } from '../../shared/postgresSchemaManage';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
+type RelationKind = 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
@@ -216,6 +218,13 @@ export class PostgresCreateTableWorkspace {
         verify: (connection, oid) => verify(connection, draft, oid),
       };
     });
+  }
+
+  /** Schema 管理复用按文档绑定的一次性预览和事务回执。 */
+  async prepareSchema(input: Scoped<PostgresSchemaPreviewInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+    const draft = postgresSchemaPreviewSchema.parse(raw);
+    return this.prepareRelation(input, 'schemaManage', connect, () => connection => postgresSchemaPlan(connection, draft));
   }
 
   /** 来源表结构与目标 schema 绑定预览，确认后只复制事务内可见的已提交行。 */

@@ -27,6 +27,7 @@ import {
 import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
+import { postgresSchemaCatalog } from './schemaManage';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
 import { readPostgresRoutine, readPostgresRoutineCatalog, readPostgresRoutineOwnerTargets } from './routine';
@@ -1156,6 +1157,9 @@ export class PostgresEngine {
           else this.completionReads.delete(profile.id);
         }
       }
+      case 'postgres.schemaManage.read':
+      case 'postgres.schemaManage.preview':
+      case 'postgres.schemaManage.apply':
       case 'postgres.createTable.schemas':
       case 'postgres.createTable.preview':
       case 'postgres.createTable.apply':
@@ -1184,6 +1188,15 @@ export class PostgresEngine {
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 建表连接和原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.schemaManage.read') return connect(connection => postgresSchemaCatalog(connection, input.database));
+        if (command === 'postgres.schemaManage.preview') {
+          const { profile: _profile, ...draft } = input;
+          return this.creations.prepareSchema(draft as Parameters<PostgresCreateTableWorkspace['prepareSchema']>[0], connect);
+        }
+        if (command === 'postgres.schemaManage.apply') {
+          if (input.confirmed !== true) throw Error('请明确确认 PostgreSQL Schema 操作');
+          return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect, 'schemaManage');
+        }
         if (command === 'postgres.createTable.schemas') return connect(postgresCreateSchemas);
         if (command === 'postgres.createTable.preview') return this.creations.prepare(input as Parameters<PostgresCreateTableWorkspace['prepare']>[0], connect);
         if (command === 'postgres.createTable.copy.preview') {

@@ -4,6 +4,7 @@ import { splitPostgresSql } from '../../src/shared/postgresSql';
 import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from '../../src/shared/postgresTableManage';
 import { postgresTriggerEditorDraft, postgresTriggerChangeSchema } from '../../src/shared/postgresTrigger';
 import { postgresPolicyChangeSchema, postgresPolicyRequiresReplacement } from '../../src/shared/postgresPolicy';
+import { postgresSchemaApplySchema, postgresSchemaPreviewSchema } from '../../src/shared/postgresSchemaManage';
 
 const draft: PostgresCreateTableInput = {
   connectionId: '原连接', database: '原库', schema: '业务"区', table: '新"表', comment: "注释'；\\",
@@ -150,4 +151,16 @@ it('PostgreSQL 行级安全策略区分命令、PUBLIC、条件清除和原位�
     { ...draft, using: 'true) WITH CHECK (true' }, { ...draft, using: 'true; DROP TABLE x' },
     { ...draft, using: '$1' }, { ...draft, sql: 'ALTER TABLE arbitrary' },
   ]) expect(postgresPolicyChangeSchema.safeParse(change).success).toBe(false);
+});
+
+it('PostgreSQL Schema 管理拒绝系统名、任意 SQL 和未确认提交', () => {
+  const target = { connectionId: 'saved', database: 'qa' };
+  const create = { ...target, action: 'create', name: '业务"归档', comment: '保留换行\n和引号' };
+  expect(postgresSchemaPreviewSchema.parse(create)).toEqual(create);
+  expect(postgresSchemaPreviewSchema.parse({ ...create, newOwner: 'application' })).toMatchObject({ newOwner: 'application' });
+  for (const input of [{ ...create, name: 'pg_shadow' }, { ...create, name: 'information_schema' },
+    { ...create, sql: 'DROP SCHEMA public CASCADE' }, { ...create, owner: '伪造窗口' }, { ...create, name: '中'.repeat(22) },
+    { ...target, action: 'drop', schema: '业务', stamp: 'a'.repeat(64), cascade: true }])
+    expect(postgresSchemaPreviewSchema.safeParse(input).success).toBe(false);
+  expect(postgresSchemaApplySchema.safeParse({ ...target, token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: false }).success).toBe(false);
 });
