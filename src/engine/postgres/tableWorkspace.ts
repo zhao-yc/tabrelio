@@ -1,4 +1,6 @@
-import { postgresRecordCopyNull, readPostgresRecordImportSource, type PostgresRecordImportSource } from './recordImportFile';
+import { postgresRecordCopyNull, readPostgresRecordImportSource } from './recordImportFile';
+import { postgresImportColumnOrder, postgresImportFileRecords, type PostgresImportSource } from './importSource';
+import { importBatchLimit } from '../../shared/fileImportBatch';
 import type { Readable } from 'node:stream';
 import { createHash, randomUUID } from 'node:crypto';
 import type { CellValue, DataRow } from '../../shared/contracts';
@@ -21,7 +23,7 @@ import type { PostgresConnection } from './connection';
 import type { PostgresSyncEvidence, PostgresSyncRow } from './dataCompare';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings, type PostgresTableBackupSql } from './sqlExport';
 import { readPostgresTableBackup } from './tableBackup';
-import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
+import { readPostgresCopySource } from './copyImportFile';
 import { createPostgresImportStage, indexPostgresImportStage, readPostgresImportKeys, writePostgresImportConflict } from './importConflict';
 import { isPostgresImportUpdateColumn } from '../../shared/postgresTable';
 import { postgresTableCondition, postgresTableReadOrder } from '../../shared/postgresTableReadSql';
@@ -79,7 +81,7 @@ interface RelatedScope {
   expires: number;
   editSource?: { token: string; relation: Relation; rows: Original[] };
 }
-export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresCopySource | PostgresRecordImportSource };
+export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresImportSource };
 const noWrites: Capabilities = { insert: false, update: false, delete: false };
 // 按内置类型 OID 开放可原生比较且文本可往返的字段，避免同名自定义类型混入。
 const valueOptionTypes = new Set([
@@ -466,15 +468,23 @@ export class PostgresTableWorkspace {
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
     const snapshot = this.snapshot(input);
     const { source, conflict } = input;
-    const records = 'options' in source;
+    const batch = 'files' in source;
+    const files = batch ? source.files : [source];
+    const format = 'format' in input ? input.format : undefined;
+    const records = format !== undefined;
+    if (batch && (files.length < 2 || files.length > importBatchLimit ||
+        new Set(files.map(file => file.path)).size !== files.length ||
+        files.some(file => !postgresImportFileRecords(file)))) throw Error('PostgreSQL 批次来源无效，请重新选择文件');
+    const orders = files.map(file => postgresImportColumnOrder(source.header, file.header));
     const mappings = input.columns.flatMap((key, index) => key === null ? [] : [{ key, name: source.header[index] }]);
     const selected = mappings.map(item => snapshot.relation.columns.find(column => column.key === item.key));
-    if (!snapshot.relation.canImport || (records ? source.options.format : undefined) !== ('format' in input ? input.format : undefined) || input.columns.length !== source.header.length || !selected.length ||
+    if (!snapshot.relation.canImport || files.some(file => ('options' in file ? file.options.format : undefined) !== format) ||
+        orders.some(order => !order) || input.columns.length !== source.header.length || !selected.length ||
         !records && selected.length !== input.columns.length || new Set(mappings.map(item => item.key)).size !== selected.length ||
         selected.some(column => !column || !isPostgresSqlExportColumn(column)))
       throw Error('目标表或列映射不可导入，请刷新表页并重新核对');
     const columns = selected as PostgresTableColumn[];
-    const projection = columns.map(column => postgresIdentifier(column.name)).join(', ');
+    const names = columns.map(column => postgresIdentifier(column.name));
     this.snapshots.delete(key);
     this.active.add(key);
     let receipt: PostgresTableOutcome | undefined;
@@ -504,16 +514,28 @@ export class PostgresTableWorkspace {
           check();
           const stage = chosen ? await createPostgresImportStage(connection, target, columns) : undefined;
           await connection.query("SET LOCAL statement_timeout = '0'", undefined, small());
-          const sourceOptions = records ? "ENCODING 'UTF8', NULL " + postgresDdlLiteral(postgresRecordCopyNull) :
-            'HEADER ' + (source.hasHeader ? 'true' : 'false') + ", ENCODING 'UTF8', DELIMITER " + postgresDdlLiteral(source.delimiter);
-          const command = 'COPY ' + (stage ?? relation.sql) + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, ' + sourceOptions + ')';
-          const consume = (stream: Readable) => {
-            check(); sent = true;
-            return connection.copyIn(command, stream);
-          };
-          const rows = records ? await readPostgresRecordImportSource(source,
-            mappings.map((item, index) => ({ name: item.name, binary: columns[index].binary })), check, consume)
-            : await readPostgresCopySource(source, consume);
+          let rows = 0;
+          const fields = mappings.map((item, index) => ({ name: item.name, binary: columns[index].binary }));
+          // 每个原生文件保留原 CSV 字节及列序，所有 COPY 共用原事务及冲突暂存表。
+          for (const [index, file] of files.entries()) {
+            check();
+            const parsed = 'options' in file;
+            const projection = (parsed ? names : orders[index]!.map(position => names[position])).join(', ');
+            const sourceOptions = parsed ? "ENCODING 'UTF8', NULL " + postgresDdlLiteral(postgresRecordCopyNull) :
+              'HEADER ' + (file.hasHeader ? 'true' : 'false') + ", ENCODING 'UTF8', DELIMITER " + postgresDdlLiteral(file.delimiter);
+            const command = 'COPY ' + (stage ?? relation.sql) + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, ' + sourceOptions + ')';
+            const consume = (stream: Readable) => {
+              check(); sent = true;
+              return connection.copyIn(command, stream);
+            };
+            try {
+              rows += parsed ? await readPostgresRecordImportSource(file, fields, check, consume) : await readPostgresCopySource(file, consume);
+              if (!Number.isSafeInteger(rows)) throw Error('累计导入行数超过可确认范围');
+            } catch (reason) {
+              if (!batch) throw reason;
+              throw Error(`第 ${index + 1} 个文件导入失败。${connection.error(reason).message}`, { cause: reason });
+            }
+          }
           let counts: PostgresTableOutcome['conflictCounts'];
           if (stage && chosen && conflict && keys) {
             check();
@@ -532,9 +554,10 @@ export class PostgresTableWorkspace {
           const completed = await connection.query('COMMIT', undefined, small());
           if (completed.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen)
             throw Error('PostgreSQL 未确认导入提交');
+          const summary = 'PostgreSQL 已提交导入' + (batch ? ` ${files.length} 个文件` : '');
           receipt = counts ? { outcome: 'committed', affected: counts.inserted + counts.matchedUpdates, conflictCounts: counts,
-            message: `PostgreSQL 已提交导入，新增 ${counts.inserted} 行，匹配更新 ${counts.matchedUpdates} 行，跳过已有 ${counts.skippedExisting} 行，跳过未匹配 ${counts.skippedMissing} 行` } :
-            { outcome: 'committed', affected: rows, message: 'PostgreSQL 已提交导入，共 ' + rows + ' 行' };
+            message: `${summary}，新增 ${counts.inserted} 行，匹配更新 ${counts.matchedUpdates} 行，跳过已有 ${counts.skippedExisting} 行，跳过未匹配 ${counts.skippedMissing} 行` } :
+            { outcome: 'committed', affected: rows, message: summary + '，共 ' + rows + ' 行' };
         } catch (reason) {
           receipt = await this.rollbackWrite(connection, sent, commitAttempted, reason);
         }

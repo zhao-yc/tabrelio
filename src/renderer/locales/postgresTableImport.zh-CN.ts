@@ -1,4 +1,7 @@
 export const postgresTableImportZh = {
+  chooseBatch: '选择多个文件',
+  batchHint: '所有文件共用文件解释和映射，在同一个事务中提交。样本来自第一个文件。',
+  batchFiles: '批次文件',
   open: '导入数据', title: '导入数据到 PostgreSQL 表', choose: '选择 CSV 文件', format: '导入格式', chooseXml: '选择 XML 文件', chooseJson: '选择 JSON 文件', chooseTxt: '选择 TXT 文件',
   encoding: '文件编码', reading: '正在选择并读取文件', records: (count: number) => `已扫描 ${count.toLocaleString('zh-CN')} 条记录`,
   jsonNote: 'JSON 使用对象数组。记录中省略的已映射字段写入 NULL。大整数和小数按源文本交给 PostgreSQL。',

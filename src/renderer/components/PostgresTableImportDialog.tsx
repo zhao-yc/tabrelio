@@ -140,8 +140,9 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   }
 
   /** 预填准确同名字段，余下字段留给用户映射。 */
-  async function choose() {
-    if (initialSource || occupied.current || presetOperation.current || !page.exportToken || !validCsv || !validXml || !validTxt || !validWorkbook) return;
+  async function choose(batch = false) {
+    if (initialSource || occupied.current || presetOperation.current || !page.exportToken || !validCsv || !validXml || !validTxt || !validWorkbook ||
+        batch && format === 'xlsx') return;
     occupied.current = true;
     setChoosing(true); resetSource();
     if (pendingPreset) setPresetNotice(format === 'xlsx' ? presetsText.chooseNewSheet : presetsText.chooseNewFile);
@@ -151,7 +152,8 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         format === 'xlsx' ? { format, excelOptions, workbookToken: workbook!.token } :
         recordCsv ? { format, encoding, csvDelimiter: delimiter, csvHasHeader: hasHeader, ...csvRangeOption(csvRowRange) } :
         { csvDelimiter: delimiter, csvHasHeader: hasHeader, ...csvRangeOption(csvRowRange) };
-      const selected = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...selection });
+      const selected = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...selection,
+        ...(batch ? { batch: true as const } : {}) });
       if (!isCurrent()) throw Error(text.stale);
       if (!selected) return;
       if (pendingPreset) {
@@ -238,6 +240,8 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         </label>
         </>}
         {format !== 'xlsx' && <button disabled={locked || !validCsv || !validXml || !validTxt} onClick={() => void choose()}>{format === 'xml' ? text.chooseXml : format === 'json' ? text.chooseJson : format === 'txt' ? text.chooseTxt : text.choose}</button>}
+        {format !== 'xlsx' && <button disabled={locked || !validCsv || !validXml || !validTxt}
+          onClick={() => void choose(true)}>{text.chooseBatch}</button>}
       </div>
       {format === 'xlsx' && <><div className="form-grid"><ExcelImportFields fileToken={workbook?.token} options={excelOptions} disabled={locked} onChange={options => {
         setExcelOptions(options);
@@ -263,6 +267,11 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
       {choosing && <Spinner text={text.reading}/>}
       {file && <>
         <p>{text.file} · {file.name} · {file.bytes.toLocaleString('zh-CN')} {text.bytes}{file.records !== undefined && <> · {format === 'xml' && xmlOptions.documentResult !== undefined ? xmlImportZh.documentRecords(file.records) : text.records(file.records)}</>}</p>
+        {file.files && <>
+          <p>{text.batchHint}</p>
+          <ol aria-label={text.batchFiles}>{file.files.map((item, index) =>
+            <li key={index}>{item.name} · {text.records(item.records)}</li>)}</ol>
+        </>}
         <fieldset disabled={locked}>
           <legend>{text.columns}</legend>
           <ImportMappingActions disabled={locked} positionDisabled={!records && file.header.length > candidates.length} onAction={action => {
@@ -293,7 +302,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         </div>}
         {mode !== 'insert' && conflictError && <p className="warning-text">{conflictError}</p>}
         <section aria-label={text.sample}>
-          <p>{file.sampleLimited ? records ? text.recordSampleLimited : text.sampleLimited : file.sample.length ? text.sampleLimit : text.sampleEmpty}</p>
+          <p>{file.sampleLimited ? (records || file.files) ? text.recordSampleLimited : text.sampleLimited : file.sample.length ? text.sampleLimit : text.sampleEmpty}</p>
           {file.sample.length > 0 && <div className="pg-copy-import-sample">
             <table className="design-table" aria-label={text.sample}>
               <thead><tr>{previewHeaders.map((name, i) => <th scope="col" key={i}>{name || text.unnamed}</th>)}</tr></thead>

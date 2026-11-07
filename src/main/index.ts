@@ -1,5 +1,6 @@
 import { csvRangeOption } from '../shared/csvImport';
-import { inspectPostgresRecordImportSource, type PostgresRecordImportSource } from '../engine/postgres/recordImportFile';
+import { inspectPostgresRecordImportSource } from '../engine/postgres/recordImportFile';
+import { postgresImportColumnOrder, postgresImportFileRecords, type PostgresImportFile, type PostgresImportSource } from '../engine/postgres/importSource';
 import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
 import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpTool';
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
@@ -12,7 +13,7 @@ import type { SqliteEditClaim } from './sqliteTableEdit';
 import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
 import { sameConnectionFamily } from '../shared/connectionDialect';
 import { postgresTableExportExtension, type PostgresImportKey, type PostgresTableImportChooseInput } from '../shared/postgresTable';
-import { inspectPostgresCopySource, type PostgresCopySource } from '../engine/postgres/copyImportFile';
+import { inspectPostgresCopySource } from '../engine/postgres/copyImportFile';
 import { inspectPostgresSqlFile, type PostgresSqlFileSource } from '../engine/postgres/sqlFile';
 import { postgresSqlFileTitle } from '../shared/postgresSqlFile';
 import { isPostgresCustomArchiveDestination, postgresCustomArchiveExtensions, postgresDatabaseBackupPickToolTitle,
@@ -978,7 +979,7 @@ const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupCh
 const databaseBackupChoosing = new WeakSet<object>();
 const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
-const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource | PostgresRecordImportSource; conflictKeys: PostgresImportKey[]; revision: number; expires: number }>();
+const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresImportSource; conflictKeys: PostgresImportKey[]; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
@@ -1418,23 +1419,57 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const formatName = format.toUpperCase();
         const workbookToken = records && target.format === 'xlsx' ? target.workbookToken : undefined;
         const fileToken = scanned?.token ?? workbookToken;
-        const path = fileToken ? resolveFileToken(files, fileToken, 'import', format) : await dialog.showOpenDialog(columns!.owner.window,
-          { title: `选择 PostgreSQL ${formatName} 文件`, properties: ['openFile'],
+        const batch = 'batch' in target && target.batch === true;
+        const paths = fileToken ? [resolveFileToken(files, fileToken, 'import', format)] : await dialog.showOpenDialog(columns!.owner.window,
+          { title: batch ? `选择多个 PostgreSQL ${formatName} 文件` : `选择 PostgreSQL ${formatName} 文件`,
+            properties: batch ? ['openFile', 'multiSelections'] : ['openFile'],
             filters: [{ name: formatName, extensions: format === 'csv' ? ['csv', 'tsv'] : [format] }] })
-          .then(chosen => chosen.canceled ? undefined : chosen.filePaths[0]);
+          .then(chosen => chosen.canceled ? [] : batch ? chosen.filePaths : chosen.filePaths.slice(0, 1));
         check();
-        if (!path) return null;
-        const { source, sample, sampleLimited } = records
-          ? await inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
+        if (!paths.length) return null;
+        if (batch && (paths.length < 2 || paths.length > importBatchLimit || new Set(paths).size !== paths.length))
+          throw Error(`请选择 2 至 ${importBatchLimit} 个不同文件`);
+        const inspect = (path: string) => records
+          ? inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
             target.format === 'csv' ? { format: 'csv', encoding: target.encoding, csvDelimiter: target.csvDelimiter, csvHasHeader: target.csvHasHeader, ...csvRangeOption(target.csvRowRange) } :
               target.format === 'txt' ? { format: 'txt', encoding: target.encoding, txtOptions: target.txtOptions } :
                 target.format === 'xlsx' ? { format: 'xlsx', encoding: 'utf8', excelOptions: target.excelOptions } :
                 { format: 'json', encoding: target.encoding }, check)
-          : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader, target.csvRowRange, check);
+          : inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader, target.csvRowRange, check, batch);
+        const first = await inspect(paths[0]);
         check();
         // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
-        if (scanned && (!('sha256' in source) || source.sha256 !== scanned.expectedSource.sha256 || source.bytes !== scanned.expectedSource.bytes))
+        if (scanned && (!('sha256' in first.source) || first.source.sha256 !== scanned.expectedSource.sha256 || first.source.bytes !== scanned.expectedSource.bytes))
           throw Error(`${formatName} 源文件已变化，请退出向导并核对已创建的表`);
+        const selected: PostgresImportFile[] = [first.source];
+        let batchFiles: { name: string; records: number }[] | undefined;
+        let count = 'records' in first.source ? first.source.records : undefined;
+        let bytes = first.source.bytes;
+        if (batch) {
+          for (const [index, path] of paths.slice(1).entries()) {
+            try {
+              const { source } = await inspect(path);
+              check();
+              if (!postgresImportColumnOrder(first.source.header, source.header))
+                throw Error('源字段与第一个文件不匹配');
+              selected.push(source);
+            } catch (reason) {
+              check();
+              throw Error(`第 ${index + 2} 个文件未通过扫描。${reason instanceof Error ? reason.message : '读取失败'}`);
+            }
+          }
+          let recordsTotal = 0;
+          bytes = 0;
+          batchFiles = selected.map(source => {
+            const records = postgresImportFileRecords(source);
+            if (!records) throw Error('批次中有文件没有可导入的记录');
+            recordsTotal += records; bytes += source.bytes;
+            return { name: basename(source.path), records };
+          });
+          count = recordsTotal;
+          if (!Number.isSafeInteger(count) || !Number.isSafeInteger(bytes)) throw Error('批次记录数或字节数超过可确认范围');
+        }
+        const source: PostgresImportSource = batch ? { header: first.source.header, files: selected } : first.source;
         const conflictKeys = scanned ? [] : await broker.request('postgres.table.importKeys', {
           connectionId: target.connectionId, database: target.database, table: target.table, tabId: target.tabId, pageToken: target.pageToken,
           owner, connectionRevision: revision, profile: store.resolveConnection(target.connectionId),
@@ -1442,8 +1477,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         check();
         const token = randomUUID();
         postgresImportFiles.set(document, { token, target, source, conflictKeys, revision, expires: Date.now() + 5 * 60 * 1000 });
-        return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited, conflictKeys,
-          ...('records' in source ? { records: source.records } : {}) };
+        return { token, name: batch ? `${selected.length} 个文件` : basename(first.source.path), header: source.header, bytes,
+          sample: first.sample, sampleLimited: first.sampleLimited, conflictKeys,
+          ...(count === undefined ? {} : { records: count }), ...(batchFiles ? { files: batchFiles } : {}) };
       } finally { postgresImportChoosing.delete(document); }
     });
   }

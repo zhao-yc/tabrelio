@@ -1,7 +1,7 @@
 import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { parse as streamCsv } from 'csv-parse';
 import { parse } from 'csv-parse/sync';
@@ -99,17 +99,29 @@ function summarize(records: NativeRecord[], hasHeader: boolean, sampleLimited: b
 
 /** 流式确定原字节边界，选中的数据连续发送，保留 PostgreSQL 的原生 CSV 值语义。 */
 async function inspectCopyRange(stream: Readable, delimiter: CsvImportDelimiter,
-  range: ReturnType<typeof importRecordRange>, bom: number, check: () => void) {
+  range: ReturnType<typeof importRecordRange>, bom: number, check: () => void, complete: boolean) {
   const { headerRow, firstDataRow, lastDataRow } = range;
   const hasHeader = headerRow > 0;
   const parser = streamCsv({
     delimiter, encoding: null, info: true, relax_column_count: true, max_record_size: 64 * 1024 * 1024,
     cast(value, context) { return nativeCell(value, context); },
   });
-  const done = pipeline(stream, parser);
+  // 多选逐份完整检查原字节编码，列数只约束所选数据，允许范围外有说明和汇总。
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const encoding = complete ? new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      try { decoder.decode(chunk, { stream: true }); callback(null, chunk); }
+      catch (error) { callback(error as Error); }
+    },
+    flush(callback) {
+      try { decoder.decode(); callback(); }
+      catch (error) { callback(error as Error); }
+    },
+  }) : undefined;
+  const done = encoding ? pipeline(stream, encoding, parser) : pipeline(stream, parser);
   void done.catch(() => undefined);
   const sample: NativeRecord[] = [];
-  let previous = bom, offset = -1, end = -1, records = 0, sampleBytes = 0;
+  let previous = bom, offset = -1, end = -1, records = 0, sampleBytes = 0, width = 0;
   try {
     for await (const { record, info } of parser as AsyncIterable<{ record: NativeRecord; info: { bytes: number; records: number } }>) {
       check();
@@ -117,10 +129,13 @@ async function inspectCopyRange(stream: Readable, delimiter: CsvImportDelimiter,
       previous = info.bytes + bom;
       if (info.records === headerRow || !hasHeader && info.records === firstDataRow) {
         if (previous - start > headerLimit) throw Error('字段名记录或首条数据超过预览大小限制');
+        width = record.length;
         // 具名字段只用于映射，数据的 COPY 字节区间从第一条选中数据开始。
         if (hasHeader) sample.push(record);
       }
       if (info.records < firstDataRow || info.records > lastDataRow) continue;
+      if (complete && (record.length !== width || record.some(value => value?.includes(0))))
+        throw Error('CSV 记录列数与字段名不符，或含有不支持的空字节');
       if (records === 0) offset = start;
       records++;
       end = previous;
@@ -142,18 +157,19 @@ async function inspectCopyRange(stream: Readable, delimiter: CsvImportDelimiter,
 
 /** 文件授权固定记录解释及字节边界，样本单独返回。 */
 export async function inspectPostgresCopySource(path: string, delimiter: CsvImportDelimiter, csvHasHeader?: boolean,
-  csvRowRange?: ImportRecordRange, check = () => {}) {
+  csvRowRange?: ImportRecordRange, check = () => {}, complete = false) {
   if (!isAbsolute(path) || path.includes('\0')) throw Error('未取得授权 CSV 文件路径');
   csvImportDelimiter('csv', delimiter);
   const hasHeader = csvImportHasHeader('csv', csvHasHeader);
   if (!validCsvRange({ csvHasHeader, ...csvRangeOption(csvRowRange) })) throw Error(csvRangeInvalid);
   const range = importRecordRange(hasHeader, csvRowRange);
+  const fullScan = range.skipsRecords || complete;
   const stat = await lstat(path, { bigint: true });
   const expected = version(stat), bytes = Number(stat.size);
   const handle = await openRead(path);
   try {
     await assertVersion(path, handle, expected);
-    const prefix = Buffer.allocUnsafe(Math.min(bytes, range.skipsRecords ? utf8Bom.length : headerLimit + utf8Bom.length + 1));
+    const prefix = Buffer.allocUnsafe(Math.min(bytes, fullScan ? utf8Bom.length : headerLimit + utf8Bom.length + 1));
     let length = 0;
     while (length < prefix.length) {
       const { bytesRead } = await handle.read(prefix, length, prefix.length - length, length);
@@ -161,10 +177,10 @@ export async function inspectPostgresCopySource(path: string, delimiter: CsvImpo
       length += bytesRead;
     }
     const offset = prefix.subarray(0, 3).equals(utf8Bom) ? 3 : 0;
-    if (range.skipsRecords) {
+    if (fullScan) {
       if (offset === bytes) throw Error('指定范围没有可导入的 CSV 数据');
       const stream = handle.createReadStream({ autoClose: false, start: offset, end: bytes - 1 });
-      const { offset: start, selection, header, sample, sampleLimited } = await inspectCopyRange(stream, delimiter, range, offset, check);
+      const { offset: start, selection, header, sample, sampleLimited } = await inspectCopyRange(stream, delimiter, range, offset, check, complete);
       await assertVersion(path, handle, expected);
       const source: PostgresCopySource = { path, version: expected, bytes, offset: start, delimiter, hasHeader: false, header, selection };
       return { source, sample, sampleLimited };

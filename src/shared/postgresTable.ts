@@ -261,15 +261,15 @@ export interface PostgresTableExportOutput { rows: number; fileCommitted: true }
 const scannedImportFile = z.object({ token, expectedSource: importFileSourceSchema }).strict();
 const recordImportEncoding = z.enum(['utf8', 'utf16le', 'gb18030']);
 export const postgresTableImportChooseSchema = z.union([
-  target.extend({ pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional(), csvRowRange: importRecordRangeSchema.optional() }).strict().refine(validCsvRange, csvRangeInvalid),
+  target.extend({ pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional(), batch: z.literal(true).optional(), csvRowRange: importRecordRangeSchema.optional() }).strict().refine(validCsvRange, csvRangeInvalid),
   target.extend({ pageToken: token, format: z.literal('xml'), xmlOptions: xmlImportOptionsSchema,
-    scannedFile: scannedImportFile.optional(),
+    batch: z.literal(true).optional(), scannedFile: scannedImportFile.optional(),
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('csv'), encoding: recordImportEncoding,
-    csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), csvRowRange: importRecordRangeSchema.optional(), scannedFile: scannedImportFile.optional(),
+    csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), csvRowRange: importRecordRangeSchema.optional(), batch: z.literal(true).optional(), scannedFile: scannedImportFile.optional(),
   }).strict().refine(validCsvRange, csvRangeInvalid),
   target.extend({ pageToken: token, format: z.literal('txt'), encoding: recordImportEncoding,
-    txtOptions: txtImportOptionsSchema, scannedFile: scannedImportFile.optional(),
+    txtOptions: txtImportOptionsSchema, batch: z.literal(true).optional(), scannedFile: scannedImportFile.optional(),
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('xlsx'), excelOptions: excelImportOptionsSchema,
     scannedFile: scannedImportFile, workbookToken: z.never().optional(),
@@ -278,9 +278,9 @@ export const postgresTableImportChooseSchema = z.union([
     workbookToken: token, scannedFile: z.never().optional(),
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('json'), encoding: recordImportEncoding,
-    scannedFile: scannedImportFile.optional(),
+    batch: z.literal(true).optional(), scannedFile: scannedImportFile.optional(),
   }).strict(),
-]);
+]).refine(value => !('batch' in value && value.batch && 'scannedFile' in value && value.scannedFile), '批量导入须从现有表重新选择文件');
 const postgresImportConflict = z.object({ mode: z.enum(fileImportConflictModes), keyId: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export type PostgresImportConflict = z.infer<typeof postgresImportConflict>;
 export interface PostgresImportKey { id: string; name: string; columns: string[]; }
@@ -303,6 +303,7 @@ export interface PostgresTableImportChoice {
   sample: (string | null)[][];
   sampleLimited: boolean;
   conflictKeys?: PostgresImportKey[];
+  files?: { name: string; records: number }[];
 }
 export type PostgresTableTarget = z.infer<typeof target>;
 export type PostgresTablePageInput = z.infer<typeof postgresTablePageSchema>;

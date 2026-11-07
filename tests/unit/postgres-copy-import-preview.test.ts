@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { inspectPostgresCopySource, readPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
+import { postgresImportColumnOrder } from '../../src/engine/postgres/importSource';
 
 /** 测试使用真实文件句柄，覆盖预览前缀和选择阶段的文件身份读取。 */
 async function inspect(csv: string, hasHeader?: boolean) {
@@ -15,6 +16,26 @@ async function inspect(csv: string, hasHeader?: boolean) {
 }
 
 describe('PostgreSQL CSV 导入样本', () => {
+  it('批次完整扫描验证样本后的选中行，并按实际字段对齐文件列序', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'tabrelio-copy-batch-'));
+    try {
+      const path = join(directory, '批次.csv');
+      const body = '编号;值\r\n' + '1;正确\r\n'.repeat(6);
+      await writeFile(path, body);
+      const checked = await inspectPostgresCopySource(path, ';', true, undefined, undefined, true);
+      expect(checked.source).toMatchObject({ header: ['编号', '值'], hasHeader: false, selection: { records: 6 } });
+      expect(checked.sample).toHaveLength(5);
+      await writeFile(path, body + '2;正文;多列\r\n');
+      await expect(inspectPostgresCopySource(path, ';', true, undefined, undefined, true)).rejects.toThrow('无法读取');
+      await writeFile(path, Buffer.concat([Buffer.from(body), Buffer.from([0xff])]));
+      await expect(inspectPostgresCopySource(path, ';', true, { lastDataRow: 7 }, undefined, true)).rejects.toThrow('无法读取');
+      expect(postgresImportColumnOrder(['编号', '值'], ['值', '编号'])).toEqual([1, 0]);
+      expect(postgresImportColumnOrder(['编号', '值'], ['编号', '编号'])).toBeUndefined();
+      expect(postgresImportColumnOrder(['编号', ''], ['', '编号'])).toBeUndefined();
+      expect(postgresImportColumnOrder(['编号', ''], ['编号', ''])).toEqual([0, 1]);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('跨读取块按逻辑记录截取原字节，保留 NULL、空字符串和引号内换行', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'tabrelio-copy-range-'));
     try {
