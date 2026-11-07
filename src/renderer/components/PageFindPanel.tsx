@@ -86,6 +86,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     workingRef.current = false; setWorking(false);
     if (result.status === 'blocked') { singleLock.current = false; setError(result.message); return; }
     if (result.operation === 'find') { setFound({ matches: result.matches, snapshot: source }); const matches = pageOccurrences(result.matches), next = resume ? nextPageOccurrenceAfterReplacement(rows, keys, matches, resume.only, resume.value) : -1; selectPosition(next); if (next >= 0) onJump(matches[next].rowId, matches[next].key, false); return; }
+    if (result.operation !== 'preview') { singleLock.current = false; setError(text.workerFailed); return; }
     if (composingRef.current || latestReplacement.current !== value || (only && (!sameCurrent(only) || (getSelectionToken && getSelectionToken() !== selectionToken)))) { singleLock.current = false; setError(text.changed); return; }
     try {
       if (only) {

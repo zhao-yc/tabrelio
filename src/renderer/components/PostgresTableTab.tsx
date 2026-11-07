@@ -1218,9 +1218,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
         onOpen={openFind} onClose={() => setFindRequest(undefined)} onStage={stageFind}
-        onPreview={(hits, replacement) => {
+        onPreview={patches => {
           if (!findIsCurrent() || !canEditGrid) throw Error(findText.stale);
-          return postgresFindPlan(page, findRows, gridLayout.columns, hits, replacement,
+          return postgresFindPlan(page, findRows, gridLayout.columns, patches,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump

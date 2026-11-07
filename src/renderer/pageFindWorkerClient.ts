@@ -1,10 +1,11 @@
 import type { TableInfo } from '../shared/contracts';
 import type { DraftRow } from './dataChanges';
-import { assertPageFindTransfer, pageFindLimits, type PageCellMatch, type PageFindOptions, type PageOccurrence, type PageReplacement } from './pageFindReplace';
+import { assertPageFindTransfer, pageFindLimits, type PageCellMatch, type PageFindOptions, type PageOccurrence, type PageReplacement, type PageTextPatch } from './pageFindReplace';
 import { tableGridZh as text } from './locales/tableGrid.zh-CN';
 
-export interface PageFindRequest { operation: 'find' | 'preview'; rows: DraftRow[]; keys: string[]; options: PageFindOptions; replacement?: string; info?: TableInfo; generation: number; only?: PageOccurrence; }
-export type PageFindResult = { status: 'ready'; operation: 'find'; matches: PageCellMatch[] } | { status: 'ready'; operation: 'preview'; preview: PageReplacement } | { status: 'blocked'; reason: string; message: string };
+export interface PageFindRequest { operation: 'find' | 'preview' | 'previewText'; rows: DraftRow[]; keys: string[]; options: PageFindOptions; replacement?: string; info?: TableInfo; generation: number; only?: PageOccurrence; }
+export type PageFindResult = { status: 'ready'; operation: 'find'; matches: PageCellMatch[] } | { status: 'ready'; operation: 'preview'; preview: PageReplacement } |
+  { status: 'ready'; operation: 'previewText'; patches: PageTextPatch[] } | { status: 'blocked'; reason: string; message: string };
 export interface PageFindWorkerPort { postMessage(value: unknown): void; terminate(): void | Promise<unknown>; onmessage: ((event: MessageEvent) => void) | null; onerror: ((event: ErrorEvent) => void) | null; onmessageerror: ((event: MessageEvent) => void) | null; }
 interface Pending { id: number; worker: PageFindWorkerPort; request?: PageFindRequest; running: boolean; timer: ReturnType<typeof setTimeout>; resolve(value: PageFindResult): void; }
 

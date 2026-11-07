@@ -8,7 +8,8 @@ export const pageFindLimits = { query: 512, replacement: 4096, bytes: 16 * 1024 
 export interface PageFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; captureReplacement?: boolean; }
 export interface PageCellMatch { rowId: string; key: string; ranges: { start: number; end: number }[]; }
 export interface PageOccurrence { rowId: string; key: string; range?: { start: number; end: number }; occurrence: number; }
-export interface PageReplacement { generation: number; signature: string; rows: DraftRow[]; patches: { rowId: string; key: string; before: string; after: string }[]; }
+export interface PageTextPatch { rowId: string; key: string; before: string; after: string; }
+export interface PageReplacement { generation: number; signature: string; rows: DraftRow[]; patches: PageTextPatch[]; }
 /** 捕获内容及每处展开仅留在Worker的计划构造过程，不增加查找消息的传输负担。 */
 type PlannedMatch = Omit<PageCellMatch, 'ranges'> & { ranges: (PageCellMatch['ranges'][number] & { capture?: RegExpExecArray })[] };
 /** 累计 UTF-8 预算不能静默截断，否则预览和最终草稿会出现不同结果。 */
@@ -130,13 +131,38 @@ export function previewPageReplacement(rows: readonly DraftRow[], keys: readonly
 
 /** Worker 内匹配后构造预览，不能把用户模式回传到渲染线程重新执行。 */
 export function previewPageReplacementInWorker(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
+  const writable = (key: string) => pageReplaceWritable(info, key);
+  const request = { operation: 'preview', rows, keys, options, replacement, info, generation, only };
+  const matches = scanReplacementMatches(rows, keys, options, replacement, writable, request, only);
+  return planPageReplacement(rows, matches, options, replacement, info, generation, only);
+}
+
+/** 替换线程复用捕获与输出预算，调用方决定哪些目录列可以暂存。 */
+export function previewTextReplacementInWorker(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions,
+  replacement: string, limits: { value: number; draft: number }, only?: PageOccurrence): PageTextPatch[] {
+  const request = { operation: 'previewText', rows, keys, options, replacement, generation: 0, only };
+  const matches = scanReplacementMatches(rows, keys, options, replacement, () => true, request, only);
+  const plans = replacementPlans(rows, matches, options, replacement, () => true, only);
+  let draft = 0;
+  for (const { size } of plans) {
+    draft += 32 + size.units * 4;
+    if (size.units > limits.value || draft > limits.draft) throw new Error(text.budget);
+  }
+  const envelope = { bytes: 0 };
+  measureJson({ status: 'ready', operation: 'previewText', patches: [] }, envelope);
+  budget(patchResponseBytes(plans) + envelope.bytes - 2);
+  return buildPatches(plans, replacement);
+}
+
+function scanReplacementMatches(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string,
+  writable: (key: string) => boolean, input: unknown, only?: PageOccurrence) {
   if (replacement.length > pageFindLimits.replacement) throw new Error(text.replacementLimit);
   if (options.captureReplacement && (options.kind !== 'text' || !options.regex)) throw new Error(text.captureRequiresRegex);
-  const request = { bytes: 0 }; if (options.captureReplacement) measureJson({ operation: 'preview', rows, keys, options, replacement, info, generation, only }, request);
+  const request = { bytes: 0 }; if (options.captureReplacement) measureJson(input, request);
   let captureMemory = 0;
-  const matches = scanPageCells(rows, keys, options, workerPattern(options), options.captureReplacement ? (row, key, match) => {
+  return scanPageCells(rows, keys, options, workerPattern(options), options.captureReplacement ? (row, key, match) => {
     // 单处只展开指定的原文边界；非文本、只读或其它命中不能消耗替换输出预算。
-    if ((only && (only.rowId !== row.id || only.key !== key || only.range?.start !== match.index || only.range?.end !== match.index + match[0].length)) || !pageReplaceWritable(info, key) || typeof ownCell(row.data, key) !== 'string') return undefined;
+    if ((only && (only.rowId !== row.id || only.key !== key || only.range?.start !== match.index || only.range?.end !== match.index + match[0].length)) || !writable(key) || typeof ownCell(row.data, key) !== 'string') return undefined;
     // 原生捕获只保留到两阶段计划结束；计入既有128MiB估算，不能无限保留捕获数组。
     captureMemory += match.length * 16;
     for (const value of match) captureMemory += (value?.length ?? 0) * 2;
@@ -144,7 +170,6 @@ export function previewPageReplacementInWorker(rows: readonly DraftRow[], keys: 
     if (request.bytes * 6 + pageFindLimits.matches * 128 + captureMemory > pageFindLimits.memory) throw new Error(text.budget);
     return match;
   } : undefined);
-  return planPageReplacement(rows, matches, options, replacement, info, generation, only);
 }
 
 /** 按ECMAScript GetSubstitution枚举既有字符串区间；不分配展开结果，也不重跑正则。 */
@@ -190,14 +215,14 @@ function unchangedText(before: string, spans: Iterable<PageTextSpan>): boolean {
   return index === before.length;
 }
 
-/** 先精确预检整格/跨格输出、全部补丁、完整行及最终响应；全部通过后才分配文字和clone。 */
-function planPageReplacement(rows: readonly DraftRow[], matches: PlannedMatch[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
+function replacementPlans(rows: readonly DraftRow[], matches: PlannedMatch[], options: PageFindOptions, replacement: string,
+  writable: (key: string) => boolean, only?: PageOccurrence) {
   if (replacement.length > pageFindLimits.replacement) throw new Error(text.replacementLimit);
   if (options.kind !== 'text') throw new Error(text.noReplace);
   const plans: { rowId: string; key: string; before: string; ranges: PlannedMatch['ranges']; size: PageTextSize }[] = []; let outputBytes = 0;
   for (const match of matches) {
     if (only && (only.rowId !== match.rowId || only.key !== match.key)) continue;
-    if (!pageReplaceWritable(info, match.key)) continue;
+    if (!writable(match.key)) continue;
     const row = rows.find(row => row.id === match.rowId)!; const before = ownCell(row.data, match.key); if (typeof before !== 'string') continue;
     const ranges = only ? match.ranges.filter(range => range.start === only.range?.start && range.end === only.range?.end) : match.ranges;
     if (!ranges.length) continue;
@@ -206,18 +231,33 @@ function planPageReplacement(rows: readonly DraftRow[], matches: PlannedMatch[],
     outputBytes += size.utf8; budget(outputBytes); plans.push({ rowId: row.id, key: match.key, before, ranges, size });
   }
   if (!plans.length) throw new Error(text.noReplace);
-  const ids = new Set(plans.map(plan => plan.rowId)), snapshots = rows.filter(row => ids.has(row.id));
-  const patchesSize = { bytes: 2 }, snapshotsSize = { bytes: 0 }, infoSize = { bytes: 0 };
+  return plans;
+}
+
+function patchResponseBytes(plans: ReturnType<typeof replacementPlans>) {
+  let bytes = 2;
   for (const [index, plan] of plans.entries()) {
     const header = { bytes: 0 }; measureJson({ rowId: plan.rowId, key: plan.key, before: plan.before, after: '' }, header);
-    patchesSize.bytes += (index ? 1 : 0) + header.bytes + plan.size.json; budget(patchesSize.bytes);
+    bytes += (index ? 1 : 0) + header.bytes + plan.size.json; budget(bytes);
   }
+  return bytes;
+}
+
+function buildPatches(plans: ReturnType<typeof replacementPlans>, replacement: string): PageTextPatch[] {
+  return plans.map(plan => ({ rowId: plan.rowId, key: plan.key, before: plan.before, after: joinPageText(replacementParts(plan.before, plan.ranges, replacement)) }));
+}
+
+/** 先精确预检整格/跨格输出、全部补丁、完整行及最终响应；全部通过后才分配文字和clone。 */
+function planPageReplacement(rows: readonly DraftRow[], matches: PlannedMatch[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
+  const plans = replacementPlans(rows, matches, options, replacement, key => pageReplaceWritable(info, key), only);
+  const ids = new Set(plans.map(plan => plan.rowId)), snapshots = rows.filter(row => ids.has(row.id));
+  const patchesSize = { bytes: patchResponseBytes(plans) }, snapshotsSize = { bytes: 0 }, infoSize = { bytes: 0 };
   measureJson(snapshots, snapshotsSize); measureJson(info, infoSize); budget(patchesSize.bytes + snapshotsSize.bytes + infoSize.bytes);
   // signature尚未JSON.stringify；escaped准确包含再次嵌入JSON时的引号和反斜杠开销。
   const signature = { bytes: 0, escaped: 0 }; measureJson([info.database, info.name, info.objectKind, info.engine, info.editableKey, info.columns], signature);
   const envelope = { bytes: 0 }; measureJson({ status: 'ready', operation: 'preview', preview: { generation, signature: '', rows: [], patches: [] } }, envelope);
   budget(envelope.bytes + signature.escaped + snapshotsSize.bytes - 2 + patchesSize.bytes - 2);
-  const patches = plans.map(plan => ({ rowId: plan.rowId, key: plan.key, before: plan.before, after: joinPageText(replacementParts(plan.before, plan.ranges, replacement)) }));
+  const patches = buildPatches(plans, replacement);
   return { generation, signature: tableSignature(info), rows: structuredClone(snapshots), patches };
 }
 

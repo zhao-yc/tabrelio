@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import type { PostgresTableColumn } from '../../shared/postgresTable';
 import type { DraftRow } from '../dataChanges';
 import { cellPreview, errorMessage } from '../lib';
-import { pageFindLimits, pageOccurrences, type PageFindOptions, type PageOccurrence } from '../pageFindReplace';
+import { pageFindLimits, pageOccurrences, type PageFindOptions, type PageOccurrence, type PageTextPatch } from '../pageFindReplace';
 import { PageFindWorkerClient } from '../pageFindWorkerClient';
 import { postgresFindWritable, type PostgresFindPlan } from '../postgresTableFind';
 import { postgresTableFindZh as text } from '../locales/postgresTableFind.zh-CN';
@@ -16,7 +16,7 @@ interface Props {
   request?: PostgresFindRequest; scope: object; pageKey?: string; enabled: boolean; writable: boolean; rows: DraftRow[];
   columns: PostgresTableColumn[]; isCurrent(): boolean; anchor(): GridFindTarget | undefined;
   onOpen(replace: boolean): void; onClose(): void;
-  onPreview(hits: readonly PageOccurrence[], replacement: string): PostgresFindPlan;
+  onPreview(patches: readonly PageTextPatch[]): PostgresFindPlan;
   onStage(scope: object, plan: PostgresFindPlan): void;
   renderGrid(target?: GridFindTarget, highlights?: ReadonlySet<string>): ReactNode;
 }
@@ -26,15 +26,18 @@ export function PostgresTableFindPanel(props: Props) {
   const { request, scope, pageKey, enabled, writable, rows, columns, isCurrent, anchor, onOpen, onClose, onPreview, onStage, renderGrid } = props;
   const [mode, setMode] = useState<Mode>('text'), [column, setColumn] = useState('');
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
+  const [regex, setRegex] = useState(false), [capture, setCapture] = useState(false);
   const [sensitive, setSensitive] = useState(false), [whole, setWhole] = useState(false), [highlight, setHighlight] = useState(true);
   const [composing, setComposing] = useState(false);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null);
   const modeInput = useRef<HTMLSelectElement>(null);
   const client = useRef<PageFindWorkerClient>(undefined);
   const resume = useRef<{ request: PostgresFindRequest; pageKey?: string; query: string; hit: PageOccurrence; end: number }>(undefined);
-  const snapshot = useMemo(() => ({ request, scope, enabled, rows, columns, mode, column, query, sensitive, whole, composing }),
-    [request, scope, enabled, rows, columns, mode, column, query, sensitive, whole, composing]);
+  const snapshot = useMemo(() => ({ request, scope, enabled, rows, columns, mode, column, query, sensitive, whole, regex, composing }),
+    [request, scope, enabled, rows, columns, mode, column, query, sensitive, whole, regex, composing]);
   const latest = useRef(snapshot); latest.current = snapshot;
+  const runningPreview = useRef<{ snapshot: typeof snapshot }>(undefined);
+  const [preparing, setPreparing] = useState<typeof snapshot>();
   const [result, setResult] = useState<{ snapshot: typeof snapshot; hits: PageOccurrence[]; error?: string }>();
   const [position, setPosition] = useState<{ snapshot: typeof snapshot; index: number }>();
   const [preview, setPreview] = useState<{ snapshot: typeof snapshot; replacement: string; plan: PostgresFindPlan; only?: PageOccurrence }>();
@@ -46,6 +49,9 @@ export function PostgresTableFindPanel(props: Props) {
   const canSearch = mode === 'null' || !!query;
   const replaceVisible = request?.replace && mode === 'text';
   const canReplace = writable && enabled && replaceVisible;
+  const pending = preparing === snapshot;
+  const locked = pending || !!review;
+  const options: PageFindOptions = { kind: 'text', query, caseSensitive: sensitive, wholeCell: whole, regex, column: column || undefined };
 
   useEffect(() => {
     if (!request || !enabled) return;
@@ -84,9 +90,8 @@ export function PostgresTableFindPanel(props: Props) {
         }).map(column => ({ rowId: '-1', key: column.key, occurrence: 1 })));
         return;
       }
-      const options: PageFindOptions = { kind: mode, query, caseSensitive: sensitive, wholeCell: whole, column: column || undefined };
       client.current ??= new PageFindWorkerClient(() => new Worker(new URL('../pageFind.worker.ts', import.meta.url), { type: 'module' }));
-      const answer = await client.current.run({ operation: 'find', rows, keys, options, generation: 0 });
+      const answer = await client.current.run({ operation: 'find', rows, keys, options: { ...options, kind: mode }, generation: 0 });
       if (!accepts()) return;
       if (answer.status === 'ready' && answer.operation === 'find') publish(pageOccurrences(answer.matches));
       else if (answer.status === 'blocked') setResult({ snapshot, hits: [], error: answer.message });
@@ -102,7 +107,7 @@ export function PostgresTableFindPanel(props: Props) {
   const oneWritable = canReplace && hit?.range && replaceKeys.has(hit.key);
 
   function jump(direction: -1 | 1) {
-    if (!found?.hits.length || !isCurrent() || composing || review) return;
+    if (!found?.hits.length || !isCurrent() || composing || locked) return;
     const length = found.hits.length;
     setPosition(previous => {
       const index = previous?.snapshot === snapshot ? previous.index : -1;
@@ -110,12 +115,31 @@ export function PostgresTableFindPanel(props: Props) {
     });
   }
 
-  function makePreview(only?: PageOccurrence) {
-    if (!canReplace || !found || !isCurrent() || composing || latest.current !== snapshot) return;
+  async function makePreview(only?: PageOccurrence) {
+    if (!canReplace || !found || !client.current || !isCurrent() || composing || locked || latest.current !== snapshot ||
+        runningPreview.current?.snapshot === snapshot) return;
+    if (/[\u0000\uD800-\uDFFF]/u.test(replacement)) { setError(text.invalidValue); return; }
+    const job = { snapshot };
+    runningPreview.current = job;
+    setPreparing(snapshot);
+    setError('');
     try {
-      setPreview({ snapshot, replacement, only, plan: onPreview(only ? [only] : found.hits, replacement) });
-      setError('');
-    } catch (reason) { setError(errorMessage(reason)); }
+      const result = await client.current.run({ operation: 'previewText', rows, keys: [...replaceKeys],
+        options: { ...options, captureReplacement: regex && capture }, replacement, generation: 0, only });
+      if (runningPreview.current !== job || latest.current !== snapshot || !isCurrent()) return;
+      if (result.status === 'blocked') setError(result.message);
+      else if (result.operation === 'previewText') setPreview({ snapshot, replacement, only, plan: onPreview(result.patches) });
+    } catch (reason) {
+      if (runningPreview.current === job && latest.current === snapshot && isCurrent()) setError(errorMessage(reason));
+    } finally {
+      if (runningPreview.current === job) { runningPreview.current = undefined; setPreparing(undefined); }
+    }
+  }
+
+  function cancelPending() {
+    runningPreview.current = undefined;
+    setPreparing(undefined);
+    void client.current?.cancel();
   }
 
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -132,7 +156,7 @@ export function PostgresTableFindPanel(props: Props) {
       if (!event.repeat) jump(event.shiftKey ? -1 : 1);
     } else if (request && !modifier && !event.altKey && key === 'escape') {
       event.preventDefault(); event.stopPropagation();
-      if (review) setPreview(undefined); else onClose();
+      if (pending) cancelPending(); else if (review) setPreview(undefined); else onClose();
     }
   }
 
@@ -140,32 +164,37 @@ export function PostgresTableFindPanel(props: Props) {
     {request && <section className="pg-table-find" aria-label={text.title}
       onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}>
       <div className="query-result-find-toolbar">
-        <label className="pg-find-mode">{text.mode} <select ref={modeInput} aria-label={text.mode} value={mode} disabled={!enabled || !!review} onChange={event => setMode(event.target.value as Mode)}>
+        <label className="pg-find-mode">{text.mode} <select ref={modeInput} aria-label={text.mode} value={mode} disabled={!enabled || locked} onChange={event => setMode(event.target.value as Mode)}>
           <option value="text">{text.values}</option><option value="field">{text.fields}</option><option value="null">{text.null}</option>
         </select></label>
         {mode !== 'null' && <input ref={queryInput} aria-label={text.query} value={query} maxLength={pageFindLimits.query}
-          disabled={!enabled || !!review} onChange={event => { setQuery(event.target.value); setError(''); }}/>}
-        {mode !== 'field' && <select aria-label={text.column} value={column} disabled={!enabled || !!review} onChange={event => setColumn(event.target.value)}>
+          disabled={!enabled || locked} onChange={event => { setQuery(event.target.value); setError(''); }}/>}
+        {mode !== 'field' && <select aria-label={text.column} value={column} disabled={!enabled || locked} onChange={event => setColumn(event.target.value)}>
           <option value="">{text.allColumns}</option>{columns.map(item => <option key={item.key} value={item.key}>{item.name}</option>)}
         </select>}
         {mode !== 'null' && <>
-          <label className="check"><input type="checkbox" checked={sensitive} disabled={!enabled || !!review} onChange={event => setSensitive(event.target.checked)}/>{text.caseSensitive}</label>
-          <label className="check"><input type="checkbox" checked={whole} disabled={!enabled || !!review} onChange={event => setWhole(event.target.checked)}/>{text.whole}</label>
+          <label className="check"><input type="checkbox" checked={sensitive} disabled={!enabled || locked} onChange={event => setSensitive(event.target.checked)}/>{text.caseSensitive}</label>
+          <label className="check"><input type="checkbox" checked={whole} disabled={!enabled || locked} onChange={event => setWhole(event.target.checked)}/>{text.whole}</label>
         </>}
+        {mode === 'text' && <label className="check"><input type="checkbox" checked={regex} disabled={!enabled || locked}
+          onChange={event => { setRegex(event.target.checked); setCapture(false); setError(''); }}/>{text.regex}</label>}
         <label className="check"><input type="checkbox" checked={highlight} onChange={event => setHighlight(event.target.checked)}/>{text.highlight}</label>
-        <button type="button" disabled={!enabled || !found?.hits.length || !!review} onClick={() => jump(-1)}>{text.previous}</button>
-        <button type="button" disabled={!enabled || !found?.hits.length || !!review} onClick={() => jump(1)}>{text.next}</button>
+        <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(-1)}>{text.previous}</button>
+        <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(1)}>{text.next}</button>
         <button type="button" onClick={onClose}>{text.close}</button>
       </div>
       {replaceVisible && <div className="query-result-find-toolbar">
-        <input ref={replacementInput} aria-label={text.replacement} value={replacement} maxLength={pageFindLimits.replacement} disabled={!canReplace || !!review}
+        <input ref={replacementInput} aria-label={text.replacement} value={replacement} maxLength={pageFindLimits.replacement} disabled={!canReplace || locked}
           onChange={event => { setReplacement(event.target.value); setError(''); }}/>
-        <button type="button" disabled={!oneWritable || !!review} onClick={() => makePreview(hit)}>{text.one}</button>
-        <button type="button" disabled={!hasWritable || !!review} onClick={() => makePreview()}>{text.all}</button>
+        {regex && <label className="check"><input type="checkbox" checked={capture} disabled={!canReplace || locked}
+          onChange={event => { setCapture(event.target.checked); setError(''); }}/>{text.captures}</label>}
+        <button type="button" disabled={!oneWritable || locked} onClick={() => void makePreview(hit)}>{text.one}</button>
+        <button type="button" disabled={!hasWritable || locked} onClick={() => void makePreview()}>{text.all}</button>
+        {pending && <button type="button" onClick={cancelPending}>{text.cancel}</button>}
         <span className="muted small">{text.replaceScope}</span>
       </div>}
       <div className="query-result-find-status">
-        {enabled && canSearch && !composing && !found?.error && <span role="status">{!found ? text.searching : found.hits.length ? text.ready(found.hits.length, chosen) : text.noMatch}</span>}
+        {enabled && canSearch && !composing && !found?.error && <span role="status">{pending ? text.preparing : !found ? text.searching : found.hits.length ? text.ready(found.hits.length, chosen) : text.noMatch}</span>}
         {hit && <span>{text.location(Number(hit.rowId), columns.find(column => column.key === hit.key)?.name ?? hit.key)}</span>}
         <span className="muted">{text.scope}</span>
       </div>
@@ -182,7 +211,11 @@ export function PostgresTableFindPanel(props: Props) {
           if (latest.current !== snapshot || !isCurrent()) return;
           try {
             onStage(scope, review.plan);
-            if (review.only?.range) resume.current = { request, pageKey, query, hit: review.only, end: review.only.range.start + replacement.length };
+            if (review.only?.range) {
+              const { start, end } = review.only.range, { before, after } = review.plan.patches[0];
+              // 零宽命中需要越过原位置，避免下一处仍停在刚插入文字的边界。
+              resume.current = { request, pageKey, query, hit: review.only, end: end + after.length - before.length + (start === end ? 1 : 0) };
+            }
             setPreview(undefined);
             setError('');
           }

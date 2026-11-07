@@ -246,7 +246,7 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 在 PostgreSQL 普通表选中起始格后按 `Ctrl/⌘+V` 可覆盖本页记录，也可从工具栏「粘贴新增记录」追加多行。两种[网格粘贴](development/postgres-grid-paste-20261106.md)都会先暂存，确认整批后写入。
 
-在 PostgreSQL 表页按 `Ctrl/⌘+F` 可[查找当前页的数据、字段名或 SQL NULL](development/postgres-table-find-replace-20261106.md)。可更新的普通表也可预览替换单处或全部文字匹配，先加入草稿，再走整批 SQL 预览与提交。
+在 PostgreSQL 表页按 `Ctrl/⌘+F` 可[查找当前页的数据、字段名或 SQL NULL](development/postgres-table-find-replace-20261106.md)。数据查找支持正则表达式。可更新的普通表可预览替换单处或全部文字匹配，可选展开捕获组，先加入草稿，再走整批 SQL 预览与提交。
 
 切到 PostgreSQL [记录表单视图](development/postgres-record-form-view-20261106.md)可逐条和跨页浏览，搜索字段、定位字段并展开完整原值。可更新记录支持在表单中暂存本行，随后统一预览和提交。
 

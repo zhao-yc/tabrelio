@@ -16,8 +16,9 @@ import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 import { postgresHistogramBins } from './postgresTableHistogram';
 import { postgresIdentifier, postgresRelationName } from './postgresSql';
 import { dataFileFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
+import { postgresTableLimits } from './postgresTableLimits';
 
-export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
+export { postgresTableLimits } from './postgresTableLimits';
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
 const relation = z.string().min(1).max(512).refine(value => !value.includes('\0'));
 export const postgresTableLayoutPreferencesSchema = strictTableLayoutPreferences(relation, 1022);

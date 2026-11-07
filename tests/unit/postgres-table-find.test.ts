@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PostgresTableChange, PostgresTableColumn, PostgresTablePage } from '../../src/shared/postgresTable';
-import { findPageCells, pageOccurrences } from '../../src/renderer/pageFindReplace';
+import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTablePage } from '../../src/shared/postgresTable';
+import { findPageCells, findPageCellsInWorker, pageOccurrences, previewTextReplacementInWorker } from '../../src/renderer/pageFindReplace';
 import { postgresFindPlan, postgresFindRows } from '../../src/renderer/postgresTableFind';
 
 const id: PostgresTableColumn = { key: 'c0', name: 'id', type: 'bigint', nullable: false, defaultValue: false, primary: true, generated: false, binary: false };
@@ -18,9 +18,9 @@ describe('PostgreSQL 表页查找与替换', () => {
     const rows = postgresFindRows(page, empty);
     const hits = pageOccurrences(findPageCells(rows, ['c1', 'c2'], options));
     expect(hits).toHaveLength(5);
-    const one = postgresFindPlan(page, rows, [note, generated], [hits[1]], '$&', empty);
+    const one = postgresFindPlan(page, rows, [note, generated], previewTextReplacementInWorker(rows, ['c1'], options, '$&', postgresTableLimits, hits[1]), empty);
     expect(one.patches[0].after).toBe('a$&\r\na');
-    const all = postgresFindPlan(page, rows, [note, generated], hits, 'x', empty);
+    const all = postgresFindPlan(page, rows, [note, generated], previewTextReplacementInWorker(rows, ['c1'], options, 'x', postgresTableLimits), empty);
     expect(all.patches).toEqual([{ row: 0, column: note, before: 'aA\r\na', after: 'xx\r\nx' }]);
   });
 
@@ -30,8 +30,8 @@ describe('PostgreSQL 表页查找与替换', () => {
         { column: 'c1', value: { mode: 'text', value: 'a草稿' } }] } : { kind: 'delete', row: 1 };
     const rows = postgresFindRows(page, prior);
     expect(rows[1].deleted).toBe(true);
-    const hits = pageOccurrences(findPageCells(rows, ['c0', 'c1'], options));
-    expect(postgresFindPlan(page, rows, [id, note], hits, 'b', prior).changes).toEqual([
+    const patches = previewTextReplacementInWorker(rows, ['c1'], options, 'b', postgresTableLimits);
+    expect(postgresFindPlan(page, rows, [id, note], patches, prior).changes).toEqual([
       { kind: 'update', row: 0, fields: [{ column: 'c0', value: { mode: 'text', value: '9007199254740993' } },
         { column: 'c1', value: { mode: 'text', value: 'b草稿' } }] },
     ]);
@@ -41,10 +41,20 @@ describe('PostgreSQL 表页查找与替换', () => {
     const rows = postgresFindRows(page, empty);
     const numbers = pageOccurrences(findPageCells(rows, ['c0'], { ...options, query: '10' }));
     expect(numbers).toHaveLength(2);
-    expect(() => postgresFindPlan(page, rows, [id], numbers, '11', empty)).toThrow('没有产生');
+    expect(() => postgresFindPlan(page, rows, [id], [{rowId: '0', key: 'c0', before: '101', after: '111'}], empty)).toThrow('草稿已变化');
     expect(findPageCells(rows, ['c1'], { ...options, kind: 'null' })).toEqual([{ rowId: '1', key: 'c1', ranges: [] }]);
-    const hits = pageOccurrences(findPageCells(rows, ['c1'], options));
-    expect(() => postgresFindPlan(page, rows, [note], hits, 'x'.repeat(65536), empty)).toThrow('预算');
-    expect(() => postgresFindPlan(page, rows, [note], hits, '\0', empty)).toThrow('无法传输');
+    const patch = { rowId: '0', key: 'c1', before: 'aA\r\na' };
+    expect(() => postgresFindPlan(page, rows, [note], [{...patch, after: 'x'.repeat(65537)}], empty)).toThrow('预算');
+    expect(() => postgresFindPlan(page, rows, [note], [{...patch, after: '\0'}], empty)).toThrow('无法传输');
+    expect(() => postgresFindPlan(page, rows, [note], [{...patch, before: '旧文本', after: '新的'}], empty)).toThrow('草稿已变化');
+  });
+  it('在线程中按 Unicode 边界处理零宽、命名捕获和实际输出预算', () => {
+    const rows = [{id: '0', data: {c1: '😀A12 B34'}, inserted: false, deleted: false}];
+    const regex = {...options, regex: true, query: '(?=(?<tag>[A-Z])([0-9]+))'};
+    const hits = pageOccurrences(findPageCellsInWorker(rows, ['c1'], regex));
+    expect(hits.map(hit => hit.range)).toEqual([{start: 2, end: 2}, {start: 6, end: 6}]);
+    expect(previewTextReplacementInWorker(rows, ['c1'], regex, '$2$<tag>', postgresTableLimits, hits[1])[0].after).toBe('😀A12 $2$<tag>B34');
+    expect(previewTextReplacementInWorker(rows, ['c1'], {...regex, captureReplacement: true}, '$2$<tag>', postgresTableLimits, hits[1])[0].after).toBe('😀A12 34BB34');
+    expect(() => previewTextReplacementInWorker(rows, ['c1'], {...regex, captureReplacement: true}, '$2'.repeat(5), {value: 10, draft: 1000})).toThrow();
   });
 });
