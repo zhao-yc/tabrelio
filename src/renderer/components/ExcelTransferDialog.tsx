@@ -1,9 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CellValue, FileChoice } from '../../shared/contracts';
-import { excelImportZh, excelRowRangeMessage, excelRowRangeSchema, validateExcelMapping, type ExcelColumn, type ExcelFieldMapping, type ExcelRowRange, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol, type ExcelTransferProgress, type ExcelTransferServices, type ExcelTransferTarget } from '../../shared/excelTransfer';
+import { excelImportZh, excelRowRangeMessage, excelRowRangeSchema, validateExcelMapping, type ExcelColumn, type ExcelImportOptions, type ExcelFieldMapping, type ExcelRowRange, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol, type ExcelTransferProgress, type ExcelTransferServices, type ExcelTransferTarget } from '../../shared/excelTransfer';
 import { excelTransferZh as text } from '../locales/excelTransfer.zh-CN';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { ExcelRowRangeFields } from './ExcelImportFields';
+import { importBatchZh } from './ImportBatchDialog';
 import { ImportMappingActions } from './ImportMappingActions';
 import { matchImportColumns } from '../importMapping';
 import { ExcelTransferLifecycle, type ExcelTaskSnapshot } from '../excelTransferLifecycle';
@@ -15,6 +16,7 @@ import '../excelTransfer.css';
 
 interface Props extends ExcelTransferTarget {
   mode: 'import' | 'export'; services: ExcelTransferServices; onClose(): void; onBack?(): void;
+  onBatch?(settings: Omit<ExcelImportOptions, 'sheetId'>): void;
   progress?: ExcelTransferProgress; onTaskStart?(taskId: string): void;
 }
 interface ReadyPreview { key: string; revision: number; sample: ExcelSheetPreview; targets: ExcelColumn[]; mapping: ExcelFieldMapping[]; }
@@ -181,6 +183,8 @@ export function ExcelTransferDialog(props: Props) {
       {mode === 'export' && <p className="info-strip">{text.exportScope}</p>}<UsageHelp><p>{mode === 'export' ? text.exportHelp : text.importLimits}</p>{mode === 'export' ? <p>{text.limits}</p> : <p>{protocol === 'plain' ? text.plainHelp : text.dbarkHelp}</p>}</UsageHelp>
       {mode === 'import' && <p className="info-strip">{text.importPolicy}</p>}
       {props.onBack && <button disabled={locked || loading} onClick={() => { if (presetCurrent() && !presetOperation.current) props.onBack?.(); }}>{text.back}</button>}
+      {mode === 'import' && props.onBatch && <button type="button" disabled={locked || loading}
+        onClick={() => { if (presetCurrent() && !presetOperation.current) props.onBatch?.({ ...rowRange, protocol }); }}>{importBatchZh.open}</button>}
       {mode === 'export' && <Field label={text.scope}><select aria-label={text.scope} disabled={busy} value={scope} onChange={event => { setScope(event.target.value as typeof scope); setDone(undefined); }}><option value="sample">{text.sample}</option><option value="all">{text.all}</option></select></Field>}
       {mode === 'import' && <details><summary>{presetsText.title}</summary>
         <ImportPresets source={JSON.stringify([contextKey, key, ready?.revision, ready?.mapping, preset])}

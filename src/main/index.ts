@@ -712,7 +712,7 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
       if (target.format !== 'xlsx') throw Error(importBatchInvalid);
     } else if (dialect === 'sqlite') {
       if (target.database !== 'main' || !profile.sqlite.filePath || profile.pendingFiles?.length) throw Error(importBatchInvalid);
-    } else if (target.format === 'xlsx' || dialect !== 'mysql' && dialect !== 'mariadb') throw Error(importBatchInvalid);
+    } else if (dialect !== 'mysql' && dialect !== 'mariadb') throw Error(importBatchInvalid);
     return profile;
   };
   check();
@@ -756,7 +756,7 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
 
 /** 预检凭证绑定原字节、文件解释和映射。任务编号和 UI 状态都不能替代它。 */
 function batchPreflightKey(input: FileImportPreflightInput): string {
-  return JSON.stringify([input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, input.csvRowRange, input.xmlOptions, input.txtOptions,
+  return JSON.stringify([input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, input.csvRowRange, input.xmlOptions, input.txtOptions, input.excelOptions,
     input.expectedSource?.sha256, input.expectedSource?.bytes, Object.entries(input.mapping).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)]);
 }
 
@@ -768,6 +768,13 @@ function batchImportPath(command: Command, input: FileImportPreflightInput & { b
   if (!columnsMain.sharesDocumentOwner(grant.owner, owner!) || shuttingDown || store.connectionRevision() !== grant.revision ||
       grant.target.format !== input.format || command !== 'files.inspectImport' && (input.connectionId !== grant.target.connectionId ||
       input.database !== grant.target.database || input.table !== grant.target.table)) throw Error(importBatchInvalid);
+  if (input.format === 'xlsx' && command !== 'files.import') {
+    const workbook = grant.workbooks?.get(input.fileToken);
+    if (!workbook?.sheets.some(sheet => sheet.id === input.excelOptions?.sheetId)) throw Error(importBatchInvalid);
+    if (command === 'files.preflight' && (input.expectedSource?.sha256 !== workbook.source.sha256 ||
+        input.expectedSource?.bytes !== workbook.source.bytes))
+      throw Error('工作簿在读取目录后已变化，请重新选择');
+  }
   if (command === 'files.inspectImport') { grant.preflights.delete(input.fileToken); return { filePath }; }
   if (command === 'files.preflight') {
     if (!input.expectedSource) throw Error('批次预检需要已扫描的原文件指纹');
@@ -779,7 +786,9 @@ function batchImportPath(command: Command, input: FileImportPreflightInput & { b
       [...grant.files.keys()].some((token, index) => token !== batch.sources[index].fileToken)) throw Error(importBatchInvalid);
   for (const source of batch.sources) {
     const proof = grant.preflights.get(source.fileToken);
-    if (proof?.key !== batchPreflightKey({ ...input, expectedSource: source.expectedSource }) ||
+    const workbookOptions = input.format === 'xlsx' && input.excelOptions && source.sheetId
+      ? { excelOptions: { ...input.excelOptions, sheetId: source.sheetId } } : {};
+    if (proof?.key !== batchPreflightKey({ ...input, ...workbookOptions, expectedSource: source.expectedSource }) ||
         proof.schema !== batch.schemaFingerprint || proof.records !== source.records) throw Error('批次预检已失效，请按当前映射重新预检全部文件');
   }
   importBatchGrant = undefined;
@@ -1198,6 +1207,7 @@ async function applySqliteSync(input: import('../shared/sqliteTableEdit').Sqlite
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
   let batchPreflightOwner: ImportBatchGrant | undefined;
+  let batchWorkbookSource: { grant: ImportBatchGrant; sha256: string; bytes: number } | undefined;
   if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.sqliteStatementTimeoutMs !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('SQLite 语句超时只能用于原 SQLite 查询会话');
@@ -2705,6 +2715,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (input.batch || input.batchToken) {
         const batch = batchImportPath(command, input as Parameters<typeof batchImportPath>[1], columns);
         if (command === 'files.preflight') batchPreflightOwner = importBatchGrant;
+        if (command === 'files.inspectImport' && input.format === 'xlsx') {
+          const grant = importBatchGrant!, workbook = grant.workbooks!.get(input.fileToken)!;
+          batchWorkbookSource = { grant, ...workbook.source };
+        }
         const { batchToken, ...request } = input;
         input = { ...request, ...batch };
       } else input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) };
@@ -2796,6 +2810,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'sessions.close' && session?.postgres) session.postgres.closing = true;
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    if (batchWorkbookSource) {
+      columnsMain.assertCapturedOwner(columns);
+      if (batchWorkbookSource.grant !== importBatchGrant || store.connectionRevision() !== batchWorkbookSource.grant.revision)
+        throw Error(importBatchInvalid);
+      const source = (result as { source: { sha256: string; bytes: number } }).source;
+      if (source.sha256 !== batchWorkbookSource.sha256 || source.bytes !== batchWorkbookSource.bytes)
+        throw Error('工作簿在读取目录后已变化，请重新选择');
+    }
     if (batchPreflightOwner && importBatchGrant === batchPreflightOwner && store.connectionRevision() === batchPreflightOwner.revision) {
       columnsMain.assertCapturedOwner(columns);
       const report = result as FileImportPreflightReport;

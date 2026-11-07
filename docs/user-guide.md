@@ -900,7 +900,7 @@ CSV 导入的“CSV 分隔符”可选择逗号（默认）、分号或制表符
 
 需要跳过报表说明、注释或汇总时，可指定字段名记录号和首末数据记录号。引号内的换行按同一条记录处理。MySQL、MariaDB、PostgreSQL 和 SQLite 的现有表导入及新表向导均可使用，PostgreSQL 原生 COPY 保留选中记录的原字节语义。[CSV 按记录范围导入](development/csv-import-row-range-20261107.md)
 
-MySQL 和 MariaDB 的现有 InnoDB 基本表支持「多文件导入」。一次选择 2 至 16 个同结构的 CSV、TXT、JSON 或 XML 文件，共用字段映射并逐份预检，确认后在同一个事务中新增。[多文件导入](development/multi-file-import-20261107.md)
+MySQL 和 MariaDB 的现有 InnoDB 基本表支持「多文件导入」。一次选择 2 至 16 个同结构的 CSV、TXT、JSON 或 XML 文件，共用字段映射并逐份预检，确认后在同一个事务中新增。选择「Excel（XLSX）」后也可点击「多文件导入」，逐本选表，共用行范围、文本协议及映射，再扫描和预检。[多文件导入](development/multi-file-import-20261107.md)
 
 PostgreSQL 现有表的导入窗口可点击「选择多个文件」。原生 CSV 和 tabrelio CSV 均可批量导入，也支持 TXT、JSON 和 XML。每个文件的记录数单独显示，所有选中的数据共用映射和一次事务。匹配键模式会一并核对跨文件的重复键。导入 XLSX 时点击「选择多个 Excel 工作簿」，逐本选定工作表，填写共用行范围和文本协议，完整扫描后核对各表记录数及映射。[PostgreSQL 多文件导入](development/multi-file-import-20261107.md#postgresql)
 

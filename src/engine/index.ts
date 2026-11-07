@@ -890,7 +890,7 @@ export class Engine {
           if (!validImportBatch({ ...input, batch, fileToken: input.fileToken, format: input.format }) || batchFiles.length !== batch.sources.length ||
               batchFiles[0].filePath !== input.filePath || batchFiles.some((file, index) => {
                 const expected = batch.sources[index];
-                return file.records !== expected.records || file.expectedSource.sha256 !== expected.expectedSource.sha256 ||
+                return file.records !== expected.records || file.sheetId !== expected.sheetId || file.expectedSource.sha256 !== expected.expectedSource.sha256 ||
                   file.expectedSource.bytes !== expected.expectedSource.bytes;
               })) throw Error(importBatchInvalid);
         }
@@ -2245,7 +2245,10 @@ export class Engine {
     for (const [index, file] of files.entries()) {
       let records = 0;
       try {
-        for await (const row of readVerifiedImportRecords({ ...input, ...file, format: input.format, encoding: input.encoding, requiredColumns, strictEncoding: true }, check, task.managed.signal)) {
+        // 每份工作簿按预检原工作表读取，范围和协议继续共用同一组已确认设置。
+        const workbookOptions = file.sheetId ? { excelOptions: { ...input.excelOptions, sheetId: file.sheetId } } : {};
+        for await (const row of readVerifiedImportRecords({ ...input, ...file, ...workbookOptions, format: input.format,
+          encoding: input.encoding, requiredColumns, strictEncoding: true }, check, task.managed.signal)) {
           if (++records > file.records) throw Error('批次文件记录数变化');
           yield row;
         }
@@ -2319,8 +2322,8 @@ export class Engine {
           return value;
         });
         let inserted: ResultSetHeader;
-        if (input.format === 'xlsx' && records) {
-          // 旧 Excel 表格入口仍沿可靠键规则，新表追加走已核验的原子导入，不要求先定义索引。
+        if (input.format === 'xlsx' && records && !input.batch) {
+          // 旧 Excel 表格入口仍沿可靠键规则。经原字节核验的新表和多文件追加可写入无键基本表。
           const change = buildChanges(info, [{ kind: 'insert', values: Object.fromEntries(mapping.map(([, target], index) => [target, values[index]])) }]).statements[0];
           inserted = await this.statement(task, change.sql, change.params);
         } else inserted = await this.statement(task, insertPrefix + '(' + mapping.map(([, target], index) => typedCellPlaceholder(columns.get(target)!, values[index])).join(', ') + ')', values);

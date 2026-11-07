@@ -7,6 +7,7 @@ import { EventEmitter } from 'node:events';
 import type { ManagedConnection } from '../../src/engine/connection';
 import type { ConnectionProfile, TableInfo, TaskEvent } from '../../src/shared/contracts';
 import { fileImportTransactionMode, fileImportTransactionModeSchema } from '../../src/shared/fileImportTransaction';
+import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { fileImportSchemaFingerprint } from '../../src/engine/fileImportPreflight';
 import { validateCommand } from '../../src/shared/validation';
 const io = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn(), metadata: vi.fn(), close: vi.fn() }));
@@ -162,6 +163,33 @@ describe('新表导入原文件指纹的真实Engine接线（离线驱动边界�
     expect(commands()).not.toContain('COMMIT');
     expect(commands().at(-1)).toBe('ROLLBACK');
   });
+  it('Excel 批次在建连前核对每份工作表编号，按预检工作表写入同一事务', async () => {
+    const first = join(folder, 'first.xlsx'), second = join(folder, 'second.xlsx');
+    await writeXlsxImportFixture(first, ['id', 'amount'], [['1', '123456789012345678.123456789012']], true);
+    await writeXlsxImportFixture(second, ['amount', 'id'], [['2.50', '2']], true, '第二本明细');
+    const batchFiles = await Promise.all([first, second].map(async (filePath, index) => ({
+      filePath, expectedSource: await fingerprint(filePath), records: 1, sheetId: String(index + 2),
+    })));
+    const batch = { token: '批次', schemaFingerprint: fileImportSchemaFingerprint(await io.metadata()),
+      sources: batchFiles.map(({ filePath: _path, ...file }, index) => ({ ...file, fileToken: '文件' + index })) };
+    const contract = { ...target, fileToken: '文件0', format: 'xlsx', encoding: 'utf8', taskId: 'Excel批次',
+      mapping: { id: 'id', amount: 'amount' }, transactionMode: 'atomic', batch,
+      excelOptions: { sheetId: '2', headerRow: 2, firstDataRow: 4, lastDataRow: 4, protocol: 'plain' } };
+    expect(validateCommand('files.import', contract)).toMatchObject(contract);
+    expect(() => validateCommand('files.import', { ...contract, excelOptions: { ...contract.excelOptions, sheetId: '3' } })).toThrow();
+    const { sheetId: _sheet, ...withoutSheet } = batch.sources[1];
+    expect(() => validateCommand('files.import', { ...contract, batch: { ...batch, sources: [batch.sources[0], withoutSheet] } })).toThrow();
+    const { excelOptions: _excel, ...plain } = contract;
+    expect(() => validateCommand('files.import', { ...plain, format: 'csv' })).toThrow();
+    const selected = { ...contract, filePath: first, batchFiles };
+    io.connect.mockClear();
+    await expect(engine.handle('files.import', { ...selected, batchFiles: [batchFiles[0], { ...batchFiles[1], sheetId: '2' }] })).rejects.toThrow('批量导入');
+    expect(io.connect).not.toHaveBeenCalled();
+    await expect(engine.handle('files.import', selected)).resolves.toEqual({ rows: 2, errors: [] });
+    expect(inserts().map(([, , params]) => params)).toEqual([['1', '123456789012345678.123456789012'], ['2', '2.50']]);
+    expect(commands().filter(sql => sql === 'COMMIT')).toHaveLength(1);
+  });
+
   it('CSV 新表只写指定记录，范围外汇总字节改动仍导致整批回滚', async () => {
     const request = await input(1), content = '报表说明\nid,amount\n附注\n4,123.45\n5,\\N\n原汇总';
     await writeFile(request.filePath, content);

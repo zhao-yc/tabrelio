@@ -1,19 +1,20 @@
 import { z } from 'zod';
 import { importFileSourceSchema } from './importNewTable';
 import type { FileChoice } from './contracts';
-import type { ExcelSheet } from './excelTransfer';
+import type { ExcelImportOptions, ExcelSheet } from './excelTransfer';
 
-export const importBatchFormats = ['csv', 'txt', 'json', 'xml'] as const;
+export const importBatchFormats = ['csv', 'txt', 'json', 'xml', 'xlsx'] as const;
 export const importBatchLimit = 16;
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(512);
 export const importBatchChooseSchema = z.object({
-  connectionId: id, database: name, table: name, format: z.enum([...importBatchFormats, 'xlsx']),
+  connectionId: id, database: name, table: name, format: z.enum(importBatchFormats),
 }).strict();
 export const importBatchReleaseSchema = z.object({ token: id }).strict();
 const source = {
   expectedSource: importFileSourceSchema,
   records: z.number().int().positive(),
+  sheetId: id.optional(),
 };
 export const importBatchSchema = z.object({
   token: id, schemaFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
@@ -33,10 +34,13 @@ export const excelWorkbookBatchSchema = z.object({
   token: id, sheets: z.array(z.object({ fileToken: id, sheetId: id }).strict()).min(2).max(importBatchLimit),
 }).strict().refine(value => new Set(value.sheets.map(sheet => sheet.fileToken)).size === value.sheets.length);
 
-export function validImportBatch(input: { batch?: ImportBatch; fileToken: string; format: string; transactionMode?: string }) {
+export function validImportBatch(input: { batch?: ImportBatch; fileToken: string; format: string; transactionMode?: string; excelOptions?: ExcelImportOptions }) {
   if (!Object.hasOwn(input, 'batch')) return true;
   return !!input.batch && importBatchFormats.some(format => format === input.format) &&
     input.transactionMode === 'atomic' && input.batch.sources[0]?.fileToken === input.fileToken &&
+    (input.format === 'xlsx'
+      ? !!input.excelOptions && input.batch.sources[0].sheetId === input.excelOptions.sheetId && input.batch.sources.every(source => !!source.sheetId)
+      : input.batch.sources.every(source => !Object.hasOwn(source, 'sheetId'))) &&
     !Object.hasOwn(input, 'expectedSource') && !Object.hasOwn(input, 'conflict');
 }
 

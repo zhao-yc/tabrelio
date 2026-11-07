@@ -947,7 +947,7 @@ export class SqliteRuntime {
     const { filePath, batchPaths, batchWorkbooks, assertCurrent, ...publicInput } = raw, input = sqliteTableImportInspectSchema.parse(publicInput);
     if (batchPaths !== undefined && (!Array.isArray(batchPaths) || batchPaths.length < 2 || batchPaths.length > importBatchLimit ||
         batchPaths[0] !== filePath || new Set(batchPaths).size !== batchPaths.length || batchPaths.some(path => typeof path !== 'string' || !path) ||
-        !importBatchFormats.some(format => format === input.format) && input.format !== 'xlsx' || input.sourceId)) throw Error('SQLite批次文件来源无效');
+        !importBatchFormats.some(format => format === input.format) || input.sourceId)) throw Error('SQLite批次文件来源无效');
     if (input.format === 'xlsx' && !!batchPaths !== !!batchWorkbooks || !!input.workbookBatch !== !!batchWorkbooks ||
         batchWorkbooks && (batchWorkbooks.length !== batchPaths?.length || batchWorkbooks.length !== input.workbookBatch?.sheets.length ||
           batchWorkbooks.some((book, index) => book.sheetId !== input.workbookBatch?.sheets[index]?.sheetId)))

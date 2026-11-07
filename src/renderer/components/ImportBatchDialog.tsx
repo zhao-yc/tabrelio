@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { importBatchLimit, type ImportBatchChoice, type ImportBatchChoose } from '../../shared/fileImportBatch';
+import { excelImportDefaults, excelImportSettingsSchema, excelImportZh, type ExcelImportOptions } from '../../shared/excelTransfer';
+import { ExcelBatchSheetFields, ExcelImportSettingsFields } from './ExcelImportFields';
 import type { ImportFileInspectOutput, ImportFileReadOptions } from '../../shared/importNewTable';
 import type { FileImportResult } from '../../shared/sqlFileImport';
 import { cellPreview, errorMessage, invoke, uid } from '../lib';
@@ -7,8 +9,9 @@ import { matchImportColumns, type ImportMappingAction } from '../importMapping';
 import { ImportMappingActions } from './ImportMappingActions';
 import { ErrorBox, Modal } from './ui';
 
+type ExcelSettings = Omit<ExcelImportOptions, 'sheetId'>;
 type Options = ImportFileReadOptions & { format: ImportBatchChoose['format'] };
-type ScannedFile = Pick<ImportFileInspectOutput, 'records' | 'source' | 'rows'> & { token: string; name: string };
+type ScannedFile = Pick<ImportFileInspectOutput, 'records' | 'source' | 'rows'> & { token: string; name: string; sheetId?: string; sheetName?: string };
 type Scan = { files: ScannedFile[]; columns: string[]; targets: string[] };
 type Operation = { taskId?: string; cancelled: boolean; cancelling?: Promise<unknown> };
 
@@ -16,6 +19,8 @@ export const importBatchZh = {
   open: '多文件导入',
   title: '向同一张表导入多个文件',
   choose: '选择并扫描多个文件',
+  chooseWorkbooks: '选择多个 Excel 工作簿',
+  workbookSheet: (index: number, name: string) => `第 ${index + 1} 本工作簿 ${name} 的工作表`,
   preflight: '预检全部文件',
   commit: '确认整批导入',
   mapping: (name: string) => '批次映射 ' + name,
@@ -31,11 +36,14 @@ export const importBatchZh = {
 } as const;
 
 /** 批次共用一份映射。扫描与预检逐文件串行，提交仅发送一次原子导入。 */
-export function ImportBatchDialog({ target, options, current, onBack, onDone }: {
+export function ImportBatchDialog({ target, options, initialExcelSettings, current, onBack, onDone }: {
   target: Omit<ImportBatchChoose, 'format'>; options: Options;
-  current(): boolean; onBack(): void; onDone(): void;
+  initialExcelSettings?: ExcelSettings; current(): boolean; onBack(): void; onDone(): void;
 }) {
   const [choiceList, setChoiceList] = useState<ImportBatchChoice['files']>([]);
+  const [sheetIds, setSheetIds] = useState<Record<string, string>>({});
+  const [excelSettings, setExcelSettings] = useState<ExcelSettings>(initialExcelSettings ?? { protocol: excelImportDefaults.protocol, headerRow: 1 });
+  const workbook = options.format === 'xlsx';
   const [scan, setScan] = useState<Scan>();
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [verified, setVerified] = useState(false);
@@ -96,15 +104,28 @@ export function ImportBatchDialog({ target, options, current, onBack, onDone }: 
   }
   function invalidatePreview() { confirmation.current = undefined; setVerified(false); }
 
-  async function chooseAndScan() {
+  const selectedSheets = choiceList.length >= 2 && choiceList.every(file => file.sheets?.some(sheet => sheet.id === sheetIds[file.token]));
+  const canScanWorkbooks = selectedSheets && excelImportSettingsSchema.safeParse(excelSettings).success;
+  const optionsFor = (sheetId?: string): Options => sheetId ? { ...options, excelOptions: { ...excelSettings, sheetId } } : options;
+  function clearScan() { invalidatePreview(); setScan(undefined); setMapping({}); }
+  function editWorkbookOptions(change: () => void) {
+    if (operation.current || submittedRef.current || !stillCurrent()) return;
+    change(); clearScan(); setError('');
+  }
+
+  async function chooseAndScan(pick: boolean) {
+    if (!pick && (!workbook || !canScanWorkbooks)) return;
     const active = begin();
     if (!active) return;
     try {
-      const choice = await invoke('files.chooseImportBatch', { ...target, format: options.format });
+      const choice = pick ? await invoke('files.chooseImportBatch', { ...target, format: options.format }) : selection.current;
       if (!choice) return;
-      if (!mounted.current || !stillCurrent() || active.cancelled) { release(choice); assertCurrent(active); }
-      selection.current = choice; setChoiceList(choice.files);
-      invalidatePreview(); setScan(undefined); setMapping({});
+      if (!mounted.current || !stillCurrent() || active.cancelled) { if (pick) release(choice); assertCurrent(active); }
+      if (pick) {
+        selection.current = choice; setChoiceList(choice.files); setSheetIds({});
+      }
+      clearScan();
+      if (pick && workbook) return;
       const info = await invoke('metadata.table', target);
       assertCurrent(active);
       if (info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB') throw Error('多文件导入只支持 InnoDB 基本表。');
@@ -116,19 +137,21 @@ export function ImportBatchDialog({ target, options, current, onBack, onDone }: 
         assertCurrent(active);
         setProgress(`扫描第 ${index + 1} 个文件，共 ${choice.files.length} 个。`);
         const taskId = uid(); active.taskId = taskId;
+        const sheet = workbook ? file.sheets?.find(item => item.id === sheetIds[file.token]) : undefined;
         const { records, columns: names, rows, source } = await invoke('files.inspectImport', {
-          ...options, fileToken: file.token, taskId, strictEncoding: true, batchToken: choice.token,
-        });
+          ...optionsFor(sheet?.id), fileToken: file.token, taskId, strictEncoding: true, batchToken: choice.token,
+        }).catch(reason => { throw Error(`第 ${index + 1} 个文件未通过扫描。${errorMessage(reason)}`); });
         active.taskId = undefined;
         assertCurrent(active);
         if (!records || !names.length) throw Error(`第 ${index + 1} 个文件没有可导入的记录。`);
         if (!columnSet) { columns = names; columnSet = new Set(names); }
         if (names.length !== columns.length || names.some(name => !columnSet!.has(name))) throw Error(`第 ${index + 1} 个文件的源字段与首个文件不一致。`);
-        files.push({ ...file, records, source, rows: rows.slice(0, 3) });
+        files.push({ token: file.token, name: file.name, records, source, rows: rows.slice(0, 3),
+          ...(sheet ? { sheetId: sheet.id, sheetName: sheet.name } : {}) });
       }
       if (!Number.isSafeInteger(files.reduce((total, file) => total + file.records, 0))) throw Error('批次记录总数超过可确认范围。');
       setScan({ files, columns, targets });
-      const positional = options.format === 'csv' && options.csvHasHeader === false || options.format === 'txt' && options.txtOptions?.hasHeader === false;
+      const positional = options.format === 'csv' && options.csvHasHeader === false || options.format === 'txt' && options.txtOptions?.hasHeader === false || workbook && excelSettings.headerRow === 0;
       const writable = new Set(targets);
       setMapping(Object.fromEntries(columns.map(column => [column, !positional && writable.has(column) ? column : ''])));
     } catch (reason) { fail(active, reason); }
@@ -159,7 +182,7 @@ export function ImportBatchDialog({ target, options, current, onBack, onDone }: 
         setProgress(`预检第 ${index + 1} 个文件，共 ${scan.files.length} 个。`);
         const taskId = uid(); active.taskId = taskId;
         const report = await invoke('files.preflight', {
-          ...target, ...options, taskId, fileToken: file.token, expectedSource: file.source, batchToken: choice.token, mapping: selectedMapping,
+          ...target, ...optionsFor(file.sheetId), taskId, fileToken: file.token, expectedSource: file.source, batchToken: choice.token, mapping: selectedMapping,
         });
         active.taskId = undefined;
         assertCurrent(active);
@@ -188,10 +211,10 @@ export function ImportBatchDialog({ target, options, current, onBack, onDone }: 
     setProgress('正在写入同一事务，等待数据库确认…');
     try {
       const receipt = await invoke('files.import', {
-        ...target, ...options, taskId, fileToken: scan.files[0].token,
+        ...target, ...optionsFor(scan.files[0].sheetId), taskId, fileToken: scan.files[0].token,
         mapping: selectedMapping, transactionMode: 'atomic',
         batch: { token: choice.token, schemaFingerprint: checked.schema, sources: scan.files.map(file => ({
-          fileToken: file.token, expectedSource: file.source, records: file.records,
+          fileToken: file.token, expectedSource: file.source, records: file.records, ...(file.sheetId ? { sheetId: file.sheetId } : {}),
         })) },
       });
       if (mounted.current) setResult(receipt);
@@ -206,13 +229,21 @@ export function ImportBatchDialog({ target, options, current, onBack, onDone }: 
   return <Modal title={importBatchZh.title} wide onClose={close}>
     <div className="modal-content" aria-busy={busy}>
       <p>{target.database}.{target.table} · {options.format.toUpperCase()} · {options.encoding.toUpperCase()}</p>
-      <p className="muted">一次选择 2 至 {importBatchLimit} 个文件，共用前一步的编码、格式选项和本页字段映射。全部文件使用一次事务新增。</p>
-      {!submitted && <button type="button" disabled={!valid || busy} onClick={() => void chooseAndScan()}>{importBatchZh.choose}</button>}
-      {!scan && choiceList.length > 0 && <ol>{choiceList.map(file => <li key={file.token}>{file.name}</li>)}</ol>}
+      <p className="muted">一次选择 2 至 {importBatchLimit} 个文件，{workbook ? '逐本选择工作表，共用行范围、文本协议和字段映射。' : '共用前一步的编码、格式选项和本页字段映射。'}全部文件使用一次事务新增。</p>
+      {!submitted && <button type="button" disabled={!valid || busy} onClick={() => void chooseAndScan(true)}>{workbook ? importBatchZh.chooseWorkbooks : importBatchZh.choose}</button>}
+      {workbook && selection.current && <><div className="form-grid">
+        <ExcelBatchSheetFields batch={selection.current} selected={sheetIds} disabled={!valid || busy || submitted}
+          labelFor={importBatchZh.workbookSheet} onSelect={(fileToken, sheetId) => editWorkbookOptions(() => setSheetIds({ ...sheetIds, [fileToken]: sheetId }))}/>
+        <ExcelImportSettingsFields options={excelSettings} disabled={!valid || busy || submitted}
+          onChange={settings => editWorkbookOptions(() => setExcelSettings(settings))}/>
+      </div>
+        {!submitted && <button type="button" disabled={!valid || busy || !canScanWorkbooks} onClick={() => void chooseAndScan(false)}>{excelImportZh.inspect}</button>}
+      </>}
+      {!workbook && !scan && choiceList.length > 0 && <ol>{choiceList.map(file => <li key={file.token}>{file.name}</li>)}</ol>}
       {scan && <>
         <p>{importBatchZh.scanned(scan.files.length, total)}</p>
         <ol>{scan.files.map(file => <li key={file.token}>
-          <details><summary>{file.name} · {file.records} 条</summary>
+          <details><summary>{file.name}{file.sheetName ? ' · ' + file.sheetName : ''} · {file.records} 条</summary>
             <table><thead><tr>{scan.columns.slice(0, 12).map(name => <th key={name}>{name}</th>)}</tr></thead>
               <tbody>{file.rows.map((row, index) => <tr key={index}>{scan.columns.slice(0, 12).map(name =>
                 <td key={name}>{cellPreview(Object.hasOwn(row, name) ? row[name] : undefined, 100)}</td>)}</tr>)}</tbody></table>
