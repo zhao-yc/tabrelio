@@ -1,13 +1,14 @@
 import { z } from 'zod';
 import { importFileSourceSchema } from './importNewTable';
 import type { FileChoice } from './contracts';
+import type { ExcelSheet } from './excelTransfer';
 
 export const importBatchFormats = ['csv', 'txt', 'json', 'xml'] as const;
 export const importBatchLimit = 16;
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(512);
 export const importBatchChooseSchema = z.object({
-  connectionId: id, database: name, table: name, format: z.enum(importBatchFormats),
+  connectionId: id, database: name, table: name, format: z.enum([...importBatchFormats, 'xlsx']),
 }).strict();
 export const importBatchReleaseSchema = z.object({ token: id }).strict();
 const source = {
@@ -26,7 +27,11 @@ export const importBatchFilesSchema = z.array(z.object({ filePath: z.string().mi
 export type ImportBatchChoose = z.infer<typeof importBatchChooseSchema>;
 export type ImportBatch = z.infer<typeof importBatchSchema>;
 export type ImportBatchFile = z.infer<typeof importBatchFilesSchema>[number];
-export interface ImportBatchChoice { token: string; files: FileChoice[] }
+export interface ImportBatchChoice { token: string; files: (FileChoice & { sheets?: ExcelSheet[] })[] }
+
+export const excelWorkbookBatchSchema = z.object({
+  token: id, sheets: z.array(z.object({ fileToken: id, sheetId: id }).strict()).min(2).max(importBatchLimit),
+}).strict().refine(value => new Set(value.sheets.map(sheet => sheet.fileToken)).size === value.sheets.length);
 
 export function validImportBatch(input: { batch?: ImportBatch; fileToken: string; format: string; transactionMode?: string }) {
   if (!Object.hasOwn(input, 'batch')) return true;

@@ -1,9 +1,10 @@
+import type { ImportBatchChoice } from '../../shared/fileImportBatch';
 import { ImportRecordRangeFields, importRangeAfterHeaderChange } from './ImportRecordRangeFields';
 import type { ImportRecordRange } from '../../shared/importRecordRange';
-import { excelImportDefaults, excelImportOptionsSchema, excelImportZh } from '../../shared/excelTransfer';
-import { ExcelImportFields } from './ExcelImportFields';
+import { excelImportDefaults, excelImportOptionsSchema, excelImportSettingsSchema, excelImportZh } from '../../shared/excelTransfer';
+import { ExcelImportFields, ExcelImportSettingsFields } from './ExcelImportFields';
 import type { FileChoice } from '../../shared/contracts';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import type { ImportFileReadOptions } from '../../shared/importNewTable';
 import { txtImportDefaults, txtImportOptionsSchema, txtImportZh, type TxtImportOptions } from '../../shared/txtImport';
@@ -45,8 +46,18 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const [encoding, setEncoding] = useState<ImportFileReadOptions['encoding']>('utf8');
   const [txtOptions, setTxtOptions] = useState<TxtImportOptions>(txtImportDefaults);
   const [workbook, setWorkbook] = useState<FileChoice | null>(null);
+  const [workbooks, setWorkbooks] = useState<ImportBatchChoice>();
+  const [sheetIds, setSheetIds] = useState<Record<string, string>>({});
   const [excelOptions, setExcelOptions] = useState(excelImportDefaults);
-  const validWorkbook = format !== 'xlsx' || !!workbook && excelImportOptionsSchema.safeParse(excelOptions).success;
+  const { sheetId: _sheetId, ...excelSettings } = excelOptions;
+  const validWorkbook = format !== 'xlsx' || (workbooks
+    ? excelImportSettingsSchema.safeParse(excelSettings).success &&
+      workbooks.files.every(file => file.sheets?.some(sheet => sheet.id === sheetIds[file.token]))
+    : !!workbook && excelImportOptionsSchema.safeParse(excelOptions).success);
+  useEffect(() => {
+    if (!workbooks) return;
+    return () => { void invoke('files.releaseImportBatch', { token: workbooks.token }).catch(() => undefined); };
+  }, [workbooks?.token]);
   const [file, setFile] = useState<PostgresTableImportChoice | null>(initialSource?.file ?? null);
   const candidates = page.columns.filter(isPostgresSqlExportColumn);
   const [mapping, setMapping] = useState<string[]>(() => initialSource?.file.header.map(name =>
@@ -93,7 +104,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     setDelimiter(value.csvDelimiter ?? ','); setHasHeader(value.csvHasHeader ?? true); setCsvRowRange(value.csvRowRange);
     if (value.xmlOptions) setXmlOptions(value.xmlOptions);
     if (value.txtOptions) setTxtOptions(value.txtOptions);
-    setWorkbook(null); setExcelOptions({ ...excelImportDefaults, ...value.excelOptions });
+    setWorkbook(null); setWorkbooks(undefined); setSheetIds({}); setExcelOptions({ ...excelImportDefaults, ...value.excelOptions });
     setPendingPreset(value); resetSource();
     setPresetNotice(value.format === 'xlsx' ? presetsText.chooseNewSheet : presetsText.chooseNewFile);
     return true;
@@ -124,17 +135,28 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     setMapping(next); setMode('insert'); setKeyId(''); setPresetNotice('');
   }
 
-  async function chooseWorkbook() {
+  async function chooseWorkbook(batch = false) {
     if (initialSource || occupied.current || presetOperation.current || format !== 'xlsx') return;
     occupied.current = true; setChoosing(true);
     try {
       if (!isCurrent()) throw Error(text.stale);
-      const selected = await invoke('files.choose', { purpose: 'import', format: 'xlsx' });
-      if (!isCurrent()) throw Error(text.stale);
-      if (selected) {
-        setWorkbook(selected); setExcelOptions({ ...excelImportDefaults, ...pendingPreset?.excelOptions }); resetSource();
-        if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
+      if (batch) {
+        const { connectionId, database, table } = target;
+        const selected = await invoke('files.chooseImportBatch', { connectionId, database, table, format: 'xlsx' });
+        if (!isCurrent()) {
+          if (selected) void invoke('files.releaseImportBatch', { token: selected.token }).catch(() => undefined);
+          throw Error(text.stale);
+        }
+        if (!selected) return;
+        setWorkbook(null); setWorkbooks(selected); setSheetIds({});
+      } else {
+        const selected = await invoke('files.choose', { purpose: 'import', format: 'xlsx' });
+        if (!isCurrent()) throw Error(text.stale);
+        if (!selected) return;
+        setWorkbook(selected); setWorkbooks(undefined); setSheetIds({});
       }
+      setExcelOptions({ ...excelImportDefaults, ...pendingPreset?.excelOptions }); resetSource();
+      if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
     } catch (reason) { setError(errorMessage(reason)); }
     finally { occupied.current = false; setChoosing(false); }
   }
@@ -149,7 +171,9 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     try {
       if (!isCurrent()) throw Error(text.stale);
       const selection = format === 'xml' ? { format, xmlOptions } : format === 'txt' ? { format, encoding, txtOptions } : format === 'json' ? { format, encoding } :
-        format === 'xlsx' ? { format, excelOptions, workbookToken: workbook!.token } :
+        format === 'xlsx' ? workbooks ? { format, excelOptions: excelSettings, workbookBatch: {
+          token: workbooks.token, sheets: workbooks.files.map(file => ({ fileToken: file.token, sheetId: sheetIds[file.token] })),
+        } } : { format, excelOptions, workbookToken: workbook!.token } :
         recordCsv ? { format, encoding, csvDelimiter: delimiter, csvHasHeader: hasHeader, ...csvRangeOption(csvRowRange) } :
         { csvDelimiter: delimiter, csvHasHeader: hasHeader, ...csvRangeOption(csvRowRange) };
       const selected = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...selection,
@@ -163,7 +187,8 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         setMapping(resolved.map(name => targets.get(name) ?? ''));
         setPresetNotice(presetsText.applied);
       } else {
-        setMapping(matchImportColumns(format !== 'csv' || hasHeader ? 'name' : 'clear', selected.header, candidates).map(column => column?.key ?? ''));
+        const positional = format === 'csv' && !hasHeader || format === 'xlsx' && !!workbooks && excelSettings.headerRow === 0;
+        setMapping(matchImportColumns(positional ? 'clear' : 'name', selected.header, candidates).map(column => column?.key ?? ''));
       }
       setFile(selected);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -211,7 +236,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
       <p>{mode === 'insert' ? text.note : text.conflictNote}</p>
       {(!['txt', 'xlsx'].includes(format) || initialSource) && <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : format === 'txt' ? txtImportZh.hint : format === 'xlsx' ? excelImportZh.hint : initialSource ? newTableText.postgresCsv : recordCsv ? text.tabrelioCsvNote : text.nullNote}</p>}
       {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
-        setFormat(event.target.value as typeof format); setWorkbook(null); setExcelOptions(excelImportDefaults); editSource();
+        setFormat(event.target.value as typeof format); setWorkbook(null); setWorkbooks(undefined); setSheetIds({}); setExcelOptions(excelImportDefaults); editSource();
       }}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xlsx">{excelImportZh.format}</option><option value="xml">XML</option></select></Field>
       <div className="pg-table-controls">
         {format === 'xml' ? <>
@@ -224,7 +249,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
           <label className="check"><input type="checkbox" checked={xmlOptions.binaryBase64} disabled={locked}
             onChange={event => { setXmlOptions({ ...xmlOptions, binaryBase64: event.target.checked }); editSource(); }}/> {xmlImportZh.binary}</label>
           </>}
-        </> : format === 'json' || format === 'txt' ? encodingField : format === 'xlsx' ? <button disabled={locked} onClick={() => void chooseWorkbook()}>{workbook?.name ?? excelImportZh.workbook}</button> : <>
+        </> : format === 'json' || format === 'txt' ? encodingField : format === 'xlsx' ? <>
+          <button disabled={locked} onClick={() => void chooseWorkbook()}>{workbook?.name ?? excelImportZh.workbook}</button>
+          <button disabled={locked} onClick={() => void chooseWorkbook(true)}>{text.chooseWorkbooks}</button>
+        </> : <>
         <Field label={text.csvProtocol}><select aria-label={text.csvProtocol} value={csvProtocol} disabled={locked}
           onChange={event => { setCsvProtocol(event.target.value as CsvImportProtocol); editSource(); }}>
           <option value="postgres-native">{text.nativeCsv}</option><option value="tabrelio">{text.tabrelioCsv}</option>
@@ -243,13 +271,28 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         {format !== 'xlsx' && <button disabled={locked || !validCsv || !validXml || !validTxt}
           onClick={() => void choose(true)}>{text.chooseBatch}</button>}
       </div>
-      {format === 'xlsx' && <><div className="form-grid"><ExcelImportFields fileToken={workbook?.token} options={excelOptions} disabled={locked} onChange={options => {
+      {format === 'xlsx' && <><div className="form-grid">{workbooks ? <>
+        {workbooks.files.map((file, index) => {
+          const label = text.workbookSheet(index, file.name);
+          return <Field key={file.token} label={label}><select aria-label={label} disabled={locked} value={sheetIds[file.token] ?? ''}
+            onChange={event => {
+              setSheetIds({ ...sheetIds, [file.token]: event.target.value }); resetSource();
+              if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
+            }}>
+            <option value="">{excelImportZh.sheet}</option>
+            {file.sheets?.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}{sheet.hidden ? excelImportZh.hidden : ''}</option>)}
+          </select></Field>;
+        })}
+        <ExcelImportSettingsFields options={excelSettings} disabled={locked} onChange={settings => {
+          setExcelOptions({ sheetId: '', ...settings }); editSource();
+        }}/>
+      </> : <ExcelImportFields fileToken={workbook?.token} options={excelOptions} disabled={locked} onChange={options => {
         setExcelOptions(options);
         if (options.sheetId !== excelOptions.sheetId) {
           resetSource();
           if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
         } else editSource();
-      }}/></div>
+      }}/>}</div>
         <button disabled={locked || !validWorkbook} onClick={() => void choose()}>{excelImportZh.inspect}</button></>}
       {format === 'txt' && <div className="form-grid"><TxtImportFields options={txtOptions} disabled={locked} onChange={options => { setTxtOptions(options); editSource(); }}/></div>}
       {format === 'csv' && <div className="form-grid">
@@ -270,7 +313,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         {file.files && <>
           <p>{text.batchHint}</p>
           <ol aria-label={text.batchFiles}>{file.files.map((item, index) =>
-            <li key={index}>{item.name} · {text.records(item.records)}</li>)}</ol>
+            <li key={index}>{item.name}{item.sheet ? ' · ' + item.sheet : ''} · {text.records(item.records)}</li>)}</ol>
         </>}
         <fieldset disabled={locked}>
           <legend>{text.columns}</legend>

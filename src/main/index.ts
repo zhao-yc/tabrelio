@@ -1,3 +1,4 @@
+import { listExcelWorkbookSource } from '../engine/excelFiles';
 import { csvRangeOption } from '../shared/csvImport';
 import { inspectPostgresRecordImportSource } from '../engine/postgres/recordImportFile';
 import { postgresImportColumnOrder, postgresImportFileRecords, type PostgresImportFile, type PostgresImportSource } from '../engine/postgres/importSource';
@@ -175,7 +176,7 @@ const sessions = new Map<string, { connectionId: string; postgres?: { owner: Col
 const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatement: boolean; executionSqlReceived: boolean }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 type BatchPreflight = { taskId: string; key?: string; schema?: string; records?: number };
-type ImportBatchGrant = { token: string; owner: MainInvocation; target: ImportBatchChoose; dialect: 'mysql' | 'mariadb' | 'sqlite'; revision: number; files: Map<string, string>; paths: readonly string[]; preflights: Map<string, BatchPreflight> };
+type ImportBatchGrant = { token: string; owner: MainInvocation; target: ImportBatchChoose; dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql'; revision: number; files: Map<string, string>; paths: readonly string[]; workbooks?: Map<string, Awaited<ReturnType<typeof listExcelWorkbookSource>>>; preflights: Map<string, BatchPreflight> };
 let importBatchGrant: ImportBatchGrant | undefined;
 let choosingImportBatch = false;
 const resultSqlPreviews = new ResultSqlPreviews(files);
@@ -703,8 +704,11 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
     columnsMain.assertCapturedOwner(owner);
     connectionConfig.assertAvailable(target.connectionId);
     const dialect = store.connections().find(profile => profile.id === target.connectionId)?.dialect;
-    if (shuttingDown || revision !== store.connectionRevision() ||
-        dialect !== 'mysql' && dialect !== 'mariadb' && (dialect !== 'sqlite' || target.database !== 'main')) throw Error(importBatchInvalid);
+    if (shuttingDown || revision !== store.connectionRevision()) throw Error(importBatchInvalid);
+    if (dialect === 'postgresql') {
+      if (target.format !== 'xlsx') throw Error(importBatchInvalid);
+    } else if (target.format === 'xlsx' || dialect !== 'mysql' && dialect !== 'mariadb' && (dialect !== 'sqlite' || target.database !== 'main'))
+      throw Error(importBatchInvalid);
     return dialect;
   };
   check();
@@ -723,8 +727,19 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
           new Set(chosen.filePaths).size !== chosen.filePaths.length) throw Error(`请选择 2 至 ${importBatchLimit} 个不同文件`);
       const selected = new Map(chosen.filePaths.map(path => [randomUUID(), path]));
       const token = randomUUID();
-      importBatchGrant = { token, owner: owner!, target, dialect, revision, files: selected, paths: [...selected.values()], preflights: new Map() };
-      return { token, files: [...selected].map(([token, path]) => ({ token, name: basename(path) })) };
+      const workbooks = target.format === 'xlsx' ? new Map<string, Awaited<ReturnType<typeof listExcelWorkbookSource>>>() : undefined;
+      if (workbooks) for (const [index, [fileToken, path]] of [...selected].entries()) {
+        try { workbooks.set(fileToken, await listExcelWorkbookSource({ filePath: path, checkCancelled: check })); }
+        catch (reason) {
+          check();
+          throw Error(`第 ${index + 1} 本工作簿无法读取目录。${reason instanceof Error ? reason.message : '读取失败'}`);
+        }
+      }
+      check();
+      importBatchGrant = { token, owner: owner!, target, dialect, revision, files: selected, paths: [...selected.values()], workbooks, preflights: new Map() };
+      return { token, files: [...selected].map(([token, path]) => ({
+        token, name: basename(path), ...(workbooks ? { sheets: workbooks.get(token)!.sheets } : {}),
+      })) };
     });
   } finally { choosingImportBatch = false; }
 }
@@ -738,7 +753,7 @@ function batchPreflightKey(input: FileImportPreflightInput): string {
 function batchImportPath(command: Command, input: FileImportPreflightInput & { batch?: ImportBatch }, owner?: MainInvocation) {
   const grant = importBatchGrant;
   const filePath = grant?.files.get(input.fileToken);
-  if (!grant || grant.dialect === 'sqlite' || !filePath || (input.batchToken ?? input.batch?.token) !== grant.token) throw Error(importBatchInvalid);
+  if (!grant || grant.dialect !== 'mysql' && grant.dialect !== 'mariadb' || !filePath || (input.batchToken ?? input.batch?.token) !== grant.token) throw Error(importBatchInvalid);
   columnsMain.assertCapturedOwner(owner);
   if (!columnsMain.sharesDocumentOwner(grant.owner, owner!) || shuttingDown || store.connectionRevision() !== grant.revision ||
       grant.target.format !== input.format || command !== 'files.inspectImport' && (input.connectionId !== grant.target.connectionId ||
@@ -1413,11 +1428,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     postgresImportChoosing.add(document);
     postgresImportFiles.delete(document);
     return queryFileOperation(async () => {
+      let workbookGrant: ImportBatchGrant | undefined;
       /** 文件对话框和只读检查的回包只归原文档与连接修订。 */
       const check = () => {
         columnsMain.assertCapturedOwner(columns);
         connectionConfig.assertAvailable(target.connectionId);
-        if (shuttingDown || revision !== store.connectionRevision() ||
+        if (shuttingDown || revision !== store.connectionRevision() || workbookGrant && workbookGrant !== importBatchGrant ||
             store.connections().find(profile => profile.id === target.connectionId)?.dialect !== 'postgresql')
           throw Error('PostgreSQL 导入的原连接已变化，请重新选择');
       };
@@ -1429,8 +1445,22 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const formatName = format.toUpperCase();
         const workbookToken = records && target.format === 'xlsx' ? target.workbookToken : undefined;
         const fileToken = scanned?.token ?? workbookToken;
-        const batch = 'batch' in target && target.batch === true;
-        const paths = fileToken ? [resolveFileToken(files, fileToken, 'import', format)] : await dialog.showOpenDialog(columns!.owner.window,
+        const workbookBatch = 'workbookBatch' in target ? target.workbookBatch : undefined;
+        if (workbookBatch) {
+          const grant = importBatchGrant;
+          if (!grant?.workbooks || grant.dialect !== 'postgresql' || grant.token !== workbookBatch.token ||
+              !columnsMain.sharesDocumentOwner(grant.owner, columns!) || grant.revision !== revision ||
+              grant.target.format !== format ||
+              (['connectionId', 'database', 'table'] as const).some(key => grant.target[key] !== target[key]) ||
+              grant.files.size !== workbookBatch.sheets.length ||
+              [...grant.files.keys()].some((token, index) => token !== workbookBatch.sheets[index].fileToken ||
+                !grant.workbooks!.get(token)?.sheets.some(sheet => sheet.id === workbookBatch.sheets[index].sheetId)))
+            throw Error('Excel 批次或工作表选择已失效，请重新选择工作簿');
+          workbookGrant = grant;
+        }
+        const batch = !!workbookBatch || 'batch' in target && target.batch === true;
+        const paths = workbookGrant ? workbookGrant.paths :
+          fileToken ? [resolveFileToken(files, fileToken, 'import', format)] : await dialog.showOpenDialog(columns!.owner.window,
           { title: batch ? `选择多个 PostgreSQL ${formatName} 文件` : `选择 PostgreSQL ${formatName} 文件`,
             properties: batch ? ['openFile', 'multiSelections'] : ['openFile'],
             filters: [{ name: formatName, extensions: format === 'csv' ? ['csv', 'tsv'] : [format] }] })
@@ -1439,26 +1469,36 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         if (!paths.length) return null;
         if (batch && (paths.length < 2 || paths.length > importBatchLimit || new Set(paths).size !== paths.length))
           throw Error(`请选择 2 至 ${importBatchLimit} 个不同文件`);
-        const inspect = (path: string) => records
-          ? inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
+        const inspect = async (path: string, index: number) => {
+          const selection = workbookBatch?.sheets[index];
+          const result = records
+          ? await inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
             target.format === 'csv' ? { format: 'csv', encoding: target.encoding, csvDelimiter: target.csvDelimiter, csvHasHeader: target.csvHasHeader, ...csvRangeOption(target.csvRowRange) } :
               target.format === 'txt' ? { format: 'txt', encoding: target.encoding, txtOptions: target.txtOptions } :
-                target.format === 'xlsx' ? { format: 'xlsx', encoding: 'utf8', excelOptions: target.excelOptions } :
+                target.format === 'xlsx' ? { format: 'xlsx', encoding: 'utf8', excelOptions: {
+                  ...target.excelOptions, sheetId: selection?.sheetId ?? ('sheetId' in target.excelOptions ? target.excelOptions.sheetId : ''),
+                } } :
                 { format: 'json', encoding: target.encoding }, check)
-          : inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader, target.csvRowRange, check, batch);
-        const first = await inspect(paths[0]);
+          : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader, target.csvRowRange, check, batch);
+          const original = selection && workbookGrant?.workbooks?.get(selection.fileToken)?.source;
+          if (selection && (!original || !('sha256' in result.source) ||
+              result.source.sha256 !== original.sha256 || result.source.bytes !== original.bytes))
+            throw Error('工作簿在读取目录后已变化，请重新选择工作簿');
+          return result;
+        };
+        const first = await inspect(paths[0], 0);
         check();
         // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
         if (scanned && (!('sha256' in first.source) || first.source.sha256 !== scanned.expectedSource.sha256 || first.source.bytes !== scanned.expectedSource.bytes))
           throw Error(`${formatName} 源文件已变化，请退出向导并核对已创建的表`);
         const selected: PostgresImportFile[] = [first.source];
-        let batchFiles: { name: string; records: number }[] | undefined;
+        let batchFiles: { name: string; records: number; sheet?: string }[] | undefined;
         let count = 'records' in first.source ? first.source.records : undefined;
         let bytes = first.source.bytes;
         if (batch) {
           for (const [index, path] of paths.slice(1).entries()) {
             try {
-              const { source } = await inspect(path);
+              const { source } = await inspect(path, index + 1);
               check();
               if (!postgresImportColumnOrder(first.source.header, source.header))
                 throw Error('源字段与第一个文件不匹配');
@@ -1470,11 +1510,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           }
           let recordsTotal = 0;
           bytes = 0;
-          batchFiles = selected.map(source => {
+          batchFiles = selected.map((source, index) => {
             const records = postgresImportFileRecords(source);
             if (!records) throw Error('批次中有文件没有可导入的记录');
             recordsTotal += records; bytes += source.bytes;
-            return { name: basename(source.path), records };
+            const selection = workbookBatch?.sheets[index];
+            const sheet = selection && workbookGrant?.workbooks?.get(selection.fileToken)?.sheets.find(sheet => sheet.id === selection.sheetId)?.name;
+            return { name: basename(source.path), records, ...(sheet ? { sheet } : {}) };
           });
           count = recordsTotal;
           if (!Number.isSafeInteger(count) || !Number.isSafeInteger(bytes)) throw Error('批次记录数或字节数超过可确认范围');
@@ -2530,6 +2572,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           ('format' in file.target ? file.target.format : undefined) !== input.format ||
           (['connectionId', 'database', 'table', 'tabId', 'pageToken'] as const).some(key => file.target[key] !== input[key]))
         throw Error('PostgreSQL 导入的原表页或源文件选择已失效');
+      if ('workbookBatch' in file.target && file.target.workbookBatch && importBatchGrant?.token !== file.target.workbookBatch.token)
+        throw Error('Excel 批次已失效，请重新选择工作簿');
       if (input.conflict && !file.conflictKeys.some(key => key.id === input.conflict.keyId))
         throw Error('PostgreSQL 未为原文件签发此匹配键，请重新选择文件');
       const profile = store.resolveConnection(input.connectionId);

@@ -307,6 +307,17 @@ export async function listExcelSheets(input: ExcelReadOptions): Promise<ExcelShe
   finally { await zip.close(); }
 }
 
+/** 批次工作表目录与整份原字节在同一 ZIP 句柄中读取，扫描时凭摘要核对原授权。 */
+export async function listExcelWorkbookSource(input: ExcelReadOptions) {
+  const zip = await ExcelZipArchive.open(input.filePath, input.checkCancelled);
+  try {
+    let bytes = 0;
+    const sha256 = await zip.fingerprint(chunk => { bytes += chunk.length; });
+    const sheets = (await inspectWorkbook(zip)).map(({ id, name, hidden }) => ({ id, name, hidden }));
+    return { sheets, source: { sha256, bytes } };
+  } finally { await zip.close(); }
+}
+
 /** 无标题时先流式确定所选范围的最宽列数，避免首行稀疏时遗漏后续字段。 */
 async function* worksheetRecords(zip: ExcelZipArchive, sheet: InternalSheet, input: ExcelSheetReadOptions, maximumCells: number,
   onColumns: (columns: string[]) => void): AsyncGenerator<DataRow> {

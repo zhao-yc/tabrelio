@@ -1,5 +1,6 @@
 export const postgresTableImportZh = {
-  chooseBatch: '选择多个文件',
+  chooseBatch: '选择多个文件', chooseWorkbooks: '选择多个 Excel 工作簿',
+  workbookSheet: (index: number, name: string) => `第 ${index + 1} 本工作簿 ${name} 的工作表`,
   batchHint: '所有文件共用文件解释和映射，在同一个事务中提交。样本来自第一个文件。',
   batchFiles: '批次文件',
   open: '导入数据', title: '导入数据到 PostgreSQL 表', choose: '选择 CSV 文件', format: '导入格式', chooseXml: '选择 XML 文件', chooseJson: '选择 JSON 文件', chooseTxt: '选择 TXT 文件',

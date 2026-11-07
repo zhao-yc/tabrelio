@@ -1,6 +1,7 @@
 import { importRecordRangeSchema } from './importRecordRange';
 import { csvRangeInvalid, validCsvRange } from './csvImport';
-import { excelImportOptionsSchema } from './excelTransfer';
+import { excelImportOptionsSchema, excelImportSettingsSchema } from './excelTransfer';
+import { excelWorkbookBatchSchema } from './fileImportBatch';
 import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { txtImportOptionsSchema } from './txtImport';
 import { recordImportFormats, xmlImportOptionsSchema } from './xmlImport';
@@ -277,6 +278,9 @@ export const postgresTableImportChooseSchema = z.union([
   target.extend({ pageToken: token, format: z.literal('xlsx'), excelOptions: excelImportOptionsSchema,
     workbookToken: token, scannedFile: z.never().optional(),
   }).strict(),
+  target.extend({ pageToken: token, format: z.literal('xlsx'), excelOptions: excelImportSettingsSchema,
+    workbookBatch: excelWorkbookBatchSchema, workbookToken: z.never().optional(), scannedFile: z.never().optional(),
+  }).strict(),
   target.extend({ pageToken: token, format: z.literal('json'), encoding: recordImportEncoding,
     batch: z.literal(true).optional(), scannedFile: scannedImportFile.optional(),
   }).strict(),
@@ -303,7 +307,7 @@ export interface PostgresTableImportChoice {
   sample: (string | null)[][];
   sampleLimited: boolean;
   conflictKeys?: PostgresImportKey[];
-  files?: { name: string; records: number }[];
+  files?: { name: string; records: number; sheet?: string }[];
 }
 export type PostgresTableTarget = z.infer<typeof target>;
 export type PostgresTablePageInput = z.infer<typeof postgresTablePageSchema>;

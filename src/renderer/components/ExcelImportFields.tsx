@@ -43,14 +43,24 @@ export function ExcelImportFields({ fileToken, options, disabled, frozen = false
       {frozen ? <option value={options.sheetId}>{options.sheetId}</option> : catalogue?.sheets?.map(sheet =>
         <option key={sheet.id} value={sheet.id}>{sheet.name}{sheet.hidden ? text.hidden : ''}</option>)}
     </select></Field>
-    <ExcelRowRangeFields range={options} disabled={disabled || frozen} onChange={range => onChange({ ...options, ...range })}/>
-    <Field label={text.protocol}><select aria-label={text.protocol} value={options.protocol} disabled={disabled || frozen}
+    <ExcelImportSettingsFields options={options} disabled={disabled || frozen}
+      onChange={settings => onChange({ ...options, ...settings })}/>
+    {fileToken && !catalogue && !frozen && <Spinner text={text.reading}/>}
+    {catalogue?.error && <ErrorBox message={catalogue.error}/>}
+  </>;
+}
+
+/** 单工作簿和批次共用同一行范围及值协议。 */
+export function ExcelImportSettingsFields({ options, disabled, onChange }: {
+  options: Omit<ExcelImportOptions, 'sheetId'>; disabled: boolean; onChange(options: Omit<ExcelImportOptions, 'sheetId'>): void;
+}) {
+  return <>
+    <ExcelRowRangeFields range={options} disabled={disabled} onChange={range => onChange({ ...options, ...range })}/>
+    <Field label={text.protocol}><select aria-label={text.protocol} value={options.protocol} disabled={disabled}
       onChange={event => onChange({ ...options, protocol: event.target.value as ExcelImportOptions['protocol'] })}>
       <option value="plain">{text.plain}</option><option value="dbark-v1">{text.reversible}</option>
     </select></Field>
     <p className="muted small">{text.rangeHint} {text.hint}</p>
     {!excelRowRangeSchema.safeParse(options).success && <ErrorBox message={excelRowRangeMessage}/>}
-    {fileToken && !catalogue && !frozen && <Spinner text={text.reading}/>}
-    {catalogue?.error && <ErrorBox message={catalogue.error}/>}
   </>;
 }

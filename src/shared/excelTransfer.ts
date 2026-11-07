@@ -18,9 +18,13 @@ export function validExcelRowRange({ headerRow = 1, firstDataRow = headerRow + 1
 }
 export const excelRowRangeSchema = z.object(excelRowRangeShape).refine(validExcelRowRange, excelRowRangeMessage);
 
-export const excelImportOptionsSchema = z.object({
-  sheetId: z.string().min(1).max(200), ...excelRowRangeShape,
+const excelImportSettings = {
+  ...excelRowRangeShape,
   protocol: z.enum(['plain', 'dbark-v1']),
+};
+export const excelImportSettingsSchema = z.object(excelImportSettings).strict().refine(validExcelRowRange, excelRowRangeMessage);
+export const excelImportOptionsSchema = z.object({
+  sheetId: z.string().min(1).max(200), ...excelImportSettings,
 }).strict().refine(validExcelRowRange, excelRowRangeMessage);
 export type ExcelImportOptions = z.infer<typeof excelImportOptionsSchema>;
 export const excelImportDefaults: ExcelImportOptions = { sheetId: '', headerRow: 1, protocol: 'plain' };

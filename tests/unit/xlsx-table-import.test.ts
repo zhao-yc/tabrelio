@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import ExcelJS from 'exceljs';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { inspectImportFile, readVerifiedImportRecords } from '../../src/engine/importNewTableSource';
-import { listExcelSheets } from '../../src/engine/excelFiles';
+import { listExcelSheets, listExcelWorkbookSource } from '../../src/engine/excelFiles';
 import { validateCommand } from '../../src/shared/validation';
 import { sqliteImportSourceOptionsKey } from '../../src/shared/sqliteImportSource';
 import { fileImportTransactionMode } from '../../src/shared/fileImportTransaction';
@@ -33,6 +33,9 @@ it('指定第二张工作表和第 2 行标题，保留精确值与工作簿字�
   await workbook('中文🚢');
   expect((await listExcelSheets({filePath})).map(sheet => [sheet.id, sheet.name])).toEqual([['1', '首张'], ['2', '所选🚢']]);
   const bytes = await readFile(filePath);
+  const directory = await listExcelWorkbookSource({filePath});
+  expect(directory.sheets.map(sheet => [sheet.id, sheet.name])).toEqual([['1', '首张'], ['2', '所选🚢']]);
+  expect(directory.source).toMatchObject({ bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
   const inspected = await inspectImportFile({...options, filePath, strictEncoding: true}, () => {});
   expect(inspected).toMatchObject({columns: ['id', 'note', 'bytes', 'empty'], records: 2, source: {
     bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'),
@@ -44,6 +47,16 @@ it('指定第二张工作表和第 2 行标题，保留精确值与工作簿字�
   await workbook('变化🚢');
   const changed = readVerifiedImportRecords({...options, filePath, expectedSource: inspected.source}, () => {});
   await expect(changed.next()).rejects.toThrow('变化');
+});
+
+it('PostgreSQL 的 Excel 批次要求不同文件分别指定工作表', () => {
+  const target = { connectionId: 'connection', database: 'db', table: 'table', tabId: 'tab', pageToken: '129b6636-5d3b-4c58-b15c-918f07e0bcde' };
+  const sheets = [{ fileToken: 'file-a', sheetId: '2' }, { fileToken: 'file-b', sheetId: '3' }];
+  const input = { ...target, format: 'xlsx', excelOptions: { headerRow: 2, protocol: 'dbark-v1' },
+    workbookBatch: { token: 'group', sheets } };
+  expect(validateCommand('postgres.table.importChoose', input)).toMatchObject(input);
+  expect(() => validateCommand('postgres.table.importChoose', { ...input, workbookToken: 'file-a' })).toThrow();
+  expect(() => validateCommand('postgres.table.importChoose', { ...input, workbookBatch: { token: 'group', sheets: [sheets[0], sheets[0]] } })).toThrow();
 });
 
 it('样本之外的公式仍阻止整张工作表通过检查', async () => {
