@@ -46,3 +46,12 @@ it('PostgreSQL 清空预览必须明确序列策略，拒绝级联和任意目�
     { ...target, identity: 'continue', tables: ['其他表'] }, { ...target, identity: 'continue', name: '另一表' }])
     expect(postgresTableManagePreviewSchema.safeParse(input).success).toBe(false);
 });
+
+it('PostgreSQL 移表预览只接受目标 schema 和原目录摘要', () => {
+  const draft = { connectionId: 'saved', database: 'qa', table: '"来源"."原表"', stamp: 'a'.repeat(64),
+    action: 'move', schema: '新"区域' };
+  expect(postgresTableManagePreviewSchema.parse(draft)).toEqual(draft);
+  for (const input of [{ ...draft, schema: undefined }, { ...draft, schema: '长'.repeat(22) },
+    { ...draft, name: '另一表' }, { ...draft, database: '' }, { ...draft, sql: 'ALTER TABLE t SET SCHEMA other' }])
+    expect(postgresTableManagePreviewSchema.safeParse(input).success).toBe(false);
+});

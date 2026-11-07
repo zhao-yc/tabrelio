@@ -4,7 +4,7 @@ import { postgresSequenceTargets, readPostgresSequence, readPostgresSequenceAllo
 import { createHash, randomUUID } from 'node:crypto';
 import {
   postgresCreateTablePlan, type PostgresCreateTableApply, type PostgresCreateTableInput,
-  type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget, type PostgresTruncateScope,
+  type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget, type PostgresTruncateScope, type PostgresTableMoveScope,
 } from '../../shared/postgresCreateTable';
 import type { PostgresConnection } from './connection';
 import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery,
@@ -22,6 +22,7 @@ import { postgresTableCopySql, readPostgresCopyColumns, readPostgresCopySource }
 import { postgresTableManagePreviewSchema, type PostgresTableManageInput } from '../../shared/postgresTableManage';
 import { readPostgresTableManageFacts } from './tableManage';
 import { postgresTableTruncatePlan } from './tableTruncate';
+import { postgresTableMovePlan } from './tableMove';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -37,6 +38,7 @@ interface Plan {
   guard?: { sql: string; stamp: string; parseOnly?: true; changed?: string };
   identity?: string;
   truncateScope?: PostgresTruncateScope;
+  moveScope?: PostgresTableMoveScope;
   statementTimeout?: '120s';
   firstCommand?: 'SELECT';
   lock?: string;
@@ -397,9 +399,13 @@ export class PostgresCreateTableWorkspace {
       const original = await readPostgresTableManageFacts(connection, schema, name);
       if (connection.database !== draft.database || original.stamp !== draft.stamp || !original[draft.action]) throw Error(changed);
       if (draft.action === 'truncate') return postgresTableTruncatePlan(connection, original, draft);
+      // 同一表移动 schema 或改名时，工作台继续使用相同的物理身份。
+      const identity = createHash('sha256').update(JSON.stringify([draft.database, original.oid, original.startedAt])).digest('hex');
+      // Parse / Sync 持有原关系的共享锁，既不读数据，也不要求 schema 所有者拥有表的 SELECT。
+      const guard = { sql: 'SELECT 1 FROM ONLY ' + originalTable + ' WHERE FALSE', stamp: original.stamp, parseOnly: true as const, changed };
+      if (draft.action === 'move') return { ...await postgresTableMovePlan(connection, original, draft), guard, identity };
       const base = {
-        // Parse / Sync 持有原关系的共享锁，既不读数据，也不要求 schema 所有者拥有表的 SELECT。
-        guard: { sql: 'SELECT 1 FROM ONLY ' + originalTable + ' WHERE FALSE', stamp: original.stamp, parseOnly: true as const, changed },
+        guard,
         protocol: 'extended' as const,
         async preflight(current: PostgresConnection) {
           const actual = await readPostgresTableManageFacts(current, schema, name);
@@ -414,7 +420,7 @@ export class PostgresCreateTableWorkspace {
         const identifier = postgresIdentifier(draft.name);
         return {
           ...base, table: prefix + identifier, success: 'PostgreSQL 表已确认重命名',
-          identity: createHash('sha256').update(JSON.stringify([draft.database, original.namespace, original.oid])).digest('hex'),
+          identity,
           statements: ['ALTER TABLE ' + originalTable + ' RENAME TO ' + identifier],
           async verify(current) {
             if ((await readPostgresTableManageFacts(current, schema, draft.name)).stamp !== original.stamp)
@@ -538,7 +544,7 @@ export class PostgresCreateTableWorkspace {
       this.plans.set(key, { input: { connectionId, database, owner, connectionRevision }, token, targetStamp, plan, expires: now + 300_000 });
       const first = plan.lock ?? (plan.guard && !plan.guard.parseOnly ? plan.guard.sql : undefined);
       return { token, statements: first ? [first, ...plan.statements] : plan.statements,
-        ...(plan.truncateScope ? { truncateScope: plan.truncateScope } : {}) };
+        ...(plan.truncateScope ? { truncateScope: plan.truncateScope } : {}), ...(plan.moveScope ? { moveScope: plan.moveScope } : {}) };
     } finally { this.pending.delete(key); }
   }
 

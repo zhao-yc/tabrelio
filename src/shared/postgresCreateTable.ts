@@ -60,7 +60,10 @@ export type PostgresCreateTableInput = z.infer<typeof postgresCreateTablePreview
 export type PostgresCreateColumn = z.infer<typeof postgresCreateColumnSchema>;
 export type PostgresCreateTableApply = z.infer<typeof postgresCreateTableApplySchema>;
 export interface PostgresTruncateScope { tables: string[]; sequences: string[]; }
-export interface PostgresCreateTablePreview { token: string; statements: string[]; truncateScope?: PostgresTruncateScope; }
+export interface PostgresTableMoveScope { indexes: string[]; constraints: string[]; sequences: string[]; }
+export interface PostgresCreateTablePreview {
+  token: string; statements: string[]; truncateScope?: PostgresTruncateScope; moveScope?: PostgresTableMoveScope;
+}
 export interface PostgresCreateTableOutcome {
   outcome: 'committed' | 'notSent' | 'rolledBack' | 'unknown';
   message: string;

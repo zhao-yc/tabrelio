@@ -1,10 +1,16 @@
-# PostgreSQL 表重命名与受限删除
+# PostgreSQL 表管理
 
 从表记录页或对象目录打开「查看结构 → 管理表」。窗口按当前连接身份显示可执行的操作。普通表、分区父表和分区子表可在同一个 schema 内改名。执行者需要拥有表及 schema 的 CREATE 权限。核对新名称和 SQL，再点击「确认重命名」。成功后按新名称打开记录页，原表的数据、OID 和数据库依赖保留。若旧表已有收藏且新名称没有冲突，收藏会迁移并保留自定义标签。[PostgreSQL ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html)
 
 普通非分区表的表所有者或 schema 所有者可选择「删除表」。核对 `DROP TABLE … RESTRICT`，输入原表名再确认。删除移除表结构及数据。若视图、外键等对象阻止删除，PostgreSQL 会拒绝并回滚。分区父表和子表的操作列表仅提供改名。[PostgreSQL DROP TABLE](https://www.postgresql.org/docs/18/sql-droptable.html)
 
 提交前会检查同一表及拟用名称下的标签页，发现草稿或正在运行的操作会停止。预览只读，单次确认先在同一事务内解析原关系以持有锁，再复核原表 OID 与管理权限。DDL 执行后还会核对目录，确认成功才提交。遇到未知回执时，先从原数据库核对关系，确认后再决定下一步。
+
+## 移动到其他 schema
+
+在「查看结构 → 管理表」选择「移动到其他 schema」。执行者须拥有原表，目标列表只显示当前角色有 USAGE 和 CREATE 权限的其他 schema。核对 `ALTER TABLE … SET SCHEMA` 以及预览列出的随迁索引、约束和拥有的序列，然后确认。表、记录、视图依赖与外键关联保留原身份。分区父表与子表可分别移动，分区关联保留。[PostgreSQL ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html)
+
+预览会检查目标同名关系或类型。提交时重新核对原表 OID、随迁对象和目标 schema OID，再验证原表及随迁对象已到达目标位置。成功后按新位置打开记录页，符合迁移条件的收藏也会更新。原名或目标名有草稿或活动任务时，先处理这些标签页。
 
 ## 清空数据
 
@@ -23,3 +29,9 @@ macOS arm64 运行时检查、严格类型检查、构建和 70 项相关单测�
 ## 清空数据验证
 
 macOS arm64 运行时检查、类型检查、构建及 71 项相关单测通过。Server-200 隔离 PostgreSQL 18.6 通过 4 项 Electron 用例及 1 项表页实库回归。实测两种序列策略、触发器、外键回滚、原标签刷新、授权清空、分区和传统继承范围，以及等锁期间同名替换。隔离连接、转发及容器已清理。Windows 测试会话不可达，Windows、安装包和其他 PostgreSQL 版本待验。
+
+## 跨 schema 移动验证
+
+macOS arm64 运行时检查、类型检查、构建及 72 项相关单测通过。Server-200 隔离 PostgreSQL 18.6 通过 6 项 Electron 用例及 1 项表页实库回归。独立连接核对了含引号名称、随迁索引和约束、序列进度、原外键和视图依赖，以及分区父子表分别移动。原生界面核对了冲突提示和收藏往返迁移。
+
+随迁对象、源表或目标 schema 在确认时发生变化，旧预览会被拒绝。测试还在 ALTER 已发出后替换目标 schema，提交前 OID 核验触发回滚。隔离连接、转发及容器已清理。Windows 测试会话不可达，Windows、安装包和其他 PostgreSQL 版本待验。

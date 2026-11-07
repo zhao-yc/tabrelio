@@ -188,8 +188,8 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
     ...(materialized ? { materialized: parsePostgresMaterializedFacts(materialized).state } : {}) };
   const tableManage = result.rows[0].c7;
   if (typeof tableManage === 'string') {
-    const { stamp, rename, drop, truncate } = parsePostgresTableManageFacts(tableManage);
-    output.tableManage = { stamp, rename, drop, truncate };
+    const { stamp, rename, move, drop, truncate } = parsePostgresTableManageFacts(tableManage);
+    output.tableManage = { stamp, rename, move, drop, truncate };
   }
   return { output, oid, indexIds, keyIds, foreignIds, checkIds };
 }
