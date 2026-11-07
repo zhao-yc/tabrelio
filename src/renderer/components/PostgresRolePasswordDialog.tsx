@@ -1,16 +1,16 @@
 import { useRef, useState } from 'react';
 import { postgresRolePasswordApplySchema, type PostgresRoleChangeOutcome, type PostgresRoleChangePreview,
-  type PostgresRolePasswordDraft } from '../../shared/postgresRoles';
+  type PostgresRolePasswordDraft, type PostgresRolePasswordResetDraft } from '../../shared/postgresRoles';
 import { errorMessage, invoke } from '../lib';
 import { postgresRolesZh as roles } from '../locales/postgresRoles.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
 
-const t = roles.password;
-
 export function PostgresRolePasswordDialog({target, current, onClose, onEditConnection}: {
-  target: PostgresRolePasswordDraft; current(): boolean; onClose(invalidate: boolean): void; onEditConnection(): void;
+  target: PostgresRolePasswordDraft | PostgresRolePasswordResetDraft;
+  current(): boolean; onClose(invalidate: boolean): void; onEditConnection?(): void;
 }) {
+  const t = 'stamp' in target ? roles.passwordReset : roles.password;
   const [preview, setPreview] = useState<PostgresRoleChangePreview>();
   const [outcome, setOutcome] = useState<PostgresRoleChangeOutcome>();
   const [busy, setBusy] = useState(false), [confirmed, setConfirmed] = useState(false), [error, setError] = useState('');
@@ -24,7 +24,8 @@ export function PostgresRolePasswordDialog({target, current, onClose, onEditConn
     if (pending.current || outcome && !retryable || !current()) return;
     pending.current = true; setBusy(true); setError(''); setPreview(undefined); setConfirmed(false); setOutcome(undefined);
     try {
-      const result = await invoke('postgres.roles.password.preview', target);
+      const result = 'stamp' in target ? await invoke('postgres.roles.passwordReset.preview', target) :
+        await invoke('postgres.roles.password.preview', target);
       if (!current()) throw Error(roles.changed);
       setPreview(result);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -39,7 +40,9 @@ export function PostgresRolePasswordDialog({target, current, onClose, onEditConn
     if (!request.success || request.data.password !== repeat.current.value) { setError(roles.create.passwordMismatch); return; }
     password.current.value = ''; repeat.current.value = '';
     pending.current = true; setBusy(true); setError(''); setConfirmed(false);
-    try { setOutcome(await invoke('postgres.roles.password.apply', request.data)); }
+    try {
+      setOutcome(await invoke('stamp' in target ? 'postgres.roles.passwordReset.apply' : 'postgres.roles.password.apply', request.data));
+    }
     catch { setOutcome({outcome: 'unknown', message: t.unknown}); }
     finally { pending.current = false; setBusy(false); }
   }
@@ -66,8 +69,9 @@ export function PostgresRolePasswordDialog({target, current, onClose, onEditConn
     </div>
     <footer className="modal-footer">
       <button disabled={busy} onClick={close}>{zh.common.close}</button>
-      {outcome?.outcome === 'committed' ?
-        <button className="primary" disabled={!current()} onClick={onEditConnection}>{t.editConnection}</button> :
+      {outcome?.outcome === 'committed' && onEditConnection &&
+        <button className="primary" disabled={!current()} onClick={onEditConnection}>{roles.password.editConnection}</button>}
+      {outcome?.outcome !== 'committed' &&
         <button className="primary" disabled={busy || !!outcome || !preview || !confirmed || !current()} onClick={() => void apply()}>{t.apply}</button>}
     </footer>
   </Modal>;

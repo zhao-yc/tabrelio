@@ -1553,3 +1553,121 @@ test('PostgreSQL 角色重命名保留身份、权限和 SCRAM 并清除旧 MD5'
     expect(native.exitCode).toBe(0);
   } finally {await Promise.all([observer.end(), admin.end()]);}
 });
+
+test('PostgreSQL 管理员重置角色密码并阻止同名替换', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  const newPassword = process.env.DBARK_PG_ROLES_ROTATION_NEW ?? '', alternate = process.env.DBARK_PG_ROLES_ROTATION_OLD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' ||
+      ![password, adminPassword, newPassword, alternate].every(value => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', manager = prefix + 'creator', target = prefix + 'reset';
+  const racing = prefix + 'reset_race', blocked = prefix + 'reset_denied', inactive = prefix + 'reset_inactive';
+  const endpoint = {host: '127.0.0.1', port, database, connectionTimeoutMillis: 3000};
+  const admin = new Client({...endpoint, user: 'postgres', password: adminPassword});
+  const observer = new Client({...endpoint, user: 'postgres', password: adminPassword});
+  const login = async (user: string, secret: string) => {
+    const client = new Client({...endpoint, user, password: secret});
+    try {await client.connect(); return (await client.query('SELECT current_user::text AS name')).rows[0].name;}
+    finally {await client.end();}
+  };
+  await admin.connect();
+  try {
+    await observer.connect();
+    await admin.query(`CREATE ROLE ${target} LOGIN NOINHERIT CONNECTION LIMIT 3 VALID UNTIL '2099-06-07 08:09:00+00' PASSWORD '${password}';
+      CREATE ROLE ${racing} LOGIN CONNECTION LIMIT 4 PASSWORD '${password}'; CREATE ROLE ${blocked};
+      CREATE ROLE ${inactive} NOLOGIN CONNECTION LIMIT 0;
+      GRANT ${target},${racing},${inactive} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`);
+    const read = async (name: string) => (await admin.query(`SELECT oid::text,rolcanlogin AS login,rolinherit AS inherit,rolconnlimit AS lim,
+      rolvaliduntil::text AS expiry,rolpassword LIKE 'SCRAM-SHA-256$%' AS scram FROM pg_catalog.pg_authid WHERE rolname=$1`, [name])).rows[0];
+    const original = await read(target);
+    expect(original).toMatchObject({login: true, inherit: false, lim: 3, scram: true});
+    expect((await admin.query("SELECT pg_catalog.pg_has_role($1::name,$2::name,'SET') AS allowed", [manager, target])).rows[0].allowed).toBe(false);
+    expect(await login(target, password)).toBe(target);
+
+    const profile = await page.evaluate(async ({database, port, manager, password}) => window.dbark.invoke('connections.save', {
+      id: '', dialect: 'postgresql', name: '普通 CREATEROLE 重置密码', group: '', color: '#123456', host: '127.0.0.1',
+      port, database, user: manager, password, rememberPassword: false,
+    }), {database, port, manager, password});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const locale = t.passwordReset, modal = page.getByRole('dialog', {name: t.title, exact: true});
+    const dialog = page.getByRole('dialog', {name: locale.title, exact: true});
+    const directory = modal.getByRole('region', {name: t.directory, exact: true});
+    const select = async (name: string) => {
+      await modal.getByLabel(t.search, {exact: true}).fill(name);
+      await modal.getByRole('button', {name: t.read, exact: true}).click();
+      await directory.getByRole('button', {name, exact: true}).click();
+      await expect(modal.getByRole('region', {name: t.attributes, exact: true}).getByRole('heading', {name, exact: true})).toBeVisible();
+    };
+    const prepareDirect = async (name: string, oid: string) => page.evaluate(async ({connectionId, database, name, oid}) => {
+      const role = {name, oid};
+      const result = await window.dbark.invoke('postgres.roles.read', {kind: 'detail', taskId: crypto.randomUUID(), connectionId, database, role});
+      if (result.kind !== 'detail' || !result.attributeEditor) throw Error('缺少角色管理入口');
+      return window.dbark.invoke('postgres.roles.passwordReset.preview', {connectionId, database, role, stamp: result.attributeEditor.stamp});
+    }, {connectionId: profile.id, database, name, oid});
+    const confirmDirect = (planToken: string, secret: string) => page.evaluate(async ({connectionId, database, token, password}) =>
+      window.dbark.invoke('postgres.roles.passwordReset.apply', {connectionId, database, token, confirmed: true, password}),
+    {connectionId: profile.id, database, token: planToken, password: secret});
+
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profile.id);
+    await select(blocked);
+    await expect(modal.getByRole('button', {name: locale.open, exact: true})).toHaveCount(0);
+    await select(target);
+    await modal.getByRole('button', {name: locale.open, exact: true}).click();
+    await dialog.getByRole('button', {name: locale.preview, exact: true}).click();
+    await expect(dialog.getByLabel(locale.sql, {exact: true})).toHaveText(
+      `ALTER ROLE "${target}" WITH PASSWORD <客户端生成的 SCRAM 验证值> CONNECTION LIMIT 0; ALTER ROLE "${target}" WITH CONNECTION LIMIT 3`);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 管理员重置密码预览.png')});
+    await expect(dialog.getByRole('button', {name: locale.apply, exact: true})).toBeDisabled();
+    await dialog.getByLabel(locale.secret, {exact: true}).fill(newPassword);
+    await dialog.getByLabel(t.create.repeat, {exact: true}).fill(newPassword);
+    await dialog.getByRole('checkbox', {name: locale.confirm, exact: true}).check();
+    await dialog.getByRole('button', {name: locale.apply, exact: true}).click();
+    await expect(dialog.getByRole('status')).toHaveText(locale.committed);
+    await expect(dialog.getByRole('button', {name: t.password.editConnection, exact: true})).toHaveCount(0);
+    await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await expect(modal.getByRole('button', {name: locale.open, exact: true})).toBeEnabled();
+    expect(await read(target)).toEqual(original);
+    expect(await login(target, newPassword)).toBe(target);
+    await expect(login(target, password)).rejects.toMatchObject({code: '28P01'});
+
+    const inactiveOriginal = await read(inactive);
+    const inactivePlan = await prepareDirect(inactive, inactiveOriginal.oid);
+    expect(inactivePlan.sql).toContain('CONNECTION LIMIT 1;');
+    expect(await confirmDirect(inactivePlan.token, newPassword)).toMatchObject({outcome: 'committed'});
+    expect(await confirmDirect(inactivePlan.token, alternate)).toMatchObject({outcome: 'notSent'});
+    expect(await read(inactive)).toEqual({...inactiveOriginal, scram: true});
+
+    const originalRace = await read(racing), racePlan = await prepareDirect(racing, originalRace.oid);
+    await admin.query('BEGIN; LOCK TABLE pg_catalog.pg_authid IN SHARE ROW EXCLUSIVE MODE');
+    const applying = confirmDirect(racePlan.token, newPassword);
+    void applying.catch(() => undefined);
+    try {
+      await expect.poll(async () => (await observer.query(`SELECT EXISTS(SELECT FROM pg_catalog.pg_stat_activity
+        WHERE wait_event_type='Lock' AND query LIKE $1) AS waiting`, ['ALTER ROLE "' + racing + '" WITH PASSWORD%'])).rows[0].waiting,
+      {timeout: 3500}).toBe(true);
+      // 管理员也能修改替换角色，验证失败必须来自原角色回读，并回滚密码与临时连接数。
+      await admin.query(`ALTER ROLE ${racing} RENAME TO ${racing}_old;
+        CREATE ROLE ${racing} LOGIN CONNECTION LIMIT 6 PASSWORD '${alternate}';
+        GRANT ${racing} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE; COMMIT`);
+    } finally {await admin.query('ROLLBACK');}
+    expect(await applying).toMatchObject({outcome: 'rolledBack'});
+    expect(await read(racing + '_old')).toEqual(originalRace);
+    expect(await read(racing)).toMatchObject({lim: 6, scram: true});
+    expect(await login(racing + '_old', password)).toBe(racing + '_old');
+    expect(await login(racing, alternate)).toBe(racing);
+    await expect(login(racing, newPassword)).rejects.toMatchObject({code: '28P01'});
+
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([observer.end(), admin.end()]);}
+});

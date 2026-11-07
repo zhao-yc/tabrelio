@@ -62,7 +62,7 @@ import { readPostgresRoles } from './roles';
 import { PostgresRoleChanges } from './roleChanges';
 import { PostgresObjectPrivilegeChanges } from './objectPrivileges';
 import { PostgresRoleMembership } from './roleMembership';
-import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRoleAttributesDraftSchema, postgresRoleRenameDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresColumnPrivilegeDraftSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from '../../shared/postgresRoles';
+import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRoleAttributesDraftSchema, postgresRoleRenameDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordResetDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresColumnPrivilegeDraftSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from '../../shared/postgresRoles';
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
@@ -1093,6 +1093,8 @@ export class PostgresEngine {
       case 'postgres.roles.password.apply':
       case 'postgres.roles.attributes.preview':
       case 'postgres.roles.attributes.apply':
+      case 'postgres.roles.passwordReset.preview':
+      case 'postgres.roles.passwordReset.apply':
       case 'postgres.roles.rename.preview':
       case 'postgres.roles.rename.apply':
       case 'postgres.roles.tablePrivileges.preview':
@@ -1114,6 +1116,8 @@ export class PostgresEngine {
         if (command === 'postgres.roles.password.apply') return this.roleChanges.apply('password', {...postgresRolePasswordApplySchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.attributes.preview') return this.roleChanges.preview({...postgresRoleAttributesDraftSchema.parse(request), kind: 'attributes', owner, connectionRevision}, connect);
         if (command === 'postgres.roles.attributes.apply') return this.roleChanges.apply('attributes', {...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.passwordReset.preview') return this.roleChanges.preview({...postgresRolePasswordResetDraftSchema.parse(request), kind: 'passwordReset', owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.passwordReset.apply') return this.roleChanges.apply('passwordReset', {...postgresRolePasswordApplySchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.rename.preview') return this.roleChanges.preview({...postgresRoleRenameDraftSchema.parse(request), kind: 'rename', owner, connectionRevision}, connect);
         if (command === 'postgres.roles.rename.apply') return this.roleChanges.apply('rename', {...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.tablePrivileges.preview') return this.objectPrivileges.preview({...postgresTablePrivilegeDraftSchema.parse(request), owner, connectionRevision}, connect);

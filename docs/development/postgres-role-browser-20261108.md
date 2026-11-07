@@ -91,3 +91,11 @@ PUBLIC 包含当前及将来创建的角色。撤销 CONNECT 后，仅通过 PUB
 在 PostgreSQL 16 及以上的角色详情点击「重命名角色」，输入服务器范围内未占用的新名称，核对原角色 OID 和 SQL 后确认。普通 CREATEROLE 管理员须对目标角色拥有 ADMIN 选项。角色改名保留原 OID、成员关系和对象授权。当前登录角色与预定义角色不提供此入口。[PostgreSQL ALTER ROLE](https://www.postgresql.org/docs/18/sql-alterrole.html)
 
 新连接需要使用新用户名，已保存的连接可在连接编辑中手动更新。PostgreSQL 会保留 SCRAM 密码，并清除以旧用户名为盐的 MD5 密码。预览和确认会核对角色 OID、原属性及新名可用性，提交前会在同一事务中确认原 OID 已对应新名称。
+
+## 管理员重置角色密码
+
+使用 PostgreSQL 16 及以上的管理连接打开目标角色详情，点击「重置角色密码」。超级用户可以管理其他角色。普通执行者须具有 CREATEROLE 和目标角色的 ADMIN 选项，且目标不能是超级用户或复制角色。当前登录角色使用独立的密码轮换入口。[PostgreSQL ALTER ROLE](https://www.postgresql.org/docs/18/sql-alterrole.html)
+
+核对目标角色和 SQL，输入两次新密码，再勾选确认并执行。客户端仅在执行时生成带随机盐的 SCRAM 验证值并提交给 PostgreSQL。重置在整台服务器上生效，保留目标角色的登录状态、密码有效期和连接数上限。已保存的连接配置需按各自用途手动更新。[PostgreSQL 密码认证](https://www.postgresql.org/docs/18/auth-password.html)
+
+确认时重新核对角色 OID、名称、原属性和管理员权限。更改密码的同一条语句会临时设置不同的连接数上限，用于在重复读事务内确认写入命中原 OID。客户端在提交前恢复并复核原上限，核对失败则回滚。遇到提交状态未知时，使用目标角色的独立新连接核对密码。

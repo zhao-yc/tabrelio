@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DataRow } from '../../shared/contracts';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import { postgresRoleAttributeFlags, type PostgresRole, type PostgresRoleAttributeEditor, type PostgresRoleAttributesDraft,
-  type PostgresRoleRef, type PostgresRoleRenameDraft } from '../../shared/postgresRoles';
+  type PostgresRolePasswordResetDraft, type PostgresRoleRef, type PostgresRoleRenameDraft } from '../../shared/postgresRoles';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 
@@ -111,6 +111,19 @@ export async function prepareRoleRename(connection: PostgresConnection, draft: P
   if (availability.rows[0]?.c1 !== 't') throw Error('新角色名称超过服务器标识符长度限制');
   return {...target, expected: {...original, name: draft.name},
     sql: 'ALTER ROLE ' + postgresIdentifier(original.name) + ' RENAME TO ' + postgresIdentifier(draft.name)};
+}
+
+export async function prepareRolePasswordReset(connection: PostgresConnection, draft: PostgresRolePasswordResetDraft) {
+  const {role: original} = await readRole(connection, draft.role);
+  const target = await readRoleManagementTarget(connection, original);
+  if (!target?.attributeEditor) throw Error('当前角色无权重置此角色的密码，或目标是当前登录角色');
+  if (target.database !== draft.database || target.attributeEditor.stamp !== draft.stamp)
+    throw Error('原角色属性或数据库已变化，请重新读取角色目录');
+  const limit = original.connectionLimit === 0 ? 1 : 0;
+  const alter = 'ALTER ROLE ' + postgresIdentifier(original.name) + ' WITH ';
+  return {...target, expected: {...original, connectionLimit: limit},
+    sql: (password: string) => alter + 'PASSWORD ' + password + ' CONNECTION LIMIT ' + limit,
+    restore: {expected: original, sql: alter + 'CONNECTION LIMIT ' + original.connectionLimit}};
 }
 
 /** 在重复读快照中核对原 OID 的完整属性。本事务以外的同名变更不能提供提交证据。 */

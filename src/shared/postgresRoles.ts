@@ -45,6 +45,9 @@ const rolePassword = z.string().min(1).max(1024).refine(value =>
   !/[\u0000\uD800-\uDFFF]/u.test(value) && new TextEncoder().encode(value).byteLength <= 1024, '请输入 1 至 1024 字节的密码');
 export const postgresRoleCreateApplySchema = postgresMembershipApplySchema.extend({password: rolePassword.optional()});
 export const postgresRolePasswordDraftSchema = z.object({...membershipTarget, role}).strict();
+export const postgresRolePasswordResetDraftSchema = z.object({...membershipTarget, database: identifier, role,
+  stamp: z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export type PostgresRolePasswordResetDraft = z.infer<typeof postgresRolePasswordResetDraftSchema>;
 export const postgresRolePasswordApplySchema = postgresMembershipApplySchema.extend({password: rolePassword});
 export const postgresRoleAttributeFlags = ['login', 'inherit', 'createDatabase', 'createRole', 'superuser', 'replication', 'bypassRls'] as const;
 export type PostgresRoleAttributeFlag = typeof postgresRoleAttributeFlags[number];

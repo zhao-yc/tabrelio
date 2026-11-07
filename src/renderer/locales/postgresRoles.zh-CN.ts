@@ -81,6 +81,14 @@ export const postgresRolesZh = {
     editConnection: '编辑此连接的密码', committed: '已提交密码轮换。请更新连接配置并测试新密码。',
     unknown: '密码轮换状态未知。请先使用独立新连接核对密码，再更新连接配置。',
   },
+  passwordReset: {
+    title: '重置 PostgreSQL 角色密码', open: '重置角色密码',
+    hint: '此操作修改目标角色在整台服务器上的密码。事务内临时使用连接数上限确认原角色，提交前恢复原值。登录状态和密码有效期保持原值。',
+    preview: '预览密码重置 SQL', sql: '本次密码重置 SQL', secret: '新登录密码',
+    confirm: '确认重置此服务器上的目标角色密码', apply: '执行密码重置',
+    committed: '已提交密码重置。请使用目标角色的独立新连接验证。',
+    unknown: '密码重置状态未知。请先使用目标角色的独立新连接核对密码。',
+  },
   editAttributes: {
     title: '编辑 PostgreSQL 角色属性', open: '编辑角色属性',
     hint: '角色属性在整台服务器上生效。停用登录不会断开已有会话。密码有效期仅影响密码认证。',

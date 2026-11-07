@@ -166,3 +166,14 @@ it('角色重命名绑定原 OID 和属性摘要，新名称按服务器标识�
   expect(() => validateCommand('postgres.roles.rename.apply', {connectionId: 'saved', database: 'qa',
     token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true, name: draft.name})).toThrow();
 });
+
+it('管理员重置密码的预览仅接受目标与目录摘要，执行才接收密码', () => {
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '101', name: '目标角色'}, stamp: 'a'.repeat(64)};
+  expect(validateCommand('postgres.roles.passwordReset.preview', draft)).toEqual(draft);
+  for (const input of [{...draft, database: undefined}, {...draft, stamp: 'old'}, {...draft, password: '合成密码'}])
+    expect(() => validateCommand('postgres.roles.passwordReset.preview', input)).toThrow();
+  const apply = {connectionId: 'saved', database: 'qa', token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true, password: '合成密码'};
+  expect(validateCommand('postgres.roles.passwordReset.apply', apply)).toEqual(apply);
+  for (const input of [{...apply, password: undefined}, {...apply, confirmed: false}, {...apply, role: draft.role}])
+    expect(() => validateCommand('postgres.roles.passwordReset.apply', input)).toThrow();
+});

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { PostgresConnectionProfile } from '../../shared/contracts';
 import { postgresDatabasePrivileges, postgresRoutinePrivileges, postgresSchemaPrivileges, postgresSequencePrivileges, postgresTablePrivileges, type PostgresObjectPrivilege,
   type PostgresColumnPrivilegeEditor, type PostgresScopedPrivilegeEditor, type PostgresTablePrivilegeEditor } from '../../shared/postgresRoles';
-import type { PostgresRole, PostgresRoleAttributeEditor, PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRoleRef, PostgresRolesInput, PostgresRolesList, PostgresRolesOutput } from '../../shared/postgresRoles';
+import type { PostgresRole, PostgresRoleAttributeEditor, PostgresRoleDetail, PostgresRoleMembership, PostgresRolePasswordDraft,
+  PostgresRolePasswordResetDraft, PostgresRolePrivilege, PostgresRoleRef, PostgresRolesInput, PostgresRolesList, PostgresRolesOutput } from '../../shared/postgresRoles';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresRolesZh as t } from '../locales/postgresRoles.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -72,7 +73,9 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
   const [objectAccess, setObjectAccess] = useState<RoleSource & {role: PostgresRoleRef; scope: Scope; editor: PrivilegeEditor; privileges: readonly PostgresObjectPrivilege[]}>();
   const [attributes, setAttributes] = useState<RoleSource & {role: PostgresRole; editor: PostgresRoleAttributeEditor; scope?: Scope}>();
   const [rename, setRename] = useState<RoleSource & {role: PostgresRoleRef; stamp: string}>();
-  const [rotation, setRotation] = useState<RoleSource & {role: PostgresRoleRef}>();
+  const [passwordChange, setPasswordChange] = useState<RoleSource & {
+    target: PostgresRolePasswordDraft | PostgresRolePasswordResetDraft; scope?: Scope;
+  }>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
   const connection = connections.find(profile => profile.id === connectionId);
@@ -141,13 +144,15 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
       setSearch(name);
       readList(name);
     }}/>;
-  if (rotation) return <PostgresRolePasswordDialog
-    target={{connectionId: rotation.connection.id, database: rotation.database, role: rotation.role}}
-    current={() => sourceCurrent(rotation)} onClose={invalidate => {
-      setRotation(undefined);
-      if (invalidate) reset();
-    }} onEditConnection={() => {
-      if (sourceCurrent(rotation)) onEditConnection(rotation.connection);
+  if (passwordChange) return <PostgresRolePasswordDialog target={passwordChange.target}
+    current={() => sourceCurrent(passwordChange)} onClose={refresh => {
+      setPasswordChange(undefined);
+      if (!refresh) return;
+      if ('stamp' in passwordChange.target) {
+        if (sourceCurrent(passwordChange)) readDetail(passwordChange.target.role, passwordChange.scope);
+      } else reset();
+    }} onEditConnection={'stamp' in passwordChange.target ? undefined : () => {
+      if (sourceCurrent(passwordChange)) onEditConnection(passwordChange.connection);
     }}/>;
   if (creation) return <PostgresRoleCreateDialog connectionId={creation.connection.id} database={creation.database}
     current={() => sourceCurrent(creation)} onClose={name => {
@@ -214,12 +219,19 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
         <h3>{role.name}</h3>
         {connection && role.login && role.oid === detail.snapshot.current.oid && role.name === detail.snapshot.login && role.name === connection.user &&
           <button disabled={busy} onClick={() => {
-            setRotation({connection, version, database: detail.snapshot.database, role: {oid: role.oid, name: role.name}});
+            const database = detail.snapshot.database;
+            setPasswordChange({connection, version, database, target: {connectionId, database, role: {oid: role.oid, name: role.name}}});
           }}>{t.password.open}</button>}
         {connection && detail.snapshot.attributeEditor && <button disabled={busy} onClick={() => {
           const editor = detail.snapshot.attributeEditor;
           if (editor) setAttributes({connection, version, database: detail.snapshot.database, role, editor, scope: detail.scope});
         }}>{t.editAttributes.open}</button>}
+        {connection && detail.snapshot.attributeEditor && <button disabled={busy} onClick={() => {
+          const stamp = detail.snapshot.attributeEditor?.stamp;
+          const database = detail.snapshot.database;
+          if (stamp) setPasswordChange({connection, version, database, scope: detail.scope,
+            target: {connectionId, database, role: {oid: role.oid, name: role.name}, stamp}});
+        }}>{t.passwordReset.open}</button>}
         {connection && detail.snapshot.renameStamp && <button disabled={busy} onClick={() => {
           const stamp = detail.snapshot.renameStamp;
           if (stamp) setRename({connection, version, database: detail.snapshot.database, role: {oid: role.oid, name: role.name}, stamp});

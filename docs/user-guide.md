@@ -418,6 +418,8 @@ TLS 默认验证服务端证书。私有 CA 或自签证书使用 CA 文件；�
 
 在角色窗口点击「查看当前角色」后，可[轮换当前登录密码](development/postgres-role-browser-20261108.md#轮换当前登录密码)。核对脱敏预览并确认后，点击「编辑此连接的密码」，重新输入新密码并测试、保存。
 
+使用具备权限的 PostgreSQL 16+ 管理连接，在目标角色详情可[重置其他角色密码](development/postgres-role-browser-20261108.md#管理员重置角色密码)。核对脱敏预览后输入新密码并确认。原登录状态和密码有效期保持原值。
+
 在角色详情可[编辑现有角色属性](development/postgres-role-browser-20261108.md#编辑现有角色属性)，为其他角色启用或停用登录，并修改连接上限与密码有效期。
 
 在角色详情也可[重命名角色](development/postgres-role-browser-20261108.md#重命名角色)，核对原 OID、目标名称和密码影响后确认。
