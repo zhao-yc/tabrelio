@@ -71,9 +71,10 @@ import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { csvExportDelimiter } from '../shared/csvExport';
 import { csvImportHasHeader, csvRangeInvalid, csvRangeOption, validCsvRange } from '../shared/csvImport';
-import { preflightImportFile } from './fileImportPreflight';
+import { fileImportSchemaFingerprint, preflightImportFile } from './fileImportPreflight';
 import type { FileImportPreflightInput } from '../shared/fileImportPreflight';
 import { fileImportTransactionMode, fileImportTransactionText } from '../shared/fileImportTransaction';
+import { importBatchFilesSchema, importBatchInvalid, importBatchSchema, validImportBatch, type ImportBatchFile } from '../shared/fileImportBatch';
 import { ResultFileTasks } from './resultFileTasks';
 import { ImportFileInspectTasks } from './importFileInspectTasks';
 import { readVerifiedImportRecords } from './importNewTableSource';
@@ -882,6 +883,17 @@ export class Engine {
       case 'files.importKeys': return this.readImportKeys(input);
       case 'files.import': {
         this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
+        let batchFiles: ImportBatchFile[] | undefined;
+        if (Object.hasOwn(input, 'batch') || Object.hasOwn(input, 'batchFiles')) {
+          const batch = importBatchSchema.parse(input.batch);
+          batchFiles = importBatchFilesSchema.parse(input.batchFiles);
+          if (!validImportBatch({ ...input, batch, fileToken: input.fileToken, format: input.format }) || batchFiles.length !== batch.sources.length ||
+              batchFiles[0].filePath !== input.filePath || batchFiles.some((file, index) => {
+                const expected = batch.sources[index];
+                return file.records !== expected.records || file.expectedSource.sha256 !== expected.expectedSource.sha256 ||
+                  file.expectedSource.bytes !== expected.expectedSource.bytes;
+              })) throw Error(importBatchInvalid);
+        }
         // 请求配置错误在建连及SQL运行回执之前拒绝；importFile内仍保留同一防线。
         if (!validCsvRange(input)) throw Error(csvRangeInvalid);
         if (Object.hasOwn(input, 'csvHasHeader')) {
@@ -912,7 +924,12 @@ export class Engine {
           }
         }
         const evidence: NonNullable<RunningTask['fileImport']> = { committing: false, finalCommit: false, commitAcknowledged: false, committedRows: 0 };
-        try { return await this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => { task.fileImport = evidence; return this.importFile(task, input); }), input.database, mode === 'atomic'); }
+        try {
+          return await this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => {
+            task.fileImport = evidence;
+            return this.importFile(task, input, batchFiles && this.readImportBatch(task, input, batchFiles));
+          }), input.database, mode === 'atomic');
+        }
         catch (error) {
           if (!evidence.commitAcknowledged || !evidence.result) { if (evidence.failure && error !== evidence.failure) throw Error(`${evidence.failure.message}；附加收尾错误：${this.errorMessage(error)}`); throw error; }
           // 物理关闭晚失败不能抹掉已收到的COMMIT ACK，也不自动重新导入。
@@ -2220,6 +2237,25 @@ export class Engine {
     if (input.expectedSource === undefined || !recordImportFormats.includes(input.format) || mode !== 'atomic' || Object.hasOwn(input, 'conflict')) throw Error('原文件指纹仅允许数据文件整文件事务新增，不允许冲突策略');
     return importFileSourceSchema.parse(input.expectedSource);
   }
+
+  /** 按选择顺序耗尽各文件，只有每份原字节和记录数都通过才允许原事务提交。 */
+  private async *readImportBatch(task: RunningTask, input: Input, files: readonly ImportBatchFile[]): AsyncGenerator<DataRow> {
+    const check = () => this.checkCancelled(task);
+    const requiredColumns = input.format === 'xml' ? Object.keys(input.mapping) : undefined;
+    for (const [index, file] of files.entries()) {
+      let records = 0;
+      try {
+        for await (const row of readVerifiedImportRecords({ ...input, ...file, format: input.format, encoding: input.encoding, requiredColumns, strictEncoding: true }, check, task.managed.signal)) {
+          if (++records > file.records) throw Error('批次文件记录数变化');
+          yield row;
+        }
+        if (records !== file.records) throw Error('批次文件记录数变化');
+      } catch {
+        check();
+        throw Error(`第 ${index + 1} 个文件的内容、格式或记录数与扫描结果不符，请重新选择并预检`);
+      }
+    }
+  }
   private async importFile(task: RunningTask, input: Input, records?: AsyncIterable<DataRow>): Promise<{ rows: number; errors: string[] }> {
     const transactionMode = fileImportTransactionMode(input.format, input), atomic = transactionMode === 'atomic';
     const expectedSource = this.assertExpectedImportSource(input, transactionMode);
@@ -2236,6 +2272,7 @@ export class Engine {
     const plan = (info: Awaited<ReturnType<typeof metadata.tableInfo>>) => {
       if (info.engine.toUpperCase() !== 'INNODB') throw new Error('数据文件导入仅支持 InnoDB 表，以保证失败可回滚');
       if (atomic && info.objectKind !== 'table') throw new Error('整文件原子提交仅支持可确认的 InnoDB 基本表');
+      if (input.batch && fileImportSchemaFingerprint(info) !== input.batch.schemaFingerprint) throw Error('目标表结构已变化，请重新扫描并预检批次');
       const columns = new Map(info.columns.map(column => [column.name, column])), mapping = Object.entries(input.mapping as Record<string, string>);
       if (!mapping.length) throw new Error('请至少映射一个源字段');
       if (new Set(mapping.map(([, target]) => target)).size !== mapping.length) throw new Error('多个源字段不能映射到同一个目标字段');

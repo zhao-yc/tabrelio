@@ -10,7 +10,7 @@ export interface FileImportPreflightInput {
   csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; csvRowRange?: ImportRecordRange; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions;
   /** 新表导入绑定最初完整扫描的原字节，样本及映射不能替代该指纹。 */
   expectedSource?: import('./importNewTable').ImportFileSource;
-  mapping: Record<string, string>; taskId: string;
+  batchToken?: string; mapping: Record<string, string>; taskId: string;
 }
 export interface FileImportPreflightIssue {
   record?: number; source?: string; target?: string;

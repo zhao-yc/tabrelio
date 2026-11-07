@@ -106,6 +106,8 @@ import { SnippetTransfers } from './snippetTransfer';
 import { snippetTransferZh } from '../shared/snippetTransfer';
 import { assertConnectionReady } from '../shared/connectionTransfer';
 import { confirmConnectionFiles, resolveFileToken, revokeConnectionFiles } from './fileTokens';
+import { importBatchInvalid, importBatchLimit, type ImportBatch, type ImportBatchChoose } from '../shared/fileImportBatch';
+import type { FileImportPreflightInput, FileImportPreflightReport } from '../shared/fileImportPreflight';
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { ExportReservations } from './exportReservations';
 import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
@@ -171,6 +173,10 @@ const sessions = new Map<string, { connectionId: string; postgres?: { owner: Col
 // 历史上下文由引擎在会话互斥内报告，不能由渲染进程提供或从较早的标签状态推测。
 const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatement: boolean; executionSqlReceived: boolean }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
+type BatchPreflight = { taskId: string; key?: string; schema?: string; records?: number };
+type ImportBatchGrant = { token: string; owner: MainInvocation; target: ImportBatchChoose; revision: number; files: Map<string, string>; preflights: Map<string, BatchPreflight> };
+let importBatchGrant: ImportBatchGrant | undefined;
+let choosingImportBatch = false;
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
 let networkSyncTarget: { dialect: 'postgres' | 'mysql'; snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
@@ -680,6 +686,70 @@ async function chooseFile(input: any): Promise<{ token: string; name: string } |
   return { token, name: basename(filePath) };
 }
 
+/** 批次授权仅供原文档的扫描、预检和一次提交，子令牌不能经普通文件接口解出路径。 */
+async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocation) {
+  columnsMain.assertCapturedOwner(owner);
+  const revision = store.connectionRevision();
+  const check = () => {
+    columnsMain.assertCapturedOwner(owner);
+    connectionConfig.assertAvailable(target.connectionId);
+    const dialect = store.connections().find(profile => profile.id === target.connectionId)?.dialect;
+    if (shuttingDown || revision !== store.connectionRevision() || dialect !== 'mysql' && dialect !== 'mariadb') throw Error(importBatchInvalid);
+  };
+  check();
+  if (choosingImportBatch) throw Error('已有批量导入文件选择正在进行');
+  choosingImportBatch = true;
+  try {
+    return await queryFileOperation(async () => {
+      const extension = dataExportExtension(target.format);
+      const chosen = await dialog.showOpenDialog(owner!.owner.window, {
+        title: '选择批量导入文件', properties: ['openFile', 'multiSelections'],
+        filters: [{ name: target.format.toUpperCase(), extensions: target.format === 'csv' ? [extension, 'tsv'] : [extension] }],
+      });
+      check();
+      if (chosen.canceled) return null;
+      if (chosen.filePaths.length < 2 || chosen.filePaths.length > importBatchLimit ||
+          new Set(chosen.filePaths).size !== chosen.filePaths.length) throw Error(`请选择 2 至 ${importBatchLimit} 个不同文件`);
+      const selected = new Map(chosen.filePaths.map(path => [randomUUID(), path]));
+      const token = randomUUID();
+      importBatchGrant = { token, owner: owner!, target, revision, files: selected, preflights: new Map() };
+      return { token, files: [...selected].map(([token, path]) => ({ token, name: basename(path) })) };
+    });
+  } finally { choosingImportBatch = false; }
+}
+
+/** 预检凭证绑定原字节、文件解释和映射。任务编号和 UI 状态都不能替代它。 */
+function batchPreflightKey(input: FileImportPreflightInput): string {
+  return JSON.stringify([input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, input.csvRowRange, input.xmlOptions, input.txtOptions,
+    input.expectedSource?.sha256, input.expectedSource?.bytes, Object.entries(input.mapping).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)]);
+}
+
+function batchImportPath(command: Command, input: FileImportPreflightInput & { batch?: ImportBatch }, owner?: MainInvocation) {
+  const grant = importBatchGrant;
+  const filePath = grant?.files.get(input.fileToken);
+  if (!grant || !filePath || (input.batchToken ?? input.batch?.token) !== grant.token) throw Error(importBatchInvalid);
+  columnsMain.assertCapturedOwner(owner);
+  if (!columnsMain.sharesDocumentOwner(grant.owner, owner!) || shuttingDown || store.connectionRevision() !== grant.revision ||
+      grant.target.format !== input.format || command !== 'files.inspectImport' && (input.connectionId !== grant.target.connectionId ||
+      input.database !== grant.target.database || input.table !== grant.target.table)) throw Error(importBatchInvalid);
+  if (command === 'files.inspectImport') { grant.preflights.delete(input.fileToken); return { filePath }; }
+  if (command === 'files.preflight') {
+    if (!input.expectedSource) throw Error('批次预检需要已扫描的原文件指纹');
+    grant.preflights.set(input.fileToken, { taskId: input.taskId });
+    return { filePath };
+  }
+  const batch = input.batch;
+  if (command !== 'files.import' || batch?.token !== grant.token || batch.sources.length !== grant.files.size ||
+      [...grant.files.keys()].some((token, index) => token !== batch.sources[index].fileToken)) throw Error(importBatchInvalid);
+  for (const source of batch.sources) {
+    const proof = grant.preflights.get(source.fileToken);
+    if (proof?.key !== batchPreflightKey({ ...input, expectedSource: source.expectedSource }) ||
+        proof.schema !== batch.schemaFingerprint || proof.records !== source.records) throw Error('批次预检已失效，请按当前映射重新预检全部文件');
+  }
+  importBatchGrant = undefined;
+  return { filePath, batchFiles: batch.sources.map(({ fileToken, ...source }) => ({ ...source, filePath: grant.files.get(fileToken)! })) };
+}
+
 /** 原生选择前后核同一文档，SQLite令牌只在独立能力表中，不能由通用路径接口解出。 */
 async function chooseSqliteFile(owner: MainInvocation | undefined, connectionId: string) {
   columnsMain.assertCapturedOwner(owner);
@@ -1091,6 +1161,7 @@ async function applySqliteSync(input: import('../shared/sqliteTableEdit').Sqlite
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  let batchPreflightOwner: ImportBatchGrant | undefined;
   if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.sqliteStatementTimeoutMs !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('SQLite 语句超时只能用于原 SQLite 查询会话');
@@ -2326,6 +2397,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'metadata.routineInvocation':
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
+    case 'files.chooseImportBatch': return chooseImportBatch(input as ImportBatchChoose, columns);
+    case 'files.releaseImportBatch':
+      columnsMain.assertCapturedOwner(columns);
+      if (importBatchGrant?.token === input.token && columnsMain.sharesDocumentOwner(importBatchGrant!.owner, columns!)) importBatchGrant = undefined;
+      return;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'mysql.compareData':
     case 'postgres.compareData': return compareNetworkData(command, input, columns);
@@ -2526,7 +2602,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const checkFormat = command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ||
         (command === 'files.preview' || command === 'files.import') && ['xml', 'txt', 'xlsx'].includes(input.format) ||
         command === 'files.exportResult' && (input.format === 'xlsx' || !!dataFileText(input.format));
-      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) }; break;
+      if (input.batch || input.batchToken) {
+        const batch = batchImportPath(command, input as Parameters<typeof batchImportPath>[1], columns);
+        if (command === 'files.preflight') batchPreflightOwner = importBatchGrant;
+        const { batchToken, ...request } = input;
+        input = { ...request, ...batch };
+      } else input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) };
+      break;
     }
   }
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
@@ -2614,6 +2696,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'sessions.close' && session?.postgres) session.postgres.closing = true;
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    if (batchPreflightOwner && importBatchGrant === batchPreflightOwner && store.connectionRevision() === batchPreflightOwner.revision) {
+      columnsMain.assertCapturedOwner(columns);
+      const report = result as FileImportPreflightReport;
+      const latest = batchPreflightOwner.preflights.get(input.fileToken);
+      if (latest?.taskId === input.taskId && report.complete && report.issueCount === 0 && report.checkedRecords > 0 &&
+          report.checkedRecords === report.validRecords && report.sourceFingerprint === input.expectedSource.sha256 &&
+          report.sourceBytes === input.expectedSource.bytes) {
+        batchPreflightOwner.preflights.set(input.fileToken, { taskId: input.taskId, key: batchPreflightKey(input),
+          schema: report.schemaFingerprint, records: report.validRecords });
+      }
+    }
     if (publishMonitor) result = publishMonitor(result);
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!(result);
     if (command === 'sqliteDraftFiles.restore') try { sqliteEditLease!.check(); } catch (reason) { await sqliteEdits.rejectRestored(result).catch(() => {}); throw reason; }
@@ -2777,6 +2870,7 @@ async function createWindow(): Promise<void> {
   window.webContents.on('destroyed', () => queryFileSources.invalidate());
   window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument)invalidateTablePresetSources();});
   window.webContents.on('did-navigate',invalidateTablePresetSources);
+  window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) importBatchGrant = undefined; });
   window.webContents.on('render-process-gone',invalidateTablePresetSources);
   window.webContents.on('destroyed',invalidateTablePresetSources);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -2785,7 +2879,7 @@ async function createWindow(): Promise<void> {
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.once('ready-to-show', () => window?.show());
   window.on('close', event => { if (!shutdownComplete) { event.preventDefault(); app.quit(); } });
-  window.on('closed', () => { applicationMenu?.invalidate(); window = undefined; resultSqlPreviews.clear(); files.clear(); sqliteFiles.clear(); });
+  window.on('closed', () => { applicationMenu?.invalidate(); window = undefined; resultSqlPreviews.clear(); files.clear(); sqliteFiles.clear(); importBatchGrant = undefined; });
   await window.loadURL(rendererURL);
 }
 
@@ -3055,6 +3149,9 @@ else {
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
+        if (payload.command === 'files.chooseImportBatch' || payload.command === 'files.releaseImportBatch' ||
+            ['files.inspectImport', 'files.preflight', 'files.import'].includes(payload.command) &&
+            input && (Object.hasOwn(input, 'batchToken') || Object.hasOwn(input, 'batch'))) columns = columnsMain.capture(event);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
         // 片段文件及整文件预检的清理全部结算后才关闭存储，预检另在退出时沿原任务通道取消。
         const trackedFileOperation=payload.command.startsWith('snippets.transfer') || (payload.command === 'files.preflight' || payload.command === 'files.inspectImport');if(trackedFileOperation)queryFileOperations.add(operation);

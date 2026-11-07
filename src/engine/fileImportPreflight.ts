@@ -12,7 +12,7 @@ import { inlineParameters, typedCellPlaceholder } from './sql';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 
 /** 指纹仅包含本次逐字段校验真正使用的完整定义，不包含自增计数等动态目录值。 */
-function schemaFingerprint(info: TableInfo): string {
+export function fileImportSchemaFingerprint(info: TableInfo): string {
   return createHash('sha256').update(JSON.stringify([info.engine, info.objectKind, info.columns.map(column => [column.name, column.type, column.nullable, column.defaultValue, column.extra, column.comment, column.generated, column.characterSet ?? null])])).digest('hex');
 }
 /** 比较文件身份及时间、大小；完整SHA只由本轮同一读取链生成。 */
@@ -37,7 +37,7 @@ export async function preflightImportFile(context: StructureTaskContext, input: 
   const report: FileImportPreflightReport = {
     taskId: input.taskId, target: { connectionId: input.connectionId, database: input.database, table: input.table }, format: input.format, encoding: input.encoding,
     checkedRecords: 0, validRecords: 0, invalidRecords: 0, issueCount: 0, issues: [], truncated: false, complete: false, termination: 'complete',
-    sourceFingerprint: null, sourceBytes: 0, schemaFingerprint: schemaFingerprint(info), warnings: [
+    sourceFingerprint: null, sourceBytes: 0, schemaFingerprint: fileImportSchemaFingerprint(info), warnings: [
       '本次只检查已映射字段；未映射列、默认值及导入匹配策略仍需在正式导入时核对。',
       '本次不读取目标记录，不保证唯一键、外键、CHECK、触发器、匹配键及服务器实时状态检查通过。',
       '预检结果不是导入授权或执行令牌；文件、映射、连接或字段变化后须重新预检，正式导入仍逐项校验。',
@@ -85,7 +85,7 @@ export async function preflightImportFile(context: StructureTaskContext, input: 
     }
   }
   const afterInfo = await readInfo(); checkCancelled();
-  if (schemaFingerprint(afterInfo) !== report.schemaFingerprint) {
+  if (fileImportSchemaFingerprint(afterInfo) !== report.schemaFingerprint) {
     report.termination = 'schema-changed'; issue({ code: 'schema-changed', message: '目标字段定义已变化，请重新读取映射并预检' });
   }
   report.complete = finished && report.termination === 'complete'; progress();

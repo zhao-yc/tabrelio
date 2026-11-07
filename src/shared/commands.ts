@@ -183,6 +183,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.databaseCopy': true,
   'backupArchive.open': true, 'backupArchive.exportSql': true, 'backupArchive.inspectSql': true, 'backupArchive.auditTarget': true, 'backupArchive.restore': true, 'backupArchive.cancel': true,
   'postgres.archive.choose': true, 'postgres.archive.list': true, 'postgres.archive.exportSql': true, 'postgres.archive.cancel': true,
+  'files.chooseImportBatch': true, 'files.releaseImportBatch': true,
   'files.choose': true, 'files.createSqlite': true, 'files.path': true, 'files.preview': true, 'files.inspectImport': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
   'files.previewResultSql': true, 'files.releaseResultSql': true,

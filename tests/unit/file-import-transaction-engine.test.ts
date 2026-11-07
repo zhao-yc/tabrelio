@@ -7,6 +7,8 @@ import { EventEmitter } from 'node:events';
 import type { ManagedConnection } from '../../src/engine/connection';
 import type { ConnectionProfile, TableInfo, TaskEvent } from '../../src/shared/contracts';
 import { fileImportTransactionMode, fileImportTransactionModeSchema } from '../../src/shared/fileImportTransaction';
+import { fileImportSchemaFingerprint } from '../../src/engine/fileImportPreflight';
+import { validateCommand } from '../../src/shared/validation';
 const io = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn(), metadata: vi.fn(), close: vi.fn() }));
 vi.mock('../../src/engine/connection', () => ({ connect: io.connect, execute: io.execute }));
 vi.mock('../../src/engine/metadata', () => ({ tableInfo: io.metadata }));
@@ -128,6 +130,38 @@ describe('整文件原子事务真实Engine调度', () => {
 describe('新表导入原文件指纹的真实Engine接线（离线驱动边界）', () => {
   /** 期望直接哈希独立手写文件，不调用产品扫描器生成期望摘要。 */
   async function fingerprint(filePath: string) { const bytes = await readFile(filePath); return { sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length }; }
+  it('两份 CSV 共用一份映射和事务，后一个文件变化时撤销前一个文件的写入', async () => {
+    const request = await input(1);
+    const second = join(folder, 'second.csv');
+    await writeFile(second, 'amount,id\n2.50,2\n');
+    const batchFiles = await Promise.all([request.filePath, second].map(async filePath => ({
+      filePath, expectedSource: await fingerprint(filePath), records: 1,
+    })));
+    const batch = {
+      token: '批次', schemaFingerprint: fileImportSchemaFingerprint(await io.metadata()),
+      sources: batchFiles.map(({ expectedSource, records }, index) => ({ fileToken: '文件' + index, expectedSource, records })),
+    };
+    const { filePath, ...rest } = request;
+    const contract = { ...rest, fileToken: '文件0', batch, transactionMode: 'atomic' };
+    expect(validateCommand('files.import', contract)).toMatchObject({ batch });
+    for (const patch of [
+      { transactionMode: 'batch' }, { format: 'sql' }, { fileToken: '文件1' },
+      { batch: { ...batch, sources: [batch.sources[0], batch.sources[0]] } },
+    ]) expect(() => validateCommand('files.import', { ...contract, ...patch })).toThrow();
+    const selected = { ...contract, filePath, batchFiles };
+    await expect(engine.handle('files.import', selected)).resolves.toEqual({ rows: 2, errors: [] });
+    expect(inserts().map(([, , params]) => params)).toEqual([['1', '123456789012345678.123456789012'], ['2', '2.50']]);
+    expect(commands().filter(sql => sql === 'COMMIT')).toHaveLength(1);
+
+    io.execute.mockClear();
+    await writeFile(second, 'amount,id\n9.50,2\n');
+    const failed = await engine.handle('files.import', { ...selected, taskId: '文件二变化' });
+    expect(failed.rows).toBe(0);
+    expect(failed.errors.join(' ')).toMatch(/确认回滚.*第 2 个文件/);
+    expect(inserts()).toHaveLength(2);
+    expect(commands()).not.toContain('COMMIT');
+    expect(commands().at(-1)).toBe('ROLLBACK');
+  });
   it('CSV 新表只写指定记录，范围外汇总字节改动仍导致整批回滚', async () => {
     const request = await input(1), content = '报表说明\nid,amount\n附注\n4,123.45\n5,\\N\n原汇总';
     await writeFile(request.filePath, content);
