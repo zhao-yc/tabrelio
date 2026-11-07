@@ -65,3 +65,13 @@ it('PostgreSQL 注释批次区分未修改与清空，并拒绝重复字段和�
     { ...draft, columns: [...draft.columns, { ...draft.columns[0], name: '别的字段' }] }])
     expect(postgresTableManagePreviewSchema.safeParse(input).success).toBe(false);
 });
+
+it('PostgreSQL 标识列输入保留精确整数并拒绝任意选项', () => {
+  const draft = { connectionId: 'saved', database: 'qa', table: '"public"."原表"', stamp: 'b'.repeat(64),
+    action: 'identity', position: 1, name: '标识列', change: { kind: 'add', mode: 'always', start: '9007199254740993' } };
+  expect(postgresTableManagePreviewSchema.parse(draft)).toEqual(draft);
+  expect(postgresTableManagePreviewSchema.parse({ ...draft, change: { kind: 'restart' } })).toMatchObject({ change: { kind: 'restart' } });
+  for (const value of [{ ...draft, position: 0 }, { ...draft, change: { kind: 'restart', value: 9007199254740992 } },
+    { ...draft, change: { kind: 'add', mode: 'always', start: '1e4' } }, { ...draft, change: { kind: 'drop', cascade: true } }])
+    expect(postgresTableManagePreviewSchema.safeParse(value).success).toBe(false);
+});

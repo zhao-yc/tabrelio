@@ -4,6 +4,10 @@ import type { PostgresConnection } from './connection';
 const supported = "c.relkind IN ('r','p') AND c.relpersistence IN ('p','u')";
 const move = `(${supported} AND pg_catalog.pg_has_role(c.relowner,'USAGE'))`;
 const rename = `(${move} AND pg_catalog.has_schema_privilege(n.oid,'CREATE'))`;
+export const postgresTableOwnerLockSql = `(pg_catalog.pg_has_role(c.relowner,'USAGE') AND
+  (pg_catalog.has_table_privilege(c.oid,'UPDATE, DELETE, TRUNCATE') OR
+    CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000
+      THEN pg_catalog.has_table_privilege(c.oid,'MAINTAIN') ELSE false END))`;
 // 分区树可能在 RESTRICT 下被一起删除，表页只允许独立的普通表删除。
 export const postgresTableCanDropSql = `(c.relkind='r' AND c.relpersistence IN ('p','u') AND NOT c.relispartition
   AND (pg_catalog.pg_has_role(c.relowner,'USAGE') OR pg_catalog.pg_has_role(n.nspowner,'USAGE')))`;

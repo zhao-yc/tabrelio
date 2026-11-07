@@ -3,13 +3,11 @@ import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { PostgresTableManageInput } from '../../shared/postgresTableManage';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
+import { postgresTableOwnerLockSql } from './tableManage';
 
 // 先取得 COMMENT 使用的表锁，再读取原注释，避免覆盖等锁期间其他会话的修改。
 export const postgresCommentIdentitySql = `CASE WHEN c.relkind IN ('r','p') AND c.relpersistence IN ('p','u')
-  AND pg_catalog.pg_has_role(c.relowner,'USAGE') AND
-  (pg_catalog.has_table_privilege(c.oid,'UPDATE, DELETE, TRUNCATE') OR
-    CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000
-      THEN pg_catalog.has_table_privilege(c.oid,'MAINTAIN') ELSE false END)
+  AND ${postgresTableOwnerLockSql}
   THEN pg_catalog.jsonb_build_array(c.oid::text,n.oid::text,c.relkind,c.relpersistence,c.relowner::text,
     current_user,session_user,extract(epoch FROM pg_catalog.pg_postmaster_start_time()),pg_catalog.current_database())::text END`;
 

@@ -1,0 +1,172 @@
+import { Client } from 'pg';
+import type { PostgresIdentityChange } from '../../src/shared/postgresTableManage';
+import { postgresIdentityColumnsZh as identity } from '../../src/renderer/locales/postgresIdentityColumns.zh-CN';
+import { postgresStructureZh as structure } from '../../src/renderer/locales/postgresStructure.zh-CN';
+import { test, expect, desktop, page, quitDesktop } from './desktop-fixture';
+
+test.use({ trace: 'off', screenshot: 'off', video: 'off' });
+test.skip(process.env.DBARK_POSTGRES_WORKSPACE_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+test.setTimeout(60_000);
+
+function isolatedConnection() {
+  const user = process.env.DBARK_POSTGRES_TEST_USER ?? '', database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
+  const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(user) || database !== user ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('需要本轮独占回环库');
+  return { host: '127.0.0.1', port, user, database, password, connectionTimeoutMillis: 3000 };
+}
+
+async function saveConnection(config: ReturnType<typeof isolatedConnection>) {
+  return page.evaluate(async ({ host, port, user, database, password }) => (await window.dbark.invoke('connections.save', {
+    id: '', name: 'PostgreSQL 标识列测试', group: '', color: '#123456', dialect: 'postgresql',
+    host, port, user, database, password, rememberPassword: false,
+  })).id, config);
+}
+
+test('PostgreSQL 标识列界面启用、切换、精确重启和移除', async ({}, info) => {
+  const config = isolatedConnection(), observer = new Client(config), target = '"public"."标识 ""表"""';
+  const start = '9007199254740993', next = '9007199254740995';
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE ${target}(id bigint PRIMARY KEY, note text, nullable_id bigint, with_default bigint NOT NULL DEFAULT 7);
+      INSERT INTO ${target}(id,note) VALUES (42,'原数据')`);
+    const facts = async () => (await observer.query(`SELECT c.oid::text AS oid,a.attidentity AS mode,a.attnotnull AS required,
+      pg_catalog.pg_get_serial_sequence($1,'id')::regclass::oid::text AS sequence
+      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid
+      WHERE c.oid=$1::regclass AND a.attname='id'`, [target])).rows[0];
+    const original = await facts();
+    const connectionId = await saveConnection(config);
+    await page.evaluate(async ({ connectionId, database, table }) => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'pg-identity-target', tabs: [
+        { id: 'pg-identity-target', title: '标识列测试表', kind: 'table', connectionId, database, table },
+      ] });
+    }, { connectionId, database: config.database, table: target });
+    await page.reload();
+    const tab = page.locator('.postgres-table-tab:visible'), dialog = page.getByRole('dialog', { name: structure.title, exact: true });
+    const panel = dialog.getByRole('region', { name: identity.title, exact: true });
+    const open = () => dialog.getByRole('button', { name: identity.title, exact: true }).click();
+    const button = (name: string) => panel.getByRole('button', { name, exact: true });
+    const apply = async () => { await button(identity.apply).click(); await expect(panel).toHaveCount(0); };
+    const preview = async (sql: string) => {
+      await button(identity.preview).click();
+      await expect(panel.getByLabel(identity.sql, { exact: true })).toHaveText(
+        'LOCK TABLE ONLY ' + target + ' IN ACCESS EXCLUSIVE MODE; ALTER TABLE ' + target + ' ALTER COLUMN "id" ' + sql + ';');
+    };
+    await expect(tab.getByRole('grid')).toContainText('原数据');
+    await tab.getByRole('button', { name: structure.open, exact: true }).click();
+    await open();
+    const field = panel.getByRole('combobox', { name: identity.column, exact: true });
+    await expect(field.getByRole('option')).toHaveText(['id']);
+    await panel.getByLabel(identity.start, { exact: true }).fill(start);
+    await preview('ADD GENERATED ALWAYS AS IDENTITY (START WITH ' + start + ')');
+    expect(await facts()).toEqual(original);
+    await panel.screenshot({ path: info.outputPath('PostgreSQL 启用标识列预览.png') });
+    await apply();
+    const added = await facts();
+    expect(added).toMatchObject({ oid: original.oid, mode: 'a', required: true, sequence: expect.any(String) });
+    await expect(observer.query(`INSERT INTO ${target}(id,note) VALUES (12,'显式值')`)).rejects.toMatchObject({ code: '428C9' });
+    expect((await observer.query(`INSERT INTO ${target}(note) VALUES ('自动生成') RETURNING id::text`)).rows).toEqual([{ id: start }]);
+
+    await open();
+    await expect(panel.getByRole('combobox', { name: identity.mode, exact: true })).toHaveValue('byDefault');
+    await preview('SET GENERATED BY DEFAULT');
+    await apply();
+    expect(await facts()).toEqual({ ...added, mode: 'd' });
+    await observer.query(`INSERT INTO ${target}(id,note) VALUES (12,'允许显式值')`);
+    await open();
+    await panel.getByRole('combobox', { name: identity.operation, exact: true }).selectOption('restart');
+    await panel.getByLabel(identity.restart, { exact: true }).fill(next);
+    await preview('RESTART WITH ' + next);
+    await expect(button(identity.apply)).toBeDisabled();
+    await panel.getByRole('checkbox', { name: identity.acknowledgeRestart, exact: true }).check();
+    await panel.screenshot({ path: info.outputPath('PostgreSQL 重启标识序列预览.png') });
+    await apply();
+    expect((await observer.query(`INSERT INTO ${target}(note) VALUES ('重启后生成') RETURNING id::text`)).rows).toEqual([{ id: next }]);
+
+    await open();
+    await panel.getByRole('combobox', { name: identity.operation, exact: true }).selectOption('drop');
+    await preview('DROP IDENTITY');
+    await expect(button(identity.apply)).toBeDisabled();
+    await panel.getByRole('checkbox', { name: identity.acknowledgeDrop, exact: true }).check();
+    await apply();
+    expect(await facts()).toEqual(original);
+    expect((await observer.query('SELECT EXISTS(SELECT FROM pg_catalog.pg_class WHERE oid=$1::oid) AS present', [added.sequence])).rows)
+      .toEqual([{ present: false }]);
+    expect((await observer.query(`SELECT id::text FROM ${target} ORDER BY id`)).rows).toEqual(
+      ['12', '42', start, next].map(id => ({ id })));
+    await dialog.getByRole('button', { name: structure.close, exact: true }).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 标识列锁后识别序列变化，回滚异常重启并管理分区父表', async () => {
+  const config = isolatedConnection(), holder = new Client(config), observer = new Client(config);
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  if (!/^[a-f0-9]{64}$/.test(adminPassword)) throw Error('需要隔离库管理夹具');
+  const admin = new Client({ ...config, user: 'postgres', password: adminPassword });
+  await Promise.all([holder.connect(), observer.connect(), admin.connect()]);
+  try {
+    await holder.query(`CREATE TABLE public.identity_race(id bigint GENERATED BY DEFAULT AS IDENTITY
+      (SEQUENCE NAME public.identity_race_seq START WITH 30));
+      INSERT INTO public.identity_race DEFAULT VALUES;
+      CREATE TABLE public.identity_root(id int NOT NULL, bucket int NOT NULL) PARTITION BY RANGE(bucket);
+      CREATE TABLE public.identity_leaf PARTITION OF public.identity_root FOR VALUES FROM (0) TO (10)`);
+    const connectionId = await saveConnection(config), database = config.database;
+    const race = '"public"."identity_race"', root = '"public"."identity_root"', leaf = '"public"."identity_leaf"';
+    const read = (table: string) => page.evaluate(input => window.dbark.invoke('postgres.structure.read', input), { connectionId, database, table });
+    const prepare = async (table: string, change: PostgresIdentityChange) => {
+      const stamp = (await read(table)).identityStamp;
+      if (!stamp) throw Error('缺少原标识列摘要');
+      return page.evaluate(input => window.dbark.invoke('postgres.tableManage.preview', input),
+        { connectionId, database, table, stamp, action: 'identity' as const, position: 1, name: 'id', change });
+    };
+    const apply = (token: string) => page.evaluate(input => window.dbark.invoke('postgres.tableManage.apply', input),
+      { connectionId, database, token, confirmed: true as const });
+    const allocation = async () => (await observer.query('SELECT last_value::text,is_called FROM public.identity_race_seq')).rows[0];
+    const stale = await prepare(race, { kind: 'restart', value: '70' });
+    await holder.query('BEGIN; LOCK TABLE public.identity_race IN ACCESS EXCLUSIVE MODE');
+    const applying = apply(stale.token);
+    void applying.catch(() => undefined);
+    try {
+      await expect.poll(async () => (await observer.query(`SELECT EXISTS(SELECT FROM pg_catalog.pg_stat_activity
+        WHERE wait_event_type='Lock' AND query LIKE $1) AS waiting`, ['LOCK TABLE ONLY "public"."identity_race"%'])).rows[0].waiting,
+      { timeout: 3500 }).toBe(true);
+      await holder.query('ALTER SEQUENCE public.identity_race_seq INCREMENT BY 3; COMMIT');
+    } finally { await holder.query('ROLLBACK'); }
+    expect(await applying).toMatchObject({ outcome: 'notSent', message: expect.stringContaining('标识序列已变化') });
+    expect(await allocation()).toEqual({ last_value: '30', is_called: true });
+    expect((await observer.query("SELECT seqincrement::text AS step FROM pg_catalog.pg_sequence WHERE seqrelid='public.identity_race_seq'::regclass")).rows)
+      .toEqual([{ step: '3' }]);
+
+    await admin.query(`CREATE FUNCTION public.consume_identity_restart() RETURNS event_trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF current_query() LIKE 'ALTER TABLE "public"."identity_race" ALTER COLUMN "id" RESTART%' THEN
+          PERFORM pg_catalog.nextval('public.identity_race_seq');
+        END IF;
+      END; $$;
+      CREATE EVENT TRIGGER consume_identity_restart ON ddl_command_end WHEN TAG IN ('ALTER TABLE')
+      EXECUTE FUNCTION public.consume_identity_restart()`);
+    const rolledBack = await prepare(race, { kind: 'restart' });
+    expect(rolledBack.statements[1]).toContain('RESTART WITH 30');
+    expect(await apply(rolledBack.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('实际序列分配状态') });
+    expect(await allocation()).toEqual({ last_value: '30', is_called: true });
+    await admin.query('DROP EVENT TRIGGER consume_identity_restart');
+    expect(await apply((await prepare(race, { kind: 'restart' })).token)).toMatchObject({ outcome: 'committed' });
+    expect(await allocation()).toEqual({ last_value: '30', is_called: false });
+
+    expect((await read(leaf)).identityStamp).toBeUndefined();
+    expect(await apply((await prepare(root, { kind: 'add', mode: 'byDefault', start: '100' })).token)).toMatchObject({ outcome: 'committed' });
+    expect((await observer.query('INSERT INTO public.identity_leaf(bucket) VALUES (1) RETURNING id')).rows).toEqual([{ id: 100 }]);
+    expect(await apply((await prepare(root, { kind: 'mode', mode: 'always' })).token)).toMatchObject({ outcome: 'committed' });
+    await expect(observer.query('INSERT INTO public.identity_leaf(id,bucket) VALUES (5,1)')).rejects.toMatchObject({ code: '428C9' });
+    expect(await apply((await prepare(root, { kind: 'drop' })).token)).toMatchObject({ outcome: 'committed' });
+    await observer.query('INSERT INTO public.identity_leaf(id,bucket) VALUES (5,1)');
+    expect((await observer.query('SELECT id FROM public.identity_root ORDER BY id')).rows).toEqual([{ id: 5 }, { id: 100 }]);
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally { await Promise.all([holder.end(), observer.end(), admin.end()]); }
+});

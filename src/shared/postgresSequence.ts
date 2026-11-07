@@ -49,6 +49,7 @@ const limits = {
   smallint: [-32768n, 32767n], integer: [-2147483648n, 2147483647n],
   bigint: [-9223372036854775808n, 9223372036854775807n],
 } as const;
+export { integer as postgresSequenceInteger, limits as postgresSequenceLimits };
 
 /** 校验序列的全部精确参数，创建时补齐升降序默认值。 */
 function sequenceParameters(input: z.infer<typeof sequenceSettings>) {

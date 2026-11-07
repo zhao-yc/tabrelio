@@ -24,6 +24,7 @@ import { readPostgresTableManageFacts } from './tableManage';
 import { postgresTableTruncatePlan } from './tableTruncate';
 import { postgresTableMovePlan } from './tableMove';
 import { postgresTableCommentPlan } from './tableComments';
+import { postgresTableIdentityPlan } from './tableIdentity';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -394,6 +395,8 @@ export class PostgresCreateTableWorkspace {
     const draft = postgresTableManagePreviewSchema.parse(raw);
     if (draft.action === 'comment')
       return this.prepareRelation(input, 'tableManage', connect, () => connection => postgresTableCommentPlan(connection, draft));
+    if (draft.action === 'identity')
+      return this.prepareRelation(input, 'tableManage', connect, () => connection => postgresTableIdentityPlan(connection, draft));
     const { schema, name } = postgresRelationName(draft.table);
     const prefix = postgresIdentifier(schema) + '.', originalTable = prefix + postgresIdentifier(name);
     const changed = '原表或管理权限已变化，请刷新结构后继续';

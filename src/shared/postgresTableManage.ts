@@ -1,8 +1,17 @@
 import { z } from 'zod';
 import { postgresCreateTableApplySchema, postgresDdlText, postgresNewIdentifier } from './postgresCreateTable';
 import { postgresStructureInputSchema } from './postgresStructure';
+import { postgresSequenceInteger } from './postgresSequence';
 
 const target = postgresStructureInputSchema.extend({ stamp: z.string().regex(/^[a-f0-9]{64}$/) });
+const identityMode = z.enum(['always', 'byDefault']);
+const identityChange = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('add'), mode: identityMode, start: postgresSequenceInteger }).strict(),
+  z.object({ kind: z.literal('mode'), mode: identityMode }).strict(),
+  z.object({ kind: z.literal('restart'), value: postgresSequenceInteger.optional() }).strict(),
+  z.object({ kind: z.literal('drop') }).strict(),
+]);
+export type PostgresIdentityChange = z.infer<typeof identityChange>;
 const commentTarget = target.extend({ action: z.literal('comment'),
   value: postgresDdlText.nullable().optional(),
   columns: z.array(z.object({
@@ -20,6 +29,8 @@ export const postgresTableManagePreviewSchema = z.discriminatedUnion('action', [
   target.extend({ action: z.literal('drop') }).strict(),
   target.extend({ action: z.literal('truncate'), identity: z.enum(['continue', 'restart']) }).strict(),
   commentTarget,
+  target.extend({ action: z.literal('identity'), position: z.number().int().min(1).max(2000),
+    name: postgresStructureInputSchema.shape.table, change: identityChange }).strict(),
 ]);
 export const postgresTableManageApplySchema = postgresCreateTableApplySchema.extend({ confirmed: z.literal(true) });
 export type PostgresTableManageInput = z.infer<typeof postgresTableManagePreviewSchema>;

@@ -15,6 +15,8 @@ import { PostgresViewEditPanel } from './PostgresViewEditPanel';
 import { postgresViewEditZh } from '../locales/postgresViewEdit.zh-CN';
 import { PostgresColumnEditPanel } from './PostgresColumnEditPanel';
 import { PostgresTableCommentsPanel } from './PostgresTableCommentsPanel';
+import { PostgresIdentityColumnsPanel, postgresIdentityColumns } from './PostgresIdentityColumnsPanel';
+import { postgresIdentityColumnsZh } from '../locales/postgresIdentityColumns.zh-CN';
 import { postgresTableCommentsZh } from '../locales/postgresTableComments.zh-CN';
 import { PostgresIndexEditPanel } from './PostgresIndexEditPanel';
 import { PostgresKeyEditPanel } from './PostgresKeyEditPanel';
@@ -38,6 +40,7 @@ const editors = {
   definition: { Panel: PostgresViewEditPanel, label: postgresViewEditZh.title },
   columns: { Panel: PostgresColumnEditPanel, label: postgresColumnEditZh.open },
   comments: { Panel: PostgresTableCommentsPanel, label: postgresTableCommentsZh.title },
+  identity: { Panel: PostgresIdentityColumnsPanel, label: postgresIdentityColumnsZh.title },
   indexes: { Panel: PostgresIndexEditPanel, label: postgresIndexEditZh.open },
   constraints: { Panel: PostgresKeyEditPanel, label: postgresKeyEditZh.open },
   foreign: { Panel: PostgresForeignEditPanel, label: postgresForeignEditZh.open },
@@ -111,7 +114,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const manageStamp = output?.tableManage?.stamp ?? output?.materializedManageStamp ?? output?.viewEditStamp;
   const editStamp = editing === 'indexes' ? indexStamp : editing === 'materialized' ? output?.materialized?.stamp :
     editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp :
-      editing === 'comments' ? output?.commentStamp : output?.editStamp;
+      editing === 'comments' ? output?.commentStamp : editing === 'identity' ? output?.identityStamp : output?.editStamp;
   if (dependencies) return <PostgresDependenciesDialog target={target} onBack={() => setDependencies(false)}/>;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
@@ -186,6 +189,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
       {!readOnly && output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
       {!readOnly && manageStamp && !editing && <button onClick={() => setEditing('manage')}>{output?.tableManage ? postgresTableManageZh.title : postgresViewManageZh.title}</button>}
       {!readOnly && output?.commentStamp && !editing && <button onClick={() => setEditing('comments')}>{editors.comments.label}</button>}
+      {!readOnly && output?.identityStamp && !editing && postgresIdentityColumns(output).length > 0 &&
+        <button onClick={() => setEditing('identity')}>{editors.identity.label}</button>}
       {!readOnly && section === 'definition' && output?.viewEditStamp && !editing && <button onClick={() => setEditing('definition')}>
         {postgresViewEditZh.title}
       </button>}
