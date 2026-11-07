@@ -538,6 +538,8 @@ PostgreSQL 查询页的单组行结果、结果选择器和固定结果也支持
 
 SQLite 查询页从「更多查询操作 → 执行与分析 → 执行并导出完整结果」打开导出。可选中一条 SQL，也可让光标留在无选区的编辑器中使用全文。导出使用独立只读连接执行一条 SELECT 或 WITH 查询，读取已提交数据。选择 CSV、JSON 或 Excel，以及保存位置，再点击「执行查询并保存」。含 `:name` 时先设置本次导出参数。JSON 要求列名唯一，数值以字符串保留精度。详见 [SQLite 完整查询导出](development/sqlite-query-export-20261107.md)。
 
+SQLite 选择 Excel 时可导出 1 至 64 条 SELECT 或 WITH 查询。每条查询依次写入一张工作表，空结果保留标题。所有查询共用同一个主库只读快照，同名参数复用同一个值。[SQLite 多查询 Excel 工作簿](development/sqlite-query-export-20261107.md#多查询-excel-工作簿)
+
 PostgreSQL 查询页的「执行并导出完整结果」可将一条 SELECT／WITH 查询分批保存为 CSV、JSON 或 Excel。非空单选区优先，空光标使用全文。导出使用独立只读会话，读取目标数据库已提交的数据。选好格式、编码和文件后点击「执行查询并保存」，完成后显示行数。有位置参数时，先点击「设置导出参数」填写类型和值，再采用本次参数。[完整查询导出](development/postgres-query-export-20261107.md) [参数导出](development/postgres-export-parameters-20261107.md)
 
 选择 Excel 时也可导出 1 至 64 条 SELECT 或 WITH 查询。所有查询共用同一个可重复读快照，每条查询生成一张工作表，空结果保留标题。各条查询从 `$1` 开始编号，同编号使用同一个参数值。[多查询 Excel 工作簿](development/postgres-query-export-20261107.md#多查询-excel-工作簿)

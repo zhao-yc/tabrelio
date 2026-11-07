@@ -19,7 +19,8 @@ export function sqliteCurrentQueryExportSource(source: string, offset: number): 
 }
 
 const sql = z.string().min(1).max(queryParameterLimits.sqlBytes);
-export const sqliteQueryExportSourceSchema = z.object({ sql }).strict();
+export const sqliteQueryExportSourceSchema = z.object({ sql, workbook: z.literal(true).optional() }).strict();
+export type SqliteQueryExportSource = z.infer<typeof sqliteQueryExportSourceSchema>;
 const parameters = z.array(z.object({
   name: z.string().max(64), type: z.enum(queryParameterTypes), value: z.string().max(queryParameterLimits.valueBytes).optional(),
 }).strict()).max(queryParameterLimits.names).superRefine((values, context) => {

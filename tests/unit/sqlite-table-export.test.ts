@@ -435,6 +435,45 @@ function queryRequest(profile: SqliteConnectionProfile, patch: Partial<SqliteQue
 }
 
 describe('SQLite 完整查询导出', () => {
+  it('工作簿在首张常量工作表前固定 WAL 快照，各语句只接收所需绑定', async () => {
+    const profile = fixture();
+    disk(profile, db => db.exec('PRAGMA journal_mode=WAL'));
+    let intervened = false;
+    const {app} = runtime(profile, {create: () => transport((message, forward, record) => {
+      const command = record.sent.find(item => item.kind === 'streamRead' && 'id' in message && item.id === message.id);
+      if (!intervened && message.kind === 'batch' && command?.kind === 'streamRead' && command.sql.startsWith('SELECT :exact')) {
+        intervened = true;
+        disk(profile, db => db.exec("UPDATE subject SET note='另一连接已提交' WHERE id=1"));
+      }
+      forward();
+    })});
+    const filePath = join(dirname(profile.sqlite.filePath!), 'query-workbook.xlsx');
+    const input = queryRequest(profile, {format: 'xlsx', filePath,
+      sql: "SELECT :exact AS id, ';' AS note; SELECT :exact AS id, note, payload FROM subject WHERE id=1; SELECT :extra AS label WHERE 0;",
+      parameters: [{name: 'exact', type: 'integer', value: '9223372036854775807'}, {name: 'extra', type: 'text', value: '只用于末张'}]});
+    await expect(app.request('sqlite.queryExport', input)).resolves.toEqual({rows: 2, fileCommitted: true});
+    expect(intervened).toBe(true);
+    const worker = processes.at(-1)!;
+    expect(await worker.exited).toEqual({code: 0, signal: null});
+    expect(worker.sent.filter(frame => frame.kind === 'execute').map(frame => frame.sql))
+      .toEqual(['BEGIN', 'SELECT 1 FROM main.sqlite_schema LIMIT 1', 'ROLLBACK']);
+    expect(worker.sent.filter(frame => frame.kind === 'streamRead').map(frame => Object.keys(frame.namedParameters!)))
+      .toEqual([[':exact'], [':exact'], [':extra']]);
+    const sheets = await listExcelSheets({filePath});
+    expect(sheets.map(sheet => sheet.name)).toEqual(['结果 1', '结果 2', '结果 3']);
+    const second = [];
+    for await (const row of readExcelRows({filePath, sheetId: sheets[1].id, protocol: 'dbark-v1'})) second.push(row);
+    expect(second).toEqual([{id: '9223372036854775807', note: '中文🚢', payload: {type: 'binary', base64: 'AP8='}}]);
+    expect(disk(profile, db => db.prepare('SELECT note FROM subject WHERE id=1').get()!.note)).toBe('另一连接已提交');
+    const original = readFileSync(filePath);
+    for (const [index, sql] of ["SELECT 1; SELECT printf('%032768d', 1)", 'SELECT 1; WITH x AS (SELECT 1) DELETE FROM subject RETURNING id',
+      'SELECT 1;'.repeat(65)].entries()) {
+      await expect(app.request('sqlite.queryExport', queryRequest(profile, {taskId: '工作簿失败' + index, format: 'xlsx', filePath, sql}))).rejects.toThrow();
+      expect(readFileSync(filePath)).toEqual(original);
+    }
+    expect(readdirSync(dirname(filePath)).filter(path => path.endsWith('.partial'))).toEqual([]);
+  });
+
   it('独立原生只读 CTE 导出超过预览上限的结果并按原生类型绑定', async () => {
     const profile = fixture(), { app, events } = runtime(profile), before = await hash(profile.sqlite.filePath!);
     const sql = `/* 分号 ; 和参数 :ignored */ WITH RECURSIVE series(n) AS (
@@ -558,6 +597,7 @@ describe('SQLite 完整查询导出', () => {
       if (!paused && message.kind === 'batch') { paused = true; reached.resolve(); } else forward();
     })});
     const input = queryRequest(profile, {format, filePath: join(dirname(profile.sqlite.filePath!), 'result.' + format),
+      ...(format === 'xlsx' ? {sql: 'SELECT 0 WHERE 0; SELECT id FROM subject'} : {}),
       ...(format === 'sql' ? {insertTarget: {database: 'main', table: 'target'}} : {})});
     writeFileSync(input.filePath, '旧文件');
     const work = app.request('sqlite.queryExport', input).catch(reason => reason);

@@ -81,7 +81,7 @@ import { databaseBackupArchiveZh } from '../shared/databaseBackupArchiveFiles';
 import { sqliteBackupFileIdentity } from '../engine/sqlite/backup';
 import { closeSqliteDatabaseCopies, publishSqliteDatabaseCopy } from './sqliteDatabaseBackup';
 import { sqliteDatabaseCopyZh, type SqliteDatabaseCopyInput } from '../shared/sqliteDatabaseBackup';
-import { sqliteQueryExportParameterNames } from '../engine/sqlite/parameters';
+import { sqliteQueryExportParameterNames } from './sqliteQueryExport';
 import { sqliteTableExportMessages } from '../shared/sqliteTableExport';
 import { SqliteTableEditOwners, type SqliteEditLease } from './sqliteTableEditOwners';
 import { SqliteWriteRecords } from './sqliteWriteRecords';
@@ -1214,7 +1214,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if ((command === 'query.parameterNames' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('此当前语句操作只用于原 SQLite 查询会话');
-  if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql);
+  if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql, input.workbook);
   if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.')) {
     const session = sessions.get(input.sessionId);
     // 会话能力保留原事务和临时对象来源，仅允许创建该会话的真实文档发起。

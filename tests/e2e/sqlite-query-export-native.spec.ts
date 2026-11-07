@@ -1,9 +1,10 @@
 import { txtExportZh } from '../../src/shared/txtExport';
 import { txtImportZh } from '../../src/shared/txtImport';
 import { parse as parseTxt } from 'csv-parse/sync';
+import ExcelJS from 'exceljs';
 import { test as base, expect } from '@playwright/test';
-import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { copyFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
@@ -28,6 +29,83 @@ const test: typeof base = enabled ? (require('./desktop-fixture') as Desktop).te
 test.skip(!enabled, '仅在显式启用的独占 SQLite 测试环境运行');
 test.use({trace: 'off', screenshot: 'off', video: 'off', ...(enabled ? {preserveOnUnconfirmedExit: true} : {})});
 test.describe.configure({timeout: 120000, retries: 0});
+
+test('SQLite 多条查询按顺序写入同一本 Excel', async ({}, info) => {
+  const runtime = require('./desktop-fixture') as Desktop;
+  const {DatabaseSync} = require('node:sqlite') as typeof import('node:sqlite');
+  const {application, page} = runtime.ownedDesktopResources(info);
+  const originalProcess = application.process();
+  const database = join(runtime.dataDir, '查询工作簿源.sqlite'), output = join(runtime.dataDir, 'SQLite 完整查询工作簿.xlsx');
+  const db = new DatabaseSync(database);
+  try { db.exec("CREATE TABLE workbook_source(id INTEGER PRIMARY KEY, payload BLOB); INSERT INTO workbook_source VALUES(9223372036854775807,X'00ff');"); }
+  finally { db.close(); }
+  const original = readFileSync(database);
+  try {
+    await application.evaluate(({dialog, BrowserWindow}, paths) => {
+      const open = dialog.showOpenDialog, save = dialog.showSaveDialog;
+      let opens = 0, saves = 0;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        if (++opens !== 1 || args[0] !== BrowserWindow.getAllWindows()[0] ||
+            !(args.at(-1) as Electron.OpenDialogOptions).filters?.[0]?.extensions.includes('sqlite'))
+          throw Error('仅允许选择本例 SQLite 文件');
+        return {canceled: false, filePaths: [paths.database]};
+      }) as typeof open;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        if (++saves !== 1 || args[0] !== BrowserWindow.getAllWindows()[0] ||
+            !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes('xlsx'))
+          throw Error('仅允许选择本例 XLSX 文件');
+        return {canceled: false, filePath: paths.output};
+      }) as typeof save;
+      Object.assign(globalThis, {restoreSqliteQueryWorkbook() { dialog.showOpenDialog = open; dialog.showSaveDialog = save; return [opens, saves]; }});
+    }, {database, output});
+    const sql = [
+      "SELECT :key AS value, ';' AS value;",
+      'WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<205) SELECT i,id,payload FROM n CROSS JOIN workbook_source WHERE id=:key ORDER BY i;',
+      'SELECT :unused AS header WHERE 0;',
+    ].join('\n');
+    await page.evaluate(async ({id, sql}) => {
+      const selected = await window.dbark.invoke('files.choose', {purpose: 'sqlite-database', sqliteConnectionId: id});
+      if (!selected) throw Error('SQLite 数据库选择未确认');
+      const connection = await window.dbark.invoke('connections.save', {id, name: 'SQLite 查询工作簿', dialect: 'sqlite', group: '', color: '#123456',
+        sqlite: {fileToken: selected.token, readOnly: true, busyTimeoutMs: 100}});
+      const settings = await window.dbark.invoke('settings.get', {});
+      await window.dbark.invoke('settings.save', {...settings, activeTabId: 'sqlite-query-workbook', tabs: [
+        {id: 'sqlite-query-workbook', kind: 'query', title: 'SQLite 查询工作簿', database: 'main', connectionId: connection.id, sql},
+      ]});
+    }, {id: randomUUID(), sql});
+    await page.reload();
+    const query = page.locator('.query-tab:visible');
+    await expect(query.locator('.monaco-editor').getByRole('textbox')).toBeVisible();
+    await (await navigationMenuItem(query.locator('.query-primary-toolbar'), {name: text.open, exact: true})).click();
+    const modal = page.getByRole('dialog', {name: text.title, exact: true});
+    await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('xlsx');
+    await expect(modal.getByText(text.workbookHint, {exact: true})).toBeVisible();
+    await modal.getByRole('button', {name: text.parameters, exact: true}).click();
+    const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+    await form.getByLabel(parameterZh.type + ' key', {exact: true}).selectOption('integer');
+    await form.getByLabel(parameterZh.value + ' key', {exact: true}).fill('9223372036854775807');
+    await form.getByLabel(parameterZh.value + ' unused', {exact: true}).fill('本例空页参数');
+    await form.getByRole('button', {name: text.applyParameters, exact: true}).click();
+    await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+    await modal.getByRole('button', {name: text.start, exact: true}).click();
+    await expect(modal.getByRole('status')).toHaveText(text.done(206));
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(output);
+    expect(book.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 1]]);
+    expect(['A1', 'B1', 'A2', 'B2'].map(cell => book.worksheets[0].getCell(cell).text)).toEqual(['value', 'value [2]', '9223372036854775807', ';']);
+    expect(['A206', 'B206', 'C206'].map(cell => book.worksheets[1].getCell(cell).text)).toEqual(['205', '9223372036854775807', '\\B:AP8=']);
+    expect(book.worksheets[2].getCell('A1').text).toBe('header');
+    expect(readFileSync(database)).toEqual(original);
+    expect(readdirSync(runtime.dataDir).filter(path => path.endsWith('.partial'))).toEqual([]);
+    expect(await application.evaluate(() => (globalThis as typeof globalThis & {restoreSqliteQueryWorkbook(): number[]})
+      .restoreSqliteQueryWorkbook())).toEqual([1, 1]);
+    mkdirSync(info.outputDir, {recursive: true});
+    await modal.screenshot({path: info.outputPath('SQLite 完整查询工作簿.png')});
+    copyFileSync(output, info.outputPath(basename(output)));
+    await runtime.confirmOwnedDesktopExit(info);
+    expect(originalProcess.exitCode).toBe(0);
+  } catch (error) { runtime.retainOwnedDesktopResources(info); throw error; }
+});
 
 test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并保护源文件', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Desktop;

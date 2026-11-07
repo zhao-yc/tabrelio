@@ -37,7 +37,7 @@ import { sqliteSchemaScriptSchema } from '../shared/sqliteSchemaScript';
 import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type SqliteRelationshipsOutput } from '../shared/sqliteRelationships';
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import { sqliteQueryExportSchema } from '../shared/sqliteQueryExport';
-import { prepareSqliteQueryExport, sqliteQueryExportBindings, type SqliteQueryExportRequest } from './sqliteQueryExport';
+import { prepareSqliteQueryExport, sqliteQueryExportPlan, type SqliteQueryExportRequest } from './sqliteQueryExport';
 import { sqliteTableExportSchema, sqliteWorkbookExportSchema, type SqliteTableExportOutput } from '../shared/sqliteTableExport';
 import { SqliteTableExportFile, prepareSqliteTableExport, type SqliteTableExportRequest, type SqliteWorkbookExportRequest } from './sqliteTableExport';
 import type { AtomicFileIO } from '../engine/atomicFile';
@@ -713,7 +713,7 @@ export class SqliteRuntime {
     const event = (status: TaskEvent['status'], message: string, progress = 0) => { this.options.emit({ taskId: task.input.taskId, status, progress, rows: task.rows, message }); };
     try {
       event('running', '正在导出SQLite文件'); this.exportCheck(task);
-      const bindings = 'sql' in task.input ? sqliteQueryExportBindings(task.input) : undefined;
+      const queries = 'sql' in task.input ? sqliteQueryExportPlan(task.input) : undefined;
       const maximum = this.options.tableExport?.maxBytes;
       if (maximum !== undefined && (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 10 * 1024 ** 3)) throw Error('SQLite导出内部文件预算无效');
       const file = task.file = new SqliteTableExportFile(task.input, () => this.exportCheck(task), () => { this.exportCheck(task); task.committing = true; }, this.options.tableExport?.io, maximum);
@@ -724,7 +724,7 @@ export class SqliteRuntime {
       const check = () => this.exportCheck(task);
       const progress = (rows: number) => { task.rows = rows; event('running', '已暂存SQLite导出' + rows + '行'); };
       task.rows = 'sql' in task.input
-        ? await prepareSqliteQueryExport(task.driver, task.input, bindings!, file, check, progress)
+        ? await prepareSqliteQueryExport(task.driver, task.input, queries!, file, check, progress)
         : await prepareSqliteTableExport(task.driver, task.input, file, {
           check, progress, beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; },
         });

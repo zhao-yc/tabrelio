@@ -397,7 +397,7 @@ export interface CommandMap {
   'sqlite.tableExport': { input: import('./sqliteTableExport').SqliteTableExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
   'sqlite.syntaxCheck': { input: {sessionId: string; taskId: string; sql: string}; output: import('./sqlSyntaxCheck').SqlSyntaxCheckResult };
   'sqlite.queryExport': { input: import('./sqliteQueryExport').SqliteQueryExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
-  'sqlite.queryExportParameterNames': { input: { sql: string }; output: QueryParameterNames };
+  'sqlite.queryExportParameterNames': { input: import('./sqliteQueryExport').SqliteQueryExportSource; output: QueryParameterNames };
   'sqliteDraftFiles.save': { input: { source: import('./sqliteTableEdit').SqliteTableEditPreviewInput; activeSnapshotId?: string }; output: { name: string } | null };
   'sqliteDraftFiles.open': { input: { target: import('./sqliteTableDraft').SqliteTableDraftDocument['target'] }; output: { name: string; document: import('./sqliteTableDraft').SqliteTableDraftDocument } | null };
   'sqliteDraftFiles.restore': { input: import('./sqliteTableDraft').SqliteTableDraftDocument['target'] & { taskId: string; document: import('./sqliteTableDraft').SqliteTableDraftDocument }; output: import('./sqliteTableDraft').SqliteDraftRestored };
