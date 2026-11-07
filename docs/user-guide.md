@@ -316,6 +316,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 在「查看结构 → 管理表」可[重命名 PostgreSQL 表或受限删除普通表](development/postgres-table-manage-20261108.md)。核对 SQL 后确认，删除还需输入原表名。 也可[清空数据](development/postgres-table-manage-20261108.md#清空数据)，核对普通表或分区范围，并选择保留或重置关联序列。 [移动到其他 schema](development/postgres-table-manage-20261108.md#移动到其他-schema)可预览随表移动的索引、约束和拥有的序列。
 
+在「查看结构」点击「编辑表和字段注释」，可载入原文，修改或清空多项后整批预览、确认。[表和字段注释](development/postgres-table-manage-20261108.md#编辑表和字段注释)
+
 在「查看结构 → 索引 → 编辑索引」可创建、重命名和删除 PostgreSQL 独立索引。先选择索引方法及键列，再将多项改动加入同一份预览。删除需额外确认，主键、约束和复制标识索引会排除在候选之外。详见[PostgreSQL 普通表索引编辑](development/postgres-index-edit-20261105.md)。
 
 在「查看结构 → 约束 → 编辑主键与唯一约束」可按键列顺序创建主键和唯一约束，也可改名或删除。替换主键时先加入旧键的删除，再加入新键，然后预览并确认整批 SQL。详见[PostgreSQL 普通表主键与唯一约束](development/postgres-key-edit-20261105.md)。

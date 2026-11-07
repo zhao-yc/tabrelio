@@ -55,3 +55,13 @@ it('PostgreSQL 移表预览只接受目标 schema 和原目录摘要', () => {
     { ...draft, name: '另一表' }, { ...draft, database: '' }, { ...draft, sql: 'ALTER TABLE t SET SCHEMA other' }])
     expect(postgresTableManagePreviewSchema.safeParse(input).success).toBe(false);
 });
+
+it('PostgreSQL 注释批次区分未修改与清空，并拒绝重复字段和任意 SQL', () => {
+  const draft = { connectionId: 'saved', database: 'qa', table: '"public"."原表"', stamp: 'a'.repeat(64),
+    action: 'comment', value: null, columns: [{ position: 2, name: '原字段', value: '中文\n原样' }] };
+  expect(postgresTableManagePreviewSchema.parse(draft)).toEqual(draft);
+  expect(postgresTableManagePreviewSchema.parse({ ...draft, columns: [] })).toMatchObject({ value: null });
+  for (const input of [{ ...draft, value: undefined, columns: [] }, { ...draft, value: '\0' }, { ...draft, sql: 'COMMENT ON TABLE x IS NULL' },
+    { ...draft, columns: [...draft.columns, { ...draft.columns[0], name: '别的字段' }] }])
+    expect(postgresTableManagePreviewSchema.safeParse(input).success).toBe(false);
+});

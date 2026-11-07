@@ -23,6 +23,7 @@ import { postgresTableManagePreviewSchema, type PostgresTableManageInput } from 
 import { readPostgresTableManageFacts } from './tableManage';
 import { postgresTableTruncatePlan } from './tableTruncate';
 import { postgresTableMovePlan } from './tableMove';
+import { postgresTableCommentPlan } from './tableComments';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -39,6 +40,7 @@ interface Plan {
   identity?: string;
   truncateScope?: PostgresTruncateScope;
   moveScope?: PostgresTableMoveScope;
+  readCommitted?: true;
   statementTimeout?: '120s';
   firstCommand?: 'SELECT';
   lock?: string;
@@ -390,6 +392,8 @@ export class PostgresCreateTableWorkspace {
   async prepareTableManage(input: Scoped<PostgresTableManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     const { owner: _owner, connectionRevision: _revision, ...raw } = input;
     const draft = postgresTableManagePreviewSchema.parse(raw);
+    if (draft.action === 'comment')
+      return this.prepareRelation(input, 'tableManage', connect, () => connection => postgresTableCommentPlan(connection, draft));
     const { schema, name } = postgresRelationName(draft.table);
     const prefix = postgresIdentifier(schema) + '.', originalTable = prefix + postgresIdentifier(name);
     const changed = '原表或管理权限已变化，请刷新结构后继续';
@@ -572,7 +576,7 @@ export class PostgresCreateTableWorkspace {
     try {
       await startPostgresDdl(connection, false);
       const { plan, targetStamp } = prepared;
-      if (plan.guard || plan.truncateScope)
+      if (plan.guard || plan.truncateScope || plan.readCommitted)
         await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', undefined, budget());
       if (plan.lock && (await connection.query(plan.lock, undefined, budget(), undefined, 'extended')).postgresCommand !== 'LOCK')
         throw Error('服务器未确认锁定来源表');

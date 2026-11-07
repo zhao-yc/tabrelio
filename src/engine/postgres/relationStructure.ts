@@ -6,6 +6,7 @@ import { postgresEditableViewSql, postgresManageableMaterializedSql, postgresVie
 import { parsePostgresMaterializedFacts, postgresMaterializedCanRefreshSql, postgresMaterializedFactsSql } from './materializedView';
 import { startPostgresDdl } from './createTable';
 import { parsePostgresTableManageFacts, postgresTableCanDropSql, postgresTableCanTruncateSql, postgresTableManageFactsSql } from './tableManage';
+import { postgresCommentIdentitySql, postgresCommentStamp } from './tableComments';
 
 // 依赖与结构使用相同的关系可见性；物化视图维护者也可核对依赖。
 export const postgresStructureVisibleSql = `(pg_catalog.has_table_privilege(c.oid, 'SELECT') OR pg_catalog.pg_has_role(c.relowner, 'USAGE')
@@ -20,6 +21,7 @@ WITH target AS MATERIALIZED (
          CASE WHEN c.relkind = 'm' THEN (${postgresMaterializedFactsSql})::text END AS materialized,
          CASE WHEN ${postgresManageableMaterializedSql} THEN (${postgresViewFactsSql})::text END AS materialized_manage,
          ${postgresTableManageFactsSql} AS table_manage,
+         ${postgresCommentIdentitySql} AS comment_identity,
          c.relkind = 'r' AND c.relpersistence IN ('p', 'u') AND NOT c.relispartition
            AND pg_catalog.pg_has_role(c.relowner, 'USAGE')
            AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid) AS editable
@@ -142,7 +144,7 @@ SELECT pg_catalog.jsonb_build_object(
       pg_catalog.jsonb_build_object('oid', oid::text, 'reference', confrelid::text, 'index', conindid::text)) FROM (
       SELECT c.conname, c.oid, c.confrelid, c.conindid FROM pg_catalog.pg_constraint c
       WHERE c.conrelid = t.oid AND c.contype = 'f' ORDER BY c.oid LIMIT 2001
-    ) foreign_ids), '{}'::jsonb)), t.view_edit, t.materialized, t.materialized_manage, t.table_manage
+    ) foreign_ids), '{}'::jsonb)), t.view_edit, t.materialized, t.materialized_manage, t.table_manage, t.comment_identity
 FROM target t
 `;
 
@@ -191,6 +193,9 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
     const { stamp, rename, move, drop, truncate } = parsePostgresTableManageFacts(tableManage);
     output.tableManage = { stamp, rename, move, drop, truncate };
   }
+  const commentIdentity = result.rows[0].c8;
+  if (typeof commentIdentity === 'string')
+    output.commentStamp = postgresCommentStamp(commentIdentity, output.comment, output.columns);
   return { output, oid, indexIds, keyIds, foreignIds, checkIds };
 }
 

@@ -1,0 +1,16 @@
+export const postgresTableCommentsZh = {
+  title: '编辑表和字段注释',
+  target: '注释对象',
+  table: '表注释',
+  column: (name: string) => '字段 · ' + name,
+  value: '注释内容',
+  hint: '选择表或字段编辑原文。可以修改多项后一起预览和保存。清空文本会移除该项注释。',
+  changed: (count: number) => '已修改 ' + count + ' 项注释',
+  restore: '恢复此项原文',
+  preview: '预览注释 SQL',
+  sql: '注释 SQL',
+  back: '返回编辑',
+  apply: '确认保存注释',
+  close: '关闭编辑',
+  unknown: '注释提交结果待核对，请刷新结构读取实际注释。',
+} as const;
