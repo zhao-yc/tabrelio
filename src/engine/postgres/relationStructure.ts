@@ -134,10 +134,16 @@ SELECT pg_catalog.jsonb_build_object(
       'definition', pg_catalog.pg_get_triggerdef(g.oid, false),
       'internal', g.tgisinternal, 'inherited', COALESCE((pg_catalog.to_jsonb(g)->>'tgparentid')::oid, 0::oid) <> 0,
       'constraint', g.tgconstraint <> 0, 'signature', pg_catalog.md5((pg_catalog.to_jsonb(g) - 'tgname' - 'tgenabled')::text),
-      'functionOid', g.tgfoid::text, 'eventBits', g.tgtype, 'updatePositions', g.tgattr::smallint[],
-      'argsHex', pg_catalog.encode(g.tgargs, 'hex'), 'conditional', g.tgqual IS NOT NULL
+      'functionOid', g.tgfoid::text, 'functionSchema', fn.nspname, 'functionName', p.proname,
+      'eventBits', g.tgtype, 'updatePositions', g.tgattr::smallint[],
+      'argumentCount', g.tgnargs, 'argsHex', pg_catalog.encode(g.tgargs, 'hex'), 'conditional', g.tgqual IS NOT NULL,
+      'oldTable', g.tgoldtable, 'newTable', g.tgnewtable, 'comment', pg_catalog.obj_description(g.oid, 'pg_trigger'),
+      'extensionBound', EXISTS (SELECT FROM pg_catalog.pg_depend d
+        WHERE d.classid = 'pg_catalog.pg_trigger'::regclass AND d.objid = g.oid AND d.deptype IN ('e', 'x'))
     ) AS item
-    FROM pg_catalog.pg_trigger g WHERE g.tgrelid = t.oid ORDER BY g.tgname, g.oid LIMIT 2001
+    FROM pg_catalog.pg_trigger g JOIN pg_catalog.pg_proc p ON p.oid = g.tgfoid
+    JOIN pg_catalog.pg_namespace fn ON fn.oid = p.pronamespace
+    WHERE g.tgrelid = t.oid ORDER BY g.tgname, g.oid LIMIT 2001
   ) entry), '[]'::jsonb)
 ), t.oid::text, t.editable,
   pg_catalog.jsonb_build_object('indexes', COALESCE((SELECT pg_catalog.jsonb_object_agg(index_name, index_oid) FROM (

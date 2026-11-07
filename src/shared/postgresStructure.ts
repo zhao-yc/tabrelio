@@ -60,6 +60,8 @@ const structureTrigger = z.object({
   internal: z.boolean(), inherited: z.boolean(), constraint: z.boolean(), signature: z.string().regex(/^[0-9a-f]{32}$/),
   functionOid: oid, eventBits: z.number().int().nonnegative(),
   updatePositions: z.array(z.number().int().positive()).max(2000), argsHex: z.string(), conditional: z.boolean(),
+  functionSchema: identifier, functionName: identifier, argumentCount: z.number().int().nonnegative(),
+  oldTable: optionalText, newTable: optionalText, comment: optionalText, extensionBound: z.boolean(),
 }).strict();
 
 /** 大型关系的结构必须完整交付；超过目录预算时整体拒绝。 */

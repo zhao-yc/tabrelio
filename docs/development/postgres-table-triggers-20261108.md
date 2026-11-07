@@ -18,9 +18,21 @@
 
 提交时锁定原表，重新核对表与触发器身份，确认提交前回读实际目录。遇到同名替换或原结构变化时应刷新后重新预览。
 
-## 验证
+## 修改定义
+
+PostgreSQL 14 及更新版本可在「管理触发器 → 修改触发器定义」载入当前时机、事件、UPDATE 字段、WHEN 条件、函数和文字参数。修改后核对 `CREATE OR REPLACE TRIGGER` 预览。提交保留原触发器 OID 和注释，并在同一事务恢复原触发模式。与扩展绑定的定义保持只读。[PostgreSQL 14 CREATE TRIGGER](https://www.postgresql.org/docs/14/sql-createtrigger.html)
+
+创建和修改单事件 AFTER 触发器时可以填写 OLD TABLE 或 NEW TABLE 别名，让触发函数读取整条语句影响的行。INSERT 只支持 NEW TABLE，DELETE 只支持 OLD TABLE，UPDATE 可同时使用两者。使用过渡表时，UPDATE 须覆盖所有字段。界面载入原别名后允许保留、修改或清除。
+
+## 创建和管理验收
 
 - macOS arm64 原生运行时检查、类型检查、构建和 88 项相关单测通过。
 - Server-200 隔离 PostgreSQL 18.6 通过 16 项 Electron 源码用例及 4 项实库集成用例。用独立连接验证四种模式、UPDATE 字段、WHEN、含引号和反斜杠的文字参数、原 OID 重命名和受限删除。错误函数在预览拒绝，无法解析的条件引用使提交回滚。锁等待期间同名替换被拦截。
 - 首轮原生测试的禁用选项断言误报。改为直接读取原生 `disabled` 属性后通过。两轮隔离实例均在客户连接归零后清理。
 - WIN11-TEST 不可达，本轮未派发。Windows 原生窗口、安装包和其他 PostgreSQL 版本待验。
+
+## 定义替换验收
+
+- macOS arm64 原生运行时、严格类型检查、构建和 138 项相关单测通过。
+- Server-200 隔离 PostgreSQL 18.6 通过 18 项 Electron 用例和 4 项实库集成用例。独立连接核对原 OID、禁用模式、注释、空参数、多行参数及末尾反斜杠，确认更新后的条件与函数实际生效。过渡表的旧行和新行被触发函数读取，非法替换回滚并保留原定义。
+- Windows 原生窗口、安装包及 PostgreSQL 14–17 实例待验。WIN11-TEST 不可达，本轮未派发。

@@ -283,7 +283,7 @@ export interface PostgresEditorToken {
 }
 
 /** 编辑器允许未闭合的标识符，字符串和注释沿原词法边界一律禁止目录请求。 */
-export function scanPostgresEditorTokens(source: string, budget: number): PostgresEditorToken[] | undefined {
+export function scanPostgresEditorTokens(source: string, budget: number, standardStrings = false): PostgresEditorToken[] | undefined {
   const result: PostgresEditorToken[] = [];
   let i = 0;
   while (i < source.length) {
@@ -301,8 +301,9 @@ export function scanPostgresEditorTokens(source: string, budget: number): Postgr
       result.push({ kind: 'blocked', start, end: i, text: 'comment', open });
     } else if (c === '"' || c === "'") {
       let open = false;
-      // 兼容未掌握的会话字符串设置，反斜杠后一律不恢复字符串内的补全。
-      try { i = quotedEnd(source, i, c === "'"); } catch { i = source.length; open = true; }
+      // 补全沿用保守边界，已知字符串模式的目录反编译可按服务器设置读取。
+      const escape = /[eE]/.test(source[i - 1] ?? '') && !identifierPart.test(source[i - 2] ?? '');
+      try { i = quotedEnd(source, i, c === "'" && (!standardStrings || escape)); } catch { i = source.length; open = true; }
       result.push({ kind: c === '"' ? 'identifier' : 'blocked', start, end: i,
         text: c === '"' ? source.slice(start + 1, open ? i : i - 1).replaceAll('""', '"') : '', open });
     } else if (c === '$' && dollarTag(source, i)) {

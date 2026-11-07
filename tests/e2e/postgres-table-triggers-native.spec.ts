@@ -170,3 +170,112 @@ test('PostgreSQL 触发器锁后识别同名替换并拒绝错误函数', async 
     expect(native.exitCode).toBe(0);
   } finally { await Promise.all([holder.end(), observer.end()]); }
 });
+
+test('PostgreSQL 载入并替换触发器定义，保留禁用状态、注释和身份', async ({}, info) => {
+  const config = isolatedConnection(), observer = new Client(config), table = '"public"."trigger_replace"';
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE ${table}(id int PRIMARY KEY, amount int, tag text);
+      INSERT INTO ${table} VALUES (1, 1, NULL);
+      CREATE FUNCTION public.replace_before() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN NEW.tag := TG_ARGV[0]; RETURN NEW; END $$;
+      CREATE FUNCTION public.replace_after() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN NEW.tag := '替换:' || TG_ARGV[0]; RETURN NEW; END $$`);
+    const args = "旧参数'\\";
+    const multiline = '第一行\n第二行';
+    await observer.query(`CREATE TRIGGER "WHEN (" BEFORE UPDATE OF amount ON ${table} FOR EACH ROW
+      WHEN (NEW.amount > 1 AND (NEW.tag IS NULL OR NEW.tag <> 'EXECUTE FUNCTION )'))
+      EXECUTE FUNCTION public.replace_before('旧参数''\\', '', '${multiline}');
+      ALTER TABLE ONLY ${table} DISABLE TRIGGER "WHEN (";
+      COMMENT ON TRIGGER "WHEN (" ON ${table} IS '保留的注释'`);
+    const connectionId = await saveConnection(config);
+    const target = { connectionId, database: config.database, table };
+    const read = () => page.evaluate(input => window.dbark.invoke('postgres.structure.read', input), target);
+    const before = (await read()).triggers?.[0];
+    expect(before).toMatchObject({ mode: 'D', comment: '保留的注释', functionName: 'replace_before', argumentCount: 3 });
+    await page.evaluate(async ({ connectionId, database, table }) => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'pg-trigger-replace', tabs: [
+        { id: 'pg-trigger-replace', title: '修改触发器测试', kind: 'table', connectionId, database, table },
+      ] });
+    }, target);
+    await page.reload();
+    await page.locator('.postgres-table-tab:visible').getByRole('button', { name: structure.open, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: structure.title, exact: true });
+    await dialog.getByRole('button', { name: structure.sections.triggers, exact: true }).click();
+    await dialog.getByRole('button', { name: triggers.title, exact: true }).click();
+    const panel = dialog.getByRole('region', { name: triggers.title, exact: true });
+    await panel.getByLabel(triggers.operation, { exact: true }).selectOption('replace');
+    await expect(panel.getByLabel(triggers.existing, { exact: true })).toHaveValue('WHEN (');
+    await expect(panel.getByLabel(triggers.arg(0), { exact: true })).toHaveValue(args);
+    await expect(panel.getByLabel(triggers.arg(1), { exact: true })).toHaveValue('');
+    await expect(panel.getByLabel(triggers.arg(2), { exact: true })).toHaveValue(multiline);
+    await expect(panel.getByLabel(triggers.functionName, { exact: true })).toHaveValue('replace_before');
+    await expect(panel.getByLabel(triggers.condition, { exact: true })).toHaveValue(/new\.amount.*EXECUTE FUNCTION/is);
+    await expect(panel.getByLabel(triggers.updateOf, { exact: true })).toHaveValues(['amount']);
+    await panel.getByLabel(triggers.functionName, { exact: true }).fill('replace_after');
+    await panel.getByLabel(triggers.condition, { exact: true }).fill('NEW.amount >= 10');
+    await panel.screenshot({ path: info.outputPath('PostgreSQL 载入触发器定义.png') });
+    await panel.getByRole('button', { name: triggers.preview, exact: true }).click();
+    await expect(panel.getByLabel(triggers.sql, { exact: true })).toContainText('CREATE OR REPLACE TRIGGER "WHEN ("');
+    await expect(panel.getByLabel(triggers.sql, { exact: true })).toContainText('DISABLE TRIGGER "WHEN ("');
+    expect((await read()).triggers?.[0]).toEqual(before);
+    await panel.screenshot({ path: info.outputPath('PostgreSQL 替换触发器定义预览.png') });
+    await panel.getByRole('button', { name: triggers.apply, exact: true }).click();
+    await expect(panel).toHaveCount(0);
+    const after = (await read()).triggers?.[0];
+    expect(after).toMatchObject({ oid: before?.oid, mode: 'D', comment: before?.comment,
+      functionName: 'replace_after', argsHex: before?.argsHex, updatePositions: before?.updatePositions });
+    const update = async (amount: number) => (await observer.query(`UPDATE ${table} SET amount = $1 WHERE id = 1 RETURNING tag`, [amount])).rows[0].tag;
+    expect(await update(11)).toBeNull();
+    await observer.query(`ALTER TABLE ONLY ${table} ENABLE TRIGGER "WHEN ("`);
+    expect(await update(5)).toBeNull();
+    expect(await update(10)).toBe('替换:' + args);
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 过渡表别名支持创建、替换及无效替换回滚', async () => {
+  const config = isolatedConnection(), observer = new Client(config), table = '"public"."trigger_transition"';
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE ${table}(id int PRIMARY KEY, amount int);
+      CREATE TABLE public.transition_log(old_amount int, new_amount int);
+      CREATE FUNCTION public.transition_trigger() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN INSERT INTO public.transition_log SELECT o.amount, n.amount FROM old_rows o JOIN new_rows n USING (id); RETURN NULL; END $$;
+      INSERT INTO ${table} VALUES (1, 5)`);
+    const connectionId = await saveConnection(config), database = config.database;
+    const target = { connectionId, database, table };
+    const read = () => page.evaluate(input => window.dbark.invoke('postgres.structure.read', input), target);
+    const prepare = async (change: PostgresTriggerChange) => page.evaluate(input => window.dbark.invoke('postgres.tableManage.preview', input),
+      { ...target, stamp: (await read()).editStamp!, action: 'trigger' as const, change });
+    const apply = (token: string) => page.evaluate(input => window.dbark.invoke('postgres.tableManage.apply', input),
+      { connectionId, database, token, confirmed: true as const });
+    const create = { kind: 'create', name: 'transition_example', timing: 'AFTER', level: 'STATEMENT', events: ['UPDATE'], args: [],
+      functionSchema: 'public', functionName: 'transition_trigger', updateOf: [], oldTable: 'old_rows', newTable: 'new_rows' } satisfies PostgresTriggerChange;
+    const preview = await prepare(create);
+    expect(preview.statements.join('\n')).toContain('REFERENCING OLD TABLE AS "old_rows" NEW TABLE AS "new_rows"');
+    expect(await apply(preview.token)).toMatchObject({ outcome: 'committed' });
+    await observer.query(`UPDATE ${table} SET amount = 6`);
+    expect((await observer.query('SELECT * FROM public.transition_log')).rows).toEqual([{ old_amount: 5, new_amount: 6 }]);
+    const prior = (await read()).triggers?.[0];
+    const { kind: _kind, name, ...definition } = create;
+    const replace = { ...definition, kind: 'replace', from: name } as const;
+    const broken = await prepare({ ...replace, condition: 'NEW.nonexistent > 0' });
+    expect(await apply(broken.token)).toMatchObject({ outcome: 'rolledBack' });
+    expect((await read()).triggers?.[0]).toEqual(prior);
+    const valid = await prepare({ ...replace, args: ['更换'] });
+    expect(await apply(valid.token)).toMatchObject({ outcome: 'committed' });
+    expect((await read()).triggers?.[0]).toMatchObject({
+      oid: prior?.oid, argumentCount: 1, oldTable: 'old_rows', newTable: 'new_rows',
+    });
+    await observer.query(`UPDATE ${table} SET amount = 7`);
+    expect((await observer.query('SELECT * FROM public.transition_log ORDER BY old_amount')).rows)
+      .toEqual([{ old_amount: 5, new_amount: 6 }, { old_amount: 6, new_amount: 7 }]);
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally { await observer.end(); }
+});

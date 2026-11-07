@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { postgresCreateTablePlan, postgresCreateTablePreviewSchema, type PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
 import { splitPostgresSql } from '../../src/shared/postgresSql';
 import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from '../../src/shared/postgresTableManage';
+import { postgresTriggerEditorDraft, postgresTriggerChangeSchema } from '../../src/shared/postgresTrigger';
 
 const draft: PostgresCreateTableInput = {
   connectionId: '原连接', database: '原库', schema: '业务"区', table: '新"表', comment: "注释'；\\",
@@ -111,4 +112,23 @@ it('PostgreSQL 触发器输入约束事件、UPDATE 字段和 WHEN 的边界', (
     { ...input.change, condition: 'true; DROP TABLE x' }, { ...input.change, condition: '$1' },
     { ...input.change, sql: 'CREATE TRIGGER arbitrary' },
   ]) expect(postgresTableManagePreviewSchema.safeParse({ ...input, change }).success).toBe(false);
+});
+
+it('从 PostgreSQL 触发器目录还原条件、字面参数和过渡表别名', () => {
+  const args = ["a'b", '尾部\\', '', 'EXECUTE FUNCTION ( WHEN ('];
+  const condition = "((new.a > old.a) AND (new.memo <> 'EXECUTE FUNCTION )'))";
+  const trigger = {
+    oid: '12', name: 'WHEN (', mode: 'D' as const, internal: false, inherited: false, constraint: false,
+    definition: `CREATE TRIGGER "WHEN (" AFTER UPDATE ON public.t REFERENCING OLD TABLE AS "旧表" NEW TABLE AS "新表" FOR EACH ROW WHEN (${condition}) EXECUTE FUNCTION "x"."f("('a''b', '尾部\\', '', 'EXECUTE FUNCTION ( WHEN (')`,
+    functionOid: '9', functionSchema: 'x', functionName: 'f(', eventBits: 17,
+    argumentCount: args.length, updatePositions: [], argsHex: '', conditional: true, signature: '0'.repeat(32),
+    oldTable: '旧表', newTable: '新表', comment: null, extensionBound: false,
+  };
+  const draft = postgresTriggerEditorDraft(trigger, []);
+  expect(draft).toEqual({ timing: 'AFTER', events: ['UPDATE'], level: 'ROW', updateOf: [], condition,
+    functionSchema: 'x', functionName: 'f(', args, oldTable: '旧表', newTable: '新表' });
+  expect(postgresTriggerEditorDraft({ ...trigger, argumentCount: 9 }, [])).toBeUndefined();
+  expect(postgresTriggerEditorDraft({ ...trigger, extensionBound: true }, [])).toBeUndefined();
+  expect(postgresTriggerChangeSchema.safeParse({ ...draft, kind: 'replace', from: '旧触发器', updateOf: ['a'] }).success).toBe(false);
+  expect(postgresTriggerChangeSchema.safeParse({ ...draft, kind: 'replace', from: '旧触发器', events: ['INSERT'] }).success).toBe(false);
 });
