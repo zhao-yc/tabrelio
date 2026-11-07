@@ -418,6 +418,8 @@ TLS 默认验证服务端证书。私有 CA 或自签证书使用 CA 文件；�
 
 在角色窗口点击「查看当前角色」后，可[轮换当前登录密码](development/postgres-role-browser-20261108.md#轮换当前登录密码)。核对脱敏预览并确认后，点击「编辑此连接的密码」，重新输入新密码并测试、保存。
 
+在角色详情可[编辑现有角色属性](development/postgres-role-browser-20261108.md#编辑现有角色属性)，为其他角色启用或停用登录，并修改连接上限与密码有效期。
+
 在角色详情检查指定表或视图后，可以[管理直接权限](development/postgres-role-browser-20261108.md#管理表和视图的直接权限)。确认前可查看所选表级权限以及撤销时受影响的列权限。
 
 同一窗口也可[管理数据库与 Schema 的直接权限](development/postgres-role-browser-20261108.md#管理数据库与-schema-的直接权限)，为所选角色设置连接、建库内对象或访问 Schema 的权限。

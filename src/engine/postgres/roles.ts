@@ -1,10 +1,10 @@
 import type { CellValue, DataRow } from '../../shared/contracts';
-import type { PostgresColumnPrivilege, PostgresColumnPrivilegeRow, PostgresRole, PostgresRoleDetail, PostgresRoleMembership,
+import type { PostgresColumnPrivilege, PostgresColumnPrivilegeRow, PostgresRoleDetail, PostgresRoleMembership,
   PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput, PostgresObjectPrivilege, PostgresRoutinePrivilegeRow } from '../../shared/postgresRoles';
 import type { PostgresConnection } from './connection';
 import { postgresRoutineSignatureSql } from './routine';
+import { parsePostgresRole, postgresRoleFields, readRoleAttributeTarget } from './roleAttributes';
 
-const roleFields = 'r.oid::text,r.rolname::text,r.rolcanlogin,r.rolsuper,r.rolinherit,r.rolcreaterole,r.rolcreatedb,r.rolreplication,r.rolbypassrls,r.rolconnlimit::text,r.rolvaliduntil::text';
 const pageSize = 50, memberLimit = 200;
 const columnPageSize = 32;
 const invalid = () => Error('PostgreSQL 角色目录返回不完整');
@@ -12,14 +12,6 @@ const text = (value: CellValue): string => { if (typeof value !== 'string') thro
 const nullableText = (value: CellValue): string | null => value === null ? null : text(value);
 const flag = (value: CellValue): boolean => { if (value !== 't' && value !== 'f') throw invalid(); return value === 't'; };
 const nullableFlag = (value: CellValue): boolean | null => value === null ? null : flag(value);
-function readRole(row: DataRow): PostgresRole {
-  const connectionLimit = Number(text(row.c9));
-  if (!Number.isSafeInteger(connectionLimit)) throw invalid();
-  return {oid: text(row.c0), name: text(row.c1), login: flag(row.c2), superuser: flag(row.c3), inherit: flag(row.c4),
-    createRole: flag(row.c5), createDatabase: flag(row.c6), replication: flag(row.c7), bypassRls: flag(row.c8),
-    connectionLimit, validUntil: nullableText(row.c10)};
-}
-
 /** 只投影角色属性和授权目录。用户名、对象名、过滤词始终以绑定值传递。 */
 export async function readPostgresRoles(connection: PostgresConnection, input: PostgresRolesInput, check: () => void): Promise<PostgresRolesOutput> {
   const rows = async (sql: string, values: unknown[], limit: number) => {
@@ -38,17 +30,18 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
   const context = {database: text(identity.c0), login: text(identity.c1), current: {name: text(identity.c2), oid: text(identity.c3)}};
   let output: PostgresRolesOutput;
   if (input.kind === 'list') {
-    const found = await rows(`SELECT ${roleFields} FROM pg_catalog.pg_roles r
+    const found = await rows(`SELECT ${postgresRoleFields} FROM pg_catalog.pg_roles r
       WHERE pg_catalog.strpos(pg_catalog.lower(r.rolname::text),pg_catalog.lower($1::text))>0
         AND ($2::text IS NULL OR r.rolname::text COLLATE pg_catalog."C">$2::text COLLATE pg_catalog."C")
       ORDER BY r.rolname::text COLLATE pg_catalog."C" LIMIT 51`, [input.search, input.after ?? null], pageSize + 1);
-    const roles = found.slice(0, pageSize).map(readRole);
+    const roles = found.slice(0, pageSize).map(parsePostgresRole);
     output = {kind: 'list', ...context, roles, ...(found.length > pageSize ? {next: roles.at(-1)!.name} : {})};
   } else {
-    const [row] = await rows(`SELECT ${roleFields} FROM pg_catalog.pg_roles r WHERE r.oid=$1::oid AND r.rolname::text=$2::text`,
+    const [row] = await rows(`SELECT ${postgresRoleFields} FROM pg_catalog.pg_roles r WHERE r.oid=$1::oid AND r.rolname::text=$2::text`,
       [input.role.oid, input.role.name], 1);
     if (!row) throw Error('所选 PostgreSQL 角色已变化，请重新读取目录');
-    const role = readRole(row);
+    const role = parsePostgresRole(row);
+    const attributeEditor = (await readRoleAttributeTarget(connection, role))?.editor;
     const memberships = async (direction: 'granted' | 'members') => {
       const owner = direction === 'granted' ? 'member' : 'roleid', peer = direction === 'granted' ? 'roleid' : 'member';
       // PG16 开始按授权记录保存 INHERIT 和 SET，旧版本显示未知而不猜权限。
@@ -221,7 +214,7 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       }
     }
     output = {kind: 'detail', ...context, role, memberships: {granted: granted.edges, members: members.edges, limited: granted.limited || members.limited},
-      databasePrivileges, ...(databaseEditor ? {databaseEditor} : {}), ...(databasePublicEditor ? {databasePublicEditor} : {}), ...(scope ? {scope} : {})};
+      databasePrivileges, ...(attributeEditor ? {attributeEditor} : {}), ...(databaseEditor ? {databaseEditor} : {}), ...(databasePublicEditor ? {databasePublicEditor} : {}), ...(scope ? {scope} : {})};
   }
   check();
   const ended = await connection.query('COMMIT', undefined, {rows: 0, bytes: 1024});

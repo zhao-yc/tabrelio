@@ -46,6 +46,18 @@ const rolePassword = z.string().min(1).max(1024).refine(value =>
 export const postgresRoleCreateApplySchema = postgresMembershipApplySchema.extend({password: rolePassword.optional()});
 export const postgresRolePasswordDraftSchema = z.object({...membershipTarget, role}).strict();
 export const postgresRolePasswordApplySchema = postgresMembershipApplySchema.extend({password: rolePassword});
+export const postgresRoleAttributeFlags = ['login', 'inherit', 'createDatabase', 'createRole', 'superuser', 'replication', 'bypassRls'] as const;
+export type PostgresRoleAttributeFlag = typeof postgresRoleAttributeFlags[number];
+const roleAttributePatch = z.object({
+  login: z.boolean().optional(), inherit: z.boolean().optional(), createDatabase: z.boolean().optional(),
+  createRole: z.boolean().optional(), superuser: z.boolean().optional(), replication: z.boolean().optional(), bypassRls: z.boolean().optional(),
+  connectionLimit: z.number().int().min(-1).max(2147483647).optional(),
+  validUntil: z.union([z.literal('infinity'), z.iso.datetime({precision: 3}).refine(value => Number.isFinite(Date.parse(value)))]).optional(),
+}).strict().refine(patch => Object.values(patch).some(value => value !== undefined), '至少需要修改一项角色属性');
+export const postgresRoleAttributesDraftSchema = z.object({...membershipTarget, database: identifier, role,
+  stamp: z.string().regex(/^[a-f0-9]{64}$/), patch: roleAttributePatch}).strict();
+export type PostgresRoleAttributesDraft = z.infer<typeof postgresRoleAttributesDraftSchema>;
+export interface PostgresRoleAttributeEditor {stamp: string; flags: PostgresRoleAttributeFlag[];}
 export type PostgresRoleCreateDraft = z.infer<typeof postgresRoleCreateDraftSchema>;
 export type PostgresRoleCreateApply = z.infer<typeof postgresRoleCreateApplySchema>;
 export type PostgresRolePasswordDraft = z.infer<typeof postgresRolePasswordDraftSchema>;
@@ -134,6 +146,7 @@ export interface PostgresRolesList extends PostgresRolesContext {
 }
 export interface PostgresRoleDetail extends PostgresRolesContext {
   kind: 'detail'; role: PostgresRole;
+  attributeEditor?: PostgresRoleAttributeEditor;
   memberships: {granted: PostgresRoleMembership[]; members: PostgresRoleMembership[]; limited: boolean};
   databasePrivileges: PostgresRolePrivilege[];
   databaseEditor?: PostgresScopedPrivilegeEditor;

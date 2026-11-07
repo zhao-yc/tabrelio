@@ -79,3 +79,9 @@ PUBLIC 包含当前及将来创建的角色。撤销 CONNECT 后，仅通过 PUB
 检查对象权限后，可从表、视图和序列的有效权限区打开各自的 PUBLIC 授权入口。列权限矩阵显示 PUBLIC 的有效权限，可从「管理列级 PUBLIC 权限」批量授予或撤销选中列。对象所有者和超级用户可以操作，预览会明确显示 `TO PUBLIC` 或 `FROM PUBLIC RESTRICT`，确认文字也会注明 PUBLIC。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html)
 
 撤销表或视图的 PUBLIC 权限时，预览会列出同时受影响的同来源列权限。单独撤销列级授权后，表级授权仍可能提供该列的访问权限。其他角色的直接授权按原来源保留。序列权限单独处理，预览和提交不会推进序列。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
+
+## 编辑现有角色属性
+
+在 PostgreSQL 16 及以上的角色详情点击「编辑角色属性」，可启用或停用登录，调整连接上限、密码有效期及执行者有权修改的其他属性。密码有效期可保留、设为永不过期，或输入 UTC 到期时间。角色设置在整个服务器上生效，停用登录只影响新连接。普通 CREATEROLE 执行者还需拥有目标角色的 ADMIN 选项，服务器会独立校验执行权限。[PostgreSQL ALTER ROLE](https://www.postgresql.org/docs/18/sql-alterrole.html)
+
+预览只列出发生变化的属性。确认会核对数据库、执行角色、目标角色 OID 和原属性。在同一个重复读事务中回读原 OID 的全部属性后才提交。当前登录角色和预定义角色不提供属性编辑入口。角色详情与目录会在确认后重新读取。[PostgreSQL 事务隔离](https://www.postgresql.org/docs/18/transaction-iso.html)

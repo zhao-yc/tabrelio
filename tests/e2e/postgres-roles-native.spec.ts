@@ -1286,3 +1286,137 @@ test('PostgreSQL 表列视图和序列 PUBLIC 权限与直接授权分离', asyn
     expect(native.exitCode).toBe(0);
   } finally {await Promise.all([publicOnly.end(), directRole.end(), owner.end()]);}
 });
+
+test('PostgreSQL 管理员修改角色登录和有效期并保护同名替换', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || ![password, adminPassword].every(value => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', manager = prefix + 'creator', name = prefix + 'edit', racer = prefix + 'race';
+  const endpoint = {host: '127.0.0.1', port, database, connectionTimeoutMillis: 3000};
+  const admin = new Client({...endpoint, user: 'postgres', password: adminPassword});
+  const observer = new Client({...endpoint, user: 'postgres', password: adminPassword});
+  const live = new Client({...endpoint, user: name, password});
+  const login = async () => {
+    const client = new Client({...endpoint, user: name, password});
+    try {await client.connect(); return (await client.query('SELECT current_user::text AS name')).rows[0].name;}
+    finally {await client.end();}
+  };
+  await admin.connect();
+  try {
+    await observer.connect();
+    await admin.query(`CREATE ROLE ${name} LOGIN PASSWORD '${password}'; CREATE ROLE ${racer};
+      GRANT ${name},${racer} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`);
+    await live.connect();
+    const attributes = async (target: string) => (await admin.query(`SELECT oid::text,rolcanlogin AS login,rolinherit AS inherit,
+      rolconnlimit AS lim,rolvaliduntil::text AS expiry,rolcreatedb AS createdb
+      FROM pg_catalog.pg_roles WHERE rolname=$1`, [target])).rows[0];
+    const initial = await attributes(name);
+    const profile = await page.evaluate(async ({database, port, manager, password}) => window.dbark.invoke('connections.save', {
+      id: '', dialect: 'postgresql', group: '', color: '#123456', host: '127.0.0.1', port, database, password, user: manager,
+      name: '普通 CREATEROLE 属性管理', rememberPassword: false,
+    }), {database, port, manager, password});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profile.id);
+    await modal.getByLabel(t.search, {exact: true}).fill(name);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    const directory = modal.getByRole('region', {name: t.directory, exact: true});
+    await directory.getByRole('button', {name, exact: true}).click();
+    const locale = t.editAttributes;
+    const dialog = page.getByRole('dialog', {name: locale.title, exact: true});
+    const open = () => modal.getByRole('button', {name: locale.open, exact: true}).click();
+    const setExpiry = async (value: string) => {
+      await dialog.getByLabel(locale.expiryAction, {exact: true}).selectOption('until');
+      await dialog.getByLabel(locale.expiry, {exact: true}).fill(value);
+    };
+    const preview = async () => {
+      await dialog.getByRole('button', {name: locale.preview, exact: true}).click();
+      const sql = dialog.getByLabel(locale.sql, {exact: true});
+      await expect(sql).toBeVisible();
+      return sql;
+    };
+    const apply = async () => {
+      await dialog.getByRole('checkbox', {name: locale.confirm, exact: true}).check();
+      await dialog.getByRole('button', {name: locale.apply, exact: true}).click();
+      await expect(dialog.getByRole('status').filter({hasText: t.result.committed})).toBeVisible();
+      await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+    await open();
+    await expect(dialog.getByRole('checkbox', {name: t.superuser, exact: true})).toBeDisabled();
+    await expect(dialog.getByRole('checkbox', {name: t.createDatabase, exact: true})).toBeDisabled();
+    await dialog.getByRole('checkbox', {name: locale.login, exact: true}).uncheck();
+    await dialog.getByRole('checkbox', {name: t.inherit, exact: true}).uncheck();
+    await dialog.getByLabel(t.connectionLimit, {exact: true}).fill('3');
+    await setExpiry('2098-06-07T08:09');
+    const sql = await preview();
+    await expect(sql).toHaveText(`ALTER ROLE "${name}" WITH\n  NOLOGIN\n  NOINHERIT\n  CONNECTION LIMIT 3\n  VALID UNTIL E'2098-06-07T08:09:00.000Z'`);
+    expect(await attributes(name)).toEqual(initial);
+    expect(await login()).toBe(name);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 角色属性修改预览.png')});
+    await apply();
+    await expect(directory.getByText(t.noLogin, {exact: true})).toBeVisible();
+    expect(await attributes(name)).toMatchObject({oid: initial.oid, login: false, inherit: false, lim: 3});
+    expect((await live.query('SELECT current_user::text AS name')).rows).toEqual([{name}]);
+    await expect(login()).rejects.toMatchObject({code: '28000'});
+
+    await open();
+    await setExpiry('2098-06-07T08:09');
+    await dialog.getByRole('button', {name: locale.preview, exact: true}).click();
+    await expect(dialog.getByText('角色属性没有变化', {exact: true})).toBeVisible();
+    await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await open();
+    await dialog.getByRole('checkbox', {name: locale.login, exact: true}).check();
+    await setExpiry('2000-01-01T00:00');
+    await preview();
+    await apply();
+    await expect(login()).rejects.toMatchObject({code: '28P01'});
+    await open();
+    await dialog.getByLabel(locale.expiryAction, {exact: true}).selectOption('never');
+    await expect(await preview()).toContainText("VALID UNTIL E'infinity'");
+    await apply();
+    expect(await login()).toBe(name);
+    expect(await attributes(name)).toMatchObject({oid: initial.oid, login: true, expiry: 'infinity'});
+
+    const prepareDirect = async (name: string, oid: string) => page.evaluate(async ({database, connectionId, name, oid}) => {
+      const role = {name, oid};
+      const detail = await window.dbark.invoke('postgres.roles.read', {kind: 'detail', connectionId, database, taskId: crypto.randomUUID(), role});
+      if (detail.kind !== 'detail' || !detail.attributeEditor) throw Error('缺少受控角色属性入口');
+      return window.dbark.invoke('postgres.roles.attributes.preview', {connectionId, database, role, stamp: detail.attributeEditor.stamp,
+        patch: {connectionLimit: 4}});
+    }, {database, connectionId: profile.id, name, oid});
+    const confirmDirect = (token: string) => page.evaluate(async ({connectionId, database, token}) =>
+      window.dbark.invoke('postgres.roles.attributes.apply', {connectionId, database, token, confirmed: true}), {connectionId: profile.id, database, token});
+    const stale = await prepareDirect(name, initial.oid);
+    await admin.query(`ALTER ROLE ${name} CREATEDB`);
+    expect((await confirmDirect(stale.token)).outcome).toBe('notSent');
+    expect(await attributes(name)).toMatchObject({lim: 3, createdb: true});
+
+    const originalRace = await attributes(racer), racePreview = await prepareDirect(racer, originalRace.oid);
+    await admin.query('BEGIN; LOCK TABLE pg_catalog.pg_authid IN SHARE ROW EXCLUSIVE MODE');
+    const racing = confirmDirect(racePreview.token);
+    void racing.catch(() => undefined);
+    try {
+      await expect.poll(async () => (await observer.query(`SELECT EXISTS(SELECT FROM pg_catalog.pg_stat_activity
+        WHERE wait_event_type='Lock' AND query LIKE $1) AS waiting`, ['ALTER ROLE "' + racer + '" WITH%'])).rows[0].waiting,
+      {timeout: 3500}).toBe(true);
+      await admin.query(`ALTER ROLE ${racer} RENAME TO ${racer}_old; CREATE ROLE ${racer}; COMMIT`);
+    } finally {await admin.query('ROLLBACK');}
+    expect((await racing).outcome).toBe('rolledBack');
+    expect(await attributes(racer)).toMatchObject({lim: -1});
+    expect(await attributes(racer + '_old')).toMatchObject({oid: originalRace.oid, lim: -1});
+
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(item => item.status === 'running').length)).toBe(0);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([live.end(), observer.end(), admin.end()]);}
+});

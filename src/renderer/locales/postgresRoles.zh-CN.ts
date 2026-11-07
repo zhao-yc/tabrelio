@@ -81,6 +81,13 @@ export const postgresRolesZh = {
     editConnection: '编辑此连接的密码', committed: '已提交密码轮换。请更新连接配置并测试新密码。',
     unknown: '密码轮换状态未知。请先使用独立新连接核对密码，再更新连接配置。',
   },
+  editAttributes: {
+    title: '编辑 PostgreSQL 角色属性', open: '编辑角色属性',
+    hint: '角色属性在整台服务器上生效。停用登录不会断开已有会话。密码有效期仅影响密码认证。',
+    login: '允许新连接登录', expiryAction: '密码有效期操作', keep: '保留原有效期', never: '设为永不过期',
+    until: '设置到期时间', expiry: '到期时间（UTC）', preview: '预览角色修改 SQL', sql: '本次角色修改 SQL',
+    confirm: '确认修改此服务器上的角色属性', apply: '执行角色修改',
+  },
   create: {
     title: '新建 PostgreSQL 角色', open: '新建角色', auth: '登录方式', group: '组角色（NOLOGIN）',
     password: '密码登录（SCRAM）', external: '外部认证（无数据库密码）',

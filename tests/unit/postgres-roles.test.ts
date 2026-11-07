@@ -144,3 +144,15 @@ it('表、列和序列的 PUBLIC 只接受普通授予及撤销', () => {
       expect(() => validateCommand(command, input)).toThrow();
   }
 });
+
+it('角色属性修改绑定角色和原属性摘要，仅接收明确可编辑字段', () => {
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '102', name: '现有角色'}, stamp: 'a'.repeat(64),
+    patch: {login: false, inherit: false, connectionLimit: 4, validUntil: '2098-06-07T08:09:00.000Z'}};
+  expect(validateCommand('postgres.roles.attributes.preview', draft)).toEqual(draft);
+  expect(validateCommand('postgres.roles.attributes.preview', {...draft, patch: {validUntil: 'infinity'}})).toMatchObject({patch: {validUntil: 'infinity'}});
+  for (const input of [{...draft, stamp: 'x'}, {...draft, patch: {}}, {...draft, patch: {connectionLimit: -2}},
+    {...draft, patch: {validUntil: '-infinity'}}, {...draft, patch: {password: '合成密码'}}, {...draft, sql: 'ALTER ROLE r NOLOGIN'}])
+    expect(() => validateCommand('postgres.roles.attributes.preview', input)).toThrow();
+  expect(() => validateCommand('postgres.roles.attributes.apply', {connectionId: 'saved', database: 'qa',
+    token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true, patch: draft.patch})).toThrow();
+});

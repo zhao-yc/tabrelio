@@ -339,6 +339,8 @@ export interface CommandMap {
   'postgres.roles.create.apply': { input: import('./postgresRoles').PostgresRoleCreateApply; output: import('./postgresRoles').PostgresRoleChangeOutcome };
   'postgres.roles.password.preview': { input: import('./postgresRoles').PostgresRolePasswordDraft; output: import('./postgresRoles').PostgresRoleChangePreview };
   'postgres.roles.password.apply': { input: import('./postgresRoles').PostgresRolePasswordApply; output: import('./postgresRoles').PostgresRoleChangeOutcome };
+  'postgres.roles.attributes.preview': { input: import('./postgresRoles').PostgresRoleAttributesDraft; output: import('./postgresRoles').PostgresRoleChangePreview };
+  'postgres.roles.attributes.apply': { input: import('./postgresRoles').PostgresMembershipApply; output: import('./postgresRoles').PostgresRoleChangeOutcome };
   'postgres.roles.tablePrivileges.preview': { input: import('./postgresRoles').PostgresTablePrivilegeDraft; output: import('./postgresRoles').PostgresTablePrivilegePreview };
   'postgres.roles.tablePrivileges.apply': { input: import('./postgresRoles').PostgresMembershipApply; output: import('./postgresRoles').PostgresMembershipOutcome };
   'postgres.roles.columnPrivileges.preview': { input: import('./postgresRoles').PostgresColumnPrivilegeDraft; output: import('./postgresRoles').PostgresTablePrivilegePreview };
