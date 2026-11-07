@@ -522,9 +522,9 @@ test('PostgreSQL 普通表直接授权、仅撤销转授及列权限影响', asy
 
     const prepareDirect = (connectionId: string, table: typeof original) => page.evaluate(async draft =>
       window.dbark.invoke('postgres.roles.tablePrivileges.preview', draft),
-      {connectionId, database, table, role, action: 'grant', privileges: ['SELECT']});
+      {connectionId, database, table, role, action: 'grant' as const, privileges: ['SELECT' as const]});
     const applyDirect = (connectionId: string, token: string) => page.evaluate(async input =>
-      window.dbark.invoke('postgres.roles.tablePrivileges.apply', input), {connectionId, database, token, confirmed: true});
+      window.dbark.invoke('postgres.roles.tablePrivileges.apply', input), {connectionId, database, token, confirmed: true as const});
     await expect(prepareDirect(profiles.member, original)).rejects.toThrow('只有对象所有者或超级用户');
     const view = await object('report');
     const viewPreview = await prepareDirect(profiles.admin, view);
@@ -544,4 +544,140 @@ test('PostgreSQL 普通表直接授权、仅撤销转授及列权限影响', asy
     expect((await applyDirect(profiles.owner, replacement.token)).outcome).toBe('notSent');
     await quitDesktop();
   } finally { await Promise.all([member.end(), owner.end(), admin.end()]); }
+});
+
+test('PostgreSQL 数据库和 Schema 直接授权控制新登录与对象访问', async ({}, info) => {
+  const owner = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(owner)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || ![password, adminPassword].every(value => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', recipient = prefix + 'recipient', dependent = prefix + 'dependent';
+  const database = 'ACL ' + token, db = '"' + database + '"', schema = 'Scope "QA"', ns = '"Scope ""QA"""';
+  const endpoint = {host: '127.0.0.1', port, connectionTimeoutMillis: 3000};
+  const admin = new Client({...endpoint, database: owner, user: 'postgres', password: adminPassword});
+  const directOwner = new Client({...endpoint, database, user: owner, password});
+  const member = new Client({...endpoint, database, user: recipient, password});
+  const fresh = async () => {
+    const client = new Client({...endpoint, database, user: recipient, password});
+    try {await client.connect(); return (await client.query('SELECT current_user::text')).rows[0].current_user;}
+    finally {await client.end();}
+  };
+  await admin.connect();
+  try {
+    await admin.query(`CREATE DATABASE ${db} OWNER ${owner}`);
+    await admin.query(`REVOKE CONNECT ON DATABASE ${db} FROM PUBLIC`);
+    await directOwner.connect();
+    await directOwner.query(`CREATE SCHEMA ${ns}; CREATE TABLE ${ns}.data(id int); INSERT INTO ${ns}.data VALUES (7);
+      GRANT SELECT ON ${ns}.data TO ${recipient}; CREATE SCHEMA stale`);
+    await expect(fresh()).rejects.toMatchObject({code: '42501'});
+    const role = (await admin.query('SELECT oid::text,rolname::text AS name FROM pg_catalog.pg_roles WHERE rolname=$1', [recipient])).rows[0];
+    const databaseOid = (await admin.query('SELECT oid::text FROM pg_catalog.pg_database WHERE datname=$1', [database])).rows[0].oid;
+    const schemaOid = async (name: string) => (await directOwner.query('SELECT oid::text FROM pg_catalog.pg_namespace WHERE nspname=$1', [name])).rows[0].oid;
+    const acl = async (kind: 'database' | 'schema', object: string) => {
+      const source = kind === 'database' ? 'pg_database c CROSS JOIN LATERAL pg_catalog.aclexplode(c.datacl) acl'
+        : 'pg_namespace c CROSS JOIN LATERAL pg_catalog.aclexplode(c.nspacl) acl';
+      return (await directOwner.query(`SELECT acl.privilege_type,acl.is_grantable,pg_catalog.pg_get_userbyid(acl.grantor)::text AS grantor
+        FROM pg_catalog.${source} WHERE c.oid=$1 AND acl.grantee=$2 ORDER BY 1`, [object, role.oid])).rows;
+    };
+    const edge = (privilege_type: string, is_grantable: boolean, grantor = owner) => ({privilege_type, is_grantable, grantor});
+    const profiles = await page.evaluate(async ({port, database, owner, password, recipient}) => {
+      const base = {id: '', dialect: 'postgresql' as const, group: '', color: '#123456', host: '127.0.0.1', port,
+        database, rememberPassword: false, password};
+      const add = (name: string, user: string) => window.dbark.invoke('connections.save', {...base, name, user});
+      return {owner: (await add('数据库权限所有者', owner)).id, member: (await add('数据库权限受权者', recipient)).id};
+    }, {port, database, owner, password, recipient});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profiles.owner);
+    await modal.getByLabel(t.search, {exact: true}).fill(recipient);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    await modal.getByRole('region', {name: t.directory, exact: true}).getByRole('button', {name: recipient, exact: true}).click();
+    const common = t.tablePrivileges, dbText = common.database, schemaText = common.schema;
+    const prepare = async (kind: 'database' | 'schema', action: string, privileges: string[]) => {
+      const copy = common[kind];
+      await modal.getByRole('button', {name: copy.open, exact: true}).click();
+      const dialog = page.getByRole('dialog', {name: copy.title, exact: true});
+      await dialog.getByLabel(common.action, {exact: true}).selectOption(action);
+      for (const name of privileges) await dialog.getByRole('checkbox', {name, exact: true}).check();
+      await dialog.getByRole('button', {name: copy.preview, exact: true}).click();
+      await expect(dialog.getByLabel(copy.sql, {exact: true})).toBeVisible();
+      return dialog;
+    };
+    const apply = async (kind: 'database' | 'schema', dialog: Awaited<ReturnType<typeof prepare>>, outcome: 'committed' | 'rolledBack' = 'committed') => {
+      await dialog.getByRole('checkbox', {name: common[kind].confirm, exact: true}).check();
+      await dialog.getByRole('button', {name: common[kind].apply, exact: true}).click();
+      await expect(dialog.getByRole(outcome === 'committed' ? 'status' : 'alert').filter({hasText: t.result[outcome]})).toBeVisible();
+      await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+    let dialog = await prepare('database', 'grantOption', ['CONNECT', 'TEMPORARY']);
+    await expect(dialog.getByLabel(dbText.sql, {exact: true})).toHaveText(`GRANT CONNECT, TEMPORARY ON DATABASE ${db} TO "${recipient}" WITH GRANT OPTION`);
+    expect(await acl('database', databaseOid)).toEqual([]);
+    await expect(fresh()).rejects.toMatchObject({code: '42501'});
+    await apply('database', dialog);
+    await expect(fresh()).resolves.toBe(recipient);
+    expect(await acl('database', databaseOid)).toEqual([edge('CONNECT', true), edge('TEMPORARY', true)]);
+    await member.connect();
+    await expect(member.query(`SELECT id FROM ${ns}.data`)).rejects.toMatchObject({code: '42501'});
+
+    await modal.getByLabel(t.schema, {exact: true}).fill(schema);
+    await modal.getByRole('button', {name: t.probe, exact: true}).click();
+    dialog = await prepare('schema', 'grantOption', ['USAGE', 'CREATE']);
+    await expect(dialog.getByLabel(schemaText.sql, {exact: true})).toHaveText(`GRANT USAGE, CREATE ON SCHEMA ${ns} TO "${recipient}" WITH GRANT OPTION`);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL Schema 权限预览.png')});
+    await apply('schema', dialog);
+    const scopeOid = await schemaOid(schema);
+    expect(await acl('schema', scopeOid)).toEqual([edge('CREATE', true), edge('USAGE', true)]);
+    expect((await member.query(`SELECT id FROM ${ns}.data`)).rows).toEqual([{id: 7}]);
+    await member.query(`GRANT USAGE ON SCHEMA ${ns} TO ${dependent}`);
+    await apply('schema', await prepare('schema', 'revoke', ['CREATE', 'USAGE']), 'rolledBack');
+    expect(await acl('schema', scopeOid)).toEqual([edge('CREATE', true), edge('USAGE', true)]);
+    await member.query(`REVOKE USAGE ON SCHEMA ${ns} FROM ${dependent}`);
+    await apply('schema', await prepare('schema', 'revokeOption', ['USAGE']));
+    expect(await acl('schema', scopeOid)).toEqual([edge('CREATE', true), edge('USAGE', false)]);
+    await apply('schema', await prepare('schema', 'revoke', ['USAGE']));
+    expect(await acl('schema', scopeOid)).toEqual([edge('CREATE', true)]);
+    await expect(member.query(`SELECT id FROM ${ns}.data`)).rejects.toMatchObject({code: '42501'});
+
+    const prepareDirect = (connectionId: string, oid: string, name: string, privilege: 'USAGE' | 'CREATE') => page.evaluate(async draft =>
+      window.dbark.invoke('postgres.roles.scopedPrivileges.preview', draft),
+      {connectionId, database, role, object: {kind: 'schema' as const, oid, name}, action: 'grant' as const, privileges: [privilege]});
+    const confirmDirect = (token: string, table = false) => page.evaluate(async ({token, table, connectionId, database}) =>
+      window.dbark.invoke(table ? 'postgres.roles.tablePrivileges.apply' : 'postgres.roles.scopedPrivileges.apply',
+        {connectionId, database, token, confirmed: true}), {token, table, connectionId: profiles.owner, database});
+    const publicOid = await schemaOid('public');
+    await expect(prepareDirect(profiles.member, publicOid, 'public', 'CREATE')).rejects.toThrow('只有对象所有者或超级用户');
+    const publicPreview = await prepareDirect(profiles.owner, publicOid, 'public', 'CREATE');
+    expect(publicPreview.grantor).toBe('pg_database_owner');
+    expect((await confirmDirect(publicPreview.token, true)).outcome).toBe('notSent');
+    expect((await confirmDirect(publicPreview.token)).outcome).toBe('committed');
+    expect(await acl('schema', publicOid)).toEqual([edge('CREATE', false, 'pg_database_owner')]);
+    await member.query('CREATE TABLE public.acl_qa(id int); DROP TABLE public.acl_qa');
+
+    const staleOid = await schemaOid('stale');
+    const stale = await prepareDirect(profiles.owner, staleOid, 'stale', 'USAGE');
+    await directOwner.query('ALTER SCHEMA stale RENAME TO old_stale; CREATE SCHEMA stale');
+    expect((await confirmDirect(stale.token)).outcome).toBe('notSent');
+    expect(await acl('schema', staleOid)).toEqual([]);
+    expect(await acl('schema', await schemaOid('stale'))).toEqual([]);
+
+    await apply('database', await prepare('database', 'revoke', ['CONNECT']));
+    expect(await acl('database', databaseOid)).toEqual([edge('TEMPORARY', true)]);
+    expect((await member.query('SELECT 1 AS ready')).rows).toEqual([{ready: 1}]);
+    await expect(fresh()).rejects.toMatchObject({code: '42501'});
+    const effective = modal.getByRole('table', {name: t.databasePrivileges, exact: true});
+    await expect(effective.getByRole('row', {name: /CONNECT/}).getByRole('cell')).toHaveText([t.no, t.no]);
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+      .filter(item => item.status === 'running').length)).toBe(0);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([member.end(), directOwner.end(), admin.end()]);}
 });

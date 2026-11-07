@@ -60,9 +60,9 @@ import { serverMonitorSignalSchema, validateServerMonitorInput, type ServerMonit
   type ServerMonitorSignalResult } from '../../shared/serverMonitor';
 import { readPostgresRoles } from './roles';
 import { PostgresRoleChanges } from './roleChanges';
-import { PostgresTablePrivilegeChanges } from './tablePrivileges';
+import { PostgresObjectPrivilegeChanges } from './objectPrivileges';
 import { PostgresRoleMembership } from './roleMembership';
-import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresTablePrivilegeDraftSchema } from '../../shared/postgresRoles';
+import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from '../../shared/postgresRoles';
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
@@ -166,7 +166,7 @@ export class PostgresEngine {
   private readonly tables = new PostgresTableWorkspace();
   private readonly roleMembership = new PostgresRoleMembership();
   private readonly roleChanges = new PostgresRoleChanges();
-  private readonly tablePrivileges = new PostgresTablePrivilegeChanges();
+  private readonly objectPrivileges = new PostgresObjectPrivilegeChanges();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
@@ -187,7 +187,7 @@ export class PostgresEngine {
       input.dialect === 'postgresql' ||
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
-        (id) => [...this.transfers.values()].some(task => task.connectionId === id || (id !== undefined && task.otherConnectionId === id)) || this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) || this.roleMembership.connectionIds().includes(id) || this.roleChanges.connectionIds().includes(id) || this.tablePrivileges.connectionIds().includes(id) ||
+        (id) => [...this.transfers.values()].some(task => task.connectionId === id || (id !== undefined && task.otherConnectionId === id)) || this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) || this.roleMembership.connectionIds().includes(id) || this.roleChanges.connectionIds().includes(id) || this.objectPrivileges.connectionIds().includes(id) ||
           this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || this.keyEdits.connectionIds().includes(id) || this.foreignEdits.connectionIds().includes(id) || this.checkEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
@@ -788,7 +788,7 @@ export class PostgresEngine {
       this.creations.clear(id);
       this.roleMembership.clear(id);
       this.roleChanges.clear(id);
-      this.tablePrivileges.clear(id);
+      this.objectPrivileges.clear(id);
       this.columnEdits.clear(id);
       this.indexEdits.clear(id);
       this.keyEdits.clear(id);
@@ -822,7 +822,7 @@ export class PostgresEngine {
       this.creations.clear(input.id);
       this.roleMembership.clear(input.id);
       this.roleChanges.clear(input.id);
-      this.tablePrivileges.clear(input.id);
+      this.objectPrivileges.clear(input.id);
       this.columnEdits.clear(input.id);
       this.indexEdits.clear(input.id);
       this.keyEdits.clear(input.id);
@@ -842,7 +842,7 @@ export class PostgresEngine {
         ...this.creations.connectionIds(),
         ...this.roleMembership.connectionIds(),
         ...this.roleChanges.connectionIds(),
-        ...this.tablePrivileges.connectionIds(),
+        ...this.objectPrivileges.connectionIds(),
         ...this.columnEdits.connectionIds(),
         ...this.indexEdits.connectionIds(),
         ...this.keyEdits.connectionIds(),
@@ -1093,6 +1093,8 @@ export class PostgresEngine {
       case 'postgres.roles.password.apply':
       case 'postgres.roles.tablePrivileges.preview':
       case 'postgres.roles.tablePrivileges.apply':
+      case 'postgres.roles.scopedPrivileges.preview':
+      case 'postgres.roles.scopedPrivileges.apply':
       case 'postgres.roles.membership.preview':
       case 'postgres.roles.membership.apply': {
         const {profile, owner, connectionRevision, ...request} = input;
@@ -1104,8 +1106,10 @@ export class PostgresEngine {
         if (command === 'postgres.roles.create.apply') return this.roleChanges.apply('create', {...postgresRoleCreateApplySchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.password.preview') return this.roleChanges.preview({...postgresRolePasswordDraftSchema.parse(request), kind: 'password', owner, connectionRevision}, connect);
         if (command === 'postgres.roles.password.apply') return this.roleChanges.apply('password', {...postgresRolePasswordApplySchema.parse(request), owner, connectionRevision}, connect);
-        if (command === 'postgres.roles.tablePrivileges.preview') return this.tablePrivileges.preview({...postgresTablePrivilegeDraftSchema.parse(request), owner, connectionRevision}, connect);
-        if (command === 'postgres.roles.tablePrivileges.apply') return this.tablePrivileges.apply({...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.tablePrivileges.preview') return this.objectPrivileges.preview({...postgresTablePrivilegeDraftSchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.tablePrivileges.apply') return this.objectPrivileges.apply('table', {...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.scopedPrivileges.preview') return this.objectPrivileges.preview({...postgresScopedPrivilegeDraftSchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.scopedPrivileges.apply') return this.objectPrivileges.apply('scope', {...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
         return command === 'postgres.roles.membership.preview'
           ? this.roleMembership.preview({...postgresMembershipPreviewSchema.parse(request), owner, connectionRevision}, connect)
           : this.roleMembership.apply({...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);

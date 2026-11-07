@@ -37,3 +37,11 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 撤销一律使用 RESTRICT。预览列出 PostgreSQL 会一并撤销或降级的同来源列权限。存在需要级联撤销的下游依赖时，服务器拒绝操作，整批回滚。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
 
 确认后使用短事务独占锁定原对象，再核对对象、角色和原 ACL。普通视图遵循 PostgreSQL 的递归锁定规则，锁等待超过五秒会结束操作。提交前比较表级和列级 ACL 的实际变化。关闭回执后重新读取有效权限。[PostgreSQL LOCK](https://www.postgresql.org/docs/18/sql-lock.html)
+
+## 管理数据库与 Schema 的直接权限
+
+在角色详情的「数据库有效权限」下点击「管理数据库直接授权」，可修改当前数据库的 CONNECT、CREATE 和 TEMPORARY。在「检查对象权限」填写 Schema 后，可用「管理 Schema 直接授权」修改 USAGE 和 CREATE。对象所有者与超级用户可以操作。若默认 `public` Schema 由 `pg_database_owner` 所有，当前数据库所有者也可以管理，预览会列出该实际授权者。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html) [PostgreSQL 预定义角色](https://www.postgresql.org/docs/18/predefined-roles.html)
+
+可以多选授予、添加转授、仅撤销转授或撤销直接权限。撤销使用 RESTRICT，有下游依赖时整批回滚。撤销 CONNECT 影响新连接，已有会话可继续使用。角色仍可能通过 PUBLIC 或继承获得 CONNECT。Schema 的 USAGE 允许解析对象名称，访问表数据仍需相应的表权限。[PostgreSQL 权限](https://www.postgresql.org/docs/18/ddl-priv.html) [PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
+
+确认时核对原对象、角色、授权来源及系统目录行版本。事务提交前复核实际 ACL，确认目标目录行由本次事务写入。状态未知时通过重新读取目录与实际连接结果核对。

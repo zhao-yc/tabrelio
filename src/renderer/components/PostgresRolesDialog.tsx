@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresConnectionProfile } from '../../shared/contracts';
-import { postgresTablePrivileges, type PostgresTablePrivilege, type PostgresTablePrivilegeEditor } from '../../shared/postgresRoles';
+import { postgresDatabasePrivileges, postgresSchemaPrivileges, postgresTablePrivileges, type PostgresObjectPrivilege,
+  type PostgresScopedPrivilegeEditor, type PostgresTablePrivilegeEditor } from '../../shared/postgresRoles';
 import type { PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRoleRef, PostgresRolesInput, PostgresRolesList, PostgresRolesOutput } from '../../shared/postgresRoles';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresRolesZh as t } from '../locales/postgresRoles.zh-CN';
@@ -10,7 +11,7 @@ import { ErrorBox, Field, Modal } from './ui';
 import { PostgresMembershipDialog, type MembershipIntent } from './PostgresMembershipDialog';
 import { PostgresRoleCreateDialog } from './PostgresRoleCreateDialog';
 import { PostgresRolePasswordDialog } from './PostgresRolePasswordDialog';
-import { PostgresTablePrivilegesDialog } from './PostgresTablePrivilegesDialog';
+import { PostgresObjectPrivilegesDialog } from './PostgresObjectPrivilegesDialog';
 import '../postgresRoles.css';
 
 const yesNo = (value: boolean | null) => value === null ? t.unknown : value ? t.yes : t.no;
@@ -61,7 +62,7 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
   const [schema, setSchema] = useState(''), [relation, setRelation] = useState('');
   const [membership, setMembership] = useState<RoleSource & {intent: MembershipIntent; role: PostgresRoleRef; scope?: Scope}>();
   const [creation, setCreation] = useState<RoleSource>();
-  const [tableAccess, setTableAccess] = useState<RoleSource & {role: PostgresRoleRef; scope: Scope; editor: PostgresTablePrivilegeEditor; privileges: PostgresTablePrivilege[]}>();
+  const [objectAccess, setObjectAccess] = useState<RoleSource & {role: PostgresRoleRef; scope: Scope; editor: PostgresTablePrivilegeEditor | PostgresScopedPrivilegeEditor; privileges: readonly PostgresObjectPrivilege[]}>();
   const [rotation, setRotation] = useState<RoleSource & {role: PostgresRoleRef}>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
@@ -106,11 +107,11 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
   const context = detail?.snapshot ?? directory?.snapshot;
   const role = detail?.snapshot.role;
   const reset = () => { setError(''); setPage(undefined); setInspection(undefined); };
-  if (tableAccess) return <PostgresTablePrivilegesDialog connectionId={tableAccess.connection.id} database={tableAccess.database}
-    role={tableAccess.role} editor={tableAccess.editor} privileges={tableAccess.privileges}
-    current={() => sourceCurrent(tableAccess)} onClose={refresh => {
-      setTableAccess(undefined);
-      if (refresh && sourceCurrent(tableAccess)) readDetail(tableAccess.role, tableAccess.scope);
+  if (objectAccess) return <PostgresObjectPrivilegesDialog connectionId={objectAccess.connection.id} database={objectAccess.database}
+    role={objectAccess.role} editor={objectAccess.editor} privileges={objectAccess.privileges}
+    current={() => sourceCurrent(objectAccess)} onClose={refresh => {
+      setObjectAccess(undefined);
+      if (refresh && sourceCurrent(objectAccess)) readDetail(objectAccess.role, objectAccess.scope);
     }}/>;
   if (rotation) return <PostgresRolePasswordDialog
     target={{connectionId: rotation.connection.id, database: rotation.database, role: rotation.role}}
@@ -134,6 +135,11 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
     if (!connection || !detail || !role || running.current) return;
     setMembership({intent, connection, version, database: detail.snapshot.database, role, scope: detail.scope});
   };
+  function editPrivileges(editor: PostgresTablePrivilegeEditor | PostgresScopedPrivilegeEditor, privileges: readonly PostgresObjectPrivilege[]) {
+    if (!connection || !detail || !role || running.current) return;
+    setObjectAccess({connection, version, database: detail.snapshot.database, role: {oid: role.oid, name: role.name},
+      scope: detail.scope, editor, privileges});
+  }
   const protectedRole = (name: string) => name === context?.login || name === context?.current.name;
   const revoke = (edge: PostgresRoleMembership, target: PostgresRoleRef, member: PostgresRoleRef) => {
     if (!edge.grantor || !edge.grantorOid || protectedRole(target.name) || protectedRole(member.name)) return;
@@ -192,19 +198,23 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
         </div>
         {detail.snapshot.memberships.limited && <p>{t.limited}</p>}
         <Privileges label={t.databasePrivileges} rows={detail.snapshot.databasePrivileges}/>
+        {detail.snapshot.databaseEditor && <button disabled={busy} onClick={() =>
+          editPrivileges(detail.snapshot.databaseEditor!, postgresDatabasePrivileges)}>{t.tablePrivileges.database.open}</button>}
         <form className="form-grid" onSubmit={event => {event.preventDefault(); if (schema) readDetail(role, {schema, ...(relation ? {relation} : {})});}}>
           <Field label={t.schema}><input value={schema} maxLength={256} disabled={busy} onChange={event => setSchema(event.target.value)}/></Field>
           <Field label={t.relation}><input value={relation} maxLength={256} disabled={busy} onChange={event => setRelation(event.target.value)}/></Field>
           <div className="postgres-roles-actions"><button type="submit" disabled={!schema || busy}>{t.probe}</button></div>
         </form>
         {detail.scope && detail.snapshot.scope && <div className="postgres-roles-sections">
-          <Privileges label={t.schemaPrivileges + ' · ' + detail.scope.schema} rows={detail.snapshot.scope.schema}/>
+          <div><Privileges label={t.schemaPrivileges + ' · ' + detail.scope.schema} rows={detail.snapshot.scope.schema}/>
+            {detail.snapshot.scope.schemaEditor && <button disabled={busy} onClick={() =>
+              editPrivileges(detail.snapshot.scope!.schemaEditor!, postgresSchemaPrivileges)}>{t.tablePrivileges.schema.open}</button>}
+          </div>
           {detail.scope.relation && <div><Privileges label={t.relationPrivileges + ' · ' + detail.scope.relation}
             rows={detail.snapshot.scope.relation?.privileges ?? null}/>
             {connection && detail.snapshot.scope.relation?.editor && <button disabled={busy} onClick={() => {
               const relation = detail.snapshot.scope?.relation;
-              if (relation?.editor) setTableAccess({connection, version, database: detail.snapshot.database, role: {oid: role.oid, name: role.name},
-                scope: detail.scope, editor: relation.editor, privileges: postgresTablePrivileges.filter(name => relation.privileges.some(item => item.name === name))});
+              if (relation?.editor) editPrivileges(relation.editor, postgresTablePrivileges.filter(name => relation.privileges.some(item => item.name === name)));
             }}>{t.tablePrivileges.open}</button>}
             {detail.snapshot.scope.relation && <p>{t.rowSecurity} · {yesNo(detail.snapshot.scope.relation.rls)} ／ {t.forceRls} · {yesNo(detail.snapshot.scope.relation.forceRls)}</p>}</div>}
         </div>}

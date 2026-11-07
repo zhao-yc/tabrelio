@@ -66,3 +66,14 @@ it('表权限预览绑定实际对象和角色，只接受去重的权限白名�
   expect(validateCommand('postgres.roles.tablePrivileges.apply', apply)).toEqual(apply);
   expect(() => validateCommand('postgres.roles.tablePrivileges.apply', {...apply, privileges: ['SELECT']})).toThrow();
 });
+
+it('数据库和 Schema 授权只能使用各自的权限，数据库目标绑定当前库', () => {
+  const draft = {connectionId: 'saved', database: '租户 QA', role: {oid: '42', name: '受权者'}, action: 'grantOption'};
+  const database = {...draft, object: {kind: 'database', oid: '101', name: draft.database}, privileges: ['CONNECT', 'TEMPORARY']};
+  const schema = {...draft, object: {kind: 'schema', oid: '102', name: '数据"区'}, privileges: ['USAGE', 'CREATE']};
+  expect(validateCommand('postgres.roles.scopedPrivileges.preview', database)).toEqual(database);
+  expect(validateCommand('postgres.roles.scopedPrivileges.preview', schema)).toEqual(schema);
+  for (const input of [{...database, privileges: ['USAGE']}, {...schema, privileges: ['CONNECT']}, {...schema, privileges: ['CREATE', 'CREATE']},
+    {...database, object: {...database.object, name: '其他数据库'}}, {...schema, sql: 'GRANT ALL'}, {...schema, cascade: true}])
+    expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
+});

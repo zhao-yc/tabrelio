@@ -341,6 +341,8 @@ export interface CommandMap {
   'postgres.roles.password.apply': { input: import('./postgresRoles').PostgresRolePasswordApply; output: import('./postgresRoles').PostgresRoleChangeOutcome };
   'postgres.roles.tablePrivileges.preview': { input: import('./postgresRoles').PostgresTablePrivilegeDraft; output: import('./postgresRoles').PostgresTablePrivilegePreview };
   'postgres.roles.tablePrivileges.apply': { input: import('./postgresRoles').PostgresMembershipApply; output: import('./postgresRoles').PostgresMembershipOutcome };
+  'postgres.roles.scopedPrivileges.preview': { input: import('./postgresRoles').PostgresScopedPrivilegeDraft; output: import('./postgresRoles').PostgresTablePrivilegePreview };
+  'postgres.roles.scopedPrivileges.apply': { input: import('./postgresRoles').PostgresMembershipApply; output: import('./postgresRoles').PostgresMembershipOutcome };
   'postgres.roles.membership.preview': { input: import('./postgresRoles').PostgresMembershipDraft; output: import('./postgresRoles').PostgresMembershipPreview };
   'postgres.roles.membership.apply': { input: import('./postgresRoles').PostgresMembershipApply; output: import('./postgresRoles').PostgresMembershipOutcome };
   'postgres.roles.read': { input: import('./postgresRoles').PostgresRolesInput; output: import('./postgresRoles').PostgresRolesOutput };
