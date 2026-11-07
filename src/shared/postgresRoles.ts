@@ -42,10 +42,14 @@ export const postgresRoleCreateDraftSchema = z.object({
 const rolePassword = z.string().min(1).max(1024).refine(value =>
   !/[\u0000\uD800-\uDFFF]/u.test(value) && new TextEncoder().encode(value).byteLength <= 1024, '请输入 1 至 1024 字节的密码');
 export const postgresRoleCreateApplySchema = postgresMembershipApplySchema.extend({password: rolePassword.optional()});
+export const postgresRolePasswordDraftSchema = z.object({...membershipTarget, role}).strict();
+export const postgresRolePasswordApplySchema = postgresMembershipApplySchema.extend({password: rolePassword});
 export type PostgresRoleCreateDraft = z.infer<typeof postgresRoleCreateDraftSchema>;
 export type PostgresRoleCreateApply = z.infer<typeof postgresRoleCreateApplySchema>;
-export interface PostgresRoleCreatePreview {token: string; database: string; actor: string; sql: string;}
-export interface PostgresRoleCreateOutcome extends PostgresMembershipOutcome {role?: PostgresRoleRef;}
+export type PostgresRolePasswordDraft = z.infer<typeof postgresRolePasswordDraftSchema>;
+export type PostgresRolePasswordApply = z.infer<typeof postgresRolePasswordApplySchema>;
+export interface PostgresRoleChangePreview {token: string; database: string; actor: string; sql: string;}
+export interface PostgresRoleChangeOutcome extends PostgresMembershipOutcome {role?: PostgresRoleRef;}
 export interface PostgresRole extends PostgresRoleRef {
   login: boolean; superuser: boolean; inherit: boolean; createRole: boolean; createDatabase: boolean;
   replication: boolean; bypassRls: boolean; connectionLimit: number; validUntil: string | null;

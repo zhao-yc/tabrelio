@@ -46,6 +46,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.table.exportChoose': true, 'postgres.table.export': true,
   'postgres.query.export': true,
   'postgres.roles.create.preview': true, 'postgres.roles.create.apply': true,
+  'postgres.roles.password.preview': true, 'postgres.roles.password.apply': true,
   'postgres.roles.read': true, 'postgres.roles.membership.preview': true, 'postgres.roles.membership.apply': true,
   'postgres.workbookExport': true,
   'mysql.workbookExport': true,

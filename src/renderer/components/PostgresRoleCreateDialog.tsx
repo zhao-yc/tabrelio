@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, type PostgresRoleCreateDraft, type PostgresRoleCreateOutcome, type PostgresRoleCreatePreview } from '../../shared/postgresRoles';
+import { postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, type PostgresRoleCreateDraft, type PostgresRoleChangeOutcome, type PostgresRoleChangePreview } from '../../shared/postgresRoles';
 import { errorMessage, invoke } from '../lib';
 import { postgresRolesZh as roles } from '../locales/postgresRoles.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -19,8 +19,8 @@ export function PostgresRoleCreateDialog({connectionId, database, current, onClo
     createRole: false, superuser: false, replication: false, bypassRls: false, connectionLimit: -1,
   });
   const [connectionLimit, setConnectionLimit] = useState('-1'), [expiry, setExpiry] = useState('');
-  const [preview, setPreview] = useState<PostgresRoleCreatePreview>(), [confirmed, setConfirmed] = useState(false);
-  const [outcome, setOutcome] = useState<PostgresRoleCreateOutcome>();
+  const [preview, setPreview] = useState<PostgresRoleChangePreview>(), [confirmed, setConfirmed] = useState(false);
+  const [outcome, setOutcome] = useState<PostgresRoleChangeOutcome>();
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const pending = useRef(false), password = useRef<HTMLInputElement>(null), repeated = useRef<HTMLInputElement>(null);
   const disabled = busy || !!outcome;

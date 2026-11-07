@@ -20,6 +20,14 @@ export const postgresRolesZh = {
   grantHint: '使用准确的角色名。启用管理选项可让成员继续授权，启用切换选项可让成员切换到获授角色。',
   revokeHint: '只撤销所列授权者的直接记录。若存在依赖授权，服务器将拒绝撤销。其他来源仍可能提供同一角色。',
   result: {committed: '已提交', rolledBack: '已回滚', notSent: '未发送', unknown: '提交状态未知，请重新读取目录核对'},
+  password: {
+    title: '轮换 PostgreSQL 登录密码', open: '轮换登录密码',
+    hint: '此操作修改当前登录角色在整个服务器上的密码，并保留原有效期。使用旧密码的连接配置需要更新后才能重新登录。',
+    preview: '预览密码轮换 SQL', sql: '本次密码轮换 SQL', secret: '新登录密码',
+    confirm: '确认修改此服务器上的登录密码', apply: '执行密码轮换',
+    editConnection: '编辑此连接的密码', committed: '已提交密码轮换。请更新连接配置并测试新密码。',
+    unknown: '密码轮换状态未知。请先使用独立新连接核对密码，再更新连接配置。',
+  },
   create: {
     title: '新建 PostgreSQL 角色', open: '新建角色', auth: '登录方式', group: '组角色（NOLOGIN）',
     password: '密码登录（SCRAM）', external: '外部认证（无数据库密码）',

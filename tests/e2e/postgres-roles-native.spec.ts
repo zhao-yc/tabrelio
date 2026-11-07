@@ -320,3 +320,106 @@ test('PostgreSQL 创建组角色和登录角色并通过新密码实际认证', 
     expect(native.exitCode).toBe(0);
   } finally { await observer.end(); }
 });
+
+test('PostgreSQL 普通登录角色轮换密码并更新原连接配置', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  const oldPassword = process.env.DBARK_PG_ROLES_ROTATION_OLD ?? '', newPassword = process.env.DBARK_PG_ROLES_ROTATION_NEW ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || ![adminPassword, oldPassword, newPassword].every(value => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const user = 'tabrelio_roles_' + token + '_rotate';
+  const endpoint = {host: '127.0.0.1', port, database};
+  const admin = new Client({...endpoint, user: 'postgres', password: adminPassword, connectionTimeoutMillis: 3000});
+  const login = async (password: string) => {
+    const connection = new Client({...endpoint, user, password, connectionTimeoutMillis: 3000});
+    try { await connection.connect(); return (await connection.query('SELECT current_user::text')).rows[0].current_user; }
+    finally { await connection.end(); }
+  };
+  await admin.connect();
+  try {
+    await admin.query(`CREATE ROLE ${user} LOGIN NOSUPERUSER NOCREATEROLE CONNECTION LIMIT 4 PASSWORD '${oldPassword}' VALID UNTIL '2098-08-08T08:08:08Z'`);
+    const attributes = () => admin.query('SELECT oid::text,rolsuper,rolcreaterole,rolconnlimit,rolvaliduntil::text FROM pg_catalog.pg_roles WHERE rolname=$1', [user]);
+    const before = (await attributes()).rows[0];
+    expect(before).toMatchObject({rolsuper: false, rolcreaterole: false, rolconnlimit: 4});
+    const connection = await page.evaluate(async ({endpoint, user, oldPassword}) => window.dbark.invoke('connections.save', {
+      ...endpoint, id: '', name: '轮换密码验收连接', dialect: 'postgresql', group: '', color: '#123456', user,
+      password: oldPassword, rememberPassword: false,
+    }), {endpoint, user, oldPassword});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.search, {exact: true}).fill(database);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    const directory = modal.getByRole('region', {name: t.directory, exact: true});
+    await directory.getByRole('button', {name: database, exact: true}).click();
+    await expect(modal.getByRole('heading', {name: database, exact: true})).toBeVisible();
+    await expect(modal.getByRole('button', {name: t.password.open, exact: true})).toHaveCount(0);
+    await expect(page.evaluate(async ({connectionId, database, user}) => window.dbark.invoke('postgres.roles.password.preview', {
+      connectionId, database, role: {oid: '10', name: user},
+    }), {connectionId: connection.id, database, user})).rejects.toThrow('角色已变化');
+    const previewForRole = () => page.evaluate(async ({connectionId, database, user, oid}) =>
+      window.dbark.invoke('postgres.roles.password.preview', {connectionId, database, role: {oid, name: user}}),
+      {connectionId: connection.id, database, user, oid: before.oid});
+    const stale = await previewForRole();
+    const wrongOperation = await page.evaluate(async ({connectionId, database, token, newPassword}) =>
+      window.dbark.invoke('postgres.roles.create.apply', {connectionId, database, token, confirmed: true, password: newPassword}),
+      {connectionId: connection.id, database, token: stale.token, newPassword});
+    expect(wrongOperation.outcome).toBe('notSent');
+    await admin.query(`ALTER ROLE ${user} VALID UNTIL '2099-01-01T00:00:00Z'`);
+    const staleOutcome = await page.evaluate(async ({connectionId, database, token, newPassword}) =>
+      window.dbark.invoke('postgres.roles.password.apply', {connectionId, database, token, confirmed: true, password: newPassword}),
+      {connectionId: connection.id, database, token: stale.token, newPassword});
+    expect(staleOutcome.outcome).toBe('notSent');
+    expect(staleOutcome.message).toContain('已变化');
+    await expect(login(oldPassword)).resolves.toBe(user);
+    await admin.query(`ALTER ROLE ${user} VALID UNTIL '2098-08-08T08:08:08Z'`);
+
+    await modal.getByRole('button', {name: t.current, exact: true}).click();
+    await modal.getByRole('button', {name: t.password.open, exact: true}).click();
+    const rotation = page.getByRole('dialog', {name: t.password.title, exact: true});
+    await expect(rotation.getByLabel(t.password.secret, {exact: true})).toHaveCount(0);
+    await rotation.getByRole('button', {name: t.password.preview, exact: true}).click();
+    const sql = rotation.getByLabel(t.password.sql, {exact: true});
+    await expect(sql).toHaveText('ALTER ROLE CURRENT_USER PASSWORD <客户端生成的 SCRAM 验证值>');
+    await rotation.screenshot({path: info.outputPath('PostgreSQL 登录密码轮换预览.png')});
+    await expect(login(oldPassword)).resolves.toBe(user);
+    await rotation.getByLabel(t.password.secret, {exact: true}).fill(newPassword);
+    const repeat = rotation.getByLabel(t.create.repeat, {exact: true});
+    await repeat.fill(oldPassword);
+    await rotation.getByLabel(t.password.confirm, {exact: true}).check();
+    const apply = rotation.getByRole('button', {name: t.password.apply, exact: true});
+    await apply.click();
+    await expect(rotation.getByText(t.create.passwordMismatch, {exact: true})).toBeVisible();
+    await expect(login(oldPassword)).resolves.toBe(user);
+    await repeat.fill(newPassword);
+    await apply.click();
+    await expect(rotation.getByText(t.password.committed, {exact: true})).toBeVisible();
+    await expect(login(oldPassword)).rejects.toMatchObject({code: '28P01'});
+    await expect(login(newPassword)).resolves.toBe(user);
+    expect((await attributes()).rows).toEqual([before]);
+    expect((await admin.query('SELECT rolpassword LIKE $1 AS scram FROM pg_catalog.pg_authid WHERE rolname=$2',
+      ['SCRAM-SHA-256$%', user])).rows).toEqual([{scram: true}]);
+
+    await rotation.getByRole('button', {name: t.password.editConnection, exact: true}).click();
+    const editor = page.getByRole('dialog', {name: zh.connections.text003, exact: true});
+    await expect(editor.getByLabel(zh.connections.text006, {exact: true})).toHaveValue('轮换密码验收连接');
+    const passwordField = editor.getByLabel(zh.connections.text011, {exact: true});
+    await expect(passwordField).toHaveValue('');
+    await passwordField.fill(newPassword);
+    await editor.getByRole('button', {name: zh.connections.text034, exact: true}).click();
+    await expect(editor.getByText(/连接成功 · PostgreSQL/)).toBeVisible();
+    await editor.getByRole('button', {name: zh.connections.text036, exact: true}).click();
+    await expect(editor).toHaveCount(0);
+    const saved = await page.evaluate(async () => JSON.stringify({
+      profiles: await window.dbark.invoke('connections.list', {}), history: await window.dbark.invoke('history.list', {}),
+      tasks: await window.dbark.invoke('tasks.list', {}),
+    }));
+    expect([oldPassword, newPassword, 'SCRAM-SHA-256$'].every(value => !saved.includes(value))).toBe(true);
+    await quitDesktop();
+  } finally { await admin.end(); }
+});

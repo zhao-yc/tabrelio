@@ -8,6 +8,7 @@ import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal } from './ui';
 import { PostgresMembershipDialog, type MembershipIntent } from './PostgresMembershipDialog';
 import { PostgresRoleCreateDialog } from './PostgresRoleCreateDialog';
+import { PostgresRolePasswordDialog } from './PostgresRolePasswordDialog';
 import '../postgresRoles.css';
 
 const yesNo = (value: boolean | null) => value === null ? t.unknown : value ? t.yes : t.no;
@@ -45,9 +46,9 @@ function Memberships({label, edges, busy, read, revoke, protectedPeer}: {
 }
 
 /** 所有结果跟随一次明确读取。切换连接或关闭窗口时，不展示旧任务的迟到结果。 */
-export function PostgresRolesDialog({connections, preferred, versions, onClose}: {
+export function PostgresRolesDialog({connections, preferred, versions, onClose, onEditConnection}: {
   connections: PostgresConnectionProfile[]; preferred?: {connectionId: string; database?: string};
-  versions: Record<string, number>; onClose(): void;
+  versions: Record<string, number>; onClose(): void; onEditConnection(profile: PostgresConnectionProfile): void;
 }) {
   const initial = connections.find(profile => profile.id === preferred?.connectionId) ?? connections[0];
   const [connectionId, setConnectionId] = useState(initial?.id ?? '');
@@ -58,6 +59,7 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
   const [schema, setSchema] = useState(''), [relation, setRelation] = useState('');
   const [membership, setMembership] = useState<RoleSource & {intent: MembershipIntent; role: PostgresRoleRef; scope?: Scope}>();
   const [creation, setCreation] = useState<RoleSource>();
+  const [rotation, setRotation] = useState<RoleSource & {role: PostgresRoleRef}>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
   const connection = connections.find(profile => profile.id === connectionId);
@@ -101,6 +103,14 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
   const context = detail?.snapshot ?? directory?.snapshot;
   const role = detail?.snapshot.role;
   const reset = () => { setError(''); setPage(undefined); setInspection(undefined); };
+  if (rotation) return <PostgresRolePasswordDialog
+    target={{connectionId: rotation.connection.id, database: rotation.database, role: rotation.role}}
+    current={() => sourceCurrent(rotation)} onClose={invalidate => {
+      setRotation(undefined);
+      if (invalidate) reset();
+    }} onEditConnection={() => {
+      if (sourceCurrent(rotation)) onEditConnection(rotation.connection);
+    }}/>;
   if (creation) return <PostgresRoleCreateDialog connectionId={creation.connection.id} database={creation.database}
     current={() => sourceCurrent(creation)} onClose={name => {
       setCreation(undefined);
@@ -154,6 +164,10 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
       </section>}
       {detail && role && <section aria-label={t.attributes}>
         <h3>{role.name}</h3>
+        {connection && role.login && role.oid === detail.snapshot.current.oid && role.name === detail.snapshot.login && role.name === connection.user &&
+          <button disabled={busy} onClick={() => {
+            setRotation({connection, version, database: detail.snapshot.database, role: {oid: role.oid, name: role.name}});
+          }}>{t.password.open}</button>}
         {!protectedRole(role.name) && <button disabled={busy}
           onClick={() => edit({action: 'grant', member: {oid: role.oid, name: role.name}})}>{t.grant}</button>}
         <dl className="postgres-roles-attributes">{[

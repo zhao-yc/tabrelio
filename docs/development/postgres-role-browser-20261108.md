@@ -23,3 +23,9 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 预览核对当前执行角色、目标服务器和同名冲突。密码登录的 SQL 预览使用占位符。确认时输入两遍密码，客户端在内存中按 PostgreSQL SASLprep 与 SCRAM 规则生成带盐验证值，并只将验证值发送给服务器。密码和验证值均不写入客户端设置或查询历史。[PostgreSQL 密码认证](https://www.postgresql.org/docs/18/auth-password.html) [PostgreSQL SASL 认证](https://www.postgresql.org/docs/18/sasl-authentication.html)
 
 确认后服务器在一个事务内创建并回读角色属性。旧预览发现同名角色时停止，提交成功后窗口刷新目录。后续可通过直接成员授权分配所需角色。
+
+## 轮换当前登录密码
+
+在角色窗口读取目录，点击「查看当前角色」→「轮换登录密码」。窗口确认当前角色与连接的登录身份一致后才显示入口。预览列出角色、所用数据库和脱敏 SQL。确认时输入两次新密码，客户端在内存中生成带盐的 SCRAM 验证值，服务器执行 `ALTER ROLE CURRENT_USER`。轮换作用于整台 PostgreSQL 服务器，并保留原密码有效期。预览有效期为五分钟，确认令牌只能使用一次。[PostgreSQL ALTER ROLE](https://www.postgresql.org/docs/18/sql-alterrole.html)
+
+已提交后，可点击「编辑此连接的密码」，重新输入新密码、测试并保存。该入口沿用连接编辑的会话和凭据保护。已打开此连接的工作区标签时，请先按连接编辑页的提示处理查询、草稿和事务。轮换本身不会把输入填入连接配置。若提交状态未知，先用新的独立连接核对实际密码，再更新连接配置。

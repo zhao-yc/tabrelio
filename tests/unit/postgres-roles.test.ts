@@ -40,3 +40,17 @@ it('角色创建预览拒绝密码，创建确认拒绝外来 SQL 和超预算�
   for (const value of [{...apply, password: '界'.repeat(342)}, {...apply, password: 'x\0y'}, {...apply, sql: 'SELECT 1'}, {...apply, confirmed: false}])
     expect(() => validateCommand('postgres.roles.create.apply', value)).toThrow();
 });
+
+it('登录密码轮换预览只接受原角色身份，确认只接受一次性令牌和非空密码', () => {
+  const draft = {connectionId: 'saved', database: 'postgres', role: {oid: '42', name: '原登录角色'}};
+  const apply = {connectionId: draft.connectionId, database: draft.database, token: '0550f154-5fc9-4447-a835-fd56f9e9a17f',
+    confirmed: true, password: '合成密码'};
+  expect(validateCommand('postgres.roles.password.preview', draft)).toEqual(draft);
+  expect(validateCommand('postgres.roles.password.apply', apply)).toEqual(apply);
+  for (const value of [{...draft, password: apply.password}, {...draft, role: {...draft.role, oid: '0'}},
+    {...draft, sql: 'ALTER ROLE CURRENT_USER PASSWORD NULL'}])
+    expect(() => validateCommand('postgres.roles.password.preview', value)).toThrow();
+  for (const value of [{...apply, password: undefined}, {...apply, password: ''}, {...apply, password: '界'.repeat(342)},
+    {...apply, confirmed: false}, {...apply, role: draft.role}, {...apply, validUntil: 'infinity'}])
+    expect(() => validateCommand('postgres.roles.password.apply', value)).toThrow();
+});
