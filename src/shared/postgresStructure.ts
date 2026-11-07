@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { postgresPolicyCatalogSchema } from './postgresPolicy';
 
 const identifier = z.string().min(1).max(512).refine(value => !value.includes('\0'));
 const optionalText = z.string().nullable();
@@ -80,6 +81,8 @@ export const postgresStructureResultSchema = z.object({
   constraints: z.array(structureConstraint).max(2000),
   indexes: z.array(structureIndex).max(2000),
   triggers: z.array(structureTrigger).max(2000).optional(),
+  policies: z.array(postgresPolicyCatalogSchema).max(2000).optional(),
+  policyStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   serverVersion: z.number().int().positive().optional(),
   materialized: z.object({
     populated: z.boolean(), uniqueIndex: z.boolean(), stamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),

@@ -324,6 +324,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 在「查看结构 → 触发器」可查看定义和触发模式。有管理权限的普通表可创建触发器、重命名、切换正常／禁用／副本／始终模式或受限删除。创建时可指定事件、UPDATE 字段、WHEN 条件和现有函数。PostgreSQL 14+ 可载入并修改已有普通触发器定义，保留原注释和触发模式。单事件 AFTER 触发器可配置过渡表别名。[PostgreSQL 表触发器](development/postgres-table-triggers-20261108.md)
 
+在「查看结构 → 行级安全」可查看策略与启用状态。表管理者可创建、修改、改名和删除策略，并分别确认启用、禁用和对所有者强制执行。可按命令、角色、USING 与 WITH CHECK 配置。[PostgreSQL 行级安全](development/postgres-rls-policies-20261108.md)
+
 在「查看结构 → 管理标识列」可为已有整数列启用标识属性、切换 ALWAYS 与 BY DEFAULT、重启序列或移除标识属性。[PostgreSQL 标识列管理](development/postgres-table-manage-20261108.md#管理标识列)
 
 在「查看结构 → 索引 → 编辑索引」可创建、重命名和删除 PostgreSQL 独立索引。先选择索引方法及键列，再将多项改动加入同一份预览。删除需额外确认，主键、约束和复制标识索引会排除在候选之外。详见[PostgreSQL 普通表索引编辑](development/postgres-index-edit-20261105.md)。

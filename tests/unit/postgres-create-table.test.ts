@@ -3,6 +3,7 @@ import { postgresCreateTablePlan, postgresCreateTablePreviewSchema, type Postgre
 import { splitPostgresSql } from '../../src/shared/postgresSql';
 import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from '../../src/shared/postgresTableManage';
 import { postgresTriggerEditorDraft, postgresTriggerChangeSchema } from '../../src/shared/postgresTrigger';
+import { postgresPolicyChangeSchema, postgresPolicyRequiresReplacement } from '../../src/shared/postgresPolicy';
 
 const draft: PostgresCreateTableInput = {
   connectionId: '原连接', database: '原库', schema: '业务"区', table: '新"表', comment: "注释'；\\",
@@ -131,4 +132,22 @@ it('从 PostgreSQL 触发器目录还原条件、字面参数和过渡表别名'
   expect(postgresTriggerEditorDraft({ ...trigger, extensionBound: true }, [])).toBeUndefined();
   expect(postgresTriggerChangeSchema.safeParse({ ...draft, kind: 'replace', from: '旧触发器', updateOf: ['a'] }).success).toBe(false);
   expect(postgresTriggerChangeSchema.safeParse({ ...draft, kind: 'replace', from: '旧触发器', events: ['INSERT'] }).success).toBe(false);
+});
+
+it('PostgreSQL 行级安全策略区分命令、PUBLIC、条件清除和原位修改', () => {
+  const old = { oid: '33', name: 'tenant', command: 'ALL' as const, permissive: true, comment: null, rebuildBlocked: false,
+    roles: [{ oid: '0', name: 'PUBLIC' }], using: 'tenant = CURRENT_USER', check: null };
+  const draft = { kind: 'edit' as const, from: 'tenant', command: 'ALL' as const, permissive: true,
+    roles: null, using: 'tenant = CURRENT_USER -- 保留原行', check: null };
+  expect(postgresPolicyChangeSchema.parse(draft)).toEqual(draft);
+  expect(postgresPolicyRequiresReplacement(old, draft)).toBe(false);
+  expect(postgresPolicyRequiresReplacement(old, { ...draft, using: null })).toBe(true);
+  expect(postgresPolicyRequiresReplacement(old, { ...draft, command: 'SELECT' })).toBe(true);
+  expect(postgresPolicyRequiresReplacement(old, { ...draft, permissive: false })).toBe(true);
+  for (const change of [
+    { ...draft, roles: [] }, { ...draft, roles: ['reader', 'reader'] },
+    { ...draft, command: 'INSERT' }, { ...draft, command: 'SELECT', check: 'true' },
+    { ...draft, using: 'true) WITH CHECK (true' }, { ...draft, using: 'true; DROP TABLE x' },
+    { ...draft, using: '$1' }, { ...draft, sql: 'ALTER TABLE arbitrary' },
+  ]) expect(postgresPolicyChangeSchema.safeParse(change).success).toBe(false);
 });

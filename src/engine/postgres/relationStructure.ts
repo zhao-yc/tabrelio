@@ -24,6 +24,8 @@ WITH target AS MATERIALIZED (
          ${postgresTableManageFactsSql} AS table_manage,
          ${postgresCommentIdentitySql} AS comment_identity,
          ${postgresTableIdentityFactsSql} AS identity_facts,
+         c.relkind IN ('r', 'p') AND c.relpersistence IN ('p', 'u')
+           AND pg_catalog.pg_has_role(c.relowner, 'USAGE') AS policy_editable,
          c.relkind = 'r' AND c.relpersistence IN ('p', 'u') AND NOT c.relispartition
            AND pg_catalog.pg_has_role(c.relowner, 'USAGE')
            AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid) AS editable
@@ -144,6 +146,24 @@ SELECT pg_catalog.jsonb_build_object(
     FROM pg_catalog.pg_trigger g JOIN pg_catalog.pg_proc p ON p.oid = g.tgfoid
     JOIN pg_catalog.pg_namespace fn ON fn.oid = p.pronamespace
     WHERE g.tgrelid = t.oid ORDER BY g.tgname, g.oid LIMIT 2001
+  ) entry), '[]'::jsonb),
+  'policies', COALESCE((SELECT pg_catalog.jsonb_agg(entry.item ORDER BY entry.name, entry.oid) FROM (
+    SELECT p.polname AS name, p.oid, pg_catalog.jsonb_build_object(
+      'oid', p.oid::text, 'name', p.polname,
+      'command', CASE p.polcmd WHEN '*' THEN 'ALL' WHEN 'r' THEN 'SELECT'
+        WHEN 'a' THEN 'INSERT' WHEN 'w' THEN 'UPDATE' WHEN 'd' THEN 'DELETE' END,
+      'permissive', p.polpermissive,
+      'roles', (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'oid', item.oid::text, 'name', CASE WHEN item.oid = 0 THEN 'PUBLIC' ELSE r.rolname::text END) ORDER BY item.pos)
+        FROM pg_catalog.unnest(p.polroles) WITH ORDINALITY AS item(oid, pos)
+        LEFT JOIN pg_catalog.pg_roles r ON r.oid = item.oid),
+      'using', pg_catalog.pg_get_expr(p.polqual, p.polrelid),
+      'check', pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid),
+      'comment', pg_catalog.obj_description(p.oid, 'pg_policy'),
+      'rebuildBlocked', EXISTS (SELECT FROM pg_catalog.pg_depend d
+        WHERE d.classid = 'pg_catalog.pg_policy'::regclass AND d.objid = p.oid AND d.deptype IN ('e', 'x'))
+        OR EXISTS (SELECT FROM pg_catalog.pg_seclabel sl WHERE sl.classoid = 'pg_catalog.pg_policy'::regclass AND sl.objoid = p.oid)
+    ) AS item FROM pg_catalog.pg_policy p WHERE p.polrelid = t.oid ORDER BY p.polname, p.oid LIMIT 2001
   ) entry), '[]'::jsonb)
 ), t.oid::text, t.editable,
   pg_catalog.jsonb_build_object('indexes', COALESCE((SELECT pg_catalog.jsonb_object_agg(index_name, index_oid) FROM (
@@ -163,7 +183,7 @@ SELECT pg_catalog.jsonb_build_object(
       pg_catalog.jsonb_build_object('oid', oid::text, 'reference', confrelid::text, 'index', conindid::text)) FROM (
       SELECT c.conname, c.oid, c.confrelid, c.conindid FROM pg_catalog.pg_constraint c
       WHERE c.conrelid = t.oid AND c.contype = 'f' ORDER BY c.oid LIMIT 2001
-    ) foreign_ids), '{}'::jsonb)), t.view_edit, t.materialized, t.materialized_manage, t.table_manage, t.comment_identity, t.identity_facts
+    ) foreign_ids), '{}'::jsonb)), t.view_edit, t.materialized, t.materialized_manage, t.table_manage, t.comment_identity, t.identity_facts, t.policy_editable
 FROM target t
 `;
 
@@ -200,8 +220,10 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
     const value = foreignIds.get(key.name);
     return !value || ![value.oid, value.reference, value.index].every(oid => typeof oid === 'string' && /^\d+$/.test(oid));
   })) throw Error('PostgreSQL 外键身份回包不完整');
-  const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
-    { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}),
+  const relationStamp = () => createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex');
+  const structureStamp = editable === 't' || result.rows[0].c10 === 't' ? relationStamp() : undefined;
+  const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ? { editStamp: structureStamp } : {}),
+    ...(result.rows[0].c10 === 't' ? { policyStamp: structureStamp } : {}),
     ...(materializedManage && materialized ?
       { indexEditStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids + '\0' + materialized).digest('hex'),
         materializedManageStamp: postgresViewStamp(materializedManage) } : {}),

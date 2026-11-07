@@ -19,6 +19,8 @@ import { PostgresIdentityColumnsPanel, postgresIdentityColumns } from './Postgre
 import { postgresIdentityColumnsZh } from '../locales/postgresIdentityColumns.zh-CN';
 import { PostgresTableTriggerPanel } from './PostgresTableTriggerPanel';
 import { postgresTableTriggerZh as triggerText } from '../locales/postgresTableTrigger.zh-CN';
+import { PostgresTablePolicyPanel } from './PostgresTablePolicyPanel';
+import { postgresTablePolicyZh as policyText } from '../locales/postgresTablePolicy.zh-CN';
 import { postgresTableCommentsZh } from '../locales/postgresTableComments.zh-CN';
 import { PostgresIndexEditPanel } from './PostgresIndexEditPanel';
 import { PostgresKeyEditPanel } from './PostgresKeyEditPanel';
@@ -48,6 +50,7 @@ const editors = {
   foreign: { Panel: PostgresForeignEditPanel, label: postgresForeignEditZh.open },
   check: { Panel: PostgresCheckEditPanel, label: postgresCheckEditZh.open },
   triggers: { Panel: PostgresTableTriggerPanel, label: triggerText.title },
+  policies: { Panel: PostgresTablePolicyPanel, label: policyText.title },
 };
 
 /** 统一目录表格语义，空列表和数据库空值分别显示。 */
@@ -93,7 +96,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         const output = await invoke('postgres.structure.read', { connectionId, database, table });
         if (owner.current !== request || (useWorkspace.getState().connectionVersions[connectionId] ?? 0) !== version) return;
         setView({ key: scope, output });
-        setSection(value => value === 'definition' && !output.viewDefinition || value === 'triggers' && !output.triggers ? 'columns' : value);
+        setSection(value => value === 'definition' && !output.viewDefinition || value === 'triggers' && !output.triggers ||
+          value === 'policies' && output.kind !== 'r' && output.kind !== 'p' ? 'columns' : value);
       } catch (reason) {
         if (owner.current === request) setView({ key: scope, error: errorMessage(reason) });
       }
@@ -113,13 +117,16 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
 
   const sections: Section[] = ['columns', 'constraints', 'indexes'];
   if (output?.triggers && output.kind !== 'm') sections.push('triggers');
+  if (output?.policies && (output.kind === 'r' || output.kind === 'p')) sections.push('policies');
   if (output?.viewDefinition) sections.push('definition');
   const EditPanel = editing && editors[editing].Panel;
   const indexStamp = output && postgresIndexEditStamp(output);
+  const sectionStamp = section === 'indexes' ? indexStamp : section === 'policies' ? output?.policyStamp : output?.editStamp;
   const manageStamp = output?.tableManage?.stamp ?? output?.materializedManageStamp ?? output?.viewEditStamp;
   const editStamp = editing === 'indexes' ? indexStamp : editing === 'materialized' ? output?.materialized?.stamp :
     editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp :
-      editing === 'comments' ? output?.commentStamp : editing === 'identity' ? output?.identityStamp : output?.editStamp;
+      editing === 'comments' ? output?.commentStamp : editing === 'identity' ? output?.identityStamp :
+        editing === 'policies' ? output?.policyStamp : output?.editStamp;
   if (dependencies) return <PostgresDependenciesDialog target={target} onBack={() => setDependencies(false)}/>;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
@@ -189,12 +196,24 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
             <td><code>{trigger.definition}</code></td>
           </tr>)}
         </CatalogTable>}
+        {section === 'policies' && <>
+          {!output.rowSecurity && <p>{policyText.disabled}{output.forceRowSecurity ? ' · ' + policyText.forcedHint : ''}</p>}
+          <CatalogTable empty={!output.policies?.length} headers={[
+            text.name, policyText.command, policyText.type, policyText.roles, policyText.using, policyText.check, policyText.comment,
+          ]}>{output.policies?.map(policy => <tr key={policy.oid}>
+            <th scope="row">{policy.name}</th><td>{policy.command}</td>
+            <td>{policy.permissive ? policyText.permissive : policyText.restrictive}</td>
+            <td>{policy.roles.map(role => role.name).join('、')}</td>
+            <td><code>{policy.using ?? '—'}</code></td><td><code>{policy.check ?? '—'}</code></td>
+            <td>{policy.comment ?? '—'}</td>
+          </tr>)}</CatalogTable>
+        </>}
       </>}
     </div>
     <footer className="modal-footer">
       <button disabled={!!editing || busy || dialect !== 'postgresql'} onClick={() => { owner.current = undefined; setAttempt(value => value + 1); }}>{text.refresh}</button>
       {output && !editing && <button onClick={() => setDependencies(true)}>{postgresDependenciesZh.open}</button>}
-      {!readOnly && (section === 'indexes' ? indexStamp : output?.editStamp) && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
+      {!readOnly && sectionStamp && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
         {editors[section].label}
       </button>}
       {!readOnly && output?.editStamp && !editing && section === 'constraints' &&

@@ -27,6 +27,7 @@ import { postgresTableMovePlan } from './tableMove';
 import { postgresTableCommentPlan } from './tableComments';
 import { postgresTableIdentityPlan } from './tableIdentity';
 import { postgresTableTriggerPlan } from './tableTriggers';
+import { postgresTablePolicyPlan } from './tablePolicies';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -449,6 +450,8 @@ export class PostgresCreateTableWorkspace {
       return this.prepareRelation(input, 'tableManage', connect, () => connection => postgresTableIdentityPlan(connection, draft));
     if (draft.action === 'trigger')
       return this.prepareRelation(input, 'tableManage', connect, () => connection => postgresTableTriggerPlan(connection, draft));
+    if (draft.action === 'policy')
+      return this.prepareRelation(input, 'tableManage', connect, () => connection => postgresTablePolicyPlan(connection, draft));
     const { schema, name } = postgresRelationName(draft.table);
     const prefix = postgresIdentifier(schema) + '.', originalTable = prefix + postgresIdentifier(name);
     const changed = '原表或管理权限已变化，请刷新结构后继续';

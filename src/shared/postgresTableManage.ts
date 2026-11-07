@@ -3,6 +3,7 @@ import { postgresCreateTableApplySchema, postgresDdlText, postgresNewIdentifier 
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresSequenceInteger } from './postgresSequence';
 import { postgresTriggerChangeSchema } from './postgresTrigger';
+import { postgresPolicyChangeSchema } from './postgresPolicy';
 
 const target = postgresStructureInputSchema.extend({ stamp: z.string().regex(/^[a-f0-9]{64}$/) });
 const identityMode = z.enum(['always', 'byDefault']);
@@ -31,6 +32,7 @@ export const postgresTableManagePreviewSchema = z.discriminatedUnion('action', [
   target.extend({ action: z.literal('truncate'), identity: z.enum(['continue', 'restart']) }).strict(),
   commentTarget,
   target.extend({ action: z.literal('trigger'), change: postgresTriggerChangeSchema }).strict(),
+  target.extend({ action: z.literal('policy'), change: postgresPolicyChangeSchema }).strict(),
   target.extend({ action: z.literal('identity'), position: z.number().int().min(1).max(2000),
     name: postgresStructureInputSchema.shape.table, change: identityChange }).strict(),
 ]);
