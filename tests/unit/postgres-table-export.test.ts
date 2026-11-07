@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportExtension, postgresTableExportSchema } from '../../src/shared/postgresTable';
+import { validateCommand } from '../../src/shared/validation';
 import { exportPostgresTable } from '../../src/engine/postgres/tableExport';
 import { PostgresTableWorkspace } from '../../src/engine/postgres/tableWorkspace';
 
@@ -13,6 +14,17 @@ const request = {
 };
 
 describe('PostgreSQL 表页导出协议', () => {
+  it('多工作表导出仅允许完整限定且唯一的目录关系', () => {
+    const input = { connectionId: request.connectionId, database: request.database, taskId: request.taskId,
+      fileToken: request.fileToken, objects: [{ name: '"a"."同名"', kind: 'table' }, { name: '"b""c"."同名"', kind: 'view' }] };
+    expect(validateCommand('postgres.workbookExport', input)).toEqual(input);
+    for (const patch of [{ filePath: '/private/file' }, { sql: 'SELECT 1' },
+      { objects: [{ ...input.objects[0], name: '同名' }, input.objects[1]] },
+      { objects: [input.objects[0], { ...input.objects[0], kind: 'view' }] }]) {
+      expect(() => validateCommand('postgres.workbookExport', { ...input, ...patch })).toThrow();
+    }
+  });
+
   it('只接受服务端快照和主进程文件令牌，保留显式列顺序', () => {
     expect(postgresTableExportSchema.parse(request).columns).toEqual(['c1', 'c0']);
     for (const unexpected of [{ filePath: '/private/file' }, { sql: 'SELECT 1' }, { filter: { column: 'id', text: '' } }]) {

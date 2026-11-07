@@ -11,8 +11,8 @@ import { navigationZh as text } from '../locales/navigation.zh-CN';
 import { SidebarTreeRow } from './SidebarContextMenu';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import '../navigation.css';
-import { SqliteWorkbookExportDialog } from './SqliteWorkbookExportDialog';
-import { sqliteWorkbookExportZh } from '../locales/sqliteWorkbookExport.zh-CN';
+import { WorkbookExportDialog } from './WorkbookExportDialog';
+import { sqliteWorkbookExportZh } from '../locales/workbookExport.zh-CN';
 import { importNewTableZh } from '../locales/importNewTable.zh-CN';
 
 interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onNewTable(): void; onNewSequence?(): void; onNewRoutine?(): void; onSqliteCreate?(kind: 'view' | 'trigger'): void; onImportNewTable?(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
@@ -84,15 +84,17 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
       && current.tab.connectionId === proof.connectionId && current.tab.database === proof.database
       && now.connections.find(item => item.id === proof.connectionId) === proof.profile && (now.connectionVersions[proof.connectionId] ?? 0) === proof.version;
   };
+  const workbookDialect = profile?.dialect === 'postgresql' && tab.database ? 'postgresql' :
+    profile?.dialect === 'sqlite' && tab.database === 'main' ? 'sqlite' : undefined;
   const workbookObjects = useMemo(() => objects.filter(object => object.kind === 'table' || object.kind === 'view'), [objects]);
   function openWorkbook() {
     const proof = catalog.current;
-    if (!proof || !actionCurrent() || workbookObjects.length < 2) return;
+    if (!proof || !workbookDialect || !actionCurrent() || workbookObjects.length < 2) return;
     setWorkbook({ objects: workbookObjects, current: () => contextCurrent(false) && generation.current === proof.owner && catalog.current === proof });
   }
   return <div className="workspace-tab object-browser" aria-label={text.objects}>
     <div className="object-browser-header"><Database size={16}/><strong title={`${profile?.name ?? tab.connectionId} / ${tab.database}`}>{profile?.name ?? tab.connectionId} / {tab.database}</strong><span className="grow"/>
-      {profile?.dialect === 'sqlite' && tab.database === 'main' && ['table', 'view'].includes(category) &&
+      {workbookDialect && ['table', 'view'].includes(category) &&
         <button disabled={busy || workbookObjects.length < 2} onClick={openWorkbook}>{sqliteWorkbookExportZh.open}</button>}
       {category === 'sequence' && profile?.dialect === 'postgresql' && onNewSequence && <button disabled={busy}
         onClick={() => { if (contextCurrent()) onNewSequence(); }}>{postgresSequenceZh.create}</button>}
@@ -112,7 +114,8 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
               <Table2 size={14}/><span>{object.name}</span><span className="grow"/><small className="object-browser-kind">{kindLabels[object.kind]}</small></button></SidebarTreeRow>;
         })}</div></div>}
     </div><div className="object-browser-footer">{text.records(filtered.length, objects.length)}</div>
-    {workbook && <SqliteWorkbookExportDialog connectionId={tab.connectionId} tabId={tab.id} objects={workbook.objects}
+    {workbook && workbookDialect && <WorkbookExportDialog connectionId={tab.connectionId} database={tab.database!}
+      dialect={workbookDialect} tabId={tab.id} objects={workbook.objects}
       current={workbook.current} onClose={() => setWorkbook(undefined)}/>}
   </div>;
 }

@@ -14,3 +14,12 @@ export const sqliteWorkbookExportZh = {
   complete: (sheets: number, rows: number) => `已保存 ${sheets} 张工作表，共 ${rows} 行。`,
   stale: '原对象目录或连接已变化，请关闭后重新选择。',
 } as const;
+
+
+export const postgresWorkbookExportZh = {
+  ...sqliteWorkbookExportZh,
+  title: '导出 PostgreSQL 工作簿',
+  hint: '选择至少两个表或视图。每个对象导出全部可读取的行和字段，按勾选顺序排列。相同对象名会加序号。',
+  suggestedName: 'PostgreSQL 数据.xlsx',
+  exporting: '正在导出 PostgreSQL 工作簿',
+} as const;

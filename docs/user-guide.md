@@ -882,6 +882,8 @@ MySQL、MariaDB、PostgreSQL 和 SQLite 可向现有表导入 `.txt`，也可用
 
 SQLite 的表或视图列表可点击「导出多个对象到 Excel」，按勾选顺序将 2 至 64 个对象写到同一本工作簿，每个对象一张工作表。所有对象从同一只读快照完整导出，空表保留标题。[SQLite 多表 Excel 导出](development/sqlite-workbook-export-20261108.md)
 
+PostgreSQL 的表或视图列表也提供「导出多个对象到 Excel」。同一数据库内可跨 schema 勾选，窗口会显示完整限定名和最终页签，导出时共用一个可重复读只读快照。[PostgreSQL 多表 Excel 导出](development/postgres-workbook-export-20261108.md)
+
 MySQL、MariaDB、PostgreSQL 和 SQLite 均可将「Excel（XLSX）」导入现有表或从工作簿新建表。选择工作表并填写标题行，无标题时填 0 并按列位置映射。可填写首末数据行以跳过说明和汇总，范围包含首末两行。由 tabrelio 导出的文件可选可逆文本协议。确认前核对样本和字段映射。[XLSX 工作簿导入](development/xlsx-table-import-20261107.md)
 
 CSV/JSON 导入先检查预览并建立字段映射；同一目标字段不能被多个源字段映射。JSON 顶层必须是对象数组，数字保留原始十进制文本以免丢失精度。CSV 默认第一行为列名，`\N` 表示 NULL，反斜线开头的文本用额外反斜线转义；二进制使用 `base64:` 表示。客户端先做无损类型检查，服务器约束和错误仍会终止当前批次。

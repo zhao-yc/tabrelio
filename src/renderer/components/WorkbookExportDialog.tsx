@@ -1,28 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DatabaseObject, FileChoice } from '../../shared/contracts';
+import { postgresRelationName } from '../../shared/postgresSql';
 import { EXCEL_LIMITS, excelWorksheetNames } from '../../shared/excelTransfer';
 import { acquireWorkspaceBusy, useWorkspace } from '../store';
 import { errorMessage, invoke, kindLabels, uid } from '../lib';
-import { checkSqliteTableExportOutput } from '../sqliteTableExportUi';
-import { sqliteWorkbookExportZh as text } from '../locales/sqliteWorkbookExport.zh-CN';
+import { checkTableFilteredExportOutput } from '../tableFilteredExportUi';
+import { postgresWorkbookExportZh, sqliteWorkbookExportZh } from '../locales/workbookExport.zh-CN';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 type Operation = { taskId?: string; stop?: Promise<unknown> };
 type ObjectChoice = { name: string; kind: 'table' | 'view' };
 interface Props {
-  connectionId: string; tabId: string; objects: readonly DatabaseObject[];
+  connectionId: string; database: string; dialect: 'sqlite' | 'postgresql'; tabId: string; objects: readonly DatabaseObject[];
   current(): boolean; onClose(): void;
 }
 
 /** 选文件与实际导出均占用原标签，重载或换绑后不会发送旧选择。 */
-export function SqliteWorkbookExportDialog({ connectionId, tabId, objects, current, onClose }: Props) {
+export function WorkbookExportDialog({ connectionId, database, dialect, tabId, objects, current, onClose }: Props) {
+  const text = dialect === 'postgresql' ? postgresWorkbookExportZh : sqliteWorkbookExportZh;
   const [selected, setSelected] = useState<ObjectChoice[]>([]), [search, setSearch] = useState('');
   const [file, setFile] = useState<FileChoice | null>(null), [done, setDone] = useState<number>();
   const [busy, setBusy] = useState(false), [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
   const active = useRef<Operation | undefined>(undefined), mounted = useRef(true);
   const choices = objects.filter((object): object is ObjectChoice => (object.kind === 'table' || object.kind === 'view') &&
     object.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
-  const names = excelWorksheetNames(selected.map(object => object.name));
+  const names = excelWorksheetNames(selected.map(object => dialect === 'postgresql' ? postgresRelationName(object.name).name : object.name));
   const valid = current(), ready = selected.length >= 2, locked = busy || done !== undefined || !valid;
 
   function stop() {
@@ -61,10 +63,11 @@ export function SqliteWorkbookExportDialog({ connectionId, tabId, objects, curre
         if (result && mounted.current && current()) setFile(result);
       } else {
         setFile(null);
-        const output = checkSqliteTableExportOutput(await invoke('sqlite.workbookExport', {
-          connectionId, database: 'main', format: 'xlsx', encoding: 'utf8', fileToken: file!.token,
-          taskId: operation.taskId!, objects: selected.map(({ name, kind }) => ({ name, kind })),
-        }));
+        const input = { connectionId, database, fileToken: file!.token, taskId: operation.taskId!,
+          objects: selected.map(({ name, kind }) => ({ name, kind })) };
+        const output = checkTableFilteredExportOutput(dialect === 'postgresql'
+          ? await invoke('postgres.workbookExport', input)
+          : await invoke('sqlite.workbookExport', { ...input, database: 'main', format: 'xlsx', encoding: 'utf8' }));
         if (mounted.current) { setFile(file); setDone(output.rows); }
         else useWorkspace.getState().notify(text.complete(selected.length, output.rows));
       }

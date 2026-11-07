@@ -168,6 +168,7 @@ function columnIdentifier(relation: Relation, name: string): string {
 }
 
 /** 翻页、游标和 COPY 共用排序，显式规则优先，同值时沿用关系的分页键。 */
+export { readSql as readPostgresTableSelect };
 function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter' | 'sort'>,
   page?: Pick<PostgresTablePageInput, 'limit' | 'offset' | 'checkFilterColumns'>, columns = relation.columns, copy = false) {
   const key = (id: string) => columnIdentifier(relation, id);

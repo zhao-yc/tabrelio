@@ -40,6 +40,7 @@ import type { PostgresForeignPreviewInput } from '../../shared/postgresForeignKe
 import { preparePostgresCheckEdit } from './checkEdit';
 import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
+import { exportPostgresWorkbook, type PostgresWorkbookExportRequest } from './workbookExport';
 import { exportPostgresQuery, type PostgresQueryExportRequest } from './queryExport';
 import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
 import { exportPostgresDatabaseBackup, type PostgresDatabaseBackupRequest } from './databaseBackup';
@@ -1248,6 +1249,14 @@ export class PostgresEngine {
           if (result.truncated) throw Error('PostgreSQL 比较目录超过显示预算');
           return result.rows.map(row => input.database ? postgresIdentifier(String(row.c0)) + '.' + postgresIdentifier(String(row.c1)) : String(row.c0));
         });
+      }
+      case 'postgres.workbookExport': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision))
+          throw Error('缺少可信的 PostgreSQL 导出连接');
+        const request = input as PostgresWorkbookExportRequest;
+        return this.runFileExport(request, profile, (connect, check, publish, progress) =>
+          exportPostgresWorkbook(request, connect, check, publish, progress), true);
       }
       case 'postgres.query.export': {
         const profile = input.profile as PostgresConnectionProfile | undefined;

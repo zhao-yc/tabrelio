@@ -5,6 +5,7 @@ import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport
 import { txtImportOptionsSchema, txtImportZh, validTxtImport } from './txtImport';
 import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, xmlImportZh } from './xmlImport';
 import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
+import { postgresWorkbookExportSchema } from './postgresWorkbookExport';
 import { postgresQueryExportSchema } from './postgresQueryExport';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './fullQueryExportProfiles';
@@ -309,6 +310,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.checkEdit.preview': postgresCheckPreviewSchema, 'postgres.checkEdit.apply': postgresCheckApplySchema,
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': z.union([postgresTableExportSchema, postgresBackupSetSchema]),
   'postgres.query.export': postgresQueryExportSchema,
+  'postgres.workbookExport': postgresWorkbookExportSchema,
   'postgres.backup.catalogue': postgresBackupCatalogueSchema,
   'postgres.backup.chooseDumpTool': postgresDatabaseBackupToolSchema,
   'postgres.backup.chooseDatabaseFile': postgresDatabaseBackupChooseSchema,

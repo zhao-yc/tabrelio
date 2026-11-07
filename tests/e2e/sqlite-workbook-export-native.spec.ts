@@ -1,5 +1,5 @@
 import { test as baseTest, expect } from '@playwright/test';
-import { sqliteWorkbookExportZh as text } from '../../src/renderer/locales/sqliteWorkbookExport.zh-CN';
+import { sqliteWorkbookExportZh as text } from '../../src/renderer/locales/workbookExport.zh-CN';
 
 const active = process.env.DBARK_SQLITE_WORKBOOK_EXPORT_NATIVE_TEST === '1' &&
   !process.argv.some(argument => argument === '--list' || argument.startsWith('--list='));
