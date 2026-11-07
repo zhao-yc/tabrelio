@@ -23,3 +23,11 @@ export const postgresWorkbookExportZh = {
   suggestedName: 'PostgreSQL 数据.xlsx',
   exporting: '正在导出 PostgreSQL 工作簿',
 } as const;
+
+
+export function mysqlWorkbookExportZh(dialect: 'mysql' | 'mariadb') {
+  const database = dialect === 'mysql' ? 'MySQL' : 'MariaDB';
+  return { ...sqliteWorkbookExportZh, title: `导出 ${database} 工作簿`, suggestedName: `${database} 数据.xlsx`,
+    exporting: `正在导出 ${database} 工作簿`,
+    hint: '勾选至少两个 InnoDB 表或视图。每个对象导出全部可读取的行和字段，按勾选顺序排列。视图的数据可见性由底层对象决定。' };
+}

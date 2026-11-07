@@ -84,8 +84,7 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
       && current.tab.connectionId === proof.connectionId && current.tab.database === proof.database
       && now.connections.find(item => item.id === proof.connectionId) === proof.profile && (now.connectionVersions[proof.connectionId] ?? 0) === proof.version;
   };
-  const workbookDialect = profile?.dialect === 'postgresql' && tab.database ? 'postgresql' :
-    profile?.dialect === 'sqlite' && tab.database === 'main' ? 'sqlite' : undefined;
+  const workbookDialect = tab.database && (profile?.dialect !== 'sqlite' || tab.database === 'main') ? profile?.dialect : undefined;
   const workbookObjects = useMemo(() => objects.filter(object => object.kind === 'table' || object.kind === 'view'), [objects]);
   function openWorkbook() {
     const proof = catalog.current;

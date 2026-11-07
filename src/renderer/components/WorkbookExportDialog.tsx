@@ -5,19 +5,19 @@ import { EXCEL_LIMITS, excelWorksheetNames } from '../../shared/excelTransfer';
 import { acquireWorkspaceBusy, useWorkspace } from '../store';
 import { errorMessage, invoke, kindLabels, uid } from '../lib';
 import { checkTableFilteredExportOutput } from '../tableFilteredExportUi';
-import { postgresWorkbookExportZh, sqliteWorkbookExportZh } from '../locales/workbookExport.zh-CN';
+import { mysqlWorkbookExportZh, postgresWorkbookExportZh, sqliteWorkbookExportZh } from '../locales/workbookExport.zh-CN';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 type Operation = { taskId?: string; stop?: Promise<unknown> };
 type ObjectChoice = { name: string; kind: 'table' | 'view' };
 interface Props {
-  connectionId: string; database: string; dialect: 'sqlite' | 'postgresql'; tabId: string; objects: readonly DatabaseObject[];
+  connectionId: string; database: string; dialect: 'sqlite' | 'postgresql' | 'mysql' | 'mariadb'; tabId: string; objects: readonly DatabaseObject[];
   current(): boolean; onClose(): void;
 }
 
 /** 选文件与实际导出均占用原标签，重载或换绑后不会发送旧选择。 */
 export function WorkbookExportDialog({ connectionId, database, dialect, tabId, objects, current, onClose }: Props) {
-  const text = dialect === 'postgresql' ? postgresWorkbookExportZh : sqliteWorkbookExportZh;
+  const text = dialect === 'postgresql' ? postgresWorkbookExportZh : dialect === 'sqlite' ? sqliteWorkbookExportZh : mysqlWorkbookExportZh(dialect);
   const [selected, setSelected] = useState<ObjectChoice[]>([]), [search, setSearch] = useState('');
   const [file, setFile] = useState<FileChoice | null>(null), [done, setDone] = useState<number>();
   const [busy, setBusy] = useState(false), [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
@@ -67,7 +67,8 @@ export function WorkbookExportDialog({ connectionId, database, dialect, tabId, o
           objects: selected.map(({ name, kind }) => ({ name, kind })) };
         const output = checkTableFilteredExportOutput(dialect === 'postgresql'
           ? await invoke('postgres.workbookExport', input)
-          : await invoke('sqlite.workbookExport', { ...input, database: 'main', format: 'xlsx', encoding: 'utf8' }));
+          : dialect === 'sqlite' ? await invoke('sqlite.workbookExport', { ...input, database: 'main', format: 'xlsx', encoding: 'utf8' })
+            : await invoke('mysql.workbookExport', input));
         if (mounted.current) { setFile(file); setDone(output.rows); }
         else useWorkspace.getState().notify(text.complete(selected.length, output.rows));
       }

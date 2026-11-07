@@ -36,6 +36,7 @@ import { mysqlDataCompareSchema } from '../shared/mysqlDataCompare';
 import { readSchemaComparisonTarget } from './schemaCompare';
 import { open, rename, rm } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
+import { prepareMysqlWorkbookExport } from './mysqlWorkbookExport';
 import { exportExcelFile, previewExcelSheet, readExcelRows } from './excelFiles';
 import { ExcelReadTasks } from './excelReadTasks';
 import { validateExcelMapping } from '../shared/excelTransfer';
@@ -721,7 +722,13 @@ export class Engine {
         // 候选使用独立只读会话；原终包与严格连接清理完成后才发布，不读取父页草稿。
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readTableValueOptions({ managed, ...control }, input as TableValueOptionsInput, () => this.stopIndependentRead(input.taskId)), undefined, '读取服务器不同值', true);
       }
+      case 'mysql.workbookExport':
       case 'table.exportFiltered': {
+        const workbook = command === 'mysql.workbookExport';
+        const label = workbook ? '导出多对象工作簿' : tableFilteredExportText.label;
+        if (workbook && (!input.profile || !['mysql', 'mariadb'].includes(input.profile.dialect) ||
+            input.profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision)))
+          throw Error('缺少可信的 MySQL 或 MariaDB 工作簿导出连接');
         this.assertFile(input); this.copySourceProfile(input);
         let prepared: PreparedTableFilteredExport | undefined; let beginCommit: () => void = () => { throw Error('文件发布尚未获得原数据库收尾授权'); };
         const finalizer: IndependentFileFinalizer<import('../shared/tableFilteredExport').TableFilteredExportOutput> = {
@@ -729,12 +736,14 @@ export class Engine {
           dispose: async () => { await prepared?.dispose(); }, committed: () => prepared?.fileCommitted === true,
         };
         return this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => {
-          prepared = await prepareTableFilteredExport({ managed, ...control }, input as import('../shared/tableFilteredExport').TableFilteredExportInput & { filePath: string }, {
+          const context = { managed, ...control }, options = {
             stop: () => this.stopIndependentRead(input.taskId), onCommitStart: () => beginCommit(),
-            onProgress: rows => this.emit({ taskId: input.taskId, status: 'running', progress: 0, message: tableFilteredExportText.label, rows }),
-          });
+            onProgress: (rows: number) => this.emit({ taskId: input.taskId, status: 'running', progress: 0, message: label, rows }),
+          };
+          prepared = workbook ? await prepareMysqlWorkbookExport(context, input as Parameters<typeof prepareMysqlWorkbookExport>[1], options) :
+            await prepareTableFilteredExport(context, input as Parameters<typeof prepareTableFilteredExport>[1], options);
           return { rows: prepared.rows, fileCommitted: true as const };
-        }, undefined, tableFilteredExportText.label, true, undefined, false, finalizer);
+        }, undefined, label, true, undefined, false, finalizer);
       }
       case 'table.childReferencePage': {
         this.copySourceProfile(input);

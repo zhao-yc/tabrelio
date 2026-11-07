@@ -56,6 +56,18 @@ function fixture() {
 }
 
 describe('全部服务器筛选行导出的严格IPC', () => {
+  it('MySQL 和 MariaDB 多工作表导出只接收同库有序对象和保存令牌', () => {
+    const request = { connectionId: input.connectionId, database: input.database, taskId: input.taskId, fileToken: input.fileToken,
+      objects: [{ name: '表`甲', kind: 'table' }, { name: '视图乙', kind: 'view' }] };
+    expect(validateCommand('mysql.workbookExport', request)).toEqual(request);
+    for (const patch of [{ sql: 'SELECT 1' }, { filePath: '/private/file' }, { objects: [request.objects[0]] },
+      { objects: [request.objects[0], { ...request.objects[0], kind: 'view' }] },
+      { objects: [{ ...request.objects[0], database: '另一个库' }, request.objects[1]] },
+      { objects: [{ ...request.objects[0], name: 'A'.repeat(65) }, request.objects[1]] }]) {
+      expect(() => validateCommand('mysql.workbookExport', { ...request, ...patch })).toThrow();
+    }
+  });
+
   it.each(['csv', 'json', 'sql', 'xlsx', 'html'])('%s接受非空有序字段选择，省略仍保持旧请求', format => {
     const value = { ...input, format, columns: ['字段乙', '字段甲'] };
     expect(validateCommand('table.exportFiltered', value)).toEqual(value);

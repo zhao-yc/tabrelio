@@ -80,6 +80,34 @@ function encodedCell(value: CellValue, format: 'csv' | 'json', delimiter: CsvExp
   return encoded;
 }
 
+type TableExportRowsFrame = Extract<QueryExportFrame, { kind: 'rows-start' | 'row' | 'rows-end' }>;
+
+/** 单表及工作簿共用真实二进制结果、列目录、背压和终包警告核验。 */
+export async function streamTableExportRows(context: StructureTaskContext, plan: TableFilteredExportPlan,
+  stop: () => Promise<void>, consume: (frame: TableExportRowsFrame) => Promise<void>): Promise<void> {
+  const check = context.checkCancelled;
+  let starts = 0, ends = 0, warningCount: number | undefined;
+  await consumeQueryFrames(context.managed, plan.sql, 'binary', {
+    statementOrdinal: 1, ordinals: { results: 0, rows: 0 }, checkCancelled: check, commandStarted: context.commandStarted, stop,
+    async consume(frame: QueryExportFrame) {
+      check();
+      if (frame.kind === 'rows-start') {
+        if (++starts !== 1 || frame.resultOrdinal !== 1 || frame.rowResultOrdinal !== 1 || frame.columns.length !== plan.columns.length ||
+            frame.columns.some((column, index) => column.name !== plan.columns[index].name || column.position !== index + 1 || !exportTypes.has(column.type))) throw Error(text.metadata);
+      } else if (frame.kind === 'row') {
+        if (starts !== 1 || ends || frame.resultOrdinal !== 1 || frame.values.length !== plan.columns.length) throw Error(text.invalid);
+      } else if (frame.kind === 'rows-end') {
+        if (++ends !== 1 || starts !== 1 || frame.resultOrdinal !== 1) throw Error(text.invalid);
+        warningCount = frame.warningCount;
+      } else throw Error(text.invalid);
+      await consume(frame);
+    },
+  });
+  const warnings = (await structureTaskQuery<unknown>(context, 'SHOW WARNINGS LIMIT 21')).rows;
+  if (!Array.isArray(warnings) || warnings.length || warningCount !== 0 || starts !== 1 || ends !== 1)
+    throw Error('服务器完整导出存在警告或无法确认原终包，原文件保持');
+}
+
 /** 独立只读事务固定MDL后核来源；返回的只是完整暂存，数据库严格关闭前没有文件替换能力调用。 */
 export async function prepareTableFilteredExport(context: StructureTaskContext, input: TableFilteredExportInput & { filePath: string }, control: TableFilteredExportControl): Promise<PreparedTableFilteredExport> {
   const check = context.checkCancelled;
@@ -93,7 +121,7 @@ export async function prepareTableFilteredExport(context: StructureTaskContext, 
   let file: AtomicFile;
   try { file = await AtomicFile.create(input.filePath, input.format === 'xlsx' ? 'utf8' : input.encoding, check, control.onCommitStart, control.io, input.format === 'xlsx' ? EXCEL_LIMITS.maxCompressedBytes : limits.fileBytes, reservation, true); }
   catch (error) { if (!(error instanceof AggregateError)) reservation.release(); throw error; }
-  let rows = 0, starts = 0, ends = 0, warningCount: number | undefined, columnsStarted = false;
+  let rows = 0;
   const channel = input.format === 'xlsx' ? new ExportRowChannel() : undefined;
   let excel: Promise<{ rows: number; bytes: number }> | undefined;
   let insert: QueryInsertFile | undefined;
@@ -110,31 +138,21 @@ export async function prepareTableFilteredExport(context: StructureTaskContext, 
       // 文件/ZIP错误立即拒绝正在等待的原行生产者，consumeQueryFrames负责原命令停止及真实终态。
       void excel.catch(error => { channel.fail(error); });
     }
-    await consumeQueryFrames(context.managed, plan.sql, 'binary', {
-      statementOrdinal: 1, ordinals: { results: 0, rows: 0 }, checkCancelled: check, commandStarted: context.commandStarted, stop: control.stop,
-      async consume(frame: QueryExportFrame) {
-        check();
-        if (frame.kind === 'rows-start') {
-          if (++starts !== 1 || frame.resultOrdinal !== 1 || frame.rowResultOrdinal !== 1 || frame.columns.length !== plan.columns.length || frame.columns.some((column, index) => column.name !== plan.columns[index].name || column.position !== index + 1 || !exportTypes.has(column.type))) throw Error(text.metadata);
-          columnsStarted = true;
-        } else if (frame.kind === 'row') {
-          if (!columnsStarted || ends || frame.resultOrdinal !== 1 || frame.values.length !== plan.columns.length || !Number.isSafeInteger(rows + 1)) throw Error(text.invalid);
-          if (channel) await channel.write(frame.values);
-          else if (markup) await file.write(markup.row(frame.values));
-          else if (!insert) {
-            const cells = frame.values.map(value => encodedCell(value, input.format as 'csv' | 'json', delimiter));
-            const line = input.format === 'json' ? (rows ? ',\n' : '') + '{' + plan.columns.map((column, index) => JSON.stringify(column.name) + ':' + cells[index]).join(',') + '}' : cells.join(delimiter) + '\r\n';
-            if (Buffer.byteLength(line) > limits.rowBytes) throw Error('完整导出序列化单行超过16MiB');
-            await file.write(line);
-          }
-          rows++; if (rows % 100 === 0) control.onProgress?.(rows);
-        } else if (frame.kind === 'rows-end') { if (++ends !== 1 || starts !== 1 || frame.resultOrdinal !== 1) throw Error(text.invalid); warningCount = frame.warningCount; }
-        else throw Error(text.invalid);
-        if (insert) await insert.consume(frame);
-      },
+    await streamTableExportRows(context, plan, control.stop, async frame => {
+      if (frame.kind === 'row') {
+        if (!Number.isSafeInteger(rows + 1)) throw Error(text.invalid);
+        if (channel) await channel.write(frame.values);
+        else if (markup) await file.write(markup.row(frame.values));
+        else if (!insert) {
+          const cells = frame.values.map(value => encodedCell(value, input.format as 'csv' | 'json', delimiter));
+          const line = input.format === 'json' ? (rows ? ',\n' : '') + '{' + plan.columns.map((column, index) => JSON.stringify(column.name) + ':' + cells[index]).join(',') + '}' : cells.join(delimiter) + '\r\n';
+          if (Buffer.byteLength(line) > limits.rowBytes) throw Error('完整导出序列化单行超过16MiB');
+          await file.write(line);
+        }
+        rows++; if (rows % 100 === 0) control.onProgress?.(rows);
+      }
+      if (insert) await insert.consume(frame);
     });
-    const warnings = (await structureTaskQuery<unknown>(context, 'SHOW WARNINGS LIMIT 21')).rows;
-    if (!Array.isArray(warnings) || warnings.length || warningCount !== 0 || starts !== 1 || ends !== 1) throw Error('服务器完整导出存在警告或无法确认原终包，原文件保持');
     channel?.end(); if (excel) { const complete = await excel; if (complete.rows !== rows) throw Error(text.invalid); }
     if (input.format === 'json') await file.write('\n]\n');
     if (markup) await file.write(markup.tableEnd(rows) + markup.documentEnd);
