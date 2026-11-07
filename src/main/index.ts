@@ -175,7 +175,7 @@ const sessions = new Map<string, { connectionId: string; postgres?: { owner: Col
 const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatement: boolean; executionSqlReceived: boolean }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 type BatchPreflight = { taskId: string; key?: string; schema?: string; records?: number };
-type ImportBatchGrant = { token: string; owner: MainInvocation; target: ImportBatchChoose; revision: number; files: Map<string, string>; preflights: Map<string, BatchPreflight> };
+type ImportBatchGrant = { token: string; owner: MainInvocation; target: ImportBatchChoose; dialect: 'mysql' | 'mariadb' | 'sqlite'; revision: number; files: Map<string, string>; paths: readonly string[]; preflights: Map<string, BatchPreflight> };
 let importBatchGrant: ImportBatchGrant | undefined;
 let choosingImportBatch = false;
 const resultSqlPreviews = new ResultSqlPreviews(files);
@@ -373,6 +373,14 @@ const sqliteTableImports = new SqliteTableImportMain({
   epoch: id => { let value = tableValueOptionsConnectionOwners.get(id); if (!value) { value = {}; tableValueOptionsConnectionOwners.set(id, value); } return value; },
   profile: id => { const value = store.connections().find(profile => profile.id === id); return value?.dialect === 'sqlite' ? value : undefined; },
   file: (token, format) => { resolveFileToken(files, token, 'import', format); return files.get(token)!; },
+  batch: (owner, token, target, format) => {
+    const grant = importBatchGrant;
+    if (grant?.token !== token) return;
+    if (grant.dialect !== 'sqlite' || grant.revision !== store.connectionRevision() || !columnsMain.sharesDocumentOwner(grant.owner, owner) ||
+        grant.target.connectionId !== target.connectionId || grant.target.database !== target.database || grant.target.table !== target.table ||
+        grant.target.format !== format) throw Error(importBatchInvalid);
+    return grant.paths;
+  },
   request: (command, input) => broker.request(command, input), task: id => tasks.get(id), replace: task => { tasks.set(task.id, task); },
   save: task => store.saveTask(task), event: event => taskEvent(event),
 });
@@ -695,7 +703,9 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
     columnsMain.assertCapturedOwner(owner);
     connectionConfig.assertAvailable(target.connectionId);
     const dialect = store.connections().find(profile => profile.id === target.connectionId)?.dialect;
-    if (shuttingDown || revision !== store.connectionRevision() || dialect !== 'mysql' && dialect !== 'mariadb') throw Error(importBatchInvalid);
+    if (shuttingDown || revision !== store.connectionRevision() ||
+        dialect !== 'mysql' && dialect !== 'mariadb' && (dialect !== 'sqlite' || target.database !== 'main')) throw Error(importBatchInvalid);
+    return dialect;
   };
   check();
   if (choosingImportBatch) throw Error('已有批量导入文件选择正在进行');
@@ -707,13 +717,13 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
         title: '选择批量导入文件', properties: ['openFile', 'multiSelections'],
         filters: [{ name: target.format.toUpperCase(), extensions: target.format === 'csv' ? [extension, 'tsv'] : [extension] }],
       });
-      check();
+      const dialect = check();
       if (chosen.canceled) return null;
       if (chosen.filePaths.length < 2 || chosen.filePaths.length > importBatchLimit ||
           new Set(chosen.filePaths).size !== chosen.filePaths.length) throw Error(`请选择 2 至 ${importBatchLimit} 个不同文件`);
       const selected = new Map(chosen.filePaths.map(path => [randomUUID(), path]));
       const token = randomUUID();
-      importBatchGrant = { token, owner: owner!, target, revision, files: selected, preflights: new Map() };
+      importBatchGrant = { token, owner: owner!, target, dialect, revision, files: selected, paths: [...selected.values()], preflights: new Map() };
       return { token, files: [...selected].map(([token, path]) => ({ token, name: basename(path) })) };
     });
   } finally { choosingImportBatch = false; }
@@ -728,7 +738,7 @@ function batchPreflightKey(input: FileImportPreflightInput): string {
 function batchImportPath(command: Command, input: FileImportPreflightInput & { batch?: ImportBatch }, owner?: MainInvocation) {
   const grant = importBatchGrant;
   const filePath = grant?.files.get(input.fileToken);
-  if (!grant || !filePath || (input.batchToken ?? input.batch?.token) !== grant.token) throw Error(importBatchInvalid);
+  if (!grant || grant.dialect === 'sqlite' || !filePath || (input.batchToken ?? input.batch?.token) !== grant.token) throw Error(importBatchInvalid);
   columnsMain.assertCapturedOwner(owner);
   if (!columnsMain.sharesDocumentOwner(grant.owner, owner!) || shuttingDown || store.connectionRevision() !== grant.revision ||
       grant.target.format !== input.format || command !== 'files.inspectImport' && (input.connectionId !== grant.target.connectionId ||

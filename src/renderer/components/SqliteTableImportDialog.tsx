@@ -1,3 +1,4 @@
+import type { ImportBatchChoice, ImportBatchChoose } from '../../shared/fileImportBatch';
 import { ImportRecordRangeFields, importRangeAfterHeaderChange } from './ImportRecordRangeFields';
 import type { ImportRecordRange } from '../../shared/importRecordRange';
 import { excelImportDefaults, excelImportOptionsSchema, excelImportZh, type ExcelImportOptions } from '../../shared/excelTransfer';
@@ -65,12 +66,15 @@ export class SqliteTableImportSource {
 }
 export interface SqliteTableImportServices {
   choose(input: { purpose: 'import'; format: SqliteTableImportInspectInput['format'] }): Promise<FileChoice | null>;
+  chooseBatch?(input: ImportBatchChoose): Promise<ImportBatchChoice | null>;
+  releaseBatch?(token: string): Promise<void>;
   inspect(input: SqliteTableImportInspectInput): Promise<SqliteTableImportInspectOutput>;
   preview(input: SqliteTableImportPreviewInput): Promise<SqliteTableImportPreviewOutput>;
   apply(input: SqliteTableImportApplyInput): Promise<SqliteTableImportOutcome>;
   release(input: SqliteTableImportReleaseInput): Promise<void>; cancel(taskId: string): Promise<unknown>; subscribe(listener: (event: TaskEvent) => void): () => void;
 }
 export const sqliteTableImportServices: SqliteTableImportServices = {
+  chooseBatch: input => invoke('files.chooseImportBatch', input), releaseBatch: token => invoke('files.releaseImportBatch', { token }),
   choose: input => invoke('files.choose', input), inspect: input => invoke('sqlite.tableImport.inspect', input), preview: input => invoke('sqlite.tableImport.preview', input), apply: input => invoke('sqlite.tableImport.apply', input), release: input => invoke('sqlite.tableImport.release', input), cancel: taskId => invoke('query.cancel', { taskId }), subscribe: listener => window.dbark.onTask(listener),
 };
 export interface SqliteTableImportInitialSource { file: FileChoice; sourceId: string; format: SqliteTableImportInspectInput['format']; encoding: SqliteTableImportInspectInput['encoding']; csvDelimiter?: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; csvHasHeader?: boolean; csvRowRange?: ImportRecordRange; xmlOptions?: SqliteXmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; }
@@ -90,7 +94,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   const propsEpoch = useRef(0), observedProps = useRef({ source, services, initialSource });
   if (observedProps.current.source !== source || observedProps.current.services !== services || observedProps.current.initialSource !== initialSource) { observedProps.current = { source, services, initialSource }; propsEpoch.current++; }
   const presetOperation = useRef(false), [presetBusy, setPresetBusy] = useState(false);
-  const inspections = useRef(new Set<string>()), previews = useRef(new Set<string>()), releases = useRef(new Map<string, Promise<void>>());
+  const batches = useRef(new Set<string>()), inspections = useRef(new Set<string>()), previews = useRef(new Set<string>()), releases = useRef(new Map<string, Promise<void>>());
   const renderTicket = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; }; });
   if (owner.source !== source || owner.services !== services || owner.initialSource !== initialSource || seed && !seed.success) invalid.current = true;
@@ -100,15 +104,24 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   function editable(): boolean { return localCurrent() && current() && !operation.current && !presetOperation.current && !closing && !draft.locked; }
   function report(reason: unknown): void { const value = errorMessage(reason); if (mounted.current && !closed.current) setError(value); else try { owner.callbacks.onCleanupError(value); } catch { /* 收尾反馈不能替代原事务事实。 */ } }
   /** dirty先同步登记到原表页，退出守卫不能错过尚未提交的映射或预检。 */
-  function replace(next: Draft): void { live.current = next; owner.callbacks.onDirtyChange?.(!next.outcome?.fact.commitAcknowledged && (!!next.file || !!next.inspection || next.mapping.some(row => !!row.target) || next.locked)); setDraft(next); }
-  async function releaseOne(kind: 'inspectionId' | 'previewId', id: string): Promise<void> {
+  function replace(next: Draft): void {
+    const previous = live.current.file?.token;
+    if (previous && previous !== next.file?.token && batches.current.has(previous))
+      void releaseOne('batch', previous).catch(report);
+    live.current = next; owner.callbacks.onDirtyChange?.(!next.outcome?.fact.commitAcknowledged && (!!next.file || !!next.inspection || next.mapping.some(row => !!row.target) || next.locked)); setDraft(next); }
+  async function releaseOne(kind: 'inspectionId' | 'previewId' | 'batch', id: string): Promise<void> {
     const key = kind + ':' + id; let promise = releases.current.get(key);
-    if (!promise) { promise = Promise.resolve().then(() => owner.services.release({ [kind]: id })).then(() => { (kind === 'inspectionId' ? inspections.current : previews.current).delete(id); }); releases.current.set(key, promise); }
+    if (!promise) {
+      promise = Promise.resolve().then(() => kind === 'batch' ? owner.services.releaseBatch?.(id) : owner.services.release({ [kind]: id }))
+        .then(() => { (kind === 'batch' ? batches.current : kind === 'inspectionId' ? inspections.current : previews.current).delete(id); });
+      releases.current.set(key, promise);
+    }
     try { await promise; } finally { if (releases.current.get(key) === promise) releases.current.delete(key); }
   }
-  async function releaseAll(): Promise<void> {
-    // 在首次等待前固定两种能力，旧清理不得领取随后新签发的检查。
-    const owned = [['previewId', [...previews.current]], ['inspectionId', [...inspections.current]]] as const;
+  async function releaseAll(includeBatch = false): Promise<void> {
+    // 在首次等待前固定已有能力，旧清理不得领取随后新签发的检查。
+    const owned = [['previewId', [...previews.current]], ['inspectionId', [...inspections.current]],
+      ['batch', includeBatch ? [...batches.current] : []]] as const;
     const errors: string[] = [];
     for (const [kind, values] of owned) for (const id of values) {
       try { await releaseOne(kind, id); } catch (reason) { errors.push(errorMessage(reason)); }
@@ -214,16 +227,32 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     try { owner.callbacks.onActivity(-1); } catch (reason) { report(reason); }
     if (mounted.current && generation.current === op.generation) setBusy(false);
     if (op.committed && !op.committedNotified) { op.committedNotified = true; const changed = !mounted.current || invalid.current || !owner.source.current(); try { owner.callbacks.onCommitted?.(op.committed, changed); } catch (reason) { report(reason); } }
-    if (!mounted.current) void releaseAll().catch(report);
+    if (!mounted.current) void releaseAll(true).catch(report);
   }
   function stop(op = operation.current): void { if (!op || operation.current !== op || op.cancelled || op.commitBoundary || op.resultReceived || op.fact?.commitAcknowledged || op.fact?.rollbackAcknowledged) return; op.cancelled = true; if (op.sent && op.id) op.cancel = Promise.resolve().then(() => owner.services.cancel(op.id!)).then(() => undefined).catch(report); if (mounted.current) setMessage(text.cancelling); }
   /** 取消文件选择保留完整旧草稿；chooser晚回不得给新格式或后继来源签入令牌。 */
-  function choose(): void {
-    if (owner.initialSource) return;
+  function choose(batch = false): void {
+    if (owner.initialSource || batch && (!owner.services.chooseBatch || draft.format === 'xlsx')) return;
     const op = begin('choose'); if (!op) return;
     op.promise = (async () => {
-      try { const file = await owner.services.choose({ purpose: 'import', format: op.draft.format }); if (!accepts(op)) return; if (!file) { replace({ ...op.draft }); return; } if (!file.token || !file.name) throw Error(text.invalid); op.draft = { ...op.draft, ...(op.draft.format === 'xlsx' ? { excelOptions: { ...excelImportDefaults, ...op.draft.preset?.excelOptions } } : {}), file, inspection: undefined, preview: undefined, confirmation: '', outcome: undefined }; replace(op.draft); await releaseAll(); if (!accepts(op)) return; }
-      catch (reason) { if (mounted.current && generation.current === op.generation) report(reason); }
+      try {
+        let file: FileChoice | null;
+        if (batch) {
+          const choice = await owner.services.chooseBatch!({ ...owner.source.target, format: op.draft.format as ImportBatchChoose['format'] });
+          if (choice) batches.current.add(choice.token);
+          if (!accepts(op)) {
+            if (choice) await releaseOne('batch', choice.token);
+            return;
+          }
+          file = choice ? { token: choice.token, name: text.batchCount(choice.files.length) } : null;
+        } else file = await owner.services.choose({ purpose: 'import', format: op.draft.format });
+        if (!accepts(op)) return;
+        if (!file) { replace({ ...op.draft }); return; }
+        if (!file.token || !file.name) throw Error(text.invalid);
+        op.draft = { ...op.draft, ...(op.draft.format === 'xlsx' ? { excelOptions: { ...excelImportDefaults, ...op.draft.preset?.excelOptions } } : {}),
+          file, inspection: undefined, preview: undefined, confirmation: '', outcome: undefined };
+        replace(op.draft); await releaseAll();
+      } catch (reason) { if (mounted.current && generation.current === op.generation) report(reason); }
       finally { await finish(op); }
     })();
   }
@@ -325,7 +354,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     if (!localCurrent() || closing || presetOperation.current) return;
     if (!confirmed && !draft.outcome?.fact.commitAcknowledged && (!!draft.file || !!draft.inspection || draft.locked)) { setDiscard(true); return; }
     const token = generation.current, epoch = propsEpoch.current; setClosing(true); closed.current = true; const active = operation.current; stop(active);
-    void (async () => { if (active?.promise) await active.promise; if (active?.cancel) await active.cancel; await releaseAll(); if (mounted.current && generation.current === token && propsEpoch.current === epoch && closedProps.current.source === owner.source && closedProps.current.services === owner.services && closedProps.current.initialSource === owner.initialSource) { owner.callbacks.onDirtyChange?.(false); owner.callbacks.onClose(); } })().catch(reason => { closed.current = false; if (mounted.current) setClosing(false); report(reason); });
+    void (async () => { if (active?.promise) await active.promise; if (active?.cancel) await active.cancel; await releaseAll(true); if (mounted.current && generation.current === token && propsEpoch.current === epoch && closedProps.current.source === owner.source && closedProps.current.services === owner.services && closedProps.current.initialSource === owner.initialSource) { owner.callbacks.onDirtyChange?.(false); owner.callbacks.onClose(); } })().catch(reason => { closed.current = false; if (mounted.current) setClosing(false); report(reason); });
   }
   useEffect(() => {
     mounted.current = true;
@@ -352,7 +381,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
         setProgress(event);
       }
     });
-    return () => { mounted.current = false; generation.current++; unsubscribeSource(); unsubscribe(); stop(); if (!operation.current) void releaseAll().catch(report); owner.callbacks.onDirtyChange?.(false); };
+    return () => { mounted.current = false; generation.current++; unsubscribeSource(); unsubscribe(); stop(); if (!operation.current) void releaseAll(true).catch(report); owner.callbacks.onDirtyChange?.(false); };
   }, []);
   useEffect(() => { const now = Date.now(), deadlines = [draft.inspection?.expiresAt, draft.preview?.ok ? draft.preview.expiresAt : undefined].filter((value): value is string => !!value).map(Date.parse).filter(value => Number.isFinite(value) && value > now); if (!deadlines.length) return; const timer = setTimeout(() => tick(value => value + 1), Math.max(1, Math.min(...deadlines) - now + 1)); return () => clearTimeout(timer); }, [draft.preview, draft.inspection, timeRevision]);
   const valid = current(), disabled = busy || closing || presetBusy || !valid || draft.locked, inspection = draft.inspection, selected = draft.preview?.ok ? draft.preview : undefined;
@@ -371,7 +400,8 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
         onChange={csvRowRange => configure({ csvRowRange })}/></>}{draft.format === 'xlsx' && <ExcelImportFields fileToken={draft.file?.token} options={draft.excelOptions} disabled={configurationDisabled} frozen={!!owner.initialSource} onChange={excelOptions => configure({ excelOptions })}/>}
       {draft.format === 'txt' && <TxtImportFields options={draft.txtOptions} disabled={configurationDisabled} onChange={txtOptions => configure({ txtOptions })}/>}{draft.format === 'xml' && <SqliteXmlImportFields options={draft.xmlOptions} disabled={configurationDisabled} onChange={xmlOptions => configure({ xmlOptions })}/>}</div>
     {!validCsv && <ErrorBox message={csvRangeInvalid}/>}
-    <div className="sqlite-import-actions"><button type="button" disabled={configurationDisabled} onClick={choose}>{draft.file ? text.chooseAgain : text.choose}</button><span aria-label={text.source}>{draft.file?.name ?? text.noFile}</span><button type="button" disabled={disabled || !draft.file || !validCsv || draft.format === 'xlsx' && !excelImportOptionsSchema.safeParse(draft.excelOptions).success} onClick={inspect}>{text.inspect}</button></div>
+    <div className="sqlite-import-actions"><button type="button" disabled={configurationDisabled} onClick={() => choose()}>{draft.file ? text.chooseAgain : text.choose}</button>
+      {owner.services.chooseBatch && draft.format !== 'xlsx' && <button type="button" disabled={configurationDisabled} onClick={() => choose(true)}>{text.chooseBatch}</button>}<span aria-label={text.source}>{draft.file?.name ?? text.noFile}</span><button type="button" disabled={disabled || !draft.file || !validCsv || draft.format === 'xlsx' && !excelImportOptionsSchema.safeParse(draft.excelOptions).success} onClick={inspect}>{text.inspect}</button></div>
     {!owner.initialSource && <details><summary>{presetsText.title}</summary>
       <ImportPresets source={JSON.stringify([owner.source.id, draft.file?.token, inspection?.inspectionId, draft.mapping, draft.preset])}
         busy={busy || closing || !valid || draft.locked} canSave={canSavePreset} isCurrent={current}
@@ -379,7 +409,10 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
         capture={capturePreset} onApply={applyPreset} onActivity={presetActivity}/>
     </details>}
     {draft.preset && <button type="button" disabled={disabled} onClick={() => configure({})}>{presetsText.cancelApply}</button>}
-    {inspection && <><p>{draft.format === 'xml' && draft.xmlOptions?.documentResult !== undefined ? xmlImportZh.documentRecords(inspection.records) : text.records(inspection.records)} · {inspection.strict ? text.strict : ''}</p><p className="muted small">{text.sourceHash}：{inspection.source.sha256}</p><details><summary>{text.targetColumns}</summary><ul>{inspection.columns.map(column => <li key={column.name}>{column.name} · {column.declaredType} · {text.affinity} {column.affinity} · {column.nullable ? text.nullable : text.notNull} · {column.hasDefault ? text.hasDefault : text.noDefault}{column.generated ? ' · ' + text.generated : ''}</li>)}</ul></details>
+    {inspection && <><p>{draft.format === 'xml' && draft.xmlOptions?.documentResult !== undefined ? xmlImportZh.documentRecords(inspection.records) : text.records(inspection.records)} · {inspection.strict ? text.strict : ''}</p><p className="muted small">{inspection.files ? text.batchHash : text.sourceHash}：{inspection.source.sha256}</p>
+      {inspection.files && <><p>{text.batchHint}</p><ol aria-label={text.batchFiles}>
+        {inspection.files.map((file, index) => <li key={index}>{file.name} · {text.records(file.records)}</li>)}
+      </ol></>}<details><summary>{text.targetColumns}</summary><ul>{inspection.columns.map(column => <li key={column.name}>{column.name} · {column.declaredType} · {text.affinity} {column.affinity} · {column.nullable ? text.nullable : text.notNull} · {column.hasDefault ? text.hasDefault : text.noDefault}{column.generated ? ' · ' + text.generated : ''}</li>)}</ul></details>
       <section aria-label={text.mapping}><h3>{text.mapping}</h3><ImportMappingActions disabled={disabled || inspectionExpired} onAction={remap}/><button type="button" disabled={disabled || inspectionExpired || draft.mapping.length >= sqliteTableImportLimits.mapping} onClick={addMapping}>{text.addMapping}</button>{draft.mapping.map((row, index) => <div className="sqlite-import-mapping" key={row.id}><select aria-label={text.sourceColumn(index + 1)} value={row.source === null ? '' : 's' + inspection.sourceColumns.indexOf(row.source)} disabled={disabled || inspectionExpired} onChange={event => sourceAt(row, event.target.value)}><option value="">{text.noSource}</option>{inspection.sourceColumns.map((name, at) => <option key={at} value={'s' + at}>{name || text.emptySource}</option>)}</select><select aria-label={text.target(row.source ?? text.noSource)} value={row.target} disabled={disabled || inspectionExpired || row.source === null} onChange={event => mappingAt(row, { target: event.target.value })}><option value="">{text.exclude}</option>{inspection.columns.map(column => <option key={column.name} value={column.name} disabled={column.generated}>{column.name}{column.generated ? ' · ' + text.generated : ''}</option>)}</select><select aria-label={text.kind(row.source ?? text.noSource)} value={row.kind} disabled={disabled || inspectionExpired || !row.target} onChange={event => mappingAt(row, { kind: event.target.value as Mapping['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select><button type="button" aria-label={text.removeMapping(index + 1)} disabled={disabled || inspectionExpired} onClick={() => removeMapping(row)}>×</button></div>)}</section>
       <details><summary>{text.sample}</summary>{inspection.sampleOmitted && <p>{text.sampleLimit}</p>}<div className="sqlite-import-scroll"><table aria-label={text.sample}><thead><tr>{inspection.sourceColumns.map(name => <th key={name}>{name}</th>)}</tr></thead><tbody>{inspection.sample.map((row, index) => <tr key={index}>{inspection.sourceColumns.map(name => <td key={name}>{!Object.hasOwn(row, name) ? draft.format === 'xml' ? text.null : text.missing : row[name] === null ? text.null : row[name] === '' ? text.empty : typeof row[name] === 'object' ? JSON.stringify(row[name]) : String(row[name])}</td>)}</tr>)}</tbody></table></div></details>
     </>}

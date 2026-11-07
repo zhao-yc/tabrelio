@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import { txtImportDefaults } from '../../src/shared/txtImport';
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import { assertSqliteImportWriteFactTransition, sqliteImportWriteFactSchema, sqliteTableImportInspectionSchema, sqliteTableImportOutcomeSchema, sqliteTableImportPreviewOutputSchema, type SqliteImportWriteFact, type SqliteTableImportInspectOutput, type SqliteTableImportMapping, type SqliteTableImportOutcome, type SqliteTableImportPreviewOutput } from '../../src/shared/sqliteTableImport';
 
@@ -43,6 +44,36 @@ async function plan(app: SqliteRuntime, value: SqliteTableImportInspectOutput, m
 function apply(app: SqliteRuntime, value: Preview, record?: (fact: SqliteImportWriteFact) => void) { const facts: SqliteImportWriteFact[] = [], input = { previewId: value.previewId, taskId: '导入提交' + ++serial, confirmation: value.confirmation, operationId: randomUUID(), assertCurrent: () => {}, recordWriteFact: (fact: SqliteImportWriteFact) => { sqliteImportWriteFactSchema.parse(fact); if (facts.length) assertSqliteImportWriteFactTransition(facts.at(-1)!, fact); record?.(fact); facts.push(structuredClone(fact)); } }; return { input, facts, result: (app.request('sqlite.tableImport.apply', input) as Promise<SqliteTableImportOutcome>).then(value => sqliteTableImportOutcomeSchema.parse(value)) }; }
 
 describe('SQLite现有表整文件导入真实磁盘与准确进程生命周期', () => {
+  it.each([
+    { format: 'json', first: '[{"value":"第一份"}]', second: '[{"value":"第二份"}]', options: {} },
+    { format: 'txt', first: 'value\n第一份\n', second: 'value\n第二份\n', options: { txtOptions: { ...txtImportDefaults, hasHeader: true } } },
+    { format: 'xml', first: '<rows><entry value="第一份"/></rows>', second: '<rows><entry value="第二份"/></rows>',
+      options: { xmlOptions: { rowTag: 'entry', attributes: true, binaryBase64: false } } },
+  ])('$format 同表多文件在预检和写入时逐份核验', async ({ format, first, second, options }) => {
+    const profile = fixture('CREATE TABLE target(id INTEGER PRIMARY KEY,value TEXT)'), { app } = runtime(profile);
+    const source = file(profile, first), later = file(profile, second);
+    const inspectBatch = async (paths: string[]) => sqliteTableImportInspectionSchema.parse(await app.request('sqlite.tableImport.inspect', {
+      connectionId: profile.id, database: 'main', table: 'target', fileToken: '本例批次', taskId: '检查批次' + ++serial,
+      encoding: 'utf8', format, ...options, filePath: paths[0], batchPaths: paths, assertCurrent: () => {},
+    }));
+    const original = await inspectBatch([source, later]);
+    expect(original).toMatchObject({
+      records: 2, files: [{ name: basename(source), records: 1 }, { name: basename(later), records: 1 }],
+      source: { bytes: Buffer.byteLength(first) + Buffer.byteLength(second) }, sample: [{ value: '第一份' }],
+    });
+    const checked = await plan(app, original);
+    writeFileSync(later, second.replace('第二份', '已改动'));
+    expect(await apply(app, checked).result).toMatchObject({ outcome: 'not-sent', fact: { appliedRows: 0 }, failure: { code: 'source-changed' } });
+    expect(rows(profile)).toEqual([]);
+    writeFileSync(later, second);
+    const hardlink = join(dirname(source), '同一文件.json');
+    linkSync(source, hardlink);
+    await expect(inspectBatch([source, hardlink])).rejects.toThrow('同一物理文件');
+    const committed = await apply(app, await plan(app, await inspectBatch([source, later]))).result;
+    expect(committed).toMatchObject({ outcome: 'committed', fact: { requestedRows: 2, appliedRows: 2, commitAcknowledged: true } });
+    expect(rows(profile)).toEqual([{ id: '1', type: 'text', value: '第一份' }, { id: '2', type: 'text', value: '第二份' }]);
+  });
+
   it('导入真实来源强制严格编码，非法UTF8在签能力前拒绝，合法替换字符及NUL不被误拒', async () => {
     const profile = fixture('CREATE TABLE target(id INTEGER PRIMARY KEY,value TEXT)'), { app } = runtime(profile), invalid = file(profile, '', 'csv');
     writeFileSync(invalid, Buffer.concat([Buffer.from('value\n先前有效\n'), Buffer.from([0xc3, 0x28]), Buffer.from('\n')]));

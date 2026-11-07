@@ -1,6 +1,7 @@
 import { csvRangeOption } from '../shared/csvImport';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, realpath, stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import type { BigIntStats } from 'node:fs';
 import type { DataRow, SqliteConnectionProfile } from '../shared/contracts';
 import type { ImportFileInspectInput } from '../shared/importNewTable';
@@ -10,7 +11,7 @@ import type { SqliteFileIdentity, SqliteValue } from '../engine/sqlite/protocol'
 import { readSqliteTableCatalogue, type SqliteTableCatalogue, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 import { buildSqliteTableImportPlan, SqliteTableImportMappingError, sqliteTableImportAffinity, sqliteTableImportIssue, sqliteTableImportLimits as limits, sqliteTableImportMessages as text, type SqliteTableImportColumn, type SqliteTableImportInspectInput, type SqliteTableImportInspectOutput, type SqliteTableImportPreviewInput, type SqliteTableImportPreviewOutput, type SqliteTableImportApplyInput, type SqliteTableImportReleaseInput, type SqliteTableImportReport, type SqliteTableImportIssue, type SqliteTableImportOutcome, type SqliteImportWriteFact } from '../shared/sqliteTableImport';
 
-export interface SqliteTableImportInspectRequest extends SqliteTableImportInspectInput { filePath: string; assertCurrent(): void; }
+export interface SqliteTableImportInspectRequest extends SqliteTableImportInspectInput { filePath: string; batchPaths?: readonly string[]; assertCurrent(): void; }
 export interface SqliteTableImportPreviewRequest extends SqliteTableImportPreviewInput { assertCurrent(): void; }
 export interface SqliteTableImportApplyRequest extends SqliteTableImportApplyInput { operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteImportWriteFact): void; }
 export interface SqliteTableImportControl extends SqliteTableBrowseControl { signal: AbortSignal; progress(records: number): void; }
@@ -19,14 +20,16 @@ export interface SqliteImportFileIdentity { device: string; inode: string; size:
 type SourceIdentity = SqliteImportFileIdentity;
 export type SqliteImportFileInput = ImportFileInspectInput & { filePath: string };
 export interface SqliteImportFileScan { source: SqliteTableImportInspectOutput['source']; records: number; sourceColumns: string[]; sample: DataRow[]; sampleOmitted: boolean; }
+interface SqliteImportMember { filePath: string; fileIdentity: SourceIdentity; source: SqliteImportFileScan['source']; records: number }
 export interface SqliteImportTarget {
   target: SqliteTableImportInspectOutput['target']; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
   schemaVersion: string; catalogue: SqliteTableCatalogue; columns: SqliteTableImportColumn[]; strict: boolean;
 }
 export interface SqliteImportInspection extends SqliteImportTarget {
-  id: string; expires: number; bytes: number; file: Omit<SqliteTableImportInspectRequest, 'assertCurrent'>;
+  id: string; expires: number; bytes: number; file: Omit<SqliteTableImportInspectRequest, 'assertCurrent' | 'batchPaths'>;
   fileIdentity: SourceIdentity; source: SqliteTableImportInspectOutput['source']; records: number; sourceColumns: string[];
   sample: DataRow[]; sampleOmitted: boolean;
+  members?: SqliteImportMember[];
 }
 type ImportPlan = ReturnType<typeof buildSqliteTableImportPlan>;
 export interface SqliteImportClaim { id: string; expires: number; bytes: number; inspection: SqliteImportInspection; plan: ImportPlan; confirmation: string; confirmed: boolean; }
@@ -83,8 +86,36 @@ export async function verifySqliteImportTarget(driver: SqliteDriverSession, insp
 /** DB已正常关闭后才扫源文件，长文件检查不会持有数据库读锁。 */
 export async function inspectSqliteImportFile(input: SqliteTableImportInspectRequest, target: SqliteImportTarget, expected: SourceIdentity, control: SqliteTableImportControl): Promise<Omit<SqliteImportInspection, 'id' | 'expires' | 'bytes'>> {
   const scanned = await inspectSqliteImportRecords(input, target.profile, expected, control);
-  const { assertCurrent: _owner, ...file } = input;
-  return { ...target, file: structuredClone(file), fileIdentity: expected, ...scanned };
+  const { assertCurrent: _owner, batchPaths, ...file } = input;
+  const inspection = { ...target, file: structuredClone(file), fileIdentity: expected, ...scanned };
+  if (!batchPaths) return inspection;
+  if (!scanned.records || !scanned.sourceColumns.length) throw Error('第 1 个文件没有可导入的记录');
+  const members: SqliteImportMember[] = [{ filePath: input.filePath, fileIdentity: expected, source: scanned.source, records: scanned.records }];
+  const identities = new Set([JSON.stringify([expected.device, expected.inode])]);
+  const fields = new Set(scanned.sourceColumns);
+  let records = scanned.records, bytes = scanned.source.bytes;
+  for (const [index, filePath] of batchPaths.slice(1).entries()) {
+    try {
+      const identity = await assertSqliteImportSource(filePath, target.profile, control);
+      const key = JSON.stringify([identity.device, identity.inode]);
+      if (identities.has(key)) throw Error('批次包含同一物理文件');
+      identities.add(key);
+      const member = await inspectSqliteImportRecords({ ...input, filePath }, target.profile, identity,
+        { ...control, progress: count => control.progress(records + count) });
+      if (!member.records) throw Error('没有可导入的记录');
+      if (member.sourceColumns.length !== fields.size || member.sourceColumns.some(name => !fields.has(name)))
+        throw Error('源字段与第一个文件不匹配');
+      records += member.records; bytes += member.source.bytes;
+      if (records > limits.records || !Number.isSafeInteger(bytes)) throw Error('批次超过导入预算');
+      members.push({ filePath, fileIdentity: identity, source: member.source, records: member.records });
+    } catch (reason) {
+      control.check();
+      throw Error(`第 ${index + 2} 个文件未通过扫描。${reason instanceof Error ? reason.message : '读取失败'}`);
+    }
+  }
+  // 对外用有序指纹表示整组，对内继续核对每份文件的真实身份及原字节。
+  const sha256 = createHash('sha256').update(JSON.stringify(members.map(({ source, records }) => [source.sha256, source.bytes, records]))).digest('hex');
+  return { ...inspection, source: { sha256, bytes }, records, sampleOmitted: true, members };
 }
 /** 共享严格原字节扫描，只读来源能力和最终目标检查沿同一reader及样本预算。 */
 export async function inspectSqliteImportRecords(input: SqliteImportFileInput, profile: SqliteConnectionProfile, expected: SourceIdentity, control: SqliteTableImportControl): Promise<SqliteImportFileScan> {
@@ -103,19 +134,44 @@ export async function inspectSqliteImportRecords(input: SqliteImportFileInput, p
 /** 仅有界诊断穿过公共边界，不把第三方错误、文件行值或路径带入任务概要。 */
 function issue(report: SqliteTableImportReport, value: SqliteTableImportIssue): void { report.issueCount++; if (report.issues.length < limits.issues) report.issues.push(value); report.truncated = report.issueCount > report.issues.length; }
 const report = (): SqliteTableImportReport => ({ checkedRecords: 0, validRecords: 0, invalidRecords: 0, issueCount: 0, issues: [], truncated: false, complete: false });
+
+function inspectionMembers(inspection: SqliteImportInspection): SqliteImportMember[] {
+  return inspection.members ?? [{
+    filePath: inspection.file.filePath, fileIdentity: inspection.fileIdentity, source: inspection.source, records: inspection.records,
+  }];
+}
+
+async function assertInspectionFiles(inspection: SqliteImportInspection, control: SqliteTableImportControl): Promise<void> {
+  for (const file of inspectionMembers(inspection)) await assertSqliteImportSource(file.filePath, inspection.profile, control, file.fileIdentity);
+}
+
+/** 预检与写入按相同顺序耗尽每份文件，上一份的回读不能替代下一份的完整核验。 */
+async function* readInspectedRows(inspection: SqliteImportInspection, control: SqliteTableImportControl): AsyncGenerator<DataRow> {
+  for (const file of inspectionMembers(inspection)) {
+    await assertSqliteImportSource(file.filePath, inspection.profile, control, file.fileIdentity);
+    let count = 0;
+    for await (const row of readVerifiedImportRecords({ ...inspection.file, filePath: file.filePath, expectedSource: file.source, strictEncoding: true }, control.check, control.signal)) {
+      if (++count > file.records) throw new SourceChanged();
+      yield row;
+    }
+    if (count !== file.records) throw new SourceChanged();
+    await assertSqliteImportSource(file.filePath, inspection.profile, control, file.fileIdentity);
+  }
+}
+
 export async function previewSqliteImport(inspection: SqliteImportInspection, input: SqliteTableImportPreviewRequest, control: SqliteTableImportControl): Promise<{ plan?: ImportPlan; report: SqliteTableImportReport }> {
   const checked = report(); let plan: ImportPlan | undefined;
   try {
-    await assertSqliteImportSource(inspection.file.filePath, inspection.profile, control, inspection.fileIdentity); await assertDatabase(inspection, control);
+    await assertInspectionFiles(inspection, control); await assertDatabase(inspection, control);
     if (inspection.records) try { plan = buildSqliteTableImportPlan({ target: inspection.target, columns: inspection.columns, sourceColumns: inspection.sourceColumns, mapping: input.mapping, strict: inspection.strict, ...(inspection.file.format === 'xml' ? { missingAsNull: true } : {}) }); }
     catch (reason) { if (reason instanceof SqliteTableImportMappingError) { for (const error of reason.issues) issue(checked, error); checked.issueCount += reason.issueCount - reason.issues.length; checked.truncated = checked.issueCount > checked.issues.length; } else issue(checked, sqliteTableImportIssue('invalid-mapping')); return { report: checked }; }
-    for await (const row of readVerifiedImportRecords({ ...inspection.file, expectedSource: inspection.source, strictEncoding: true }, control.check, control.signal)) {
+    for await (const row of readInspectedRows(inspection, control)) {
       control.check(); if (checked.checkedRecords >= limits.records) { issue(checked, sqliteTableImportIssue('record-limit')); return { report: checked }; }
       const converted = plan!.convertRow(row, checked.checkedRecords + 1); checked.checkedRecords++;
       if (converted.ok) checked.validRecords++; else { checked.invalidRecords++; for (const error of converted.issues) issue(checked, error); checked.issueCount += converted.issueCount - converted.issues.length; checked.truncated = checked.issueCount > checked.issues.length; }
       if (checked.checkedRecords % 128 === 0) control.progress(checked.checkedRecords);
     }
-    await assertSqliteImportSource(inspection.file.filePath, inspection.profile, control, inspection.fileIdentity);
+    await assertInspectionFiles(inspection, control);
     checked.complete = true; if (checked.checkedRecords !== inspection.records) throw new SourceChanged();
     if (!checked.checkedRecords) issue(checked, sqliteTableImportIssue('empty-file'));
   } catch (reason) { control.check(); checked.complete = false; issue(checked, sqliteTableImportIssue(reason instanceof SourceChanged || reason instanceof Error && /变化|替换|移动/.test(reason.message) ? 'source-changed' : 'parse-error')); }
@@ -144,7 +200,8 @@ export class SqliteTableImports {
   publish(value: Omit<SqliteImportInspection, 'id' | 'expires' | 'bytes'>): SqliteTableImportInspectOutput {
     this.prune(); const bytes = Buffer.byteLength(JSON.stringify(value)); if (this.inspectionCount() >= limits.inspections || this.bytes + bytes > limits.previewBytes) throw Error('SQLite导入来源预算已满，请释放旧来源');
     const inspection = { ...value, id: randomUUID(), expires: Date.now() + limits.previewLifetimeMs, bytes }; this.inspections.set(inspection.id, inspection); this.bytes += bytes;
-    return { inspectionId: inspection.id, target: { ...inspection.target }, source: { ...inspection.source }, sourceColumns: [...inspection.sourceColumns], sample: structuredClone(inspection.sample), sampleOmitted: inspection.sampleOmitted, records: inspection.records, columns: structuredClone(inspection.columns), strict: inspection.strict, readOnly: inspection.profile.sqlite.readOnly, expiresAt: new Date(inspection.expires).toISOString() };
+    return { inspectionId: inspection.id, target: { ...inspection.target }, source: { ...inspection.source }, sourceColumns: [...inspection.sourceColumns], sample: structuredClone(inspection.sample), sampleOmitted: inspection.sampleOmitted, records: inspection.records, columns: structuredClone(inspection.columns), strict: inspection.strict, readOnly: inspection.profile.sqlite.readOnly, expiresAt: new Date(inspection.expires).toISOString(),
+      ...(inspection.members ? { files: inspection.members.map(file => ({ name: basename(file.filePath), records: file.records })) } : {}) };
   }
   inspection(id: string): SqliteImportInspection { this.prune(); const value = this.inspections.get(id); if (!value) throw Error(text.stale); return value; }
   /** 只读预检保留到原Promise终态；已claim writer不登记于此，不把metadata释放当成事务取消。 */
@@ -189,19 +246,19 @@ export async function applySqliteImport(driver: SqliteDriverSession, claim: Sqli
   const record = (phase: SqliteImportWriteFact['phase']) => { const value: unknown = input.recordWriteFact(fact(phase)); if (value && typeof (value as { then?: unknown }).then === 'function') throw Error('SQLite导入事实必须同步持久化'); };
   try {
     control.check(); if (!claim.confirmed || driver.readOnly || !equal(driver.identity, inspection.identity)) throw Error(text.stale);
-    await assertDatabase(inspection, control); await assertSqliteImportSource(inspection.file.filePath, inspection.profile, control, inspection.fileIdentity); stage = 'transaction'; record('not-sent');
+    await assertDatabase(inspection, control); await assertInspectionFiles(inspection, control); stage = 'transaction'; record('not-sent');
     try { await driver.execute('BEGIN IMMEDIATE'); begun = true; } catch (reason) { if (reason instanceof SqliteDriverError && reason.completedStatements === 1 && reason.completedResults[0]?.transaction === true) begun = true; throw reason; }
     control.check(); stage = 'schema'; await assertDatabase(inspection, control);
     if (integer((await read(driver, 'PRAGMA main.schema_version', [], 1, control))[0]?.[0]) !== inspection.schemaVersion) throw Error(text.stale);
     const catalogue = await readSqliteTableCatalogue(driver, inspection.target.table, control); if (catalogue.schemaKey !== inspection.catalogue.schemaKey || !equal(catalogue.xinfo, inspection.catalogue.xinfo)) throw Error(text.stale);
-    stage = 'source'; await assertSqliteImportSource(inspection.file.filePath, inspection.profile, control, inspection.fileIdentity); stage = 'transaction'; record('writing'); stage = 'source';
-    for await (const row of readVerifiedImportRecords({ ...inspection.file, expectedSource: inspection.source, strictEncoding: true }, control.check, control.signal)) {
+    stage = 'source'; await assertInspectionFiles(inspection, control); stage = 'transaction'; record('writing'); stage = 'source';
+    for await (const row of readInspectedRows(inspection, control)) {
       control.check(); if (appliedRows >= inspection.records) throw new SourceChanged(); currentRecord = appliedRows + 1; stage = 'row'; const converted = claim.plan.convertRow(row, currentRecord); if (!converted.ok) { failure = converted.issues[0]; throw Error('SQLite导入原行未通过预检规则'); }
       const value = await driver.execute(claim.plan.sql, { parameters: converted.parameters }); if (value.statements.length !== 1 || value.statements[0].truncated) throw Error('SQLite导入缺少原INSERT完整事实');
       const changed = await read(driver, 'SELECT changes()', [], 1, control); if (integer(changed[0]?.[0]) !== '1') throw Error('SQLite导入顶层INSERT不是准确1行，原批必须回滚'); appliedRows++;
       if (appliedRows % 128 === 0) { stage = 'transaction'; record('writing'); control.progress(appliedRows); } stage = 'source';
     }
-    if (appliedRows !== inspection.records) throw new SourceChanged(); await assertSqliteImportSource(inspection.file.filePath, inspection.profile, control, inspection.fileIdentity); stage = 'schema'; await assertDatabase(inspection, control); stage = 'transaction'; record('writing'); record('commit-pending'); control.check(); control.beginCommit(); sent = true;
+    if (appliedRows !== inspection.records) throw new SourceChanged(); await assertInspectionFiles(inspection, control); stage = 'schema'; await assertDatabase(inspection, control); stage = 'transaction'; record('writing'); record('commit-pending'); control.check(); control.beginCommit(); sent = true;
     await driver.execute('COMMIT'); committed = true; try { record('committed'); } catch { warning = true; }
   } catch (reason) {
     if (sent && reason instanceof SqliteDriverError && reason.completedStatements === 1 && reason.completedResults.length === 1 && reason.completedResults[0].index === 0 && reason.completedResults[0].rows === 0 && !reason.completedResults[0].truncated && reason.completedResults[0].transaction === false) { committed = true; warning = true; try { record('committed'); } catch { /* 保留真实ACK。 */ } }

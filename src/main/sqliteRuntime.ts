@@ -1,3 +1,4 @@
+import { importBatchFormats, importBatchLimit } from '../shared/fileImportBatch';
 import type { SqliteSyncEvidence } from './sqliteDataSync';
 import { compareSqliteTables } from './sqliteDataCompare';
 import { sqliteDataCompareSchema, type SqliteDataCompareOutput } from '../shared/sqliteDataCompare';
@@ -943,9 +944,13 @@ export class SqliteRuntime {
   }
   private tableImportInspect(source: unknown): Promise<SqliteTableImportInspectOutput> {
     const raw = source as SqliteTableImportInspectRequest; if (!raw || typeof raw.filePath !== 'string' || typeof raw.assertCurrent !== 'function') throw Error('SQLite导入检查缺少Main文件和原文档能力');
-    const { filePath, assertCurrent, ...publicInput } = raw, input = sqliteTableImportInspectSchema.parse(publicInput); this.reserveImportTask(input.taskId); assertCurrent();
+    const { filePath, batchPaths, assertCurrent, ...publicInput } = raw, input = sqliteTableImportInspectSchema.parse(publicInput);
+    if (batchPaths !== undefined && (!Array.isArray(batchPaths) || batchPaths.length < 2 || batchPaths.length > importBatchLimit ||
+        batchPaths[0] !== filePath || new Set(batchPaths).size !== batchPaths.length || batchPaths.some(path => typeof path !== 'string' || !path) ||
+        !importBatchFormats.some(format => format === input.format) || input.sourceId)) throw Error('SQLite批次文件来源无效');
+    this.reserveImportTask(input.taskId); assertCurrent();
     const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id); this.assertTarget(connection, profile);
-    const request = { ...input, filePath, assertCurrent }, claim = input.sourceId ? this.importSources.claim(request, profile) : undefined;
+    const request = { ...input, filePath, ...(batchPaths ? { batchPaths } : {}), assertCurrent }, claim = input.sourceId ? this.importSources.claim(request, profile) : undefined;
     const checkOwner = () => { assertCurrent(); if (claim) this.importSources.assertClaim(claim); };
     try {
       return this.startImport({ taskId: input.taskId, assertCurrent: checkOwner }, connection, 'inspect', async task => {
