@@ -4,7 +4,7 @@ import { postgresSequenceTargets, readPostgresSequence, readPostgresSequenceAllo
 import { createHash, randomUUID } from 'node:crypto';
 import {
   postgresCreateTablePlan, type PostgresCreateTableApply, type PostgresCreateTableInput,
-  type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget,
+  type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget, type PostgresTruncateScope,
 } from '../../shared/postgresCreateTable';
 import type { PostgresConnection } from './connection';
 import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery,
@@ -21,6 +21,7 @@ import { postgresTableCopyPreviewSchema, type PostgresTableCopyInput } from '../
 import { postgresTableCopySql, readPostgresCopyColumns, readPostgresCopySource } from './tableCopy';
 import { postgresTableManagePreviewSchema, type PostgresTableManageInput } from '../../shared/postgresTableManage';
 import { readPostgresTableManageFacts } from './tableManage';
+import { postgresTableTruncatePlan } from './tableTruncate';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -35,6 +36,7 @@ interface Plan {
   success: string;
   guard?: { sql: string; stamp: string; parseOnly?: true; changed?: string };
   identity?: string;
+  truncateScope?: PostgresTruncateScope;
   statementTimeout?: '120s';
   firstCommand?: 'SELECT';
   lock?: string;
@@ -394,6 +396,7 @@ export class PostgresCreateTableWorkspace {
     return this.prepareRelation(input, 'tableManage', connect, () => async connection => {
       const original = await readPostgresTableManageFacts(connection, schema, name);
       if (connection.database !== draft.database || original.stamp !== draft.stamp || !original[draft.action]) throw Error(changed);
+      if (draft.action === 'truncate') return postgresTableTruncatePlan(connection, original, draft);
       const base = {
         // Parse / Sync 持有原关系的共享锁，既不读数据，也不要求 schema 所有者拥有表的 SELECT。
         guard: { sql: 'SELECT 1 FROM ONLY ' + originalTable + ' WHERE FALSE', stamp: original.stamp, parseOnly: true as const, changed },
@@ -534,7 +537,8 @@ export class PostgresCreateTableWorkspace {
       const token = randomUUID();
       this.plans.set(key, { input: { connectionId, database, owner, connectionRevision }, token, targetStamp, plan, expires: now + 300_000 });
       const first = plan.lock ?? (plan.guard && !plan.guard.parseOnly ? plan.guard.sql : undefined);
-      return { token, statements: first ? [first, ...plan.statements] : plan.statements };
+      return { token, statements: first ? [first, ...plan.statements] : plan.statements,
+        ...(plan.truncateScope ? { truncateScope: plan.truncateScope } : {}) };
     } finally { this.pending.delete(key); }
   }
 
@@ -562,10 +566,11 @@ export class PostgresCreateTableWorkspace {
     try {
       await startPostgresDdl(connection, false);
       const { plan, targetStamp } = prepared;
+      if (plan.guard || plan.truncateScope)
+        await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', undefined, budget());
       if (plan.lock && (await connection.query(plan.lock, undefined, budget(), undefined, 'extended')).postgresCommand !== 'LOCK')
         throw Error('服务器未确认锁定来源表');
       if (plan.guard) {
-        await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', undefined, budget());
         // 先取目标锁，再读取会取得共享锁的反编译定义，避免并发替换时先阻塞在读路径。
         if (plan.guard.parseOnly) {
           await connection.query(plan.guard.sql, undefined, budget(), undefined, 'parse');

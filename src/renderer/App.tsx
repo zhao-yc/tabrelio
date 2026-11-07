@@ -888,20 +888,27 @@ function WorkspaceApp() {
     return workspace.dirtyTabs[id] || workspace.activeJobs[id] || workspace.tableLayoutDrafts[id];
   }
   /** 提交前保护原名和拟用名称下的隐藏草稿，并作废仍在解析的旧导航。 */
-  function beforePostgresTableManage(target: TableColumnPatchTarget, destination?: string) {
+  function beforePostgresTableManage(target: TableColumnPatchTarget, destination?: string, truncateTables?: readonly string[]) {
     const workspace = useWorkspace.getState();
-    const tabs = [...postgresManagedTabs(workspace, target),
-      ...(destination ? postgresManagedTabs(workspace, { ...target, table: destination }) : [])];
+    const tables = truncateTables ?? (destination ? [target.table, destination] : [target.table]);
+    const tabs = tables.flatMap(table => postgresManagedTabs(workspace, { ...target, table }));
     if (tabs.some(tab => postgresManageTabBusy(workspace, tab.id))) throw Error(postgresColumnEditZh.dirty);
     workbenchNavigation.invalidate();
   }
   /** 确认后才关闭准确的旧标签。未知终态保留工作区草稿和查询正文。 */
   function finishPostgresRelationManage(target: TableColumnPatchTarget, message: string, unknown: boolean, version: number,
-    kind: 'table' | 'view', destination?: string, identity?: string) {
+    kind: 'table' | 'view', destination?: string, identity?: string, truncateTables?: readonly string[]) {
     const workspace = useWorkspace.getState();
     workspace.notify(message, unknown);
     if ((workspace.connectionVersions[target.connectionId] ?? 0) !== version ||
         workspace.connections.find(profile => profile.id === target.connectionId)?.dialect !== 'postgresql') return;
+    if (truncateTables) {
+      // 清空仅影响数据。保留关系标签和收藏，未知回执要求手动刷新。
+      const tabs = truncateTables.flatMap(table => postgresManagedTabs(workspace, { ...target, table }));
+      for (const tab of tabs) if (!postgresManageTabBusy(workspace, tab.id))
+        markStructureTarget({ ...target, table: tab.table! }, !unknown);
+      return;
+    }
     const original = postgresRelationName(target.table);
     const name = postgresIdentifier(original.schema) + '.' + postgresIdentifier(original.name);
     const before = { ...target, table: name };

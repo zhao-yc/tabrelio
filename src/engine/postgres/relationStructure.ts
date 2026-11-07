@@ -5,7 +5,7 @@ import type { PostgresConnection } from './connection';
 import { postgresEditableViewSql, postgresManageableMaterializedSql, postgresViewFactsSql, postgresViewStamp } from './viewDefinition';
 import { parsePostgresMaterializedFacts, postgresMaterializedCanRefreshSql, postgresMaterializedFactsSql } from './materializedView';
 import { startPostgresDdl } from './createTable';
-import { parsePostgresTableManageFacts, postgresTableCanDropSql, postgresTableManageFactsSql } from './tableManage';
+import { parsePostgresTableManageFacts, postgresTableCanDropSql, postgresTableCanTruncateSql, postgresTableManageFactsSql } from './tableManage';
 
 // 依赖与结构使用相同的关系可见性；物化视图维护者也可核对依赖。
 export const postgresStructureVisibleSql = `(pg_catalog.has_table_privilege(c.oid, 'SELECT') OR pg_catalog.pg_has_role(c.relowner, 'USAGE')
@@ -29,7 +29,7 @@ WITH target AS MATERIALIZED (
     AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
     AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
     AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
-    AND (${postgresStructureVisibleSql} OR ${postgresTableCanDropSql})
+    AND (${postgresStructureVisibleSql} OR ${postgresTableCanDropSql} OR ${postgresTableCanTruncateSql})
 )
 SELECT pg_catalog.jsonb_build_object(
   'database', pg_catalog.current_database(),
@@ -188,8 +188,8 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
     ...(materialized ? { materialized: parsePostgresMaterializedFacts(materialized).state } : {}) };
   const tableManage = result.rows[0].c7;
   if (typeof tableManage === 'string') {
-    const { stamp, rename, drop } = parsePostgresTableManageFacts(tableManage);
-    output.tableManage = { stamp, rename, drop };
+    const { stamp, rename, drop, truncate } = parsePostgresTableManageFacts(tableManage);
+    output.tableManage = { stamp, rename, drop, truncate };
   }
   return { output, oid, indexIds, keyIds, foreignIds, checkIds };
 }

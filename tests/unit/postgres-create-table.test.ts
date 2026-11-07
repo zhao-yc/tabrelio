@@ -37,3 +37,12 @@ it('PostgreSQL 表管理绑定目录摘要，删除和执行都拒绝额外 SQL'
   expect(postgresTableManageApplySchema.safeParse({ ...apply, confirmed: false }).success).toBe(false);
   expect(postgresTableManageApplySchema.safeParse({ ...apply, sql: 'DROP TABLE x' }).success).toBe(false);
 });
+
+it('PostgreSQL 清空预览必须明确序列策略，拒绝级联和任意目标列表', () => {
+  const target = { connectionId: 'saved', database: 'qa', table: '"public"."原表"', stamp: 'a'.repeat(64), action: 'truncate' };
+  for (const identity of ['continue', 'restart'])
+    expect(postgresTableManagePreviewSchema.parse({ ...target, identity })).toEqual({ ...target, identity });
+  for (const input of [target, { ...target, identity: 'reset' }, { ...target, identity: 'restart', cascade: true },
+    { ...target, identity: 'continue', tables: ['其他表'] }, { ...target, identity: 'continue', name: '另一表' }])
+    expect(postgresTableManagePreviewSchema.safeParse(input).success).toBe(false);
+});

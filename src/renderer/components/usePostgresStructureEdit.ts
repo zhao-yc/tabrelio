@@ -11,15 +11,15 @@ export interface PostgresStructureEditProps {
   original: PostgresStructureResult;
   version: number;
   onClose(): void;
-  onResult(message: string, unknown: boolean, receipt?: PostgresCreateTableOutcome, attempted?: string): void;
-  beforeManage?(destination?: string): void;
+  onResult(message: string, unknown: boolean, receipt?: PostgresCreateTableOutcome, attempted?: string, truncateTables?: readonly string[]): void;
+  beforeManage?(destination?: string, truncateTables?: readonly string[]): void;
   onDirtyChange(value: boolean): void;
 }
 
 /** 字段和索引共用原目标保护、单次提交、未知终态和窗口草稿状态。 */
 export function usePostgresStructureEdit({ target, original, version, onResult, onDirtyChange }: PostgresStructureEditProps,
   dirty: boolean, dropping: boolean, readPreview: () => Promise<PostgresCreateTablePreview>,
-  applyPreview: (token: string) => Promise<PostgresCreateTableOutcome>, beforeApply?: () => void) {
+  applyPreview: (token: string) => Promise<PostgresCreateTableOutcome>, beforeApply?: (preview: PostgresCreateTablePreview) => void) {
   const [preview, setPreview] = useState<PostgresCreateTablePreview>();
   const [acceptDrop, setAcceptDrop] = useState(false);
   const [busy, setBusy] = useState(false), [unknown, setUnknown] = useState(false), [error, setError] = useState('');
@@ -49,7 +49,7 @@ export function usePostgresStructureEdit({ target, original, version, onResult, 
     let sent = false;
     try {
       assertCurrent();
-      if (apply) beforeApply?.();
+      if (apply) beforeApply?.(preview!);
       setPreview(undefined);
       if (!apply) {
         setAcceptDrop(false);
@@ -60,10 +60,10 @@ export function usePostgresStructureEdit({ target, original, version, onResult, 
       }
       sent = true;
       const result = await applyPreview(preview!.token);
-      if (result.outcome === 'committed') onResult(result.message, false, result);
+      if (result.outcome === 'committed') onResult(result.message, false, result, undefined, preview!.truncateScope?.tables);
       else if (result.outcome === 'unknown') {
         setUnknown(true);
-        onResult(result.message, true);
+        onResult(result.message, true, undefined, undefined, preview!.truncateScope?.tables);
       } else setError(result.message);
     } catch (reason) {
       if (alive.current) {
@@ -71,7 +71,7 @@ export function usePostgresStructureEdit({ target, original, version, onResult, 
         setError(message);
         if (sent) {
           setUnknown(true);
-          onResult(message, true);
+          onResult(message, true, undefined, undefined, preview?.truncateScope?.tables);
         }
       }
     } finally {

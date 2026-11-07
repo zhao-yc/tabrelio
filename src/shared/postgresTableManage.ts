@@ -6,6 +6,7 @@ const target = postgresStructureInputSchema.extend({ stamp: z.string().regex(/^[
 export const postgresTableManagePreviewSchema = z.discriminatedUnion('action', [
   target.extend({ action: z.literal('rename'), name: postgresNewIdentifier }).strict(),
   target.extend({ action: z.literal('drop') }).strict(),
+  target.extend({ action: z.literal('truncate'), identity: z.enum(['continue', 'restart']) }).strict(),
 ]);
 export const postgresTableManageApplySchema = postgresCreateTableApplySchema.extend({ confirmed: z.literal(true) });
 export type PostgresTableManageInput = z.infer<typeof postgresTableManagePreviewSchema>;

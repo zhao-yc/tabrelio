@@ -52,8 +52,8 @@ function CatalogTable({ headers, children, empty }: { headers: readonly string[]
 /** 在原窗口、连接修订和关系目标下读取结构，刷新、关闭及切换来源废弃迟到回包。 */
 export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged, beforeTableManage }: {
   target: PostgresStructureInput; readOnly?: boolean; searchFocus?: PostgresStructureSearchFocus; onClose(): void; onDirtyChange(value: boolean): void;
-  beforeTableManage(target: PostgresStructureInput, destination?: string): void;
-  onManaged(target: PostgresStructureInput, message: string, unknown: boolean, version: number, kind: 'table' | 'view', destination?: string, identity?: string): void;
+  beforeTableManage(target: PostgresStructureInput, destination?: string, truncateTables?: readonly string[]): void;
+  onManaged(target: PostgresStructureInput, message: string, unknown: boolean, version: number, kind: 'table' | 'view', destination?: string, identity?: string, truncateTables?: readonly string[]): void;
   onEdited(target: PostgresStructureInput, message: string, unknown: boolean, version: number): void;
 }) {
   const version = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
@@ -116,10 +116,10 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
       {EditPanel && output && editStamp ? <EditPanel target={target} original={output} version={version}
         onDirtyChange={onDirtyChange} onClose={() => { setEditing(undefined); setAttempt(value => value + 1); }}
-        beforeManage={output.tableManage ? destination => beforeTableManage(target, destination) : undefined}
-        onResult={(message, unknown, receipt, attempted) => {
+        beforeManage={output.tableManage ? (destination, truncateTables) => beforeTableManage(target, destination, truncateTables) : undefined}
+        onResult={(message, unknown, receipt, attempted, truncateTables) => {
           if (editing === 'manage') {
-            onManaged(target, message, unknown, version, output.tableManage ? 'table' : 'view', receipt?.table ?? attempted, receipt?.identity);
+            onManaged(target, message, unknown, version, output.tableManage ? 'table' : 'view', receipt?.table ?? attempted, receipt?.identity, truncateTables);
             if (!unknown) onClose();
             return;
           }

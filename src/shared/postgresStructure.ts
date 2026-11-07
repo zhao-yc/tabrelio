@@ -76,7 +76,7 @@ export const postgresStructureResultSchema = z.object({
   indexEditStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   materializedManageStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   viewEditStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  tableManage: z.object({ stamp: z.string().regex(/^[a-f0-9]{64}$/), rename: z.boolean(), drop: z.boolean() }).strict().optional(),
+  tableManage: z.object({ stamp: z.string().regex(/^[a-f0-9]{64}$/), rename: z.boolean(), drop: z.boolean(), truncate: z.boolean() }).strict().optional(),
   editStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 export type PostgresStructureResult = z.infer<typeof postgresStructureResultSchema>;
