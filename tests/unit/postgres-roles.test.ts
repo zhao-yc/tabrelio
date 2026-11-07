@@ -92,3 +92,13 @@ it('列授权绑定关系和属性编号，只接受明确且互异的列与权�
   expect(validateCommand('postgres.roles.read', detail)).toEqual(detail);
   expect(() => validateCommand('postgres.roles.read', {...detail, scope: {...detail.scope, relation: undefined}})).toThrow();
 });
+
+it('序列授权只接受精确 Schema、序列 OID 和序列权限', () => {
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '42', name: '应用角色'}, action: 'grant',
+    object: {kind: 'sequence', schema: '租户 QA', oid: '102', name: '订单"编号'}, privileges: ['USAGE', 'SELECT', 'UPDATE']};
+  expect(validateCommand('postgres.roles.scopedPrivileges.preview', draft)).toEqual(draft);
+  for (const input of [{...draft, privileges: ['CREATE']}, {...draft, privileges: ['USAGE', 'USAGE']},
+    {...draft, object: {...draft.object, schema: undefined}}, {...draft, object: {...draft.object, oid: '0'}},
+    {...draft, object: {...draft.object, kind: 'schema'}}, {...draft, cascade: true}])
+    expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
+});

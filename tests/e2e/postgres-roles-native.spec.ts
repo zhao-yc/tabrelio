@@ -808,3 +808,129 @@ test('PostgreSQL 列权限区分有效访问、直接授权和整表权限', asy
     expect(native.exitCode).toBe(0);
   } finally {await Promise.all([member.end(), owner.end()]);}
 });
+
+test('PostgreSQL 序列权限单独控制带默认编号的插入', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^[a-f0-9]{64}$/.test(password) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', recipient = prefix + 'recipient', dependent = prefix + 'dependent';
+  const schema = 'QA Sequence ACL', name = 'Order"No', sequence = '"QA Sequence ACL"."Order""No"';
+  const table = '"QA Sequence ACL".orders', twin = '"Other Sequence ACL"."Order""No"';
+  const endpoint = {host: '127.0.0.1', port, database, password, connectionTimeoutMillis: 3000};
+  const owner = new Client({...endpoint, user: database}), member = new Client({...endpoint, user: recipient});
+  await owner.connect();
+  try {
+    await member.connect();
+    await owner.query(`CREATE SCHEMA "QA Sequence ACL"; CREATE SCHEMA "Other Sequence ACL";
+      CREATE SEQUENCE ${sequence} START WITH 11; CREATE SEQUENCE ${twin} START WITH 31;
+      CREATE TABLE ${table}(id bigint DEFAULT nextval('${sequence}'::regclass), label text);
+      ALTER SEQUENCE ${sequence} OWNED BY ${table}.id;
+      CREATE SEQUENCE "QA Sequence ACL".stale;
+      GRANT USAGE ON SCHEMA "QA Sequence ACL" TO ${recipient},${dependent};
+      GRANT INSERT ON ${table} TO ${recipient}`);
+    const insert = () => member.query(`INSERT INTO ${table}(label) VALUES ('qa')`);
+    const readState = async () => (await owner.query(`SELECT last_value::text,is_called FROM ${sequence}`)).rows;
+    const before = await readState();
+    expect(before).toEqual([{last_value: '11', is_called: false}]);
+    await expect(insert()).rejects.toMatchObject({code: '42501'});
+    const role = (await owner.query('SELECT oid::text,rolname::text AS name FROM pg_catalog.pg_roles WHERE rolname=$1', [recipient])).rows[0];
+    const oidOf = async (qualified: string) => (await owner.query('SELECT $1::regclass::oid::text AS oid', [qualified])).rows[0].oid;
+    const oid = await oidOf(sequence);
+    const direct = async (target = oid) => (await owner.query(`SELECT a.privilege_type,a.is_grantable FROM pg_catalog.pg_class c
+      CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a WHERE c.oid=$1 AND a.grantee=$2 AND a.grantor=c.relowner ORDER BY 1`,
+    [target, role.oid])).rows;
+    const edge = (privilege_type: string, is_grantable: boolean) => ({privilege_type, is_grantable});
+    const profiles = await page.evaluate(async ({database, port, password, recipient}) => {
+      const base = {id: '', dialect: 'postgresql' as const, group: '', color: '#123456', host: '127.0.0.1', port,
+        database, password, rememberPassword: false};
+      return {owner: (await window.dbark.invoke('connections.save', {...base, name: '序列授权所有者', user: database})).id,
+        member: (await window.dbark.invoke('connections.save', {...base, name: '序列授权受权者', user: recipient})).id};
+    }, {database, port, password, recipient});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profiles.owner);
+    await modal.getByLabel(t.search, {exact: true}).fill(recipient);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    await modal.getByRole('region', {name: t.directory, exact: true}).getByRole('button', {name: recipient, exact: true}).click();
+    await modal.getByLabel(t.schema, {exact: true}).fill(schema);
+    await modal.getByLabel(t.relation, {exact: true}).fill(name);
+    await modal.getByRole('button', {name: t.probe, exact: true}).click();
+    const locale = t.tablePrivileges.sequence;
+    const effective = modal.getByRole('table', {name: locale.effective + ' · ' + name, exact: true});
+    const usage = effective.getByRole('row', {name: /USAGE/}).getByRole('cell');
+    await expect(usage).toHaveText([t.no, t.no]);
+    await expect(modal.getByRole('button', {name: t.tablePrivileges.column.inspect, exact: true})).toHaveCount(0);
+    const dialog = page.getByRole('dialog', {name: locale.title, exact: true});
+    const prepare = async (action: string, choices: string[]) => {
+      await modal.getByRole('button', {name: locale.open, exact: true}).click();
+      await dialog.getByLabel(t.tablePrivileges.action, {exact: true}).selectOption(action);
+      for (const choice of choices) await dialog.getByRole('checkbox', {name: choice, exact: true}).check();
+      await dialog.getByRole('button', {name: locale.preview, exact: true}).click();
+      const sql = dialog.getByLabel(locale.sql, {exact: true});
+      await expect(sql).toBeVisible();
+      return sql;
+    };
+    const apply = async (outcome: 'committed' | 'rolledBack' = 'committed') => {
+      await dialog.getByRole('checkbox', {name: locale.confirm, exact: true}).check();
+      await dialog.getByRole('button', {name: locale.apply, exact: true}).click();
+      await expect(dialog.getByRole(outcome === 'committed' ? 'status' : 'alert').filter({hasText: t.result[outcome]})).toBeVisible();
+      await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+    await expect(await prepare('grantOption', ['USAGE'])).toHaveText(`GRANT USAGE ON SEQUENCE ${sequence} TO "${recipient}" WITH GRANT OPTION`);
+    expect(await direct()).toEqual([]);
+    expect(await readState()).toEqual(before);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 序列授权预览.png')});
+    await apply();
+    await expect(usage).toHaveText([t.yes, t.yes]);
+    expect(await readState()).toEqual(before);
+    expect(await direct(await oidOf(twin))).toEqual([]);
+    expect((await insert()).rowCount).toBe(1);
+    expect((await owner.query(`SELECT id::text FROM ${table}`)).rows).toEqual([{id: '11'}]);
+    await expect(member.query(`SELECT id FROM ${table}`)).rejects.toMatchObject({code: '42501'});
+    await expect(member.query(`SELECT setval('${sequence}',80)`)).rejects.toMatchObject({code: '42501'});
+
+    await member.query(`GRANT USAGE ON SEQUENCE ${sequence} TO ${dependent}`);
+    await prepare('revokeOption', ['USAGE']);
+    await apply('rolledBack');
+    expect(await direct()).toEqual([edge('USAGE', true)]);
+    await member.query(`REVOKE USAGE ON SEQUENCE ${sequence} FROM ${dependent}`);
+    await expect(await prepare('revokeOption', ['USAGE'])).toHaveText(`REVOKE GRANT OPTION FOR USAGE ON SEQUENCE ${sequence} FROM "${recipient}" RESTRICT`);
+    await apply();
+    expect(await direct()).toEqual([edge('USAGE', false)]);
+    await prepare('grant', ['SELECT', 'UPDATE']);
+    await apply();
+    expect((await member.query(`SELECT last_value::text FROM ${sequence}`)).rows).toEqual([{last_value: '11'}]);
+    expect((await member.query(`SELECT setval('${sequence}',80)::text AS value`)).rows).toEqual([{value: '80'}]);
+    await prepare('revoke', ['USAGE', 'UPDATE']);
+    await apply();
+    expect(await direct()).toEqual([edge('SELECT', false)]);
+    await expect(insert()).rejects.toMatchObject({code: '42501'});
+    await expect(usage).toHaveText([t.no, t.no]);
+
+    const staleOid = await oidOf('"QA Sequence ACL".stale');
+    const preview = (connectionId: string) => page.evaluate(async draft => window.dbark.invoke('postgres.roles.scopedPrivileges.preview', draft),
+      {connectionId, database, role, action: 'grant' as const, object: {kind: 'sequence' as const, schema, name: 'stale', oid: staleOid},
+        privileges: ['USAGE' as const]});
+    await expect(preview(profiles.member)).rejects.toThrow('只有对象所有者或超级用户');
+    const stale = await preview(profiles.owner);
+    await owner.query('ALTER SEQUENCE "QA Sequence ACL".stale RENAME TO old_stale; CREATE SEQUENCE "QA Sequence ACL".stale');
+    const receipt = await page.evaluate(async ({connectionId, database, token}) =>
+      window.dbark.invoke('postgres.roles.scopedPrivileges.apply', {connectionId, database, token, confirmed: true}),
+      {connectionId: profiles.owner, database, token: stale.token});
+    expect(receipt.outcome).toBe('notSent');
+    expect(await direct(staleOid)).toEqual([]);
+    expect(await direct(await oidOf('"QA Sequence ACL".stale'))).toEqual([]);
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(item => item.status === 'running').length)).toBe(0);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([member.end(), owner.end()]);}
+});

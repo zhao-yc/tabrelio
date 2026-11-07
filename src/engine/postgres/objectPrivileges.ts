@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { postgresColumnPrivileges, postgresDatabasePrivileges, postgresSchemaPrivileges, postgresTablePrivileges, type PostgresMembershipApply,
+import { postgresColumnPrivileges, postgresScopedPrivileges, postgresTablePrivileges, type PostgresMembershipApply,
   type PostgresColumnPrivilegeDraft, type PostgresMembershipOutcome, type PostgresScopedPrivilegeDraft, type PostgresTablePrivilegeDraft, type PostgresTablePrivilegePreview } from '../../shared/postgresRoles';
 import type { DataRow } from '../../shared/contracts';
 import { postgresIdentifier } from '../../shared/postgresSql';
@@ -74,35 +74,39 @@ function readEdges(rows: DataRow[]) {
   return edges;
 }
 
-/** 数据库与 Schema 无法用 LOCK TABLE 锁定。用系统目录行版本验证实际写入来自本事务。 */
+/** 数据库、Schema 和序列使用系统目录行版本验证实际写入，不改变序列状态。 */
 async function readScopedState(connection: PostgresConnection, draft: PostgresScopedPrivilegeDraft) {
   const {object, role} = draft;
-  const database = object.kind === 'database';
-  const target = database
-    ? `SELECT d.oid,d.datname AS name,d.datdba AS owner,d.datacl AS acl,d.xmin
-       FROM pg_catalog.pg_database d WHERE d.datname=pg_catalog.current_database() AND NOT d.datistemplate`
-    : `SELECT n.oid,n.nspname AS name,n.nspowner AS owner,n.nspacl AS acl,n.xmin
-       FROM pg_catalog.pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema'`;
-  const result = await connection.query(`WITH object AS (${target})
+  const target = {
+    database: {acl: 'd', sql: `SELECT d.oid,d.datname AS name,d.datdba AS owner,d.datacl AS acl,d.xmin,NULL::text AS schema_oid
+      FROM pg_catalog.pg_database d WHERE d.datname=pg_catalog.current_database() AND NOT d.datistemplate`},
+    schema: {acl: 'n', sql: `SELECT n.oid,n.nspname AS name,n.nspowner AS owner,n.nspacl AS acl,n.xmin,NULL::text AS schema_oid
+      FROM pg_catalog.pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema'`},
+    sequence: {acl: 's', sql: `SELECT c.oid,c.relname AS name,c.relowner AS owner,c.relacl AS acl,c.xmin,n.oid::text AS schema_oid
+      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE c.relkind='S' AND c.relpersistence<>'t' AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+        AND n.nspname::text COLLATE pg_catalog."C"=$6`},
+  }[object.kind];
+  const result = await connection.query(`WITH object AS (${target.sql})
     SELECT NULL::text,acl.grantor::text,acl.grantee::text,acl.privilege_type,acl.is_grantable,
       actor.rolname::text,owner.rolname::text,owner.oid::text,actor.oid::text,d.oid::text,d.datdba::text,
       extract(epoch FROM pg_catalog.pg_postmaster_start_time())::text,actor.rolsuper,
-      obj.xmin::text,obj.xmin=pg_catalog.pg_current_xact_id_if_assigned()::xid
+      obj.xmin::text,obj.xmin=pg_catalog.pg_current_xact_id_if_assigned()::xid,obj.schema_oid
     FROM object obj JOIN pg_catalog.pg_roles owner ON owner.oid=obj.owner
     JOIN pg_catalog.pg_roles actor ON actor.rolname=current_user
     JOIN pg_catalog.pg_roles recipient ON recipient.oid=$3::oid AND recipient.rolname::text COLLATE pg_catalog."C"=$4
     CROSS JOIN pg_catalog.pg_database d
-    LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(obj.acl,pg_catalog.acldefault(${database ? "'d'" : "'n'"},obj.owner))) acl ON true
+    LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(obj.acl,pg_catalog.acldefault('${target.acl}',obj.owner))) acl ON true
     WHERE obj.oid=$1::oid AND obj.name::text COLLATE pg_catalog."C"=$2
       AND d.datname=pg_catalog.current_database() AND d.datname::text COLLATE pg_catalog."C"=$5
-    LIMIT ${limit + 1}`, [object.oid, object.name, role.oid, role.name, draft.database], budget(limit + 1));
+    LIMIT ${limit + 1}`, [object.oid, object.name, role.oid, role.name, draft.database, ...('schema' in object ? [object.schema] : [])], budget(limit + 1));
   if (result.truncated || result.rows.length > limit) throw Error('该对象的授权记录超出预览上限');
   const row = result.rows[0];
   if (!row || typeof row.c5 !== 'string' || typeof row.c6 !== 'string' || typeof row.c7 !== 'string' || typeof row.c13 !== 'string')
     throw changed();
-  const implicitOwner = !database && row.c6 === 'pg_database_owner' && row.c8 === row.c10;
+  const implicitOwner = object.kind === 'schema' && row.c6 === 'pg_database_owner' && row.c8 === row.c10;
   if (row.c7 === role.oid || row.c7 !== row.c8 && row.c12 !== 't' && !implicitOwner) throw forbidden();
-  return {identity: [row.c5, row.c6, row.c7, row.c8, row.c9, row.c10, row.c11, row.c12],
+  return {identity: [row.c5, row.c6, row.c7, row.c8, row.c9, row.c10, row.c11, row.c12, row.c15],
     actor: row.c5, grantor: row.c6, grantorOid: row.c7, databaseOid: row.c9, rowVersion: row.c13, writtenHere: row.c14 === 't',
     edges: readEdges(result.rows.filter(entry => entry.c1 !== null))};
 }
@@ -117,8 +121,8 @@ const qualified = (table: PostgresTablePrivilegeDraft['table']) => postgresIdent
 function prepare(draft: Draft, state: State) {
   const granting = draft.action === 'grant' || draft.action === 'grantOption';
   const target = 'table' in draft ? 'TABLE ' + qualified(draft.table) :
-    draft.object.kind.toUpperCase() + ' ' + postgresIdentifier(draft.object.name);
-  const available = 'table' in draft ? postgresTablePrivileges : draft.object.kind === 'database' ? postgresDatabasePrivileges : postgresSchemaPrivileges;
+    draft.object.kind.toUpperCase() + ' ' + ('schema' in draft.object ? qualified(draft.object) : postgresIdentifier(draft.object.name));
+  const available = 'table' in draft ? postgresTablePrivileges : postgresScopedPrivileges[draft.object.kind];
   const expected = new Map(state.edges), columns: PostgresTablePrivilegePreview['columns'] = [];
   const changes = 'changes' in draft ? draft.changes.map(({column, privilege}) => ({column: column.name, privilege})) :
     available.filter(value => draft.privileges.some(selected => selected === value)).map(privilege => ({column: null, privilege}));

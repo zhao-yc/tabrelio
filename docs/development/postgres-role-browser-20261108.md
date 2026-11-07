@@ -51,3 +51,11 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 在角色详情检查表或视图后点击「查看列权限」。目录按 PostgreSQL 属性编号分页，每页 32 列，展示 SELECT、INSERT、UPDATE 和 REFERENCES 的有效权限、所有者直接授权和转授状态。有效权限包含整表授权、PUBLIC 和继承。[PostgreSQL 权限查询函数](https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-ACCESS-TABLE)
 
 对象所有者或超级用户可在普通表、分区表和普通视图上点击「管理列级直接授权」，在当前页多选列与权限。预览会明确列名与操作，支持授予、授予及转授、撤销和仅撤销转授。确认时按原关系 OID、属性编号和原列名复核。列级撤销使用 RESTRICT，有下游依赖时整批回滚。已有整表授权仍可能提供同样的有效权限。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html) [PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
+
+## 查看与管理序列权限
+
+在角色详情输入准确的 Schema 和序列名，点击「检查对象权限」可查看 USAGE、SELECT 和 UPDATE 的有效权限。对象所有者或超级用户可在「管理序列直接授权」查看所有者的直接授权，批量授予、撤销或调整转授选项。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html)
+
+使用 `nextval` 生成默认值的插入，需要表上的 INSERT 和序列上的 USAGE 或 UPDATE。通常授予 USAGE 即可取号，UPDATE 还允许通过 `setval` 改值。授权预览和执行只处理权限目录，不读取或推进序列值。[PostgreSQL 序列函数](https://www.postgresql.org/docs/18/functions-sequence.html)
+
+确认绑定数据库、Schema、序列 OID 和角色。提交前会核对实际序列目录行由本事务写入以及权限变化是否符合预览。撤销使用 RESTRICT，有下游依赖时整批回滚。

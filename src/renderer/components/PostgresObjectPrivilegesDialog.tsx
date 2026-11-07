@@ -68,7 +68,9 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
 
   return <Modal title={copy.title} wide onClose={close}>
     <div className="modal-content postgres-roles" aria-busy={busy}>
-      <p>{database}{'table' in editor ? ' · ' + editor.table.schema + ' / ' + editor.table.name : editor.object.kind === 'schema' ? ' · ' + editor.object.name : ''} · {roles.roleName} {role.name}</p>
+      <p>{database}{'table' in editor ? ' · ' + editor.table.schema + ' / ' + editor.table.name :
+        editor.object.kind === 'sequence' ? ' · ' + editor.object.schema + ' / ' + editor.object.name :
+        editor.object.kind === 'schema' ? ' · ' + editor.object.name : ''} · {roles.roleName} {role.name}</p>
       <p>{roles.grantor} {editor.grantor}</p>
       <p>{t.hint} {copy.lockHint}</p>
       {'direct' in editor && <p>{t.direct} · {editor.direct.map(item => item.privilege + (item.grantable ? ' WITH GRANT OPTION' : '')).join('、') || t.inherited}</p>}

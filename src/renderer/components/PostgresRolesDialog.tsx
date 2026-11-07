@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresConnectionProfile } from '../../shared/contracts';
-import { postgresDatabasePrivileges, postgresSchemaPrivileges, postgresTablePrivileges, type PostgresObjectPrivilege,
+import { postgresDatabasePrivileges, postgresSchemaPrivileges, postgresSequencePrivileges, postgresTablePrivileges, type PostgresObjectPrivilege,
   type PostgresColumnPrivilegeEditor, type PostgresScopedPrivilegeEditor, type PostgresTablePrivilegeEditor } from '../../shared/postgresRoles';
 import type { PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRoleRef, PostgresRolesInput, PostgresRolesList, PostgresRolesOutput } from '../../shared/postgresRoles';
 import { errorMessage, invoke, uid } from '../lib';
@@ -217,7 +217,12 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
             {detail.snapshot.scope.schemaEditor && <button disabled={busy} onClick={() =>
               editPrivileges(detail.snapshot.scope!.schemaEditor!, postgresSchemaPrivileges)}>{t.tablePrivileges.schema.open}</button>}
           </div>
-          {detail.scope.relation && <div><Privileges label={t.relationPrivileges + ' · ' + detail.scope.relation}
+          {detail.snapshot.scope.sequence && <div>
+            <Privileges label={t.tablePrivileges.sequence.effective + ' · ' + detail.scope.relation} rows={detail.snapshot.scope.sequence.privileges}/>
+            {detail.snapshot.scope.sequence.editor && <button disabled={busy} onClick={() =>
+              editPrivileges(detail.snapshot.scope!.sequence!.editor!, postgresSequencePrivileges)}>{t.tablePrivileges.sequence.open}</button>}
+          </div>}
+          {detail.scope.relation && !detail.snapshot.scope.sequence && <div><Privileges label={t.relationPrivileges + ' · ' + detail.scope.relation}
             rows={detail.snapshot.scope.relation?.privileges ?? null}/>
             {connection && detail.snapshot.scope.relation?.editor && <button disabled={busy} onClick={() => {
               const relation = detail.snapshot.scope?.relation;

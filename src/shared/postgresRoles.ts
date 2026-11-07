@@ -64,6 +64,10 @@ export const postgresTablePrivileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 
 export const postgresColumnPrivileges = ['SELECT', 'INSERT', 'UPDATE', 'REFERENCES'] as const;
 export const postgresDatabasePrivileges = ['CONNECT', 'CREATE', 'TEMPORARY'] as const;
 export const postgresSchemaPrivileges = ['USAGE', 'CREATE'] as const;
+export const postgresSequencePrivileges = ['USAGE', 'SELECT', 'UPDATE'] as const;
+export const postgresScopedPrivileges = {
+  database: postgresDatabasePrivileges, schema: postgresSchemaPrivileges, sequence: postgresSequencePrivileges,
+} as const;
 const tablePrivilege = z.enum(postgresTablePrivileges);
 export type PostgresTablePrivilege = z.infer<typeof tablePrivilege>;
 export type PostgresObjectPrivilege = PostgresTablePrivilege | typeof postgresDatabasePrivileges[number] | typeof postgresSchemaPrivileges[number];
@@ -90,11 +94,12 @@ export interface PostgresColumnPrivilegePage {rows: PostgresColumnPrivilegeRow[]
 const scopeRef = {oid, name: identifier};
 export const postgresScopedPrivilegeTargetSchema = z.discriminatedUnion('kind', [
   z.object({...scopeRef, kind: z.literal('database')}).strict(), z.object({...scopeRef, kind: z.literal('schema')}).strict(),
+  z.object({...scopeRef, kind: z.literal('sequence'), schema: identifier}).strict(),
 ]);
 export const postgresScopedPrivilegeDraftSchema = z.object({...privilegeSource, object: postgresScopedPrivilegeTargetSchema,
-  privileges: z.array(z.enum(['CONNECT', 'CREATE', 'TEMPORARY', 'USAGE'])).min(1).max(3),
+  privileges: z.array(z.enum(['CONNECT', 'CREATE', 'TEMPORARY', 'USAGE', 'SELECT', 'UPDATE'])).min(1).max(3),
 }).strict().refine(({object, database, privileges}) => {
-  const allowed: readonly string[] = object.kind === 'database' ? postgresDatabasePrivileges : postgresSchemaPrivileges;
+  const allowed: readonly string[] = postgresScopedPrivileges[object.kind];
   return (object.kind !== 'database' || object.name === database) &&
     new Set(privileges).size === privileges.length && privileges.every(privilege => allowed.includes(privilege));
 }, '权限必须适用于所选对象，数据库授权须使用当前数据库');
@@ -125,6 +130,6 @@ export interface PostgresRoleDetail extends PostgresRolesContext {
   scope?: {schema: PostgresRolePrivilege[] | null; schemaEditor?: PostgresScopedPrivilegeEditor; relation?: {
     oid: string; privileges: PostgresRolePrivilege[]; rls: boolean; forceRls: boolean; editor?: PostgresTablePrivilegeEditor;
     columns?: PostgresColumnPrivilegePage;
-  } | null};
+  } | null; sequence?: {privileges: PostgresRolePrivilege[]; editor?: PostgresScopedPrivilegeEditor}};
 }
 export type PostgresRolesOutput = PostgresRolesList | PostgresRoleDetail;

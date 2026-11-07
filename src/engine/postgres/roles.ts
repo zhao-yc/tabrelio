@@ -106,19 +106,30 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
         scope.schemaEditor = {object: {kind: 'schema', oid, name: schema}, grantor: text(firstSchema.c4), direct: await directPrivileges('schema', oid)};
       }
       if (relation !== undefined) {
-        const relations = await rows(`SELECT p.name,pg_catalog.has_table_privilege($1::oid,c.oid,p.name),
-          pg_catalog.has_table_privilege($1::oid,c.oid,p.name||' WITH GRANT OPTION'),c.relrowsecurity,c.relforcerowsecurity,
+        const relations = await rows(`SELECT p.name,
+          CASE WHEN c.relkind='S' THEN pg_catalog.has_sequence_privilege($1::oid,c.oid,p.name)
+            ELSE pg_catalog.has_table_privilege($1::oid,c.oid,p.name) END,
+          CASE WHEN c.relkind='S' THEN pg_catalog.has_sequence_privilege($1::oid,c.oid,p.name||' WITH GRANT OPTION')
+            ELSE pg_catalog.has_table_privilege($1::oid,c.oid,p.name||' WITH GRANT OPTION') END,c.relrowsecurity,c.relforcerowsecurity,
           c.oid::text,pg_catalog.pg_get_userbyid(c.relowner)::text,
-          c.relowner<>$1::oid AND c.relkind IN ('r','p','v') AND c.relpersistence<>'t'
+          c.relowner<>$1::oid AND c.relkind IN ('r','p','v','S') AND c.relpersistence<>'t'
             AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
-            AND (c.relowner=$4::oid OR EXISTS(SELECT FROM pg_catalog.pg_roles WHERE oid=$4::oid AND rolsuper))
+            AND (c.relowner=$4::oid OR EXISTS(SELECT FROM pg_catalog.pg_roles WHERE oid=$4::oid AND rolsuper)),c.relkind
           FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-          CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER'),('MAINTAIN')) p(name)
-          WHERE n.nspname::text=$2::text AND c.relname::text=$3::text AND c.relkind IN ('r','p','v','m','f')
+          CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER'),('MAINTAIN'),('USAGE')) p(name)
+          WHERE n.nspname::text COLLATE pg_catalog."C"=$2::text AND c.relname::text COLLATE pg_catalog."C"=$3::text
+            AND ((c.relkind='S' AND p.name IN ('USAGE','SELECT','UPDATE')) OR (c.relkind IN ('r','p','v','m','f') AND p.name<>'USAGE'))
             AND (p.name<>'MAINTAIN' OR pg_catalog.current_setting('server_version_num')::int>=170000)`,
           [role.oid, schema, relation, context.current.oid], 8);
         const first = relations[0];
-        scope.relation = first ? {oid: text(first.c5), privileges: relations.map(privilege), rls: flag(first.c3), forceRls: flag(first.c4)} : null;
+        scope.relation = first && first.c8 !== 'S'
+          ? {oid: text(first.c5), privileges: relations.map(privilege), rls: flag(first.c3), forceRls: flag(first.c4)} : null;
+        if (first?.c8 === 'S') {
+          const oid = text(first.c5);
+          scope.sequence = {privileges: relations.map(privilege), ...(flag(first.c7) ? {
+            editor: {object: {kind: 'sequence', oid, schema, name: relation}, grantor: text(first.c6), direct: await directPrivileges('table', oid)},
+          } : {})};
+        }
         if (scope.relation && flag(first.c7)) {
           const oid = text(first.c5);
           scope.relation.editor = {table: {oid, schema, name: relation}, grantor: text(first.c6), direct: await directPrivileges('table', oid)};

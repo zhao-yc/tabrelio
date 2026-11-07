@@ -10,7 +10,7 @@ export const postgresRolesZh = {
   granted: '直接获授的角色', members: '直接成员', grantor: '授权者', admin: '管理选项', memberInherit: '继承选项',
   memberSet: '切换选项', noMembership: '无直接成员关系',
   limited: '单个方向最多显示 200 条直接授权记录。',
-  databasePrivileges: '数据库有效权限', schema: 'Schema 名称', relation: '表或视图名称（可选）', probe: '检查对象权限',
+  databasePrivileges: '数据库有效权限', schema: 'Schema 名称', relation: '表、视图或序列名称（可选）', probe: '检查对象权限',
   schemaPrivileges: 'Schema 有效权限', relationPrivileges: '表或视图有效权限', missing: '目录中没有匹配对象',
   privilege: '权限', allowed: '拥有', grantable: '可转授', rowSecurity: '启用行级安全', forceRls: '强制行级安全',
   hint: '只读目录按服务器可见范围返回。有效权限包含继承和 PUBLIC 授权。表权限与列级授权、具体行是否可见分别判定。',
@@ -43,6 +43,11 @@ export const postgresRolesZh = {
       title: '管理 PostgreSQL Schema 权限', open: '管理 Schema 直接授权', selection: '所选 Schema 权限',
       lockHint: 'Schema 的 USAGE 允许访问其中的对象，查询或编辑对象仍需要相应对象权限。',
       preview: '预览 Schema 权限 SQL', sql: '本次 Schema 权限 SQL', confirm: '确认执行所选 Schema 权限变更', apply: '执行 Schema 权限变更',
+    },
+    sequence: {
+      title: '管理 PostgreSQL 序列权限', open: '管理序列直接授权', effective: '序列有效权限', selection: '所选序列权限',
+      lockHint: 'USAGE 可调用 nextval 和 currval。UPDATE 还允许调用 setval。序列权限和表权限分别授予。',
+      preview: '预览序列权限 SQL', sql: '本次序列权限 SQL', confirm: '确认执行所选序列权限变更', apply: '执行序列权限变更',
     },
   },
   password: {
