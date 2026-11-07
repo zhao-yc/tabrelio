@@ -314,6 +314,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。
 
+右键 PostgreSQL 连接选择「管理 PostgreSQL 数据库」，可选择模板建库，编辑注释、所有者和连接设置，或从另一个维护库执行改名。[PostgreSQL 数据库管理](development/postgres-database-management-20261108.md)
+
 右键 PostgreSQL 数据库选择「管理 PostgreSQL Schema」，可查看可见 Schema 的所有者和权限，并在有权限时创建、改名、编辑注释、转移所有者或受限删除。改名和删除前先关闭受影响的表页或视图页。[PostgreSQL Schema 管理](development/postgres-schema-management-20261108.md)
 
 在「查看结构 → 管理表」可[重命名 PostgreSQL 表或受限删除普通表](development/postgres-table-manage-20261108.md)。核对 SQL 后确认，删除还需输入原表名。 也可[清空数据](development/postgres-table-manage-20261108.md#清空数据)，核对普通表或分区范围，并选择保留或重置关联序列。 [移动到其他 schema](development/postgres-table-manage-20261108.md#移动到其他-schema)可预览随表移动的索引、约束和拥有的序列。

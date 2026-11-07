@@ -28,6 +28,7 @@ import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
 import { postgresSchemaCatalog } from './schemaManage';
+import { postgresDatabaseCatalog } from './databaseManage';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
 import { readPostgresRoutine, readPostgresRoutineCatalog, readPostgresRoutineOwnerTargets } from './routine';
@@ -1157,6 +1158,9 @@ export class PostgresEngine {
           else this.completionReads.delete(profile.id);
         }
       }
+      case 'postgres.databaseManage.read':
+      case 'postgres.databaseManage.preview':
+      case 'postgres.databaseManage.apply':
       case 'postgres.schemaManage.read':
       case 'postgres.schemaManage.preview':
       case 'postgres.schemaManage.apply':
@@ -1188,6 +1192,15 @@ export class PostgresEngine {
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 建表连接和原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.databaseManage.read') return connect(connection => postgresDatabaseCatalog(connection, input.database));
+        if (command === 'postgres.databaseManage.preview') {
+          const { profile: _profile, ...draft } = input;
+          return this.creations.prepareDatabase(draft as Parameters<PostgresCreateTableWorkspace['prepareDatabase']>[0], connect);
+        }
+        if (command === 'postgres.databaseManage.apply') {
+          if (input.confirmed !== true) throw Error('请明确确认 PostgreSQL 数据库操作');
+          return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect, 'databaseManage');
+        }
         if (command === 'postgres.schemaManage.read') return connect(connection => postgresSchemaCatalog(connection, input.database));
         if (command === 'postgres.schemaManage.preview') {
           const { profile: _profile, ...draft } = input;

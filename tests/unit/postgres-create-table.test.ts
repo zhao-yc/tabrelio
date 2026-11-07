@@ -5,6 +5,7 @@ import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from
 import { postgresTriggerEditorDraft, postgresTriggerChangeSchema } from '../../src/shared/postgresTrigger';
 import { postgresPolicyChangeSchema, postgresPolicyRequiresReplacement } from '../../src/shared/postgresPolicy';
 import { postgresSchemaApplySchema, postgresSchemaPreviewSchema } from '../../src/shared/postgresSchemaManage';
+import { postgresDatabaseManageApplySchema, postgresDatabaseManagePreviewSchema } from '../../src/shared/postgresDatabaseManage';
 
 const draft: PostgresCreateTableInput = {
   connectionId: '原连接', database: '原库', schema: '业务"区', table: '新"表', comment: "注释'；\\",
@@ -163,4 +164,15 @@ it('PostgreSQL Schema 管理拒绝系统名、任意 SQL 和未确认提交', ()
     { ...target, action: 'drop', schema: '业务', stamp: 'a'.repeat(64), cascade: true }])
     expect(postgresSchemaPreviewSchema.safeParse(input).success).toBe(false);
   expect(postgresSchemaApplySchema.safeParse({ ...target, token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: false }).success).toBe(false);
+});
+
+it('PostgreSQL 建库与维护仅接受固定模板、连接上限和明确确认', () => {
+  const target = { connectionId: 'saved', database: 'qa' };
+  const create = { ...target, action: 'create', name: '业务"库', template: 'template0', connectionLimit: 0, newOwner: '运行账号' };
+  expect(postgresDatabaseManagePreviewSchema.parse(create)).toEqual(create);
+  for (const input of [{ ...create, template: 'arbitrary' }, { ...create, name: 'postgres' },
+    { ...create, connectionLimit: -2 }, { ...create, connectionLimit: 1.2 }, { ...create, owner: '伪造窗口' },
+    { ...create, sql: 'CREATE DATABASE another' }])
+    expect(postgresDatabaseManagePreviewSchema.safeParse(input).success).toBe(false);
+  expect(postgresDatabaseManageApplySchema.safeParse({ ...target, token: '0550f54a-5fc9-4447-a835-fd56f9e9a17f', confirmed: false }).success).toBe(false);
 });

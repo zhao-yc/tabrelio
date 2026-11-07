@@ -30,13 +30,16 @@ import { postgresTableTriggerPlan } from './tableTriggers';
 import { postgresTablePolicyPlan } from './tablePolicies';
 import { postgresSchemaPlan } from './schemaManage';
 import { postgresSchemaPreviewSchema, type PostgresSchemaPreviewInput } from '../../shared/postgresSchemaManage';
+import { postgresDatabasePlan } from './databaseManage';
+import { postgresDatabaseManagePreviewSchema, type PostgresDatabaseManageInput } from '../../shared/postgresDatabaseManage';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
+type RelationKind = 'databaseManage' | 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
+  autocommit?: boolean;
   preflight(connection: PostgresConnection): Promise<string>;
   validate?(connection: PostgresConnection): Promise<void>;
   verify(connection: PostgresConnection, schemaOid: string, insertedRows?: number): Promise<void>;
@@ -225,6 +228,13 @@ export class PostgresCreateTableWorkspace {
     const { owner: _owner, connectionRevision: _revision, ...raw } = input;
     const draft = postgresSchemaPreviewSchema.parse(raw);
     return this.prepareRelation(input, 'schemaManage', connect, () => connection => postgresSchemaPlan(connection, draft));
+  }
+
+  /** 维护库能力绑定原文档、连接修订和模板或目标库。 */
+  async prepareDatabase(input: Scoped<PostgresDatabaseManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+    const draft = postgresDatabaseManagePreviewSchema.parse(raw);
+    return this.prepareRelation(input, 'databaseManage', connect, () => connection => postgresDatabasePlan(connection, draft));
   }
 
   /** 来源表结构与目标 schema 绑定预览，确认后只复制事务内可见的已提交行。 */
@@ -639,6 +649,7 @@ export class PostgresCreateTableWorkspace {
 
   /** 创建、注释和核对属于同一事务，断线且终态无法确认时保留未知。 */
   private async execute(connection: PostgresConnection, prepared: Prepared): Promise<PostgresCreateTableOutcome> {
+    if (prepared.plan.autocommit) return this.executeCreateDatabase(connection, prepared);
     let sent = false, committing = false;
     try {
       await startPostgresDdl(connection, false);
@@ -695,6 +706,32 @@ export class PostgresCreateTableWorkspace {
         if (!committing && connection.state().transactionKnown && !connection.state().transactionOpen) return { outcome: 'rolledBack', message };
       } catch { /* 连接异常由原回执保留，禁止重放。 */ }
       return { outcome: 'unknown', message };
+    }
+  }
+
+  /** CREATE DATABASE 由独立物理会话发送一次。服务器未确认或回读不符时保留未知状态。 */
+  private async executeCreateDatabase(connection: PostgresConnection, prepared: Prepared): Promise<PostgresCreateTableOutcome> {
+    let sent = false, acknowledged = false;
+    try {
+      const { plan, targetStamp } = prepared;
+      if (plan.statements.length !== 1 || !connection.state().transactionKnown || connection.state().transactionOpen)
+        throw Error('建库需要独立的事务外会话');
+      await connection.query("SET statement_timeout = '120s'", undefined, budget());
+      await connection.query("SET lock_timeout = '5s'", undefined, budget());
+      if (await plan.preflight(connection) !== targetStamp) throw Error('原建库预览已变化');
+      sent = true;
+      const reply = await connection.query(plan.statements[0], undefined, budget(), undefined, 'extended');
+      if (reply.postgresCommand !== 'CREATE' || !connection.state().transactionKnown || connection.state().transactionOpen)
+        throw Error('PostgreSQL 未确认建库回执');
+      acknowledged = true;
+      await plan.verify(connection, targetStamp);
+      return { outcome: 'committed', table: plan.table, message: plan.success };
+    } catch (reason) {
+      const error = connection.error(reason) as Error & { postgresSqlState?: string };
+      if (!sent) return { outcome: 'notSent', message: error.message };
+      if (!acknowledged && error.postgresSqlState && connection.state().transactionKnown && !connection.state().transactionOpen)
+        return { outcome: 'rolledBack', message: error.message };
+      return { outcome: 'unknown', message: error.message };
     }
   }
 

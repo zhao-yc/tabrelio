@@ -1,0 +1,15 @@
+export const postgresDatabaseManageZh = {
+  title: '管理 PostgreSQL 数据库', maintenance: '维护数据库', read: '读取数据库目录',
+  operation: '操作', source: '目标数据库', name: '数据库名称', owner: '所有者', newOwner: '目标所有者',
+  comment: '数据库注释', template: '建库模板', encoding: '编码', collation: '排序规则',
+  allow: '允许新连接', limit: '连接上限', unlimited: '不限（-1）', yes: '是', no: '否',
+  actions: { create: '新建数据库', rename: '重命名数据库', comment: '编辑注释', owner: '转移所有者', settings: '修改连接设置' },
+  newHint: 'template0 创建初始数据库，template1 复制服务器默认模板。编码与排序规则沿用模板。',
+  maintenanceHint: '重命名需要连接到另一个维护库，并关闭目标数据库的所有连接。默认连接库和 postgres 受保护。',
+  changeHint: '关闭允许新连接不会结束已有连接。维护库、默认连接库和 postgres 必须允许连接。',
+  renameTabs: '请先关闭原库和目标名称下的工作台标签。已有查询正文保留原样。',
+  empty: '当前角色没有可见的用户数据库。', close: '关闭', back: '返回修改',
+  preview: '预览数据库 SQL', apply: '确认提交数据库操作', sql: '实际提交 SQL',
+  changed: '原连接已变化，请重新打开数据库管理。', discard: '放弃未提交的数据库修改？',
+  unknown: '提交结果待核对。请关闭窗口后重新读取数据库目录。',
+} as const;

@@ -16,6 +16,9 @@ import type { PostgresCreateViewKind } from '../shared/postgresCreateView';
 import { postgresColumnEditZh } from './locales/postgresColumnEdit.zh-CN';
 import { postgresViewManageZh } from './locales/postgresViewManage.zh-CN';
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
+import { PostgresDatabaseManageDialog } from './components/PostgresDatabaseManageDialog';
+import { postgresDatabaseManageZh } from './locales/postgresDatabaseManage.zh-CN';
+import type { PostgresDatabaseManageInput } from '../shared/postgresDatabaseManage';
 import { PostgresSchemaManageDialog } from './components/PostgresSchemaManageDialog';
 import { postgresSchemaManageZh } from './locales/postgresSchemaManage.zh-CN';
 import type { PostgresSchemaPreviewInput } from '../shared/postgresSchemaManage';
@@ -749,6 +752,27 @@ function WorkspaceApp() {
     if ((workspace.connectionVersions[result.target.connectionId] ?? 0) !== version) { workspace.notify(tableCreateZh.mismatch, true); return; }
     refreshRenameDatabase(result.target); markStructureTarget(result.target, false);
   }
+  /** 改名前保护原库和目标名称的标签，保留查询正文及工作区草稿。 */
+  function beforePostgresDatabaseManage(draft: PostgresDatabaseManageInput) {
+    if (draft.action !== 'rename') return;
+    if (useWorkspace.getState().settings.tabs.some(tab => tab.connectionId === draft.connectionId &&
+      [draft.targetName, draft.name].includes(tab.database || 'postgres'))) throw Error(postgresDatabaseManageZh.renameTabs);
+    workbenchNavigation.invalidate();
+  }
+
+  /** 真实回执刷新原连接。改名前的数据库链接在当前窗口退役。 */
+  function finishPostgresDatabaseManage(draft: PostgresDatabaseManageInput, version: number, message: string, unknown: boolean) {
+    const workspace = useWorkspace.getState();
+    workspace.notify(message, unknown);
+    if ((workspace.connectionVersions[draft.connectionId] ?? 0) !== version) return;
+    setConnectionRefreshVersions(current => ({ ...current, [draft.connectionId]: (current[draft.connectionId] ?? 0) + 1 }));
+    if (draft.action === 'rename') {
+      workbenchNavigation.retireDatabase({ connectionId: draft.connectionId, database: draft.targetName });
+      if (unknown) workbenchNavigation.retireDatabase({ connectionId: draft.connectionId, database: draft.name });
+      if (workspace.selection?.connectionId === draft.connectionId && workspace.selection.database === draft.targetName)
+        workspace.select({ connectionId: draft.connectionId, ...(!unknown ? { database: draft.name } : {}) });
+    } else workbenchNavigation.invalidate();
+  }
   /** Schema 改名和删除前保护源和目标下的表页，查询正文不参与路径变更。 */
   function beforePostgresSchemaManage(draft: PostgresSchemaPreviewInput) {
     if (draft.action !== 'rename' && draft.action !== 'drop') return;
@@ -1231,7 +1255,11 @@ function WorkspaceApp() {
       onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : schema.createView ? <PostgresCreateViewDialog key={JSON.stringify([schema.connectionId, schema.database, schema.createView])} kind={schema.createView}
       target={schema} onDirtyChange={setTableCreateEdits}
       onCreated={(view, version, message) => finishPostgresTableCreate({ connectionId: schema.connectionId, database: schema.database }, view, version, message)}
-      onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : !schema.table && connections.find(profile => profile.id === schema.connectionId)?.dialect === 'postgresql' ? <PostgresCreateTableDialog key={JSON.stringify([schema.connectionId, schema.database])} target={{ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }} onDirtyChange={setTableCreateEdits} onCreated={(table, version, message) => finishPostgresTableCreate({ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }, table, version, message)} onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : <SchemaDialog {...schema} onDirtyChange={setTableCreateEdits} onCreated={finishTableCreate} onSqliteCreated={finishSqliteTableCreate} onClose={() => { setSchema(null); setTableCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {ddl && (!ddl.object && ddl.database && connections.find(profile => profile.id === ddl.connectionId)?.dialect === 'postgresql' ?
+      onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : !schema.table && connections.find(profile => profile.id === schema.connectionId)?.dialect === 'postgresql' ? <PostgresCreateTableDialog key={JSON.stringify([schema.connectionId, schema.database])} target={{ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }} onDirtyChange={setTableCreateEdits} onCreated={(table, version, message) => finishPostgresTableCreate({ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }, table, version, message)} onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : <SchemaDialog {...schema} onDirtyChange={setTableCreateEdits} onCreated={finishTableCreate} onSqliteCreated={finishSqliteTableCreate} onClose={() => { setSchema(null); setTableCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {ddl && (!ddl.object && !ddl.database && connections.find(profile => profile.id === ddl.connectionId)?.dialect === 'postgresql' ?
+      <PostgresDatabaseManageDialog key={ddl.connectionId} connectionId={ddl.connectionId}
+        initialDatabase={connections.filter(profile => profile.dialect === 'postgresql').find(profile => profile.id === ddl.connectionId)?.database || 'postgres'}
+        onDirtyChange={setDatabaseCreateEdits} beforeApply={beforePostgresDatabaseManage} onResult={finishPostgresDatabaseManage}
+        onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }}/> : !ddl.object && ddl.database && connections.find(profile => profile.id === ddl.connectionId)?.dialect === 'postgresql' ?
       <PostgresSchemaManageDialog key={JSON.stringify([ddl.connectionId, ddl.database])} target={{ connectionId: ddl.connectionId, database: ddl.database }}
         onDirtyChange={setDatabaseCreateEdits} beforeApply={beforePostgresSchemaManage} onResult={finishPostgresSchemaManage}
         onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }}/> : ddl.object && ddl.definitionSearch?.dialect !== 'postgresql' && connections.find(profile => profile.id === ddl.connectionId)?.dialect === 'postgresql' ? ddl.object.kind === 'function' || ddl.object.kind === 'procedure' ? <PostgresRoutineDialog
