@@ -88,6 +88,12 @@ export const postgresRolesZh = {
     until: '设置到期时间', expiry: '到期时间（UTC）', preview: '预览角色修改 SQL', sql: '本次角色修改 SQL',
     confirm: '确认修改此服务器上的角色属性', apply: '执行角色修改',
   },
+  rename: {
+    title: '重命名 PostgreSQL 角色', open: '重命名角色', name: '新角色名',
+    hint: '新连接需要使用新用户名。PostgreSQL 会清除原角色的 MD5 密码，SCRAM 密码保留。',
+    preview: '预览角色重命名 SQL', sql: '本次重命名 SQL',
+    confirm: '确认更改角色名并接受 MD5 密码影响', apply: '执行角色重命名',
+  },
   create: {
     title: '新建 PostgreSQL 角色', open: '新建角色', auth: '登录方式', group: '组角色（NOLOGIN）',
     password: '密码登录（SCRAM）', external: '外部认证（无数据库密码）',

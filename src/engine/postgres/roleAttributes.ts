@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DataRow } from '../../shared/contracts';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import { postgresRoleAttributeFlags, type PostgresRole, type PostgresRoleAttributeEditor, type PostgresRoleAttributesDraft,
-  type PostgresRoleRef } from '../../shared/postgresRoles';
+  type PostgresRoleRef, type PostgresRoleRenameDraft } from '../../shared/postgresRoles';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 
@@ -30,8 +30,8 @@ function roleStamp(role: PostgresRole) {
   return createHash('sha256').update(JSON.stringify(role)).digest('hex');
 }
 
-/** 执行者只能编辑非自身角色，服务端也会在 ALTER ROLE 时独立校验权限。 */
-export async function readRoleAttributeTarget(connection: PostgresConnection, role: PostgresRole) {
+/** 执行者只能管理非自身角色，属性编辑和改名使用各自的服务端权限范围。 */
+export async function readRoleManagementTarget(connection: PostgresConnection, role: PostgresRole) {
   if (role.name.startsWith('pg_')) return;
   const result = await connection.query(`SELECT a.oid::text,a.rolname::text,session_user::text,a.rolsuper,a.rolcreaterole,
     a.rolcreatedb,a.rolreplication,a.rolbypassrls,d.oid::text,d.datname::text,extract(epoch FROM pg_catalog.pg_postmaster_start_time())::text,
@@ -44,7 +44,7 @@ export async function readRoleAttributeTarget(connection: PostgresConnection, ro
   if (!row || result.truncated || typeof row.c1 !== 'string' || typeof row.c9 !== 'string' || row.c12 !== 't' ||
       row.c0 === role.oid || row.c2 === role.name) return;
   const superuser = row.c3 === 't';
-  if (!superuser && (row.c4 !== 't' || row.c11 !== 't' || role.superuser || role.replication)) return;
+  if (!superuser && (row.c4 !== 't' || row.c11 !== 't' || role.superuser)) return;
   const flags = postgresRoleAttributeFlags.filter(key => {
     switch (key) {
       case 'superuser': return superuser && role.oid !== '10';
@@ -54,8 +54,9 @@ export async function readRoleAttributeTarget(connection: PostgresConnection, ro
       default: return true;
     }
   });
-  const editor: PostgresRoleAttributeEditor = {stamp: roleStamp(role), flags};
-  return {editor, actor: row.c1, database: row.c9, stamp: JSON.stringify([row, role])};
+  const renameStamp = roleStamp(role);
+  const attributeEditor: PostgresRoleAttributeEditor | undefined = superuser || !role.replication ? {stamp: renameStamp, flags} : undefined;
+  return {attributeEditor, renameStamp, actor: row.c1, database: row.c9, stamp: JSON.stringify([row, role])};
 }
 
 async function readRole(connection: PostgresConnection, role: PostgresRoleRef) {
@@ -71,16 +72,16 @@ const keywords = {login: 'LOGIN', inherit: 'INHERIT', createDatabase: 'CREATEDB'
 
 export async function prepareRoleAttributes(connection: PostgresConnection, draft: PostgresRoleAttributesDraft) {
   const {role: original, expiryEpoch} = await readRole(connection, draft.role);
-  const target = await readRoleAttributeTarget(connection, original);
-  if (!target) throw Error('当前角色无权编辑此角色，或目标是当前登录角色');
-  if (target.database !== draft.database || target.editor.stamp !== draft.stamp)
+  const target = await readRoleManagementTarget(connection, original);
+  if (!target?.attributeEditor) throw Error('当前角色无权编辑此角色，或目标是当前登录角色');
+  if (target.database !== draft.database || target.attributeEditor.stamp !== draft.stamp)
     throw Error('原角色属性或数据库已变化，请重新读取角色目录');
   const expected = {...original};
   const clauses: string[] = [];
   for (const key of postgresRoleAttributeFlags) {
     const value = draft.patch[key];
     if (value === undefined || value === original[key]) continue;
-    if (!target.editor.flags.includes(key)) throw Error('当前角色无权修改 ' + keywords[key]);
+    if (!target.attributeEditor.flags.includes(key)) throw Error('当前角色无权修改 ' + keywords[key]);
     expected[key] = value;
     clauses.push((value ? '' : 'NO') + keywords[key]);
   }
@@ -97,8 +98,23 @@ export async function prepareRoleAttributes(connection: PostgresConnection, draf
   return {...target, expected, expiry, sql: 'ALTER ROLE ' + postgresIdentifier(draft.role.name) + ' WITH\n  ' + clauses.join('\n  ')};
 }
 
+export async function prepareRoleRename(connection: PostgresConnection, draft: PostgresRoleRenameDraft) {
+  const {role: original} = await readRole(connection, draft.role);
+  const target = await readRoleManagementTarget(connection, original);
+  if (!target) throw Error('当前角色无权重命名此角色，或目标是当前登录角色');
+  if (target.database !== draft.database || target.renameStamp !== draft.stamp)
+    throw Error('原角色属性或数据库已变化，请重新读取角色目录');
+  const availability = await connection.query(`SELECT
+    NOT EXISTS(SELECT FROM pg_catalog.pg_roles WHERE rolname::text COLLATE pg_catalog."C"=$1::text),
+    pg_catalog.octet_length($1::text)<=pg_catalog.current_setting('max_identifier_length')::int`, [draft.name], budget());
+  if (availability.rows[0]?.c0 !== 't') throw Error('新角色名称已存在，请重新选择');
+  if (availability.rows[0]?.c1 !== 't') throw Error('新角色名称超过服务器标识符长度限制');
+  return {...target, expected: {...original, name: draft.name},
+    sql: 'ALTER ROLE ' + postgresIdentifier(original.name) + ' RENAME TO ' + postgresIdentifier(draft.name)};
+}
+
 /** 在重复读快照中核对原 OID 的完整属性。本事务以外的同名变更不能提供提交证据。 */
-export async function verifyRoleAttributes(connection: PostgresConnection, {expected, expiry}: Awaited<ReturnType<typeof prepareRoleAttributes>>) {
+export async function verifyRoleAttributes(connection: PostgresConnection, {expected, expiry}: {expected: PostgresRole; expiry?: string}) {
   const {role, expiryEpoch} = await readRole(connection, expected);
   const actualExpiry = expiry === 'infinity' ? role.validUntil === 'infinity'
     : expiry === undefined ? role.validUntil === expected.validUntil : expiryEpoch !== null && Number(expiryEpoch) === Date.parse(expiry) / 1000;

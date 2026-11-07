@@ -85,3 +85,9 @@ PUBLIC 包含当前及将来创建的角色。撤销 CONNECT 后，仅通过 PUB
 在 PostgreSQL 16 及以上的角色详情点击「编辑角色属性」，可启用或停用登录，调整连接上限、密码有效期及执行者有权修改的其他属性。密码有效期可保留、设为永不过期，或输入 UTC 到期时间。角色设置在整个服务器上生效，停用登录只影响新连接。普通 CREATEROLE 执行者还需拥有目标角色的 ADMIN 选项，服务器会独立校验执行权限。[PostgreSQL ALTER ROLE](https://www.postgresql.org/docs/18/sql-alterrole.html)
 
 预览只列出发生变化的属性。确认会核对数据库、执行角色、目标角色 OID 和原属性。在同一个重复读事务中回读原 OID 的全部属性后才提交。当前登录角色和预定义角色不提供属性编辑入口。角色详情与目录会在确认后重新读取。[PostgreSQL 事务隔离](https://www.postgresql.org/docs/18/transaction-iso.html)
+
+## 重命名角色
+
+在 PostgreSQL 16 及以上的角色详情点击「重命名角色」，输入服务器范围内未占用的新名称，核对原角色 OID 和 SQL 后确认。普通 CREATEROLE 管理员须对目标角色拥有 ADMIN 选项。角色改名保留原 OID、成员关系和对象授权。当前登录角色与预定义角色不提供此入口。[PostgreSQL ALTER ROLE](https://www.postgresql.org/docs/18/sql-alterrole.html)
+
+新连接需要使用新用户名，已保存的连接可在连接编辑中手动更新。PostgreSQL 会保留 SCRAM 密码，并清除以旧用户名为盐的 MD5 密码。预览和确认会核对角色 OID、原属性及新名可用性，提交前会在同一事务中确认原 OID 已对应新名称。

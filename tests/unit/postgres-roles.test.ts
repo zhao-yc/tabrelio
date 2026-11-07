@@ -156,3 +156,13 @@ it('角色属性修改绑定角色和原属性摘要，仅接收明确可编辑�
   expect(() => validateCommand('postgres.roles.attributes.apply', {connectionId: 'saved', database: 'qa',
     token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true, patch: draft.patch})).toThrow();
 });
+
+it('角色重命名绑定原 OID 和属性摘要，新名称按服务器标识符校验', () => {
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '101', name: '原角色'}, stamp: 'a'.repeat(64), name: '新 "角色"'};
+  expect(validateCommand('postgres.roles.rename.preview', draft)).toEqual(draft);
+  for (const value of [{...draft, name: draft.role.name}, {...draft, name: 'pg_reserved'}, {...draft, name: '界'.repeat(22)},
+    {...draft, name: 'x\0y'}, {...draft, stamp: ''}, {...draft, sql: 'ALTER ROLE r RENAME TO x'}])
+    expect(() => validateCommand('postgres.roles.rename.preview', value)).toThrow();
+  expect(() => validateCommand('postgres.roles.rename.apply', {connectionId: 'saved', database: 'qa',
+    token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true, name: draft.name})).toThrow();
+});

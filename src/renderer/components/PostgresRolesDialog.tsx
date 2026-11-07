@@ -12,6 +12,7 @@ import { PostgresMembershipDialog, type MembershipIntent } from './PostgresMembe
 import { PostgresRoleCreateDialog } from './PostgresRoleCreateDialog';
 import { PostgresRolePasswordDialog } from './PostgresRolePasswordDialog';
 import { PostgresRoleAttributesDialog } from './PostgresRoleAttributesDialog';
+import { PostgresRoleRenameDialog } from './PostgresRoleRenameDialog';
 import { PostgresObjectPrivilegesDialog } from './PostgresObjectPrivilegesDialog';
 import { PostgresColumnPrivilegesGrid } from './PostgresColumnPrivilegesGrid';
 import '../postgresRoles.css';
@@ -70,6 +71,7 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
   const [creation, setCreation] = useState<RoleSource>();
   const [objectAccess, setObjectAccess] = useState<RoleSource & {role: PostgresRoleRef; scope: Scope; editor: PrivilegeEditor; privileges: readonly PostgresObjectPrivilege[]}>();
   const [attributes, setAttributes] = useState<RoleSource & {role: PostgresRole; editor: PostgresRoleAttributeEditor; scope?: Scope}>();
+  const [rename, setRename] = useState<RoleSource & {role: PostgresRoleRef; stamp: string}>();
   const [rotation, setRotation] = useState<RoleSource & {role: PostgresRoleRef}>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
@@ -129,6 +131,15 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
     connectionId={attributes.connection.id} database={attributes.database} current={() => sourceCurrent(attributes)} onClose={refresh => {
       setAttributes(undefined);
       if (refresh && sourceCurrent(attributes)) readDetail(attributes.role, attributes.scope);
+    }}/>;
+  if (rename) return <PostgresRoleRenameDialog role={rename.role} stamp={rename.stamp}
+    connectionId={rename.connection.id} database={rename.database} current={() => sourceCurrent(rename)} onClose={outcome => {
+      setRename(undefined);
+      if (!outcome || !sourceCurrent(rename)) return;
+      const name = outcome.outcome === 'committed' ? outcome.role?.name ?? '' : search;
+      setPage(undefined);
+      setSearch(name);
+      readList(name);
     }}/>;
   if (rotation) return <PostgresRolePasswordDialog
     target={{connectionId: rotation.connection.id, database: rotation.database, role: rotation.role}}
@@ -209,6 +220,10 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
           const editor = detail.snapshot.attributeEditor;
           if (editor) setAttributes({connection, version, database: detail.snapshot.database, role, editor, scope: detail.scope});
         }}>{t.editAttributes.open}</button>}
+        {connection && detail.snapshot.renameStamp && <button disabled={busy} onClick={() => {
+          const stamp = detail.snapshot.renameStamp;
+          if (stamp) setRename({connection, version, database: detail.snapshot.database, role: {oid: role.oid, name: role.name}, stamp});
+        }}>{t.rename.open}</button>}
         {!protectedRole(role.name) && <button disabled={busy}
           onClick={() => edit({action: 'grant', member: {oid: role.oid, name: role.name}})}>{t.grant}</button>}
         <dl className="postgres-roles-attributes">{[

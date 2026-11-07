@@ -57,6 +57,10 @@ const roleAttributePatch = z.object({
 export const postgresRoleAttributesDraftSchema = z.object({...membershipTarget, database: identifier, role,
   stamp: z.string().regex(/^[a-f0-9]{64}$/), patch: roleAttributePatch}).strict();
 export type PostgresRoleAttributesDraft = z.infer<typeof postgresRoleAttributesDraftSchema>;
+export const postgresRoleRenameDraftSchema = z.object({...membershipTarget, database: identifier, role,
+  stamp: z.string().regex(/^[a-f0-9]{64}$/), name: postgresNewIdentifier.refine(value => !value.startsWith('pg_'), '角色名不能以 pg_ 开头'),
+}).strict().refine(draft => draft.name !== draft.role.name, '新角色名必须与原名不同');
+export type PostgresRoleRenameDraft = z.infer<typeof postgresRoleRenameDraftSchema>;
 export interface PostgresRoleAttributeEditor {stamp: string; flags: PostgresRoleAttributeFlag[];}
 export type PostgresRoleCreateDraft = z.infer<typeof postgresRoleCreateDraftSchema>;
 export type PostgresRoleCreateApply = z.infer<typeof postgresRoleCreateApplySchema>;
@@ -147,6 +151,7 @@ export interface PostgresRolesList extends PostgresRolesContext {
 export interface PostgresRoleDetail extends PostgresRolesContext {
   kind: 'detail'; role: PostgresRole;
   attributeEditor?: PostgresRoleAttributeEditor;
+  renameStamp?: string;
   memberships: {granted: PostgresRoleMembership[]; members: PostgresRoleMembership[]; limited: boolean};
   databasePrivileges: PostgresRolePrivilege[];
   databaseEditor?: PostgresScopedPrivilegeEditor;

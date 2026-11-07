@@ -3,7 +3,7 @@ import type { PostgresColumnPrivilege, PostgresColumnPrivilegeRow, PostgresRoleD
   PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput, PostgresObjectPrivilege, PostgresRoutinePrivilegeRow } from '../../shared/postgresRoles';
 import type { PostgresConnection } from './connection';
 import { postgresRoutineSignatureSql } from './routine';
-import { parsePostgresRole, postgresRoleFields, readRoleAttributeTarget } from './roleAttributes';
+import { parsePostgresRole, postgresRoleFields, readRoleManagementTarget } from './roleAttributes';
 
 const pageSize = 50, memberLimit = 200;
 const columnPageSize = 32;
@@ -41,7 +41,8 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       [input.role.oid, input.role.name], 1);
     if (!row) throw Error('所选 PostgreSQL 角色已变化，请重新读取目录');
     const role = parsePostgresRole(row);
-    const attributeEditor = (await readRoleAttributeTarget(connection, role))?.editor;
+    const management = await readRoleManagementTarget(connection, role);
+    const {attributeEditor, renameStamp} = management ?? {};
     const memberships = async (direction: 'granted' | 'members') => {
       const owner = direction === 'granted' ? 'member' : 'roleid', peer = direction === 'granted' ? 'roleid' : 'member';
       // PG16 开始按授权记录保存 INHERIT 和 SET，旧版本显示未知而不猜权限。
@@ -214,7 +215,7 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       }
     }
     output = {kind: 'detail', ...context, role, memberships: {granted: granted.edges, members: members.edges, limited: granted.limited || members.limited},
-      databasePrivileges, ...(attributeEditor ? {attributeEditor} : {}), ...(databaseEditor ? {databaseEditor} : {}), ...(databasePublicEditor ? {databasePublicEditor} : {}), ...(scope ? {scope} : {})};
+      databasePrivileges, ...(attributeEditor ? {attributeEditor} : {}), ...(renameStamp ? {renameStamp} : {}), ...(databaseEditor ? {databaseEditor} : {}), ...(databasePublicEditor ? {databasePublicEditor} : {}), ...(scope ? {scope} : {})};
   }
   check();
   const ended = await connection.query('COMMIT', undefined, {rows: 0, bytes: 1024});

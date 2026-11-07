@@ -3,17 +3,17 @@ import { promisify } from 'node:util';
 import saslprep from '@mongodb-js/saslprep';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { PostgresRoleAttributesDraft, PostgresRoleCreateApply, PostgresRoleCreateDraft, PostgresRoleChangeOutcome, PostgresRoleChangePreview,
-  PostgresRolePasswordDraft } from '../../shared/postgresRoles';
+  PostgresRolePasswordDraft, PostgresRoleRenameDraft } from '../../shared/postgresRoles';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 import { startPostgresDdl } from './createTable';
-import { prepareRoleAttributes, verifyRoleAttributes } from './roleAttributes';
+import { prepareRoleAttributes, prepareRoleRename, verifyRoleAttributes } from './roleAttributes';
 
 type Scoped<T> = T & {owner: string; connectionRevision: number};
 type Connect = (work: (connection: PostgresConnection) => Promise<void>, writing?: boolean) => Promise<void>;
 type CredentialChange = (PostgresRoleCreateDraft & {kind: 'create'}) | (PostgresRolePasswordDraft & {kind: 'password'});
-type RoleChange = CredentialChange | (PostgresRoleAttributesDraft & {kind: 'attributes'});
-type Target = {actor: string; database: string; iterations: number; stamp: string; attributes?: Awaited<ReturnType<typeof prepareRoleAttributes>>};
+type RoleChange = CredentialChange | (PostgresRoleAttributesDraft & {kind: 'attributes'}) | (PostgresRoleRenameDraft & {kind: 'rename'});
+type Target = {actor: string; database: string; iterations: number; stamp: string; managed?: Awaited<ReturnType<typeof prepareRoleAttributes | typeof prepareRoleRename>>};
 const derive = promisify(pbkdf2);
 const budget = (rows = 0) => ({rows, bytes: 16 * 1024});
 const scramPlaceholder = '<客户端生成的 SCRAM 验证值>';
@@ -73,9 +73,9 @@ async function readPasswordTarget(connection: PostgresConnection, draft: Postgre
 }
 
 async function readChangeTarget(connection: PostgresConnection, draft: RoleChange): Promise<Target> {
-  if (draft.kind === 'attributes') {
-    const attributes = await prepareRoleAttributes(connection, draft);
-    return {actor: attributes.actor, database: attributes.database, iterations: 0, stamp: attributes.stamp, attributes};
+  if (draft.kind === 'attributes' || draft.kind === 'rename') {
+    const managed = draft.kind === 'attributes' ? await prepareRoleAttributes(connection, draft) : await prepareRoleRename(connection, draft);
+    return {actor: managed.actor, database: managed.database, iterations: 0, stamp: managed.stamp, managed};
   }
   if (draft.kind === 'password') return readPasswordTarget(connection, draft);
   const result = await connection.query(`SELECT a.oid::text,a.rolname::text,a.rolsuper,a.rolcreaterole,a.rolcreatedb,
@@ -111,9 +111,9 @@ async function verifyCreatedRole(connection: PostgresConnection, draft: Postgres
 }
 
 function changeSql(draft: RoleChange, target: Target, verifier?: string) {
-  if (draft.kind !== 'attributes') return roleSql(draft, verifier);
-  if (!target.attributes) throw Error('未确认角色属性预览');
-  return target.attributes.sql;
+  if (draft.kind === 'create' || draft.kind === 'password') return roleSql(draft, verifier);
+  if (!target.managed) throw Error('未确认角色变更预览');
+  return target.managed.sql;
 }
 
 /** 预览只保留非秘密属性。单次提交消费令牌并复核实际服务器与目录。 */
@@ -129,7 +129,7 @@ export class PostgresRoleChanges {
       let target: Awaited<ReturnType<typeof readChangeTarget>> | undefined;
       await connect(async connection => {
         await startPostgresDdl(connection, true);
-        if (draft.kind === 'attributes') await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', undefined, budget());
+        if (draft.kind === 'attributes' || draft.kind === 'rename') await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', undefined, budget());
         target = await readChangeTarget(connection, draft);
         if ((await connection.query('COMMIT', undefined, budget())).postgresCommand !== 'COMMIT')
           throw Error('未确认角色变更预览事务结束');
@@ -145,7 +145,7 @@ export class PostgresRoleChanges {
 
   async apply(kind: RoleChange['kind'], input: Scoped<PostgresRoleCreateApply>, connect: Connect): Promise<PostgresRoleChangeOutcome> {
     const key = JSON.stringify([input.owner, input.connectionId]), plan = this.plans.get(key);
-    const operation = {password: '密码轮换', create: '角色创建', attributes: '角色属性修改'}[kind];
+    const operation = {password: '密码轮换', create: '角色创建', attributes: '角色属性修改', rename: '角色重命名'}[kind];
     if (this.pending.has(key) || !plan || plan.draft.kind !== kind || input.confirmed !== true || plan.token !== input.token || plan.expires <= Date.now() ||
         plan.draft.connectionRevision !== input.connectionRevision || plan.draft.database !== input.database)
       return {outcome: 'notSent', message: operation + '预览已失效，请重新预览'};
@@ -159,7 +159,7 @@ export class PostgresRoleChanges {
         let sent = false, committing = false;
         try {
           await startPostgresDdl(connection, false);
-          if (kind === 'attributes') await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', undefined, budget());
+          if (kind === 'attributes' || kind === 'rename') await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', undefined, budget());
           const current = await readChangeTarget(connection, plan.draft);
           if (current.stamp !== plan.target.stamp) throw Error('服务器、角色权限或认证配置已变化，请重新预览');
           const verifier = input.password === undefined ? undefined : await postgresRoleScramVerifier(input.password, current.iterations);
@@ -174,8 +174,8 @@ export class PostgresRoleChanges {
             role = plan.draft.role;
           } else if (plan.draft.kind === 'create') role = await verifyCreatedRole(connection, plan.draft);
           else {
-            if (!current.attributes) throw Error('未确认角色属性预览');
-            role = await verifyRoleAttributes(connection, current.attributes);
+            if (!current.managed) throw Error('未确认角色变更预览');
+            role = await verifyRoleAttributes(connection, current.managed);
           }
           committing = true;
           const result = await connection.query('COMMIT', undefined, budget()), state = connection.state();
@@ -187,7 +187,7 @@ export class PostgresRoleChanges {
           }
         } catch (reason) {
           // 角色变更的诊断可能携带验证值。发送后只交付固定消息和真实事务结果。
-          const message = sent && kind !== 'attributes' ? '服务器未确认' + operation + '，请核对角色目录与执行权限' : connection.error(reason).message;
+          const message = sent && (kind === 'create' || kind === 'password') ? '服务器未确认' + operation + '，请核对角色目录与执行权限' : connection.error(reason).message;
           let rolledBack = false;
           try {
             if (connection.state().transactionOpen)

@@ -7,7 +7,7 @@ import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, xmlImportZ
 import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
 import { mysqlWorkbookExportSchema } from './mysqlWorkbookExport';
 import { postgresWorkbookExportSchema } from './postgresWorkbookExport';
-import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRoleAttributesDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresColumnPrivilegeDraftSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from './postgresRoles';
+import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRoleAttributesDraftSchema, postgresRoleRenameDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresColumnPrivilegeDraftSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from './postgresRoles';
 import { postgresQueryExportSchema } from './postgresQueryExport';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './fullQueryExportProfiles';
@@ -319,6 +319,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.roles.password.apply': postgresRolePasswordApplySchema,
   'postgres.roles.attributes.preview': postgresRoleAttributesDraftSchema,
   'postgres.roles.attributes.apply': postgresMembershipApplySchema,
+  'postgres.roles.rename.preview': postgresRoleRenameDraftSchema,
+  'postgres.roles.rename.apply': postgresMembershipApplySchema,
   'postgres.roles.tablePrivileges.preview': postgresTablePrivilegeDraftSchema,
   'postgres.roles.tablePrivileges.apply': postgresMembershipApplySchema,
   'postgres.roles.columnPrivileges.preview': postgresColumnPrivilegeDraftSchema,

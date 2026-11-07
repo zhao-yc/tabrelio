@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { postgresRolesZh as t } from '../../src/renderer/locales/postgresRoles.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { test, expect, desktop, page, quitDesktop } from './desktop-fixture';
@@ -1419,4 +1419,137 @@ test('PostgreSQL 管理员修改角色登录和有效期并保护同名替换', 
     await quitDesktop();
     expect(native.exitCode).toBe(0);
   } finally {await Promise.all([live.end(), observer.end(), admin.end()]);}
+});
+
+test('PostgreSQL 角色重命名保留身份、权限和 SCRAM 并清除旧 MD5', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || ![password, adminPassword].every(value => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', manager = prefix + 'creator', old = prefix + 'rename';
+  const legacy = prefix + 'legacy', renamedLegacy = legacy + '_new', racing = prefix + 'rename_race';
+  const next = 'Renamed "QA" ' + token, quotedNext = '"Renamed ""QA"" ' + token + '"';
+  const endpoint = {host: '127.0.0.1', port, database, connectionTimeoutMillis: 3000};
+  const admin = new Client({...endpoint, user: 'postgres', password: adminPassword});
+  const observer = new Client({...endpoint, user: 'postgres', password: adminPassword});
+  const login = async (user: string, sql = 'SELECT current_user::text AS name') => {
+    const client = new Client({...endpoint, user, password});
+    try {await client.connect(); return (await client.query(sql)).rows;}
+    finally {await client.end();}
+  };
+  await admin.connect();
+  try {
+    await observer.connect();
+    const legacyVerifier = 'md5' + createHash('md5').update(password + legacy).digest('hex');
+    const schema = 'qa_rename_' + token;
+    await admin.query(`CREATE ROLE ${old} LOGIN PASSWORD '${password}'; CREATE ROLE ${legacy} LOGIN PASSWORD '${legacyVerifier}';
+      CREATE ROLE ${racing}; GRANT ${old},${legacy},${racing} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+      GRANT ${prefix}group TO ${old} WITH INHERIT TRUE, SET TRUE;
+      CREATE SCHEMA ${schema}; GRANT USAGE ON SCHEMA ${schema} TO ${old};
+      CREATE TABLE ${schema}.owned(id int); ALTER TABLE ${schema}.owned OWNER TO ${old};
+      CREATE TABLE ${schema}.shared(id int); INSERT INTO ${schema}.shared VALUES (17);
+      GRANT SELECT ON ${schema}.shared TO ${old}`);
+    const readRole = async (name: string) => (await admin.query(`SELECT oid::text,rolcanlogin AS login,rolpassword LIKE 'SCRAM-SHA-256$%' AS scram,
+      rolpassword LIKE 'md5%' AS md5 FROM pg_catalog.pg_authid WHERE rolname=$1`, [name])).rows[0];
+    const original = await readRole(old), originalLegacy = await readRole(legacy);
+    expect(original).toMatchObject({login: true, scram: true, md5: false});
+    expect(originalLegacy).toMatchObject({login: true, scram: false, md5: true});
+    const grants = async () => (await admin.query(`SELECT
+      (SELECT relowner::text FROM pg_catalog.pg_class WHERE oid=$2::regclass) AS owner,
+      EXISTS(SELECT FROM pg_catalog.pg_auth_members WHERE member=$1::oid AND roleid=$3::regrole AND inherit_option) AS member,
+      pg_catalog.has_table_privilege($1::oid,$4::regclass,'SELECT') AS granted`,
+    [original.oid, schema + '.owned', prefix + 'group', schema + '.shared'])).rows[0];
+    expect(await grants()).toEqual({owner: original.oid, member: true, granted: true});
+    expect(await login(old)).toEqual([{name: old}]);
+    const profile = await page.evaluate(async ({database, port, manager, old, password}) => {
+      const base = {id: '', dialect: 'postgresql' as const, group: '', color: '#123456', host: '127.0.0.1', port, database,
+        password, rememberPassword: false};
+      const profile = await window.dbark.invoke('connections.save', {...base, user: manager, name: '普通 CREATEROLE 重命名'});
+      await window.dbark.invoke('connections.save', {...base, user: old, name: '角色原用户名'});
+      return profile;
+    }, {database, port, manager, old, password});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profile.id);
+    const locale = t.rename, dialog = page.getByRole('dialog', {name: locale.title, exact: true});
+    const directory = modal.getByRole('region', {name: t.directory, exact: true});
+    const select = async (name: string) => {
+      await modal.getByLabel(t.search, {exact: true}).fill(name);
+      await modal.getByRole('button', {name: t.read, exact: true}).click();
+      await directory.getByRole('button', {name, exact: true}).click();
+    };
+    const prepare = async (name: string) => {
+      await dialog.getByLabel(locale.name, {exact: true}).fill(name);
+      await dialog.getByRole('button', {name: locale.preview, exact: true}).click();
+    };
+    const apply = async () => {
+      await dialog.getByRole('checkbox', {name: locale.confirm, exact: true}).check();
+      await dialog.getByRole('button', {name: locale.apply, exact: true}).click();
+      await expect(dialog.getByRole('status').filter({hasText: t.result.committed})).toBeVisible();
+      await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+    await select(old);
+    await modal.getByRole('button', {name: locale.open, exact: true}).click();
+    await expect(dialog.getByText(locale.hint, {exact: true})).toBeVisible();
+    await prepare(manager);
+    await expect(dialog.getByText(/新角色名称已存在/)).toBeVisible();
+    await prepare(next);
+    await expect(dialog.getByLabel(locale.sql, {exact: true})).toHaveText(`ALTER ROLE "${old}" RENAME TO ${quotedNext}`);
+    expect(await readRole(old)).toEqual(original);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 角色重命名预览.png')});
+    await apply();
+    await expect(directory.getByRole('button', {name: next, exact: true})).toBeVisible();
+    expect(await readRole(old)).toBeUndefined();
+    expect(await readRole(next)).toEqual(original);
+    expect(await grants()).toEqual({owner: original.oid, member: true, granted: true});
+    expect(await login(next, `SELECT id FROM ${schema}.shared`)).toEqual([{id: 17}]);
+    await expect(login(old)).rejects.toMatchObject({code: '28P01'});
+    const savedUser = await page.evaluate(async () => (await window.dbark.invoke('connections.list', {}))
+      .find(profile => profile.name === '角色原用户名'));
+    expect(savedUser).toMatchObject({user: old});
+
+    await select(legacy);
+    await modal.getByRole('button', {name: locale.open, exact: true}).click();
+    await prepare(renamedLegacy);
+    await expect(dialog.getByLabel(locale.sql, {exact: true})).toBeVisible();
+    await apply();
+    await expect(directory.getByRole('button', {name: renamedLegacy, exact: true})).toBeVisible();
+    expect(await readRole(renamedLegacy)).toEqual({oid: originalLegacy.oid, login: true, scram: null, md5: null});
+
+    const originalRace = await readRole(racing);
+    const racePlan = await page.evaluate(async ({connectionId, database, name, oid}) => {
+      const role = {name, oid};
+      const result = await window.dbark.invoke('postgres.roles.read', {kind: 'detail', taskId: crypto.randomUUID(), connectionId, database, role});
+      if (result.kind !== 'detail' || !result.renameStamp) throw Error('缺少重命名入口');
+      return window.dbark.invoke('postgres.roles.rename.preview', {connectionId, database, role, stamp: result.renameStamp, name: name + '_target'});
+    }, {connectionId: profile.id, database, name: racing, oid: originalRace.oid});
+    await admin.query('BEGIN; LOCK TABLE pg_catalog.pg_authid IN SHARE ROW EXCLUSIVE MODE');
+    const applying = page.evaluate(async ({connectionId, database, token}) =>
+      window.dbark.invoke('postgres.roles.rename.apply', {connectionId, database, token, confirmed: true}),
+      {connectionId: profile.id, database, token: racePlan.token});
+    void applying.catch(() => undefined);
+    try {
+      await expect.poll(async () => (await observer.query(`SELECT EXISTS(SELECT FROM pg_catalog.pg_stat_activity
+        WHERE wait_event_type='Lock' AND query LIKE $1) AS waiting`, ['ALTER ROLE "' + racing + '" RENAME TO%'])).rows[0].waiting,
+      {timeout: 3500}).toBe(true);
+      // 执行者也有替换角色的 ADMIN 权限，必须由原 OID 回读保护阻止误提交。
+      await admin.query(`ALTER ROLE ${racing} RENAME TO ${racing}_old; CREATE ROLE ${racing};
+        GRANT ${racing} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE; COMMIT`);
+    } finally {await admin.query('ROLLBACK');}
+    expect(await applying).toMatchObject({outcome: 'rolledBack', message: expect.stringContaining('原角色已变化')});
+    expect(await readRole(racing + '_target')).toBeUndefined();
+    expect(await readRole(racing + '_old')).toEqual(originalRace);
+    expect((await readRole(racing)).oid).not.toBe(originalRace.oid);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([observer.end(), admin.end()]);}
 });
