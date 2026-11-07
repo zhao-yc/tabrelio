@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { postgresNewIdentifier } from './postgresCreateTable';
 
 const identifier = z.string().min(1).max(256).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value));
 const oid = z.string().regex(/^[1-9]\d{0,9}$/).refine(value => Number(value) <= 0xffffffff);
@@ -31,6 +32,20 @@ export interface PostgresMembershipPreview {
 export interface PostgresMembershipOutcome {
   outcome: 'committed' | 'rolledBack' | 'notSent' | 'unknown'; message: string;
 }
+export const postgresRoleCreateDraftSchema = z.object({
+  ...membershipTarget, name: postgresNewIdentifier.refine(value => !value.startsWith('pg_'), '角色名不能以 pg_ 开头'),
+  auth: z.enum(['group', 'password', 'external']),
+  inherit: z.boolean(), createDatabase: z.boolean(), createRole: z.boolean(), superuser: z.boolean(),
+  replication: z.boolean(), bypassRls: z.boolean(), connectionLimit: z.number().int().min(-1).max(2147483647),
+  validUntil: z.iso.datetime({precision: 3}).refine(value => Number.isFinite(Date.parse(value))).optional(),
+}).strict().refine(value => value.validUntil === undefined || value.auth === 'password', '密码有效期仅适用于密码登录角色');
+const rolePassword = z.string().min(1).max(1024).refine(value =>
+  !/[\u0000\uD800-\uDFFF]/u.test(value) && new TextEncoder().encode(value).byteLength <= 1024, '请输入 1 至 1024 字节的密码');
+export const postgresRoleCreateApplySchema = postgresMembershipApplySchema.extend({password: rolePassword.optional()});
+export type PostgresRoleCreateDraft = z.infer<typeof postgresRoleCreateDraftSchema>;
+export type PostgresRoleCreateApply = z.infer<typeof postgresRoleCreateApplySchema>;
+export interface PostgresRoleCreatePreview {token: string; database: string; actor: string; sql: string;}
+export interface PostgresRoleCreateOutcome extends PostgresMembershipOutcome {role?: PostgresRoleRef;}
 export interface PostgresRole extends PostgresRoleRef {
   login: boolean; superuser: boolean; inherit: boolean; createRole: boolean; createDatabase: boolean;
   replication: boolean; bypassRls: boolean; connectionLimit: number; validUntil: string | null;

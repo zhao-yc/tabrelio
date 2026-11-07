@@ -59,8 +59,9 @@ import { explainLimits } from '../../shared/explain';
 import { serverMonitorSignalSchema, validateServerMonitorInput, type ServerMonitorInput, type ServerMonitorSignalInput,
   type ServerMonitorSignalResult } from '../../shared/serverMonitor';
 import { readPostgresRoles } from './roles';
+import { PostgresRoleCreate } from './roleCreate';
 import { PostgresRoleMembership } from './roleMembership';
-import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRolesSchema } from '../../shared/postgresRoles';
+import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRolesSchema } from '../../shared/postgresRoles';
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
@@ -163,6 +164,7 @@ export class PostgresEngine {
   private readonly checkEdits = new PostgresStructureEditWorkspace<PostgresCheckPreviewInput>('CHECK 约束', preparePostgresCheckEdit);
   private readonly tables = new PostgresTableWorkspace();
   private readonly roleMembership = new PostgresRoleMembership();
+  private readonly roleCreate = new PostgresRoleCreate();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
@@ -183,7 +185,7 @@ export class PostgresEngine {
       input.dialect === 'postgresql' ||
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
-        (id) => [...this.transfers.values()].some(task => task.connectionId === id || (id !== undefined && task.otherConnectionId === id)) || this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) || this.roleMembership.connectionIds().includes(id) ||
+        (id) => [...this.transfers.values()].some(task => task.connectionId === id || (id !== undefined && task.otherConnectionId === id)) || this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) || this.roleMembership.connectionIds().includes(id) || this.roleCreate.connectionIds().includes(id) ||
           this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || this.keyEdits.connectionIds().includes(id) || this.foreignEdits.connectionIds().includes(id) || this.checkEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
@@ -783,6 +785,7 @@ export class PostgresEngine {
       this.dataSearch?.records.releaseConnection(id);
       this.creations.clear(id);
       this.roleMembership.clear(id);
+      this.roleCreate.clear(id);
       this.columnEdits.clear(id);
       this.indexEdits.clear(id);
       this.keyEdits.clear(id);
@@ -815,6 +818,7 @@ export class PostgresEngine {
       this.tables.clear(input.id);
       this.creations.clear(input.id);
       this.roleMembership.clear(input.id);
+      this.roleCreate.clear(input.id);
       this.columnEdits.clear(input.id);
       this.indexEdits.clear(input.id);
       this.keyEdits.clear(input.id);
@@ -833,6 +837,7 @@ export class PostgresEngine {
         ...this.tables.connectionIds(),
         ...this.creations.connectionIds(),
         ...this.roleMembership.connectionIds(),
+        ...this.roleCreate.connectionIds(),
         ...this.columnEdits.connectionIds(),
         ...this.indexEdits.connectionIds(),
         ...this.keyEdits.connectionIds(),
@@ -1077,6 +1082,8 @@ export class PostgresEngine {
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
   async handle(command: string, input: Input): Promise<any> {
     switch (command) {
+      case 'postgres.roles.create.preview':
+      case 'postgres.roles.create.apply':
       case 'postgres.roles.membership.preview':
       case 'postgres.roles.membership.apply': {
         const {profile, owner, connectionRevision, ...request} = input;
@@ -1084,6 +1091,8 @@ export class PostgresEngine {
             !Number.isSafeInteger(connectionRevision) || connectionRevision < 0) throw Error('缺少可信的 PostgreSQL 角色授权来源');
         const connect = (action: (connection: PostgresConnection) => Promise<void>, writing = false) =>
           this.use(profile, request.database, action, false, false, writing);
+        if (command === 'postgres.roles.create.preview') return this.roleCreate.preview({...postgresRoleCreateDraftSchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.create.apply') return this.roleCreate.apply({...postgresRoleCreateApplySchema.parse(request), owner, connectionRevision}, connect);
         return command === 'postgres.roles.membership.preview'
           ? this.roleMembership.preview({...postgresMembershipPreviewSchema.parse(request), owner, connectionRevision}, connect)
           : this.roleMembership.apply({...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);

@@ -7,12 +7,19 @@ import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal } from './ui';
 import { PostgresMembershipDialog, type MembershipIntent } from './PostgresMembershipDialog';
+import { PostgresRoleCreateDialog } from './PostgresRoleCreateDialog';
 import '../postgresRoles.css';
 
 const yesNo = (value: boolean | null) => value === null ? t.unknown : value ? t.yes : t.no;
 type RoleQuery = Extract<PostgresRolesInput, {kind: 'list'}>;
 type DetailQuery = Extract<PostgresRolesInput, {kind: 'detail'}>;
 type Scope = DetailQuery['scope'];
+type RoleSource = {connection: PostgresConnectionProfile; version: number; database: string};
+function sourceCurrent({connection, version}: RoleSource) {
+  const current = useWorkspace.getState();
+  return current.connections.find(profile => profile.id === connection.id) === connection &&
+    (current.connectionVersions[connection.id] ?? 0) === version;
+}
 
 function Privileges({label, rows}: {label: string; rows: PostgresRolePrivilege[] | null}) {
   return <section><h4>{label}</h4>{rows ? <table aria-label={label}><thead><tr>
@@ -49,8 +56,8 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
   const [page, setPage] = useState<{key: string; snapshot: PostgresRolesList; search: string; trail: string[]}>();
   const [inspection, setInspection] = useState<{key: string; snapshot: PostgresRoleDetail; scope?: Scope}>();
   const [schema, setSchema] = useState(''), [relation, setRelation] = useState('');
-  const [membership, setMembership] = useState<{intent: MembershipIntent; connection: PostgresConnectionProfile;
-    version: number; database: string; role: PostgresRoleRef; scope?: Scope}>();
+  const [membership, setMembership] = useState<RoleSource & {intent: MembershipIntent; role: PostgresRoleRef; scope?: Scope}>();
+  const [creation, setCreation] = useState<RoleSource>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
   const connection = connections.find(profile => profile.id === connectionId);
@@ -73,9 +80,7 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
     try {
       const result = await invoke('postgres.roles.read', {connectionId, taskId, ...(database ? {database} : {}), ...request});
       if (running.current !== taskId) return;
-      const current = useWorkspace.getState();
-      if (current.connections.find(profile => profile.id === connectionId) !== connection ||
-          (current.connectionVersions[connectionId] ?? 0) !== version) throw Error(t.changed);
+      if (!sourceCurrent({connection, version, database})) throw Error(t.changed);
       accept(result);
     } catch (reason) { if (running.current === taskId) setError(errorMessage(reason)); }
     finally { if (running.current === taskId) { running.current = undefined; setBusy(false); } }
@@ -96,18 +101,16 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
   const context = detail?.snapshot ?? directory?.snapshot;
   const role = detail?.snapshot.role;
   const reset = () => { setError(''); setPage(undefined); setInspection(undefined); };
-  if (membership) {
-    const sourceCurrent = () => {
-      const current = useWorkspace.getState(), id = membership.connection.id;
-      return current.connections.find(profile => profile.id === id) === membership.connection &&
-        (current.connectionVersions[id] ?? 0) === membership.version;
-    };
-    return <PostgresMembershipDialog intent={membership.intent} connectionId={membership.connection.id}
-      database={membership.database} current={sourceCurrent} onClose={refresh => {
+  if (creation) return <PostgresRoleCreateDialog connectionId={creation.connection.id} database={creation.database}
+    current={() => sourceCurrent(creation)} onClose={name => {
+      setCreation(undefined);
+      if (name && sourceCurrent(creation)) { setSearch(name); readList(name); }
+    }}/>;
+  if (membership) return <PostgresMembershipDialog intent={membership.intent} connectionId={membership.connection.id}
+      database={membership.database} current={() => sourceCurrent(membership)} onClose={refresh => {
         setMembership(undefined);
-        if (refresh && sourceCurrent()) readDetail(membership.role, membership.scope);
+        if (refresh && sourceCurrent(membership)) readDetail(membership.role, membership.scope);
       }}/>;
-  }
   const edit = (intent: MembershipIntent) => {
     if (!connection || !detail || !role || running.current) return;
     setMembership({intent, connection, version, database: detail.snapshot.database, role, scope: detail.scope});
@@ -129,7 +132,10 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
           <Field label={t.database}><input value={database} maxLength={256} placeholder={t.defaultDatabase} disabled={busy}
             onChange={event => {setDatabase(event.target.value); reset();}}/></Field>
           <Field label={t.search}><input value={search} maxLength={128} disabled={busy} onChange={event => setSearch(event.target.value)}/></Field>
-          <div className="postgres-roles-actions"><button type="submit" disabled={!connection || busy}>{t.read}</button></div>
+          <div className="postgres-roles-actions"><button type="submit" disabled={!connection || busy}>{t.read}</button>
+            <button type="button" disabled={!connection || busy} onClick={() => {
+              if (connection && !running.current) setCreation({connection, version, database});
+            }}>{t.create.open}</button></div>
         </div>
       </form>
       {busy && <p role="status">{t.busy}</p>}

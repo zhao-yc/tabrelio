@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import { randomBytes } from 'node:crypto';
 import { postgresRolesZh as t } from '../../src/renderer/locales/postgresRoles.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { test, expect, desktop, page, quitDesktop } from './desktop-fixture';
@@ -208,4 +209,114 @@ test('PostgreSQL 直接成员授权预览、受限撤销及目录回读', async 
     await quitDesktop();
     expect(native.exitCode).toBe(0);
   } finally { await member.end(); await observer.end(); }
+});
+
+test('PostgreSQL 创建组角色和登录角色并通过新密码实际认证', async ({}, info) => {
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  const token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(user)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^[a-f0-9]{64}$/.test(password) ||
+      !/^[a-f0-9]{64}$/.test(adminPassword) || !Number.isInteger(port) || port <= 1024 || port > 65535)
+    throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_';
+  const creator = prefix + 'creator', group = prefix + 'team "组"', account = prefix + 'account', external = prefix + 'external';
+  const secret = 'ＳＣＲＡＭ-' + randomBytes(18).toString('hex');
+  const endpoint = {host: '127.0.0.1', port, database: user};
+  const observer = new Client({...endpoint, user: 'postgres', password: adminPassword, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const tCreate = t.create;
+  try {
+    const native = desktop.process();
+    const ids = await page.evaluate(async ({endpoint, user, creator, password, adminPassword}) => {
+      const base = {id: '', dialect: 'postgresql' as const, group: '', color: '#123456', ...endpoint, rememberPassword: false};
+      const denied = await window.dbark.invoke('connections.save', {...base, name: '普通账号', user, password});
+      const allowed = await window.dbark.invoke('connections.save', {...base, name: '角色创建账号', user: creator, password});
+      const admin = await window.dbark.invoke('connections.save', {...base, name: '角色核对管理员', user: 'postgres', password: adminPassword});
+      return {denied: denied.id, allowed: allowed.id, admin: admin.id};
+    }, {endpoint, user, creator, password, adminPassword});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true}), edit = page.getByRole('dialog', {name: tCreate.title, exact: true});
+    await modal.getByRole('combobox', {name: t.connection, exact: true}).selectOption(ids.allowed);
+    const readRole = async (name: string) => (await observer.query(`SELECT rolcanlogin AS login,rolinherit AS inherit,
+      rolconnlimit AS lim,rolsuper AS super,rolreplication AS repl,rolbypassrls AS bypass,
+      extract(epoch FROM rolvaliduntil)::text AS expiry,rolpassword IS NULL AS no_password,
+      coalesce(rolpassword LIKE 'SCRAM-SHA-256$%',false) AS scram
+      FROM pg_catalog.pg_authid WHERE rolname::text=$1`, [name])).rows[0];
+    const open = async (name: string) => {
+      await modal.getByRole('button', {name: tCreate.open, exact: true}).click();
+      await edit.getByLabel(t.roleName, {exact: true}).fill(name);
+    };
+    const preview = () => edit.getByRole('button', {name: tCreate.preview, exact: true}).click();
+    const apply = async () => {
+      await edit.getByRole('checkbox', {name: tCreate.confirm, exact: true}).check();
+      await edit.getByRole('button', {name: tCreate.apply, exact: true}).click();
+      await expect(edit.getByRole('status')).toContainText(t.result.committed);
+      await edit.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+    const refreshed = (name: string) => expect(modal.getByRole('region', {name: t.directory, exact: true})
+      .getByRole('button', {name, exact: true})).toBeVisible();
+
+    await open(group); await preview();
+    await expect(edit.getByLabel(tCreate.sql)).toContainText('CREATE ROLE "' + group.replaceAll('"', '""') + '"');
+    await expect(edit.getByLabel(tCreate.sql)).toContainText('NOLOGIN');
+    expect(await readRole(group)).toBeUndefined();
+    await apply(); await refreshed(group);
+    expect(await readRole(group)).toMatchObject({login: false, inherit: true, lim: -1, no_password: true});
+
+    await open(account);
+    await edit.getByRole('combobox', {name: tCreate.auth, exact: true}).selectOption('password');
+    await edit.getByLabel(t.connectionLimit, {exact: true}).fill('3');
+    await edit.getByLabel(tCreate.expiry, {exact: true}).fill('2098-06-07T08:09');
+    await edit.getByRole('checkbox', {name: t.inherit, exact: true}).uncheck();
+    await preview();
+    await expect(edit.getByLabel(tCreate.sql)).toContainText('<客户端生成的 SCRAM 验证值>');
+    expect(await readRole(account)).toBeUndefined();
+    await edit.screenshot({path: info.outputPath('PostgreSQL 创建登录角色预览.png')});
+    await edit.getByLabel(tCreate.secret, {exact: true}).fill(secret);
+    await edit.getByLabel(tCreate.repeat, {exact: true}).fill('本例错误确认');
+    await edit.getByRole('checkbox', {name: tCreate.confirm, exact: true}).check();
+    await edit.getByRole('button', {name: tCreate.apply, exact: true}).click();
+    await expect(edit.getByRole('alert')).toContainText(tCreate.passwordMismatch);
+    expect(await readRole(account)).toBeUndefined();
+    await edit.getByLabel(tCreate.repeat, {exact: true}).fill(secret);
+    await apply(); await refreshed(account);
+    expect(await readRole(account)).toMatchObject({login: true, inherit: false, lim: 3, no_password: false, scram: true,
+      expiry: (Date.parse('2098-06-07T08:09:00Z') / 1000).toFixed(6)});
+    const newClient = new Client({...endpoint, user: account, password: secret, connectionTimeoutMillis: 3000});
+    try {
+      await newClient.connect();
+      expect((await newClient.query('SELECT current_user::text AS name')).rows[0].name).toBe(account);
+    } finally { await newClient.end(); }
+
+    const draft = {connectionId: ids.allowed, database: user, name: external, auth: 'external' as const,
+      inherit: true, createDatabase: false, createRole: false, superuser: false, replication: false, bypassRls: false, connectionLimit: -1};
+    const prepare = (value: typeof draft) => page.evaluate(input => window.dbark.invoke('postgres.roles.create.preview', input), value);
+    const submit = (connectionId: string, token: string) => page.evaluate(input => window.dbark.invoke('postgres.roles.create.apply', input),
+      {connectionId, database: user, token, confirmed: true as const});
+    await expect(prepare({...draft, connectionId: ids.denied})).rejects.toThrow('CREATEROLE');
+    await expect(prepare({...draft, replication: true})).rejects.toThrow('超级用户');
+    const elevated = await prepare({...draft, connectionId: ids.admin, superuser: true, replication: true, bypassRls: true});
+    await expect(submit(ids.admin, elevated.token)).resolves.toMatchObject({outcome: 'committed'});
+    expect(await readRole(external)).toMatchObject({login: true, no_password: true, super: true, repl: true, bypass: true});
+
+    const collision = prefix + 'collision', stale = await prepare({...draft, name: collision});
+    await observer.query('CREATE ROLE "' + collision + '" NOLOGIN CONNECTION LIMIT 2');
+    await expect(submit(ids.allowed, stale.token)).resolves.toMatchObject({outcome: 'notSent'});
+    await expect(submit(ids.allowed, stale.token)).resolves.toMatchObject({outcome: 'notSent'});
+    expect(await readRole(collision)).toMatchObject({login: false, lim: 2});
+    const local = await page.evaluate(async () => ({history: await window.dbark.invoke('history.list', {}),
+      tasks: await window.dbark.invoke('tasks.list', {}), settings: await window.dbark.invoke('settings.get', {})}));
+    expect(local.history).toEqual([]);
+    expect(JSON.stringify(local).includes(secret)).toBe(false);
+    expect(JSON.stringify(local).includes('SCRAM-SHA-256$')).toBe(false);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally { await observer.end(); }
 });

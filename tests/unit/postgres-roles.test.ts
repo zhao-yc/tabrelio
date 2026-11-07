@@ -27,3 +27,16 @@ it('成员变更只接受明确目标和一次性确认，禁止渲染进程提�
   for (const input of [{...apply, confirmed: false}, {...apply, token: ''}, {...apply, role}])
     expect(() => validateCommand('postgres.roles.membership.apply', input)).toThrow();
 });
+
+it('角色创建预览拒绝密码，创建确认拒绝外来 SQL 和超预算凭据', () => {
+  const draft = {connectionId: 'saved', name: '项目 "读者"', auth: 'password', inherit: true, createDatabase: false,
+    createRole: false, superuser: false, replication: false, bypassRls: false, connectionLimit: 4, validUntil: '2098-06-07T08:09:00.000Z'};
+  expect(validateCommand('postgres.roles.create.preview', draft)).toEqual(draft);
+  for (const value of [{...draft, password: '合成输入'}, {...draft, auth: 'external'}, {...draft, name: 'pg_system'},
+    {...draft, name: '界'.repeat(22)}, {...draft, connectionLimit: -2}])
+    expect(() => validateCommand('postgres.roles.create.preview', value)).toThrow();
+  const apply = {connectionId: 'saved', token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true, password: '合成密码'};
+  expect(validateCommand('postgres.roles.create.apply', apply)).toEqual(apply);
+  for (const value of [{...apply, password: '界'.repeat(342)}, {...apply, password: 'x\0y'}, {...apply, sql: 'SELECT 1'}, {...apply, confirmed: false}])
+    expect(() => validateCommand('postgres.roles.create.apply', value)).toThrow();
+});

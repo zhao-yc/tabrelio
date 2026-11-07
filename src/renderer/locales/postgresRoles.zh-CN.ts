@@ -20,4 +20,13 @@ export const postgresRolesZh = {
   grantHint: '使用准确的角色名。启用管理选项可让成员继续授权，启用切换选项可让成员切换到获授角色。',
   revokeHint: '只撤销所列授权者的直接记录。若存在依赖授权，服务器将拒绝撤销。其他来源仍可能提供同一角色。',
   result: {committed: '已提交', rolledBack: '已回滚', notSent: '未发送', unknown: '提交状态未知，请重新读取目录核对'},
+  create: {
+    title: '新建 PostgreSQL 角色', open: '新建角色', auth: '登录方式', group: '组角色（NOLOGIN）',
+    password: '密码登录（SCRAM）', external: '外部认证（无数据库密码）',
+    hint: '角色在整个服务器中生效。外部认证角色需要服务器已有的认证规则。',
+    expiry: '密码有效期（UTC，可选）', preview: '预览创建 SQL', sql: '本次创建 SQL',
+    secret: '新角色密码', repeat: '再次输入密码', secretHint: '预览使用占位符。确认时在本机生成 SCRAM 验证值。',
+    passwordMismatch: '请输入相同且有效的密码', confirm: '确认在此 PostgreSQL 服务器创建角色', apply: '执行角色创建',
+    invalid: '请核对角色名、连接上限和有效期。',
+  },
 } as const;

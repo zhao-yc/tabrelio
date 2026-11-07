@@ -7,7 +7,7 @@ import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, xmlImportZ
 import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
 import { mysqlWorkbookExportSchema } from './mysqlWorkbookExport';
 import { postgresWorkbookExportSchema } from './postgresWorkbookExport';
-import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRolesSchema } from './postgresRoles';
+import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRolesSchema } from './postgresRoles';
 import { postgresQueryExportSchema } from './postgresQueryExport';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './fullQueryExportProfiles';
@@ -313,6 +313,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': z.union([postgresTableExportSchema, postgresBackupSetSchema]),
   'postgres.query.export': postgresQueryExportSchema,
   'postgres.roles.read': postgresRolesSchema,
+  'postgres.roles.create.preview': postgresRoleCreateDraftSchema,
+  'postgres.roles.create.apply': postgresRoleCreateApplySchema,
   'postgres.roles.membership.preview': postgresMembershipPreviewSchema,
   'postgres.roles.membership.apply': postgresMembershipApplySchema,
   'postgres.workbookExport': postgresWorkbookExportSchema,

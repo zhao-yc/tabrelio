@@ -335,6 +335,8 @@ export interface CommandMap {
   'postgres.table.exportChoose': { input: import('./postgresTable').PostgresTableExportChooseInput; output: FileChoice | null };
   'mysql.workbookExport': { input: import('./mysqlWorkbookExport').MysqlWorkbookExportInput; output: import('./tableFilteredExport').TableFilteredExportOutput };
   'postgres.workbookExport': { input: import('./postgresWorkbookExport').PostgresWorkbookExportInput; output: import('./postgresTable').PostgresTableExportOutput };
+  'postgres.roles.create.preview': { input: import('./postgresRoles').PostgresRoleCreateDraft; output: import('./postgresRoles').PostgresRoleCreatePreview };
+  'postgres.roles.create.apply': { input: import('./postgresRoles').PostgresRoleCreateApply; output: import('./postgresRoles').PostgresRoleCreateOutcome };
   'postgres.roles.membership.preview': { input: import('./postgresRoles').PostgresMembershipDraft; output: import('./postgresRoles').PostgresMembershipPreview };
   'postgres.roles.membership.apply': { input: import('./postgresRoles').PostgresMembershipApply; output: import('./postgresRoles').PostgresMembershipOutcome };
   'postgres.roles.read': { input: import('./postgresRoles').PostgresRolesInput; output: import('./postgresRoles').PostgresRolesOutput };
