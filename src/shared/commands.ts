@@ -69,6 +69,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.schemaScript': true,
   'sqlite.countRows': true,
   'sqlite.tableExport': true,
+  'sqlite.workbookExport': true,
   'sqlite.queryExport': true,
   'sqlite.syntaxCheck': true,
   'sqlite.queryExportParameterNames': true,

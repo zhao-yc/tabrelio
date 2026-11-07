@@ -60,7 +60,7 @@ import { sqliteTableCreatePreviewSchema, sqliteTableCreateApplySchema, sqliteTab
 import { sqliteTableImportInspectSchema, sqliteTableImportPreviewSchema, sqliteTableImportApplySchema, sqliteTableImportReleaseSchema } from './sqliteTableImport';
 import { sqlSyntaxCheckLimits } from './sqlSyntaxCheck';
 import { sqliteQueryExportSchema, sqliteQueryExportSourceSchema } from './sqliteQueryExport';
-import { sqliteTableExportSchema } from './sqliteTableExport';
+import { sqliteTableExportSchema, sqliteWorkbookExportSchema } from './sqliteTableExport';
 import { sqliteTableEditPreviewSchema, sqliteTableEditApplySchema, sqliteTableEditReleaseSchema } from './sqliteTableEdit';
 import { tableCheckGetSchema, tableCheckPreviewSchema, tableCheckApplySchema, tableCheckReleaseSchema } from './tableChecks';
 import { uiMenuStateSchema, objectCategories, assertObjectBrowserTabs } from './uiCommands';
@@ -362,6 +362,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.referencePage': sqliteReferenceInputSchema,
   'sqlite.incomingPage': sqliteIncomingInputSchema,
   'sqlite.tableExport': sqliteTableExportSchema,
+  'sqlite.workbookExport': sqliteWorkbookExportSchema,
   'sqlite.queryExport': sqliteQueryExportSchema,
   'sqlite.syntaxCheck': z.object({sessionId: id, taskId: id, sql: z.string().max(sqlSyntaxCheckLimits.sourceUnits)}).strict(),
   'sqlite.queryExportParameterNames': sqliteQueryExportSourceSchema,

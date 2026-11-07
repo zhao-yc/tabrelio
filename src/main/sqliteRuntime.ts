@@ -38,8 +38,8 @@ import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type Sql
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import { sqliteQueryExportSchema } from '../shared/sqliteQueryExport';
 import { prepareSqliteQueryExport, sqliteQueryExportBindings, type SqliteQueryExportRequest } from './sqliteQueryExport';
-import { sqliteTableExportSchema, type SqliteTableExportOutput } from '../shared/sqliteTableExport';
-import { SqliteTableExportFile, prepareSqliteTableExport, type SqliteTableExportRequest } from './sqliteTableExport';
+import { sqliteTableExportSchema, sqliteWorkbookExportSchema, type SqliteTableExportOutput } from '../shared/sqliteTableExport';
+import { SqliteTableExportFile, prepareSqliteTableExport, type SqliteTableExportRequest, type SqliteWorkbookExportRequest } from './sqliteTableExport';
 import type { AtomicFileIO } from '../engine/atomicFile';
 import { SqliteTableEdits, applySqliteTableEdit, sqliteEditNotSent, type SqliteEditApplyRequest, type SqliteEditClaim } from './sqliteTableEdit';
 import type { SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
@@ -104,7 +104,7 @@ interface BrowseTask {
 interface FinishedBrowseTask { kind: 'browse-finished'; active?: undefined; }
 interface CompletionTask extends BrowseTask { session?: Session; abortRead?: AbortController; dataSearch?: true; }
 interface ExportTask extends Omit<BrowseTask, 'kind'> {
-  kind: 'export'; input: SqliteTableExportRequest | SqliteQueryExportRequest; file?: SqliteTableExportFile;
+  kind: 'export'; input: SqliteTableExportRequest | SqliteWorkbookExportRequest | SqliteQueryExportRequest; file?: SqliteTableExportFile;
   committing: boolean; retainedDestination: boolean; rows: number;
 }
 interface FinishedExportTask { kind: 'export-finished'; active?: undefined; }
@@ -688,11 +688,11 @@ export class SqliteRuntime {
   }
 
   /** 文件路径与函数能力只能由同进程 Main 注入。表和查询分别校验，只允许查询导出接收 SQL。 */
-  private startExport(source: unknown, querySource = false): Promise<SqliteTableExportOutput> {
-    const raw = source as SqliteTableExportRequest | SqliteQueryExportRequest;
+  private startExport(source: unknown, schema: typeof sqliteTableExportSchema | typeof sqliteQueryExportSchema | typeof sqliteWorkbookExportSchema = sqliteTableExportSchema): Promise<SqliteTableExportOutput> {
+    const raw = source as ExportTask['input'];
     if (!raw || typeof raw.filePath !== 'string' || typeof raw.assertCurrent !== 'function' || typeof raw.validateDestination !== 'function' || typeof raw.retainDestinationUntil !== 'function') return Promise.reject(Error('SQLite导出缺少Main原文档与目标文件能力'));
     const { filePath, assertCurrent, validateDestination, retainDestinationUntil, ...publicInput } = raw;
-    const parsed = (querySource ? sqliteQueryExportSchema : sqliteTableExportSchema).parse(publicInput); assertCurrent();
+    const parsed = schema.parse(publicInput); assertCurrent();
     const profile = this.profile(this.options.resolveProfile(parsed.connectionId), parsed.connectionId), connection = this.connection(profile.id); this.assertTarget(connection, profile);
     if (this.tasks.has(parsed.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
     const input = { ...parsed, filePath, assertCurrent, validateDestination, retainDestinationUntil };
@@ -1407,7 +1407,8 @@ export class SqliteRuntime {
       case 'search.release': return this.structureSearches.release(input);
       case 'query.objectDefinition': return this.objectDefinition(input);
       case 'sqlite.tableExport': return this.startExport(input);
-      case 'sqlite.queryExport': return this.startExport(input, true);
+      case 'sqlite.queryExport': return this.startExport(input, sqliteQueryExportSchema);
+      case 'sqlite.workbookExport': return this.startExport(input, sqliteWorkbookExportSchema);
       // 私有命令不在公开CommandMap或IPC校验表中，只供Main草稿文件服务调用。
       case 'sqlite.tableDraft.capture': {
         if (this.stopping) throw Error('SQLite正在退出，不能保存草稿');

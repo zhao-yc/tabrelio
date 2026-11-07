@@ -391,6 +391,7 @@ export interface CommandMap {
   'sqlite.incomingPage': { input: import('./sqliteIncoming').SqliteIncomingInput; output: import('./sqliteIncoming').SqliteIncomingOutput };
   'sqlite.referencePage': { input: import('./sqliteReference').SqliteReferenceInput; output: import('./sqliteReference').SqliteReferenceOutput };
   'sqlite.relationships': { input: import('./sqliteRelationships').SqliteRelationshipsInput; output: import('./sqliteRelationships').SqliteRelationshipsOutput };
+  'sqlite.workbookExport': { input: import('./sqliteTableExport').SqliteWorkbookExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
   'sqlite.tableExport': { input: import('./sqliteTableExport').SqliteTableExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
   'sqlite.syntaxCheck': { input: {sessionId: string; taskId: string; sql: string}; output: import('./sqlSyntaxCheck').SqlSyntaxCheckResult };
   'sqlite.queryExport': { input: import('./sqliteQueryExport').SqliteQueryExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };

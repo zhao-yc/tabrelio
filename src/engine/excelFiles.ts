@@ -41,12 +41,26 @@ function checkCellCount(rows: number, columns: number, maximum: number): void {
   if (rows * columns > maximum) throw new Error('Excel 单元格总数（含标题）超过预算，请拆分文件');
 }
 
-/** 数据逐行写入真实 XLSX；旧文件仅在完整 ZIP 写完、fsync 和最后一次取消检查之后替换。 */
+export interface ExcelExportSheet {
+  name: string; columns: ExcelColumn[];
+  writeRows(write: (row: CellValue[]) => Promise<void>): Promise<void>;
+}
+type ExcelWorkbookExportOptions = Omit<ExcelExportOptions, 'columns' | 'rows'> & { sheets: AsyncIterable<ExcelExportSheet> };
+
+/** 单工作表入口沿用原工作表名和行迭代，整个工作簿共用同一个流式写入器。 */
 export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows: number; bytes: number }> {
+  validateExcelHeaders(input.columns.map(column => column.name));
+  const { rows, columns, ...options } = input;
+  return exportExcelWorkbook({ ...options, sheets: (async function* () {
+    yield { name: '数据', columns, async writeRows(write) { for await (const row of rows) await write(row); } };
+  })() });
+}
+
+/** 每张表逐行消费；全部工作表、ZIP 尾部及文件检查完成后才允许发布。 */
+export async function exportExcelWorkbook(input: ExcelWorkbookExportOptions): Promise<{ rows: number; bytes: number }> {
   const check = input.checkCancelled ?? (() => undefined);
   if (excelJsPackage.version !== '4.4.0') throw new Error('Excel 流适配需要重新验证当前 ExcelJS 版本');
-  validateExcelHeaders(input.columns.map(column => column.name));
-  const maximumCells = cellBudget(input.cellBudget); checkCellCount(1, input.columns.length, maximumCells);
+  const maximumCells = cellBudget(input.cellBudget);
   const atomic = input.deferredAtomicFile ?? await AtomicFile.create(input.filePath, 'utf8', check, input.onCommitStart, input.io, EXCEL_LIMITS.maxCompressedBytes);
   const streams: PassThrough[] = [], pendingWrites = new Set<Promise<void>>();
   let streamError: Error | undefined, totalXml = 0;
@@ -71,11 +85,13 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
   internals._openStream = path => {
     const stream = new PassThrough({ highWaterMark: 64 * 1024 }); streams.push(stream);
     const nativeWrite = stream.write.bind(stream);
+    let entryBytes = 0;
     // ExcelJS 重用内部 StringBuf，必须立刻复制其字节，不能让后续行修改待写 XML。
     stream.write = ((chunk: string | Buffer | { toBuffer(): Buffer }, ...args: unknown[]) => {
       const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk.toBuffer());
-      totalXml += bytes.length;
-      if (totalXml > EXCEL_LIMITS.maxEntryBytes) throw new Error('Excel 工作表展开内容超过 256 MiB，请改用其他格式');
+      totalXml += bytes.length; entryBytes += bytes.length;
+      if (totalXml > EXCEL_LIMITS.maxExpandedBytes - 8 * 1024 ** 2) throw Error('Excel 工作簿展开内容超过预算，请拆分导出');
+      if (entryBytes > EXCEL_LIMITS.maxEntryBytes) throw new Error('Excel 工作表展开内容超过 256 MiB，请改用其他格式');
       return (nativeWrite as (...arguments_: unknown[]) => boolean)(bytes, ...args);
     }) as typeof stream.write;
     stream.on('error', error => { streamError = error; });
@@ -85,35 +101,46 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
   };
   let count = 0;
   try {
-    const worksheet = workbook.addWorksheet('数据');
-    const xmlStream = (worksheet as unknown as { stream: PassThrough }).stream;
-    /** 一行提交后等待 Node 背压解除，同时观察取消和实际写入错误。 */
-    async function settleRow(): Promise<void> {
-      check(); if (streamError) throw streamError;
-      if (xmlStream.writableNeedDrain) await new Promise<void>((resolve, reject) => {
-        const timer = setInterval(() => { try { check(); if (streamError) throw streamError; } catch (error) { cleanup(); reject(error); } }, 25);
-        const cleanup = () => { clearInterval(timer); xmlStream.off('drain', drained); xmlStream.off('error', failed); };
-        const drained = () => { cleanup(); resolve(); };
-        const failed = (error: Error) => { cleanup(); reject(error); };
-        xmlStream.once('drain', drained); xmlStream.once('error', failed);
-      });
-      check(); if (streamError) throw streamError;
-    }
-    if (input.columns.reduce((bytes, column) => bytes + Buffer.byteLength(column.name), 0) > EXCEL_LIMITS.maxRowBytes) throw new Error('Excel 标题行超过 1 MiB');
+    let sheetCount = 0, cells = 0;
     // 单段 inlineStr 保持文字语义，并让 Excel 与 ExcelJS 都按 ST_Xstring 解码回车和字面转义标记。
     const textCell = (value: string | boolean) => typeof value === 'string' ? { richText: [{ text: encodeExcelXmlText(value) }] } : value;
-    worksheet.addRow(input.columns.map(column => textCell(column.name))).commit(); await settleRow();
-    for await (const row of input.rows) {
+    for await (const { name, columns, writeRows } of input.sheets) {
       check();
-      if (++count >= EXCEL_LIMITS.maxRows) throw new Error('Excel 行数超过上限，请拆分导出');
-      checkCellCount(count + 1, input.columns.length, maximumCells);
-      if (row.length !== input.columns.length) throw new Error('导出行与字段数量不一致');
-      const values = row.map((value, index) => encodeExcelCell(value, input.columns[index]));
-      if (values.reduce((bytes, value) => bytes + Buffer.byteLength(String(value)), 0) > EXCEL_LIMITS.maxRowBytes) throw new Error('Excel 单行文本超过 1 MiB，请改用其他格式');
-      worksheet.addRow(values.map(textCell)).commit(); await settleRow();
-      if (count % 100 === 0) input.onProgress?.(count);
+      if (++sheetCount > EXCEL_LIMITS.maxSheets) throw Error('Excel 工作表数量超过预算');
+      validateExcelHeaders(columns.map(column => column.name));
+      const headerBytes = columns.reduce((bytes, column) => bytes + Buffer.byteLength(column.name), 0);
+      if (headerBytes > EXCEL_LIMITS.maxRowBytes) throw Error('Excel 标题行超过 1 MiB');
+      cells += columns.length; checkCellCount(1, cells, maximumCells);
+      const worksheet = workbook.addWorksheet(name);
+      const xmlStream = (worksheet as unknown as { stream: PassThrough }).stream;
+      /** 一行提交后等待 Node 背压解除，同时观察取消和实际写入错误。 */
+      async function settleRow(): Promise<void> {
+        check(); if (streamError) throw streamError;
+        if (xmlStream.writableNeedDrain) await new Promise<void>((resolve, reject) => {
+          const timer = setInterval(() => { try { check(); if (streamError) throw streamError; } catch (error) { cleanup(); reject(error); } }, 25);
+          const cleanup = () => { clearInterval(timer); xmlStream.off('drain', drained); xmlStream.off('error', failed); };
+          const drained = () => { cleanup(); resolve(); };
+          const failed = (error: Error) => { cleanup(); reject(error); };
+          xmlStream.once('drain', drained); xmlStream.once('error', failed);
+        });
+        check(); if (streamError) throw streamError;
+      }
+      worksheet.addRow(columns.map(column => textCell(column.name))).commit(); await settleRow();
+      let sheetRows = 0;
+      await writeRows(async row => {
+        check();
+        if (++sheetRows >= EXCEL_LIMITS.maxRows) throw Error('Excel 行数超过上限，请拆分导出');
+        cells += columns.length; checkCellCount(1, cells, maximumCells);
+        if (row.length !== columns.length) throw Error('导出行与字段数量不一致');
+        const values = row.map((value, index) => encodeExcelCell(value, columns[index]));
+        if (values.reduce((bytes, value) => bytes + Buffer.byteLength(String(value)), 0) > EXCEL_LIMITS.maxRowBytes) throw Error('Excel 单行文本超过 1 MiB，请改用其他格式');
+        worksheet.addRow(values.map(textCell)).commit(); await settleRow();
+        if (++count % 100 === 0) input.onProgress?.(count);
+      });
+      worksheet.commit();
     }
-    worksheet.commit(); await Promise.all([workbook.commit(), sinkDone]);
+    if (!sheetCount) throw Error('Excel 工作簿至少需要一张工作表');
+    await Promise.all([workbook.commit(), sinkDone]);
     check(); if (input.deferredAtomicFile) await atomic.prepare(true); else await atomic.commit(); input.onProgress?.(count);
     return { rows: count, bytes: atomic.bytesWritten };
   } finally {

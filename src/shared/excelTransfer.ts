@@ -86,3 +86,19 @@ export function validateExcelMapping(mapping: ExcelFieldMapping[], source: strin
     sources.add(item.source); targets.add(item.target);
   }
 }
+
+/** 从数据库对象名称生成 Excel 可接受的唯一页签，名称匹配忽略大小写。 */
+export function excelWorksheetNames(names: readonly string[]): string[] {
+  const used = new Set<string>(['history']);
+  const fit = (name: string, length: number) => name.slice(0, length).replace(/[\uD800-\uDBFF]$/, '').replace(/'+$/, '');
+  return names.map(name => {
+    const base = name.replace(/[\uD800-\uDFFF]/gu, '_').replace(/[\u0000-\u001f\u007f\ufffe\uffff\\/?:*\[\]]/gu, '_').trim().replace(/^'+|'+$/g, '') || '数据';
+    let candidate = fit(base, 31), index = 2;
+    while (used.has(candidate.toLowerCase())) {
+      const suffix = ' (' + index++ + ')';
+      candidate = fit(base, 31 - suffix.length) + suffix;
+    }
+    used.add(candidate.toLowerCase());
+    return candidate;
+  });
+}

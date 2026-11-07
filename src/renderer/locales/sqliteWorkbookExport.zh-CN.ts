@@ -1,0 +1,16 @@
+export const sqliteWorkbookExportZh = {
+  open: '导出多个对象到 Excel',
+  title: '导出 SQLite 工作簿',
+  hint: '选择至少两个表或视图。每个对象占用一张工作表，导出全部行和可见字段，按勾选顺序排列。',
+  search: '搜索表和视图',
+  selected: (count: number, limit: number) => `已选 ${count} 个对象，最多 ${limit} 个`,
+  order: '工作表顺序',
+  choose: '选择 Excel 保存位置',
+  suggestedName: 'SQLite 数据.xlsx',
+  export: '导出工作簿',
+  exporting: '正在导出 SQLite 工作簿',
+  cancel: '取消导出',
+  close: '关闭',
+  complete: (sheets: number, rows: number) => `已保存 ${sheets} 张工作表，共 ${rows} 行。`,
+  stale: '原对象目录或连接已变化，请关闭后重新选择。',
+} as const;

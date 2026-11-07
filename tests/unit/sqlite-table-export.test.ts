@@ -14,8 +14,10 @@ import type { SqliteTableExportInput, SqliteTableExportOutput } from '../../src/
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteValue, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/session';
 import { nativeAtomicFileIO, type AtomicFileIO } from '../../src/engine/atomicFile';
-import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
-import type { SqliteTableExportRequest } from '../../src/main/sqliteTableExport';
+import { listExcelSheets, previewExcelSheet, readExcelRows } from '../../src/engine/excelFiles';
+import { validateCommand } from '../../src/shared/validation';
+import { excelWorksheetNames } from '../../src/shared/excelTransfer';
+import type { SqliteTableExportRequest, SqliteWorkbookExportRequest } from '../../src/main/sqliteTableExport';
 import { sqliteInsertLiteral } from '../../src/engine/sqlite/insertLiteral';
 import type { SqliteQueryExportRequest } from '../../src/main/sqliteQueryExport';
 import { assertSqliteExportDestination } from '../../src/main/sqliteExportDestination';
@@ -95,6 +97,65 @@ async function completed(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite完整导出真实只读流、原子文件与精度回放', () => {
+  it('多工作表使用同一 WAL 快照，后续工作表失败保留原文件', async () => {
+    const profile = fixture();
+    disk(profile, db => db.exec(`PRAGMA journal_mode=WAL;
+      CREATE TABLE "销售/甲"(id INTEGER PRIMARY KEY,note TEXT,payload BLOB);
+      INSERT INTO "销售/甲" VALUES(9223372036854775807,NULL,X'00FF');
+      CREATE TABLE amounts(note TEXT);
+      INSERT INTO amounts VALUES('原快照');
+      CREATE VIEW "销售:甲" AS SELECT note FROM amounts;
+      CREATE TABLE "History"(empty TEXT);`));
+    let intervened = false;
+    const { app } = runtime(profile, { create: () => transport((message, forward, record) => {
+      const command = record.sent.find(item => item.kind === 'streamRead' && 'id' in message && item.id === message.id);
+      if (!intervened && message.kind === 'batch' && command?.kind === 'streamRead' && command.sql.includes('销售/甲')) {
+        intervened = true;
+        disk(profile, db => db.exec("UPDATE amounts SET note='另一连接已提交'"));
+      }
+      forward();
+    }) });
+    const filePath = join(dirname(profile.sqlite.filePath!), 'workbook.xlsx');
+    const objects = [{ name: '销售/甲', kind: 'table' }, { name: '销售:甲', kind: 'view' }, { name: 'History', kind: 'table' }] as const;
+    const input: SqliteWorkbookExportRequest = { connectionId: profile.id, database: 'main', taskId: '多工作表',
+      fileToken: '本例文件', format: 'xlsx', encoding: 'utf8', objects: [...objects], filePath,
+      assertCurrent: () => {}, validateDestination: async () => {}, retainDestinationUntil: () => {} };
+    const { filePath: _path, assertCurrent: _owner, validateDestination: _destination, retainDestinationUntil: _retain, ...publicInput } = input;
+    expect(validateCommand('sqlite.workbookExport', publicInput)).toMatchObject(publicInput);
+    expect(() => validateCommand('sqlite.workbookExport', { ...publicInput, objects: [objects[0], objects[0]] })).toThrow();
+    expect(() => validateCommand('sqlite.workbookExport', { ...publicInput, filePath })).toThrow();
+    expect(await app.request('sqlite.workbookExport', input)).toEqual({ rows: 2, fileCommitted: true });
+    expect(intervened).toBe(true);
+    expect(disk(profile, db => db.prepare('SELECT note FROM amounts').get()?.note)).toBe('另一连接已提交');
+    const sheets = await listExcelSheets({ filePath });
+    expect(sheets.map(sheet => sheet.name)).toEqual(['销售_甲', '销售_甲 (2)', 'History (2)']);
+    const previews = await Promise.all(sheets.map(sheet => previewExcelSheet({ filePath, sheetId: sheet.id, protocol: 'dbark-v1' })));
+    expect(previews.map(value => value.rows)).toEqual([
+      [{ id: '9223372036854775807', note: null, payload: { type: 'binary', base64: 'AP8=' } }],
+      [{ note: '原快照' }],
+      [],
+    ]);
+    expect(previews[2].columns).toEqual(['empty']);
+    const process = processes.at(-1)!;
+    expect(await process.exited).toEqual({ code: 0, signal: null });
+    expect(process.sent.filter(message => message.kind === 'streamRead')).toHaveLength(3);
+    expect(process.sent.filter(message => message.kind === 'execute' && message.sql === 'BEGIN')).toHaveLength(1);
+
+    const previous = await hash(filePath);
+    await expect(app.request('sqlite.workbookExport', {
+      ...input, taskId: '后续对象失败', objects: [objects[0], { name: '已删除的表', kind: 'table' }],
+    })).rejects.toThrow('已不存在');
+    expect(await hash(filePath)).toBe(previous);
+    expect(readdirSync(dirname(filePath)).filter(name => name.endsWith('.partial'))).toEqual([]);
+  });
+
+  it('Excel 工作表命名截断保留完整字符，规范化后忽略大小写去重', () => {
+    const long = '甲'.repeat(30) + '🚢甲';
+    expect(excelWorksheetNames([long, long, "'ABC'", 'abc', '/?[]'])).toEqual([
+      '甲'.repeat(30), '甲'.repeat(27) + ' (2)', 'ABC', 'abc (2)', '____',
+    ]);
+  });
+
   it('SQLite 视图 HTML 仅输出所选字段，空匹配仍保留表头', async () => {
     const profile = fixture();
     disk(profile, db => db.exec("CREATE VIEW html_view AS SELECT 1 AS id, '<img src=x> & 中文' AS note UNION ALL SELECT 2, '其他';"));

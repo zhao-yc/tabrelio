@@ -1,6 +1,7 @@
 import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { z } from 'zod';
 import { sqliteTablePageSchema, sqliteTableBrowseLimits } from './sqliteTableBrowse';
+import { EXCEL_LIMITS } from './excelTransfer';
 import { csvExportDelimiters } from './csvExport';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 
@@ -26,6 +27,13 @@ export const sqliteTableExportSchema = z.object({
   const markup = dataMarkupText(input.format);
   if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
 });
+export const sqliteWorkbookExportSchema = z.object({
+  connectionId: sqliteTablePageSchema.shape.connectionId, database: z.literal('main'), taskId: sqliteTablePageSchema.shape.taskId,
+  fileToken: z.string().min(1).max(200), format: z.literal('xlsx'), encoding: z.literal('utf8'),
+  objects: z.array(z.object({ name: sqliteTablePageSchema.shape.table, kind: z.enum(['table', 'view']) }).strict())
+    .min(2).max(EXCEL_LIMITS.maxSheets).refine(objects => new Set(objects.map(object => object.name)).size === objects.length, 'SQLite 工作簿导出对象不能重复'),
+}).strict();
+export type SqliteWorkbookExportInput = z.infer<typeof sqliteWorkbookExportSchema>;
 export type SqliteTableExportInput = z.infer<typeof sqliteTableExportSchema>;
 /** 仅真实文件原子提交完成可返回true；取消或失败不能伪造成功。 */
 export interface SqliteTableExportOutput { rows: number; fileCommitted: true; }
