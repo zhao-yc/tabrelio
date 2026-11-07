@@ -86,7 +86,7 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       JOIN pg_catalog.pg_roles actor ON actor.oid=$2::oid CROSS JOIN (VALUES ('CONNECT'),('CREATE'),('TEMPORARY')) p(name)
       WHERE d.datname=pg_catalog.current_database()`, [role.oid, context.current.oid], 3);
     const publicPrivilege = (entry: DataRow) => ({...privilege(entry), publicAllowed: flag(entry.c7)});
-    const publicDirect = (entries: DataRow[]) => entries.filter(entry => flag(entry.c8))
+    const publicDirect = (entries: DataRow[], key = 'c8') => entries.filter(entry => flag(entry[key]))
       .map(entry => ({privilege: text(entry.c0) as PostgresObjectPrivilege, grantable: false}));
     const databasePrivileges = databaseRows.map(publicPrivilege);
     const databaseRow = databaseRows[0];
@@ -162,9 +162,13 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
           CASE WHEN c.relkind='S' THEN pg_catalog.has_sequence_privilege($1::oid,c.oid,p.name||' WITH GRANT OPTION')
             ELSE pg_catalog.has_table_privilege($1::oid,c.oid,p.name||' WITH GRANT OPTION') END,c.relrowsecurity,c.relforcerowsecurity,
           c.oid::text,pg_catalog.pg_get_userbyid(c.relowner)::text,
-          c.relowner<>$1::oid AND c.relkind IN ('r','p','v','S') AND c.relpersistence<>'t'
+          c.relkind IN ('r','p','v','S') AND c.relpersistence<>'t'
             AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
-            AND (c.relowner=$4::oid OR EXISTS(SELECT FROM pg_catalog.pg_roles WHERE oid=$4::oid AND rolsuper)),c.relkind
+            AND (c.relowner=$4::oid OR EXISTS(SELECT FROM pg_catalog.pg_roles WHERE oid=$4::oid AND rolsuper)),c.relkind,c.relowner::text,
+          CASE WHEN c.relkind='S' THEN pg_catalog.has_sequence_privilege('public'::name,c.oid,p.name)
+            ELSE pg_catalog.has_table_privilege('public'::name,c.oid,p.name) END,
+          EXISTS(SELECT FROM pg_catalog.aclexplode(c.relacl) a
+            WHERE a.grantor=c.relowner AND a.grantee=0 AND a.privilege_type=p.name)
           FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
           CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER'),('MAINTAIN'),('USAGE')) p(name)
           WHERE n.nspname::text COLLATE pg_catalog."C"=$2::text AND c.relname::text COLLATE pg_catalog."C"=$3::text
@@ -172,17 +176,21 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
             AND (p.name<>'MAINTAIN' OR pg_catalog.current_setting('server_version_num')::int>=170000)`,
           [role.oid, schema, relation, context.current.oid], 8);
         const first = relations[0];
+        const privileges = relations.map(entry => ({...privilege(entry), publicAllowed: flag(entry.c10)}));
         scope.relation = first && first.c8 !== 'S'
-          ? {oid: text(first.c5), privileges: relations.map(privilege), rls: flag(first.c3), forceRls: flag(first.c4)} : null;
+          ? {oid: text(first.c5), privileges, rls: flag(first.c3), forceRls: flag(first.c4)} : null;
         if (first?.c8 === 'S') {
-          const oid = text(first.c5);
-          scope.sequence = {privileges: relations.map(privilege), ...(flag(first.c7) ? {
-            editor: {object: {kind: 'sequence', oid, schema, name: relation}, grantor: text(first.c6), direct: await directPrivileges('table', oid)},
-          } : {})};
+          scope.sequence = {privileges};
+          if (flag(first.c7)) {
+            const oid = text(first.c5), target = {object: {kind: 'sequence' as const, oid, schema, name: relation}, grantor: text(first.c6)};
+            if (first.c9 !== role.oid) scope.sequence.editor = {...target, direct: await directPrivileges('table', oid)};
+            scope.sequence.publicEditor = {...target, recipient: 'public', direct: publicDirect(relations, 'c11')};
+          }
         }
         if (scope.relation && flag(first.c7)) {
-          const oid = text(first.c5);
-          scope.relation.editor = {table: {oid, schema, name: relation}, grantor: text(first.c6), direct: await directPrivileges('table', oid)};
+          const oid = scope.relation.oid, target = {table: {oid, schema, name: relation}, grantor: text(first.c6)};
+          if (first.c9 !== role.oid) scope.relation.editor = {...target, direct: await directPrivileges('table', oid)};
+          scope.relation.publicEditor = {...target, recipient: 'public', direct: publicDirect(relations, 'c11')};
         }
         if (input.scope.columns) {
           if (!scope.relation || scope.relation.oid !== input.scope.columns.relationOid) throw Error('列权限的原关系已变化，请重新检查对象权限');
@@ -191,7 +199,10 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
             WHERE c.oid=$1::oid AND a.attnum>$3::smallint AND NOT a.attisdropped ORDER BY a.attnum LIMIT ${columnPageSize + 1}
           )
           SELECT col.attnum::text,col.attname::text,p.name,pg_catalog.has_column_privilege($2::oid,$1::oid,col.attnum,p.name),
-            pg_catalog.has_column_privilege($2::oid,$1::oid,col.attnum,p.name||' WITH GRANT OPTION'),a.is_grantable
+            pg_catalog.has_column_privilege($2::oid,$1::oid,col.attnum,p.name||' WITH GRANT OPTION'),a.is_grantable,
+            pg_catalog.has_column_privilege('public'::name,$1::oid,col.attnum,p.name),
+            EXISTS(SELECT FROM pg_catalog.aclexplode(col.attacl) e
+              WHERE e.grantor=col.relowner AND e.grantee=0 AND e.privilege_type=p.name)
           FROM cols col CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('REFERENCES')) p(name)
           LEFT JOIN LATERAL pg_catalog.aclexplode(col.attacl) a
             ON a.grantee=$2::oid AND a.grantor=col.relowner AND a.privilege_type=p.name
@@ -201,7 +212,7 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
             const number = Number(text(entry.c0)), name = text(entry.c1);
             const row = columns.get(number) ?? {column: {number, name}, privileges: []};
             row.privileges.push({name: text(entry.c2) as PostgresColumnPrivilege, allowed: flag(entry.c3),
-              grantable: flag(entry.c4), direct: nullableFlag(entry.c5)});
+              grantable: flag(entry.c4), direct: nullableFlag(entry.c5), publicAllowed: flag(entry.c6), publicDirect: flag(entry.c7)});
             columns.set(number, row);
           }
           const page = [...columns.values()].slice(0, columnPageSize);

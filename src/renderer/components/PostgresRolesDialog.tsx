@@ -232,6 +232,8 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
             <Privileges label={t.tablePrivileges.sequence.effective + ' · ' + detail.scope.relation} rows={detail.snapshot.scope.sequence.privileges}/>
             {detail.snapshot.scope.sequence.editor && <button disabled={busy} onClick={() =>
               editPrivileges(detail.snapshot.scope!.sequence!.editor!, postgresSequencePrivileges)}>{t.tablePrivileges.sequence.open}</button>}
+            {detail.snapshot.scope.sequence.publicEditor && <button disabled={busy} onClick={() =>
+              editPrivileges(detail.snapshot.scope!.sequence!.publicEditor!, postgresSequencePrivileges)}>{t.tablePrivileges.sequence.publicOpen}</button>}
           </div>}
           {detail.scope.relation && !detail.snapshot.scope.sequence && <div><Privileges label={t.relationPrivileges + ' · ' + detail.scope.relation}
             rows={detail.snapshot.scope.relation?.privileges ?? null}/>
@@ -239,6 +241,10 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
               const relation = detail.snapshot.scope?.relation;
               if (relation?.editor) editPrivileges(relation.editor, postgresTablePrivileges.filter(name => relation.privileges.some(item => item.name === name)));
             }}>{t.tablePrivileges.open}</button>}
+            {detail.snapshot.scope.relation?.publicEditor && <button disabled={busy} onClick={() => {
+              const relation = detail.snapshot.scope?.relation;
+              if (relation?.publicEditor) editPrivileges(relation.publicEditor, postgresTablePrivileges.filter(name => relation.privileges.some(item => item.name === name)));
+            }}>{t.tablePrivileges.publicOpen}</button>}
             {detail.snapshot.scope.relation && !detail.scope.columns && <button disabled={busy} onClick={() => readColumns([])}>
               {t.tablePrivileges.column.inspect}
             </button>}
@@ -283,6 +289,13 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
               if (relation?.editor && relation.columns)
                 editPrivileges({table: relation.editor.table, grantor: relation.editor.grantor, columns: relation.columns.rows});
             }}>{t.tablePrivileges.column.open}</button>}
+            {detail.snapshot.scope.relation.publicEditor && <button disabled={busy || !detail.snapshot.scope.relation.columns.rows.length} onClick={() => {
+              const relation = detail.snapshot.scope?.relation;
+              if (relation?.publicEditor && relation.columns) {
+                const {table, grantor} = relation.publicEditor;
+                editPrivileges({table, grantor, recipient: 'public', columns: relation.columns.rows});
+              }
+            }}>{t.tablePrivileges.column.publicOpen}</button>}
           </div>
         </section>}
       </section>}

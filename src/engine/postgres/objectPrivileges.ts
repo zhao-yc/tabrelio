@@ -38,7 +38,7 @@ async function readTableState(connection: PostgresConnection, draft: TableDraft)
   const identity = result.rows[0];
   if (!identity || result.truncated || typeof identity.c0 !== 'string' || typeof identity.c1 !== 'string' || typeof identity.c2 !== 'string')
     throw changed();
-  if (identity.c2 === role.oid || identity.c2 !== identity.c3 && identity.c10 !== 't')
+  if ((!draft.recipient && identity.c2 === role.oid) || identity.c2 !== identity.c3 && identity.c10 !== 't')
     throw forbidden();
   if ('changes' in draft) {
     // 列名可复用。按属性编号和原名核对，旧预览不能授权给同名替换列。
@@ -137,7 +137,7 @@ function prepare(draft: Draft, state: State) {
     if (!reference) throw changed();
     target = object.kind.toUpperCase() + ' ' + reference;
   }
-  const publicRecipient = 'recipient' in draft && draft.recipient === 'public';
+  const publicRecipient = draft.recipient === 'public';
   const available = 'table' in draft ? postgresTablePrivileges : postgresScopedPrivileges[draft.object.kind];
   const expected = new Map(state.edges), columns: PostgresTablePrivilegePreview['columns'] = [];
   const changes = 'changes' in draft ? draft.changes.map(({column, privilege}) => ({column: column.name, privilege})) :

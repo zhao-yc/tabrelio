@@ -73,3 +73,9 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 数据库和 Schema 的有效权限列表下会单独显示 PUBLIC 权限。对象所有者或超级用户可从对应的「管理 PUBLIC 权限」入口预览和确认授予或撤销。对于由 `pg_database_owner` 所有的默认 `public` Schema，当前数据库所有者也可操作。预览会核对默认 ACL，数据库目录即使未存显式 ACL，也会显示 PostgreSQL 默认的 CONNECT 和 TEMPORARY。[PostgreSQL 默认权限](https://www.postgresql.org/docs/18/ddl-priv.html)
 
 PUBLIC 包含当前及将来创建的角色。撤销 CONNECT 后，仅通过 PUBLIC 取得 CONNECT 的角色无法建立新连接，已有会话可继续使用。提交前会核对当前登录角色仍有 CONNECT，失去连接权限时回滚。撤销 Schema 的 PUBLIC USAGE 后，仍有直接或继承 USAGE 的角色可以继续按名称访问其对象。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
+
+## 管理表、视图、列和序列的 PUBLIC 权限
+
+检查对象权限后，可从表、视图和序列的有效权限区打开各自的 PUBLIC 授权入口。列权限矩阵显示 PUBLIC 的有效权限，可从「管理列级 PUBLIC 权限」批量授予或撤销选中列。对象所有者和超级用户可以操作，预览会明确显示 `TO PUBLIC` 或 `FROM PUBLIC RESTRICT`，确认文字也会注明 PUBLIC。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html)
+
+撤销表或视图的 PUBLIC 权限时，预览会列出同时受影响的同来源列权限。单独撤销列级授权后，表级授权仍可能提供该列的访问权限。其他角色的直接授权按原来源保留。序列权限单独处理，预览和提交不会推进序列。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)

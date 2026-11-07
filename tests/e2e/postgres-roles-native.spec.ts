@@ -1179,3 +1179,110 @@ test('PostgreSQL 数据库与 Schema PUBLIC 权限保留直接授权和管理连
     expect(native.exitCode).toBe(0);
   } finally {await Promise.all([publicOnly.end(), dbOwner.end(), admin.end()]);}
 });
+
+test('PostgreSQL 表列视图和序列 PUBLIC 权限与直接授权分离', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^[a-f0-9]{64}$/.test(password) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', recipient = prefix + 'recipient', retained = prefix + 'creator';
+  const schema = 'QA Public Objects', table = '"QA Public Objects"."Records"', view = '"QA Public Objects"."Public View"';
+  const seq = '"QA Public Objects"."Ticket"';
+  const endpoint = {host: '127.0.0.1', port, database, password, connectionTimeoutMillis: 3000};
+  const owner = new Client({...endpoint, user: database}), publicOnly = new Client({...endpoint, user: recipient});
+  const directRole = new Client({...endpoint, user: retained});
+  await owner.connect();
+  try {
+    await publicOnly.connect();
+    await directRole.connect();
+    await owner.query(`CREATE SCHEMA "QA Public Objects"; CREATE TABLE ${table}(id int, label text, secret text);
+      INSERT INTO ${table} VALUES(1,'visible','private');
+      CREATE VIEW ${view} AS SELECT label FROM ${table}; CREATE SEQUENCE ${seq} START 10;
+      GRANT USAGE ON SCHEMA "QA Public Objects" TO ${recipient},${retained};
+      GRANT SELECT ON ${table} TO ${retained}; GRANT USAGE ON SEQUENCE ${seq} TO ${retained}`);
+    const ownerProfile = await page.evaluate(async ({database, port, password}) => window.dbark.invoke('connections.save', {
+      id: '', dialect: 'postgresql', group: '', color: '#123456', host: '127.0.0.1', port, database, password, user: database,
+      name: 'PUBLIC 对象授权所有者', rememberPassword: false,
+    }), {database, port, password});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(ownerProfile.id);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    await modal.getByRole('button', {name: t.current, exact: true}).click();
+    const common = t.tablePrivileges;
+    const probe = async (name: string) => {
+      await modal.getByLabel(t.schema, {exact: true}).fill(schema);
+      await modal.getByLabel(t.relation, {exact: true}).fill(name);
+      await modal.getByRole('button', {name: t.probe, exact: true}).click();
+    };
+    const prepare = async (kind: 'table' | 'column' | 'sequence', action: string, privileges: string[]) => {
+      const copy = kind === 'table' ? common : common[kind];
+      await modal.getByRole('button', {name: copy.publicOpen, exact: true}).click();
+      const dialog = page.getByRole('dialog', {name: copy.title, exact: true});
+      const actions = dialog.getByLabel(common.action, {exact: true});
+      await expect(actions.getByRole('option')).toHaveCount(2);
+      await actions.selectOption(action);
+      for (const privilege of privileges) await dialog.getByRole('checkbox', {name: privilege, exact: true}).check();
+      await dialog.getByRole('button', {name: copy.preview, exact: true}).click();
+      await expect(dialog.getByLabel(copy.sql, {exact: true})).toBeVisible();
+      return dialog;
+    };
+    const apply = async (kind: 'table' | 'column' | 'sequence', dialog: Awaited<ReturnType<typeof prepare>>) => {
+      const copy = kind === 'table' ? common : common[kind];
+      await dialog.getByRole('checkbox', {name: copy.confirmPublic, exact: true}).check();
+      await dialog.getByRole('button', {name: copy.apply, exact: true}).click();
+      await expect(dialog.getByRole('status').filter({hasText: t.result.committed})).toBeVisible();
+      await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+
+    await probe('Records');
+    await expect(modal.getByRole('button', {name: common.open, exact: true})).toHaveCount(0);
+    await modal.getByRole('button', {name: common.column.inspect, exact: true}).click();
+    let dialog = await prepare('column', 'grant', ['label SELECT']);
+    await expect(dialog.getByLabel(common.column.sql, {exact: true})).toHaveText(`GRANT SELECT ("label") ON TABLE ${table} TO PUBLIC`);
+    await expect(publicOnly.query(`SELECT label FROM ${table}`)).rejects.toMatchObject({code: '42501'});
+    await apply('column', dialog);
+    expect((await publicOnly.query(`SELECT label FROM ${table}`)).rows).toEqual([{label: 'visible'}]);
+    await expect(publicOnly.query(`SELECT secret FROM ${table}`)).rejects.toMatchObject({code: '42501'});
+    await apply('table', await prepare('table', 'grant', ['SELECT']));
+    expect((await publicOnly.query(`SELECT secret FROM ${table}`)).rows).toEqual([{secret: 'private'}]);
+    await apply('column', await prepare('column', 'revoke', ['label SELECT']));
+    expect((await publicOnly.query(`SELECT label FROM ${table}`)).rows).toEqual([{label: 'visible'}]);
+    await apply('column', await prepare('column', 'grant', ['label SELECT']));
+    dialog = await prepare('table', 'revoke', ['SELECT']);
+    await expect(dialog.getByLabel(common.sql, {exact: true})).toHaveText(`REVOKE SELECT ON TABLE ${table} FROM PUBLIC RESTRICT`);
+    await expect(dialog.getByRole('region', {name: common.affected}).getByText('label · SELECT', {exact: true})).toBeVisible();
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 对象 PUBLIC 权限撤销预览.png')});
+    await apply('table', dialog);
+    await expect(publicOnly.query(`SELECT label FROM ${table}`)).rejects.toMatchObject({code: '42501'});
+    expect((await directRole.query(`SELECT secret FROM ${table}`)).rows).toEqual([{secret: 'private'}]);
+
+    await probe('Public View');
+    await apply('table', await prepare('table', 'grant', ['SELECT']));
+    expect((await publicOnly.query(`SELECT label FROM ${view}`)).rows).toEqual([{label: 'visible'}]);
+    await apply('table', await prepare('table', 'revoke', ['SELECT']));
+    await expect(publicOnly.query(`SELECT label FROM ${view}`)).rejects.toMatchObject({code: '42501'});
+
+    await probe('Ticket');
+    dialog = await prepare('sequence', 'grant', ['USAGE']);
+    await expect(dialog.getByLabel(common.sequence.sql, {exact: true})).toHaveText(`GRANT USAGE ON SEQUENCE ${seq} TO PUBLIC`);
+    await expect(publicOnly.query(`SELECT nextval('${seq}')`)).rejects.toMatchObject({code: '42501'});
+    await apply('sequence', dialog);
+    expect((await publicOnly.query(`SELECT nextval('${seq}')::text AS value`)).rows).toEqual([{value: '10'}]);
+    await apply('sequence', await prepare('sequence', 'revoke', ['USAGE']));
+    await expect(publicOnly.query(`SELECT nextval('${seq}')`)).rejects.toMatchObject({code: '42501'});
+    expect((await directRole.query(`SELECT nextval('${seq}')::text AS value`)).rows).toEqual([{value: '11'}]);
+    await expect(modal.getByRole('table', {name: common.sequence.effective + ' · Ticket', exact: true})).toBeVisible();
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(item => item.status === 'running').length)).toBe(0);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([publicOnly.end(), directRole.end(), owner.end()]);}
+});

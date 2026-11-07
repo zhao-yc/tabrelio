@@ -27,6 +27,9 @@ export const postgresRolesZh = {
     actions: {grant: '授予权限', grantOption: '授予权限及转授选项', revoke: '撤销直接权限', revokeOption: '仅撤销转授选项'},
     direct: '已有直接权限', inherited: '无所有者直接授权', affected: '同时受影响的列权限',
     publicSummary: 'PUBLIC 权限', publicNone: '无',
+    publicOpen: '管理表或视图的 PUBLIC 权限',
+    publicHint: 'PUBLIC 包含现有及未来角色。表级撤销也会处理同来源的对应列权限，受影响的列在预览中列出。',
+    confirmPublic: '确认修改此表或视图的 PUBLIC 权限',
     preview: '预览表权限 SQL', sql: '本次表权限 SQL', confirm: '确认执行所选表权限变更', apply: '执行表权限变更',
     column: {
       title: '管理 PostgreSQL 列权限', open: '管理列级直接授权', inspect: '查看列权限', label: '列权限', selection: '所选列级权限',
@@ -34,6 +37,8 @@ export const postgresRolesZh = {
       preview: '预览列权限 SQL', sql: '本次列权限 SQL', confirm: '确认执行所选列权限变更', apply: '执行列权限变更',
       column: '列名', effective: '有效', direct: '直接', withOption: '可转授', none: '没有可显示的用户列',
       legend: '有效权限包含整表授权、继承和 PUBLIC。直接权限显示对象所有者授予此角色的列级权限。',
+      publicOpen: '管理列级 PUBLIC 权限', publicHint: 'PUBLIC 包含现有及未来角色。列级撤销后，整表授权仍可能提供访问权限。',
+      confirmPublic: '确认修改所选列的 PUBLIC 权限', publicDirect: 'PUBLIC 直接',
     },
     database: {
       title: '管理 PostgreSQL 数据库权限', open: '管理数据库直接授权', selection: '所选数据库权限',
@@ -53,6 +58,8 @@ export const postgresRolesZh = {
       title: '管理 PostgreSQL 序列权限', open: '管理序列直接授权', effective: '序列有效权限', selection: '所选序列权限',
       lockHint: 'USAGE 可调用 nextval 和 currval。UPDATE 还允许调用 setval。序列权限和表权限分别授予。',
       preview: '预览序列权限 SQL', sql: '本次序列权限 SQL', confirm: '确认执行所选序列权限变更', apply: '执行序列权限变更',
+      publicOpen: '管理序列 PUBLIC 权限', publicHint: 'PUBLIC 包含现有及未来角色。授予 USAGE 后，角色可在有 Schema 访问权限时使用此序列取号。',
+      confirmPublic: '确认修改此序列的 PUBLIC 权限',
     },
     routine: {
       title: '管理 PostgreSQL 例程执行权限', open: '管理角色执行权限', publicOpen: '管理 PUBLIC 执行权限',

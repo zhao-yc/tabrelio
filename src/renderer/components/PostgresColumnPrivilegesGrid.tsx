@@ -6,8 +6,8 @@ const t = roles.tablePrivileges.column;
 type Privilege = PostgresColumnPrivilegeRow['privileges'][number];
 const describe = (allowed: boolean, grantable: boolean) => grantable ? t.withOption : allowed ? roles.yes : roles.no;
 
-export function PostgresColumnPrivilegesGrid({rows, control}: {
-  rows: PostgresColumnPrivilegeRow[];
+export function PostgresColumnPrivilegesGrid({rows, control, publicTarget}: {
+  rows: PostgresColumnPrivilegeRow[]; publicTarget?: boolean;
   control?(column: PostgresColumnPrivilegeRef, privilege: Privilege): ReactNode;
 }) {
   if (!rows.length) return <p>{t.none}</p>;
@@ -20,8 +20,12 @@ export function PostgresColumnPrivilegesGrid({rows, control}: {
           const privilege = row.privileges.find(item => item.name === name);
           return <td key={name}>{privilege && <>
             {control?.(row.column, privilege)}
-            <div>{t.effective} {describe(privilege.allowed, privilege.grantable)}</div>
-            <div>{t.direct} {describe(privilege.direct !== null, privilege.direct === true)}</div>
+            {!publicTarget && <>
+              <div>{t.effective} {describe(privilege.allowed, privilege.grantable)}</div>
+              <div>{t.direct} {describe(privilege.direct !== null, privilege.direct === true)}</div>
+            </>}
+            <div>PUBLIC {describe(privilege.publicAllowed, false)}</div>
+            {publicTarget && <div>{t.publicDirect} {describe(privilege.publicDirect, false)}</div>}
           </>}</td>;
         })}
       </tr>)}</tbody>

@@ -23,7 +23,7 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
   const pending = useRef(false);
   const scope = 'columns' in editor ? 'column' : 'object' in editor ? editor.object.kind : 'table';
   const copy = scope === 'table' ? t : t[scope];
-  const publicTarget = 'object' in editor && editor.recipient === 'public';
+  const publicTarget = editor.recipient === 'public';
   const publicCopy = publicTarget && 'confirmPublic' in copy ? copy : undefined;
   const locked = busy || !!outcome || !current();
   const reset = () => {setPreview(undefined); setConfirmed(false); setError('');};
@@ -41,13 +41,13 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
     if (pending.current || locked || !selectionCount) return;
     pending.current = true; setBusy(true); reset();
     try {
-      const draft = {connectionId, database, role, action, privileges: selected};
+      const draft = {connectionId, database, role, action, ...(publicTarget ? {recipient: 'public'} : {})};
       const result = 'columns' in editor
-        ? await invoke('postgres.roles.columnPrivileges.preview', postgresColumnPrivilegeDraftSchema.parse({connectionId, database, role, action, table: editor.table, changes}))
+        ? await invoke('postgres.roles.columnPrivileges.preview', postgresColumnPrivilegeDraftSchema.parse({...draft, table: editor.table, changes}))
         : 'table' in editor
-          ? await invoke('postgres.roles.tablePrivileges.preview', postgresTablePrivilegeDraftSchema.parse({...draft, table: editor.table}))
+          ? await invoke('postgres.roles.tablePrivileges.preview', postgresTablePrivilegeDraftSchema.parse({...draft, table: editor.table, privileges: selected}))
           : await invoke('postgres.roles.scopedPrivileges.preview', postgresScopedPrivilegeDraftSchema.parse({
-            ...draft, object: editor.object, ...(editor.recipient ? {recipient: editor.recipient} : {}),
+            ...draft, object: editor.object, privileges: selected,
           }));
       if (!current()) throw Error(roles.changed);
       setPreview(result);
@@ -84,10 +84,11 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
       }}>{Object.entries(t.actions).filter(([key]) => !publicTarget || key === 'grant' || key === 'revoke')
         .map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
       <fieldset><legend>{copy.selection}</legend>
-        {'columns' in editor ? <PostgresColumnPrivilegesGrid rows={editor.columns} control={(column, privilege) => {
+        {'columns' in editor ? <PostgresColumnPrivilegesGrid rows={editor.columns} publicTarget={publicTarget} control={(column, privilege) => {
           const same = (item: PostgresColumnPrivilegeChange) => item.column.number === column.number && item.privilege === privilege.name;
+          const direct = publicTarget ? privilege.publicDirect ? false : null : privilege.direct;
           return <input type="checkbox" aria-label={column.name + ' ' + privilege.name} checked={changes.some(same)}
-            disabled={locked || !available(privilege.direct)} onChange={event => {
+            disabled={locked || !available(direct)} onChange={event => {
               setChanges(event.target.checked ? [...changes, {column, privilege: privilege.name}] : changes.filter(item => !same(item)));
               reset();
             }}/>;

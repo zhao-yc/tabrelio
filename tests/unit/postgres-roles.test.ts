@@ -110,8 +110,7 @@ it('例程授权只接受 OID 和 EXECUTE，PUBLIC 不能获得转授选项', ()
   expect(validateCommand('postgres.roles.scopedPrivileges.preview', {...draft, recipient: 'public'})).toEqual({...draft, recipient: 'public'});
   for (const input of [{...draft, privileges: ['USAGE']}, {...draft, recipient: 'public', action: 'grantOption'},
     {...draft, recipient: 'public', action: 'revokeOption'}, {...draft, recipient: 'PUBLIC'},
-    {...draft, object: {...draft.object, signature: 'foo(int)'}}, {...draft, object: {...draft.object, kind: 'sequence'},
-      privileges: ['USAGE'], recipient: 'public'}])
+    {...draft, object: {...draft.object, signature: 'foo(int)'}}])
     expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
   const read = {connectionId: 'saved', taskId: 'read', kind: 'detail', role: draft.role,
     scope: {schema: draft.object.schema, routine: draft.object.name}};
@@ -128,4 +127,20 @@ it('数据库和 Schema 的 PUBLIC 只允许授予和撤销适用权限', () => 
   for (const input of [{...database, action: 'grantOption'}, {...schema, action: 'revokeOption'}, {...database, privileges: ['USAGE']},
     {...schema, privileges: ['CONNECT']}, {...database, object: {...database.object, name: 'other'}}])
     expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
+});
+
+it('表、列和序列的 PUBLIC 只接受普通授予及撤销', () => {
+  const base = {connectionId: 'saved', database: 'qa', role: {oid: '42', name: '应用角色'}, action: 'grant', recipient: 'public'};
+  const table = {oid: '101', schema: 'qa', name: 'record'};
+  const entries = [
+    ['postgres.roles.tablePrivileges.preview', {...base, table, privileges: ['SELECT']}],
+    ['postgres.roles.columnPrivileges.preview', {...base, table, changes: [{column: {number: 1, name: 'id'}, privilege: 'SELECT'}]}],
+    ['postgres.roles.scopedPrivileges.preview', {...base, object: {...table, kind: 'sequence'}, privileges: ['USAGE']}],
+  ] as const;
+  for (const [command, draft] of entries) {
+    expect(validateCommand(command, draft)).toEqual(draft);
+    expect(validateCommand(command, {...draft, action: 'revoke'})).toEqual({...draft, action: 'revoke'});
+    for (const input of [{...draft, action: 'grantOption'}, {...draft, action: 'revokeOption'}, {...draft, recipient: 'PUBLIC'}])
+      expect(() => validateCommand(command, input)).toThrow();
+  }
 });
