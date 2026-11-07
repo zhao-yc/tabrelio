@@ -1,6 +1,7 @@
 import { txtImportZh } from '../../src/shared/txtImport';
 import { parse as parseTxt } from 'csv-parse/sync';
 import { Client } from 'pg';
+import ExcelJS from 'exceljs';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
@@ -784,6 +785,105 @@ test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
   await quitDesktop();
+});
+
+test('PostgreSQL 完整查询工作簿共用快照、位置参数并保护目标文件', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  test.setTimeout(90_000);
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query(`CREATE TABLE public.query_workbook (id bigint PRIMARY KEY, note text);
+      INSERT INTO public.query_workbook VALUES (9223372036854775807, '原快照');`);
+    await prepare({id: '', name: '隔离 PostgreSQL 查询工作簿', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, [
+      'SELECT $1::bigint AS value, pg_advisory_xact_lock(62308915)::text AS barrier;',
+      "SELECT id AS value, note AS value, decode('00ff','hex') AS bytes FROM public.query_workbook CROSS JOIN generate_series(1,205) AS g WHERE id=$1::bigint ORDER BY g;",
+      'SELECT $1::bigint AS id, $2::text AS note WHERE false;',
+    ].join('\n'));
+    await mkdir(info.outputDir, {recursive: true});
+    const output = info.outputPath('PostgreSQL 完整查询工作簿.xlsx');
+    await desktop.evaluate(({dialog, BrowserWindow}, filePath) => {
+      const original = dialog.showSaveDialog;
+      let count = 0;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        if (++count > 4 || args[0] !== BrowserWindow.getAllWindows()[0] ||
+            !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes('xlsx')))
+          throw Error('仅允许本例的 XLSX 选择器');
+        return {canceled: false, filePath};
+      }) as typeof original;
+      Object.assign(globalThis, {restorePgQueryWorkbookPicker: () => { dialog.showSaveDialog = original; return count; }});
+    }, output);
+    const modal = page.getByRole('dialog', {name: fullExportText.title, exact: true});
+    const open = async () => {
+      await tab().getByRole('button', {name: fullExportText.open, exact: true}).click();
+      await modal.getByRole('combobox', {name: zh.resultExport.format, exact: true}).selectOption('xlsx');
+      await expect(modal.getByText(fullExportText.workbookHint, {exact: true})).toBeVisible();
+    };
+    const start = async () => {
+      await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+      await expect(modal.getByRole('button', {name: basename(output), exact: true})).toBeVisible();
+      await modal.getByRole('button', {name: fullExportText.start, exact: true}).click();
+    };
+    const close = () => modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const waitForCursor = () => expect.poll(async () => Number((await observer.query(`SELECT count(*) AS n FROM pg_stat_activity
+      WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event='advisory'`)).rows[0].n), {timeout: 8_000}).toBe(1);
+    await open();
+    await modal.getByRole('button', {name: fullExportText.parameters, exact: true}).click();
+    const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+    await form.getByLabel(parameterZh.type + ' p1', {exact: true}).selectOption('integer');
+    await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill('9223372036854775807');
+    await form.getByLabel(parameterZh.value + ' p2', {exact: true}).fill('只用于第三条查询');
+    await form.getByRole('button', {name: fullExportText.applyParameters, exact: true}).click();
+    await observer.query('SELECT pg_advisory_lock(62308915)');
+    try {
+      await start(); await waitForCursor();
+      await observer.query("UPDATE public.query_workbook SET note='并发已提交'");
+    } finally { await observer.query('SELECT pg_advisory_unlock(62308915)'); }
+    await expect(modal.getByRole('status')).toContainText(fullExportText.done(206));
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(output);
+    expect(workbook.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 206], ['结果 3', 1]]);
+    expect(workbook.worksheets[0].getCell('A2').text).toBe('9223372036854775807');
+    expect(['A206', 'B1', 'B206', 'C206'].map(cell => workbook.worksheets[1].getCell(cell).text))
+      .toEqual(['9223372036854775807', 'value [2]', '原快照', '\\B:AP8=']);
+    expect(workbook.worksheets[2].getCell('B1').text).toBe('note');
+    await modal.screenshot({path: info.outputPath('PostgreSQL 完整查询工作簿.png')});
+    const original = await readFile(output);
+
+    await close();
+    await replaceDraft("SELECT '先完成'; SELECT repeat('x',32768)");
+    await open(); await start();
+    await expect(modal.getByRole('alert')).toContainText('32767');
+    expect(await readFile(output)).toEqual(original);
+
+    await close();
+    await replaceDraft("SELECT '先完成'; WITH changed AS (UPDATE public.query_workbook SET note='意外修改' RETURNING id) SELECT id FROM changed");
+    await open(); await start();
+    await expect(modal.getByRole('alert')).toBeVisible();
+    expect(await readFile(output)).toEqual(original);
+    expect((await observer.query('SELECT note FROM public.query_workbook')).rows[0].note).toBe('并发已提交');
+
+    await close();
+    await replaceDraft("SELECT '先完成'; SELECT pg_advisory_xact_lock(62308915)::text AS barrier;");
+    await open();
+    await observer.query('SELECT pg_advisory_lock(62308915)');
+    try {
+      await start(); await waitForCursor();
+      await modal.getByRole('button', {name: zh.common.cancel, exact: true}).click();
+      await expect(modal.getByRole('alert')).toBeVisible();
+      await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+        .some(task => task.kind === 'postgres.query.export' && task.status === 'cancelled'))).toBe(true);
+    } finally { await observer.query('SELECT pg_advisory_unlock(62308915)'); }
+    expect(await readFile(output)).toEqual(original);
+    expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgQueryWorkbookPicker(): number})
+      .restorePgQueryWorkbookPicker())).toBe(4);
+  } finally { await observer.end(); }
 });
 
 test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护原事务及目标文件', async ({}, info) => {

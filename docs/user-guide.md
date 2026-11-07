@@ -540,6 +540,8 @@ SQLite 查询页从「更多查询操作 → 执行与分析 → 执行并导出
 
 PostgreSQL 查询页的「执行并导出完整结果」可将一条 SELECT／WITH 查询分批保存为 CSV、JSON 或 Excel。非空单选区优先，空光标使用全文。导出使用独立只读会话，读取目标数据库已提交的数据。选好格式、编码和文件后点击「执行查询并保存」，完成后显示行数。有位置参数时，先点击「设置导出参数」填写类型和值，再采用本次参数。[完整查询导出](development/postgres-query-export-20261107.md) [参数导出](development/postgres-export-parameters-20261107.md)
 
+选择 Excel 时也可导出 1 至 64 条 SELECT 或 WITH 查询。所有查询共用同一个可重复读快照，每条查询生成一张工作表，空结果保留标题。各条查询从 `$1` 开始编号，同编号使用同一个参数值。[多查询 Excel 工作簿](development/postgres-query-export-20261107.md#多查询-excel-工作簿)
+
 完整 Excel 导出保留精确数字文本、NULL 和二进制。重名及空标题按列位置生成可区分的名称。详见 [完整查询 Excel 导出](development/full-query-xlsx-20261107.md)。
 
 SQLite 和 PostgreSQL 查询页可在多语句脚本中把光标放到一条 SELECT 或 WITH 查询中，点击「导出当前语句的完整结果」。核对弹窗中的原 SQL，按需填写参数，再选择 CSV、JSON 或 Excel 及目标文件。导出读取独立只读连接的已提交数据。编辑原草稿后需重新打开导出。详见 [当前语句完整导出](development/current-query-export-20261107.md)。

@@ -35,6 +35,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   const [txtOptions, setTxtOptions] = useState(txtExportDefaults);
   const validTxt = format !== 'txt' || txtExportOptionsSchema.safeParse(txtOptions).success;
   const markup = dataMarkupText(format);
+  const postgresWorkbook = !sqlite && format === 'xlsx';
   const insert = format === 'sql', fixedEncoding = insert || format === 'xlsx' || !!markup;
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
@@ -130,7 +131,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
 
   if (editingParameters) return <QueryParametersDialog source={source.sql} syntaxHint={sqlite ? sqliteQueryExportZh.parameterHint : postgresZh.parameterHint}
     initialParameters={parameters} submitLabel={text.applyParameters}
-    loadNames={() => sqlite ? invoke('sqlite.queryExportParameterNames', {sql: source.sql}) : Promise.resolve(postgresExportParameterNames(source.sql))}
+    loadNames={() => sqlite ? invoke('sqlite.queryExportParameterNames', {sql: source.sql}) : Promise.resolve(postgresExportParameterNames(source.sql, postgresWorkbook))}
     onClose={() => setEditingParameters(false)} onExecute={values => {
       if (!current()) throw Error(text.changed);
       setParameters(values.map(value => ({...value}))); setFile(null); setRows(undefined); setEditingParameters(false);
@@ -138,7 +139,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
 
   return <Modal title={text.title} wide onClose={() => { if (!picking.current && !task.current) onClose(); }}>
     <div className="modal-content">
-      <p>{source.database} · {text.scope}</p>
+      <p>{source.database} · {postgresWorkbook ? postgresQueryExportZh.workbookScope : text.scope}</p>
       {source.fromCurrentStatement && <p className="muted small">{text.currentSource}</p>}
       <pre className="result-sql-preview" aria-label={text.source}>{source.sql.slice(0, 4000)}</pre>
       {source.sql.length > 4000 && <p>{text.sourcePrefix}</p>}
@@ -149,6 +150,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
         <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}
       </select></Field>
       {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
+      {postgresWorkbook && <p>{postgresQueryExportZh.workbookHint}</p>}
       {dataFileText(format) && <p>{dataFileText(format)?.hint}</p>}
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={fixedEncoding ? 'utf8' : encoding} disabled={!!pending || fixedEncoding}
         onChange={event => { const value = event.target.value; if (value === 'utf8' || value === 'utf16le' || value === 'gb18030') { setEncoding(value); if (format === 'txt') { setFile(null); setRows(undefined); } } }}>

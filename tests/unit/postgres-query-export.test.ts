@@ -15,6 +15,14 @@ it('导出参数名称只按词法识别，忽略 dollar 正文、注释和字�
     expect(() => postgresExportParameterNames(sql)).toThrow();
 });
 
+it('工作簿按语句校验位置编号，同编号复用且总页数有界', () => {
+  expect(postgresExportParameterNames('SELECT $1, $$; $9$$; WITH d AS (SELECT $1, $2) SELECT * FROM d; SELECT 1', true).names)
+    .toEqual(['p1', 'p2']);
+  for (const sql of ['SELECT $1, $2; SELECT $2', 'SELECT 1; UPDATE t SET x=2', 'SELECT 1;'.repeat(65),
+    "SELECT 1; SELECT 'a\\'; SELECT $1; -- '"])
+    expect(() => postgresExportParameterNames(sql, true)).toThrow();
+});
+
 it('当前 PostgreSQL 导出只截取两种模式一致的原查询', () => {
   const head = "UPDATE t SET n=1 /*前置🚢*/;\r\n";
   const target = "WITH data AS (SELECT $$; $2$$ AS note) SELECT $1, note FROM data;";
@@ -73,6 +81,14 @@ it.each(['SELECT 1; SELECT 2', 'DELETE FROM records', 'SELECT $1', 'SELECT $$未
   const query = vi.fn();
   const connection = {query, standardStrings: true} as unknown as PostgresConnection;
   await expect(exportPostgresQuery({...base, sql, filePath: join(tmpdir(), 'pg-export-preflight.csv')},
+    action => action(connection), () => {}, () => {}, () => {})).rejects.toThrow();
+  expect(query).not.toHaveBeenCalled();
+});
+
+it.each(['SELECT 1; SELECT $2', 'SELECT 1; DELETE FROM records', 'SELECT 1;'.repeat(65)])('工作簿在开始事务前校验全部语句', async sql => {
+  const query = vi.fn();
+  const connection = {query, standardStrings: true} as unknown as PostgresConnection;
+  await expect(exportPostgresQuery({...base, format: 'xlsx', sql, filePath: join(tmpdir(), 'pg-workbook-preflight.xlsx')},
     action => action(connection), () => {}, () => {}, () => {})).rejects.toThrow();
   expect(query).not.toHaveBeenCalled();
 });

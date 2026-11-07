@@ -5,6 +5,7 @@ import { queryParameterTypes, validateQueryParameters, type QueryParameterNames 
 import { postgresNewIdentifier } from './postgresCreateTable';
 import { currentPostgresStatement, splitPostgresSql } from './postgresSql';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
+import { EXCEL_LIMITS } from './excelTransfer';
 
 const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParameterTypes), value: z.string().optional()}).strict())
   .max(200).superRefine((values, context) => {
@@ -59,14 +60,28 @@ export function postgresCurrentQueryExportSource(source: string, offset: number)
   return source.slice(primary.start, end);
 }
 
-/** 表单识别只读本地模板。两个候选模式须同意范围与编号，实际投递仍由新会话复核。 */
-export function postgresExportParameterNames(sql: string): QueryParameterNames {
-  const ordinary = splitPostgresSql(sql, true), escaped = splitPostgresSql(sql, false);
-  const part = ordinary[0], alternative = escaped[0];
-  if (ordinary.length !== 1 || escaped.length !== 1 || part.start !== alternative.start || part.end !== alternative.end ||
-      JSON.stringify(part.parameters) !== JSON.stringify(alternative.parameters))
-    throw Error('导出参数需要边界明确的单条 PostgreSQL 查询');
-  if (part.parameters.some((position, index) => position !== index + 1)) throw Error('PostgreSQL 位置参数必须从 $1 连续编号');
-  return {names: part.parameters.map(position => 'p' + position), warnings: [], maxDecimalScale: 38,
+/** 每条语句的参数从 $1 独立编号，工作簿内同编号复用一次输入的值。 */
+export function postgresQueryExportStatements(sql: string, standardStrings: boolean, workbook = false) {
+  const statements = splitPostgresSql(sql, standardStrings);
+  if (workbook ? statements.length < 1 || statements.length > EXCEL_LIMITS.maxSheets : statements.length !== 1)
+    throw Error(workbook ? '完整 Excel 导出需要 1 至 64 条查询' : '完整导出需要一条 SELECT 或 WITH 查询');
+  let parameters: number[] = [];
+  for (const part of statements) {
+    if (!['SELECT', 'WITH'].includes(part.keyword)) throw Error('完整导出只接受 SELECT 或 WITH 查询');
+    if (part.parameters.some((position, index) => position !== index + 1)) throw Error('每条 PostgreSQL 查询的位置参数必须从 $1 连续编号');
+    if (part.parameters.length > parameters.length) parameters = part.parameters;
+  }
+  return {statements, parameters};
+}
+
+/** 表单的两种候选字符串模式须同意每条语句的范围及编号，独立连接再按实际模式复核。 */
+export function postgresExportParameterNames(sql: string, workbook = false): QueryParameterNames {
+  const ordinary = postgresQueryExportStatements(sql, true, workbook), escaped = postgresQueryExportStatements(sql, false, workbook);
+  if (ordinary.statements.length !== escaped.statements.length || ordinary.statements.some((part, index) => {
+    const alternative = escaped.statements[index];
+    return part.start !== alternative.start || part.end !== alternative.end ||
+      part.parameters.length !== alternative.parameters.length || part.parameters.some((position, i) => position !== alternative.parameters[i]);
+  })) throw Error('导出参数需要边界明确的 PostgreSQL 查询');
+  return {names: ordinary.parameters.map(position => 'p' + position), warnings: [], maxDecimalScale: 38,
     allowTimeEndpointFraction: false, ansiQuotes: true, noBackslashEscapes: true};
 }
