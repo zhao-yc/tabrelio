@@ -1,3 +1,4 @@
+import type { ImportBatchChoice } from '../../shared/fileImportBatch';
 import { useEffect, useState } from 'react';
 import { excelImportZh as text, excelMaxRow, excelRowRangeMessage, excelRowRangeSchema, type ExcelImportOptions, type ExcelRowRange, type ExcelSheet } from '../../shared/excelTransfer';
 import { errorMessage, invoke, uid } from '../lib';
@@ -63,4 +64,19 @@ export function ExcelImportSettingsFields({ options, disabled, onChange }: {
     <p className="muted small">{text.rangeHint} {text.hint}</p>
     {!excelRowRangeSchema.safeParse(options).success && <ErrorBox message={excelRowRangeMessage}/>}
   </>;
+}
+
+/** 用文件能力区分同名工作簿，工作表编号只在原工作簿内有效。 */
+export function ExcelBatchSheetFields({ batch, selected, disabled, labelFor, onSelect }: {
+  batch: ImportBatchChoice; selected: Readonly<Record<string, string>>; disabled: boolean;
+  labelFor(index: number, name: string): string; onSelect(fileToken: string, sheetId: string): void;
+}) {
+  return <>{batch.files.map((file, index) => {
+    const label = labelFor(index, file.name);
+    return <Field key={file.token} label={label}><select aria-label={label} disabled={disabled} value={selected[file.token] ?? ''}
+      onChange={event => onSelect(file.token, event.target.value)}>
+      <option value="">{text.sheet}</option>
+      {file.sheets?.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}{sheet.hidden ? text.hidden : ''}</option>)}
+    </select></Field>;
+  })}</>;
 }

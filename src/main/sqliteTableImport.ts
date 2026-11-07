@@ -11,7 +11,10 @@ import type { SqliteFileIdentity, SqliteValue } from '../engine/sqlite/protocol'
 import { readSqliteTableCatalogue, type SqliteTableCatalogue, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 import { buildSqliteTableImportPlan, SqliteTableImportMappingError, sqliteTableImportAffinity, sqliteTableImportIssue, sqliteTableImportLimits as limits, sqliteTableImportMessages as text, type SqliteTableImportColumn, type SqliteTableImportInspectInput, type SqliteTableImportInspectOutput, type SqliteTableImportPreviewInput, type SqliteTableImportPreviewOutput, type SqliteTableImportApplyInput, type SqliteTableImportReleaseInput, type SqliteTableImportReport, type SqliteTableImportIssue, type SqliteTableImportOutcome, type SqliteImportWriteFact } from '../shared/sqliteTableImport';
 
-export interface SqliteTableImportInspectRequest extends SqliteTableImportInspectInput { filePath: string; batchPaths?: readonly string[]; assertCurrent(): void; }
+export interface SqliteImportWorkbook { sheetId: string; name: string; source: SqliteTableImportInspectOutput['source']; }
+export interface SqliteTableImportInspectRequest extends SqliteTableImportInspectInput {
+  filePath: string; batchPaths?: readonly string[]; batchWorkbooks?: readonly SqliteImportWorkbook[]; assertCurrent(): void;
+}
 export interface SqliteTableImportPreviewRequest extends SqliteTableImportPreviewInput { assertCurrent(): void; }
 export interface SqliteTableImportApplyRequest extends SqliteTableImportApplyInput { operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteImportWriteFact): void; }
 export interface SqliteTableImportControl extends SqliteTableBrowseControl { signal: AbortSignal; progress(records: number): void; }
@@ -20,13 +23,13 @@ export interface SqliteImportFileIdentity { device: string; inode: string; size:
 type SourceIdentity = SqliteImportFileIdentity;
 export type SqliteImportFileInput = ImportFileInspectInput & { filePath: string };
 export interface SqliteImportFileScan { source: SqliteTableImportInspectOutput['source']; records: number; sourceColumns: string[]; sample: DataRow[]; sampleOmitted: boolean; }
-interface SqliteImportMember { filePath: string; fileIdentity: SourceIdentity; source: SqliteImportFileScan['source']; records: number }
+interface SqliteImportMember { filePath: string; fileIdentity: SourceIdentity; source: SqliteImportFileScan['source']; records: number; workbook?: SqliteImportWorkbook }
 export interface SqliteImportTarget {
   target: SqliteTableImportInspectOutput['target']; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
   schemaVersion: string; catalogue: SqliteTableCatalogue; columns: SqliteTableImportColumn[]; strict: boolean;
 }
 export interface SqliteImportInspection extends SqliteImportTarget {
-  id: string; expires: number; bytes: number; file: Omit<SqliteTableImportInspectRequest, 'assertCurrent' | 'batchPaths'>;
+  id: string; expires: number; bytes: number; file: Omit<SqliteTableImportInspectRequest, 'assertCurrent' | 'batchPaths' | 'batchWorkbooks' | 'workbookBatch'>;
   fileIdentity: SourceIdentity; source: SqliteTableImportInspectOutput['source']; records: number; sourceColumns: string[];
   sample: DataRow[]; sampleOmitted: boolean;
   members?: SqliteImportMember[];
@@ -85,12 +88,22 @@ export async function verifySqliteImportTarget(driver: SqliteDriverSession, insp
 }
 /** DB已正常关闭后才扫源文件，长文件检查不会持有数据库读锁。 */
 export async function inspectSqliteImportFile(input: SqliteTableImportInspectRequest, target: SqliteImportTarget, expected: SourceIdentity, control: SqliteTableImportControl): Promise<Omit<SqliteImportInspection, 'id' | 'expires' | 'bytes'>> {
-  const scanned = await inspectSqliteImportRecords(input, target.profile, expected, control);
-  const { assertCurrent: _owner, batchPaths, ...file } = input;
+  const { assertCurrent: _owner, batchPaths, batchWorkbooks, workbookBatch: _batch, ...file } = input;
+  // 同一本工作簿的目录与整文件扫描必须指向相同字节，后续预检和写入继续使用原选工作表。
+  const scan = async (filePath: string, identity: SourceIdentity, index: number, offset: number) => {
+    const workbook = batchWorkbooks?.[index];
+    const checked = await inspectSqliteImportRecords({ ...file, filePath,
+      ...(workbook ? { excelOptions: { ...file.excelOptions!, sheetId: workbook.sheetId } } : {}) },
+      target.profile, identity, { ...control, progress: count => control.progress(offset + count) });
+    if (workbook && (checked.source.sha256 !== workbook.source.sha256 || checked.source.bytes !== workbook.source.bytes))
+      throw Error('工作簿在读取目录后已变化，请重新选择');
+    return checked;
+  };
+  const scanned = await scan(file.filePath, expected, 0, 0);
   const inspection = { ...target, file: structuredClone(file), fileIdentity: expected, ...scanned };
   if (!batchPaths) return inspection;
   if (!scanned.records || !scanned.sourceColumns.length) throw Error('第 1 个文件没有可导入的记录');
-  const members: SqliteImportMember[] = [{ filePath: input.filePath, fileIdentity: expected, source: scanned.source, records: scanned.records }];
+  const members: SqliteImportMember[] = [{ filePath: input.filePath, fileIdentity: expected, source: scanned.source, records: scanned.records, workbook: batchWorkbooks?.[0] }];
   const identities = new Set([JSON.stringify([expected.device, expected.inode])]);
   const fields = new Set(scanned.sourceColumns);
   let records = scanned.records, bytes = scanned.source.bytes;
@@ -100,21 +113,20 @@ export async function inspectSqliteImportFile(input: SqliteTableImportInspectReq
       const key = JSON.stringify([identity.device, identity.inode]);
       if (identities.has(key)) throw Error('批次包含同一物理文件');
       identities.add(key);
-      const member = await inspectSqliteImportRecords({ ...input, filePath }, target.profile, identity,
-        { ...control, progress: count => control.progress(records + count) });
+      const member = await scan(filePath, identity, index + 1, records);
       if (!member.records) throw Error('没有可导入的记录');
       if (member.sourceColumns.length !== fields.size || member.sourceColumns.some(name => !fields.has(name)))
         throw Error('源字段与第一个文件不匹配');
       records += member.records; bytes += member.source.bytes;
       if (records > limits.records || !Number.isSafeInteger(bytes)) throw Error('批次超过导入预算');
-      members.push({ filePath, fileIdentity: identity, source: member.source, records: member.records });
+      members.push({ filePath, fileIdentity: identity, source: member.source, records: member.records, workbook: batchWorkbooks?.[index + 1] });
     } catch (reason) {
       control.check();
       throw Error(`第 ${index + 2} 个文件未通过扫描。${reason instanceof Error ? reason.message : '读取失败'}`);
     }
   }
   // 对外用有序指纹表示整组，对内继续核对每份文件的真实身份及原字节。
-  const sha256 = createHash('sha256').update(JSON.stringify(members.map(({ source, records }) => [source.sha256, source.bytes, records]))).digest('hex');
+  const sha256 = createHash('sha256').update(JSON.stringify(members.map(({ source, records, workbook }) => [source.sha256, source.bytes, records, ...(workbook ? [workbook.sheetId] : [])]))).digest('hex');
   return { ...inspection, source: { sha256, bytes }, records, sampleOmitted: true, members };
 }
 /** 共享严格原字节扫描，只读来源能力和最终目标检查沿同一reader及样本预算。 */
@@ -150,7 +162,8 @@ async function* readInspectedRows(inspection: SqliteImportInspection, control: S
   for (const file of inspectionMembers(inspection)) {
     await assertSqliteImportSource(file.filePath, inspection.profile, control, file.fileIdentity);
     let count = 0;
-    for await (const row of readVerifiedImportRecords({ ...inspection.file, filePath: file.filePath, expectedSource: file.source, strictEncoding: true }, control.check, control.signal)) {
+    for await (const row of readVerifiedImportRecords({ ...inspection.file, filePath: file.filePath, expectedSource: file.source, strictEncoding: true,
+      ...(file.workbook ? { excelOptions: { ...inspection.file.excelOptions!, sheetId: file.workbook.sheetId } } : {}) }, control.check, control.signal)) {
       if (++count > file.records) throw new SourceChanged();
       yield row;
     }
@@ -201,7 +214,7 @@ export class SqliteTableImports {
     this.prune(); const bytes = Buffer.byteLength(JSON.stringify(value)); if (this.inspectionCount() >= limits.inspections || this.bytes + bytes > limits.previewBytes) throw Error('SQLite导入来源预算已满，请释放旧来源');
     const inspection = { ...value, id: randomUUID(), expires: Date.now() + limits.previewLifetimeMs, bytes }; this.inspections.set(inspection.id, inspection); this.bytes += bytes;
     return { inspectionId: inspection.id, target: { ...inspection.target }, source: { ...inspection.source }, sourceColumns: [...inspection.sourceColumns], sample: structuredClone(inspection.sample), sampleOmitted: inspection.sampleOmitted, records: inspection.records, columns: structuredClone(inspection.columns), strict: inspection.strict, readOnly: inspection.profile.sqlite.readOnly, expiresAt: new Date(inspection.expires).toISOString(),
-      ...(inspection.members ? { files: inspection.members.map(file => ({ name: basename(file.filePath), records: file.records })) } : {}) };
+      ...(inspection.members ? { files: inspection.members.map(file => ({ name: basename(file.filePath), records: file.records, ...(file.workbook ? { sheet: file.workbook.name } : {}) })) } : {}) };
   }
   inspection(id: string): SqliteImportInspection { this.prune(); const value = this.inspections.get(id); if (!value) throw Error(text.stale); return value; }
   /** 只读预检保留到原Promise终态；已claim writer不登记于此，不把metadata释放当成事务取消。 */

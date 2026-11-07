@@ -944,13 +944,17 @@ export class SqliteRuntime {
   }
   private tableImportInspect(source: unknown): Promise<SqliteTableImportInspectOutput> {
     const raw = source as SqliteTableImportInspectRequest; if (!raw || typeof raw.filePath !== 'string' || typeof raw.assertCurrent !== 'function') throw Error('SQLite导入检查缺少Main文件和原文档能力');
-    const { filePath, batchPaths, assertCurrent, ...publicInput } = raw, input = sqliteTableImportInspectSchema.parse(publicInput);
+    const { filePath, batchPaths, batchWorkbooks, assertCurrent, ...publicInput } = raw, input = sqliteTableImportInspectSchema.parse(publicInput);
     if (batchPaths !== undefined && (!Array.isArray(batchPaths) || batchPaths.length < 2 || batchPaths.length > importBatchLimit ||
         batchPaths[0] !== filePath || new Set(batchPaths).size !== batchPaths.length || batchPaths.some(path => typeof path !== 'string' || !path) ||
-        !importBatchFormats.some(format => format === input.format) || input.sourceId)) throw Error('SQLite批次文件来源无效');
+        !importBatchFormats.some(format => format === input.format) && input.format !== 'xlsx' || input.sourceId)) throw Error('SQLite批次文件来源无效');
+    if (input.format === 'xlsx' && !!batchPaths !== !!batchWorkbooks || !!input.workbookBatch !== !!batchWorkbooks ||
+        batchWorkbooks && (batchWorkbooks.length !== batchPaths?.length || batchWorkbooks.length !== input.workbookBatch?.sheets.length ||
+          batchWorkbooks.some((book, index) => book.sheetId !== input.workbookBatch?.sheets[index]?.sheetId)))
+      throw Error('SQLite工作簿批次缺少原生文件与工作表授权');
     this.reserveImportTask(input.taskId); assertCurrent();
     const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id); this.assertTarget(connection, profile);
-    const request = { ...input, filePath, ...(batchPaths ? { batchPaths } : {}), assertCurrent }, claim = input.sourceId ? this.importSources.claim(request, profile) : undefined;
+    const request = { ...input, filePath, ...(batchPaths ? { batchPaths, batchWorkbooks } : {}), assertCurrent }, claim = input.sourceId ? this.importSources.claim(request, profile) : undefined;
     const checkOwner = () => { assertCurrent(); if (claim) this.importSources.assertClaim(claim); };
     try {
       return this.startImport({ taskId: input.taskId, assertCurrent: checkOwner }, connection, 'inspect', async task => {

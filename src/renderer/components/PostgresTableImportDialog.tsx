@@ -2,7 +2,7 @@ import type { ImportBatchChoice } from '../../shared/fileImportBatch';
 import { ImportRecordRangeFields, importRangeAfterHeaderChange } from './ImportRecordRangeFields';
 import type { ImportRecordRange } from '../../shared/importRecordRange';
 import { excelImportDefaults, excelImportOptionsSchema, excelImportSettingsSchema, excelImportZh } from '../../shared/excelTransfer';
-import { ExcelImportFields, ExcelImportSettingsFields } from './ExcelImportFields';
+import { ExcelBatchSheetFields, ExcelImportFields, ExcelImportSettingsFields } from './ExcelImportFields';
 import type { FileChoice } from '../../shared/contracts';
 import { useEffect, useRef, useState } from 'react';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
@@ -272,17 +272,11 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
           onClick={() => void choose(true)}>{text.chooseBatch}</button>}
       </div>
       {format === 'xlsx' && <><div className="form-grid">{workbooks ? <>
-        {workbooks.files.map((file, index) => {
-          const label = text.workbookSheet(index, file.name);
-          return <Field key={file.token} label={label}><select aria-label={label} disabled={locked} value={sheetIds[file.token] ?? ''}
-            onChange={event => {
-              setSheetIds({ ...sheetIds, [file.token]: event.target.value }); resetSource();
-              if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
-            }}>
-            <option value="">{excelImportZh.sheet}</option>
-            {file.sheets?.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}{sheet.hidden ? excelImportZh.hidden : ''}</option>)}
-          </select></Field>;
-        })}
+        <ExcelBatchSheetFields batch={workbooks} selected={sheetIds} disabled={locked} labelFor={text.workbookSheet}
+          onSelect={(fileToken, sheetId) => {
+            setSheetIds({ ...sheetIds, [fileToken]: sheetId }); resetSource();
+            if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
+          }}/>
         <ExcelImportSettingsFields options={excelSettings} disabled={locked} onChange={settings => {
           setExcelOptions({ sheetId: '', ...settings }); editSource();
         }}/>

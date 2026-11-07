@@ -89,6 +89,7 @@ import { SqliteTableCreateMain } from './sqliteTableCreateMain';
 import { SqliteIndexesMain } from './sqliteIndexesMain';
 import { SqliteTableRebuildMain } from './sqliteTableRebuildMain';
 import { SqliteColumnsMain } from './sqliteColumnsMain';
+import { assertSqliteImportSource } from './sqliteTableImport';
 import { SqliteTableImportMain } from './sqliteTableImportMain';
 import { sqliteImportFactMessage } from '../shared/sqliteTableImportFact';
 import { sqliteCreateFactMessage } from '../shared/sqliteTableCreateFact';
@@ -380,7 +381,7 @@ const sqliteTableImports = new SqliteTableImportMain({
     if (grant.dialect !== 'sqlite' || grant.revision !== store.connectionRevision() || !columnsMain.sharesDocumentOwner(grant.owner, owner) ||
         grant.target.connectionId !== target.connectionId || grant.target.database !== target.database || grant.target.table !== target.table ||
         grant.target.format !== format) throw Error(importBatchInvalid);
-    return grant.paths;
+    return grant;
   },
   request: (command, input) => broker.request(command, input), task: id => tasks.get(id), replace: task => { tasks.set(task.id, task); },
   save: task => store.saveTask(task), event: event => taskEvent(event),
@@ -703,13 +704,16 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
   const check = () => {
     columnsMain.assertCapturedOwner(owner);
     connectionConfig.assertAvailable(target.connectionId);
-    const dialect = store.connections().find(profile => profile.id === target.connectionId)?.dialect;
+    const profile = store.connections().find(profile => profile.id === target.connectionId);
+    if (!profile) throw Error(importBatchInvalid);
+    const { dialect } = profile;
     if (shuttingDown || revision !== store.connectionRevision()) throw Error(importBatchInvalid);
     if (dialect === 'postgresql') {
       if (target.format !== 'xlsx') throw Error(importBatchInvalid);
-    } else if (target.format === 'xlsx' || dialect !== 'mysql' && dialect !== 'mariadb' && (dialect !== 'sqlite' || target.database !== 'main'))
-      throw Error(importBatchInvalid);
-    return dialect;
+    } else if (dialect === 'sqlite') {
+      if (target.database !== 'main' || !profile.sqlite.filePath || profile.pendingFiles?.length) throw Error(importBatchInvalid);
+    } else if (target.format === 'xlsx' || dialect !== 'mysql' && dialect !== 'mariadb') throw Error(importBatchInvalid);
+    return profile;
   };
   check();
   if (choosingImportBatch) throw Error('已有批量导入文件选择正在进行');
@@ -721,7 +725,7 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
         title: '选择批量导入文件', properties: ['openFile', 'multiSelections'],
         filters: [{ name: target.format.toUpperCase(), extensions: target.format === 'csv' ? [extension, 'tsv'] : [extension] }],
       });
-      const dialect = check();
+      const profile = check();
       if (chosen.canceled) return null;
       if (chosen.filePaths.length < 2 || chosen.filePaths.length > importBatchLimit ||
           new Set(chosen.filePaths).size !== chosen.filePaths.length) throw Error(`请选择 2 至 ${importBatchLimit} 个不同文件`);
@@ -729,14 +733,20 @@ async function chooseImportBatch(target: ImportBatchChoose, owner?: MainInvocati
       const token = randomUUID();
       const workbooks = target.format === 'xlsx' ? new Map<string, Awaited<ReturnType<typeof listExcelWorkbookSource>>>() : undefined;
       if (workbooks) for (const [index, [fileToken, path]] of [...selected].entries()) {
-        try { workbooks.set(fileToken, await listExcelWorkbookSource({ filePath: path, checkCancelled: check })); }
-        catch (reason) {
+        try {
+          // SQLite 先排除目标库、日志和硬链接，随后只读取同一份授权工作簿。
+          const control = { check };
+          const identity = profile.dialect === 'sqlite' ? await assertSqliteImportSource(path, profile, control) : undefined;
+          const workbook = await listExcelWorkbookSource({ filePath: path, checkCancelled: check });
+          if (profile.dialect === 'sqlite') await assertSqliteImportSource(path, profile, control, identity);
+          workbooks.set(fileToken, workbook);
+        } catch (reason) {
           check();
           throw Error(`第 ${index + 1} 本工作簿无法读取目录。${reason instanceof Error ? reason.message : '读取失败'}`);
         }
       }
       check();
-      importBatchGrant = { token, owner: owner!, target, dialect, revision, files: selected, paths: [...selected.values()], workbooks, preflights: new Map() };
+      importBatchGrant = { token, owner: owner!, target, dialect: profile.dialect, revision, files: selected, paths: [...selected.values()], workbooks, preflights: new Map() };
       return { token, files: [...selected].map(([token, path]) => ({
         token, name: basename(path), ...(workbooks ? { sheets: workbooks.get(token)!.sheets } : {}),
       })) };

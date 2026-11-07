@@ -1,4 +1,4 @@
-import { importBatchLimit } from './fileImportBatch';
+import { excelWorkbookBatchSchema, importBatchLimit } from './fileImportBatch';
 import { importRecordRangeSchema } from './importRecordRange';
 import { excelImportOptionsSchema, excelImportZh, validExcelImport } from './excelTransfer';
 import { txtImportMaxOptions, txtImportOptionsSchema, txtImportZh, validTxtImport } from './txtImport';
@@ -31,12 +31,15 @@ export type SqliteTableImportColumn = z.infer<typeof sqliteTableImportColumnSche
 /** 沿原reader的精确标量；JSON数字与文字都是原文string，嵌套JSON由reader无损序列化为TEXT。 */
 export type SqliteTableImportRow = DataRow;
 /** 新表流程可引用原来源能力；摘要仍由Main/runtime账本复核，客户端不能提供或覆盖expectedSource。 */
-export const sqliteTableImportInspectSchema = guard(value => { const raw = ownData(value, 12);
-  return !!raw && (raw.format === 'csv' || !Object.hasOwn(raw, 'csvDelimiter') && !Object.hasOwn(raw, 'csvHasHeader')) &&
+export const sqliteTableImportInspectSchema = guard(value => { const raw = ownData(value, 13), batch = raw && ownData(raw.workbookBatch, 2);
+  return !!raw && (!Object.hasOwn(raw, 'workbookBatch') || !!batch && arrayBound(batch.sheets, importBatchLimit) && batch.sheets.every(sheet => !!ownData(sheet, 2))) &&
+    (raw.format === 'csv' || !Object.hasOwn(raw, 'csvDelimiter') && !Object.hasOwn(raw, 'csvHasHeader')) &&
     (!Object.hasOwn(raw, 'csvRowRange') || !!ownData(raw.csvRowRange, 3)) &&
     (!Object.hasOwn(raw, 'xmlOptions') || !!ownData(raw.xmlOptions, 4)) &&
     (!Object.hasOwn(raw, 'txtOptions') || !!ownData(raw.txtOptions, txtImportMaxOptions)) &&
-    (!Object.hasOwn(raw, 'excelOptions') || !!ownData(raw.excelOptions, 5)); }).pipe(z.object({ connectionId: id, database: z.literal('main'), table: name, fileToken: id, format: z.enum(recordImportFormats), xmlOptions: sqliteXmlImportOptionsSchema.optional(), txtOptions: txtImportOptionsSchema.optional(), excelOptions: excelImportOptionsSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), csvRowRange: importRecordRangeSchema.optional(), taskId: id, sourceId: id.optional() }).strict().refine(validCsvRange, csvRangeInvalid).refine(validXmlImport, xmlImportZh.invalid).refine(validTxtImport, txtImportZh.invalid).refine(validExcelImport, excelImportZh.missing));
+    (!Object.hasOwn(raw, 'excelOptions') || !!ownData(raw.excelOptions, 5)); }).pipe(z.object({ connectionId: id, database: z.literal('main'), table: name, fileToken: id, format: z.enum(recordImportFormats), xmlOptions: sqliteXmlImportOptionsSchema.optional(), txtOptions: txtImportOptionsSchema.optional(), excelOptions: excelImportOptionsSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), csvRowRange: importRecordRangeSchema.optional(), taskId: id, sourceId: id.optional(), workbookBatch: excelWorkbookBatchSchema.optional() }).strict().refine(value =>
+  !Object.hasOwn(value, 'workbookBatch') || !!value.workbookBatch && value.format === 'xlsx' && !value.sourceId &&
+    value.workbookBatch.token === value.fileToken && value.workbookBatch.sheets[0].sheetId === value.excelOptions?.sheetId, 'SQLite 工作簿批次与原文件或工作表不一致').refine(validCsvRange, csvRangeInvalid).refine(validXmlImport, xmlImportZh.invalid).refine(validTxtImport, txtImportZh.invalid).refine(validExcelImport, excelImportZh.missing));
 export const sqliteTableImportPreviewSchema = guard(value => { const raw = ownData(value, 3); return !!raw && arrayBound(raw.mapping, sqliteTableImportLimits.mapping); }).pipe(z.object({ inspectionId: id, mapping: sqliteTableImportMappingSchema, taskId: id }).strict());
 export const sqliteTableImportApplySchema = z.object({ previewId: id, taskId: id, confirmation: z.string().min(1).max(1024) }).strict();
 export const sqliteTableImportReleaseSchema = z.object({ inspectionId: id.optional(), previewId: id.optional() }).strict().refine(value => !!value.inspectionId || !!value.previewId, '缺少要释放的SQLite导入来源');
@@ -63,8 +66,8 @@ const binary = z.object({ type: z.literal('binary'), base64: z.string().max(4 * 
 const cell = z.union([z.null(), text, z.boolean(), z.number().finite(), binary]);
 const sampleRow = z.record(sourceName, cell).refine(value => Object.keys(value).length <= sqliteTableImportLimits.sourceColumns, 'SQLite样本列数超限');
 export const sqliteTableImportInspectionSchema = guard(value => { const raw = ownData(value, 13); return !!raw && !!ownData(raw.target, 3) && !!ownData(raw.source, 2) && arrayBound(raw.columns, sqliteTableImportLimits.columns) && raw.columns.every(column => !!ownData(column, 7)) && arrayBound(raw.sourceColumns, sqliteTableImportLimits.sourceColumns) && sampleBudget(raw.sample) &&
-    (!Object.hasOwn(raw, 'files') || arrayBound(raw.files, importBatchLimit) && raw.files.every(file => !!ownData(file, 2))); }).pipe(z.object({ inspectionId: id, target: targetSchema, source: sourceSchema, sourceColumns: z.array(sourceName).max(sqliteTableImportLimits.sourceColumns).refine(value => new Set(value).size === value.length), sample: z.array(sampleRow).max(sqliteTableImportLimits.sampleRows), sampleOmitted: z.boolean(), records: z.number().int().min(0).max(sqliteTableImportLimits.records), columns: z.array(sqliteTableImportColumnSchema).min(1).max(sqliteTableImportLimits.columns), strict: z.boolean(), readOnly: z.boolean(), expiresAt: z.string().datetime(),
-  files: z.array(z.object({ name, records: z.number().int().positive().max(sqliteTableImportLimits.records) }).strict()).min(2).max(importBatchLimit).optional(),
+    (!Object.hasOwn(raw, 'files') || arrayBound(raw.files, importBatchLimit) && raw.files.every(file => !!ownData(file, 3))); }).pipe(z.object({ inspectionId: id, target: targetSchema, source: sourceSchema, sourceColumns: z.array(sourceName).max(sqliteTableImportLimits.sourceColumns).refine(value => new Set(value).size === value.length), sample: z.array(sampleRow).max(sqliteTableImportLimits.sampleRows), sampleOmitted: z.boolean(), records: z.number().int().min(0).max(sqliteTableImportLimits.records), columns: z.array(sqliteTableImportColumnSchema).min(1).max(sqliteTableImportLimits.columns), strict: z.boolean(), readOnly: z.boolean(), expiresAt: z.string().datetime(),
+  files: z.array(z.object({ name, sheet: name.optional(), records: z.number().int().positive().max(sqliteTableImportLimits.records) }).strict()).min(2).max(importBatchLimit).optional(),
 }).strict().superRefine((value, context) => {
   if (value.files && value.files.reduce((total, file) => total + file.records, 0) !== value.records) context.addIssue({ code: 'custom', message: 'SQLite批次文件记录数不一致' });
   const sources = new Set(value.sourceColumns); if (value.sample.length > value.records || new Set(value.columns.map(column => fold(column.name))).size !== value.columns.length || value.columns.some(column => column.affinity !== sqliteTableImportAffinity(column.declaredType, value.strict)) || value.sample.some(row => Object.keys(row).some(key => !sources.has(key)))) context.addIssue({ code: 'custom', message: 'SQLite导入目录列、样本或亲和性事实不一致' });

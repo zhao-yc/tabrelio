@@ -17,7 +17,7 @@ afterEach(() => vi.useRealTimers());
 const clone = <T,>(value: T): T => structuredClone(value);
 const mapping = [{ source: '内容', target: 'note', kind: 'text' as const }];
 /** 私有端口保留真实Main来源/回执逻辑；实际文件和事务另由backend/native覆盖。 */
-function fixture(readOnly = false, records = 777) {
+function fixture(readOnly = false, records = 777, batch?: ConstructorParameters<typeof SqliteTableImportMain>[0]['batch']) {
   let document = {}, revision = 1, epoch = {}, closing = false, next = 0;
   const owner = { owner: { document, contents: new EventEmitter() } } as ColumnsInvocation;
   const profile: SqliteConnectionProfile = { id: 'sqlite-connection', name: '合成SQLite', group: '', color: '#123456', dialect: 'sqlite', sqlite: { filePath: 'D:/synthetic/target.sqlite', readOnly, busyTimeoutMs: 0 } };
@@ -36,7 +36,7 @@ function fixture(readOnly = false, records = 777) {
     assert(value) { if (value.owner.document !== document) throw Error('原文档已变化'); }, same: (left, right) => left.owner.document === right.owner.document,
     revision: () => revision, epoch: () => epoch, available: () => {}, closing: () => closing, profile: id => id === profile.id ? profile : undefined,
     file(token, format) { if (token !== 'selected-source' || file.purpose !== 'import' || file.format !== format) throw Error('来源文件未授权'); return file; },
-    request, task: id => tasks.get(id), replace: task => { tasks.set(task.id, task); }, save,
+    batch, request, task: id => tasks.get(id), replace: task => { tasks.set(task.id, task); }, save,
     event(event) { events.push(clone(event)); const task = tasks.get(event.taskId); if (task) { const next = { ...task, status: event.status, progress: event.progress, message: task.sqliteWrite ? sqliteImportFactMessage(task.sqliteWrite) : persistedTaskMessage(task.kind as any, event) }; tasks.set(task.id, next); saved.set(task.id, clone(next)); } },
   });
   const inspect = (taskId = 'inspect-task') => main.request(owner, 'sqlite.tableImport.inspect', { ...target, fileToken: 'selected-source', format: 'csv', encoding: 'utf8', taskId }) as Promise<SqliteTableImportInspectOutput>;
@@ -66,6 +66,35 @@ it.each(['inspect', 'preview'] as const)('最终%s发布前连接换代，拒绝
 it.each(['filePath', 'profile', 'operationId', 'recordWriteFact', 'assertCurrent'])('公开inspect拒绝夹带私有字段%s，零runtime请求', async key => {
   const f = fixture(); await expect(f.main.request(f.owner, 'sqlite.tableImport.inspect', { ...f.target, fileToken: 'selected-source', format: 'csv', encoding: 'utf8', taskId: 'bad', [key]: '/untrusted' })).rejects.toThrow(); expect(f.request).not.toHaveBeenCalled();
 });
+it('XLSX 批次只允许按原文件顺序引用该工作簿目录中的工作表', async () => {
+  const paths = ['D:/synthetic/甲.xlsx', 'D:/synthetic/乙.xlsx'], source = { sha256: 'a'.repeat(64), bytes: 200 };
+  const grant = { paths, files: new Map([['a', paths[0]], ['b', paths[1]]]), workbooks: new Map([
+    ['a', { sheets: [{ id: '2', name: '甲表', hidden: false }], source }],
+    ['b', { sheets: [{ id: '3', name: '乙表', hidden: false }], source }],
+  ]) };
+  let active = true;
+  const f = fixture(false, 2, (_owner, token) => active && token === 'group' ? grant : undefined);
+  const inspect = (sheets: { fileToken: string; sheetId: string }[]) => f.main.request(f.owner, 'sqlite.tableImport.inspect', {
+    ...f.target, fileToken: 'group', format: 'xlsx', encoding: 'utf8', taskId: 'batch',
+    workbookBatch: { token: 'group', sheets }, excelOptions: { sheetId: sheets[0].sheetId, protocol: 'plain' },
+  }) as Promise<SqliteTableImportInspectOutput>;
+  const selected = [{ fileToken: 'a', sheetId: '2' }, { fileToken: 'b', sheetId: '3' }];
+  await expect(inspect([...selected].reverse())).rejects.toThrow('失效');
+  await expect(inspect([selected[0], { ...selected[1], sheetId: '2' }])).rejects.toThrow('失效');
+  expect(f.request).not.toHaveBeenCalled();
+
+  f.request.mockResolvedValueOnce({ ...f.inspection(), files: [
+    { name: '甲.xlsx', sheet: '甲表', records: 1 }, { name: '乙.xlsx', sheet: '乙表', records: 1 },
+  ] });
+  const inspected = await inspect(selected);
+  f.main.assertPublication(f.owner, inspected, 'sqlite.tableImport.inspect');
+  expect(f.request.mock.calls[0][1]).toMatchObject({ batchPaths: paths, batchWorkbooks: [
+    { sheetId: '2', name: '甲表', source }, { sheetId: '3', name: '乙表', source },
+  ] });
+  active = false;
+  await expect(f.preview(inspected.inspectionId)).rejects.toThrow('失效');
+});
+
 it('来源用途不匹配和来源就是目标库/日志在开始读取前拒绝', async () => {
   for (const suffix of ['', '-wal', '-shm', '-journal']) { const f = fixture(); f.replaceFile({ ...f.file(), path: f.profile.sqlite.filePath! + suffix }); await expect(f.inspect()).rejects.toThrow('来源不能'); expect(f.request).not.toHaveBeenCalled(); }
   const f = fixture(); f.replaceFile({ ...f.file(), purpose: 'export' }); await expect(f.inspect()).rejects.toThrow('未授权'); expect(f.request).not.toHaveBeenCalled();

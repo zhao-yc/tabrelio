@@ -904,7 +904,7 @@ MySQL 和 MariaDB 的现有 InnoDB 基本表支持「多文件导入」。一次
 
 PostgreSQL 现有表的导入窗口可点击「选择多个文件」。原生 CSV 和 tabrelio CSV 均可批量导入，也支持 TXT、JSON 和 XML。每个文件的记录数单独显示，所有选中的数据共用映射和一次事务。匹配键模式会一并核对跨文件的重复键。导入 XLSX 时点击「选择多个 Excel 工作簿」，逐本选定工作表，填写共用行范围和文本协议，完整扫描后核对各表记录数及映射。[PostgreSQL 多文件导入](development/multi-file-import-20261107.md#postgresql)
 
-SQLite 现有普通表可点击「选择多个 SQLite 导入文件」，一次选择 2 至 16 个同结构的 CSV、TXT、JSON 或 XML 文件。共用字段映射和动态类型，逐份检查、整批预检后，用同一事务新增到目标表。[SQLite 多文件导入](development/multi-file-import-20261107.md#sqlite)
+SQLite 现有普通表可点击「选择多个 SQLite 导入文件」，一次选择 2 至 16 个同结构的 CSV、TXT、JSON 或 XML 文件。共用字段映射和动态类型，逐份检查、整批预检后，用同一事务新增到目标表。选择 XLSX 时可批量选工作簿，逐本选表后共用范围、文本协议和类型映射。[SQLite 多文件导入](development/multi-file-import-20261107.md#sqlite)
 
 CSV/JSON 默认每 500 条源记录提交一批，也可选择“整文件一次提交”。失败或取消时尝试回滚当前事务，已确认提交的批次不会撤销。原 COMMIT 或回滚结果未知时必须核对服务器，不能自动重放；触发器对非事务表或外部系统的副作用不保证回滚。
 

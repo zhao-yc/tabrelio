@@ -2,7 +2,7 @@ import type { ImportBatchChoice, ImportBatchChoose } from '../../shared/fileImpo
 import { ImportRecordRangeFields, importRangeAfterHeaderChange } from './ImportRecordRangeFields';
 import type { ImportRecordRange } from '../../shared/importRecordRange';
 import { excelImportDefaults, excelImportOptionsSchema, excelImportZh, type ExcelImportOptions } from '../../shared/excelTransfer';
-import { ExcelImportFields } from './ExcelImportFields';
+import { ExcelBatchSheetFields, ExcelImportFields, ExcelImportSettingsFields } from './ExcelImportFields';
 import { txtImportDefaults, txtImportZh, type TxtImportOptions } from '../../shared/txtImport';
 import { TxtImportFields } from './TxtImportFields';
 import { sqliteXmlImportOptionsSchema, xmlImportZh, type SqliteXmlImportOptions } from '../../shared/xmlImport';
@@ -80,7 +80,7 @@ export const sqliteTableImportServices: SqliteTableImportServices = {
 export interface SqliteTableImportInitialSource { file: FileChoice; sourceId: string; format: SqliteTableImportInspectInput['format']; encoding: SqliteTableImportInspectInput['encoding']; csvDelimiter?: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; csvHasHeader?: boolean; csvRowRange?: ImportRecordRange; xmlOptions?: SqliteXmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; }
 interface Props { source: SqliteTableImportSource; initialSource?: SqliteTableImportInitialSource; services?: SqliteTableImportServices; onActivity(delta: 1 | -1): void; onDirtyChange?(dirty: boolean): void; onClose(): void; onCommitted?(output: SqliteTableImportOutcome, sourceChanged: boolean): void; onCleanupError(message: string): void; }
 type Mapping = { id: string; source: string | null; target: string; kind: SqliteTableImportMapping['kind'] };
-type Draft = { preset?: SqliteImportPresetConfiguration; format: SqliteTableImportInspectInput['format']; encoding: SqliteTableImportInspectInput['encoding']; delimiter: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; header: boolean; csvRowRange?: ImportRecordRange; xmlOptions: SqliteXmlImportOptions; txtOptions: TxtImportOptions; excelOptions: ExcelImportOptions; file?: FileChoice; inspection?: SqliteTableImportInspectOutput; mapping: Mapping[]; preview?: SqliteTableImportPreviewOutput; confirmation: string; outcome?: SqliteTableImportOutcome; locked: boolean; };
+type Draft = { preset?: SqliteImportPresetConfiguration; format: SqliteTableImportInspectInput['format']; encoding: SqliteTableImportInspectInput['encoding']; delimiter: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; header: boolean; csvRowRange?: ImportRecordRange; xmlOptions: SqliteXmlImportOptions; txtOptions: TxtImportOptions; excelOptions: ExcelImportOptions; workbooks?: ImportBatchChoice; sheetIds?: Record<string, string>; file?: FileChoice; inspection?: SqliteTableImportInspectOutput; mapping: Mapping[]; preview?: SqliteTableImportPreviewOutput; confirmation: string; outcome?: SqliteTableImportOutcome; locked: boolean; };
 type Operation = { kind: 'choose' | 'inspect' | 'preview' | 'apply'; id?: string; draft: Draft; generation: number; readonly expectedRows?: number; cancelled: boolean; sent: boolean; resultReceived?: boolean; receivedOutcome?: SqliteTableImportOutcome; commitBoundary: boolean; fact?: SqliteImportWriteFact; cancel?: Promise<void>; promise?: Promise<void>; committed?: SqliteTableImportOutcome; committedNotified?: boolean; };
 
 /** 完整文件检查与显式映射分阶段进行；只有一次明确确认才能提交原表的独立事务。 */
@@ -168,17 +168,18 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     replace({ ...draft, preset: value, format: value.format, encoding: value.encoding, delimiter: value.csvDelimiter ?? ',',
       header: value.csvHasHeader ?? true, csvRowRange: value.csvRowRange, xmlOptions, txtOptions: value.txtOptions ?? txtImportDefaults,
       excelOptions: { ...excelImportDefaults, ...value.excelOptions },
-      file: undefined, inspection: undefined, mapping: [], preview: undefined, confirmation: '', outcome: undefined, locked: false });
+      file: undefined, workbooks: undefined, sheetIds: undefined, inspection: undefined, mapping: [], preview: undefined, confirmation: '', outcome: undefined, locked: false });
     setError('');
     setMessage(value.format === 'xlsx' ? presetsText.chooseNewSheet : presetsText.chooseNewFile);
     return true;
   }
 
   /** 配置变化撤销文件授权和原检查，不继承旧格式的令牌或旧SQL。 */
-  function configure(patch: Partial<Pick<Draft, 'format' | 'encoding' | 'delimiter' | 'header' | 'csvRowRange' | 'xmlOptions' | 'txtOptions' | 'excelOptions'>>): void {
+  function configure(patch: Partial<Pick<Draft, 'format' | 'encoding' | 'delimiter' | 'header' | 'csvRowRange' | 'xmlOptions' | 'txtOptions' | 'excelOptions' | 'sheetIds'>>): void {
     if (!editable() || owner.initialSource) return;
-    const keepPreset = !!patch.excelOptions && patch.excelOptions.sheetId !== draft.excelOptions.sheetId;
-    void releaseAll().catch(report); replace({ ...draft, ...patch, preset: keepPreset ? draft.preset : undefined, ...(['xml', 'xlsx'].includes(patch.format ?? '') ? { encoding: 'utf8' } : {}), file: draft.format === 'xlsx' && patch.excelOptions ? draft.file : undefined, inspection: undefined, mapping: [], preview: undefined, confirmation: '', outcome: undefined, locked: false }); setError(''); setMessage('');
+    const keepPreset = !!patch.sheetIds || !!patch.excelOptions && patch.excelOptions.sheetId !== draft.excelOptions.sheetId;
+    const keepFile = draft.format === 'xlsx' && (!!patch.excelOptions || !!patch.sheetIds);
+    void releaseAll().catch(report); replace({ ...draft, ...patch, preset: keepPreset ? draft.preset : undefined, ...(['xml', 'xlsx'].includes(patch.format ?? '') ? { encoding: 'utf8' } : {}), file: keepFile ? draft.file : undefined, workbooks: keepFile ? draft.workbooks : undefined, sheetIds: keepFile ? patch.sheetIds ?? draft.sheetIds : undefined, inspection: undefined, mapping: [], preview: undefined, confirmation: '', outcome: undefined, locked: false }); setError(''); setMessage('');
   }
   function mappingAt(row: Mapping, patch: Partial<Pick<Mapping, 'target' | 'kind'>>): void { if (!editable() || !draft.inspection || Date.parse(draft.inspection.expiresAt) <= Date.now() || row.source === null || !draft.mapping.includes(row)) return; revokePreview(); replace({ ...draft, mapping: draft.mapping.map(value => value === row ? { ...value, ...patch } : value), preview: undefined, confirmation: '', outcome: undefined }); setError(''); setMessage(''); }
   function addMapping(): void { if (!editable() || !draft.inspection || Date.parse(draft.inspection.expiresAt) <= Date.now() || draft.mapping.length >= sqliteTableImportLimits.mapping) return; revokePreview(); replace({ ...draft, mapping: [...draft.mapping, { id: uid(), source: null, target: '', kind: 'text' }], preview: undefined, confirmation: '', outcome: undefined }); }
@@ -232,11 +233,11 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   function stop(op = operation.current): void { if (!op || operation.current !== op || op.cancelled || op.commitBoundary || op.resultReceived || op.fact?.commitAcknowledged || op.fact?.rollbackAcknowledged) return; op.cancelled = true; if (op.sent && op.id) op.cancel = Promise.resolve().then(() => owner.services.cancel(op.id!)).then(() => undefined).catch(report); if (mounted.current) setMessage(text.cancelling); }
   /** 取消文件选择保留完整旧草稿；chooser晚回不得给新格式或后继来源签入令牌。 */
   function choose(batch = false): void {
-    if (owner.initialSource || batch && (!owner.services.chooseBatch || draft.format === 'xlsx')) return;
+    if (owner.initialSource || batch && !owner.services.chooseBatch) return;
     const op = begin('choose'); if (!op) return;
     op.promise = (async () => {
       try {
-        let file: FileChoice | null;
+        let file: FileChoice | null, workbooks: ImportBatchChoice | undefined;
         if (batch) {
           const choice = await owner.services.chooseBatch!({ ...owner.source.target, format: op.draft.format as ImportBatchChoose['format'] });
           if (choice) batches.current.add(choice.token);
@@ -244,13 +245,14 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
             if (choice) await releaseOne('batch', choice.token);
             return;
           }
+          if (choice && op.draft.format === 'xlsx') workbooks = choice;
           file = choice ? { token: choice.token, name: text.batchCount(choice.files.length) } : null;
         } else file = await owner.services.choose({ purpose: 'import', format: op.draft.format });
         if (!accepts(op)) return;
         if (!file) { replace({ ...op.draft }); return; }
         if (!file.token || !file.name) throw Error(text.invalid);
         op.draft = { ...op.draft, ...(op.draft.format === 'xlsx' ? { excelOptions: { ...excelImportDefaults, ...op.draft.preset?.excelOptions } } : {}),
-          file, inspection: undefined, preview: undefined, confirmation: '', outcome: undefined };
+          file, workbooks, sheetIds: undefined, inspection: undefined, preview: undefined, confirmation: '', outcome: undefined };
         replace(op.draft); await releaseAll();
       } catch (reason) { if (mounted.current && generation.current === op.generation) report(reason); }
       finally { await finish(op); }
@@ -259,7 +261,10 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   /** 检查完整原文件和准确目标元数据；有限样本不作为导入记录来源。 */
   function inspect(): void {
     if (!editable() || !draft.file) return;
-    const parsedInput = sqliteTableImportInspectSchema.safeParse({ ...owner.source.target, ...(seed?.success ? { sourceId: seed.data.sourceId } : {}), fileToken: draft.file.token, format: draft.format, encoding: draft.encoding, ...(draft.format === 'csv' ? { csvDelimiter: draft.delimiter, csvHasHeader: draft.header, ...csvRangeOption(draft.csvRowRange) } : {}), ...(draft.format === 'xml' ? { xmlOptions: draft.xmlOptions } : {}), ...(draft.format === 'txt' ? { txtOptions: draft.txtOptions } : {}), ...(draft.format === 'xlsx' ? { excelOptions: draft.excelOptions } : {}), taskId: uid() });
+    const workbookBatch = draft.workbooks && { token: draft.workbooks.token,
+      sheets: draft.workbooks.files.map(file => ({ fileToken: file.token, sheetId: draft.sheetIds?.[file.token] ?? '' })) };
+    const excelOptions = workbookBatch ? { ...draft.excelOptions, sheetId: workbookBatch.sheets[0]?.sheetId ?? '' } : draft.excelOptions;
+    const parsedInput = sqliteTableImportInspectSchema.safeParse({ ...owner.source.target, ...(seed?.success ? { sourceId: seed.data.sourceId } : {}), fileToken: draft.file.token, format: draft.format, encoding: draft.encoding, ...(draft.format === 'csv' ? { csvDelimiter: draft.delimiter, csvHasHeader: draft.header, ...csvRangeOption(draft.csvRowRange) } : {}), ...(draft.format === 'xml' ? { xmlOptions: draft.xmlOptions } : {}), ...(draft.format === 'txt' ? { txtOptions: draft.txtOptions } : {}), ...(draft.format === 'xlsx' ? { excelOptions, ...(workbookBatch ? { workbookBatch } : {}) } : {}), taskId: uid() });
     if (!parsedInput.success) { setError(text.invalid); return; } const input = parsedInput.data;
     // 首次释放能力前同步撤销可提交草稿，停止/失败不能恢复已经release的旧预览。
     const op = begin('inspect', { ...draft, inspection: undefined, preview: undefined, confirmation: '', outcome: undefined }); if (!op) return; input.taskId = op.id!;
@@ -277,7 +282,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
           value.columns.some(column => column.name === row.target && !column.generated))).map(row => ({ ...row, id: uid() }));
         replace({ ...op.draft, inspection: value, mapping, preview: undefined, confirmation: '', outcome: undefined });
         if (restored) setMessage(presetsText.sqliteApplied);
-      } catch (reason) { if (mounted.current && generation.current === op.generation && !op.cancelled) { replace({ ...op.draft, file: undefined, inspection: undefined, preview: undefined, confirmation: '' }); report(reason); } }
+      } catch (reason) { if (mounted.current && generation.current === op.generation && !op.cancelled) { replace({ ...op.draft, file: undefined, workbooks: undefined, sheetIds: undefined, inspection: undefined, preview: undefined, confirmation: '' }); report(reason); } }
       finally { await finish(op); }
     })();
   }
@@ -392,16 +397,26 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   if (!owner.initialSource && inspection && !inspectionExpired && draft.mapping.length > 0) {
     try { capturePreset(); canSavePreset = true; } catch { /* 仍可在原预检流程查看映射诊断。 */ }
   }
+  const validWorkbook = draft.format !== 'xlsx' || (draft.workbooks ?
+    draft.workbooks.files.every(file => file.sheets?.some(sheet => sheet.id === draft.sheetIds?.[file.token])) &&
+      excelImportOptionsSchema.safeParse({ ...draft.excelOptions, sheetId: draft.sheetIds?.[draft.workbooks.files[0]?.token] }).success
+    : excelImportOptionsSchema.safeParse(draft.excelOptions).success);
   const validCsv = draft.format !== 'csv' || validCsvRange({ csvHasHeader: draft.header, ...csvRangeOption(draft.csvRowRange) });
   return <Modal title={text.title} wide onClose={() => close()}><div className="modal-content sqlite-table-import" aria-busy={busy || closing || presetBusy}>
     <p>{owner.source.target.connectionId} / {owner.source.target.database} / {owner.source.target.table}</p><UsageHelp><p>{text.inspectHint}</p><p>{text.mappingHint}</p><p>{draft.format === 'xml' ? draft.xmlOptions?.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : text.nullHint}</p><p>{text.triggerHint}</p></UsageHelp>{owner.source.readOnly && <p className="warning-text">{text.readonly}</p>}{(!valid || stale) && !draft.outcome?.fact.commitAcknowledged && <ErrorBox message={text.stale}/>}
     <div className="form-grid"><Field label={text.format}><select aria-label={text.format} value={draft.format} disabled={configurationDisabled} onChange={event => configure({ format: event.target.value as Draft['format'] })}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xlsx">{excelImportZh.format}</option><option value="xml">XML</option></select></Field><Field label={text.encoding}><select aria-label={text.encoding} value={draft.encoding} disabled={configurationDisabled || draft.format === 'xml' || draft.format === 'xlsx'} onChange={event => configure({ encoding: event.target.value as Draft['encoding'] })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <><Field label={text.delimiter}><select aria-label={text.delimiter} value={draft.delimiter} disabled={configurationDisabled} onChange={event => configure({ delimiter: event.target.value as Draft['delimiter'] })}>{csvImportDelimiters.map(value => <option value={value} key={value}>{value === '\t' ? 'Tab' : value}</option>)}</select></Field><label><input type="checkbox" aria-label={text.header} checked={draft.header} disabled={configurationDisabled} onChange={event => configure({ header: event.target.checked, csvRowRange: importRangeAfterHeaderChange(event.target.checked, draft.csvRowRange) })}/>{text.header}</label>
       <ImportRecordRangeFields hasHeader={draft.header} range={draft.csvRowRange} disabled={configurationDisabled}
-        onChange={csvRowRange => configure({ csvRowRange })}/></>}{draft.format === 'xlsx' && <ExcelImportFields fileToken={draft.file?.token} options={draft.excelOptions} disabled={configurationDisabled} frozen={!!owner.initialSource} onChange={excelOptions => configure({ excelOptions })}/>}
+        onChange={csvRowRange => configure({ csvRowRange })}/></>}{draft.format === 'xlsx' && (draft.workbooks ? <>
+      <ExcelBatchSheetFields batch={draft.workbooks} selected={draft.sheetIds ?? {}} disabled={configurationDisabled} labelFor={text.workbookSheet}
+        onSelect={(fileToken, sheetId) => configure({ sheetIds: { ...draft.sheetIds, [fileToken]: sheetId } })}/>
+      <ExcelImportSettingsFields options={draft.excelOptions} disabled={configurationDisabled}
+        onChange={settings => configure({ excelOptions: { ...draft.excelOptions, ...settings } })}/>
+    </> : <ExcelImportFields fileToken={draft.file?.token} options={draft.excelOptions} disabled={configurationDisabled}
+      frozen={!!owner.initialSource} onChange={excelOptions => configure({ excelOptions })}/>)}
       {draft.format === 'txt' && <TxtImportFields options={draft.txtOptions} disabled={configurationDisabled} onChange={txtOptions => configure({ txtOptions })}/>}{draft.format === 'xml' && <SqliteXmlImportFields options={draft.xmlOptions} disabled={configurationDisabled} onChange={xmlOptions => configure({ xmlOptions })}/>}</div>
     {!validCsv && <ErrorBox message={csvRangeInvalid}/>}
     <div className="sqlite-import-actions"><button type="button" disabled={configurationDisabled} onClick={() => choose()}>{draft.file ? text.chooseAgain : text.choose}</button>
-      {owner.services.chooseBatch && draft.format !== 'xlsx' && <button type="button" disabled={configurationDisabled} onClick={() => choose(true)}>{text.chooseBatch}</button>}<span aria-label={text.source}>{draft.file?.name ?? text.noFile}</span><button type="button" disabled={disabled || !draft.file || !validCsv || draft.format === 'xlsx' && !excelImportOptionsSchema.safeParse(draft.excelOptions).success} onClick={inspect}>{text.inspect}</button></div>
+      {owner.services.chooseBatch && <button type="button" disabled={configurationDisabled} onClick={() => choose(true)}>{text.chooseBatch}</button>}<span aria-label={text.source}>{draft.file?.name ?? text.noFile}</span><button type="button" disabled={disabled || !draft.file || !validCsv || !validWorkbook} onClick={inspect}>{text.inspect}</button></div>
     {!owner.initialSource && <details><summary>{presetsText.title}</summary>
       <ImportPresets source={JSON.stringify([owner.source.id, draft.file?.token, inspection?.inspectionId, draft.mapping, draft.preset])}
         busy={busy || closing || !valid || draft.locked} canSave={canSavePreset} isCurrent={current}
@@ -411,7 +426,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     {draft.preset && <button type="button" disabled={disabled} onClick={() => configure({})}>{presetsText.cancelApply}</button>}
     {inspection && <><p>{draft.format === 'xml' && draft.xmlOptions?.documentResult !== undefined ? xmlImportZh.documentRecords(inspection.records) : text.records(inspection.records)} · {inspection.strict ? text.strict : ''}</p><p className="muted small">{inspection.files ? text.batchHash : text.sourceHash}：{inspection.source.sha256}</p>
       {inspection.files && <><p>{text.batchHint}</p><ol aria-label={text.batchFiles}>
-        {inspection.files.map((file, index) => <li key={index}>{file.name} · {text.records(file.records)}</li>)}
+        {inspection.files.map((file, index) => <li key={index}>{file.name}{file.sheet ? ' · ' + file.sheet : ''} · {text.records(file.records)}</li>)}
       </ol></>}<details><summary>{text.targetColumns}</summary><ul>{inspection.columns.map(column => <li key={column.name}>{column.name} · {column.declaredType} · {text.affinity} {column.affinity} · {column.nullable ? text.nullable : text.notNull} · {column.hasDefault ? text.hasDefault : text.noDefault}{column.generated ? ' · ' + text.generated : ''}</li>)}</ul></details>
       <section aria-label={text.mapping}><h3>{text.mapping}</h3><ImportMappingActions disabled={disabled || inspectionExpired} onAction={remap}/><button type="button" disabled={disabled || inspectionExpired || draft.mapping.length >= sqliteTableImportLimits.mapping} onClick={addMapping}>{text.addMapping}</button>{draft.mapping.map((row, index) => <div className="sqlite-import-mapping" key={row.id}><select aria-label={text.sourceColumn(index + 1)} value={row.source === null ? '' : 's' + inspection.sourceColumns.indexOf(row.source)} disabled={disabled || inspectionExpired} onChange={event => sourceAt(row, event.target.value)}><option value="">{text.noSource}</option>{inspection.sourceColumns.map((name, at) => <option key={at} value={'s' + at}>{name || text.emptySource}</option>)}</select><select aria-label={text.target(row.source ?? text.noSource)} value={row.target} disabled={disabled || inspectionExpired || row.source === null} onChange={event => mappingAt(row, { target: event.target.value })}><option value="">{text.exclude}</option>{inspection.columns.map(column => <option key={column.name} value={column.name} disabled={column.generated}>{column.name}{column.generated ? ' · ' + text.generated : ''}</option>)}</select><select aria-label={text.kind(row.source ?? text.noSource)} value={row.kind} disabled={disabled || inspectionExpired || !row.target} onChange={event => mappingAt(row, { kind: event.target.value as Mapping['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select><button type="button" aria-label={text.removeMapping(index + 1)} disabled={disabled || inspectionExpired} onClick={() => removeMapping(row)}>×</button></div>)}</section>
       <details><summary>{text.sample}</summary>{inspection.sampleOmitted && <p>{text.sampleLimit}</p>}<div className="sqlite-import-scroll"><table aria-label={text.sample}><thead><tr>{inspection.sourceColumns.map(name => <th key={name}>{name}</th>)}</tr></thead><tbody>{inspection.sample.map((row, index) => <tr key={index}>{inspection.sourceColumns.map(name => <td key={name}>{!Object.hasOwn(row, name) ? draft.format === 'xml' ? text.null : text.missing : row[name] === null ? text.null : row[name] === '' ? text.empty : typeof row[name] === 'object' ? JSON.stringify(row[name]) : String(row[name])}</td>)}</tr>)}</tbody></table></div></details>

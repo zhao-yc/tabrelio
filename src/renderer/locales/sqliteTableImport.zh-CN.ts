@@ -4,6 +4,7 @@ export const sqliteTableImportZh = {
   format: 'SQLite 导入格式', encoding: 'SQLite 导入编码', delimiter: 'SQLite CSV 分隔符', header: 'SQLite CSV 包含字段名记录',
   choose: '选择 SQLite 导入文件', chooseAgain: '重新选择 SQLite 导入文件', noFile: '尚未选择文件',
   chooseBatch: '选择多个 SQLite 导入文件', batchCount: (count: number) => `${count} 个文件`,
+  workbookSheet: (index: number, name: string) => `第 ${index + 1} 本工作簿 ${name} 的工作表`,
   batchFiles: 'SQLite 导入批次文件', batchHash: '有序批次指纹',
   batchHint: '同一批次共用格式、类型映射和事务。样本来自第一份文件，诊断记录号沿整个批次累计。',
   inspect: '检查 SQLite 导入文件', inspectHint: '完整读取选中的文件并核对原表目录；下方样本有界展示，不代表只导入样本。此阶段不写入数据库。',

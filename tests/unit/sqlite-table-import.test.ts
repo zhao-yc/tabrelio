@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
+import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
+import { listExcelWorkbookSource } from '../../src/engine/excelFiles';
 import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import { txtImportDefaults } from '../../src/shared/txtImport';
@@ -72,6 +74,39 @@ describe('SQLite现有表整文件导入真实磁盘与准确进程生命周期'
     const committed = await apply(app, await plan(app, await inspectBatch([source, later]))).result;
     expect(committed).toMatchObject({ outcome: 'committed', fact: { requestedRows: 2, appliedRows: 2, commitAcknowledged: true } });
     expect(rows(profile)).toEqual([{ id: '1', type: 'text', value: '第一份' }, { id: '2', type: 'text', value: '第二份' }]);
+  });
+
+  it('XLSX 批次绑定工作表目录原字节，预检后替换拒写且第二本约束失败整批回滚', async () => {
+    const profile = fixture('CREATE TABLE target(id INTEGER PRIMARY KEY,value TEXT UNIQUE)'), { app } = runtime(profile);
+    const paths = ['甲.xlsx', '乙.xlsx'].map(name => join(dirname(profile.sqlite.filePath!), name));
+    await writeXlsxImportFixture(paths[0], ['value'], [['甲']], true);
+    const second = (value: string) => writeXlsxImportFixture(paths[1], ['value'], [[value]], true, '第二本明细');
+    await second('乙');
+    const workbookBatch = { token: '本例批次', sheets: [{ fileToken: '甲', sheetId: '2' }, { fileToken: '乙', sheetId: '3' }] };
+    const catalogue = () => Promise.all(paths.map(async (filePath, index) => {
+      const book = await listExcelWorkbookSource({ filePath }), sheetId = workbookBatch.sheets[index].sheetId;
+      return { sheetId, name: book.sheets.find(sheet => sheet.id === sheetId)!.name, source: book.source };
+    }));
+    const inspectBatch = async (batchWorkbooks: Awaited<ReturnType<typeof catalogue>>) =>
+      sqliteTableImportInspectionSchema.parse(await app.request('sqlite.tableImport.inspect', {
+        connectionId: profile.id, database: 'main', table: 'target', fileToken: workbookBatch.token, taskId: '工作簿检查' + ++serial,
+        encoding: 'utf8', format: 'xlsx', excelOptions: { sheetId: '2', protocol: 'plain', headerRow: 2, firstDataRow: 4, lastDataRow: 4 },
+        workbookBatch, filePath: paths[0], batchPaths: paths, batchWorkbooks, assertCurrent: () => {},
+      }));
+    const originals = await catalogue();
+    await second('目录读取后变动');
+    await expect(inspectBatch(originals)).rejects.toThrow('第 2 个文件未通过扫描。工作簿在读取目录后已变化');
+    const checked = await plan(app, await inspectBatch(await catalogue()));
+    await second('预检后变动');
+    expect(await apply(app, checked).result).toMatchObject({ outcome: 'not-sent', fact: { appliedRows: 0 }, failure: { code: 'source-changed' } });
+    expect(rows(profile)).toEqual([]);
+
+    await second('甲');
+    const conflict = await plan(app, await inspectBatch(await catalogue()));
+    expect(await apply(app, conflict).result).toMatchObject({
+      outcome: 'rolled-back', fact: { appliedRows: 1, rollbackAcknowledged: true }, failure: { code: 'native-rejected', record: 2 },
+    });
+    expect(rows(profile)).toEqual([]);
   });
 
   it('导入真实来源强制严格编码，非法UTF8在签能力前拒绝，合法替换字符及NUL不被误拒', async () => {

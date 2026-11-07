@@ -2,21 +2,28 @@ import { createHash, randomUUID } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import { SqliteImportSourceMain } from './sqliteImportSourceMain';
 import type { ColumnsInvocation } from './columnsMainCapabilities';
+import type { SqliteImportWorkbook } from './sqliteTableImport';
+import type { ExcelSheet } from '../shared/excelTransfer';
 import type { SelectedFile } from './fileTokens';
 import type { SqliteConnectionProfile, TaskEvent, TaskRecord } from '../shared/contracts';
 import type { SqliteEditTarget, SqliteTableEditOutcome, SqliteWriteFact } from '../shared/sqliteTableEdit';
 import { sqliteTableImportInspectSchema, sqliteTableImportInspectionSchema, sqliteTableImportPreviewSchema, sqliteTableImportPreviewOutputSchema, sqliteTableImportApplySchema, sqliteTableImportReleaseSchema, sqliteTableImportOutcomeSchema, sqliteImportWriteFactSchema, assertSqliteImportWriteFactTransition, buildSqliteTableImportInsert, sqliteTableImportLimits as limits, type SqliteTableImportInspectInput, type SqliteTableImportInspectOutput, type SqliteTableImportPreviewInput, type SqliteTableImportPreviewOutput, type SqliteTableImportApplyInput, type SqliteTableImportReleaseInput } from '../shared/sqliteTableImport';
 import { sqliteImportFactMessage, sqliteImportTaskMessage } from '../shared/sqliteTableImportFact';
 
+interface BatchGrant {
+  paths: readonly string[];
+  files: ReadonlyMap<string, string>;
+  workbooks?: ReadonlyMap<string, { sheets: readonly ExcelSheet[]; source: SqliteImportWorkbook['source'] }>;
+}
 interface Ports {
   assert(owner: ColumnsInvocation): void; same(left: ColumnsInvocation, right: ColumnsInvocation): boolean;
   revision(): number; epoch(id: string): object; available(id: string): void; closing(): boolean;
   profile(id: string): SqliteConnectionProfile | undefined; file(token: string, format: string): SelectedFile;
-  batch?(owner: ColumnsInvocation, token: string, target: SqliteEditTarget, format: string): readonly string[] | undefined;
+  batch?(owner: ColumnsInvocation, token: string, target: SqliteEditTarget, format: string): BatchGrant | undefined;
   request(command: string, input: unknown): Promise<unknown>;
   task(id: string): TaskRecord | undefined; replace(task: TaskRecord): void; save(task: TaskRecord): void; event(event: TaskEvent): void;
 }
-interface Source { sourceId?: string; owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteEditTarget; expires: number; revoked: boolean; fileToken: string; file: SelectedFile; batch?: readonly string[]; fileKey: string; format: string; source?: { sha256: string; bytes: number }; records?: number; cancelled?(): boolean; }
+interface Source { sourceId?: string; owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteEditTarget; expires: number; revoked: boolean; fileToken: string; file: SelectedFile; batch?: BatchGrant; workbooks?: readonly SqliteImportWorkbook[]; fileKey: string; format: string; source?: { sha256: string; bytes: number }; records?: number; cancelled?(): boolean; }
 interface Inspection extends Source { id: string; }
 interface Preview extends Source { id: string; inspectionId: string; confirmation: string; records: number; }
 interface Operation { owner: ColumnsInvocation; inspection?: Inspection; cancelled: boolean; sent: boolean; check(): void; stop?: Promise<void>; settled: Promise<void>; settle(): void; }
@@ -91,13 +98,19 @@ export class SqliteTableImportMain {
     this.watch(owner); this.observe(); this.ports.assert(owner); this.ports.available(input.connectionId);
     const target: SqliteEditTarget = { connectionId: input.connectionId, database: 'main', table: input.table };
     const batch = this.ports.batch?.(owner, input.fileToken, target, input.format);
-    if (batch && input.sourceId) throw Error(stale);
+    if (batch && input.sourceId || (input.format === 'xlsx' && !!batch) !== !!input.workbookBatch) throw Error(stale);
+    const workbooks = input.workbookBatch?.sheets.map(({ fileToken, sheetId }, index) => {
+      const book = batch?.workbooks?.get(fileToken), sheet = book?.sheets.find(item => item.id === sheetId);
+      if (!batch || !book || !sheet || batch.files.get(fileToken) !== batch.paths[index]) throw Error(stale);
+      return { sheetId, name: sheet.name, source: book.source };
+    });
+    if (workbooks && workbooks.length !== batch?.paths.length) throw Error(stale);
     const profile = this.ports.profile(input.connectionId);
-    const file = batch ? { path: batch[0], purpose: 'import', format: input.format } : this.ports.file(input.fileToken, input.format);
+    const file = batch ? { path: batch.paths[0], purpose: 'import', format: input.format } : this.ports.file(input.fileToken, input.format);
     if (!profile || profile.pendingFiles?.length || !profile.sqlite.filePath) throw Error('请先保存并授权准确SQLite文件连接');
     const pathKey = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
-    if (['', '-wal', '-shm', '-journal'].some(suffix => (batch ?? [file.path]).some(path => pathKey(profile.sqlite.filePath! + suffix) === pathKey(path)))) throw Error('导入来源不能是目标SQLite文件或其日志');
-    const source: Source = { owner, revision: this.ports.revision(), epoch: this.ports.epoch(input.connectionId), profile: profileKey(profile), target, fileToken: input.fileToken, file, ...(batch ? { batch } : {}), fileKey: digest([file.path, file.purpose, file.format]), format: input.format, expires: Infinity, revoked: false };
+    if (['', '-wal', '-shm', '-journal'].some(suffix => (batch?.paths ?? [file.path]).some(path => pathKey(profile.sqlite.filePath! + suffix) === pathKey(path)))) throw Error('导入来源不能是目标SQLite文件或其日志');
+    const source: Source = { owner, revision: this.ports.revision(), epoch: this.ports.epoch(input.connectionId), profile: profileKey(profile), target, fileToken: input.fileToken, file, ...(batch ? { batch, workbooks } : {}), fileKey: digest([file.path, file.purpose, file.format]), format: input.format, expires: Infinity, revoked: false };
     this.valid(source); return source;
   }
   /** 在首个await前独占编号，原取消和退出始终指向同一次操作。 */
@@ -161,13 +174,13 @@ export class SqliteTableImportMain {
     let output: SqliteTableImportInspectOutput | undefined, accepted: Inspection | undefined, receivedId: string | undefined;
     try {
       this.start(input.taskId, 'sqlite.tableImport.inspect'); operation.check(); operation.sent = true;
-      const received = await this.ports.request('sqlite.tableImport.inspect', { ...input, filePath: source.file.path, ...(source.batch ? { batchPaths: source.batch } : {}), assertCurrent: operation.check });
+      const received = await this.ports.request('sqlite.tableImport.inspect', { ...input, filePath: source.file.path, ...(source.batch ? { batchPaths: source.batch.paths, ...(source.workbooks ? { batchWorkbooks: source.workbooks } : {}) } : {}), assertCurrent: operation.check });
       const candidate = (received as { inspectionId?: unknown } | undefined)?.inspectionId;
       if (typeof candidate === 'string' && candidate.length > 0 && candidate.length <= 200) receivedId = candidate;
       output = sqliteTableImportInspectionSchema.parse(received);
       operation.check(); const expires = Date.parse(output.expiresAt);
-      if (source.batch ? !output.files || output.files.length !== source.batch.length ||
-          output.files.some((file, index) => file.name !== basename(source.batch![index])) : output.files) throw Error(stale);
+      if (source.batch ? !output.files || output.files.length !== source.batch.paths.length ||
+          output.files.some((file, index) => file.name !== basename(source.batch!.paths[index]) || file.sheet !== source.workbooks?.[index].name) : output.files) throw Error(stale);
       if (!sameTarget(output.target, source.target) || !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + limits.previewLifetimeMs + 5000 || this.inspections.has(output.inspectionId) || this.inspections.size >= limits.previews) throw Error(stale);
       lease?.accept(output); claiming = false;
       accepted = { ...source, id: output.inspectionId, expires, records: output.records, source: output.source }; this.inspections.set(output.inspectionId, accepted);
