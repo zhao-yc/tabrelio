@@ -26,7 +26,7 @@ import {
 } from '../../shared/postgresSql';
 import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
-import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
+import { PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
 import { readPostgresRoutine, readPostgresRoutineCatalog, readPostgresRoutineOwnerTargets } from './routine';
@@ -120,10 +120,12 @@ type Input = Record<string, any>;
 export class PostgresEngine {
   private readonly completionReads = new Map<string, number>();
   private readonly creations = new PostgresCreateTableWorkspace();
-  private readonly columnEdits = new PostgresStructureEditWorkspace('字段', ({ output }, input: PostgresColumnPreviewInput) => {
+  private readonly columnEdits = new PostgresStructureEditWorkspace('字段', async ({ output }, input: PostgresColumnPreviewInput, connection) => {
     const { connectionId, database, table, editStamp, changes } = input;
     const plan = postgresColumnPlan(output, { connectionId, database, table, editStamp, changes });
-    return { ...plan, verify: final => matchesPostgresColumnPlan(final.output.columns, plan.columns) };
+    await validatePostgresDefaultPresets(connection, plan.presets);
+    return { ...plan, before: current => validatePostgresDefaultPresets(current, plan.presets),
+      verify: final => matchesPostgresColumnPlan(final.output.columns, plan.columns) };
   });
   private readonly indexEdits = new PostgresStructureEditWorkspace('索引', ({ output, indexIds }, input: PostgresIndexPreviewInput) => {
     const { connectionId, database, table, editStamp, changes } = input;

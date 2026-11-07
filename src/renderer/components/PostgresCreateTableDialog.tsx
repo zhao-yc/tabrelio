@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  postgresCreateTablePreviewSchema, postgresCreateTypes, type PostgresCreateColumn, type PostgresCreateTablePreview,
+  acceptsPostgresDefaultPreset, postgresCreateTablePreviewSchema, postgresCreateTypes, type PostgresCreateColumn, type PostgresCreateTablePreview,
   type PostgresCreateTableTarget,
 } from '../../shared/postgresCreateTable';
 import { errorMessage, invoke, uid } from '../lib';
@@ -8,6 +8,7 @@ import { postgresCreateTableZh as text } from '../locales/postgresCreateTable.zh
 import { useWorkspace } from '../store';
 import type { PostgresImportDesign } from '../importNewTableUi';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { PostgresColumnDefaultFields } from './PostgresColumnDefaultFields';
 import './PostgresCreateTableDialog.css';
 
 type FieldDraft = PostgresCreateColumn & { id: string };
@@ -84,8 +85,9 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
   /** 进入其他数据类型时撤下不兼容的长度、精度、默认函数和标识选项。 */
   function changeType(field: FieldDraft, type: PostgresCreateColumn['type']) {
     const identity = ['bigint','integer','smallint'].includes(type) ? field.identity : 'none';
-    const defaultValue = field.default.mode === 'currentDate' && type !== 'date' ||
-      field.default.mode === 'currentTimestamp' && !['timestamp','timestamptz'].includes(type) ? { mode: 'none' as const } : field.default;
+    const mode = field.default.mode;
+    const defaultValue = mode !== 'literal' && mode !== 'none' && !acceptsPostgresDefaultPreset(type, mode)
+      ? { mode: 'none' as const } : field.default;
     patch(field.id, { type, length: undefined, precision: undefined, scale: undefined, identity, default: defaultValue });
   }
 
@@ -176,13 +178,8 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
               identity: event.target.value as PostgresCreateColumn['identity'], default: { mode: 'none' },
             })}><option value="none">{text.identityNone}</option><option value="always">{text.identityAlways}</option><option value="byDefault">{text.identityDefault}</option></select>
           </Field>}
-          <Field label={text.default}><select aria-label={text.default} disabled={field.identity !== 'none'} value={field.default.mode}
-            onChange={event => { const mode = event.target.value as PostgresCreateColumn['default']['mode']; patch(field.id, { default: mode === 'literal' ? { mode, value: '' } : { mode } }); }}>
-            <option value="none">{text.noDefault}</option><option value="literal">{text.literal}</option>
-            {field.type === 'date' && <option value="currentDate">{text.currentDate}</option>}
-            {['timestamp','timestamptz'].includes(field.type) && <option value="currentTimestamp">{text.currentTimestamp}</option>}
-          </select></Field>
-          {field.default.mode === 'literal' && <Field label={text.value}><input value={field.default.value} maxLength={4096} onChange={event => patch(field.id, { default: { mode: 'literal', value: event.target.value } })}/></Field>}
+          <PostgresColumnDefaultFields type={field.type} value={field.default} disabled={field.identity !== 'none'}
+            onChange={value => patch(field.id, { default: value })}/>
           <Field label={text.comment}><input value={field.comment} maxLength={4096} onChange={event => patch(field.id, { comment: event.target.value })}/></Field>
           <button disabled={fields.length === 1} onClick={() => edit(() => setFields(previous => previous.filter(item => item.id !== field.id)))}>{text.remove}</button>
         </fieldset>)}

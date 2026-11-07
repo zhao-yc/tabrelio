@@ -24,6 +24,15 @@ describe('PostgreSQL 建表计划', () => {
     expect(postgresCreateTablePreviewSchema.safeParse({ ...draft, columns: [{ ...draft.columns[0], identity: 'always' }] }).success).toBe(false);
     expect(postgresCreateTablePreviewSchema.safeParse({ ...draft, columns: [{ ...draft.columns[0], type: 'numeric', precision: 2, scale: 3 }] }).success).toBe(false);
   });
+
+  it('UUID 预设只接受 uuid 类型及固定模式，不接收表达式参数', () => {
+    const column = { ...draft.columns[0], type: 'uuid' } as const;
+    const input = { ...draft, columns: [{ ...column, default: { mode: 'randomUuid' as const } }] };
+    expect(postgresCreateTablePlan(input).statements[0]).toContain('DEFAULT pg_catalog.gen_random_uuid()');
+    expect(postgresCreateTablePreviewSchema.safeParse({ ...input, columns: [{ ...column, type: 'date', default: { mode: 'randomUuid' } }] }).success).toBe(false);
+    expect(postgresCreateTablePreviewSchema.safeParse({ ...input, columns: [{ ...column,
+      default: { mode: 'timeOrderedUuid', value: '1 day' } }] }).success).toBe(false);
+  });
 });
 
 it('PostgreSQL 表管理绑定目录摘要，删除和执行都拒绝额外 SQL', () => {

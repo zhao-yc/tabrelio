@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { postgresColumnPlan } from '../../src/shared/postgresColumnEdit';
+import { matchesPostgresColumnPlan, postgresColumnPlan } from '../../src/shared/postgresColumnEdit';
 import type { PostgresStructureResult } from '../../src/shared/postgresStructure';
 
 const stamp = 'a'.repeat(64);
@@ -47,5 +47,22 @@ describe('PostgreSQL 已有表字段修改', () => {
     expect(() => postgresColumnPlan(source, { ...target, changes: [
       { kind: 'drop', from: 'old' }, { kind: 'comment', from: 'old', value: null },
     ] })).toThrow('原字段不存在');
+  });
+
+  it('仅允许匹配列类型的服务器默认值，最终核对表达式且保留同批前序所需函数', () => {
+    const uuid = { ...source.columns[0], type: 'uuid' };
+    const original = { ...source, columns: [uuid] };
+    const preset = { kind: 'defaultPreset', from: 'old', preset: 'timeOrderedUuid' } as const;
+    expect(() => postgresColumnPlan(source, { ...target, changes: [preset] })).toThrow('字段类型不兼容');
+    expect(() => postgresColumnPlan({ ...source, columns: [{ ...uuid, generation: 's' }] },
+      { ...target, changes: [preset] })).toThrow('生成列');
+    const plan = postgresColumnPlan(original, { ...target, changes: [preset] });
+    expect(plan.statements[0]).toContain('SET DEFAULT pg_catalog.uuidv7()');
+    expect(matchesPostgresColumnPlan([{ ...uuid, defaultExpression: 'uuidv7()' }], plan.columns)).toBe(true);
+    expect(matchesPostgresColumnPlan([{ ...uuid, defaultExpression: 'other.uuidv7()' }], plan.columns)).toBe(false);
+    expect(matchesPostgresColumnPlan([{ ...uuid, defaultExpression: 'gen_random_uuid()' }], plan.columns)).toBe(false);
+    const clear = postgresColumnPlan(original, { ...target, changes: [preset, { kind: 'default', from: 'old', value: null }] });
+    expect(clear.presets).toEqual(['timeOrderedUuid']);
+    expect(matchesPostgresColumnPlan([uuid], clear.columns)).toBe(true);
   });
 });

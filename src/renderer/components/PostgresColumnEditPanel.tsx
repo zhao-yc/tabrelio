@@ -1,33 +1,41 @@
 import { useMemo, useState } from 'react';
 import { postgresColumnPlan, type PostgresColumnChange } from '../../shared/postgresColumnEdit';
-import { postgresCreateTypes, type PostgresColumnType, type PostgresCreateColumn } from '../../shared/postgresCreateTable';
+import { acceptsPostgresDefaultPreset, postgresCreateTypes,
+  type PostgresColumnDefault, type PostgresColumnType, type PostgresCreateColumn } from '../../shared/postgresCreateTable';
 import { postgresColumnEditZh as text } from '../locales/postgresColumnEdit.zh-CN';
 import { errorMessage, invoke } from '../lib';
 import { usePostgresStructureEdit, type PostgresStructureEditProps } from './usePostgresStructureEdit';
 import { ErrorBox } from './ui';
+import { PostgresColumnDefaultFields } from './PostgresColumnDefaultFields';
 
 /** 在原结构视图中编辑结构化草稿，输入、预览和实际提交分别锁定。 */
 export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
   const { target, original, onClose } = props;
-  const [kind, setKind] = useState<PostgresColumnChange['kind']>('add');
+  const [kind, setKind] = useState<keyof typeof text.actions>('add');
   const [changes, setChanges] = useState<PostgresColumnChange[]>([]);
   const [name, setName] = useState('');
   const [from, setFrom] = useState('');
   const [type, setType] = useState<PostgresColumnType['type'] | ''>('text');
   const [length, setLength] = useState(''), [precision, setPrecision] = useState(''), [scale, setScale] = useState('');
-  const [nullable, setNullable] = useState(true), [hasDefault, setHasDefault] = useState(false);
-  const [defaultValue, setDefaultValue] = useState(''), [comment, setComment] = useState('');
-  const names = useMemo(() => changes.length
-    ? postgresColumnPlan(original, { ...target, editStamp: original.editStamp!, changes }).columns.map(column => column.name)
-    : original.columns.map(column => column.name), [original, target, changes]);
-  const old = names.includes(from) ? from : names[0] ?? '';
+  const [nullable, setNullable] = useState(true), [comment, setComment] = useState('');
+  const [defaultValue, setDefaultValue] = useState<PostgresColumnDefault>({ mode: 'none' });
+  const [replacement, setReplacement] = useState<{ field: string; value: PostgresColumnDefault }>();
+  const fields = useMemo(() => changes.length
+    ? postgresColumnPlan(original, { ...target, editStamp: original.editStamp!, changes }).fields
+    : original.columns.map(field => ({ name: field.name, type: field.type, identity: !!field.identity,
+      generated: !!field.generation, defaultExpression: field.defaultExpression })), [original, target, changes]);
+  const selected = fields.find(field => field.name === from) ?? fields[0];
+  const old = selected?.name ?? '';
+  const replacementValue = replacement?.field === old ? replacement?.value : undefined;
+  const canSetDefault = !!selected && !selected.identity && !selected.generated;
   const needsName = kind === 'add' || kind === 'rename';
   const needsType = kind === 'add' || kind === 'type';
   const dropping = changes.some(change => change.kind === 'drop');
-  const canStage = (!needsName || !!name) && (!needsType || !!type) && (kind === 'add' || !!old);
+  const canStage = (!needsName || !!name) && (!needsType || !!type) && (kind === 'add' || !!old) &&
+    (kind !== 'default' || canSetDefault && !!replacementValue);
 
   const { preview, setPreview, acceptDrop, setAcceptDrop, busy, unknown, error, setError, operation, submit } =
-    usePostgresStructureEdit(props, !!changes.length || !!name, dropping,
+    usePostgresStructureEdit(props, !!changes.length || !!name || !!replacementValue, dropping,
       () => invoke('postgres.columnEdit.preview', { ...target, editStamp: original.editStamp!, changes }),
       token => invoke('postgres.columnEdit.apply', { ...target, token }));
 
@@ -41,14 +49,21 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
         ...(type === 'numeric' && precision ? { precision: Number(precision) } : {}),
         ...(type === 'numeric' && scale ? { scale: Number(scale) } : {}) };
       const field: PostgresCreateColumn = { ...dataType, name, nullable, primary: false, unique: false, identity: 'none',
-        default: hasDefault ? { mode: 'literal', value: defaultValue } : { mode: 'none' }, comment };
+        default: defaultValue, comment };
       let change: PostgresColumnChange;
       switch (kind) {
         case 'add': change = { kind, field }; break;
         case 'rename': change = { kind, from: old, name }; break;
         case 'type': change = { kind, from: old, dataType }; break;
         case 'nullable': change = { kind, from: old, nullable }; break;
-        case 'default': change = { kind, from: old, value: hasDefault ? defaultValue : null }; break;
+        case 'default': {
+          if (!replacementValue) return;
+          const mode = replacementValue.mode;
+          change = mode === 'literal' || mode === 'none'
+            ? { kind, from: old, value: replacementValue.mode === 'literal' ? replacementValue.value : null }
+            : { kind: 'defaultPreset', from: old, preset: mode };
+          break;
+        }
         case 'comment': change = { kind, from: old, value: comment || null }; break;
         case 'drop': change = { kind, from: old }; break;
       }
@@ -57,6 +72,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
       setChanges(next);
       setPreview(undefined);
       setName('');
+      setReplacement(undefined);
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -67,7 +83,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
       <legend>{text.actions[kind]}</legend>
       <div className="pg-column-edit-fields">
         <label>{text.operation}<select aria-label={text.operation} value={kind} onChange={event => {
-          const action = event.target.value as PostgresColumnChange['kind'];
+          const action = event.target.value as keyof typeof text.actions;
           setKind(action);
           setName('');
           setType(action === 'add' ? 'text' : '');
@@ -75,19 +91,27 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
           setPrecision('');
           setScale('');
           setNullable(true);
-          setHasDefault(false);
-          setDefaultValue('');
+          setDefaultValue({ mode: 'none' });
+          setReplacement(undefined);
           setComment('');
         }}>
           {Object.entries(text.actions).map(([action, label]) =>
-            <option key={action} value={action} disabled={action !== 'add' && !names.length}>{label}</option>)}
+            <option key={action} value={action} disabled={action !== 'add' && !fields.length}>{label}</option>)}
         </select></label>
-        {kind !== 'add' && <label>{text.from}<select aria-label={text.from} value={old} onChange={event => setFrom(event.target.value)}>
-          {names.map(value => <option key={value}>{value}</option>)}
+        {kind !== 'add' && <label>{text.from}<select aria-label={text.from} value={old} onChange={event => {
+          setFrom(event.target.value);
+          setReplacement(undefined);
+        }}>
+          {fields.map(field => <option key={field.name}>{field.name}</option>)}
         </select></label>}
         {needsName && <label>{text.name}<input value={name} onChange={event => setName(event.target.value)}/></label>}
         {needsType && <>
-          <label>{text.type}<select aria-label={text.type} value={type} onChange={event => setType(event.target.value as PostgresColumnType['type'] | '')}>
+          <label>{text.type}<select aria-label={text.type} value={type} onChange={event => {
+            const next = event.target.value as PostgresColumnType['type'] | '';
+            setType(next);
+            const mode = defaultValue.mode;
+            if (mode !== 'none' && mode !== 'literal' && !acceptsPostgresDefaultPreset(next, mode)) setDefaultValue({ mode: 'none' });
+          }}>
             {kind === 'type' && <option value="" disabled>{text.chooseType}</option>}
             {postgresCreateTypes.map(value => <option key={value}>{value}</option>)}
           </select></label>
@@ -101,13 +125,14 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
           <label>{text.comment}<input value={comment} onChange={event => setComment(event.target.value)}/></label>}
         {(kind === 'add' || kind === 'nullable') &&
           <label><input type="checkbox" checked={nullable} onChange={event => setNullable(event.target.checked)}/> {text.nullable}</label>}
-        {(kind === 'add' || kind === 'default') && <>
-          <label><input type="checkbox" checked={hasDefault} onChange={event => setHasDefault(event.target.checked)}/> {text.useDefault}</label>
-          {hasDefault && <label>{text.defaultValue}<input value={defaultValue} onChange={event => setDefaultValue(event.target.value)}/></label>}
-        </>}
+        {kind === 'add' && <PostgresColumnDefaultFields type={type} value={defaultValue} onChange={setDefaultValue}/>}
+        {kind === 'default' && canSetDefault && <PostgresColumnDefaultFields type={selected.type} value={replacementValue}
+          onChange={value => setReplacement({ field: old, value })} removeLabel={text.removeDefault}/>}
       </div>
       {kind === 'type' && <p>{text.typeNote}</p>}
-      {kind === 'default' && !hasDefault && <p>{text.clearDefault}</p>}
+      {kind === 'default' && (canSetDefault
+        ? <p className="pg-column-default-expression">{text.existingDefault} <code>{selected.defaultExpression ?? text.noDefault}</code></p>
+        : <p>{text.defaultUnavailable}</p>)}
       {kind === 'comment' && !comment && <p>{text.clearComment}</p>}
       <button disabled={!canStage || changes.length >= 16} onClick={stage}>{text.stage}</button>
     </fieldset>
@@ -120,7 +145,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
     </label>}
     <div className="pg-column-edit-actions">
       <button disabled={busy || unknown || !changes.length} onClick={() => { setPreview(undefined); setChanges(changes.slice(0, -1)); }}>{text.undo}</button>
-      <button disabled={busy || unknown || !changes.length || needsName && !!name || !!preview} onClick={() => void submit(false)}>{text.preview}</button>
+      <button disabled={busy || unknown || !changes.length || needsName && !!name || !!replacementValue || !!preview} onClick={() => void submit(false)}>{text.preview}</button>
       <button disabled={busy || unknown || !preview || dropping && !acceptDrop} onClick={() => void submit(true)}>{text.apply}</button>
       <button disabled={busy} onClick={onClose}>{text.close}</button>
     </div>

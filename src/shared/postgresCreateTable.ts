@@ -27,19 +27,44 @@ export const postgresColumnTypeSchema = z.object({
   if (field.scale !== undefined && (field.precision === undefined || field.scale > field.precision)) issue('numeric 小数位不能超过精度');
 });
 export type PostgresColumnType = z.infer<typeof postgresColumnTypeSchema>;
+export const postgresDefaultPresetSchema = z.enum(['currentDate', 'currentTimestamp', 'randomUuid', 'timeOrderedUuid']);
+export type PostgresDefaultPreset = z.infer<typeof postgresDefaultPresetSchema>;
+export const postgresDefaultPresets = postgresDefaultPresetSchema.options;
+export const postgresDefaultPresetSql: Record<PostgresDefaultPreset, string> = {
+  currentDate: 'CURRENT_DATE', currentTimestamp: 'CURRENT_TIMESTAMP',
+  randomUuid: 'pg_catalog.gen_random_uuid()', timeOrderedUuid: 'pg_catalog.uuidv7()',
+};
+export type PostgresColumnDefault =
+  { mode: 'none' | PostgresDefaultPreset } | { mode: 'literal'; value: string };
+
+/** 建表类型与目录类型的拼写不同，且已有时间戳列可能带精度。 */
+export function acceptsPostgresDefaultPreset(type: string, preset: PostgresDefaultPreset): boolean {
+  if (preset === 'currentDate') return type === 'date';
+  if (preset === 'currentTimestamp') return type === 'timestamp' || type === 'timestamptz' ||
+    /^timestamp(?:\(\d+\))? (?:with|without) time zone$/.test(type);
+  return type === 'uuid';
+}
+
+/** 目录读取使用 pg_catalog 搜索路径，内置函数可能省略其 schema。 */
+export function matchesPostgresDefaultPreset(expression: unknown, preset: PostgresDefaultPreset): boolean {
+  const sql = postgresDefaultPresetSql[preset];
+  return expression === sql || (sql.startsWith('pg_catalog.') && expression === sql.slice('pg_catalog.'.length));
+}
+
 export const postgresCreateColumnSchema = postgresColumnTypeSchema.safeExtend({
   name: postgresNewIdentifier, nullable: z.boolean(), primary: z.boolean(), unique: z.boolean(),
   identity: z.enum(['none', 'always', 'byDefault']),
   default: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('none') }).strict(), z.object({ mode: z.literal('literal'), value: postgresDdlText }).strict(),
-    z.object({ mode: z.literal('currentDate') }).strict(), z.object({ mode: z.literal('currentTimestamp') }).strict(),
+    z.object({ mode: postgresDefaultPresetSchema }).strict(),
   ]),
   comment: postgresDdlText,
 }).superRefine((field, context) => {
   const issue = (message: string) => context.addIssue({ code: 'custom', message });
   if (field.identity !== 'none' && (!integerTypes.has(field.type) || field.default.mode !== 'none')) issue('标识列需要整数类型，且不能另设默认值');
-  if (field.default.mode === 'currentDate' && field.type !== 'date') issue('当前日期默认值需要 date 类型');
-  if (field.default.mode === 'currentTimestamp' && !['timestamp', 'timestamptz'].includes(field.type)) issue('当前时间默认值需要 timestamp 或 timestamptz 类型');
+  const mode = field.default.mode;
+  if (mode !== 'none' && mode !== 'literal' && !acceptsPostgresDefaultPreset(field.type, mode))
+    issue(postgresDefaultPresetSql[mode] + ' 与字段类型不兼容');
 });
 
 /** 表单只提交结构化字段；表名、类型、默认值和注释均有明确语法边界。 */
@@ -85,8 +110,7 @@ export function postgresColumnDefinition(field: PostgresCreateColumn) {
   if (!field.nullable || field.primary || field.identity !== 'none') parts.push('NOT NULL');
   if (field.unique) parts.push('UNIQUE');
   if (field.default.mode === 'literal') parts.push('DEFAULT ' + postgresDdlLiteral(field.default.value) + '::' + sqlType);
-  if (field.default.mode === 'currentDate') parts.push('DEFAULT CURRENT_DATE');
-  if (field.default.mode === 'currentTimestamp') parts.push('DEFAULT CURRENT_TIMESTAMP');
+  if (field.default.mode !== 'literal' && field.default.mode !== 'none') parts.push('DEFAULT ' + postgresDefaultPresetSql[field.default.mode]);
   return { sql: parts.join(' '), check: field.default.mode === 'literal'
     ? { name: field.name, type: sqlType, value: field.default.value, length: field.length } : undefined };
 }

@@ -3,7 +3,8 @@ import { postgresSequenceEditPlan, postgresSequenceManageSchema, postgresSequenc
 import { postgresSequenceTargets, readPostgresSequence, readPostgresSequenceAllocation } from './sequence';
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  postgresCreateTablePlan, type PostgresCreateTableApply, type PostgresCreateTableInput,
+  matchesPostgresDefaultPreset, postgresCreateTablePlan, postgresDefaultPresetSql, type PostgresDefaultPreset,
+  type PostgresCreateTableApply, type PostgresCreateTableInput,
   type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget, type PostgresTruncateScope, type PostgresTableMoveScope,
 } from '../../shared/postgresCreateTable';
 import type { PostgresConnection } from './connection';
@@ -127,10 +128,29 @@ export async function validatePostgresDefaults(connection: PostgresConnection, c
   if (!result.rows[0] || Object.values(result.rows[0]).some(value => value !== 't')) throw Error('默认值与字段类型或长度不符');
 }
 
+/** 检查目标库是否提供并授权使用选定的内置函数，预览不执行默认值函数。 */
+export async function validatePostgresDefaultPresets(connection: PostgresConnection, presets: Iterable<PostgresDefaultPreset>): Promise<void> {
+  for (const preset of new Set(presets)) {
+    const sql = postgresDefaultPresetSql[preset];
+    if (!sql.startsWith('pg_catalog.')) continue;
+    // uuidv7() 省略的是可选 interval 参数，目录身份仍包含该参数。
+    const signature = preset === 'timeOrderedUuid' ? 'pg_catalog.uuidv7(interval)' : sql;
+    const result = await connection.query(`
+      SELECT pg_catalog.has_function_privilege(pg_catalog.to_regprocedure($1)::oid, 'EXECUTE')
+    `, [signature], budget());
+    if (result.rows[0]?.c0 !== 't') {
+      const minimum = preset === 'timeOrderedUuid' ? '18' : '13';
+      throw Error('无法使用 ' + sql + '。需要 PostgreSQL ' + minimum + ' 或更高版本，以及内置函数的执行权限。');
+    }
+  }
+}
+
 /** 在同一事务核对实际 schema 和字段顺序，禁止标识符截断或目标替换后仍提交。 */
 async function verify(connection: PostgresConnection, input: PostgresCreateTableInput, schemaOid: string): Promise<void> {
   const result = await connection.query(`
-    SELECT a.attname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+    SELECT a.attname, pg_catalog.left(pg_catalog.pg_get_expr(d.adbin, d.adrelid), 128)
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+    LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3 AND c.relkind = 'r'
       AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
@@ -139,6 +159,9 @@ async function verify(connection: PostgresConnection, input: PostgresCreateTable
       result.rows.some((row, i) => row.c0 !== input.columns[i].name)) {
     throw Error('新表的实际 schema 或字段与预览不同，未提交');
   }
+  if (input.columns.some(({ default: { mode } }, index) =>
+    mode !== 'none' && mode !== 'literal' && !matchesPostgresDefaultPreset(result.rows[index].c1, mode)))
+    throw Error('新表的实际服务器默认值与预览不同，未提交');
 }
 
 /** 原文档、目标数据库、关系类别及连接修订共同约束一次性创建预览。 */
@@ -157,8 +180,13 @@ export class PostgresCreateTableWorkspace {
       const draft = { connectionId: input.connectionId, database: input.database, schema: input.schema,
         table: input.table, columns: input.columns, comment: input.comment };
       const plan = postgresCreateTablePlan(draft);
+      const presets = draft.columns.flatMap(({ default: { mode } }) => mode === 'none' || mode === 'literal' ? [] : [mode]);
       return { ...plan, success: 'PostgreSQL 新表已确认创建',
-        preflight: connection => preflight(connection, draft, draft.table, draft.columns.map(column => column.name), '表'),
+        async preflight(connection) {
+          const oid = await preflight(connection, draft, draft.table, draft.columns.map(column => column.name), '表');
+          await validatePostgresDefaultPresets(connection, presets);
+          return oid;
+        },
         validate: connection => validatePostgresDefaults(connection, plan.checks.map(check => ({
           ...check, length: draft.columns.find(column => column.name === check.name)?.length,
         }))),

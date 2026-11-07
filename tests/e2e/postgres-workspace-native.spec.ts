@@ -2004,8 +2004,8 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await fieldEdit.getByLabel(postgresColumnEditZh.length, { exact: true }).fill('16');
     await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
     await fieldEdit.getByLabel(postgresColumnEditZh.operation, { exact: true }).selectOption('default');
-    await fieldEdit.getByLabel(postgresColumnEditZh.useDefault, { exact: true }).check();
-    await fieldEdit.getByLabel(postgresColumnEditZh.defaultValue, { exact: true }).fill('新默认值');
+    await fieldEdit.getByLabel(postgresCreateTableZh.default, { exact: true }).selectOption('literal');
+    await fieldEdit.getByLabel(postgresCreateTableZh.value, { exact: true }).fill('新默认值');
     await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
     await fieldEdit.getByLabel(postgresColumnEditZh.operation, { exact: true }).selectOption('drop');
     await fieldEdit.getByLabel(postgresColumnEditZh.from, { exact: true }).selectOption('可删除');

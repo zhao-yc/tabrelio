@@ -1,4 +1,4 @@
-import { postgresColumnTypeSql } from '../../shared/postgresCreateTable';
+import { postgresColumnTypeSql, postgresDefaultPresetSql } from '../../shared/postgresCreateTable';
 import type { PostgresColumnChange } from '../../shared/postgresColumnEdit';
 
 const actions = {
@@ -13,6 +13,7 @@ function modifying(change: Exclude<PostgresColumnChange, { kind: 'add' | 'rename
     case 'type': return field + ' → ' + postgresColumnTypeSql(change.dataType);
     case 'nullable': return field + (change.nullable ? ' → 允许空值' : ' → 禁止空值');
     case 'default': return (change.value === null ? '清除默认值 ' : '设置文字默认值 ') + field;
+    case 'defaultPreset': return field + ' → ' + postgresDefaultPresetSql[change.preset];
     case 'comment': return (change.value === null ? '清除注释 ' : '设置注释 ') + field;
     case 'drop': return '删除 ' + field;
   }
@@ -21,9 +22,11 @@ function modifying(change: Exclude<PostgresColumnChange, { kind: 'add' | 'rename
 export const postgresColumnEditZh = {
   open: '编辑字段', title: 'PostgreSQL 字段编辑', operation: '操作', actions,
   from: '原字段', name: '新字段名', type: '数据类型', length: '长度', precision: '精度', scale: '小数位',
-  nullable: '允许空值', useDefault: '设置文字默认值', defaultValue: '默认值', comment: '字段注释',
+  nullable: '允许空值', comment: '字段注释',
+  existingDefault: '当前表达式', noDefault: '未设置', removeDefault: '清除默认值',
+  defaultUnavailable: '标识列和生成列由 PostgreSQL 管理，不能修改普通默认值。',
   chooseType: '选择目标类型', typeNote: '由 PostgreSQL 转换已有值和默认值。转换或约束检查失败时，整批回滚。',
-  clearDefault: '加入后将清除所选字段的默认值。', clearComment: '注释留空会清除所选字段的注释。',
+  clearComment: '注释留空会清除所选字段的注释。',
   confirmDrop: '确认删除预览中的字段及其数据。本表内引用这些字段的索引和约束也可能被 PostgreSQL 删除。',
   stage: '加入改动', undo: '撤回最后一项', preview: '预览字段 SQL', apply: '确认提交字段修改',
   close: '退出字段编辑', draft: '待提交改动', previewTitle: '实际提交 SQL',

@@ -20,6 +20,7 @@
 .pg-column-edit-fields label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .pg-column-edit-fields label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
 .pg-column-edit pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pg-column-default-expression { max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pg-column-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .pg-column-edit-drop { display: flex; align-items: baseline; gap: 6px; color: var(--warning); }
 

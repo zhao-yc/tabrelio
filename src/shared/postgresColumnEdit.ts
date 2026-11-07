@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import {
-  postgresColumnDefinition, postgresColumnTypeSchema, postgresColumnTypeSql, postgresCreateColumnSchema,
-  postgresDdlLiteral, postgresDdlText, postgresNewIdentifier,
+  acceptsPostgresDefaultPreset, matchesPostgresDefaultPreset, postgresColumnDefinition, postgresColumnTypeSchema,
+  postgresColumnTypeSql, postgresCreateColumnSchema, postgresDdlLiteral, postgresDdlText,
+  postgresDefaultPresetSchema, postgresDefaultPresetSql, postgresNewIdentifier, type PostgresDefaultPreset,
 } from './postgresCreateTable';
 import { postgresIdentifier } from './postgresSql';
 import { postgresStructureInputSchema, type PostgresStructureResult } from './postgresStructure';
@@ -13,6 +14,7 @@ const changes = z.array(z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('type'), from, dataType: postgresColumnTypeSchema }).strict(),
   z.object({ kind: z.literal('nullable'), from, nullable: z.boolean() }).strict(),
   z.object({ kind: z.literal('default'), from, value: postgresDdlText.nullable() }).strict(),
+  z.object({ kind: z.literal('defaultPreset'), from, preset: postgresDefaultPresetSchema }).strict(),
   z.object({ kind: z.literal('comment'), from, value: postgresDdlText.nullable() }).strict(),
   z.object({ kind: z.literal('drop'), from }).strict(),
 ])).min(1).max(16);
@@ -27,9 +29,11 @@ export type PostgresColumnChange = PostgresColumnPreviewInput['changes'][number]
 type Column = PostgresStructureResult['columns'][number];
 type PlannedColumn = { name: string; position?: number; expected?: {
   type?: string; nullable?: boolean; comment?: string | null; hasDefault?: boolean; collation?: string;
+  defaultPreset?: PostgresDefaultPreset;
 } };
 type ColumnState = {
   result: PlannedColumn; type: string; collation: Column['collation']; identity: boolean; generated: boolean;
+  defaultExpression: string | null;
 };
 
 /** 将白名单类型转成目录 format_type 返回的拼写，用于校验事务中的实际结果。 */
@@ -49,11 +53,12 @@ export function postgresColumnPlan(source: PostgresStructureResult, input: Postg
   const alter = 'ALTER TABLE ONLY ' + table;
   const columns = new Map<string, ColumnState>(source.columns.map(field => [field.name, {
     result: { name: field.name, position: field.position }, type: field.type,
-    collation: field.collation, identity: !!field.identity, generated: !!field.generation,
+    collation: field.collation, identity: !!field.identity, generated: !!field.generation, defaultExpression: field.defaultExpression,
   }]));
   const order = [...columns.values()];
   const statements: string[] = [];
   const checks: NonNullable<ReturnType<typeof postgresColumnDefinition>['check']>[] = [];
+  const presets = new Set<PostgresDefaultPreset>();
   for (const change of changes) {
     if (change.kind === 'add') {
       const { field } = change;
@@ -62,8 +67,15 @@ export function postgresColumnPlan(source: PostgresStructureResult, input: Postg
       statements.push(alter + ' ADD COLUMN ' + sql);
       if (field.comment) statements.push('COMMENT ON COLUMN ' + table + '.' + postgresIdentifier(field.name) + ' IS ' + postgresDdlLiteral(field.comment));
       if (check) checks.push(check);
-      const added = { result: { name: field.name, position: undefined }, type: catalogType(postgresColumnTypeSql(field)),
-        collation: null, identity: field.identity !== 'none', generated: false };
+      const mode = field.default.mode;
+      const added: ColumnState = { result: { name: field.name, position: undefined }, type: catalogType(postgresColumnTypeSql(field)),
+        collation: null, identity: field.identity !== 'none', generated: false,
+        defaultExpression: field.default.mode === 'literal' ? postgresDdlLiteral(field.default.value) : null };
+      if (mode !== 'none' && mode !== 'literal') {
+        presets.add(mode);
+        added.result.expected = { defaultPreset: mode };
+        added.defaultExpression = postgresDefaultPresetSql[mode];
+      }
       columns.set(field.name, added);
       order.push(added);
       continue;
@@ -91,6 +103,8 @@ export function postgresColumnPlan(source: PostgresStructureResult, input: Postg
     const expected = column.result.expected ??= {};
     if (change.kind === 'type') {
       const sql = postgresColumnTypeSql(change.dataType);
+      if (expected.defaultPreset && !acceptsPostgresDefaultPreset(sql, expected.defaultPreset))
+        throw Error('请先清除同批已设置的服务器默认值，再修改字段类型');
       const collation = ['text', 'varchar'].includes(change.dataType.type) ? column.collation : null;
       // 排序规则来自原目录经 pg_catalog.format('%I.%I', ...) 转义的限定名。
       statements.push(changeColumn + ' TYPE ' + sql + (collation ? ' COLLATE ' + collation : ''));
@@ -100,11 +114,21 @@ export function postgresColumnPlan(source: PostgresStructureResult, input: Postg
     } else if (change.kind === 'nullable') {
       statements.push(changeColumn + (change.nullable ? ' DROP NOT NULL' : ' SET NOT NULL'));
       expected.nullable = change.nullable;
+    } else if (change.kind === 'defaultPreset') {
+      if (column.identity || column.generated) throw Error('标识列和生成列不能修改普通默认值');
+      if (!acceptsPostgresDefaultPreset(column.type, change.preset)) throw Error('服务器默认值与字段类型不兼容');
+      presets.add(change.preset);
+      column.defaultExpression = postgresDefaultPresetSql[change.preset];
+      statements.push(changeColumn + ' SET DEFAULT ' + column.defaultExpression);
+      expected.defaultPreset = change.preset;
+      expected.hasDefault = true;
     } else if (change.kind === 'default') {
       if (column.identity || column.generated) throw Error('标识列和生成列不能修改普通默认值');
       const length = /^character varying\((\d+)\)$/.exec(column.type);
       if (change.value !== null && length && [...change.value].length > Number(length[1])) throw Error('默认值超过字段长度');
       statements.push(changeColumn + (change.value === null ? ' DROP DEFAULT' : ' SET DEFAULT ' + postgresDdlLiteral(change.value)));
+      column.defaultExpression = change.value === null ? null : postgresDdlLiteral(change.value);
+      delete expected.defaultPreset;
       expected.hasDefault = change.value !== null;
     } else {
       statements.push('COMMENT ON COLUMN ' + table + '.' + identifier + ' IS ' +
@@ -112,7 +136,11 @@ export function postgresColumnPlan(source: PostgresStructureResult, input: Postg
       expected.comment = change.value || null;
     }
   }
-  return { table, columns: order.map(column => column.result), statements, checks };
+  return {
+    table, columns: order.map(column => column.result), statements, checks, presets: [...presets],
+    fields: order.map(({ result, type, identity, generated, defaultExpression }) =>
+      ({ name: result.name, type, identity, generated, defaultExpression })),
+  };
 }
 
 /** 写入事务中回读类型、约束、默认值状态、注释和保留字段的序号。 */
@@ -123,6 +151,7 @@ export function matchesPostgresColumnPlan(actual: Column[], planned: PlannedColu
       (expected.type === undefined || field.type === expected.type) &&
       (expected.nullable === undefined || field.nullable === expected.nullable) &&
       (expected.hasDefault === undefined || (field.defaultExpression !== null) === expected.hasDefault) &&
+      (expected.defaultPreset === undefined || matchesPostgresDefaultPreset(field.defaultExpression, expected.defaultPreset)) &&
       (expected.comment === undefined || field.comment === expected.comment) &&
       (expected.collation === undefined || field.collation === expected.collation));
   });
