@@ -422,6 +422,8 @@ TLS 默认验证服务端证书。私有 CA 或自签证书使用 CA 文件；�
 
 同一窗口也可[管理数据库与 Schema 的直接权限](development/postgres-role-browser-20261108.md#管理数据库与-schema-的直接权限)，为所选角色设置连接、建库内对象或访问 Schema 的权限。
 
+[管理数据库和 Schema 的 PUBLIC 权限](development/postgres-role-browser-20261108.md#管理数据库和-schema-的-public-权限)可调整所有角色共有的 CONNECT 或 USAGE 等权限，确认前会列出目标和 SQL。
+
 检查表或视图后可[查看与管理列权限](development/postgres-role-browser-20261108.md#查看与管理列权限)，单独核对哪些列可以读取、写入或转授。
 
 在同一对象权限入口输入准确的序列名，可[查看与管理序列权限](development/postgres-role-browser-20261108.md#查看与管理序列权限)，为使用序列生成默认值的插入单独授予 USAGE。

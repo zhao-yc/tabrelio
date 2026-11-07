@@ -26,6 +26,7 @@ export const postgresRolesZh = {
     lockHint: '确认后短暂独占锁定目标，普通视图也会锁定其引用的关系。已有下游依赖时，撤销会回滚。',
     actions: {grant: '授予权限', grantOption: '授予权限及转授选项', revoke: '撤销直接权限', revokeOption: '仅撤销转授选项'},
     direct: '已有直接权限', inherited: '无所有者直接授权', affected: '同时受影响的列权限',
+    publicSummary: 'PUBLIC 权限', publicNone: '无',
     preview: '预览表权限 SQL', sql: '本次表权限 SQL', confirm: '确认执行所选表权限变更', apply: '执行表权限变更',
     column: {
       title: '管理 PostgreSQL 列权限', open: '管理列级直接授权', inspect: '查看列权限', label: '列权限', selection: '所选列级权限',
@@ -38,11 +39,15 @@ export const postgresRolesZh = {
       title: '管理 PostgreSQL 数据库权限', open: '管理数据库直接授权', selection: '所选数据库权限',
       lockHint: '数据库权限影响整个数据库，撤销 CONNECT 不会断开已登录的会话。',
       preview: '预览数据库权限 SQL', sql: '本次数据库权限 SQL', confirm: '确认执行所选数据库权限变更', apply: '执行数据库权限变更',
+      publicOpen: '管理数据库 PUBLIC 权限', publicHint: 'PUBLIC 包含现有及未来角色。撤销 CONNECT 后，仅通过 PUBLIC 获权的角色无法建立新连接。',
+      confirmPublic: '确认修改此数据库的 PUBLIC 权限',
     },
     schema: {
       title: '管理 PostgreSQL Schema 权限', open: '管理 Schema 直接授权', selection: '所选 Schema 权限',
       lockHint: 'Schema 的 USAGE 允许访问其中的对象，查询或编辑对象仍需要相应对象权限。',
       preview: '预览 Schema 权限 SQL', sql: '本次 Schema 权限 SQL', confirm: '确认执行所选 Schema 权限变更', apply: '执行 Schema 权限变更',
+      publicOpen: '管理 Schema PUBLIC 权限', publicHint: 'PUBLIC 包含现有及未来角色。撤销 USAGE 后，仅通过 PUBLIC 获权的角色将失去按名称访问 Schema 对象的权限。',
+      confirmPublic: '确认修改此 Schema 的 PUBLIC 权限',
     },
     sequence: {
       title: '管理 PostgreSQL 序列权限', open: '管理序列直接授权', effective: '序列有效权限', selection: '所选序列权限',

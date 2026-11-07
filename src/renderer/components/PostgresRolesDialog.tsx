@@ -28,11 +28,14 @@ function sourceCurrent({connection, version}: RoleSource) {
 }
 
 function Privileges({label, rows}: {label: string; rows: PostgresRolePrivilege[] | null}) {
+  const shared = rows?.filter(row => row.publicAllowed).map(row => row.name).join('、');
   return <section><h4>{label}</h4>{rows ? <table aria-label={label}><thead><tr>
     <th scope="col">{t.privilege}</th><th scope="col">{t.allowed}</th><th scope="col">{t.grantable}</th>
   </tr></thead><tbody>{rows.map(row => <tr key={row.name}>
     <th scope="row">{row.name}</th><td>{yesNo(row.allowed)}</td><td>{yesNo(row.grantable)}</td>
-  </tr>)}</tbody></table> : <p>{t.missing}</p>}</section>;
+  </tr>)}</tbody></table> : <p>{t.missing}</p>}
+    {rows?.some(row => row.publicAllowed !== undefined) && <p>{t.tablePrivileges.publicSummary} · {shared || t.tablePrivileges.publicNone}</p>}
+  </section>;
 }
 
 function Memberships({label, edges, busy, read, revoke, protectedPeer}: {
@@ -207,6 +210,8 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
         <Privileges label={t.databasePrivileges} rows={detail.snapshot.databasePrivileges}/>
         {detail.snapshot.databaseEditor && <button disabled={busy} onClick={() =>
           editPrivileges(detail.snapshot.databaseEditor!, postgresDatabasePrivileges)}>{t.tablePrivileges.database.open}</button>}
+        {detail.snapshot.databasePublicEditor && <button disabled={busy} onClick={() =>
+          editPrivileges(detail.snapshot.databasePublicEditor!, postgresDatabasePrivileges)}>{t.tablePrivileges.database.publicOpen}</button>}
         <form className="form-grid" onSubmit={event => {event.preventDefault(); if (schema) readDetail(role, {schema, ...(relation ? {relation} : {})});}}>
           <Field label={t.schema}><input value={schema} maxLength={256} disabled={busy} onChange={event => setSchema(event.target.value)}/></Field>
           <Field label={t.relation}><input value={relation} maxLength={256} disabled={busy} onChange={event => setRelation(event.target.value)}/></Field>
@@ -220,6 +225,8 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
           <div><Privileges label={t.schemaPrivileges + ' · ' + detail.scope.schema} rows={detail.snapshot.scope.schema}/>
             {detail.snapshot.scope.schemaEditor && <button disabled={busy} onClick={() =>
               editPrivileges(detail.snapshot.scope!.schemaEditor!, postgresSchemaPrivileges)}>{t.tablePrivileges.schema.open}</button>}
+            {detail.snapshot.scope.schemaPublicEditor && <button disabled={busy} onClick={() =>
+              editPrivileges(detail.snapshot.scope!.schemaPublicEditor!, postgresSchemaPrivileges)}>{t.tablePrivileges.schema.publicOpen}</button>}
           </div>
           {detail.snapshot.scope.sequence && <div>
             <Privileges label={t.tablePrivileges.sequence.effective + ' · ' + detail.scope.relation} rows={detail.snapshot.scope.sequence.privileges}/>

@@ -67,3 +67,9 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 对象所有者或超级用户可管理所选签名的 EXECUTE，分别授予或撤销指定角色的权限及转授选项。也可在独立的「管理 PUBLIC 执行权限」入口修改该签名对所有现有和未来角色的授权。PostgreSQL 通常会在创建例程时为 PUBLIC 提供 EXECUTE。撤销该授权后，仍拥有直接或继承权限的角色可以执行。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html)
 
 预览由系统目录生成参数类型签名。确认时绑定原例程 OID 和所选角色，提交前复核原签名和实际 ACL 差异。撤销使用 RESTRICT，有下游依赖时整批回滚。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
+
+## 管理数据库和 Schema 的 PUBLIC 权限
+
+数据库和 Schema 的有效权限列表下会单独显示 PUBLIC 权限。对象所有者或超级用户可从对应的「管理 PUBLIC 权限」入口预览和确认授予或撤销。对于由 `pg_database_owner` 所有的默认 `public` Schema，当前数据库所有者也可操作。预览会核对默认 ACL，数据库目录即使未存显式 ACL，也会显示 PostgreSQL 默认的 CONNECT 和 TEMPORARY。[PostgreSQL 默认权限](https://www.postgresql.org/docs/18/ddl-priv.html)
+
+PUBLIC 包含当前及将来创建的角色。撤销 CONNECT 后，仅通过 PUBLIC 取得 CONNECT 的角色无法建立新连接，已有会话可继续使用。提交前会核对当前登录角色仍有 CONNECT，失去连接权限时回滚。撤销 Schema 的 PUBLIC USAGE 后，仍有直接或继承 USAGE 的角色可以继续按名称访问其对象。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)

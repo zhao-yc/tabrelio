@@ -244,6 +244,13 @@ export class PostgresObjectPrivilegeChanges {
       // 如果授权语句遇到同名替换，即使另一事务碰巧生成了相同 ACL，也不能冒充本次写入。
       if (!same(after.identity, state.identity) || !('table' in draft) && !after.writtenHere ||
           !same(edgeStamp(after.edges), edgeStamp(expected))) throw changed();
+      if ('object' in draft && draft.object.kind === 'database' && draft.recipient === 'public' &&
+          draft.action === 'revoke' && draft.privileges.includes('CONNECT')) {
+        // 当前会话不会被撤销 CONNECT 中断，但必须仍能用原登录角色重新连接以恢复权限。
+        const login = await connection.query(`SELECT pg_catalog.has_database_privilege(session_user,pg_catalog.current_database(),'CONNECT')`,
+          undefined, budget(1));
+        if (login.rows[0]?.c0 !== 't') throw Error('撤销会使当前登录角色无法重新连接，已取消本次变更');
+      }
       committing = true;
       const tag = await finish(connection, 'COMMIT');
       if (tag === 'ROLLBACK') return {outcome: 'rolledBack', message: '服务器已回滚对象权限变更'};

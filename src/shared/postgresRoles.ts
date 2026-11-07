@@ -59,7 +59,7 @@ export interface PostgresRole extends PostgresRoleRef {
 export interface PostgresRoleMembership {
   peer: PostgresRoleRef; grantor: string | null; grantorOid: string | null; admin: boolean; inherit: boolean | null; set: boolean | null;
 }
-export interface PostgresRolePrivilege {name: string; allowed: boolean; grantable: boolean;}
+export interface PostgresRolePrivilege {name: string; allowed: boolean; grantable: boolean; publicAllowed?: boolean;}
 export const postgresTablePrivileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] as const;
 export const postgresColumnPrivileges = ['SELECT', 'INSERT', 'UPDATE', 'REFERENCES'] as const;
 export const postgresDatabasePrivileges = ['CONNECT', 'CREATE', 'TEMPORARY'] as const;
@@ -104,7 +104,7 @@ export const postgresScopedPrivilegeDraftSchema = z.object({...privilegeSource, 
 }).strict().refine(({object, database, privileges, recipient, action}) => {
   const allowed: readonly string[] = postgresScopedPrivileges[object.kind];
   return (object.kind !== 'database' || object.name === database) &&
-    (!recipient || object.kind === 'routine' && (action === 'grant' || action === 'revoke')) &&
+    (!recipient || object.kind !== 'sequence' && (action === 'grant' || action === 'revoke')) &&
     new Set(privileges).size === privileges.length && privileges.every(privilege => allowed.includes(privilege));
 }, '权限必须适用于所选对象，数据库授权须使用当前数据库');
 export type PostgresTablePrivilegeDraft = z.infer<typeof postgresTablePrivilegeDraftSchema>;
@@ -135,7 +135,8 @@ export interface PostgresRoleDetail extends PostgresRolesContext {
   memberships: {granted: PostgresRoleMembership[]; members: PostgresRoleMembership[]; limited: boolean};
   databasePrivileges: PostgresRolePrivilege[];
   databaseEditor?: PostgresScopedPrivilegeEditor;
-  scope?: {schema: PostgresRolePrivilege[] | null; schemaEditor?: PostgresScopedPrivilegeEditor; relation?: {
+  databasePublicEditor?: PostgresScopedPrivilegeEditor;
+  scope?: {schema: PostgresRolePrivilege[] | null; schemaEditor?: PostgresScopedPrivilegeEditor; schemaPublicEditor?: PostgresScopedPrivilegeEditor; relation?: {
     oid: string; privileges: PostgresRolePrivilege[]; rls: boolean; forceRls: boolean; editor?: PostgresTablePrivilegeEditor;
     columns?: PostgresColumnPrivilegePage;
   } | null; sequence?: {privileges: PostgresRolePrivilege[]; editor?: PostgresScopedPrivilegeEditor};

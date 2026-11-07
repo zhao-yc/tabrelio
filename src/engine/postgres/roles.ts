@@ -78,33 +78,47 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
     };
     const databaseRows = await rows(`SELECT p.name,pg_catalog.has_database_privilege($1::oid,d.oid,p.name),
       pg_catalog.has_database_privilege($1::oid,d.oid,p.name||' WITH GRANT OPTION'),d.oid::text,owner.rolname::text,
-      d.datdba<>$1::oid AND NOT d.datistemplate AND (d.datdba=actor.oid OR actor.rolsuper)
+      NOT d.datistemplate AND (d.datdba=actor.oid OR actor.rolsuper),d.datdba::text,
+      pg_catalog.has_database_privilege('public'::name,d.oid,p.name),
+      EXISTS(SELECT FROM pg_catalog.aclexplode(COALESCE(d.datacl,pg_catalog.acldefault('d',d.datdba))) a
+        WHERE a.grantor=d.datdba AND a.grantee=0 AND a.privilege_type=p.name)
       FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles owner ON owner.oid=d.datdba
       JOIN pg_catalog.pg_roles actor ON actor.oid=$2::oid CROSS JOIN (VALUES ('CONNECT'),('CREATE'),('TEMPORARY')) p(name)
       WHERE d.datname=pg_catalog.current_database()`, [role.oid, context.current.oid], 3);
-    const databasePrivileges = databaseRows.map(privilege);
+    const publicPrivilege = (entry: DataRow) => ({...privilege(entry), publicAllowed: flag(entry.c7)});
+    const publicDirect = (entries: DataRow[]) => entries.filter(entry => flag(entry.c8))
+      .map(entry => ({privilege: text(entry.c0) as PostgresObjectPrivilege, grantable: false}));
+    const databasePrivileges = databaseRows.map(publicPrivilege);
     const databaseRow = databaseRows[0];
-    const databaseEditor = databaseRow && flag(databaseRow.c5) ? {
+    const databaseTarget = databaseRow && flag(databaseRow.c5) ? {
       object: {kind: 'database' as const, oid: text(databaseRow.c3), name: context.database},
-      grantor: text(databaseRow.c4), direct: await directPrivileges('database', text(databaseRow.c3)),
+      grantor: text(databaseRow.c4),
     } : undefined;
+    const databaseEditor = databaseTarget && databaseRow.c6 !== role.oid
+      ? {...databaseTarget, direct: await directPrivileges('database', databaseTarget.object.oid)} : undefined;
+    const databasePublicEditor = databaseTarget ? {...databaseTarget, recipient: 'public' as const, direct: publicDirect(databaseRows)} : undefined;
     let scope: PostgresRoleDetail['scope'];
     if (input.scope) {
       const {schema, relation} = input.scope;
       const schemas = await rows(`SELECT p.name,pg_catalog.has_schema_privilege($1::oid,n.oid,p.name),
         pg_catalog.has_schema_privilege($1::oid,n.oid,p.name||' WITH GRANT OPTION'),n.oid::text,owner.rolname::text,
-        n.nspowner<>$1::oid AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
-          AND (n.nspowner=actor.oid OR actor.rolsuper OR owner.rolname='pg_database_owner' AND d.datdba=actor.oid)
+        n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+          AND (n.nspowner=actor.oid OR actor.rolsuper OR owner.rolname='pg_database_owner' AND d.datdba=actor.oid),n.nspowner::text,
+        pg_catalog.has_schema_privilege('public'::name,n.oid,p.name),
+        EXISTS(SELECT FROM pg_catalog.aclexplode(COALESCE(n.nspacl,pg_catalog.acldefault('n',n.nspowner))) a
+          WHERE a.grantor=n.nspowner AND a.grantee=0 AND a.privilege_type=p.name)
         FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_roles owner ON owner.oid=n.nspowner
         JOIN pg_catalog.pg_roles actor ON actor.oid=$3::oid CROSS JOIN pg_catalog.pg_database d
         CROSS JOIN (VALUES ('USAGE'),('CREATE')) p(name)
         WHERE n.nspname::text COLLATE pg_catalog."C"=$2::text AND d.datname=pg_catalog.current_database()`,
         [role.oid, schema, context.current.oid], 2);
-      scope = {schema: schemas.length ? schemas.map(privilege) : null};
+      scope = {schema: schemas.length ? schemas.map(publicPrivilege) : null};
       const firstSchema = schemas[0];
       if (firstSchema && flag(firstSchema.c5)) {
         const oid = text(firstSchema.c3);
-        scope.schemaEditor = {object: {kind: 'schema', oid, name: schema}, grantor: text(firstSchema.c4), direct: await directPrivileges('schema', oid)};
+        const schemaTarget = {object: {kind: 'schema' as const, oid, name: schema}, grantor: text(firstSchema.c4)};
+        if (firstSchema.c6 !== role.oid) scope.schemaEditor = {...schemaTarget, direct: await directPrivileges('schema', oid)};
+        scope.schemaPublicEditor = {...schemaTarget, recipient: 'public', direct: publicDirect(schemas)};
       }
       if (input.scope.routine !== undefined) {
         // 输入参数类型由服务器在固定搜索路径下输出，客户端只提交例程 OID 和名称。
@@ -196,7 +210,7 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       }
     }
     output = {kind: 'detail', ...context, role, memberships: {granted: granted.edges, members: members.edges, limited: granted.limited || members.limited},
-      databasePrivileges, ...(databaseEditor ? {databaseEditor} : {}), ...(scope ? {scope} : {})};
+      databasePrivileges, ...(databaseEditor ? {databaseEditor} : {}), ...(databasePublicEditor ? {databasePublicEditor} : {}), ...(scope ? {scope} : {})};
   }
   check();
   const ended = await connection.query('COMMIT', undefined, {rows: 0, bytes: 1024});

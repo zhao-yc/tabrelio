@@ -118,3 +118,14 @@ it('例程授权只接受 OID 和 EXECUTE，PUBLIC 不能获得转授选项', ()
   expect(validateCommand('postgres.roles.read', read)).toEqual(read);
   expect(() => validateCommand('postgres.roles.read', {...read, scope: {...read.scope, relation: 'relation'}})).toThrow();
 });
+
+it('数据库和 Schema 的 PUBLIC 只允许授予和撤销适用权限', () => {
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '42', name: '应用角色'}, action: 'revoke', recipient: 'public'};
+  const database = {...draft, object: {kind: 'database', oid: '101', name: 'qa'}, privileges: ['CONNECT', 'TEMPORARY']};
+  const schema = {...draft, object: {kind: 'schema', oid: '102', name: 'public'}, privileges: ['USAGE', 'CREATE']};
+  expect(validateCommand('postgres.roles.scopedPrivileges.preview', database)).toEqual(database);
+  expect(validateCommand('postgres.roles.scopedPrivileges.preview', {...schema, action: 'grant'})).toEqual({...schema, action: 'grant'});
+  for (const input of [{...database, action: 'grantOption'}, {...schema, action: 'revokeOption'}, {...database, privileges: ['USAGE']},
+    {...schema, privileges: ['CONNECT']}, {...database, object: {...database.object, name: 'other'}}])
+    expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
+});

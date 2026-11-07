@@ -24,6 +24,7 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
   const scope = 'columns' in editor ? 'column' : 'object' in editor ? editor.object.kind : 'table';
   const copy = scope === 'table' ? t : t[scope];
   const publicTarget = 'object' in editor && editor.recipient === 'public';
+  const publicCopy = publicTarget && 'confirmPublic' in copy ? copy : undefined;
   const locked = busy || !!outcome || !current();
   const reset = () => {setPreview(undefined); setConfirmed(false); setError('');};
   const selectionCount = scope === 'column' ? changes.length : selected.length;
@@ -76,7 +77,7 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
         editor.object.kind === 'routine' ? ' · ' + editor.signature :
         editor.object.kind === 'schema' ? ' · ' + editor.object.name : ''} · {publicTarget ? 'PUBLIC' : roles.roleName + ' ' + role.name}</p>
       <p>{roles.grantor} {editor.grantor}</p>
-      <p>{t.hint} {publicTarget ? t.routine.publicHint : copy.lockHint}</p>
+      <p>{publicCopy?.publicHint ?? t.hint + ' ' + copy.lockHint}</p>
       {'direct' in editor && <p>{t.direct} · {editor.direct.map(item => item.privilege + (item.grantable ? ' WITH GRANT OPTION' : '')).join('、') || t.inherited}</p>}
       <Field label={t.action}><select aria-label={t.action} value={action} disabled={locked} onChange={event => {
         setAction(event.target.value as Action); setSelected([]); setChanges([]); reset();
@@ -109,7 +110,7 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
           </li>)}</ul>
         </section>}
         {!outcome && <label><input type="checkbox" checked={confirmed} disabled={locked}
-          onChange={event => setConfirmed(event.target.checked)}/>{publicTarget ? t.routine.confirmPublic : copy.confirm}</label>}
+          onChange={event => setConfirmed(event.target.checked)}/>{publicCopy?.confirmPublic ?? copy.confirm}</label>}
       </section>}
       {outcome && <p role={outcome.outcome === 'committed' ? 'status' : 'alert'}>{roles.result[outcome.outcome]} · {outcome.message}</p>}
       <ErrorBox message={error || (!current() ? roles.changed : '')}/>

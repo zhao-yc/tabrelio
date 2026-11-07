@@ -1061,3 +1061,121 @@ test('PostgreSQL 同名函数和过程按签名授予及撤销执行权限', asy
     expect(native.exitCode).toBe(0);
   } finally {await Promise.all([member.end(), owner.end()]);}
 });
+
+test('PostgreSQL 数据库与 Schema PUBLIC 权限保留直接授权和管理连接', async ({}, info) => {
+  const owner = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(owner)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || ![password, adminPassword].every(value => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', member = prefix + 'recipient', granted = prefix + 'creator';
+  const database = 'Public ACL ' + token, db = '"' + database + '"';
+  const endpoint = {host: '127.0.0.1', port, connectionTimeoutMillis: 3000};
+  const admin = new Client({...endpoint, database: owner, user: 'postgres', password: adminPassword});
+  const dbOwner = new Client({...endpoint, database, user: owner, password});
+  const publicOnly = new Client({...endpoint, database, user: member, password});
+  const queryAs = async (user: string, sql = 'SELECT current_user::text AS value') => {
+    const client = new Client({...endpoint, database, user, password});
+    try {await client.connect(); return (await client.query(sql)).rows;}
+    finally {await client.end();}
+  };
+  await admin.connect();
+  try {
+    await admin.query(`CREATE DATABASE ${db} OWNER ${owner}`);
+    // 保留隐式 PUBLIC 默认记录，验证界面能从 NULL ACL 识别默认 CONNECT。
+    const publicDatabase = async () => (await admin.query(`SELECT
+      pg_catalog.has_database_privilege('public',oid,'CONNECT') AS connect,
+      pg_catalog.has_database_privilege('public',oid,'TEMPORARY') AS temp,
+      datacl IS NULL AS default_acl FROM pg_catalog.pg_database WHERE datname=$1`, [database])).rows[0];
+    expect(await publicDatabase()).toEqual({connect: true, temp: true, default_acl: true});
+    await dbOwner.connect();
+    await publicOnly.connect();
+    await dbOwner.query(`CREATE TABLE public.access_qa(id int); INSERT INTO public.access_qa VALUES (7);
+      GRANT SELECT ON public.access_qa TO ${member},${granted}; GRANT USAGE ON SCHEMA public TO ${granted}`);
+    const profile = await page.evaluate(async ({database, port, owner, password}) => window.dbark.invoke('connections.save', {
+      id: '', dialect: 'postgresql', group: '', color: '#123456', host: '127.0.0.1', port, database, user: owner,
+      password, rememberPassword: false, name: 'PUBLIC 授权数据库所有者',
+    }), {database, port, owner, password});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profile.id);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    await modal.getByRole('button', {name: t.current, exact: true}).click();
+    const common = t.tablePrivileges;
+    const prepare = async (kind: 'database' | 'schema', action: string, privileges: string[]) => {
+      const copy = common[kind];
+      await modal.getByRole('button', {name: copy.publicOpen, exact: true}).click();
+      const dialog = page.getByRole('dialog', {name: copy.title, exact: true});
+      const actionField = dialog.getByLabel(common.action, {exact: true});
+      await expect(actionField.getByRole('option')).toHaveCount(2);
+      await actionField.selectOption(action);
+      for (const privilege of privileges) await dialog.getByRole('checkbox', {name: privilege, exact: true}).check();
+      await dialog.getByRole('button', {name: copy.preview, exact: true}).click();
+      await expect(dialog.getByLabel(copy.sql, {exact: true})).toBeVisible();
+      return dialog;
+    };
+    const apply = async (kind: 'database' | 'schema', dialog: Awaited<ReturnType<typeof prepare>>,
+      outcome: 'committed' | 'rolledBack' = 'committed') => {
+      await dialog.getByRole('checkbox', {name: common[kind].confirmPublic, exact: true}).check();
+      await dialog.getByRole('button', {name: common[kind].apply, exact: true}).click();
+      await expect(dialog.getByRole(outcome === 'committed' ? 'status' : 'alert').filter({hasText: t.result[outcome]})).toBeVisible();
+    };
+    const close = (dialog: Awaited<ReturnType<typeof prepare>>) => dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await expect(modal.getByText(common.publicSummary + ' · CONNECT、TEMPORARY', {exact: true})).toBeVisible();
+    await expect(modal.getByRole('button', {name: common.database.open, exact: true})).toHaveCount(0);
+    let dialog = await prepare('database', 'revoke', ['CONNECT']);
+    await expect(dialog.getByLabel(common.database.sql, {exact: true})).toHaveText(`REVOKE CONNECT ON DATABASE ${db} FROM PUBLIC RESTRICT`);
+    expect(await publicDatabase()).toEqual({connect: true, temp: true, default_acl: true});
+    await close(dialog);
+
+    await admin.query(`REVOKE CONNECT ON DATABASE ${db} FROM ${owner}`);
+    expect(await queryAs(owner)).toEqual([{value: owner}]);
+    dialog = await prepare('database', 'revoke', ['CONNECT']);
+    await apply('database', dialog, 'rolledBack');
+    await expect(dialog.getByText(/当前登录角色无法重新连接/)).toBeVisible();
+    expect(await publicDatabase()).toMatchObject({connect: true, temp: true});
+    await close(dialog);
+    await admin.query(`GRANT CONNECT ON DATABASE ${db} TO ${owner},${granted}`);
+
+    dialog = await prepare('database', 'revoke', ['TEMPORARY', 'CONNECT']);
+    await expect(dialog.getByLabel(common.database.sql, {exact: true})).toHaveText(`REVOKE CONNECT, TEMPORARY ON DATABASE ${db} FROM PUBLIC RESTRICT`);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 数据库 PUBLIC 权限预览.png')});
+    await apply('database', dialog);
+    await close(dialog);
+    expect(await publicDatabase()).toMatchObject({connect: false, temp: false});
+    await expect(queryAs(member)).rejects.toMatchObject({code: '42501'});
+    expect(await queryAs(granted)).toEqual([{value: granted}]);
+    expect((await publicOnly.query('SELECT id FROM public.access_qa')).rows).toEqual([{id: 7}]);
+
+    await modal.getByLabel(t.schema, {exact: true}).fill('public');
+    await modal.getByRole('button', {name: t.probe, exact: true}).click();
+    dialog = await prepare('schema', 'revoke', ['USAGE']);
+    await expect(dialog.getByLabel(common.schema.sql, {exact: true})).toHaveText('REVOKE USAGE ON SCHEMA "public" FROM PUBLIC RESTRICT');
+    await apply('schema', dialog);
+    await close(dialog);
+    await expect(publicOnly.query('SELECT id FROM public.access_qa')).rejects.toMatchObject({code: '42501'});
+    expect(await queryAs(granted, 'SELECT id FROM public.access_qa')).toEqual([{id: 7}]);
+    dialog = await prepare('schema', 'grant', ['USAGE']);
+    await apply('schema', dialog);
+    await close(dialog);
+    expect((await publicOnly.query('SELECT id FROM public.access_qa')).rows).toEqual([{id: 7}]);
+
+    dialog = await prepare('database', 'grant', ['CONNECT', 'TEMPORARY']);
+    await apply('database', dialog);
+    await close(dialog);
+    expect(await publicDatabase()).toMatchObject({connect: true, temp: true});
+    expect(await queryAs(member)).toEqual([{value: member}]);
+    await expect(modal.getByText(common.publicSummary + ' · CONNECT、TEMPORARY', {exact: true})).toBeVisible();
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(item => item.status === 'running').length)).toBe(0);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([publicOnly.end(), dbOwner.end(), admin.end()]);}
+});
