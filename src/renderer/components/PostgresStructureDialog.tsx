@@ -17,6 +17,8 @@ import { PostgresColumnEditPanel } from './PostgresColumnEditPanel';
 import { PostgresTableCommentsPanel } from './PostgresTableCommentsPanel';
 import { PostgresIdentityColumnsPanel, postgresIdentityColumns } from './PostgresIdentityColumnsPanel';
 import { postgresIdentityColumnsZh } from '../locales/postgresIdentityColumns.zh-CN';
+import { PostgresTableTriggerPanel } from './PostgresTableTriggerPanel';
+import { postgresTableTriggerZh as triggerText } from '../locales/postgresTableTrigger.zh-CN';
 import { postgresTableCommentsZh } from '../locales/postgresTableComments.zh-CN';
 import { PostgresIndexEditPanel } from './PostgresIndexEditPanel';
 import { PostgresKeyEditPanel } from './PostgresKeyEditPanel';
@@ -45,6 +47,7 @@ const editors = {
   constraints: { Panel: PostgresKeyEditPanel, label: postgresKeyEditZh.open },
   foreign: { Panel: PostgresForeignEditPanel, label: postgresForeignEditZh.open },
   check: { Panel: PostgresCheckEditPanel, label: postgresCheckEditZh.open },
+  triggers: { Panel: PostgresTableTriggerPanel, label: triggerText.title },
 };
 
 /** 统一目录表格语义，空列表和数据库空值分别显示。 */
@@ -90,7 +93,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         const output = await invoke('postgres.structure.read', { connectionId, database, table });
         if (owner.current !== request || (useWorkspace.getState().connectionVersions[connectionId] ?? 0) !== version) return;
         setView({ key: scope, output });
-        if (!output.viewDefinition) setSection(value => value === 'definition' ? 'columns' : value);
+        setSection(value => value === 'definition' && !output.viewDefinition || value === 'triggers' && !output.triggers ? 'columns' : value);
       } catch (reason) {
         if (owner.current === request) setView({ key: scope, error: errorMessage(reason) });
       }
@@ -108,7 +111,9 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
     onClose();
   }
 
-  const sections: Section[] = output?.viewDefinition ? ['columns', 'constraints', 'indexes', 'definition'] : ['columns', 'constraints', 'indexes'];
+  const sections: Section[] = ['columns', 'constraints', 'indexes'];
+  if (output?.triggers && output.kind !== 'm') sections.push('triggers');
+  if (output?.viewDefinition) sections.push('definition');
   const EditPanel = editing && editors[editing].Panel;
   const indexStamp = output && postgresIndexEditStamp(output);
   const manageStamp = output?.tableManage?.stamp ?? output?.materializedManageStamp ?? output?.viewEditStamp;
@@ -175,6 +180,15 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         {section === 'definition' && output.viewDefinition && <>
           <p className="muted">{text.viewHint}</p><SqlEditor value={output.viewDefinition} dialect="postgresql" readOnly height={300}/>
         </>}
+        {section === 'triggers' && <CatalogTable empty={!output.triggers?.length}
+          headers={[text.name, triggerText.mode, triggerText.type, text.definition]}>
+          {output.triggers?.map(trigger => <tr key={trigger.oid}>
+            <th scope="row">{trigger.name}</th><td>{triggerText.modes[trigger.mode]}</td>
+            <td>{trigger.internal ? triggerText.internal : trigger.inherited ? triggerText.inherited :
+              trigger.constraint ? triggerText.constraint : triggerText.ordinary}</td>
+            <td><code>{trigger.definition}</code></td>
+          </tr>)}
+        </CatalogTable>}
       </>}
     </div>
     <footer className="modal-footer">

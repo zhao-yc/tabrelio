@@ -1,7 +1,7 @@
 export const postgresStructureZh = {
   open: '查看结构', title: 'PostgreSQL 关系结构', refresh: '刷新结构', close: '关闭',
   loading: '正在读取 PostgreSQL 目录', missing: '原连接已经变化，请重新打开结构',
-  sections: { columns: '字段', constraints: '约束', indexes: '索引', definition: '视图查询定义' },
+  sections: { columns: '字段', constraints: '约束', indexes: '索引', triggers: '触发器', definition: '视图查询定义' },
   kinds: { r: '普通表', p: '分区表', v: '视图', m: '物化视图', f: '外表' },
   position: '序号', name: '名称', type: '类型', nullable: '允许 NULL', defaultExpression: '默认表达式',
   generatedExpression: '生成表达式', identity: '标识列', collation: '排序规则', comment: '注释',

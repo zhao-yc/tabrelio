@@ -97,3 +97,18 @@ it('PostgreSQL 标识列输入保留精确整数并拒绝任意选项', () => {
     { ...draft, change: { kind: 'add', mode: 'always', start: '1e4' } }, { ...draft, change: { kind: 'drop', cascade: true } }])
     expect(postgresTableManagePreviewSchema.safeParse(value).success).toBe(false);
 });
+
+it('PostgreSQL 触发器输入约束事件、UPDATE 字段和 WHEN 的边界', () => {
+  const input = {
+    connectionId: 'saved', database: 'qa', table: '"public"."原表"', stamp: 'c'.repeat(64), action: 'trigger',
+    change: { kind: 'create', name: '记录更新', timing: 'BEFORE', events: ['UPDATE'], level: 'ROW', updateOf: ['金额'],
+      condition: 'NEW."金额" > 0 -- 合法尾注', functionSchema: '业务', functionName: '更新记录', args: ["反斜杠\\'; --"] },
+  };
+  expect(postgresTableManagePreviewSchema.parse(input)).toEqual(input);
+  for (const change of [
+    { ...input.change, events: ['UPDATE', 'UPDATE'] }, { ...input.change, events: ['TRUNCATE'], updateOf: [] },
+    { ...input.change, events: ['INSERT'] }, { ...input.change, condition: 'true) EXECUTE FUNCTION f(' },
+    { ...input.change, condition: 'true; DROP TABLE x' }, { ...input.change, condition: '$1' },
+    { ...input.change, sql: 'CREATE TRIGGER arbitrary' },
+  ]) expect(postgresTableManagePreviewSchema.safeParse({ ...input, change }).success).toBe(false);
+});

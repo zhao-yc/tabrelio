@@ -322,6 +322,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 新建 PostgreSQL 表或从「查看结构 → 编辑字段」新增字段时，可选择存储生成或虚拟生成并输入表达式。已有生成列可在「编辑生成列」加载并修改表达式，存储生成列还可保留原值转为普通列。界面和预览会按服务器版本核对可用操作。[PostgreSQL 生成列](development/postgres-generated-columns-20261108.md)
 
+在「查看结构 → 触发器」可查看定义和触发模式。有管理权限的普通表可创建触发器、重命名、切换正常／禁用／副本／始终模式或受限删除。创建时可指定事件、UPDATE 字段、WHEN 条件和现有函数。[PostgreSQL 表触发器](development/postgres-table-triggers-20261108.md)
+
 在「查看结构 → 管理标识列」可为已有整数列启用标识属性、切换 ALWAYS 与 BY DEFAULT、重启序列或移除标识属性。[PostgreSQL 标识列管理](development/postgres-table-manage-20261108.md#管理标识列)
 
 在「查看结构 → 索引 → 编辑索引」可创建、重命名和删除 PostgreSQL 独立索引。先选择索引方法及键列，再将多项改动加入同一份预览。删除需额外确认，主键、约束和复制标识索引会排除在候选之外。详见[PostgreSQL 普通表索引编辑](development/postgres-index-edit-20261105.md)。

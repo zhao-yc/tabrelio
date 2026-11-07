@@ -54,6 +54,14 @@ const structureIndex = z.object({
   }).strict()).max(128).optional(),
 }).strict();
 
+const oid = z.string().regex(/^\d+$/);
+const structureTrigger = z.object({
+  oid, name: identifier, mode: z.enum(['O', 'D', 'R', 'A']), definition: z.string().min(1),
+  internal: z.boolean(), inherited: z.boolean(), constraint: z.boolean(), signature: z.string().regex(/^[0-9a-f]{32}$/),
+  functionOid: oid, eventBits: z.number().int().nonnegative(),
+  updatePositions: z.array(z.number().int().positive()).max(2000), argsHex: z.string(), conditional: z.boolean(),
+}).strict();
+
 /** 大型关系的结构必须完整交付；超过目录预算时整体拒绝。 */
 export const postgresStructureResultSchema = z.object({
   database: identifier,
@@ -69,6 +77,7 @@ export const postgresStructureResultSchema = z.object({
   columns: z.array(structureColumn).max(2000),
   constraints: z.array(structureConstraint).max(2000),
   indexes: z.array(structureIndex).max(2000),
+  triggers: z.array(structureTrigger).max(2000).optional(),
   serverVersion: z.number().int().positive().optional(),
   materialized: z.object({
     populated: z.boolean(), uniqueIndex: z.boolean(), stamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -82,3 +91,4 @@ export const postgresStructureResultSchema = z.object({
   editStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 export type PostgresStructureResult = z.infer<typeof postgresStructureResultSchema>;
+export type PostgresStructureTrigger = z.infer<typeof structureTrigger>;

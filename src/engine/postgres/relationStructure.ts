@@ -127,7 +127,18 @@ SELECT pg_catalog.jsonb_build_object(
     JOIN pg_catalog.pg_am am ON am.oid = i.relam
     WHERE x.indrelid = t.oid
     ORDER BY i.relname, i.oid LIMIT 2001
-  ) ix), '[]'::jsonb)
+  ) ix), '[]'::jsonb),
+  'triggers', COALESCE((SELECT pg_catalog.jsonb_agg(entry.item ORDER BY entry.name, entry.oid) FROM (
+    SELECT g.tgname::text AS name, g.oid, pg_catalog.jsonb_build_object(
+      'oid', g.oid::text, 'name', g.tgname, 'mode', g.tgenabled,
+      'definition', pg_catalog.pg_get_triggerdef(g.oid, false),
+      'internal', g.tgisinternal, 'inherited', COALESCE((pg_catalog.to_jsonb(g)->>'tgparentid')::oid, 0::oid) <> 0,
+      'constraint', g.tgconstraint <> 0, 'signature', pg_catalog.md5((pg_catalog.to_jsonb(g) - 'tgname' - 'tgenabled')::text),
+      'functionOid', g.tgfoid::text, 'eventBits', g.tgtype, 'updatePositions', g.tgattr::smallint[],
+      'argsHex', pg_catalog.encode(g.tgargs, 'hex'), 'conditional', g.tgqual IS NOT NULL
+    ) AS item
+    FROM pg_catalog.pg_trigger g WHERE g.tgrelid = t.oid ORDER BY g.tgname, g.oid LIMIT 2001
+  ) entry), '[]'::jsonb)
 ), t.oid::text, t.editable,
   pg_catalog.jsonb_build_object('indexes', COALESCE((SELECT pg_catalog.jsonb_object_agg(index_name, index_oid) FROM (
     SELECT i.relname::text AS index_name, i.oid::text AS index_oid

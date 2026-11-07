@@ -1,0 +1,15 @@
+export const postgresTableTriggerZh = {
+  section: '触发器', title: '管理触发器', name: '触发器名称', existing: '原触发器', operation: '操作',
+  actions: { create: '创建触发器', rename: '重命名', mode: '切换触发模式', drop: '删除触发器' },
+  modes: { O: '正常触发', D: '禁用', R: '仅副本触发', A: '始终触发' },
+  timing: '触发时机', level: '触发级别', events: '触发事件', updateOf: '仅在更新所选字段时触发',
+  before: '操作前（BEFORE）', after: '操作后（AFTER）', row: '每行（ROW）', statement: '每条语句（STATEMENT）',
+  condition: 'WHEN 条件（可选）', functionSchema: '函数 schema', functionName: '触发器函数名',
+  functionHint: '选择已有的零声明参数函数，返回类型须为 trigger。下方文字参数按顺序传给 TG_ARGV。',
+  addArg: '添加文字参数', arg: (index: number) => '参数 ' + (index + 1), removeArg: (index: number) => '移除参数 ' + (index + 1),
+  type: '来源', internal: '系统内部', inherited: '分区继承', constraint: '约束', ordinary: '用户创建',
+  definition: '当前定义', mode: '触发模式', sql: '实际提交 SQL', preview: '预览触发器 SQL',
+  apply: '确认提交触发器改动', back: '返回修改', close: '退出触发器管理',
+  confirmDrop: '确认删除此触发器，之后不再执行它对应的触发逻辑。',
+  unknown: '提交结果待核对，请退出并刷新原表触发器目录。',
+} as const;
