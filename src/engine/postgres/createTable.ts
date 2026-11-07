@@ -30,16 +30,19 @@ import { postgresTableTriggerPlan } from './tableTriggers';
 import { postgresTablePolicyPlan } from './tablePolicies';
 import { postgresSchemaPlan } from './schemaManage';
 import { postgresSchemaPreviewSchema, type PostgresSchemaPreviewInput } from '../../shared/postgresSchemaManage';
+import { postgresExtensionPlan } from './extensionManage';
+import { postgresExtensionPreviewSchema, type PostgresExtensionPreviewInput } from '../../shared/postgresExtensionManage';
 import { postgresDatabasePlan } from './databaseManage';
 import { postgresDatabaseManagePreviewSchema, type PostgresDatabaseManageInput } from '../../shared/postgresDatabaseManage';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'databaseManage' | 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
+type RelationKind = 'extensionManage' | 'databaseManage' | 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
   autocommit?: boolean;
+  dropConfirmation?: string;
   preflight(connection: PostgresConnection): Promise<string>;
   validate?(connection: PostgresConnection): Promise<void>;
   verify(connection: PostgresConnection, schemaOid: string, insertedRows?: number): Promise<void>;
@@ -228,6 +231,13 @@ export class PostgresCreateTableWorkspace {
     const { owner: _owner, connectionRevision: _revision, ...raw } = input;
     const draft = postgresSchemaPreviewSchema.parse(raw);
     return this.prepareRelation(input, 'schemaManage', connect, () => connection => postgresSchemaPlan(connection, draft));
+  }
+
+  /** 扩展目录和安装、升级、迁移、卸载计划绑定原文档和数据库。 */
+  async prepareExtension(input: Scoped<PostgresExtensionPreviewInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+    const draft = postgresExtensionPreviewSchema.parse(raw);
+    return this.prepareRelation(input, 'extensionManage', connect, () => connection => postgresExtensionPlan(connection, draft));
   }
 
   /** 维护库能力绑定原文档、连接修订和模板或目标库。 */
@@ -630,11 +640,13 @@ export class PostgresCreateTableWorkspace {
   }
 
   /** 只消费一次原预览，真实提交结果优先于后续连接关闭。 */
-  async apply(input: Scoped<PostgresCreateTableApply>, connect: Connect, kind: RelationKind = 'table'): Promise<PostgresCreateTableOutcome> {
+  async apply(input: Scoped<PostgresCreateTableApply> & { dropName?: string }, connect: Connect, kind: RelationKind = 'table'): Promise<PostgresCreateTableOutcome> {
     const key = this.key(input, kind), prepared = this.plans.get(key);
     if (this.pending.has(key)) throw Error('目标已有关系创建操作');
     if (!prepared || prepared.token !== input.token || prepared.expires <= Date.now() ||
         input.connectionRevision !== prepared.input.connectionRevision) throw Error('PostgreSQL 创建预览已失效，请重新预览');
+    if (kind === 'extensionManage' && prepared.plan.dropConfirmation !== input.dropName)
+      throw Error('请逐字输入将要卸载的扩展名称');
     this.plans.delete(key);
     this.pending.add(key);
     let receipt: PostgresCreateTableOutcome | undefined;

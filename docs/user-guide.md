@@ -318,6 +318,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 右键 PostgreSQL 数据库选择「管理 PostgreSQL Schema」，可查看可见 Schema 的所有者和权限，并在有权限时创建、改名、编辑注释、转移所有者或受限删除。改名和删除前先关闭受影响的表页或视图页。[PostgreSQL Schema 管理](development/postgres-schema-management-20261108.md)
 
+右键 PostgreSQL 数据库选择「管理 PostgreSQL 扩展」，可查看服务器扩展目录及版本，安装、升级、迁移 Schema 或受限卸载。[PostgreSQL 扩展管理](development/postgres-extension-management-20261108.md)
+
 在「查看结构 → 管理表」可[重命名 PostgreSQL 表或受限删除普通表](development/postgres-table-manage-20261108.md)。核对 SQL 后确认，删除还需输入原表名。 也可[清空数据](development/postgres-table-manage-20261108.md#清空数据)，核对普通表或分区范围，并选择保留或重置关联序列。 [移动到其他 schema](development/postgres-table-manage-20261108.md#移动到其他-schema)可预览随表移动的索引、约束和拥有的序列。
 
 在「查看结构」点击「编辑表和字段注释」，可载入原文，修改或清空多项后整批预览、确认。[表和字段注释](development/postgres-table-manage-20261108.md#编辑表和字段注释)

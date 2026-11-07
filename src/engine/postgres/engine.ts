@@ -28,6 +28,7 @@ import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
 import { postgresSchemaCatalog } from './schemaManage';
+import { postgresExtensionCatalog } from './extensionManage';
 import { postgresDatabaseCatalog } from './databaseManage';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
@@ -1158,6 +1159,9 @@ export class PostgresEngine {
           else this.completionReads.delete(profile.id);
         }
       }
+      case 'postgres.extensionManage.read':
+      case 'postgres.extensionManage.preview':
+      case 'postgres.extensionManage.apply':
       case 'postgres.databaseManage.read':
       case 'postgres.databaseManage.preview':
       case 'postgres.databaseManage.apply':
@@ -1192,6 +1196,15 @@ export class PostgresEngine {
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 建表连接和原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.extensionManage.read') return connect(connection => postgresExtensionCatalog(connection, input.database));
+        if (command === 'postgres.extensionManage.preview') {
+          const { profile: _profile, ...draft } = input;
+          return this.creations.prepareExtension(draft as Parameters<PostgresCreateTableWorkspace['prepareExtension']>[0], connect);
+        }
+        if (command === 'postgres.extensionManage.apply') {
+          if (input.confirmed !== true) throw Error('请明确确认 PostgreSQL 扩展操作');
+          return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect, 'extensionManage');
+        }
         if (command === 'postgres.databaseManage.read') return connect(connection => postgresDatabaseCatalog(connection, input.database));
         if (command === 'postgres.databaseManage.preview') {
           const { profile: _profile, ...draft } = input;

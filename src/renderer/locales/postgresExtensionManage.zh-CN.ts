@@ -1,0 +1,18 @@
+export const postgresExtensionManageZh = {
+  title: '管理 PostgreSQL 扩展', search: '搜索扩展名称或说明', name: '扩展名称',
+  installed: '已安装版本', available: '默认可用版本', schema: 'Schema', owner: '所有者', description: '说明',
+  empty: '没有匹配的扩展。', operation: '扩展操作', version: '目标版本', targetSchema: '目标 Schema',
+  actions: { install: '安装', update: '升级', move: '迁移 Schema', drop: '卸载' },
+  select: '从目录选择扩展，查看可执行的操作。',
+  unavailable: '当前角色、扩展版本或可用 Schema 不满足此操作的要求。',
+  requirements: '前置扩展', missing: '请先安装缺少的前置扩展。',
+  updatePath: '服务器升级路径', installHint: '安装和升级会执行 PostgreSQL 服务器已有的扩展脚本。',
+  moveHint: '迁移时服务器检查目标 Schema 的 CREATE 权限，并按成员对象检查所有权。',
+  dropHint: '卸载会移除扩展成员，可能删除扩展自己的表和数据。预检会拒绝已发现的显式依赖，提交时使用服务器的 RESTRICT 检查。',
+  dropConfirm: '逐字输入扩展名称确认卸载',
+  refresh: '刷新扩展目录', close: '关闭', back: '返回修改',
+  preview: '预览扩展 SQL', apply: '确认提交扩展操作', sql: '实际提交 SQL',
+  changed: '原连接已变化，请重新打开扩展管理。',
+  discard: '放弃未提交的扩展预览？',
+  unknown: '提交结果待核对。请关闭窗口后重新读取扩展目录。',
+} as const;

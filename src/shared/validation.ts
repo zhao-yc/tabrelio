@@ -1,4 +1,5 @@
 import { postgresDatabaseManagePreviewSchema, postgresDatabaseManageApplySchema } from './postgresDatabaseManage';
+import { postgresExtensionPreviewSchema, postgresExtensionApplySchema } from './postgresExtensionManage';
 import { postgresSchemaReadSchema, postgresSchemaPreviewSchema, postgresSchemaApplySchema } from './postgresSchemaManage';
 import { importBatchChooseSchema, importBatchInvalid, importBatchReleaseSchema, importBatchSchema, validImportBatch } from './fileImportBatch';
 import { importRecordRangeSchema } from './importRecordRange';
@@ -278,6 +279,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableLayout.get': sqliteLayoutTargetSchema, 'sqlite.tableLayout.save': sqliteLayoutSaveSchema, 'sqlite.tableLayout.reset': sqliteLayoutResetSchema,
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
   'postgres.completion': postgresCompletionSchema,
+  'postgres.extensionManage.read': postgresCreateTableSchemasSchema,
+  'postgres.extensionManage.preview': postgresExtensionPreviewSchema,
+  'postgres.extensionManage.apply': postgresExtensionApplySchema,
   'postgres.databaseManage.read': postgresCreateTableSchemasSchema,
   'postgres.databaseManage.preview': postgresDatabaseManagePreviewSchema,
   'postgres.databaseManage.apply': postgresDatabaseManageApplySchema,
