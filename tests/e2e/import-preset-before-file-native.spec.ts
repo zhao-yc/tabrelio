@@ -33,13 +33,13 @@ test('先应用 TXT 导入配置后选择文件，兼容后恢复映射并明确
     await context.observer.query('USE ??', [context.database]);
     await context.observer.query('CREATE TABLE preset_target (id INT PRIMARY KEY, note TEXT) ENGINE=InnoDB');
     const bad = join(dataDir, '错误列数.txt'), good = join(dataDir, '兼容分隔文本.txt');
-    await writeFile(bad, iconv.encode("2||'多列'||额外\r\n", 'gb18030'));
-    await writeFile(good, iconv.encode("2||'第一条||中文'\r\n3||'第二条'\r\n", 'gb18030'));
+    await writeFile(bad, iconv.encode("报表说明\r\n2||'多列'||额外\r\n", 'gb18030'));
+    await writeFile(good, iconv.encode("报表说明\r\n2||'第一条||中文\r\n换行'\r\n3||'第二条'\r\n99||汇总", 'gb18030'));
     const name = '本例自定义 TXT 配置';
     await page.evaluate(async ({connectionId, database, name}) => {
       const saved = await window.dbark.invoke('files.importPresets.list', {});
       await window.dbark.invoke('files.importPresets.save', {generation: saved.generation, revision: saved.revision, name, configuration: {
-        format: 'txt', encoding: 'gb18030', txtOptions: {mode: 'delimited', delimiter: '||', quote: 'single', recordDelimiter: 'crlf', hasHeader: false},
+        format: 'txt', encoding: 'gb18030', txtOptions: {mode: 'delimited', delimiter: '||', quote: 'single', recordDelimiter: 'crlf', hasHeader: false, firstDataRow: 2, lastDataRow: 3},
         columns: ['第1列', '第2列'], mapping: {第1列: 'id', 第2列: 'note'},
       }});
       const settings = await window.dbark.invoke('settings.get', {});
@@ -60,6 +60,8 @@ test('先应用 TXT 导入配置后选择文件，兼容后恢复映射并明确
     await presets.getByRole('button', {name: importPresetsZh.apply, exact: true}).click();
     await expect(modal.getByRole('combobox').first()).toHaveValue('txt');
     await expect(modal.getByLabel(txtImportZh.custom, {exact: true})).toHaveValue('||');
+    await expect(modal.getByLabel(txtImportZh.firstDataRow, {exact: true})).toHaveValue('2');
+    await expect(modal.getByLabel(txtImportZh.lastDataRow, {exact: true})).toHaveValue('3');
     await expect(modal.getByRole('status').filter({hasText: importPresetsZh.needFile})).toBeVisible();
     await expect(start).toBeDisabled();
     for (const path of [bad, good]) {
@@ -81,7 +83,7 @@ test('先应用 TXT 导入配置后选择文件，兼容后恢复映射并明确
     await start.click();
     await expect(modal.locator('.success-box')).toContainText('2');
     const [rows] = await context.observer.query<RowDataPacket[]>('SELECT id, note FROM preset_target ORDER BY id');
-    expect(rows).toEqual([{id: 2, note: '第一条||中文'}, {id: 3, note: '第二条'}]);
+    expect(rows).toEqual([{id: 2, note: '第一条||中文\r\n换行'}, {id: 3, note: '第二条'}]);
   }, info);
 });
 

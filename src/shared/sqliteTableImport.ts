@@ -1,5 +1,5 @@
 import { excelImportOptionsSchema, excelImportZh, validExcelImport } from './excelTransfer';
-import { txtImportOptionsSchema, txtImportZh, validTxtImport } from './txtImport';
+import { txtImportMaxOptions, txtImportOptionsSchema, txtImportZh, validTxtImport } from './txtImport';
 import { recordImportFormats, sqliteXmlImportOptionsSchema, validXmlImport, xmlImportZh } from './xmlImport';
 import { z } from 'zod';
 import type { DataRow } from './contracts';
@@ -32,7 +32,7 @@ export type SqliteTableImportRow = DataRow;
 export const sqliteTableImportInspectSchema = guard(value => { const raw = ownData(value, 11);
   return !!raw && (raw.format === 'csv' || !Object.hasOwn(raw, 'csvDelimiter') && !Object.hasOwn(raw, 'csvHasHeader')) &&
     (!Object.hasOwn(raw, 'xmlOptions') || !!ownData(raw.xmlOptions, 4)) &&
-    (!Object.hasOwn(raw, 'txtOptions') || !!ownData(raw.txtOptions, 5)) &&
+    (!Object.hasOwn(raw, 'txtOptions') || !!ownData(raw.txtOptions, txtImportMaxOptions)) &&
     (!Object.hasOwn(raw, 'excelOptions') || !!ownData(raw.excelOptions, 5)); }).pipe(z.object({ connectionId: id, database: z.literal('main'), table: name, fileToken: id, format: z.enum(recordImportFormats), xmlOptions: sqliteXmlImportOptionsSchema.optional(), txtOptions: txtImportOptionsSchema.optional(), excelOptions: excelImportOptionsSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), taskId: id, sourceId: id.optional() }).strict().refine(validXmlImport, xmlImportZh.invalid).refine(validTxtImport, txtImportZh.invalid).refine(validExcelImport, excelImportZh.missing));
 export const sqliteTableImportPreviewSchema = guard(value => { const raw = ownData(value, 3); return !!raw && arrayBound(raw.mapping, sqliteTableImportLimits.mapping); }).pipe(z.object({ inspectionId: id, mapping: sqliteTableImportMappingSchema, taskId: id }).strict());
 export const sqliteTableImportApplySchema = z.object({ previewId: id, taskId: id, confirmation: z.string().min(1).max(1024) }).strict();

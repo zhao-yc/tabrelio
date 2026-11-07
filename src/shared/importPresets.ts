@@ -123,7 +123,9 @@ function configuration(input: unknown): StoredImportPresetConfiguration {
     const fields = record(source.xmlOptions, ['rowTag', 'attributes', 'binaryBase64', 'documentResult'], ['rowTag', 'attributes', 'binaryBase64']);
     output.xmlOptions = (sqlite ? sqliteXmlImportOptionsSchema : xmlImportOptionsSchema).parse(fields);
   }
-  if (Object.hasOwn(source, 'txtOptions')) output.txtOptions = txtImportOptionsSchema.parse(record(source.txtOptions, ['mode', 'recordDelimiter', 'hasHeader', 'delimiter', 'quote', 'widths', 'trimPadding'], ['mode', 'recordDelimiter', 'hasHeader']));
+  if (Object.hasOwn(source, 'txtOptions')) output.txtOptions = txtImportOptionsSchema.parse(record(source.txtOptions,
+    ['mode', 'recordDelimiter', 'hasHeader', 'delimiter', 'quote', 'widths', 'trimPadding', 'headerRow', 'firstDataRow', 'lastDataRow'],
+    ['mode', 'recordDelimiter', 'hasHeader']));
   if (format === 'xlsx') {
     if (output.encoding !== 'utf8') return invalid();
     const fields = record(source.excelOptions, ['headerRow', 'firstDataRow', 'lastDataRow', 'protocol'], ['protocol']);

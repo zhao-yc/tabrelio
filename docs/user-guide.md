@@ -878,7 +878,7 @@ MySQL 和 MariaDB 的可写 InnoDB 表还可导入 UTF-8 XML。按文件填写�
 
 SQLite 的普通表也可在「导入 SQLite 表数据」选择 UTF-8 XML，指定记录标签及属性读取方式。检查文件后逐列映射类型，整文件预检通过再确认追加。SQLite 的 `main` 菜单还可从 XML 新建表，建表与写入数据分别确认。[SQLite 导入 XML](development/sqlite-xml-import-20261107.md)
 
-MySQL、MariaDB、PostgreSQL 和 SQLite 可向现有表导入 `.txt`，也可用「从文件导入新表」按文件结构建表。选择「TXT 文本」及文件编码。分隔文本可设置字段分隔符、引号、记录换行和表头。固定宽度文本按顺序填写每列的字符数，例如 `8,12,20`，每条记录的字符数须与列宽总和一致。核对字段映射后确认写入。[TXT 导入说明](development/txt-import-20261107.md)
+MySQL、MariaDB、PostgreSQL 和 SQLite 可向现有表导入 `.txt`，也可用「从文件导入新表」按文件结构建表。选择「TXT 文本」及文件编码。分隔文本可设置字段分隔符、引号和记录换行。固定宽度文本按顺序填写每列的字符数，例如 `8,12,20`。两种布局均可指定字段名记录和首末数据记录，跳过报表说明和汇总。核对字段映射后确认写入。[TXT 导入说明](development/txt-import-20261107.md)
 
 MySQL、MariaDB、PostgreSQL 和 SQLite 均可将「Excel（XLSX）」导入现有表或从工作簿新建表。选择工作表并填写标题行，无标题时填 0 并按列位置映射。可填写首末数据行以跳过说明和汇总，范围包含首末两行。由 tabrelio 导出的文件可选可逆文本协议。确认前核对样本和字段映射。[XLSX 工作簿导入](development/xlsx-table-import-20261107.md)
 

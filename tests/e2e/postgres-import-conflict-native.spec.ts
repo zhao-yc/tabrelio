@@ -53,7 +53,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       { name: '源键重复.json', format: 'json', mode: 'upsert', data: '[{"tenant":"华东","code":"7","payload":"甲"},{"tenant":"华东","code":"0007","payload":"乙"}]', result: '整批已回滚' },
       { name: '空键.json', format: 'json', mode: 'skip-existing', data: '[{"tenant":"华东","code":null,"payload":"空键"}]', result: '整批已回滚' },
       { name: '其它唯一键冲突.json', format: 'json', mode: 'upsert', data: '[{"tenant":"华东","code":7,"payload":"应回滚"},{"tenant":"华东","code":9,"payload":"更新八"}]', result: '整批已回滚' },
-      { name: '分隔文本更新.txt', format: 'txt', mode: 'update-existing', data: "tenant||code||payload\n华东||7||'TXT''||内容'\n", result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
+      { name: '分隔文本更新.txt', format: 'txt', mode: 'update-existing', data: "导出说明\ntenant||code||payload\n跳过这一行\n华东||7||'TXT''||内容'\n汇总", result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
       { name: '工作簿更新.xlsx', format: 'xlsx', mode: 'update-existing', data: '', result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
       { name: 'UTF-16 LE 按键更新.csv', format: 'csv', mode: 'update-existing', encoding: 'utf16le',
         data: 'tenant;code;payload;raw;note;ignored\r\n华东;7;UTF-16 中文;base64:AP8=;\\N;跳过\r\n',
@@ -129,6 +129,9 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         await modal.getByLabel(txtImportZh.custom, {exact: true}).fill('||');
         await modal.getByLabel(txtImportZh.quote, {exact: true}).selectOption('single');
         await modal.getByRole('checkbox', {name: txtImportZh.hasHeader, exact: true}).check();
+        await modal.getByLabel(txtImportZh.headerRow, {exact: true}).fill('2');
+        await modal.getByLabel(txtImportZh.firstDataRow, {exact: true}).fill('4');
+        await modal.getByLabel(txtImportZh.lastDataRow, {exact: true}).fill('4');
       }
       if (item.format === 'xlsx') {
         await modal.getByRole('button', {name: excelImportZh.workbook, exact: true}).click();

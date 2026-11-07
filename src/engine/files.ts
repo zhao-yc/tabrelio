@@ -11,7 +11,7 @@ import { csvImportColumnName, csvImportDelimiter, csvImportHasHeader, type CsvIm
 import type { CsvExportDelimiter } from '../shared/csvExport';
 import { validXmlImport, xmlImportZh, type RecordImportFormat, type XmlImportOptions } from '../shared/xmlImport';
 import { readXmlRecords, type XmlImportReadControl } from './xmlImport';
-import { txtFixedWidths, txtImportOptionsSchema, txtImportZh, txtQualifier, txtRecordDelimiters, validTxtImport, type TxtImportOptions } from '../shared/txtImport';
+import { txtFixedWidths, txtImportOptionsSchema, txtImportRange, txtImportZh, txtQualifier, txtRecordDelimiters, validTxtImport, type TxtImportOptions } from '../shared/txtImport';
 import { excelImportZh, validExcelImport, type ExcelImportOptions } from '../shared/excelTransfer';
 import { readExcelRows } from './excelFiles';
 import { encodingName } from './fileEncoding';
@@ -78,6 +78,8 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
     return;
   }
   const txt = format === 'txt' ? txtImportOptionsSchema.parse(control?.txtOptions) : undefined;
+  const txtRange = txt && txtImportRange(txt);
+  const skipsTxtRecords = txtRange && (txtRange.firstDataRow > txtRange.headerRow + 1 || txtRange.headerRow > 1 || txtRange.lastDataRow < Infinity);
   const fixed = txt?.mode === 'fixed' ? txt : undefined;
   const widths = fixed ? txtFixedWidths(fixed.widths) : undefined;
   const width = widths?.reduce((total, value) => total + value, 0) ?? 0;
@@ -142,9 +144,9 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
   } });
   const output = delimited
     ? parse({ columns: false, delimiter: txt?.mode === 'delimited' ? txt.delimiter : fixed ? '\0' : selectedDelimiter,
-      ...(txt ? { quote, escape: quote,
+      ...(txt ? { quote, escape: quote, relax_column_count: skipsTxtRecords,
         ...(txt.recordDelimiter === 'auto' ? {} : { record_delimiter: txtRecordDelimiters[txt.recordDelimiter] }) } : {}),
-      bom: true, skip_empty_lines: !txt && selectedHasHeader, max_record_size: fixed ? width * 4 : 64 * 1024 * 1024 })
+      bom: true, skip_empty_lines: !txt && selectedHasHeader, max_record_size: fixed && !skipsTxtRecords ? width * 4 : 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
   const options = { signal: control?.signal };
   const decoding = [source, observed, ...(gbFrames ? [gbFrames] : []), decoder, codepoints];
@@ -153,8 +155,12 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
   void completed.catch(() => undefined);
   let finished = false;
   let headers: string[] | undefined;
+  let recordIndex = 0;
   try {
     for await (const item of output) {
+      // 先由解析器确定逻辑记录，再跳过范围外记录的列校验。仍消费完整文件以校验编码和来源摘要。
+      if (txtRange && ++recordIndex !== txtRange.headerRow &&
+        (recordIndex < txtRange.firstDataRow || recordIndex > txtRange.lastDataRow)) continue;
       let values = item as string[];
       if (fixed && widths) {
         // 先限制 UTF-16 长度，随后按码点切列，非 BMP 字符只占一个位置。
@@ -193,6 +199,7 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
       yield row;
     }
     await completed;
+    if (txt?.headerRow !== undefined && !headers) throw Error(txtImportZh.missingHeader);
     finished = true;
   } finally {
     source.destroy(); observed.destroy(); gbFrames?.destroy(); decoder.destroy(); codepoints.destroy(); numberTokens.destroy(); output.destroy();

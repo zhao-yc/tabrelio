@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import iconv from 'iconv-lite';
 import { previewFile } from '../../src/engine/files';
 import { inspectImportFile, readVerifiedImportRecords } from '../../src/engine/importNewTableSource';
-import { txtImportDefaults, type TxtImportOptions } from '../../src/shared/txtImport';
+import { txtImportDefaults, txtImportOptionsSchema, type TxtImportOptions } from '../../src/shared/txtImport';
 import { validateCommand } from '../../src/shared/validation';
 import { importPresetConfigurationSchema } from '../../src/shared/importPresets';
 import { sqliteImportSourceOptionsKey } from '../../src/shared/sqliteImportSource';
@@ -52,15 +52,54 @@ it('TXT 按 GB18030 无引号读取，拒绝截断的四字节字符', async () 
   await expect(previewFile(input)).rejects.toThrow();
 });
 
+it('TXT 按逻辑记录选取字段名及包含端点的数据，范围外字节仍纳入核验', async () => {
+  const txtOptions = { ...txtImportDefaults, delimiter: '|', hasHeader: true, headerRow: 3, firstDataRow: 5, lastDataRow: 6 };
+  const content = '说明\r\n\r\nid|note\r\n跳过|不等列|附注\r\n1|"引号内\r\n换行"\r\n2|末条\r\n汇总';
+  await writeFile(filePath, content);
+  const input = { filePath, format: 'txt' as const, encoding: 'utf8' as const, txtOptions };
+  const result = await inspectImportFile({ ...input, fileToken: 'file', taskId: 'task' }, () => {});
+  expect(result.columns).toEqual(['id', 'note']);
+  expect(result.rows).toEqual([{ id: '1', note: '引号内\r\n换行' }, { id: '2', note: '末条' }]);
+  await writeFile(filePath, content.replace('汇总', '改动'));
+  await expect(async () => {
+    for await (const _row of readVerifiedImportRecords({ ...input, expectedSource: result.source }, () => {})) { /* 消费整文件。 */ }
+  }).rejects.toThrow('变化');
+  await writeFile(filePath, '说明');
+  await expect(previewFile(input)).rejects.toThrow('没有指定的字段名记录');
+});
+
+it('TXT 无表头从第一条选中记录推断列，固定宽度只校验所选记录', async () => {
+  const input = { filePath, format: 'txt' as const, encoding: 'utf8' };
+  const range = { firstDataRow: 2, lastDataRow: 2 };
+  await writeFile(filePath, '很长的报表标题和版本说明\n🚢甲\n尾');
+  const fixed: TxtImportOptions = { mode: 'fixed', recordDelimiter: 'lf', widths: '1,1', hasHeader: false, trimPadding: true, ...range };
+  expect(await previewFile({ ...input, txtOptions: fixed })).toEqual({ columns: ['第1列', '第2列'], rows: [{ 第1列: '🚢', 第2列: '甲' }] });
+  await expect(previewFile({ ...input, txtOptions: { ...fixed, lastDataRow: 3 } })).rejects.toThrow('固定列宽');
+  await writeFile(filePath, '说明\n1|甲\n2|乙|多列');
+  const delimited = { ...txtImportDefaults, delimiter: '|', ...range };
+  expect(await previewFile({ ...input, txtOptions: delimited })).toEqual({ columns: ['第1列', '第2列'], rows: [{ 第1列: '1', 第2列: '甲' }] });
+  await expect(previewFile({ ...input, txtOptions: { ...delimited, lastDataRow: 3 } })).rejects.toThrow('列数');
+});
+
+it('TXT 拒绝反向、非整数及与字段名位置冲突的范围', () => {
+  for (const invalid of [
+    { headerRow: 2 }, { hasHeader: true, headerRow: 2, firstDataRow: 2 },
+    { firstDataRow: 4, lastDataRow: 3 }, { firstDataRow: 1.5 }, { lastDataRow: 0 },
+  ]) expect(txtImportOptionsSchema.safeParse({ ...txtImportDefaults, ...invalid }).success).toBe(false);
+});
+
 it('TXT 解释在预览、预检、提交、预设和 SQLite 来源指纹中保持独立', () => {
-  const request = { fileToken: 'file', format: 'txt', encoding: 'utf8', txtOptions: txtImportDefaults };
+  const txtOptions = { ...txtImportDefaults, hasHeader: true, headerRow: 2, firstDataRow: 4, lastDataRow: 5 };
+  const request = { fileToken: 'file', format: 'txt', encoding: 'utf8', txtOptions };
   const target = { connectionId: 'connection', database: 'db', table: 'table', taskId: 'task', mapping: {id: 'id'} };
-  expect(validateCommand('files.preview', request)).toMatchObject({txtOptions: txtImportDefaults});
-  expect(validateCommand('files.preflight', {...target, ...request})).toMatchObject({txtOptions: txtImportDefaults});
-  expect(validateCommand('files.import', {...target, ...request, transactionMode: 'atomic'})).toMatchObject({txtOptions: txtImportDefaults});
+  expect(validateCommand('files.preview', request)).toMatchObject({txtOptions});
+  expect(validateCommand('files.preflight', {...target, ...request})).toMatchObject({txtOptions});
+  expect(validateCommand('files.import', {...target, ...request, transactionMode: 'atomic'})).toMatchObject({txtOptions});
+  expect(validateCommand('files.inspectImport', { ...request, taskId: 'task' })).toMatchObject({txtOptions});
+  expect(validateCommand('sqlite.tableImport.inspect', { ...request, connectionId: target.connectionId, database: 'main', table: target.table, taskId: target.taskId })).toMatchObject({txtOptions});
   expect(() => validateCommand('files.preview', {...request, format: 'csv'})).toThrow();
   expect(() => validateCommand('files.preview', {...request, txtOptions: {...txtImportDefaults, delimiter: '"'}})).toThrow();
-  expect(importPresetConfigurationSchema.parse({ format: 'txt', encoding: 'utf8', txtOptions: txtImportDefaults, columns: ['id'], mapping: {id: 'id'} })).toMatchObject({txtOptions: txtImportDefaults});
+  expect(importPresetConfigurationSchema.parse({ format: 'txt', encoding: 'utf8', txtOptions, columns: ['id'], mapping: {id: 'id'} })).toMatchObject({txtOptions});
   expect(sqliteImportSourceOptionsKey({...request, format: 'txt', encoding: 'utf8'})).not.toBe(
-    sqliteImportSourceOptionsKey({...request, format: 'txt', encoding: 'utf8', txtOptions: {...txtImportDefaults, hasHeader: true}}));
+    sqliteImportSourceOptionsKey({...request, format: 'txt', encoding: 'utf8', txtOptions: {...txtOptions, lastDataRow: 6}}));
 });

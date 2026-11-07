@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { txtImportZh as text, type TxtImportOptions } from '../../shared/txtImport';
+import { txtImportRange, txtImportZh as text, type TxtImportOptions } from '../../shared/txtImport';
 import { Field } from './ui';
 
 const separators = new Map([['\t', text.tab], [',', text.comma], [';', text.semicolon], ['|', text.pipe], [' ', text.space]]);
@@ -31,11 +31,18 @@ export function TxtDelimiterFields({ options, disabled, onChange }: {
 export function TxtImportFields({ options, disabled, onChange }: {
   options: TxtImportOptions; disabled: boolean; onChange(options: TxtImportOptions): void;
 }) {
-  const { recordDelimiter, hasHeader } = options;
+  const { recordDelimiter, hasHeader, headerRow, firstDataRow, lastDataRow } = options;
+  const shared = { recordDelimiter, hasHeader, headerRow, firstDataRow, lastDataRow };
+  const range = txtImportRange(options);
+  const fields = [
+    { key: 'headerRow', placeholder: '1' },
+    { key: 'firstDataRow', placeholder: String(range.headerRow + 1) },
+    { key: 'lastDataRow', placeholder: text.throughEnd },
+  ] as const;
   return <>
     <Field label={text.layout}><select aria-label={text.layout} disabled={disabled} value={options.mode} onChange={event => {
-      onChange(event.target.value === 'fixed' ? { mode: 'fixed', recordDelimiter, hasHeader, widths: '', trimPadding: true }
-        : { mode: 'delimited', recordDelimiter, hasHeader, delimiter: '\t', quote: 'double' });
+      onChange(event.target.value === 'fixed' ? { ...shared, mode: 'fixed', widths: '', trimPadding: true }
+        : { ...shared, mode: 'delimited', delimiter: '\t', quote: 'double' });
     }}><option value="delimited">{text.delimited}</option><option value="fixed">{text.fixed}</option></select></Field>
     <Field label={text.record}><select aria-label={text.record} disabled={disabled} value={recordDelimiter}
       onChange={event => onChange({ ...options, recordDelimiter: event.target.value as typeof recordDelimiter })}>
@@ -49,7 +56,11 @@ export function TxtImportFields({ options, disabled, onChange }: {
         onChange={event => onChange({ ...options, trimPadding: event.target.checked })}/>{text.trim}</label>
     </>}
     <label className="check"><input type="checkbox" disabled={disabled} checked={hasHeader}
-      onChange={event => onChange({ ...options, hasHeader: event.target.checked })}/>{text.hasHeader}</label>
-    <p className="muted small">{options.mode === 'fixed' ? text.widthHint + ' ' : ''}{text.hint}</p>
+      onChange={event => onChange({ ...options, hasHeader: event.target.checked, headerRow: event.target.checked ? headerRow : undefined })}/>{text.hasHeader}</label>
+    {fields.filter(({ key }) => key !== 'headerRow' || hasHeader).map(({ key, placeholder }) =>
+      <Field key={key} label={text[key]}><input aria-label={text[key]} type="number" min={1} step={1}
+        placeholder={placeholder} value={options[key] ?? ''} disabled={disabled}
+        onChange={event => onChange({ ...options, [key]: event.target.value === '' ? undefined : event.target.valueAsNumber })}/></Field>)}
+    <p className="muted small">{options.mode === 'fixed' ? text.widthHint + ' ' : ''}{text.hint} {text.rangeHint}</p>
   </>;
 }

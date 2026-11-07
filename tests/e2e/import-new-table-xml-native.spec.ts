@@ -35,10 +35,10 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       ['18446744073709551615', {type: 'binary', base64: ''}, null, '尾部字段'],
     ]));
     const widths = [20, 12, 4, 8];
-    await writeFile(files[3], [['id', 'raw', 'note', 'late'],
+    await writeFile(files[3], '固定宽度报表说明\r\n' + [['id', 'raw', 'note', 'late'],
       ['18446744073709551614', 'base64:AP8=', '', '\\N'],
       ['18446744073709551615', 'base64:', '\\N', '尾部字段'],
-    ].map(row => row.map((cell, index) => cell.padEnd(widths[index])).join('')).join('\r\n') + '\r\n');
+    ].map(row => row.map((cell, index) => cell.padEnd(widths[index])).join('')).join('\r\n') + '\r\n汇总');
     await writeXlsxImportFixture(files[4], ['id', 'raw', 'note', 'late'], [
       ['18446744073709551614', '\\B:AP8=', '', null],
       ['18446744073709551615', '\\B:', null, '尾部字段'],
@@ -76,6 +76,8 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
         await wizard.getByLabel(txtImportZh.layout, {exact: true}).selectOption('fixed');
         await wizard.getByLabel(txtImportZh.widths, {exact: true}).fill(widths.join(','));
         await wizard.getByRole('checkbox', {name: txtImportZh.hasHeader, exact: true}).check();
+        await wizard.getByLabel(txtImportZh.headerRow, {exact: true}).fill('2');
+        await wizard.getByLabel(txtImportZh.lastDataRow, {exact: true}).fill('4');
       } else if (index === 2) {
         await wizard.getByLabel(xmlImportZh.layout, {exact: true}).selectOption('document');
         await wizard.getByLabel(xmlImportZh.result, {exact: true}).fill('2');

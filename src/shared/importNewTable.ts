@@ -1,5 +1,5 @@
 import { excelImportOptionsSchema, type ExcelImportOptions } from './excelTransfer';
-import { txtImportOptionsSchema, type TxtImportOptions } from './txtImport';
+import { txtImportMaxOptions, txtImportOptionsSchema, type TxtImportOptions } from './txtImport';
 import { z } from 'zod';
 import type { DataRow, FileChoice } from './contracts';
 import { csvImportDelimiters, type CsvImportDelimiter } from './csvImport';
@@ -45,7 +45,7 @@ function options(value: Record<string, unknown>): ImportFileReadOptions {
   if (Object.hasOwn(value, 'excelOptions')) return invalid();
   if (value.format === 'txt') {
     if (!['utf8', 'utf16le', 'gb18030'].includes(value.encoding as string) || ['csvDelimiter', 'csvHasHeader', 'xmlOptions'].some(key => Object.hasOwn(value, key))) return invalid();
-    return { format: 'txt', encoding: value.encoding as ImportFileReadOptions['encoding'], txtOptions: txtImportOptionsSchema.parse(object(value.txtOptions, 5)) };
+    return { format: 'txt', encoding: value.encoding as ImportFileReadOptions['encoding'], txtOptions: txtImportOptionsSchema.parse(object(value.txtOptions, txtImportMaxOptions)) };
   }
   if (Object.hasOwn(value, 'txtOptions')) return invalid();
   if (value.format === 'xml') {
