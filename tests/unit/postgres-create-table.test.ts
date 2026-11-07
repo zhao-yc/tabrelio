@@ -33,6 +33,19 @@ describe('PostgreSQL 建表计划', () => {
     expect(postgresCreateTablePreviewSchema.safeParse({ ...input, columns: [{ ...column,
       default: { mode: 'timeOrderedUuid', value: '1 day' } }] }).success).toBe(false);
   });
+
+  it('生成列使用固定模式并保护表达式的 SQL 边界', () => {
+    const column = { ...draft.columns[0], default: { mode: 'none' as const } };
+    const generated = { ...column, generation: { mode: 'stored' as const, expression: `'a;b' -- 末尾注释` } };
+    const plan = postgresCreateTablePlan({ ...draft, columns: [generated] });
+    expect(plan.statements[0]).toContain("GENERATED ALWAYS AS (\n'a;b' -- 末尾注释\n) STORED");
+    for (const invalid of [
+      { ...generated, identity: 'always', type: 'integer' }, { ...generated, default: { mode: 'literal', value: '字' } },
+      { ...generated, generation: { ...generated.generation, expression: "1) STORED, other int DEFAULT (1" } },
+      { ...generated, generation: { ...generated.generation, expression: '1; CREATE TABLE other(i int)' } },
+      { ...generated, generation: { ...generated.generation, expression: '$1' } },
+    ]) expect(postgresCreateTablePreviewSchema.safeParse({ ...draft, columns: [invalid] }).success).toBe(false);
+  });
 });
 
 it('PostgreSQL 表管理绑定目录摘要，删除和执行都拒绝额外 SQL', () => {

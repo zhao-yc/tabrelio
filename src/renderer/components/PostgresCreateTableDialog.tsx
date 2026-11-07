@@ -9,6 +9,7 @@ import { useWorkspace } from '../store';
 import type { PostgresImportDesign } from '../importNewTableUi';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { PostgresColumnDefaultFields } from './PostgresColumnDefaultFields';
+import { PostgresColumnGenerationFields } from './PostgresColumnGenerationFields';
 import './PostgresCreateTableDialog.css';
 
 type FieldDraft = PostgresCreateColumn & { id: string };
@@ -173,13 +174,15 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
           <label><input type="checkbox" checked={field.nullable && !field.primary && field.identity === 'none'} disabled={field.primary || field.identity !== 'none'} onChange={event => patch(field.id, { nullable: event.target.checked })}/>{text.nullable}</label>
           <label><input type="checkbox" checked={field.primary} onChange={event => patch(field.id, { primary: event.target.checked })}/>{text.primary}</label>
           <label><input type="checkbox" checked={field.unique} onChange={event => patch(field.id, { unique: event.target.checked })}/>{text.unique}</label>
-          {['bigint','integer','smallint'].includes(field.type) && <Field label={text.identity}>
+          {!field.generation && ['bigint','integer','smallint'].includes(field.type) && <Field label={text.identity}>
             <select aria-label={text.identity} value={field.identity} onChange={event => patch(field.id, {
               identity: event.target.value as PostgresCreateColumn['identity'], default: { mode: 'none' },
             })}><option value="none">{text.identityNone}</option><option value="always">{text.identityAlways}</option><option value="byDefault">{text.identityDefault}</option></select>
           </Field>}
-          <PostgresColumnDefaultFields type={field.type} value={field.default} disabled={field.identity !== 'none'}
-            onChange={value => patch(field.id, { default: value })}/>
+          {!field.generation && <PostgresColumnDefaultFields type={field.type} value={field.default} disabled={field.identity !== 'none'}
+            onChange={value => patch(field.id, { default: value })}/>}
+          <PostgresColumnGenerationFields value={field.generation} onChange={generation => patch(field.id,
+            generation ? { generation, identity: 'none', default: { mode: 'none' } } : { generation })}/>
           <Field label={text.comment}><input value={field.comment} maxLength={4096} onChange={event => patch(field.id, { comment: event.target.value })}/></Field>
           <button disabled={fields.length === 1} onClick={() => edit(() => setFields(previous => previous.filter(item => item.id !== field.id)))}>{text.remove}</button>
         </fieldset>)}

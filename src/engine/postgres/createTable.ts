@@ -3,7 +3,7 @@ import { postgresSequenceEditPlan, postgresSequenceManageSchema, postgresSequenc
 import { postgresSequenceTargets, readPostgresSequence, readPostgresSequenceAllocation } from './sequence';
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  matchesPostgresDefaultPreset, postgresCreateTablePlan, postgresDefaultPresetSql, type PostgresDefaultPreset,
+  matchesPostgresDefaultPreset, postgresCreateTablePlan, postgresDefaultPresetSql, postgresGenerationMinimum, type PostgresDefaultPreset,
   type PostgresCreateTableApply, type PostgresCreateTableInput,
   type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget, type PostgresTruncateScope, type PostgresTableMoveScope,
 } from '../../shared/postgresCreateTable';
@@ -147,8 +147,10 @@ export async function validatePostgresDefaultPresets(connection: PostgresConnect
 
 /** 在同一事务核对实际 schema 和字段顺序，禁止标识符截断或目标替换后仍提交。 */
 async function verify(connection: PostgresConnection, input: PostgresCreateTableInput, schemaOid: string): Promise<void> {
+  const generated = input.columns.some(field => field.generation);
   const result = await connection.query(`
     SELECT a.attname, pg_catalog.left(pg_catalog.pg_get_expr(d.adbin, d.adrelid), 128)
+      ${generated ? ', a.attgenerated' : ''}
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -162,6 +164,15 @@ async function verify(connection: PostgresConnection, input: PostgresCreateTable
   if (input.columns.some(({ default: { mode } }, index) =>
     mode !== 'none' && mode !== 'literal' && !matchesPostgresDefaultPreset(result.rows[index].c1, mode)))
     throw Error('新表的实际服务器默认值与预览不同，未提交');
+  if (generated && input.columns.some((field, index) => field.generation &&
+    (result.rows[index].c2 !== (field.generation.mode === 'stored' ? 's' : 'v') || !result.rows[index].c1)))
+    throw Error('新表的实际生成列与预览不同，未提交');
+}
+
+/** 先确认表达式使用的字符串模式，再用服务器 Parse 检查完整 DDL，预览不执行表达式。 */
+export async function parsePostgresColumnStatements(connection: PostgresConnection, statements: string[]): Promise<void> {
+  if (!connection.standardStrings) throw Error('生成列表达式的字符串模式未确认');
+  for (const sql of statements) await connection.query(sql, undefined, budget(), undefined, 'parse');
 }
 
 /** 原文档、目标数据库、关系类别及连接修订共同约束一次性创建预览。 */
@@ -181,15 +192,25 @@ export class PostgresCreateTableWorkspace {
         table: input.table, columns: input.columns, comment: input.comment };
       const plan = postgresCreateTablePlan(draft);
       const presets = draft.columns.flatMap(({ default: { mode } }) => mode === 'none' || mode === 'literal' ? [] : [mode]);
+      const minimum = Math.max(0, ...draft.columns.map(field => field.generation ? postgresGenerationMinimum(field.generation.mode) : 0));
       return { ...plan, success: 'PostgreSQL 新表已确认创建',
+        protocol: minimum ? 'extended' : undefined,
         async preflight(connection) {
           const oid = await preflight(connection, draft, draft.table, draft.columns.map(column => column.name), '表');
           await validatePostgresDefaultPresets(connection, presets);
+          if (minimum) {
+            const version = await connection.query("SELECT pg_catalog.current_setting('server_version_num')", undefined, budget());
+            if (!(Number(version.rows[0]?.c0) >= minimum))
+              throw Error('当前生成列模式需要 PostgreSQL ' + minimum / 10000 + ' 或更新版本');
+          }
           return oid;
         },
-        validate: connection => validatePostgresDefaults(connection, plan.checks.map(check => ({
-          ...check, length: draft.columns.find(column => column.name === check.name)?.length,
-        }))),
+        async validate(connection) {
+          await validatePostgresDefaults(connection, plan.checks.map(check => ({
+            ...check, length: draft.columns.find(column => column.name === check.name)?.length,
+          })));
+          if (minimum) await parsePostgresColumnStatements(connection, plan.statements);
+        },
         verify: (connection, oid) => verify(connection, draft, oid),
       };
     });

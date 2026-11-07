@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { postgresColumnPlan, type PostgresColumnChange } from '../../shared/postgresColumnEdit';
 import { acceptsPostgresDefaultPreset, postgresCreateTypes,
-  type PostgresColumnDefault, type PostgresColumnType, type PostgresCreateColumn } from '../../shared/postgresCreateTable';
+  type PostgresColumnDefault, type PostgresColumnGeneration, type PostgresColumnType, type PostgresCreateColumn } from '../../shared/postgresCreateTable';
 import { postgresColumnEditZh as text } from '../locales/postgresColumnEdit.zh-CN';
 import { errorMessage, invoke } from '../lib';
 import { usePostgresStructureEdit, type PostgresStructureEditProps } from './usePostgresStructureEdit';
 import { ErrorBox } from './ui';
 import { PostgresColumnDefaultFields } from './PostgresColumnDefaultFields';
+import { PostgresColumnGenerationFields, PostgresGenerationExpression } from './PostgresColumnGenerationFields';
 
 /** 在原结构视图中编辑结构化草稿，输入、预览和实际提交分别锁定。 */
 export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
@@ -19,23 +20,35 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
   const [length, setLength] = useState(''), [precision, setPrecision] = useState(''), [scale, setScale] = useState('');
   const [nullable, setNullable] = useState(true), [comment, setComment] = useState('');
   const [defaultValue, setDefaultValue] = useState<PostgresColumnDefault>({ mode: 'none' });
+  const [generation, setGeneration] = useState<PostgresColumnGeneration>();
+  const [generationDraft, setGenerationDraft] = useState<string>();
+  const [removeGeneration, setRemoveGeneration] = useState(false);
   const [replacement, setReplacement] = useState<{ field: string; value: PostgresColumnDefault }>();
   const fields = useMemo(() => changes.length
     ? postgresColumnPlan(original, { ...target, editStamp: original.editStamp!, changes }).fields
     : original.columns.map(field => ({ name: field.name, type: field.type, identity: !!field.identity,
-      generated: !!field.generation, defaultExpression: field.defaultExpression })), [original, target, changes]);
-  const selected = fields.find(field => field.name === from) ?? fields[0];
+      generation: field.generation, generationExpression: field.generationExpression,
+      defaultExpression: field.defaultExpression })), [original, target, changes]);
+  const version = original.serverVersion ?? 0;
+  const generatedFields = fields.filter(field => field.generation && (version >= 170000 || (version >= 130000 && field.generation === 's')));
+  const candidates = kind === 'generation' ? generatedFields : fields;
+  const selected = candidates.find(field => field.name === from) ?? candidates[0];
   const old = selected?.name ?? '';
   const replacementValue = replacement?.field === old ? replacement?.value : undefined;
-  const canSetDefault = !!selected && !selected.identity && !selected.generated;
+  const canSetDefault = !!selected && !selected.identity && !selected.generation;
+  const canRemoveGeneration = selected?.generation === 's' && version >= 130000;
+  const removingGeneration = canRemoveGeneration && (removeGeneration || version < 170000);
+  const generationText = generationDraft ?? selected?.generationExpression ?? '';
+  const unstagedGeneration = kind === 'generation' && (generationDraft !== undefined || removeGeneration);
   const needsName = kind === 'add' || kind === 'rename';
   const needsType = kind === 'add' || kind === 'type';
   const dropping = changes.some(change => change.kind === 'drop');
   const canStage = (!needsName || !!name) && (!needsType || !!type) && (kind === 'add' || !!old) &&
-    (kind !== 'default' || canSetDefault && !!replacementValue);
+    (kind !== 'default' || canSetDefault && !!replacementValue) &&
+    (kind !== 'generation' || removingGeneration || (version >= 170000 && !!generationText.trim() && generationText !== selected?.generationExpression));
 
   const { preview, setPreview, acceptDrop, setAcceptDrop, busy, unknown, error, setError, operation, submit } =
-    usePostgresStructureEdit(props, !!changes.length || !!name || !!replacementValue, dropping,
+    usePostgresStructureEdit(props, !!changes.length || !!name || !!replacementValue || unstagedGeneration, dropping,
       () => invoke('postgres.columnEdit.preview', { ...target, editStamp: original.editStamp!, changes }),
       token => invoke('postgres.columnEdit.apply', { ...target, token }));
 
@@ -49,7 +62,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
         ...(type === 'numeric' && precision ? { precision: Number(precision) } : {}),
         ...(type === 'numeric' && scale ? { scale: Number(scale) } : {}) };
       const field: PostgresCreateColumn = { ...dataType, name, nullable, primary: false, unique: false, identity: 'none',
-        default: defaultValue, comment };
+        generation, default: defaultValue, comment };
       let change: PostgresColumnChange;
       switch (kind) {
         case 'add': change = { kind, field }; break;
@@ -65,6 +78,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
           break;
         }
         case 'comment': change = { kind, from: old, value: comment || null }; break;
+        case 'generation': change = { kind, from: old, expression: removingGeneration ? null : generationText }; break;
         case 'drop': change = { kind, from: old }; break;
       }
       const next = [...changes, change];
@@ -73,6 +87,8 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
       setPreview(undefined);
       setName('');
       setReplacement(undefined);
+      setGenerationDraft(undefined);
+      setRemoveGeneration(false);
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -92,17 +108,22 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
           setScale('');
           setNullable(true);
           setDefaultValue({ mode: 'none' });
+          setGeneration(undefined);
+          setGenerationDraft(undefined);
+          setRemoveGeneration(false);
           setReplacement(undefined);
           setComment('');
         }}>
           {Object.entries(text.actions).map(([action, label]) =>
-            <option key={action} value={action} disabled={action !== 'add' && !fields.length}>{label}</option>)}
+            <option key={action} value={action} disabled={action === 'generation' ? !generatedFields.length : action !== 'add' && !fields.length}>{label}</option>)}
         </select></label>
         {kind !== 'add' && <label>{text.from}<select aria-label={text.from} value={old} onChange={event => {
           setFrom(event.target.value);
           setReplacement(undefined);
+          setGenerationDraft(undefined);
+          setRemoveGeneration(false);
         }}>
-          {fields.map(field => <option key={field.name}>{field.name}</option>)}
+          {candidates.map(field => <option key={field.name}>{field.name}</option>)}
         </select></label>}
         {needsName && <label>{text.name}<input value={name} onChange={event => setName(event.target.value)}/></label>}
         {needsType && <>
@@ -125,15 +146,34 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
           <label>{text.comment}<input value={comment} onChange={event => setComment(event.target.value)}/></label>}
         {(kind === 'add' || kind === 'nullable') &&
           <label><input type="checkbox" checked={nullable} onChange={event => setNullable(event.target.checked)}/> {text.nullable}</label>}
-        {kind === 'add' && <PostgresColumnDefaultFields type={type} value={defaultValue} onChange={setDefaultValue}/>}
+        {kind === 'add' && !generation && <PostgresColumnDefaultFields type={type} value={defaultValue} onChange={setDefaultValue}/>}
+        {kind === 'add' && version >= 120000 && <PostgresColumnGenerationFields value={generation} allowVirtual={version >= 180000}
+          onChange={next => {
+            setGeneration(next);
+            if (next) setDefaultValue({ mode: 'none' });
+          }}/>}
         {kind === 'default' && canSetDefault && <PostgresColumnDefaultFields type={selected.type} value={replacementValue}
           onChange={value => setReplacement({ field: old, value })} removeLabel={text.removeDefault}/>}
+        {kind === 'generation' && selected && <>
+          <label>{text.generationAction}<select aria-label={text.generationAction}
+            value={removingGeneration ? 'remove' : 'replace'} onChange={event => {
+              setGenerationDraft(undefined);
+              setRemoveGeneration(event.target.value === 'remove');
+            }}>
+            {version >= 170000 && <option value="replace">{text.replaceGeneration}</option>}
+            {canRemoveGeneration && <option value="remove">{text.removeGeneration}</option>}
+          </select></label>
+          {!removingGeneration && <PostgresGenerationExpression value={generationText} onChange={setGenerationDraft}/>}
+        </>}
       </div>
       {kind === 'type' && <p>{text.typeNote}</p>}
       {kind === 'default' && (canSetDefault
         ? <p className="pg-column-default-expression">{text.existingDefault} <code>{selected.defaultExpression ?? text.noDefault}</code></p>
         : <p>{text.defaultUnavailable}</p>)}
       {kind === 'comment' && !comment && <p>{text.clearComment}</p>}
+      {kind === 'generation' && removingGeneration && <p>{text.preserveGeneratedValues}</p>}
+      {(kind === 'add' && generation?.mode === 'stored' ||
+        kind === 'generation' && selected?.generation === 's' && !removingGeneration) && <p>{text.rewriteGeneration}</p>}
       <button disabled={!canStage || changes.length >= 16} onClick={stage}>{text.stage}</button>
     </fieldset>
     {!!changes.length && <ol aria-label={text.draft}>{changes.map((change, index) =>
@@ -145,7 +185,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
     </label>}
     <div className="pg-column-edit-actions">
       <button disabled={busy || unknown || !changes.length} onClick={() => { setPreview(undefined); setChanges(changes.slice(0, -1)); }}>{text.undo}</button>
-      <button disabled={busy || unknown || !changes.length || needsName && !!name || !!replacementValue || !!preview} onClick={() => void submit(false)}>{text.preview}</button>
+      <button disabled={busy || unknown || !changes.length || needsName && !!name || !!replacementValue || unstagedGeneration || !!preview} onClick={() => void submit(false)}>{text.preview}</button>
       <button disabled={busy || unknown || !preview || dropping && !acceptDrop} onClick={() => void submit(true)}>{text.apply}</button>
       <button disabled={busy} onClick={onClose}>{text.close}</button>
     </div>

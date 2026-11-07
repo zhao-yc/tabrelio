@@ -320,6 +320,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 新建 PostgreSQL 表或在「查看结构 → 编辑字段」新增字段时，可为日期、时间戳和 UUID 字段选用相应的服务器默认值。已有普通字段可在「修改默认值」查看当前表达式、改用预设或文字值，也可清除默认值。UUID v4 需要 PostgreSQL 13+，v7 需要 18+。[PostgreSQL 字段默认值](development/postgres-default-presets-20261108.md)
 
+新建 PostgreSQL 表或从「查看结构 → 编辑字段」新增字段时，可选择存储生成或虚拟生成并输入表达式。已有生成列可在「编辑生成列」加载并修改表达式，存储生成列还可保留原值转为普通列。界面和预览会按服务器版本核对可用操作。[PostgreSQL 生成列](development/postgres-generated-columns-20261108.md)
+
 在「查看结构 → 管理标识列」可为已有整数列启用标识属性、切换 ALWAYS 与 BY DEFAULT、重启序列或移除标识属性。[PostgreSQL 标识列管理](development/postgres-table-manage-20261108.md#管理标识列)
 
 在「查看结构 → 索引 → 编辑索引」可创建、重命名和删除 PostgreSQL 独立索引。先选择索引方法及键列，再将多项改动加入同一份预览。删除需额外确认，主键、约束和复制标识索引会排除在候选之外。详见[PostgreSQL 普通表索引编辑](development/postgres-index-edit-20261105.md)。

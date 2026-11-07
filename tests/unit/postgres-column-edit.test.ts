@@ -65,4 +65,21 @@ describe('PostgreSQL 已有表字段修改', () => {
     expect(clear.presets).toEqual(['timeOrderedUuid']);
     expect(matchesPostgresColumnPlan([uuid], clear.columns)).toBe(true);
   });
+
+  it('按服务器版本和生成方式开放替换与转普通列', () => {
+    const generated = { ...source.columns[0], generation: 's' as const, generationExpression: "'原值'::text" };
+    const supported = { ...source, serverVersion: 180000, columns: [generated] };
+    const replace = { kind: 'generation', from: 'old', expression: "'新值' -- 保留尾注" } as const;
+    const remove = { ...replace, expression: null };
+    expect(() => postgresColumnPlan({ ...supported, serverVersion: 160000 }, { ...target, changes: [replace] })).toThrow('PostgreSQL 17');
+    expect(() => postgresColumnPlan({ ...supported, serverVersion: 120000 }, { ...target, changes: [remove] })).toThrow('PostgreSQL 13');
+    expect(() => postgresColumnPlan({ ...supported, columns: [{ ...generated, generation: 'v' }] },
+      { ...target, changes: [remove] })).toThrow('存储生成列');
+    const plan = postgresColumnPlan(supported, { ...target, changes: [replace, remove] });
+    expect(plan.usesGeneration).toBe(true);
+    expect(plan.statements[0]).toContain("SET EXPRESSION AS (\n'新值' -- 保留尾注\n)");
+    expect(plan.statements[1]).toContain('DROP EXPRESSION');
+    expect(matchesPostgresColumnPlan([generated], plan.columns)).toBe(false);
+    expect(matchesPostgresColumnPlan(source.columns, plan.columns)).toBe(true);
+  });
 });

@@ -3,7 +3,7 @@ import type { PostgresColumnChange } from '../../shared/postgresColumnEdit';
 
 const actions = {
   add: '新增字段', rename: '重命名字段', type: '修改数据类型', nullable: '修改空值约束',
-  default: '修改默认值', comment: '修改注释', drop: '删除字段',
+  default: '修改默认值', generation: '编辑生成列', comment: '修改注释', drop: '删除字段',
 } as const;
 
 /** 草稿摘要区分设置和清除，显示实际将影响的字段。 */
@@ -14,6 +14,7 @@ function modifying(change: Exclude<PostgresColumnChange, { kind: 'add' | 'rename
     case 'nullable': return field + (change.nullable ? ' → 允许空值' : ' → 禁止空值');
     case 'default': return (change.value === null ? '清除默认值 ' : '设置文字默认值 ') + field;
     case 'defaultPreset': return field + ' → ' + postgresDefaultPresetSql[change.preset];
+    case 'generation': return (change.expression === null ? '转为普通列 ' : '修改生成表达式 ') + field;
     case 'comment': return (change.value === null ? '清除注释 ' : '设置注释 ') + field;
     case 'drop': return '删除 ' + field;
   }
@@ -25,6 +26,9 @@ export const postgresColumnEditZh = {
   nullable: '允许空值', comment: '字段注释',
   existingDefault: '当前表达式', noDefault: '未设置', removeDefault: '清除默认值',
   defaultUnavailable: '标识列和生成列由 PostgreSQL 管理，不能修改普通默认值。',
+  generationAction: '生成列操作', replaceGeneration: '修改生成表达式', removeGeneration: '转为普通列',
+  rewriteGeneration: '存储生成列可能重写已有行并锁定表。请先核对表达式和预览。',
+  preserveGeneratedValues: '保留已计算的值，之后按普通字段写入。',
   chooseType: '选择目标类型', typeNote: '由 PostgreSQL 转换已有值和默认值。转换或约束检查失败时，整批回滚。',
   clearComment: '注释留空会清除所选字段的注释。',
   confirmDrop: '确认删除预览中的字段及其数据。本表内引用这些字段的索引和约束也可能被 PostgreSQL 删除。',
