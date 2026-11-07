@@ -1161,6 +1161,8 @@ export class PostgresEngine {
       case 'postgres.createView.apply':
       case 'postgres.editView.preview':
       case 'postgres.editView.apply':
+      case 'postgres.tableManage.preview':
+      case 'postgres.tableManage.apply':
       case 'postgres.viewManage.preview':
       case 'postgres.viewManage.apply':
       case 'postgres.materializedRefresh.preview':
@@ -1188,6 +1190,13 @@ export class PostgresEngine {
           throw Error('请明确确认 PostgreSQL 表复制');
         if (command === 'postgres.createView.preview') return this.creations.prepareView(input as Parameters<PostgresCreateTableWorkspace['prepareView']>[0], connect);
         if (command === 'postgres.editView.preview') return this.creations.prepareViewEdit(input as Parameters<PostgresCreateTableWorkspace['prepareViewEdit']>[0], connect);
+        if (command === 'postgres.tableManage.preview' || command === 'postgres.tableManage.apply') {
+          const { profile: _profile, ...draft } = input;
+          if (command === 'postgres.tableManage.preview')
+            return this.creations.prepareTableManage(draft as Parameters<PostgresCreateTableWorkspace['prepareTableManage']>[0], connect);
+          if (draft.confirmed !== true) throw Error('请明确确认 PostgreSQL 表管理操作');
+          return this.creations.apply(draft as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect, 'tableManage');
+        }
         if (command === 'postgres.viewManage.preview') return this.creations.prepareViewManage(input as Parameters<PostgresCreateTableWorkspace['prepareViewManage']>[0], connect);
         if (command === 'postgres.materializedRefresh.preview') return this.creations.prepareMaterializedRefresh(input as Parameters<PostgresCreateTableWorkspace['prepareMaterializedRefresh']>[0], connect);
         if (command === 'postgres.sequence.preview') return this.creations.prepareSequence(input as Parameters<PostgresCreateTableWorkspace['prepareSequence']>[0], connect);

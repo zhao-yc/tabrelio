@@ -1,7 +1,7 @@
 import { postgresSequenceEditPlan, postgresSequenceManageSchema, postgresSequencePlan, type PostgresSequenceCreateInput,
   type PostgresSequenceManageInput } from '../../shared/postgresSequence';
 import { postgresSequenceTargets, readPostgresSequence, readPostgresSequenceAllocation } from './sequence';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   postgresCreateTablePlan, type PostgresCreateTableApply, type PostgresCreateTableInput,
   type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget,
@@ -19,10 +19,12 @@ import { postgresRoutineCreateSchema, postgresRoutineManageSchema, type Postgres
 import { compilePostgresRoutineManage } from './routine';
 import { postgresTableCopyPreviewSchema, type PostgresTableCopyInput } from '../../shared/postgresTableCopy';
 import { postgresTableCopySql, readPostgresCopyColumns, readPostgresCopySource } from './tableCopy';
+import { postgresTableManagePreviewSchema, type PostgresTableManageInput } from '../../shared/postgresTableManage';
+import { readPostgresTableManageFacts } from './tableManage';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'tableCopy' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
+type RelationKind = 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
@@ -31,7 +33,8 @@ interface Plan {
   verify(connection: PostgresConnection, schemaOid: string, insertedRows?: number): Promise<void>;
   protocol?: 'extended';
   success: string;
-  guard?: { sql: string; stamp: string; parseOnly?: true };
+  guard?: { sql: string; stamp: string; parseOnly?: true; changed?: string };
+  identity?: string;
   statementTimeout?: '120s';
   firstCommand?: 'SELECT';
   lock?: string;
@@ -379,6 +382,57 @@ export class PostgresCreateTableWorkspace {
     });
   }
 
+  /** 解析只读语句固定原表，服务端 DDL 再获取写锁，提交前核对原 OID。 */
+  async prepareTableManage(input: Scoped<PostgresTableManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+    const draft = postgresTableManagePreviewSchema.parse(raw);
+    const { schema, name } = postgresRelationName(draft.table);
+    const prefix = postgresIdentifier(schema) + '.', originalTable = prefix + postgresIdentifier(name);
+    const changed = '原表或管理权限已变化，请刷新结构后继续';
+    const checkDestination = (connection: PostgresConnection, newName: string) =>
+      preflight(connection, { ...draft, schema }, newName, [], '表');
+    return this.prepareRelation(input, 'tableManage', connect, () => async connection => {
+      const original = await readPostgresTableManageFacts(connection, schema, name);
+      if (connection.database !== draft.database || original.stamp !== draft.stamp || !original[draft.action]) throw Error(changed);
+      const base = {
+        // Parse / Sync 持有原关系的共享锁，既不读数据，也不要求 schema 所有者拥有表的 SELECT。
+        guard: { sql: 'SELECT 1 FROM ONLY ' + originalTable + ' WHERE FALSE', stamp: original.stamp, parseOnly: true as const, changed },
+        protocol: 'extended' as const,
+        async preflight(current: PostgresConnection) {
+          const actual = await readPostgresTableManageFacts(current, schema, name);
+          if (actual.stamp !== original.stamp) throw Error(changed);
+          if (draft.action === 'rename' && await checkDestination(current, draft.name) !== original.namespace) throw Error(changed);
+          return actual.stamp;
+        },
+      };
+      if (draft.action === 'rename') {
+        if (draft.name === name) throw Error('请输入不同的表名');
+        if (await checkDestination(connection, draft.name) !== original.namespace) throw Error(changed);
+        const identifier = postgresIdentifier(draft.name);
+        return {
+          ...base, table: prefix + identifier, success: 'PostgreSQL 表已确认重命名',
+          identity: createHash('sha256').update(JSON.stringify([draft.database, original.namespace, original.oid])).digest('hex'),
+          statements: ['ALTER TABLE ' + originalTable + ' RENAME TO ' + identifier],
+          async verify(current) {
+            if ((await readPostgresTableManageFacts(current, schema, draft.name)).stamp !== original.stamp)
+              throw Error('未确认重命名后的关系为原表');
+          },
+        };
+      }
+      return {
+        ...base, table: originalTable, success: 'PostgreSQL 表已确认删除',
+        statements: ['DROP TABLE ' + originalTable + ' RESTRICT'],
+        async verify(current) {
+          const result = await current.query(`SELECT EXISTS (SELECT FROM pg_catalog.pg_class c
+            WHERE c.oid=$1::oid OR (c.relnamespace=$2::oid AND c.relname::text COLLATE pg_catalog."C"=$3))`,
+          [original.oid, original.namespace, name], budget());
+          if (result.truncated || result.rows.length !== 1 || result.rows[0].c0 !== 'f')
+            throw Error('未确认原表已从目录删除');
+        },
+      };
+    });
+  }
+
   /** 重命名与受限删除绑定原视图身份，并在提交前复核实际目录。 */
   async prepareViewManage(input: Scoped<PostgresViewManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'viewManage', connect, () => {
@@ -522,7 +576,7 @@ export class PostgresCreateTableWorkspace {
         }
       }
       if (await plan.preflight(connection) !== targetStamp)
-        throw Error(plan.guard ? '原视图已变化，请刷新结构后继续' : '原 schema 已被替换，请重新预览');
+        throw Error(plan.guard ? plan.guard.changed ?? '原视图已变化，请刷新结构后继续' : '原 schema 已被替换，请重新预览');
       if (plan.statementTimeout) await connection.query(
         "SELECT pg_catalog.set_config('statement_timeout', $1, true)", [plan.statementTimeout], budget());
       let insertedRows: number | undefined;
@@ -544,6 +598,7 @@ export class PostgresCreateTableWorkspace {
         throw Error('PostgreSQL 结构提交未确认');
       }
       return { outcome: 'committed', table: prepared.plan.table, message: prepared.plan.success,
+        ...(plan.identity ? { identity: plan.identity } : {}),
         ...(insertedRows === undefined ? {} : { copiedRows: String(insertedRows) }) };
     } catch (reason) {
       const message = connection.error(reason).message;

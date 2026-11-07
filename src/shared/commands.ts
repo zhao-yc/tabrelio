@@ -25,6 +25,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.createTable.copy.preview': true, 'postgres.createTable.copy.apply': true,
   'postgres.createView.preview': true, 'postgres.createView.apply': true,
   'postgres.editView.preview': true, 'postgres.editView.apply': true,
+  'postgres.tableManage.preview': true, 'postgres.tableManage.apply': true,
   'postgres.viewManage.preview': true, 'postgres.viewManage.apply': true,
   'postgres.materializedRefresh.preview': true, 'postgres.materializedRefresh.apply': true,
   'postgres.sequence.read': true, 'postgres.sequence.preview': true, 'postgres.sequence.apply': true,

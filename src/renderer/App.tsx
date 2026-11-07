@@ -13,6 +13,7 @@ import { PostgresCreateRoutineDialog } from './components/PostgresCreateRoutineD
 import { PostgresRoutineDialog } from './components/PostgresRoutineDialog';
 import { PostgresCreateSequenceDialog, PostgresSequenceDialog } from './components/PostgresSequenceDialog';
 import type { PostgresCreateViewKind } from '../shared/postgresCreateView';
+import { postgresColumnEditZh } from './locales/postgresColumnEdit.zh-CN';
 import { postgresViewManageZh } from './locales/postgresViewManage.zh-CN';
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
 import { PostgresCreateTableDialog } from './components/PostgresCreateTableDialog';
@@ -875,33 +876,70 @@ function WorkspaceApp() {
         markStructureTarget({ ...target, table: tab.table }, true);
     }
   }
-  /** 只在服务端确认后关闭旧视图标签；改名以新标签身份读取，不改写查询正文。 */
-  function finishPostgresViewManage(target: TableColumnPatchTarget, message: string, unknown: boolean, version: number, destination?: string) {
+  function postgresManagedTabs(workspace: ReturnType<typeof useWorkspace.getState>, target: TableColumnPatchTarget) {
+    const original = postgresRelationName(target.table);
+    return workspace.settings.tabs.filter(tab => {
+      if (tab.kind !== 'table' || !tab.table || tab.connectionId !== target.connectionId || (tab.database || 'postgres') !== target.database) return false;
+      const relation = postgresRelationName(tab.table);
+      return relation.schema === original.schema && relation.name === original.name;
+    });
+  }
+  function postgresManageTabBusy(workspace: ReturnType<typeof useWorkspace.getState>, id: string) {
+    return workspace.dirtyTabs[id] || workspace.activeJobs[id] || workspace.tableLayoutDrafts[id];
+  }
+  /** 提交前保护原名和拟用名称下的隐藏草稿，并作废仍在解析的旧导航。 */
+  function beforePostgresTableManage(target: TableColumnPatchTarget, destination?: string) {
+    const workspace = useWorkspace.getState();
+    const tabs = [...postgresManagedTabs(workspace, target),
+      ...(destination ? postgresManagedTabs(workspace, { ...target, table: destination }) : [])];
+    if (tabs.some(tab => postgresManageTabBusy(workspace, tab.id))) throw Error(postgresColumnEditZh.dirty);
+    workbenchNavigation.invalidate();
+  }
+  /** 确认后才关闭准确的旧标签。未知终态保留工作区草稿和查询正文。 */
+  function finishPostgresRelationManage(target: TableColumnPatchTarget, message: string, unknown: boolean, version: number,
+    kind: 'table' | 'view', destination?: string, identity?: string) {
     const workspace = useWorkspace.getState();
     workspace.notify(message, unknown);
     if ((workspace.connectionVersions[target.connectionId] ?? 0) !== version ||
         workspace.connections.find(profile => profile.id === target.connectionId)?.dialect !== 'postgresql') return;
     const original = postgresRelationName(target.table);
     const name = postgresIdentifier(original.schema) + '.' + postgresIdentifier(original.name);
+    const before = { ...target, table: name };
+    const after = destination && destination !== name ? { ...target, table: destination } : undefined;
     refreshRenameDatabase(target);
-    workbenchNavigation.retireObject({ ...target, kind: 'view', name }, true);
+    if (kind === 'view') workbenchNavigation.retireObject({ ...target, kind: 'view', name }, true);
+    else if (!unknown && after && identity) {
+      const reusable = workbenchNavigation.completeTableRename(before, after, identity);
+      if (reusable) {
+        const favorites = useWorkbench.getState();
+        if (!favorites.ready || favorites.busy) workspace.notify(tableRenameZh.favoritesPending, true);
+        else {
+          const plan = reconcileTableRenameFavorites(favorites.snapshot.document, before, after);
+          if (plan.conflict) workspace.notify(tableRenameZh.favoritesPending, true);
+          else if (plan.changed) void favorites.save(plan.document).then(saved => {
+            if (!saved) workspace.notify(tableRenameZh.favoritesPending, true);
+          }).catch(() => workspace.notify(tableRenameZh.favoritesPending, true));
+        }
+      } else workspace.notify(tableRenameZh.ambiguousLink, true);
+    } else {
+      workbenchNavigation.retireTable(before);
+      if (after) workbenchNavigation.retireTable(after);
+    }
+    const sourceTabs = postgresManagedTabs(workspace, before);
+    const destinationTabs = kind === 'table' && after ? postgresManagedTabs(workspace, after) : [];
     if (unknown || !destination) {
-      markStructureTarget(target, false);
+      for (const tab of [...sourceTabs, ...destinationTabs]) if (!postgresManageTabBusy(workspace, tab.id))
+        markStructureTarget({ ...target, table: tab.table! }, false);
       return;
     }
     let retained = false;
-    for (const tab of workspace.settings.tabs) {
-      if (tab.kind !== 'table' || !tab.table || tab.connectionId !== target.connectionId || (tab.database || 'postgres') !== target.database) continue;
-      const relation = postgresRelationName(tab.table);
-      if (relation.schema !== original.schema || relation.name !== original.name) continue;
-      if (workspace.dirtyTabs[tab.id] || workspace.activeJobs[tab.id] || workspace.tableLayoutDrafts[tab.id]) {
-        retained = true;
-        markStructureTarget({ ...target, table: tab.table }, false);
-      } else workspace.closeTab(tab.id);
+    for (const tab of [...sourceTabs, ...destinationTabs]) {
+      if (postgresManageTabBusy(workspace, tab.id)) retained = true;
+      else workspace.closeTab(tab.id);
     }
-    if (destination !== name) {
-      finishPostgresColumnEdit({ ...target, table: destination }, message, false, version);
-      workspace.openTab({ kind: 'table', connectionId: target.connectionId, database: target.database, table: destination, title: destination });
+    if (after && !destinationTabs.some(tab => postgresManageTabBusy(workspace, tab.id))) {
+      if (kind === 'view') finishPostgresColumnEdit(after, message, false, version);
+      workspace.openTab({ kind: 'table', ...after, title: after.table });
     }
     if (retained) workspace.notify(message + '。' + postgresViewManageZh.retainedTab, true);
   }
@@ -1186,7 +1224,7 @@ function WorkspaceApp() {
         if (action === 'rename') setDdl({ ...ddl, object: { kind: 'sequence', name } });
         if (action === 'drop' || action === 'owner') setDdl(null);
       }}
-      onClose={() => setDdl(null)}/> : <PostgresStructureDialog key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])} target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }} readOnly={ddl.readOnly} searchFocus={ddl.structureSearchFocus} onDirtyChange={setColumnEdits} onEdited={finishPostgresColumnEdit} onManaged={finishPostgresViewManage} onClose={() => setDdl(null)}/> : <DdlDialog {...ddl} onDirtyChange={setDatabaseCreateEdits} onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {transfer && <TransferDialog {...transfer} onClose={() => setTransfer(null)}/>}{importNewTable && <ImportNewTableDialog {...importNewTable} onSqliteCreated={finishSqliteImportNewTableCreate} onPostgresCreated={(table, version, message) => finishPostgresTableCreate(importNewTable, table, version, message, false)} onCreated={finishTableCreate} onDirtyChange={setImportNewTableEdits} onClose={() => { setImportNewTable(null); setImportNewTableEdits(false); }}/>}
+      onClose={() => setDdl(null)}/> : <PostgresStructureDialog key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])} target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }} readOnly={ddl.readOnly} searchFocus={ddl.structureSearchFocus} onDirtyChange={setColumnEdits} onEdited={finishPostgresColumnEdit} beforeTableManage={beforePostgresTableManage} onManaged={finishPostgresRelationManage} onClose={() => setDdl(null)}/> : <DdlDialog {...ddl} onDirtyChange={setDatabaseCreateEdits} onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {transfer && <TransferDialog {...transfer} onClose={() => setTransfer(null)}/>}{importNewTable && <ImportNewTableDialog {...importNewTable} onSqliteCreated={finishSqliteImportNewTableCreate} onPostgresCreated={(table, version, message) => finishPostgresTableCreate(importNewTable, table, version, message, false)} onCreated={finishTableCreate} onDirtyChange={setImportNewTableEdits} onClose={() => { setImportNewTable(null); setImportNewTableEdits(false); }}/>}
     {objectPicker && <ObjectDatabasePicker connections={connections} preferredConnectionId={state.selection?.connectionId} onClose={() => setObjectPicker(null)} onOpen={(connectionId, database) => openObjectBrowser(objectPicker, { connectionId, database })}/>}
     {editorIndentPreferences && <EditorIndentPreferencesDialog onClose={() => { workbenchNavigation.invalidate(); setEditorIndentPreferences(false); }}/>}
     {navigationHelp && <Modal title={navigationHelp === 'usage' ? navigationZh.helpTitle : navigationZh.shortcutsTitle} onClose={() => setNavigationHelp(null)}><div className="modal-content">{navigationHelp === 'usage' ? navigationZh.help.map(line => <p key={line}>{line}</p>) : <table><tbody>{navigationZh.shortcuts.map(([label, keys]) => <tr key={label}><td>{label}</td><td><kbd>{keys}</kbd></td></tr>)}</tbody></table>}</div></Modal>}

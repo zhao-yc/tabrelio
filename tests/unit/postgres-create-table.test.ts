@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { postgresCreateTablePlan, postgresCreateTablePreviewSchema, type PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
 import { splitPostgresSql } from '../../src/shared/postgresSql';
+import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from '../../src/shared/postgresTableManage';
 
 const draft: PostgresCreateTableInput = {
   connectionId: '原连接', database: '原库', schema: '业务"区', table: '新"表', comment: "注释'；\\",
@@ -23,4 +24,16 @@ describe('PostgreSQL 建表计划', () => {
     expect(postgresCreateTablePreviewSchema.safeParse({ ...draft, columns: [{ ...draft.columns[0], identity: 'always' }] }).success).toBe(false);
     expect(postgresCreateTablePreviewSchema.safeParse({ ...draft, columns: [{ ...draft.columns[0], type: 'numeric', precision: 2, scale: 3 }] }).success).toBe(false);
   });
+});
+
+it('PostgreSQL 表管理绑定目录摘要，删除和执行都拒绝额外 SQL', () => {
+  const target = { connectionId: 'saved', database: 'qa', table: '"public"."原表"', stamp: 'f'.repeat(64) };
+  expect(postgresTableManagePreviewSchema.parse({ ...target, action: 'rename', name: '新"表' }).action).toBe('rename');
+  for (const input of [{ ...target, action: 'drop', cascade: true }, { ...target, action: 'drop', name: 'x' },
+    { ...target, action: 'rename', name: '长'.repeat(22) }, { ...target, action: 'drop', stamp: 'bad' }])
+    expect(postgresTableManagePreviewSchema.safeParse(input).success).toBe(false);
+  const apply = { connectionId: target.connectionId, database: target.database, token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true };
+  expect(postgresTableManageApplySchema.parse(apply)).toEqual(apply);
+  expect(postgresTableManageApplySchema.safeParse({ ...apply, confirmed: false }).success).toBe(false);
+  expect(postgresTableManageApplySchema.safeParse({ ...apply, sql: 'DROP TABLE x' }).success).toBe(false);
 });

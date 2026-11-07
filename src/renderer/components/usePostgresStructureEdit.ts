@@ -11,14 +11,15 @@ export interface PostgresStructureEditProps {
   original: PostgresStructureResult;
   version: number;
   onClose(): void;
-  onResult(message: string, unknown: boolean, receipt?: PostgresCreateTableOutcome): void;
+  onResult(message: string, unknown: boolean, receipt?: PostgresCreateTableOutcome, attempted?: string): void;
+  beforeManage?(destination?: string): void;
   onDirtyChange(value: boolean): void;
 }
 
 /** 字段和索引共用原目标保护、单次提交、未知终态和窗口草稿状态。 */
 export function usePostgresStructureEdit({ target, original, version, onResult, onDirtyChange }: PostgresStructureEditProps,
   dirty: boolean, dropping: boolean, readPreview: () => Promise<PostgresCreateTablePreview>,
-  applyPreview: (token: string) => Promise<PostgresCreateTableOutcome>) {
+  applyPreview: (token: string) => Promise<PostgresCreateTableOutcome>, beforeApply?: () => void) {
   const [preview, setPreview] = useState<PostgresCreateTablePreview>();
   const [acceptDrop, setAcceptDrop] = useState(false);
   const [busy, setBusy] = useState(false), [unknown, setUnknown] = useState(false), [error, setError] = useState('');
@@ -48,6 +49,7 @@ export function usePostgresStructureEdit({ target, original, version, onResult, 
     let sent = false;
     try {
       assertCurrent();
+      if (apply) beforeApply?.();
       setPreview(undefined);
       if (!apply) {
         setAcceptDrop(false);

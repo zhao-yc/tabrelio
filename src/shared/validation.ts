@@ -32,6 +32,7 @@ import { postgresIndexPreviewSchema, postgresIndexApplySchema } from './postgres
 import { postgresColumnPreviewSchema, postgresColumnApplySchema } from './postgresColumnEdit';
 import { postgresCompletionSchema } from './postgresCompletion';
 import { postgresMaterializedRefreshSchema } from './postgresMaterializedView';
+import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from './postgresTableManage';
 import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema } from './postgresCreateView';
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresTableCopyApplySchema, postgresTableCopyPreviewSchema } from './postgresTableCopy';
@@ -284,6 +285,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.createView.apply': postgresCreateTableApplySchema,
   'postgres.editView.preview': postgresEditViewPreviewSchema,
   'postgres.editView.apply': postgresCreateTableApplySchema,
+  'postgres.tableManage.preview': postgresTableManagePreviewSchema,
+  'postgres.tableManage.apply': postgresTableManageApplySchema,
   'postgres.viewManage.preview': postgresViewManagePreviewSchema,
   'postgres.viewManage.apply': postgresCreateTableApplySchema,
   'postgres.materializedRefresh.preview': postgresMaterializedRefreshSchema,

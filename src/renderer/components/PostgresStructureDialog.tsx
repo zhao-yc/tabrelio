@@ -8,7 +8,8 @@ import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { PostgresMaterializedRefreshPanel } from './PostgresMaterializedRefreshPanel';
 import { postgresMaterializedRefreshZh as refreshText } from '../locales/postgresMaterializedRefresh.zh-CN';
-import { PostgresViewManagePanel } from './PostgresViewManagePanel';
+import { PostgresRelationManagePanel } from './PostgresRelationManagePanel';
+import { postgresTableManageZh } from '../locales/postgresTableManage.zh-CN';
 import { postgresViewManageZh } from '../locales/postgresViewManage.zh-CN';
 import { PostgresViewEditPanel } from './PostgresViewEditPanel';
 import { postgresViewEditZh } from '../locales/postgresViewEdit.zh-CN';
@@ -31,7 +32,7 @@ type Section = keyof typeof text.sections;
 export interface PostgresStructureSearchFocus { section: Section; name?: string; }
 const editors = {
   materialized: { Panel: PostgresMaterializedRefreshPanel, label: refreshText.title },
-  manage: { Panel: PostgresViewManagePanel, label: postgresViewManageZh.title },
+  manage: { Panel: PostgresRelationManagePanel, label: postgresViewManageZh.title },
   definition: { Panel: PostgresViewEditPanel, label: postgresViewEditZh.title },
   columns: { Panel: PostgresColumnEditPanel, label: postgresColumnEditZh.open },
   indexes: { Panel: PostgresIndexEditPanel, label: postgresIndexEditZh.open },
@@ -49,9 +50,10 @@ function CatalogTable({ headers, children, empty }: { headers: readonly string[]
 }
 
 /** 在原窗口、连接修订和关系目标下读取结构，刷新、关闭及切换来源废弃迟到回包。 */
-export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged }: {
+export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged, beforeTableManage }: {
   target: PostgresStructureInput; readOnly?: boolean; searchFocus?: PostgresStructureSearchFocus; onClose(): void; onDirtyChange(value: boolean): void;
-  onManaged(target: PostgresStructureInput, message: string, unknown: boolean, version: number, destination?: string): void;
+  beforeTableManage(target: PostgresStructureInput, destination?: string): void;
+  onManaged(target: PostgresStructureInput, message: string, unknown: boolean, version: number, kind: 'table' | 'view', destination?: string, identity?: string): void;
   onEdited(target: PostgresStructureInput, message: string, unknown: boolean, version: number): void;
 }) {
   const version = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
@@ -103,7 +105,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const sections: Section[] = output?.viewDefinition ? ['columns', 'constraints', 'indexes', 'definition'] : ['columns', 'constraints', 'indexes'];
   const EditPanel = editing && editors[editing].Panel;
   const indexStamp = output && postgresIndexEditStamp(output);
-  const manageStamp = output?.materializedManageStamp ?? output?.viewEditStamp;
+  const manageStamp = output?.tableManage?.stamp ?? output?.materializedManageStamp ?? output?.viewEditStamp;
   const editStamp = editing === 'indexes' ? indexStamp : editing === 'materialized' ? output?.materialized?.stamp :
     editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp : output?.editStamp;
   if (dependencies) return <PostgresDependenciesDialog target={target} onBack={() => setDependencies(false)}/>;
@@ -114,9 +116,10 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
       {EditPanel && output && editStamp ? <EditPanel target={target} original={output} version={version}
         onDirtyChange={onDirtyChange} onClose={() => { setEditing(undefined); setAttempt(value => value + 1); }}
-        onResult={(message, unknown, receipt) => {
+        beforeManage={output.tableManage ? destination => beforeTableManage(target, destination) : undefined}
+        onResult={(message, unknown, receipt, attempted) => {
           if (editing === 'manage') {
-            onManaged(target, message, unknown, version, receipt?.table);
+            onManaged(target, message, unknown, version, output.tableManage ? 'table' : 'view', receipt?.table ?? attempted, receipt?.identity);
             if (!unknown) onClose();
             return;
           }
@@ -177,7 +180,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
       {!readOnly && output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
-      {!readOnly && manageStamp && !editing && <button onClick={() => setEditing('manage')}>{postgresViewManageZh.title}</button>}
+      {!readOnly && manageStamp && !editing && <button onClick={() => setEditing('manage')}>{output?.tableManage ? postgresTableManageZh.title : postgresViewManageZh.title}</button>}
       {!readOnly && section === 'definition' && output?.viewEditStamp && !editing && <button onClick={() => setEditing('definition')}>
         {postgresViewEditZh.title}
       </button>}
