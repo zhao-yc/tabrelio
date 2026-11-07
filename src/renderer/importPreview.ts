@@ -14,13 +14,14 @@ export interface ImportPreviewContext extends ImportPreviewTarget {
   csvHasHeader?: boolean;
 }
 export interface ImportSample { columns: string[]; rows: DataRow[]; }
-export interface ReadyImportPreview { key: string; status: 'ready'; info: TableInfo; sample: ImportSample; mapping: Record<string, string>; }
-export type ImportPreviewState = ReadyImportPreview | { key: string; status: 'loading' } | { key: string; status: 'failed'; error: string } | null;
+export interface ReadyImportPreview { key: string; status: 'ready'; info: TableInfo; sample: ImportSample; mapping: Record<string, string>; completeJson?: true; }
+export type ImportPreviewState = ReadyImportPreview | { key: string; status: 'loading'; completeJson?: true } | { key: string; status: 'failed'; error: string; completeJson?: true } | null;
 interface PreviewDependencies {
   metadata: (target: ImportPreviewTarget) => Promise<TableInfo>;
   preview: (context: ImportPreviewContext) => Promise<ImportSample>;
+  inspectJson?: (context: ImportPreviewContext, signal: AbortSignal) => Promise<ImportSample>;
 }
-export interface ImportPreviewPreparation { freshMetadata?: boolean; configuration?: ImportPresetConfiguration; initialMapping?: Readonly<Record<string,string>>; sourceColumns?: readonly string[]; }
+export interface ImportPreviewPreparation { freshMetadata?: boolean; configuration?: ImportPresetConfiguration; initialMapping?: Readonly<Record<string,string>>; sourceColumns?: readonly string[]; scanJson?: boolean; }
 
 /** 具名字段按完整集合对齐，无标题字段按原列位置；所有目标通过后才整份发布。 */
 function completeMapping(info: TableInfo, sample: ImportSample, configuration: ImportPresetConfiguration): Record<string, string> {
@@ -46,6 +47,7 @@ export function readyImportPreview(state: ImportPreviewState, context: ImportPre
 /** 协调只读元数据与文件预览，成功时一次发布样本和初始映射；从不执行或重试数据库写入。 */
 export class ImportPreviewController {
   private generation = 0;
+  private jsonScan?: AbortController;
   private state: ImportPreviewState = null;
   private readonly metadata = new Map<string, Promise<TableInfo>>();
 
@@ -54,10 +56,13 @@ export class ImportPreviewController {
 
   /** 切换上下文先失效旧请求，待当前目标元数据成功后才读取一次文件预览。 */
   async prepare(context: ImportPreviewContext | null, options: ImportPreviewPreparation = {}): Promise<void> {
-    if (context && !options.freshMetadata && !options.configuration && !options.initialMapping && !options.sourceColumns && readyImportPreview(this.state, context)) return;
-    const generation = ++this.generation;
+    if (context && !options.freshMetadata && !options.configuration && !options.initialMapping && !options.sourceColumns && !options.scanJson && readyImportPreview(this.state, context)) return;
+    this.cancel();
+    const generation = this.generation;
     if (!context) { this.update(null); return; }
-    const key = importPreviewKey(context); this.update({ key, status: 'loading' });
+    const scanJson = context.format === 'json' && !options.sourceColumns && !!(options.scanJson || options.configuration);
+    const scanScope = scanJson ? { completeJson: true as const } : {};
+    const key = importPreviewKey(context); this.update({ key, status: 'loading', ...scanScope });
     try {
       const configuration = options.configuration ? importPresetConfigurationSchema.parse(options.configuration) : undefined;
       // 来源列来自完整inspect，而不是有限样本或mapping的键；首await前独立复制以固定原准备意图。
@@ -69,7 +74,7 @@ export class ImportPreviewController {
       const info = await this.metadataFor(context, !!options.freshMetadata);
       if (generation !== this.generation) return;
       if ((configuration || initialMapping || sourceColumns) && (info.database !== context.database || info.name !== context.table)) throw Error(importPresetsZh.incompatible);
-      const limited = await this.dependencies.preview(context);
+      const limited = scanJson ? await this.inspectJson(context) : await this.dependencies.preview(context);
       if (generation !== this.generation) return;
       if (sourceColumns && limited.columns.some(name => !sourceColumns.includes(name))) throw Error(importPresetsZh.incompatible);
       const sample = sourceColumns ? { ...limited, columns: sourceColumns } : limited;
@@ -77,14 +82,22 @@ export class ImportPreviewController {
       // 无标题CSV的源键仅表示列位置，即便目标恰好也叫“第1列”仍必须人工映射。
       const automatic = context.format !== 'csv' || csvImportHasHeader(context.format, context.csvHasHeader);
       const mapping = configuration ? completeMapping(info, sample, configuration) : Object.fromEntries(sample.columns.map(name => [name, initialMapping !== undefined ? Object.hasOwn(initialMapping,name) && targets.has(initialMapping[name]) ? initialMapping[name] : '' : automatic && targets.has(name) ? name : '']));
-      this.update({ key, status: 'ready', info, sample, mapping });
+      this.update({ key, status: 'ready', info, sample, mapping, ...scanScope });
     } catch (reason) {
-      if (generation === this.generation) this.update({ key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason) });
+      if (generation === this.generation) this.update({ key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason), ...scanScope });
     }
   }
 
-  /** 组件卸载或参数切换后丢弃迟到响应；只读请求自然结束，不触发新的网络请求。 */
-  cancel(): void { this.generation++; }
+  /** 同步失效旧读取，完整 JSON 检查额外取消原任务；样本只读请求仍可自然结束。 */
+  cancel(): void { this.generation++; this.jsonScan?.abort(); this.jsonScan = undefined; }
+
+  private async inspectJson(context: ImportPreviewContext): Promise<ImportSample> {
+    if (!this.dependencies.inspectJson) throw Error(importPresetsZh.unavailable);
+    const scan = new AbortController();
+    this.jsonScan = scan;
+    try { return await this.dependencies.inspectJson(context, scan.signal); }
+    finally { if (this.jsonScan === scan) this.jsonScan = undefined; }
+  }
 
   /** 人工映射仅更新当前已就绪的快照，不重新请求元数据或文件预览。 */
   setMapping(context: ImportPreviewContext, source: string, target: string): void {
@@ -106,8 +119,8 @@ export class ImportPreviewController {
   /** 原就绪对象与完整配置同时核验，失败撤销整份ready，绝不保留自动映射继续导入。 */
   applyMapping(context: ImportPreviewContext, expected: ReadyImportPreview, configuration: ImportPresetConfiguration): boolean {
     if (this.ready(context) !== expected) return false;
-    try { if (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions) || JSON.stringify(configuration.txtOptions) !== JSON.stringify(context.txtOptions)) throw Error(importPresetsZh.incompatible); const mapping = completeMapping(expected.info, expected.sample, configuration); this.update({ ...expected, mapping }); return true; }
-    catch (reason) { this.update({ key: expected.key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason) }); return false; }
+    try { if (context.format === 'json' && !expected.completeJson || configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions) || JSON.stringify(configuration.txtOptions) !== JSON.stringify(context.txtOptions)) throw Error(importPresetsZh.incompatible); const mapping = completeMapping(expected.info, expected.sample, configuration); this.update({ ...expected, mapping }); return true; }
+    catch (reason) { this.update({ key: expected.key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason), ...(expected.completeJson ? { completeJson: true } : {}) }); return false; }
   }
 
   /** 执行入口再次读取协调器当前快照，避免界面刚切换时引用旧样本或旧映射。 */

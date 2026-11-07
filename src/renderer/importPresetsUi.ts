@@ -5,6 +5,7 @@ import { importPresetsZh as text } from './locales/importPresets.zh-CN';
 /** 逐项白名单生成配置，不把预览行、目标连接或文件令牌带入本地存储。 */
 export function captureImportPresetConfiguration(context: ImportPreviewContext | null, ready: ReadyImportPreview | null): ImportPresetConfiguration {
   if (!context || !ready || readyImportPreview(ready, context) !== ready) throw Error(text.unavailable);
+  if (context.format === 'json' && !ready.completeJson) throw Error(text.jsonScanRequired);
   const targets = new Set(ready.info.columns.filter(column => !column.generated).map(column => column.name));
   if (Object.values(ready.mapping).some(target => target && !targets.has(target))) throw Error(text.incompatible);
   return importPresetConfigurationSchema.parse({ format: context.format, encoding: context.encoding, ...(context.format === 'csv' && context.csvDelimiter !== undefined ? { csvDelimiter: context.csvDelimiter } : {}), ...(context.format === 'csv' && context.csvHasHeader !== undefined ? { csvHasHeader: context.csvHasHeader } : {}), ...(context.format === 'xml' ? { xmlOptions: context.xmlOptions } : {}), ...(context.format === 'txt' ? { txtOptions: context.txtOptions } : {}), columns: [...ready.sample.columns], mapping: { ...ready.mapping } });

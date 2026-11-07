@@ -80,7 +80,7 @@ function configuration(input: unknown): StoredImportPresetConfiguration {
   if (!recordImportFormats.includes(format) || !['utf8', 'utf16le', 'gb18030'].includes(source.encoding as string)) return invalid();
   let units = 0;
   const columns = array(source.columns, sqlite ? sqliteTableImportLimits.sourceColumns : importPresetLimits.columns, 1).map(value => {
-    const column = string(value, sqlite && format === 'json' ? 0 : 1, sqlite ? 256 : importPresetLimits.sourceUnits); units += column.length * 2;
+    const column = string(value, format === 'json' ? 0 : 1, sqlite ? 256 : importPresetLimits.sourceUnits); units += column.length * 2;
     // 源键在columns和mapping各出现一次；先按最小字节计费，避免构造超大JSON后才拒绝。
     if (units > importPresetLimits.configurationBytes) throw Error(importPresetText.configurationBudget);
     return column;
@@ -99,7 +99,7 @@ function configuration(input: unknown): StoredImportPresetConfiguration {
     for (const column of columns) {
       const target = string(rawMapping[column], 0, importPresetLimits.targetUnits);
       units += target.length; if (units > importPresetLimits.configurationBytes) throw Error(importPresetText.configurationBudget);
-      if (target.includes('\0') || target !== '' && targets.has(target)) return invalid();
+      if (target.includes('\0') || target !== '' && (column === '' || targets.has(target))) return invalid();
       if (target !== '') targets.add(target); mapping[column] = target;
     }
     if (!targets.size) return invalid();

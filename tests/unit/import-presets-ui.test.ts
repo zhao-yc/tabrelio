@@ -25,8 +25,35 @@ describe('导入配置协调器与整份应用（纯RAM）', () => {
   });
   it('JSON配置没有任何CSV自有字段，完整映射不可重复或映射生成列', async () => {
     const json: ImportPreviewContext = { ...context, format: 'json' }; delete json.csvDelimiter; delete json.csvHasHeader;
-    const controller = new ImportPreviewController({ metadata: async () => info(), preview: async () => ({ columns: ['id', 'body'], rows: [{ id: '1', body: '内容' }] }) }, () => {}); await controller.prepare(json);
-    const captured = captureImportPresetConfiguration(json, controller.ready(json)); expect(captured).not.toHaveProperty('csvDelimiter'); expect(captured).not.toHaveProperty('csvHasHeader'); controller.setMapping(json, 'body', 'id'); expect(() => captureImportPresetConfiguration(json, controller.ready(json))).toThrow();
+    const rows = [{ id: '1', body: '内容' }];
+    const controller = new ImportPreviewController({ metadata: async () => info(), preview: async () => ({ columns: ['id', 'body'], rows }),
+      inspectJson: async () => ({ columns: ['id', 'body', '末尾字段', ''], rows }) }, () => {});
+    await controller.prepare(json);
+    expect(() => captureImportPresetConfiguration(json, controller.ready(json))).toThrow(text.jsonScanRequired);
+    await controller.prepare(json, { scanJson: true, initialMapping: {id: 'id', body: 'body'} });
+    const captured = captureImportPresetConfiguration(json, controller.ready(json));
+    expect(captured).not.toHaveProperty('csvDelimiter');
+    expect(captured).not.toHaveProperty('csvHasHeader');
+    expect(captured.columns).toEqual(['id', 'body', '末尾字段', '']);
+    expect(captured.mapping).toEqual({id: 'id', body: 'body', 末尾字段: '', '': ''});
+    controller.setMapping(json, 'body', 'id');
+    expect(() => captureImportPresetConfiguration(json, controller.ready(json))).toThrow();
+  });
+  it('切换文件取消完整 JSON 扫描，迟到的字段不得覆盖新样本', async () => {
+    const json: ImportPreviewContext = { connectionId: 'c', database: 'db', table: 't', fileToken: '旧文件', format: 'json', encoding: 'utf8' };
+    const started = deferred<AbortSignal>(), pending = deferred<{columns: string[]; rows: []}>();
+    const controller = new ImportPreviewController({ metadata: async () => info(json.database),
+      preview: async () => ({columns: ['id'], rows: [{id: '新样本'}]}),
+      inspectJson: (_context, signal) => { started.resolve(signal); return pending.promise; } }, () => {});
+    const old = controller.prepare(json, {scanJson: true});
+    const signal = await started.promise;
+    const next = {...json, fileToken: '新文件'};
+    await controller.prepare(next);
+    expect(signal.aborted).toBe(true);
+    pending.resolve({columns: ['旧字段'], rows: []});
+    await old;
+    expect(controller.ready(json)).toBeNull();
+    expect(controller.ready(next)?.sample).toEqual({columns: ['id'], rows: [{id: '新样本'}]});
   });
   it('明确应用强制独立metadata，不让旧缓存冒充新结构；缺字段整份失败无默认映射', async () => {
     const changed = info(); changed.columns = changed.columns.filter(column => column.name !== 'id'); const metadata = vi.fn().mockResolvedValueOnce(info()).mockResolvedValueOnce(changed);
@@ -39,12 +66,19 @@ describe('导入配置协调器与整份应用（纯RAM）', () => {
   });
   it.each(['csv', 'json'] as const)('%s具名字段完整集合允许重排列，映射按当前字段序发布', async format => {
     const config: ImportPresetConfiguration = { format, encoding: 'utf8', columns: ['id', 'body'], mapping: { id: 'id', body: 'body' } }, source: ImportPreviewContext = { connectionId: 'c', database: 'db', table: 't', fileToken: 'f', format, encoding: 'utf8' };
-    const controller = new ImportPreviewController({ metadata: async () => info(source.database), preview: async () => ({ columns: ['body', 'id'], rows: [{ body: '首条', id: '1' }] }) }, () => {});
+    const read = async () => ({ columns: ['body', 'id'], rows: [{ body: '首条', id: '1' }] });
+    const controller = new ImportPreviewController({ metadata: async () => info(source.database), preview: read, inspectJson: read }, () => {});
     await controller.prepare(source, { freshMetadata: true, configuration: config }); expect(Object.keys(controller.ready(source)!.mapping)).toEqual(['body', 'id']); expect(controller.ready(source)?.mapping).toEqual({ body: 'body', id: 'id' });
   });
   it.each([{ columns: ['id'] }, { columns: ['id', 'body', 'extra'] }, { columns: ['id', 'id'] }])('具名字段缺失/新增/重复%j均整份拒绝', async ({ columns }) => {
-    const config: ImportPresetConfiguration = { format: 'json', encoding: 'utf8', columns: ['id', 'body'], mapping: { id: 'id', body: 'body' } }, source: ImportPreviewContext = { connectionId: 'c', database: 'db', table: 't', fileToken: 'f', format: 'json', encoding: 'utf8' }, controller = new ImportPreviewController({ metadata: async () => info(source.database), preview: async () => ({ columns, rows: [] }) }, () => {});
-    await controller.prepare(source, { freshMetadata: true, configuration: config }); expect(controller.ready(source)).toBeNull();
+    const config: ImportPresetConfiguration = { format: 'json', encoding: 'utf8', columns: ['id', 'body'], mapping: { id: 'id', body: 'body' } }, source: ImportPreviewContext = { connectionId: 'c', database: 'db', table: 't', fileToken: 'f', format: 'json', encoding: 'utf8' };
+    const preview = vi.fn(async () => ({ columns: config.columns, rows: [] }));
+    const inspectJson = vi.fn(async () => ({ columns, rows: [] }));
+    const controller = new ImportPreviewController({ metadata: async () => info(source.database), preview, inspectJson }, () => {});
+    await controller.prepare(source, { freshMetadata: true, configuration: config });
+    expect(controller.ready(source)).toBeNull();
+    expect(inspectJson).toHaveBeenCalledOnce();
+    expect(preview).not.toHaveBeenCalled();
   });
   it.each([false, true])('同选项反复应用也独立读取metadata，旧成功/失败不能污染最新整份映射（旧失败=%s）', async fail => {
     const old = deferred<TableInfo>(), metadata = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValueOnce(info()), controller = new ImportPreviewController({ metadata, preview: async () => sample }, () => {}), a = controller.prepare(context, { freshMetadata: true, configuration: configuration() });
