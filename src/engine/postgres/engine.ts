@@ -62,7 +62,7 @@ import { readPostgresRoles } from './roles';
 import { PostgresRoleChanges } from './roleChanges';
 import { PostgresObjectPrivilegeChanges } from './objectPrivileges';
 import { PostgresRoleMembership } from './roleMembership';
-import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from '../../shared/postgresRoles';
+import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresColumnPrivilegeDraftSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from '../../shared/postgresRoles';
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
@@ -1093,6 +1093,8 @@ export class PostgresEngine {
       case 'postgres.roles.password.apply':
       case 'postgres.roles.tablePrivileges.preview':
       case 'postgres.roles.tablePrivileges.apply':
+      case 'postgres.roles.columnPrivileges.preview':
+      case 'postgres.roles.columnPrivileges.apply':
       case 'postgres.roles.scopedPrivileges.preview':
       case 'postgres.roles.scopedPrivileges.apply':
       case 'postgres.roles.membership.preview':
@@ -1108,6 +1110,8 @@ export class PostgresEngine {
         if (command === 'postgres.roles.password.apply') return this.roleChanges.apply('password', {...postgresRolePasswordApplySchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.tablePrivileges.preview') return this.objectPrivileges.preview({...postgresTablePrivilegeDraftSchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.tablePrivileges.apply') return this.objectPrivileges.apply('table', {...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.columnPrivileges.preview') return this.objectPrivileges.preview({...postgresColumnPrivilegeDraftSchema.parse(request), owner, connectionRevision}, connect);
+        if (command === 'postgres.roles.columnPrivileges.apply') return this.objectPrivileges.apply('column', {...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.scopedPrivileges.preview') return this.objectPrivileges.preview({...postgresScopedPrivilegeDraftSchema.parse(request), owner, connectionRevision}, connect);
         if (command === 'postgres.roles.scopedPrivileges.apply') return this.objectPrivileges.apply('scope', {...postgresMembershipApplySchema.parse(request), owner, connectionRevision}, connect);
         return command === 'postgres.roles.membership.preview'

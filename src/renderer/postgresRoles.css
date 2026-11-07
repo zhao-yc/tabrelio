@@ -9,3 +9,6 @@
 .postgres-roles-attributes dt { color: var(--muted); }
 .postgres-roles table { width: 100%; border-collapse: collapse; }
 .postgres-roles th, .postgres-roles td { text-align: left; vertical-align: top; padding: 5px 6px; border-bottom: 1px solid var(--border); }
+.postgres-column-privileges { max-height: 36vh; overflow: auto; }
+.postgres-column-privileges td { min-width: 78px; }
+.postgres-column-privileges th[scope="row"] { min-width: 110px; }

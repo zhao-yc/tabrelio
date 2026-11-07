@@ -27,6 +27,13 @@ export const postgresRolesZh = {
     actions: {grant: '授予权限', grantOption: '授予权限及转授选项', revoke: '撤销直接权限', revokeOption: '仅撤销转授选项'},
     direct: '已有直接权限', inherited: '无所有者直接授权', affected: '同时受影响的列权限',
     preview: '预览表权限 SQL', sql: '本次表权限 SQL', confirm: '确认执行所选表权限变更', apply: '执行表权限变更',
+    column: {
+      title: '管理 PostgreSQL 列权限', open: '管理列级直接授权', inspect: '查看列权限', label: '列权限', selection: '所选列级权限',
+      lockHint: '列级变更只作用于所选列。角色仍可能通过整表授权、PUBLIC 或继承访问列。',
+      preview: '预览列权限 SQL', sql: '本次列权限 SQL', confirm: '确认执行所选列权限变更', apply: '执行列权限变更',
+      column: '列名', effective: '有效', direct: '直接', withOption: '可转授', none: '没有可显示的用户列',
+      legend: '有效权限包含整表授权、继承和 PUBLIC。直接权限显示对象所有者授予此角色的列级权限。',
+    },
     database: {
       title: '管理 PostgreSQL 数据库权限', open: '管理数据库直接授权', selection: '所选数据库权限',
       lockHint: '数据库权限影响整个数据库，撤销 CONNECT 不会断开已登录的会话。',

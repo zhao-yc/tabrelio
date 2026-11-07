@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { postgresDatabasePrivileges, postgresSchemaPrivileges, postgresTablePrivileges, type PostgresMembershipApply,
-  type PostgresMembershipOutcome, type PostgresScopedPrivilegeDraft, type PostgresTablePrivilegeDraft, type PostgresTablePrivilegePreview } from '../../shared/postgresRoles';
+import { postgresColumnPrivileges, postgresDatabasePrivileges, postgresSchemaPrivileges, postgresTablePrivileges, type PostgresMembershipApply,
+  type PostgresColumnPrivilegeDraft, type PostgresMembershipOutcome, type PostgresScopedPrivilegeDraft, type PostgresTablePrivilegeDraft, type PostgresTablePrivilegePreview } from '../../shared/postgresRoles';
 import type { DataRow } from '../../shared/contracts';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
@@ -8,7 +8,10 @@ import { startPostgresDdl } from './createTable';
 
 type Scoped<T> = T & {owner: string; connectionRevision: number};
 type Connect = <T>(work: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type Draft = PostgresTablePrivilegeDraft | PostgresScopedPrivilegeDraft;
+type TableDraft = PostgresTablePrivilegeDraft | PostgresColumnPrivilegeDraft;
+type Draft = TableDraft | PostgresScopedPrivilegeDraft;
+type Target = 'table' | 'scope' | 'column';
+const targetKind = (draft: Draft): Target => 'changes' in draft ? 'column' : 'table' in draft ? 'table' : 'scope';
 type Edge = {column: string | null; grantor: string; grantee: string; privilege: string; grantable: boolean};
 const limit = 2048;
 const budget = (rows = 0) => ({rows, bytes: 512 * 1024});
@@ -17,7 +20,7 @@ const forbidden = () => Error('只有对象所有者或超级用户可以管理�
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const keyOf = ({column, grantor, grantee, privilege}: Edge) => JSON.stringify([column, grantor, grantee, privilege]);
 
-async function readTableState(connection: PostgresConnection, draft: PostgresTablePrivilegeDraft) {
+async function readTableState(connection: PostgresConnection, draft: TableDraft) {
   const {role, table} = draft;
   const result = await connection.query(`SELECT actor.rolname::text,owner.rolname::text,owner.oid::text,actor.oid::text,
     d.oid::text,n.oid::text,c.relkind,c.relpersistence,extract(epoch FROM pg_catalog.pg_postmaster_start_time())::text,
@@ -36,7 +39,17 @@ async function readTableState(connection: PostgresConnection, draft: PostgresTab
     throw changed();
   if (identity.c2 === role.oid || identity.c2 !== identity.c3 && identity.c10 !== 't')
     throw forbidden();
-  if (draft.privileges.includes('MAINTAIN') && identity.c9 !== 't') throw Error('MAINTAIN 权限需要 PostgreSQL 17 或以上版本');
+  if ('changes' in draft) {
+    // 列名可复用。按属性编号和原名核对，旧预览不能授权给同名替换列。
+    const columns = new Map(draft.changes.map(({column}) => [JSON.stringify([column.number, column.name]), column]));
+    const selected = [...columns.values()];
+    const exact = await connection.query(`SELECT a.attnum::text FROM pg_catalog.pg_attribute a
+      JOIN ROWS FROM (pg_catalog.unnest($2::smallint[]),pg_catalog.unnest($3::text[])) AS requested(number,name)
+        ON a.attnum=requested.number AND a.attname::text COLLATE pg_catalog."C"=requested.name
+      WHERE a.attrelid=$1::oid AND a.attnum>0 AND NOT a.attisdropped`,
+    [table.oid, selected.map(column => column.number), selected.map(column => column.name)], budget(selected.length));
+    if (exact.truncated || exact.rows.length !== selected.length) throw changed();
+  } else if (draft.privileges.includes('MAINTAIN') && identity.c9 !== 't') throw Error('MAINTAIN 权限需要 PostgreSQL 17 或以上版本');
   const acl = await connection.query(`SELECT NULL::text,a.grantor::text,a.grantee::text,a.privilege_type,a.is_grantable
     FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(c.relacl,pg_catalog.acldefault('r',c.relowner))) a
     WHERE c.oid=$1::oid
@@ -103,29 +116,35 @@ const qualified = (table: PostgresTablePrivilegeDraft['table']) => postgresIdent
 
 function prepare(draft: Draft, state: State) {
   const granting = draft.action === 'grant' || draft.action === 'grantOption';
-  const available = 'table' in draft ? postgresTablePrivileges : draft.object.kind === 'database' ? postgresDatabasePrivileges : postgresSchemaPrivileges;
-  const selection = new Set<string>(draft.privileges);
-  const privileges = available.filter(value => selection.has(value));
   const target = 'table' in draft ? 'TABLE ' + qualified(draft.table) :
     draft.object.kind.toUpperCase() + ' ' + postgresIdentifier(draft.object.name);
+  const available = 'table' in draft ? postgresTablePrivileges : draft.object.kind === 'database' ? postgresDatabasePrivileges : postgresSchemaPrivileges;
   const expected = new Map(state.edges), columns: PostgresTablePrivilegePreview['columns'] = [];
-  for (const privilege of privileges) {
-    const edge = {column: null, grantor: state.grantorOid, grantee: draft.role.oid, privilege, grantable: draft.action === 'grantOption'};
+  const changes = 'changes' in draft ? draft.changes.map(({column, privilege}) => ({column: column.name, privilege})) :
+    available.filter(value => draft.privileges.some(selected => selected === value)).map(privilege => ({column: null, privilege}));
+  for (const {column, privilege} of changes) {
+    const edge = {column, grantor: state.grantorOid, grantee: draft.role.oid, privilege, grantable: draft.action === 'grantOption'};
     const key = keyOf(edge), original = state.edges.get(key);
     if (granting ? !!original && (original.grantable || !edge.grantable) : !original || draft.action === 'revokeOption' && !original.grantable)
       throw Error('所选权限没有对应的直接授权变化，请重新检查对象权限');
     if (granting) expected.set(key, edge);
     else {
-      // PostgreSQL 的表级撤销也处理同来源的对应列权限，预览必须显示实际影响。
+      // 表级撤销也处理对应列权限。列级撤销仅改所选列，整表权限仍可提供相同访问。
       for (const [key, item] of state.edges) {
-        if (item.grantor !== edge.grantor || item.grantee !== edge.grantee || item.privilege !== privilege) continue;
+        if (item.grantor !== edge.grantor || item.grantee !== edge.grantee || item.privilege !== privilege ||
+            column !== null && item.column !== column) continue;
         if (draft.action === 'revokeOption' && !item.grantable) continue;
-        if (item.column !== null) columns.push({name: item.column, privilege});
+        if (column === null && item.column !== null) columns.push({name: item.column, privilege});
         if (draft.action === 'revokeOption') expected.set(key, {...item, grantable: false});
         else expected.delete(key);
       }
     }
   }
+  const privileges = 'changes' in draft ? postgresColumnPrivileges.flatMap(privilege => {
+    const names = draft.changes.filter(change => change.privilege === privilege)
+      .map(change => change.column).sort((a, b) => a.number - b.number).map(column => postgresIdentifier(column.name));
+    return names.length ? [privilege + ' (' + names.join(', ') + ')'] : [];
+  }) : changes.map(change => change.privilege);
   const recipient = postgresIdentifier(draft.role.name);
   const sql = granting
     ? `GRANT ${privileges.join(', ')} ON ${target} TO ${recipient}${draft.action === 'grantOption' ? ' WITH GRANT OPTION' : ''}`
@@ -164,9 +183,9 @@ export class PostgresObjectPrivilegeChanges {
     } finally { this.pending.delete(key); }
   }
 
-  async apply(target: 'table' | 'scope', input: Scoped<PostgresMembershipApply>, connect: Connect): Promise<PostgresMembershipOutcome> {
+  async apply(target: Target, input: Scoped<PostgresMembershipApply>, connect: Connect): Promise<PostgresMembershipOutcome> {
     const key = JSON.stringify([input.owner, input.connectionId]), plan = this.plans.get(key);
-    if (this.pending.has(key) || !plan || plan.preview.token !== input.token || ('table' in plan.draft) !== (target === 'table') || !input.confirmed || plan.expires <= Date.now() ||
+    if (this.pending.has(key) || !plan || plan.preview.token !== input.token || targetKind(plan.draft) !== target || !input.confirmed || plan.expires <= Date.now() ||
         plan.draft.database !== input.database || plan.draft.connectionRevision !== input.connectionRevision)
       return {outcome: 'notSent', message: '对象权限预览已失效，请重新预览'};
     this.plans.delete(key); this.pending.add(key);

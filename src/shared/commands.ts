@@ -48,6 +48,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.roles.create.preview': true, 'postgres.roles.create.apply': true,
   'postgres.roles.password.preview': true, 'postgres.roles.password.apply': true,
   'postgres.roles.tablePrivileges.preview': true, 'postgres.roles.tablePrivileges.apply': true,
+  'postgres.roles.columnPrivileges.preview': true, 'postgres.roles.columnPrivileges.apply': true,
   'postgres.roles.scopedPrivileges.preview': true, 'postgres.roles.scopedPrivileges.apply': true,
   'postgres.roles.read': true, 'postgres.roles.membership.preview': true, 'postgres.roles.membership.apply': true,
   'postgres.workbookExport': true,

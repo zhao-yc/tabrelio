@@ -11,7 +11,9 @@ export const postgresRolesSchema = z.discriminatedUnion('kind', [
   z.object({...target, kind: z.literal('list'), search: z.string().max(128).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
     after: identifier.optional()}).strict(),
   z.object({...target, kind: z.literal('detail'), role,
-    scope: z.object({schema: identifier, relation: identifier.optional()}).strict().optional()}).strict(),
+    scope: z.object({schema: identifier, relation: identifier.optional(),
+      columns: z.object({relationOid: oid, after: z.number().int().min(0).max(1600)}).strict().optional()})
+      .strict().refine(scope => scope.columns === undefined || scope.relation !== undefined).optional()}).strict(),
 ]);
 export type PostgresRolesInput = z.infer<typeof postgresRolesSchema>;
 export type PostgresRoleRef = z.infer<typeof role>;
@@ -59,6 +61,7 @@ export interface PostgresRoleMembership {
 }
 export interface PostgresRolePrivilege {name: string; allowed: boolean; grantable: boolean;}
 export const postgresTablePrivileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] as const;
+export const postgresColumnPrivileges = ['SELECT', 'INSERT', 'UPDATE', 'REFERENCES'] as const;
 export const postgresDatabasePrivileges = ['CONNECT', 'CREATE', 'TEMPORARY'] as const;
 export const postgresSchemaPrivileges = ['USAGE', 'CREATE'] as const;
 const tablePrivilege = z.enum(postgresTablePrivileges);
@@ -69,6 +72,21 @@ const privilegeSource = {...membershipTarget, database: identifier, role, action
 export const postgresTablePrivilegeDraftSchema = z.object({...privilegeSource, table: postgresTablePrivilegeTargetSchema,
   privileges: z.array(tablePrivilege).min(1).max(postgresTablePrivileges.length).refine(values => new Set(values).size === values.length),
 }).strict();
+const columnRef = z.object({number: z.number().int().min(1).max(1600), name: identifier}).strict();
+const columnPrivilege = z.enum(postgresColumnPrivileges);
+export const postgresColumnPrivilegeDraftSchema = z.object({...privilegeSource, table: postgresTablePrivilegeTargetSchema,
+  changes: z.array(z.object({column: columnRef, privilege: columnPrivilege}).strict()).min(1).max(128),
+}).strict().refine(({changes}) =>
+  new Set(changes.map(({column, privilege}) => column.number + '/' + privilege)).size === changes.length, '同一列的权限不能重复');
+export type PostgresColumnPrivilegeDraft = z.infer<typeof postgresColumnPrivilegeDraftSchema>;
+export type PostgresColumnPrivilege = z.infer<typeof columnPrivilege>;
+export type PostgresColumnPrivilegeRef = z.infer<typeof columnRef>;
+export type PostgresColumnPrivilegeChange = PostgresColumnPrivilegeDraft['changes'][number];
+export interface PostgresColumnPrivilegeRow {
+  column: PostgresColumnPrivilegeRef;
+  privileges: {name: PostgresColumnPrivilege; allowed: boolean; grantable: boolean; direct: boolean | null}[];
+}
+export interface PostgresColumnPrivilegePage {rows: PostgresColumnPrivilegeRow[]; next?: number;}
 const scopeRef = {oid, name: identifier};
 export const postgresScopedPrivilegeTargetSchema = z.discriminatedUnion('kind', [
   z.object({...scopeRef, kind: z.literal('database')}).strict(), z.object({...scopeRef, kind: z.literal('schema')}).strict(),
@@ -89,6 +107,7 @@ export interface PostgresPrivilegeEditor {
   direct: {privilege: PostgresObjectPrivilege; grantable: boolean}[];
 }
 export type PostgresTablePrivilegeEditor = PostgresPrivilegeEditor & {table: PostgresTablePrivilegeTarget};
+export type PostgresColumnPrivilegeEditor = Pick<PostgresTablePrivilegeEditor, 'table' | 'grantor'> & {columns: PostgresColumnPrivilegeRow[]};
 export type PostgresScopedPrivilegeEditor = PostgresPrivilegeEditor & {object: PostgresScopedPrivilegeTarget};
 export interface PostgresTablePrivilegePreview {
   token: string; sql: string; actor: string; grantor: string;
@@ -104,7 +123,8 @@ export interface PostgresRoleDetail extends PostgresRolesContext {
   databasePrivileges: PostgresRolePrivilege[];
   databaseEditor?: PostgresScopedPrivilegeEditor;
   scope?: {schema: PostgresRolePrivilege[] | null; schemaEditor?: PostgresScopedPrivilegeEditor; relation?: {
-    privileges: PostgresRolePrivilege[]; rls: boolean; forceRls: boolean; editor?: PostgresTablePrivilegeEditor;
+    oid: string; privileges: PostgresRolePrivilege[]; rls: boolean; forceRls: boolean; editor?: PostgresTablePrivilegeEditor;
+    columns?: PostgresColumnPrivilegePage;
   } | null};
 }
 export type PostgresRolesOutput = PostgresRolesList | PostgresRoleDetail;

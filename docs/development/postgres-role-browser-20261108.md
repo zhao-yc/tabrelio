@@ -45,3 +45,9 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 可以多选授予、添加转授、仅撤销转授或撤销直接权限。撤销使用 RESTRICT，有下游依赖时整批回滚。撤销 CONNECT 影响新连接，已有会话可继续使用。角色仍可能通过 PUBLIC 或继承获得 CONNECT。Schema 的 USAGE 允许解析对象名称，访问表数据仍需相应的表权限。[PostgreSQL 权限](https://www.postgresql.org/docs/18/ddl-priv.html) [PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
 
 确认时核对原对象、角色、授权来源及系统目录行版本。事务提交前复核实际 ACL，确认目标目录行由本次事务写入。状态未知时通过重新读取目录与实际连接结果核对。
+
+## 查看与管理列权限
+
+在角色详情检查表或视图后点击「查看列权限」。目录按 PostgreSQL 属性编号分页，每页 32 列，展示 SELECT、INSERT、UPDATE 和 REFERENCES 的有效权限、所有者直接授权和转授状态。有效权限包含整表授权、PUBLIC 和继承。[PostgreSQL 权限查询函数](https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-ACCESS-TABLE)
+
+对象所有者或超级用户可在普通表、分区表和普通视图上点击「管理列级直接授权」，在当前页多选列与权限。预览会明确列名与操作，支持授予、授予及转授、撤销和仅撤销转授。确认时按原关系 OID、属性编号和原列名复核。列级撤销使用 RESTRICT，有下游依赖时整批回滚。已有整表授权仍可能提供同样的有效权限。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html) [PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)

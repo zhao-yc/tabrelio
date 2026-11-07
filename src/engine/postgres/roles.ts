@@ -1,9 +1,11 @@
 import type { CellValue, DataRow } from '../../shared/contracts';
-import type { PostgresRole, PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput, PostgresObjectPrivilege } from '../../shared/postgresRoles';
+import type { PostgresColumnPrivilege, PostgresColumnPrivilegeRow, PostgresRole, PostgresRoleDetail, PostgresRoleMembership,
+  PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput, PostgresObjectPrivilege } from '../../shared/postgresRoles';
 import type { PostgresConnection } from './connection';
 
 const roleFields = 'r.oid::text,r.rolname::text,r.rolcanlogin,r.rolsuper,r.rolinherit,r.rolcreaterole,r.rolcreatedb,r.rolreplication,r.rolbypassrls,r.rolconnlimit::text,r.rolvaliduntil::text';
 const pageSize = 50, memberLimit = 200;
+const columnPageSize = 32;
 const invalid = () => Error('PostgreSQL 角色目录返回不完整');
 const text = (value: CellValue): string => { if (typeof value !== 'string') throw invalid(); return value; };
 const nullableText = (value: CellValue): string | null => value === null ? null : text(value);
@@ -116,10 +118,33 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
             AND (p.name<>'MAINTAIN' OR pg_catalog.current_setting('server_version_num')::int>=170000)`,
           [role.oid, schema, relation, context.current.oid], 8);
         const first = relations[0];
-        scope.relation = first ? {privileges: relations.map(privilege), rls: flag(first.c3), forceRls: flag(first.c4)} : null;
+        scope.relation = first ? {oid: text(first.c5), privileges: relations.map(privilege), rls: flag(first.c3), forceRls: flag(first.c4)} : null;
         if (scope.relation && flag(first.c7)) {
           const oid = text(first.c5);
           scope.relation.editor = {table: {oid, schema, name: relation}, grantor: text(first.c6), direct: await directPrivileges('table', oid)};
+        }
+        if (input.scope.columns) {
+          if (!scope.relation || scope.relation.oid !== input.scope.columns.relationOid) throw Error('列权限的原关系已变化，请重新检查对象权限');
+          const columnRows = await rows(`WITH cols AS (
+            SELECT a.attnum,a.attname,a.attacl,c.relowner FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+            WHERE c.oid=$1::oid AND a.attnum>$3::smallint AND NOT a.attisdropped ORDER BY a.attnum LIMIT ${columnPageSize + 1}
+          )
+          SELECT col.attnum::text,col.attname::text,p.name,pg_catalog.has_column_privilege($2::oid,$1::oid,col.attnum,p.name),
+            pg_catalog.has_column_privilege($2::oid,$1::oid,col.attnum,p.name||' WITH GRANT OPTION'),a.is_grantable
+          FROM cols col CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('REFERENCES')) p(name)
+          LEFT JOIN LATERAL pg_catalog.aclexplode(col.attacl) a
+            ON a.grantee=$2::oid AND a.grantor=col.relowner AND a.privilege_type=p.name
+          ORDER BY col.attnum,p.name`, [scope.relation.oid, role.oid, input.scope.columns.after], (columnPageSize + 1) * 4);
+          const columns = new Map<number, PostgresColumnPrivilegeRow>();
+          for (const entry of columnRows) {
+            const number = Number(text(entry.c0)), name = text(entry.c1);
+            const row = columns.get(number) ?? {column: {number, name}, privileges: []};
+            row.privileges.push({name: text(entry.c2) as PostgresColumnPrivilege, allowed: flag(entry.c3),
+              grantable: flag(entry.c4), direct: nullableFlag(entry.c5)});
+            columns.set(number, row);
+          }
+          const page = [...columns.values()].slice(0, columnPageSize);
+          scope.relation.columns = {rows: page, ...(columns.size > columnPageSize ? {next: page.at(-1)!.column.number} : {})};
         }
       }
     }

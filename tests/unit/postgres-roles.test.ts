@@ -77,3 +77,18 @@ it('数据库和 Schema 授权只能使用各自的权限，数据库目标绑�
     {...database, object: {...database.object, name: '其他数据库'}}, {...schema, sql: 'GRANT ALL'}, {...schema, cascade: true}])
     expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
 });
+
+it('列授权绑定关系和属性编号，只接受明确且互异的列与权限组合', () => {
+  const column = {number: 3, name: '公开 "标题"'};
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '42', name: '读者'},
+    table: {oid: '100', schema: 'public', name: '文档'}, action: 'revokeOption',
+    changes: [{column, privilege: 'SELECT'}, {column, privilege: 'UPDATE'}]};
+  expect(validateCommand('postgres.roles.columnPrivileges.preview', draft)).toEqual(draft);
+  for (const value of [{...draft, changes: []}, {...draft, changes: [draft.changes[0], draft.changes[0]]},
+    {...draft, changes: [{column, privilege: 'DELETE'}]}, {...draft, changes: [{column: {...column, number: 0}, privilege: 'SELECT'}]},
+    {...draft, sql: 'GRANT ALL'}]) expect(() => validateCommand('postgres.roles.columnPrivileges.preview', value)).toThrow();
+  const detail = {connectionId: 'saved', taskId: 'read', kind: 'detail', role: draft.role,
+    scope: {schema: 'public', relation: '文档', columns: {relationOid: '100', after: 3}}};
+  expect(validateCommand('postgres.roles.read', detail)).toEqual(detail);
+  expect(() => validateCommand('postgres.roles.read', {...detail, scope: {...detail.scope, relation: undefined}})).toThrow();
+});
