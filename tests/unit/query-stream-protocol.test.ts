@@ -126,6 +126,9 @@ describe('完整导出IPC与协议预选', () => {
     const input = { sessionId: 's', taskId: 't', sql: 'SELECT 1', fileToken: 'f', format: 'json', encoding: 'utf8', protocol: 'text-strict', resultSelection: { kind: 'all' } };
     expect(validateCommand('query.exportStream', input)).toEqual(input);
     expect(validateCommand('query.exportStream', { ...input, format: 'csv-zip' })).toEqual({ ...input, format: 'csv-zip' });
+    expect(validateCommand('query.exportStream', { ...input, format: 'xlsx' })).toEqual({ ...input, format: 'xlsx' });
+    expect(() => validateCommand('query.exportStream', { ...input, format: 'xlsx', encoding: 'gb18030' })).toThrow('固定使用 UTF-8');
+    expect(() => validateCommand('query.exportStream', { ...input, format: 'xlsx', resultSelection: { kind: 'row-result', ordinal: 1 } })).toThrow('全部');
     expect(() => validateCommand('query.exportStream', { ...input, format: 'csv-zip', resultSelection: { kind: 'row-result', ordinal: 1 } })).toThrow('全部');
     expect(() => validateCommand('query.exportStream', { ...input, filePath: 'x' })).toThrow();
     expect(() => validateCommand('query.exportStream', { ...input, format: 'csv' })).toThrow('指定');

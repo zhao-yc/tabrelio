@@ -13,9 +13,10 @@ export const queryStreamExportLimits = {
   fileBytes: 10 * 1024 * 1024 * 1024,
   archiveManifestBytes: 8 * 1024 * 1024,
 } as const;
-export const queryExportFormats = ['csv', 'json', 'csv-zip', 'sql', ...dataFileFormats] as const;
+export const queryExportFormats = ['csv', 'json', 'csv-zip', 'xlsx', 'sql', ...dataFileFormats] as const;
 export type QueryExportFormat = typeof queryExportFormats[number];
 export const queryExportSelectionMessage = '单 CSV、TXT 和 XML 记录布局须指定行结果集，其余格式导出全部结果';
+export const queryExcelEncodingMessage = 'XLSX 工作簿固定使用 UTF-8';
 
 export function queryExportSelectsRowResult(format: QueryExportFormat): boolean {
   return format === 'csv' || format === 'txt' || isXmlRecordLayout(format);

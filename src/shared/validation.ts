@@ -135,7 +135,7 @@ import { queryParameterTypes, validateQueryParameters } from './queryParameters'
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
-import { queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits } from './queryStreamExport';
+import { queryExcelEncodingMessage, queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
 import { validateColumnPatches } from './tableColumnPatches';
 import { validateIndexPatches } from './tableIndexPatches';
@@ -502,6 +502,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     if (!validTxtExport(input)) context.addIssue({ code: 'custom', path: ['txtOptions'], message: txtExportZh.invalid });
     const markup = dataMarkupText(input.format);
     if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
+    if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: queryExcelEncodingMessage });
   }),
   'query.confirmInsertExport': queryInsertConfirmationSchema,
   'query.cancel': z.object({ taskId: id }).strict(),

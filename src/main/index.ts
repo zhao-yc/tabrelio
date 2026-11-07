@@ -2774,6 +2774,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (tableFilteredExport) filteredExportLease = tableFilteredExports.begin(taskId!, columns!, assertTableFilteredExportCurrent);
     if(command==='query.exportStream'&&input.format==='sql')input={...input,filePath:queryInsertExports.begin(input,columns)};
     if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || command === 'postgres.query.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'query.exportStream' && input.format === 'xlsx') {
+      await assertSqliteExportDestination(input.filePath, store.connections());
+      if (shuttingDown || !session || sessions.get(input.sessionId) !== session) throw Error('查询的原会话已变化，请重新打开导出窗口');
+    }
     if (networkWorkbookExport || command === 'postgres.query.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database') {
       await assertSqliteExportDestination(input.filePath, store.connections());
       columnsMain.assertCapturedOwner(columns);

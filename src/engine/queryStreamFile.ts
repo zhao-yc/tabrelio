@@ -1,6 +1,6 @@
 import type { TxtExportOptions } from '../shared/txtExport';
 import type { CellValue, QueryFileEncoding } from '../shared/contracts';
-import { queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame, type QueryExportSelection, type QueryExportFormat } from '../shared/queryStreamExport';
+import { queryExcelEncodingMessage, queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame, type QueryExportSelection, type QueryExportFormat } from '../shared/queryStreamExport';
 import { AtomicFile, type AtomicFileIO } from './atomicFile';
 import { csvCell, csvHeader } from './files';
 import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
@@ -8,6 +8,8 @@ import { createQueryInsertFile } from './queryInsertFile';
 import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
 import { dataFileWriter } from './dataMarkupExport';
 import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
+import { EXCEL_LIMITS } from '../shared/excelTransfer';
+import { createExcelWorkbookWriter } from './excelFiles';
 
 export interface QueryStreamFileOptions {
   filePath: string; format: QueryExportFormat; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
@@ -46,9 +48,14 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
   if (input.resultSelection.kind === 'row-result' && (!Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results)) throw Error('行结果序号必须在 1～200 之间');
   const markup = dataFileWriter(input.format, input.txtOptions), markupText = dataMarkupText(input.format);
   if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
+  const xlsx = input.format === 'xlsx';
+  if (xlsx && input.encoding !== 'utf8') throw Error(queryExcelEncodingMessage);
   if (input.format === 'csv-zip') await prepareQueryCsvZip(input.filePath, input.checkCancelled);
-  const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io, limits.fileBytes);
+  const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io,
+    xlsx ? EXCEL_LIMITS.maxCompressedBytes : limits.fileBytes, undefined, xlsx);
   const archive = input.format === 'csv-zip' ? new QueryCsvArchive(file, input.encoding, input.checkCancelled, delimiter) : undefined;
+  let workbook: Awaited<ReturnType<typeof createExcelWorkbookWriter>> | undefined;
+  let sheet: Awaited<ReturnType<NonNullable<typeof workbook>['startSheet']>> | undefined;
   let active: { ordinal: number; columns: QueryExportColumn[]; selected: boolean; rows: number } | undefined;
   let resultCount = 0, rowResultCount = 0, written = 0, selectedFound = false, completed = false;
 
@@ -71,7 +78,9 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
         });
         const selected = input.resultSelection.kind === 'all' || input.resultSelection.ordinal === frame.rowResultOrdinal;
         active = { ordinal: frame.resultOrdinal, columns, selected, rows: 0 }; if (selected) selectedFound = true;
-        if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n'); }
+        if (workbook) {
+          sheet = await workbook.startSheet(`结果 ${frame.rowResultOrdinal}`, columns.map(column => ({ name: column.exportName, type: column.type })));
+        } else if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n'); }
         else if (input.format === 'json') {
           const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal, columns: columns.map(({ key: _key, ...column }) => column) };
           await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify(metadata).slice(0, -1) + ',"rows":[\n');
@@ -83,6 +92,10 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
       }
       case 'row': {
         if (!active || active.ordinal !== frame.resultOrdinal || !Array.isArray(frame.values) || frame.values.length !== active.columns.length) throw new Error('完整导出行与所属结果列不匹配');
+        if (sheet) {
+          await sheet.write(frame.values);
+          written++; active.rows++; break;
+        }
         if (markup) {
           if (active.selected) {
             await file.write(markup.row(frame.values));
@@ -109,7 +122,8 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
       case 'rows-end':
         if (!active || active.ordinal !== frame.resultOrdinal) throw new Error('完整导出结束的结果序号无效');
         if (frame.warningCount !== undefined && (!Number.isInteger(frame.warningCount) || frame.warningCount < 0 || frame.warningCount > 65535)) throw new Error('完整导出警告数量无效');
-        if (archive) await archive.end(active.rows, frame.warningCount);
+        if (sheet) { sheet.close(); sheet = undefined; }
+        else if (archive) await archive.end(active.rows, frame.warningCount);
         else if (input.format === 'json') await file.write('\n],"rowsWritten":' + active.rows + (frame.warningCount === undefined ? '' : ',"warningCount":' + frame.warningCount) + '}');
         else if (markup && active.selected) await file.write(markup.tableEnd(active.rows, frame.warningCount));
         active = undefined; break;
@@ -123,6 +137,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
     }
   }
   try {
+    if (xlsx) workbook = await createExcelWorkbookWriter({ ...input, deferredAtomicFile: file });
     if (!archive && input.encoding === 'utf16le') await file.write('\uFEFF');
     if (input.format === 'json') await file.write('{"format":"DBArk-query-results","version":1,"results":[');
     if (markup) await file.write(markup.documentStart());
@@ -134,13 +149,17 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
       if (active) throw new Error('完整导出结果集尚未结束');
       if (completed) throw new Error('完整导出文件已提交');
       if (singleResult && !selectedFound) throw new Error('本次执行不存在指定的行结果集；SQL 可能已执行，原目标文件保持不变');
+      await workbook?.complete();
       if (archive) await archive.complete();
       if (input.format === 'json') await file.write('\n]}\n');
       if (markup) await file.write(markup.documentEnd);
       await file.commit(); completed = true;
     },
     /** 无论失败、取消或完成，均关闭自有句柄并释放目标文件锁。 */
-    abort: () => file.dispose(),
+    async abort() {
+      try { await workbook?.dispose(); }
+      finally { await file.dispose(); }
+    },
     get bytesWritten() { return file.bytesWritten; },
     get rowsWritten() { return written; },
     get fileCommitted() { return file.fileCommitted; },

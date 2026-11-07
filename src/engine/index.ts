@@ -1951,7 +1951,12 @@ export class Engine {
     const progress: QueryExportProgress = task.queryExport = { phase: 'preparing', statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, sqlMayHaveExecuted: false, transactionKnown: false, peakBufferedRows: 0, peakBufferedBytes: 0 };
     let writer: Awaited<ReturnType<typeof createQueryStreamFile>> | undefined;
     /** 人工确认等待前后仍核原物理会话；发布前断线不借新连接，既有格式沿原取消策略。 */
-    const checkFile=()=>{this.checkCancelled(task);if(input.format==='sql'&&!task.fileCommitStarted&&(this.closing||task.managed.broken||this.sessions.get(input.sessionId)?.managed!==task.managed))throw Error(queryInsertZh.stale);};
+    const checkFile = () => {
+      this.checkCancelled(task);
+      if ((input.format === 'sql' || input.format === 'xlsx') && !task.fileCommitStarted &&
+          (this.closing || task.managed.broken || this.sessions.get(input.sessionId)?.managed !== task.managed))
+        throw Error(input.format === 'sql' ? queryInsertZh.stale : '查询的原会话已变化，工作簿未保存');
+    };
     /** 状态仅来自原会话缓存，未确认时不把旧位冒充当前事务真值。 */
     const refresh = () => {
       progress.transactionKnown = !task.managed.broken && task.managed.serverStatus !== undefined && task.managed.transactionStateKnown !== false;

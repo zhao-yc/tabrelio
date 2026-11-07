@@ -56,6 +56,25 @@ describe('完整多结果流式文件', () => {
       expect(parse(await readFile(input.filePath, 'utf8'))).toEqual([['NULL', '空串', '反斜线', '二进制'], ['\\N', '', '\\\\N', 'base64:AAH/']]); expect(writer.rowsWritten).toBe(1);
     } finally { await writer.abort(); }
   });
+  it.each([0, 65])('XLSX 遇到 %d 个行结果时拒绝发布并清理临时文件', async sheetCount => {
+    const input = await options({ format: 'xlsx' });
+    const writer = await createQueryStreamFile(input);
+    try {
+      if (sheetCount === 0) {
+        await writer.write({ kind: 'status', resultOrdinal: 1, statementOrdinal: 1, affectedRows: 0, insertId: '0', warningCount: 0 });
+        await expect(writer.complete()).rejects.toThrow('至少需要一张工作表');
+      } else {
+        for (let ordinal = 1; ordinal < sheetCount; ordinal++) {
+          await writer.write(start(ordinal, ordinal));
+          await writer.write({ kind: 'rows-end', resultOrdinal: ordinal });
+        }
+        await expect(writer.write(start(sheetCount, sheetCount))).rejects.toThrow('工作表数量超过预算');
+      }
+      expect(writer.fileCommitted).toBe(false);
+    } finally { await writer.abort(); }
+    expect(await readFile(input.filePath, 'utf8')).toBe('原文件');
+    expect(await readdir(directories.at(-1)!)).toEqual(['result']);
+  });
   it('指定结果不存在、结果串流或字段预算超限均保留原文件', async () => {
     const input = await options({ format: 'csv', resultSelection: { kind: 'row-result', ordinal: 2 } }); const writer = await createQueryStreamFile(input);
     try {

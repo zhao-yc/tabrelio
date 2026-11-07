@@ -7,7 +7,7 @@ import { copySqliteResultStorage, sqliteResultStorageLimits, type SqliteResultSt
 
 export const resultSqlLimits = { previews: 8, ttlMs: 120000, previewRows: 20, previewBytes: 4 * 1024 ** 2, fileBytes: 512 * 1024 ** 2 } as const;
 /** 无会话模式时保守限制名称，反引号由SQL生成器双写，不允许反斜线改变词法。 */
-const identifier = z.string().min(1, text.identifier).max(64, text.identifier).refine(value => !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff\\]/.test(value) && !/\s$/u.test(value), text.identifier);
+export const mysqlInsertIdentifier = z.string().min(1, text.identifier).max(64, text.identifier).refine(value => !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff\\]/.test(value) && !/\s$/u.test(value), text.identifier);
 export const sqliteInsertIdentifier = z.string().min(1).max(256).refine(value => !!value.trim() &&
   !/[\u0000-\u001f\u007f-\u009f]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value), text.sqliteIdentifier);
 export function sqliteInsertIdentifierKey(name: string): string {
@@ -18,7 +18,7 @@ export const resultSqlTargetSchema = z.object({
   database: z.string().max(256), table: z.string().max(256),
   columns: z.array(z.object({ key: z.string().min(1).max(256), name: z.string().max(256) }).strict()).min(1).max(1024),
 }).strict().superRefine((value, context) => {
-  const schema = value.dialect === 'sqlite' ? sqliteInsertIdentifier : value.dialect === 'postgresql' ? postgresNewIdentifier : identifier;
+  const schema = value.dialect === 'sqlite' ? sqliteInsertIdentifier : value.dialect === 'postgresql' ? postgresNewIdentifier : mysqlInsertIdentifier;
   const message = value.dialect === 'sqlite' ? text.sqliteIdentifier : value.dialect === 'postgresql' ? text.postgresIdentifier : text.identifier;
   for (const [path, name] of [['database', value.database], ['table', value.table]] as const)
     if (!schema.safeParse(name).success) context.addIssue({code: 'custom', path: [path], message});

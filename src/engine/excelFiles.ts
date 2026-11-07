@@ -46,6 +46,7 @@ export interface ExcelExportSheet {
   writeRows(write: (row: CellValue[]) => Promise<void>): Promise<void>;
 }
 type ExcelWorkbookExportOptions = Omit<ExcelExportOptions, 'columns' | 'rows'> & { sheets: AsyncIterable<ExcelExportSheet> };
+type ExcelWorkbookWriterOptions = Omit<ExcelWorkbookExportOptions, 'sheets'>;
 
 /** 单工作表入口沿用原工作表名和行迭代，整个工作簿共用同一个流式写入器。 */
 export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows: number; bytes: number }> {
@@ -58,6 +59,19 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
 
 /** 每张表逐行消费；全部工作表、ZIP 尾部及文件检查完成后才允许发布。 */
 export async function exportExcelWorkbook(input: ExcelWorkbookExportOptions): Promise<{ rows: number; bytes: number }> {
+  const writer = await createExcelWorkbookWriter(input);
+  try {
+    for await (const { name, columns, writeRows } of input.sheets) {
+      const sheet = await writer.startSheet(name, columns);
+      await writeRows(sheet.write);
+      sheet.close();
+    }
+    return await writer.complete();
+  } finally { await writer.dispose(); }
+}
+
+/** 查询协议按帧推送，表导出按工作表拉取，两种入口共享预算、背压和发布边界。 */
+export async function createExcelWorkbookWriter(input: ExcelWorkbookWriterOptions) {
   const check = input.checkCancelled ?? (() => undefined);
   if (excelJsPackage.version !== '4.4.0') throw new Error('Excel 流适配需要重新验证当前 ExcelJS 版本');
   const maximumCells = cellBudget(input.cellBudget);
@@ -99,13 +113,14 @@ export async function exportExcelWorkbook(input: ExcelWorkbookExportOptions): Pr
     stream.on('finish', () => stream.emit('zipped'));
     return stream;
   };
-  let count = 0;
-  try {
-    let sheetCount = 0, cells = 0;
-    // 单段 inlineStr 保持文字语义，并让 Excel 与 ExcelJS 都按 ST_Xstring 解码回车和字面转义标记。
-    const textCell = (value: string | boolean) => typeof value === 'string' ? { richText: [{ text: encodeExcelXmlText(value) }] } : value;
-    for await (const { name, columns, writeRows } of input.sheets) {
+  let count = 0, sheetCount = 0, cells = 0;
+  let active = false, finishing = false;
+  // 单段 inlineStr 保持文字语义，并让 Excel 与 ExcelJS 都按 ST_Xstring 解码回车和字面转义标记。
+  const textCell = (value: string | boolean) => typeof value === 'string' ? { richText: [{ text: encodeExcelXmlText(value) }] } : value;
+  return {
+    async startSheet(name: string, columns: ExcelColumn[]) {
       check();
+      if (active || finishing) throw Error('当前状态不能开始下一张工作表');
       if (++sheetCount > EXCEL_LIMITS.maxSheets) throw Error('Excel 工作表数量超过预算');
       validateExcelHeaders(columns.map(column => column.name));
       const headerBytes = columns.reduce((bytes, column) => bytes + Buffer.byteLength(column.name), 0);
@@ -125,33 +140,50 @@ export async function exportExcelWorkbook(input: ExcelWorkbookExportOptions): Pr
         });
         check(); if (streamError) throw streamError;
       }
+      active = true;
       worksheet.addRow(columns.map(column => textCell(column.name))).commit(); await settleRow();
       let sheetRows = 0;
-      await writeRows(async row => {
-        check();
-        if (++sheetRows >= EXCEL_LIMITS.maxRows) throw Error('Excel 行数超过上限，请拆分导出');
-        cells += columns.length; checkCellCount(1, cells, maximumCells);
-        if (row.length !== columns.length) throw Error('导出行与字段数量不一致');
-        const values = row.map((value, index) => encodeExcelCell(value, columns[index]));
-        if (values.reduce((bytes, value) => bytes + Buffer.byteLength(String(value)), 0) > EXCEL_LIMITS.maxRowBytes) throw Error('Excel 单行文本超过 1 MiB，请改用其他格式');
-        worksheet.addRow(values.map(textCell)).commit(); await settleRow();
-        if (++count % 100 === 0) input.onProgress?.(count);
-      });
-      worksheet.commit();
-    }
-    if (!sheetCount) throw Error('Excel 工作簿至少需要一张工作表');
-    await Promise.all([workbook.commit(), sinkDone]);
-    check(); if (input.deferredAtomicFile) await atomic.prepare(true); else await atomic.commit(); input.onProgress?.(count);
-    return { rows: count, bytes: atomic.bytesWritten };
-  } finally {
-    clearInterval(cancellationTimer);
-    // 停止 ZIP 生产和所有流后等待在途真实写入，最后才释放独占临时文件与目标锁。
-    internals.zip.abort(); internals.zip.destroy();
-    for (const stream of streams) stream.destroy();
-    sink.destroy();
-    await Promise.allSettled([sinkDone, zipDone, ...pendingWrites]);
-    if (!input.deferredAtomicFile) await atomic.dispose();
-  }
+      let closed = false;
+      return {
+        async write(row: CellValue[]) {
+          check();
+          if (closed || finishing) throw Error('工作表已关闭');
+          if (++sheetRows >= EXCEL_LIMITS.maxRows) throw Error('Excel 行数超过上限，请拆分导出');
+          cells += columns.length; checkCellCount(1, cells, maximumCells);
+          if (row.length !== columns.length) throw Error('导出行与字段数量不一致');
+          const values = row.map((value, index) => encodeExcelCell(value, columns[index]));
+          if (values.reduce((bytes, value) => bytes + Buffer.byteLength(String(value)), 0) > EXCEL_LIMITS.maxRowBytes) throw Error('Excel 单行文本超过 1 MiB，请改用其他格式');
+          worksheet.addRow(values.map(textCell)).commit(); await settleRow();
+          if (++count % 100 === 0) input.onProgress?.(count);
+        },
+        close() {
+          check();
+          if (closed || finishing) throw Error('工作表已关闭');
+          worksheet.commit();
+          closed = true; active = false;
+        },
+      };
+    },
+    async complete() {
+      check();
+      if (active || finishing) throw Error('当前状态不能提交工作簿');
+      if (!sheetCount) throw Error('Excel 工作簿至少需要一张工作表');
+      finishing = true;
+      await Promise.all([workbook.commit(), sinkDone]);
+      check(); if (input.deferredAtomicFile) await atomic.prepare(true); else await atomic.commit(); input.onProgress?.(count);
+      return { rows: count, bytes: atomic.bytesWritten };
+    },
+    async dispose() {
+      finishing = true;
+      clearInterval(cancellationTimer);
+      // 停止 ZIP 生产和所有流后等待在途真实写入，最后才释放独占临时文件与目标锁。
+      internals.zip.abort(); internals.zip.destroy();
+      for (const stream of streams) stream.destroy();
+      sink.destroy();
+      await Promise.allSettled([sinkDone, zipDone, ...pendingWrites]);
+      if (!input.deferredAtomicFile) await atomic.dispose();
+    },
+  };
 }
 
 /** 关系目标按 OPC 相对路径解析，拒绝文件系统路径、外链和包外跳转。 */

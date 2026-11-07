@@ -1,4 +1,5 @@
 import { txtImportZh } from '../../src/shared/txtImport';
+import ExcelJS from 'exceljs';
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -65,8 +66,8 @@ async function count(observer: Connection, database: string, condition = '1=1') 
   return Number(rows[0].total);
 }
 /** 选择格式和目标后仍需明确新执行确认，双协议确认相互独立。 */
-async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' | 'xml' | 'txt' | XmlRecordLayout = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
-  await observeEvents(); await choosePath(path, isXmlRecordLayout(format) ? 'xml' : format === 'txt' ? 'txt' : undefined);
+async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'xlsx' | 'html' | 'xml' | 'txt' | XmlRecordLayout = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
+  await observeEvents(); await choosePath(path, isXmlRecordLayout(format) ? 'xml' : format === 'txt' || format === 'xlsx' ? format : undefined);
   await (await navigationMenuItem(query(), { name: '新执行并完整导出', exact: true })).click();
   const modal = dialog(); await expect(modal).toBeVisible();
   await modal.getByRole('combobox', { name: '完整文件格式', exact: true }).selectOption(format);
@@ -139,6 +140,53 @@ async function restorePathGate() { await desktop.evaluate(() => { const state = 
 test.describe('实库完整 SQL 流式导出', () => {
   test.skip(!enabled, '需要显式启用 DBARK_INTEGRATION_ENABLED 并配置已核对的远程测试实例');
   test.describe.configure({ timeout: 180000 });
+
+  test('完整 XLSX 每个行结果一张工作表，失败及取消保留原文件', async ({}, info) => {
+    await isolatedDatabase(async ({ observer, database }) => {
+      await observer.query(`CREATE TABLE \`${database}\`.stream_guard (id INT PRIMARY KEY)`);
+      await openDatabaseQuery(database);
+      await mkdir(info.outputDir, { recursive: true });
+      const output = info.outputPath('完整查询结果.xlsx');
+      await writeSql(`SELECT CAST('18446744073709551615' AS UNSIGNED) AS n, NULL AS n, X'00FF' AS payload;
+INSERT INTO stream_guard VALUES (1);
+SELECT id FROM stream_guard WHERE id = 0;
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 205) SELECT n FROM seq ORDER BY n;`);
+      const modal = await openExport(output, 'xlsx');
+      await expect(modal.getByRole('combobox', { name: '文件编码' })).toHaveValue('utf8');
+      await expect(modal.getByRole('combobox', { name: '文件编码' })).toBeDisabled();
+      expect(await count(observer, database)).toBe(0);
+      const result = await finish(await start(modal, true));
+      expect(result?.queryExport).toMatchObject({ statementsCompleted: 4, rowsWritten: 206, fileCommitted: true });
+      expect(await count(observer, database)).toBe(1);
+      await expect(modal.getByRole('region', { name: '完整文件结果摘要' })).toContainText('影响 1 行');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(output);
+      expect(workbook.worksheets.map(sheet => [sheet.name, sheet.rowCount])).toEqual([['结果 1', 2], ['结果 2', 1], ['结果 3', 206]]);
+      expect(['A1', 'B1', 'A2', 'B2', 'C2'].map(cell => workbook.worksheets[0].getCell(cell).text))
+        .toEqual(['n', 'n [2]', '18446744073709551615', '\\N', '\\B:AP8=']);
+      expect(workbook.worksheets[2].getCell('A206').text).toBe('205');
+      await modal.screenshot({ path: info.outputPath('完整查询导出.png') });
+      const original = await readFile(output);
+
+      await closeExport();
+      await writeSql("SELECT '先完成' AS value; SELECT REPEAT('x',32768) AS value; INSERT INTO stream_guard VALUES (2)");
+      await finish(await start(await openExport(output, 'xlsx')), 'failed');
+      await expect(modal.locator('.error-box')).toContainText('32767');
+      expect(await readFile(output)).toEqual(original);
+
+      await closeExport();
+      await writeSql("SELECT '先完成' AS value; SELECT SLEEP(40) AS hold; INSERT INTO stream_guard VALUES (3)");
+      const cancelling = await start(await openExport(output, 'xlsx'));
+      await expect.poll(async () => Number((await observer.query<RowDataPacket[]>(
+        "SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE ID <> CONNECTION_ID() AND INFO LIKE 'SELECT SLEEP(40)%'"
+      ))[0][0].n)).toBe(1);
+      await (await navigationMenuItem(modal, { name: '取消任务', exact: true })).click();
+      await finish(cancelling, 'cancelled');
+      expect(await readFile(output)).toEqual(original);
+      expect(await count(observer, database)).toBe(1);
+      expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
+    }, info, { captureFailureScreenshot: false });
+  });
 
   test('TXT 完整导出只写第二个行结果并在配置变化后撤销原选择', async ({}, info) => {
     await isolatedDatabase(async ({observer, database}) => {
