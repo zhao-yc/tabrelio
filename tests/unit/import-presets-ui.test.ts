@@ -20,7 +20,7 @@ function fixture(overrides: Partial<ImportPresetsServices> = {}) {
 describe('导入配置协调器与整份应用（纯RAM）', () => {
   it('当前ready按白名单保存false及跳过字段，不保存行/令牌/连接/数据库/DDL', async () => {
     const controller = new ImportPreviewController({ metadata: async () => info(), preview: async () => sample }, () => {}); await controller.prepare(context); controller.setMapping(context, '第1列', 'id'); const value = captureImportPresetConfiguration(context, controller.ready(context));
-    expect(value).toEqual(configuration()); expect(Object.keys(value).sort()).toEqual(['columns', 'csvDelimiter', 'csvHasHeader', 'encoding', 'format', 'mapping']); expect(JSON.stringify(value)).not.toMatch(/首条秘密数据|不保存的|fileToken|connectionId|database|ddl/);
+    expect(value).toEqual({...configuration(), csvProtocol: 'tabrelio'}); expect(Object.keys(value).sort()).toEqual(['columns', 'csvDelimiter', 'csvHasHeader', 'csvProtocol', 'encoding', 'format', 'mapping']); expect(JSON.stringify(value)).not.toMatch(/首条秘密数据|不保存的|fileToken|connectionId|database|ddl/);
     expect(() => captureImportPresetConfiguration({ ...context, fileToken: '其它文件' }, controller.ready(context))).toThrow(); controller.setMapping(context, '第1列', ''); expect(() => captureImportPresetConfiguration(context, controller.ready(context))).toThrow();
   });
   it('JSON配置没有任何CSV自有字段，完整映射不可重复或映射生成列', async () => {

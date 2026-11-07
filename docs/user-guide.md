@@ -338,7 +338,7 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 要把数据交给 PostgreSQL 的 `COPY FROM`，在表页「导出数据」中选择「COPY CSV（PostgreSQL 原生）」。选择输出列及逗号、分号或 Tab，再指定 `.csv` 保存位置。文件含列名，固定 UTF-8，按 PostgreSQL 的 CSV 规则区分 NULL 和空字符串。导入时使用相同分隔符，并按文件列顺序指定目标列。详见[PostgreSQL 表页原生 COPY 导出](development/postgres-copy-export-20261105.md)。
 
-在有写入权限的 PostgreSQL 普通表或分区表打开「导入数据」，选择 CSV、JSON 或 XML。CSV 可设置分隔符和首行模式，XML 可指定记录标签、使用属性字段及按需解码 Base64。CSV 和 XML 使用 UTF-8，JSON 另支持 UTF-16 LE 和 GB18030。核对样本和字段映射后点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。[CSV 导入](development/postgres-copy-preview-20261105.md) · [JSON 导入](development/postgres-table-json-import-20261107.md) · [XML 导入](development/postgres-xml-import-20261107.md)
+在有写入权限的 PostgreSQL 普通表或分区表打开「导入数据」。CSV 可选择原生 UTF-8 或 tabrelio 读取方式，后者支持 UTF-8、UTF-16 LE 和 GB18030。两种方式均可设置分隔符和首行模式。XML 使用 UTF-8，可指定记录标签、使用属性字段及按需解码 Base64。JSON 也支持三种编码。核对样本和字段映射后点击「确认追加并导入」，提交后表页自动刷新。[CSV 读取方式](development/postgres-csv-encoding-20261107.md) · [JSON 导入](development/postgres-table-json-import-20261107.md) · [XML 导入](development/postgres-xml-import-20261107.md)
 
 导入现有 PostgreSQL 表时，如源文件已映射完整非空主键或唯一键，可选择跳过已有、新增或更新，或仅更新已有。向导默认只新增。确认按键导入后，回执分别显示新增、匹配更新和跳过行数。[PostgreSQL 文件按键导入](development/postgres-import-conflict-20261107.md)
 

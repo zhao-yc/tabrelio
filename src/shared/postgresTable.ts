@@ -264,7 +264,7 @@ export const postgresTableImportChooseSchema = z.union([
     scannedFile: scannedImportFile.optional(),
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('csv'), encoding: recordImportEncoding,
-    csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), scannedFile: scannedImportFile,
+    csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), scannedFile: scannedImportFile.optional(),
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('txt'), encoding: recordImportEncoding,
     txtOptions: txtImportOptionsSchema, scannedFile: scannedImportFile.optional(),

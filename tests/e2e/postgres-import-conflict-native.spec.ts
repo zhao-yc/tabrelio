@@ -5,6 +5,7 @@ import { test, expect, desktop, page } from './desktop-fixture';
 import { Client } from 'pg';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
+import iconv from 'iconv-lite';
 import { postgresTableImportZh as text } from '../../src/renderer/locales/postgresTableImport.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { fileImportConflictZh as conflict } from '../../src/renderer/locales/fileImportConflict.zh-CN';
@@ -54,6 +55,12 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       { name: '其它唯一键冲突.json', format: 'json', mode: 'upsert', data: '[{"tenant":"华东","code":7,"payload":"应回滚"},{"tenant":"华东","code":9,"payload":"更新八"}]', result: '整批已回滚' },
       { name: '分隔文本更新.txt', format: 'txt', mode: 'update-existing', data: "tenant||code||payload\n华东||7||'TXT''||内容'\n", result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
       { name: '工作簿更新.xlsx', format: 'xlsx', mode: 'update-existing', data: '', result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
+      { name: 'UTF-16 LE 按键更新.csv', format: 'csv', mode: 'update-existing', encoding: 'utf16le',
+        data: 'tenant;code;payload;raw;note;ignored\r\n华东;7;UTF-16 中文;base64:AP8=;\\N;跳过\r\n',
+        result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行', expected: {payload: 'UTF-16 中文', raw: '00ff', note: null} },
+      { name: 'GB18030 按键更新.csv', format: 'csv', mode: 'update-existing', encoding: 'gb18030',
+        data: 'tenant;code;payload;raw;note;ignored\r\n华东;7;GB18030 中文;base64:AAE=;"";跳过\r\n',
+        result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行', expected: {payload: 'GB18030 中文', raw: '0001', note: ''} },
       { name: '等待并发提交.json', format: 'json', mode: 'skip-existing', data: '[{"tenant":"华东","code":9,"payload":"不得覆盖并发写入"}]', result: '新增 0 行，匹配更新 0 行，跳过已有 1 行，跳过未匹配 0 行' },
       { name: '索引变化.json', format: 'json', mode: 'update-existing', data: '[{"tenant":"华东","code":7,"payload":"不写入"}]', result: '原匹配键已变化' },
     ] as const;
@@ -61,7 +68,9 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
     const paths = cases.map(item => info.outputPath(item.name));
     const incompatible = info.outputPath('缺少原字段.xlsx');
     for (const [index, path] of paths.entries()) {
-      if (cases[index].format !== 'xlsx') await writeFile(path, cases[index].data);
+      const item = cases[index];
+      if ('encoding' in item) await writeFile(path, iconv.encode((item.encoding === 'utf16le' ? '\ufeff' : '') + item.data, item.encoding));
+      else if (item.format !== 'xlsx') await writeFile(path, item.data);
       else {
         await writeXlsxImportFixture(path, ['tenant', 'code', 'memo', 'raw'], [['华东', '7', '工作簿更新', '\\B:AAE=']], true);
         await writeXlsxImportFixture(incompatible, ['tenant', 'code', 'other', 'raw'], [['华东', '7', '不同字段', '\\B:AAE=']], true);
@@ -83,8 +92,38 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
     const modal = page.getByRole('dialog', {name: text.title, exact: true});
     let committed: Awaited<ReturnType<typeof snapshot>> = [];
     for (const [index, item] of cases.entries()) {
+      const csvPresetName = '本例 tabrelio GB18030 CSV 配置';
+      if ('encoding' in item && item.encoding === 'gb18030') {
+        await page.evaluate(async name => {
+          const snapshot = await window.dbark.invoke('files.importPresets.list', {});
+          await window.dbark.invoke('files.importPresets.save', {generation: snapshot.generation, revision: snapshot.revision, name, configuration: {
+            format: 'csv', encoding: 'gb18030', csvProtocol: 'tabrelio', csvDelimiter: ';', csvHasHeader: true,
+            columns: ['tenant', 'code', 'payload', 'raw', 'note', 'ignored'],
+            mapping: {tenant: 'tenant', code: 'code', payload: 'payload', raw: 'raw', note: 'note', ignored: ''},
+          }});
+        }, csvPresetName);
+      }
       await (await navigationMenuItem(tab, {name: text.open, exact: true})).click();
       await modal.getByLabel(text.format, {exact: true}).selectOption(item.format);
+      if (item.format === 'csv') {
+        await expect(modal.getByLabel(text.csvProtocol, {exact: true})).toHaveValue('postgres-native');
+        await expect(modal.getByLabel(text.encoding, {exact: true})).toBeDisabled();
+        if ('encoding' in item) {
+          if (item.encoding === 'gb18030') {
+            await modal.locator('summary').filter({hasText: importPresetsZh.title}).click();
+            await modal.getByRole('button', {name: importPresetsZh.read, exact: true}).click();
+            await modal.getByLabel(importPresetsZh.choose, {exact: true}).selectOption({label: csvPresetName});
+            await modal.getByRole('button', {name: importPresetsZh.apply, exact: true}).click();
+          } else {
+            await modal.getByLabel(text.csvProtocol, {exact: true}).selectOption('tabrelio');
+            await modal.getByLabel(text.encoding, {exact: true}).selectOption(item.encoding);
+            await modal.getByLabel(text.delimiter, {exact: true}).selectOption(';');
+          }
+          await expect(modal.getByLabel(text.csvProtocol, {exact: true})).toHaveValue('tabrelio');
+          await expect(modal.getByLabel(text.encoding, {exact: true})).toHaveValue(item.encoding);
+          await expect(modal.getByLabel(text.delimiter, {exact: true})).toHaveValue(';');
+        }
+      }
       if (item.format === 'txt') {
         await modal.getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('');
         await modal.getByLabel(txtImportZh.custom, {exact: true}).fill('||');
@@ -102,6 +141,11 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       const pick = item.format === 'xlsx' ? excelImportZh.inspect : item.format === 'csv' ? text.choose : item.format === 'json' ? text.chooseJson : item.format === 'txt' ? text.chooseTxt : text.chooseXml;
       await modal.getByRole('button', {name: pick, exact: true}).click();
       await expect(modal).toContainText(basename(paths[index]));
+      if ('encoding' in item) {
+        await expect(modal).toContainText(text.records(1));
+        await expect(modal.getByLabel(text.target(5), {exact: true})).toHaveValue('');
+        expect(await snapshot()).toEqual(committed);
+      }
       if (item.format === 'xlsx') {
         const before = await snapshot();
         const preset = '本例 XLSX 按范围映射';
@@ -163,6 +207,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       if (index === 1) await modal.screenshot({path: info.outputPath('PostgreSQL 匹配键导入.png')});
       if (item.format === 'txt') await modal.screenshot({path: info.outputPath('PostgreSQL TXT 字段映射.png')});
       if (item.format === 'xlsx') await modal.screenshot({path: info.outputPath('PostgreSQL XLSX 字段映射.png')});
+      if ('encoding' in item) await modal.screenshot({path: info.outputPath(`PostgreSQL CSV ${item.encoding} 字段映射.png`)});
       if (item.name === '索引变化.json') await observer.query('DROP INDEX public.import_match');
       if (item.name === '等待并发提交.json') {
         await observer.query('BEGIN');
@@ -198,6 +243,10 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       }
       else if (item.format === 'xlsx') {
         expect(actual).toEqual([{...committed[0], payload: '工作簿更新', raw: '0001'}, ...committed.slice(1)]);
+        committed = actual;
+      }
+      else if ('encoding' in item) {
+        expect(actual).toEqual([{...committed[0], ...item.expected}, ...committed.slice(1)]);
         committed = actual;
       }
       else if (item.name === '等待并发提交.json') {

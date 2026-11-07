@@ -26,6 +26,7 @@ export interface ImportPreviewPreparation { freshMetadata?: boolean; configurati
 /** 具名字段按完整集合对齐，无标题字段按原列位置；所有目标通过后才整份发布。 */
 function completeMapping(info: TableInfo, sample: ImportSample, configuration: ImportPresetConfiguration): Record<string, string> {
   const value = importPresetConfigurationSchema.parse(configuration), targets = new Set(info.columns.filter(column => !column.generated).map(column => column.name));
+  if (value.csvProtocol === 'postgres-native') throw Error(importPresetsZh.incompatible);
   const mapping = resolveImportPresetMapping(value, sample.columns, targets);
   if (!mapping) throw Error(importPresetsZh.incompatible);
   return Object.fromEntries(sample.columns.map((name, index) => [name, mapping[index]]));

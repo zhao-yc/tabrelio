@@ -11,6 +11,13 @@ function entry() { return { id: randomUUID(), name: '财务 CSV 导入', configu
 function packet() { return { generation: randomUUID(), revision: 0, name: '财务 CSV 导入', configuration: configuration() }; }
 
 describe('导入配置严格共享合同', () => {
+  it('CSV 读取方式可存储，原生 PostgreSQL 固定 UTF-8 且其它格式不能携带 CSV 方式', () => {
+    const csv = configuration();
+    expect(importPresetConfigurationSchema.parse({...csv, csvProtocol: 'postgres-native'}).csvProtocol).toBe('postgres-native');
+    expect(importPresetConfigurationSchema.parse({...csv, encoding: 'gb18030', csvProtocol: 'tabrelio'}).csvProtocol).toBe('tabrelio');
+    expect(importPresetConfigurationSchema.safeParse({...csv, encoding: 'utf16le', csvProtocol: 'postgres-native'}).success).toBe(false);
+    expect(importPresetConfigurationSchema.safeParse({format: 'json', encoding: 'utf8', columns: ['id'], mapping: {id: 'id'}, csvProtocol: 'tabrelio'}).success).toBe(false);
+  });
   it('SQLite 配置保留空 JSON 键和同源多目标的独立转换，拒绝跨形态或不在目录的映射', () => {
     const sqliteMapping = [{ source: '', target: 'original', kind: 'text' }, { source: '', target: 'number', kind: 'integer' }];
     const raw = { format: 'json', encoding: 'utf8', columns: ['', 'note'], sqliteMapping };

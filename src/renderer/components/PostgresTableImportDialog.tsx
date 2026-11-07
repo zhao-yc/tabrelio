@@ -22,10 +22,10 @@ import { ImportMappingActions } from './ImportMappingActions';
 import { importPresetConfigurationSchema, resolveImportPresetMapping, type ImportPresetConfiguration, type StoredImportPresetConfiguration } from '../../shared/importPresets';
 import { ImportPresets } from './ImportPresets';
 import { importPresetsZh as presetsText } from '../locales/importPresets.zh-CN';
+import type { CsvImportProtocol } from '../../shared/csvImport';
 
-/** 原生 COPY 直接读取 UTF-8。其它连接保存的非 UTF-8 CSV 配置不套用到此入口。 */
 function supportsPreset(configuration: StoredImportPresetConfiguration): configuration is ImportPresetConfiguration {
-  return 'mapping' in configuration && (configuration.format !== 'csv' || configuration.encoding === 'utf8');
+  return 'mapping' in configuration;
 }
 
 /** 显示原文件的样本和列映射，只在用户确认后申请一次性导入。 */
@@ -38,6 +38,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const [xmlOptions, setXmlOptions] = useState<XmlImportOptions>(initialSource?.xmlOptions ?? { rowTag: 'RECORD', attributes: true, binaryBase64: false });
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [hasHeader, setHasHeader] = useState(true);
+  const [csvProtocol, setCsvProtocol] = useState<CsvImportProtocol>('postgres-native');
   const [encoding, setEncoding] = useState<ImportFileReadOptions['encoding']>('utf8');
   const [txtOptions, setTxtOptions] = useState<TxtImportOptions>(txtImportDefaults);
   const [workbook, setWorkbook] = useState<FileChoice | null>(null);
@@ -57,7 +58,8 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const presetOperation = useRef(false);
   const occupied = useRef(false), cancelRequested = useRef(false);
   const locked = choosing || !!taskId || presetBusy;
-  const records = !!initialSource || format !== 'csv';
+  const recordCsv = format === 'csv' && csvProtocol === 'tabrelio';
+  const records = !!initialSource || format !== 'csv' || recordCsv;
   const selectedKeys = mapping.filter(Boolean);
   const mapped = !!file && mapping.length === file.header.length && selectedKeys.length > 0 &&
     new Set(selectedKeys).size === selectedKeys.length && (records || selectedKeys.length === mapping.length);
@@ -82,6 +84,8 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   function applyPreset(value: StoredImportPresetConfiguration): boolean {
     if (occupied.current || presetOperation.current || !isCurrent() || !supportsPreset(value)) return false;
     setFormat(value.format); setEncoding(value.encoding);
+    // 旧 UTF-8 配置沿用原生读取；旧非 UTF-8 配置来自 tabrelio 文本入口。
+    setCsvProtocol(value.csvProtocol ?? (value.format === 'csv' && value.encoding !== 'utf8' ? 'tabrelio' : 'postgres-native'));
     setDelimiter(value.csvDelimiter ?? ','); setHasHeader(value.csvHasHeader ?? true);
     if (value.xmlOptions) setXmlOptions(value.xmlOptions);
     if (value.txtOptions) setTxtOptions(value.txtOptions);
@@ -97,9 +101,9 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     if (mapping.some(key => key && !names.has(key))) throw Error(presetsText.incompatible);
     const { sheetId: _sheetId, ...workbookOptions } = excelOptions;
     return importPresetConfigurationSchema.parse({
-      format, encoding: format === 'txt' || format === 'json' ? encoding : 'utf8', columns: file.header,
+      format, encoding: format === 'txt' || format === 'json' || recordCsv ? encoding : 'utf8', columns: file.header,
       mapping: Object.fromEntries(file.header.map((name, index) => [name, names.get(mapping[index]) ?? ''])),
-      ...(format === 'csv' ? { csvDelimiter: delimiter, csvHasHeader: hasHeader } : {}),
+      ...(format === 'csv' ? { csvDelimiter: delimiter, csvHasHeader: hasHeader, csvProtocol } : {}),
       ...(format === 'xml' ? { xmlOptions } : {}),
       ...(format === 'txt' ? { txtOptions } : {}),
       ...(format === 'xlsx' ? { excelOptions: workbookOptions } : {}),
@@ -141,6 +145,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
       if (!isCurrent()) throw Error(text.stale);
       const selection = format === 'xml' ? { format, xmlOptions } : format === 'txt' ? { format, encoding, txtOptions } : format === 'json' ? { format, encoding } :
         format === 'xlsx' ? { format, excelOptions, workbookToken: workbook!.token } :
+        recordCsv ? { format, encoding, csvDelimiter: delimiter, csvHasHeader: hasHeader } :
         { csvDelimiter: delimiter, csvHasHeader: hasHeader };
       const selected = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...selection });
       if (!isCurrent()) throw Error(text.stale);
@@ -152,7 +157,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         setMapping(resolved.map(name => targets.get(name) ?? ''));
         setPresetNotice(presetsText.applied);
       } else {
-        setMapping(matchImportColumns(records || hasHeader ? 'name' : 'clear', selected.header, candidates).map(column => column?.key ?? ''));
+        setMapping(matchImportColumns(format !== 'csv' || hasHeader ? 'name' : 'clear', selected.header, candidates).map(column => column?.key ?? ''));
       }
       setFile(selected);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -189,11 +194,16 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
 
   let canSavePreset = false;
   if (!initialSource && mapped) { try { capturePreset(); canSavePreset = true; } catch { /* 不完整或超限的映射仍可按当前流程单次导入。 */ } }
+  const nativeCsv = format === 'csv' && !recordCsv;
+  const encodingField = <Field label={text.encoding}><select aria-label={text.encoding} value={nativeCsv ? 'utf8' : encoding}
+    disabled={locked || nativeCsv} onChange={event => { setEncoding(event.target.value as typeof encoding); editSource(); }}>
+    <option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option>
+  </select></Field>;
   return <Modal title={text.title} onClose={() => { if (!occupied.current && !presetOperation.current) onClose(); }}>
     <div className="modal-content pg-table-export">
       <p><strong>{target.table}</strong> · {target.database}</p>
       <p>{mode === 'insert' ? text.note : text.conflictNote}</p>
-      {(!['txt', 'xlsx'].includes(format) || initialSource) && <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : format === 'txt' ? txtImportZh.hint : format === 'xlsx' ? excelImportZh.hint : initialSource ? newTableText.postgresCsv : text.nullNote}</p>}
+      {(!['txt', 'xlsx'].includes(format) || initialSource) && <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : format === 'txt' ? txtImportZh.hint : format === 'xlsx' ? excelImportZh.hint : initialSource ? newTableText.postgresCsv : recordCsv ? text.tabrelioCsvNote : text.nullNote}</p>}
       {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
         setFormat(event.target.value as typeof format); setWorkbook(null); setExcelOptions(excelImportDefaults); editSource();
       }}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xlsx">{excelImportZh.format}</option><option value="xml">XML</option></select></Field>
@@ -208,10 +218,12 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
           <label className="check"><input type="checkbox" checked={xmlOptions.binaryBase64} disabled={locked}
             onChange={event => { setXmlOptions({ ...xmlOptions, binaryBase64: event.target.checked }); editSource(); }}/> {xmlImportZh.binary}</label>
           </>}
-        </> : format === 'json' || format === 'txt' ? <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
-          onChange={event => { setEncoding(event.target.value as typeof encoding); editSource(); }}>
-          <option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option>
-        </select></Field> : format === 'xlsx' ? <button disabled={locked} onClick={() => void chooseWorkbook()}>{workbook?.name ?? excelImportZh.workbook}</button> : <>
+        </> : format === 'json' || format === 'txt' ? encodingField : format === 'xlsx' ? <button disabled={locked} onClick={() => void chooseWorkbook()}>{workbook?.name ?? excelImportZh.workbook}</button> : <>
+        <Field label={text.csvProtocol}><select aria-label={text.csvProtocol} value={csvProtocol} disabled={locked}
+          onChange={event => { setCsvProtocol(event.target.value as CsvImportProtocol); editSource(); }}>
+          <option value="postgres-native">{text.nativeCsv}</option><option value="tabrelio">{text.tabrelioCsv}</option>
+        </select></Field>
+        {encodingField}
         <CsvExportDelimiterField value={delimiter} disabled={locked} label={text.delimiter} hint={text.delimiterHint} onChange={value => {
           setDelimiter(value); editSource();
         }}/>

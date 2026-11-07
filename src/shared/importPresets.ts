@@ -1,14 +1,14 @@
 import { txtImportOptionsSchema, validTxtImport, type TxtImportOptions } from './txtImport';
 import { z } from 'zod';
 import { recordImportFormats, sqliteXmlImportOptionsSchema, validXmlImport, xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions } from './xmlImport';
-import { csvImportDelimiters, csvImportHasHeader, type CsvImportDelimiter } from './csvImport';
+import { csvImportDelimiters, csvImportHasHeader, csvImportProtocols, type CsvImportDelimiter, type CsvImportProtocol } from './csvImport';
 import { excelImportOptionsSchema, type ExcelImportOptions } from './excelTransfer';
 import { sqliteTableImportLimits, sqliteTableImportMappingSchema, type SqliteTableImportMapping } from './sqliteTableImport';
 
 interface ImportPresetReadOptions {
   format: RecordImportFormat; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
   excelOptions?: Omit<ExcelImportOptions, 'sheetId'>;
-  csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; columns: string[];
+  csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; csvProtocol?: CsvImportProtocol; columns: string[];
 }
 export interface ImportPresetConfiguration extends ImportPresetReadOptions { mapping: Record<string, string>; }
 export interface SqliteImportPresetConfiguration extends ImportPresetReadOptions { sqliteMapping: SqliteTableImportMapping[]; }
@@ -73,7 +73,7 @@ function date(input: unknown): string { const value = string(input, 24, 24); if 
 
 /** 配置仅含文件解释、源列身份及显式映射，不接收路径、行值、SQL或任何连接身份。 */
 function configuration(input: unknown): StoredImportPresetConfiguration {
-  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions', 'columns', 'mapping', 'sqliteMapping'], ['format', 'encoding', 'columns']);
+  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'csvProtocol', 'xmlOptions', 'txtOptions', 'excelOptions', 'columns', 'mapping', 'sqliteMapping'], ['format', 'encoding', 'columns']);
   const sqlite = Object.hasOwn(source, 'sqliteMapping');
   if (sqlite === Object.hasOwn(source, 'mapping')) return invalid();
   const format = source.format as RecordImportFormat;
@@ -112,6 +112,12 @@ function configuration(input: unknown): StoredImportPresetConfiguration {
   if (Object.hasOwn(source, 'csvHasHeader')) {
     if (source.format !== 'csv' || typeof source.csvHasHeader !== 'boolean') return invalid();
     output.csvHasHeader = source.csvHasHeader;
+  }
+  if (Object.hasOwn(source, 'csvProtocol')) {
+    const protocol = source.csvProtocol as CsvImportProtocol;
+    if (format !== 'csv' || !csvImportProtocols.includes(protocol) ||
+        protocol === 'postgres-native' && (sqlite || output.encoding !== 'utf8')) return invalid();
+    output.csvProtocol = protocol;
   }
   if (Object.hasOwn(source, 'xmlOptions')) {
     const fields = record(source.xmlOptions, ['rowTag', 'attributes', 'binaryBase64', 'documentResult'], ['rowTag', 'attributes', 'binaryBase64']);

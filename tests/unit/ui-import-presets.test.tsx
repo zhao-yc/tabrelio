@@ -70,6 +70,13 @@ describe('导入配置正式TransferDialog流程（真实React RAM，零实际�
   it('首帧显式读取沿协调器原状态生效，选择配置后应用入口可用', async () => {
     await mount(); const id = installPreset(); await click(namedButton(presetText.read)); expect(requests('files.importPresets.list')).toHaveLength(1); await change(named(presetText.choose, 'select'), id); expect(namedButton(presetText.apply).disabled).toBe(false);
   });
+  it('MySQL 与 MariaDB 通用入口不列出 PostgreSQL 原生 CSV 配置', async () => {
+    await mount();
+    installPreset({...config(), csvProtocol: 'postgres-native'});
+    await click(namedButton(presetText.read));
+    expect(named(presetText.choose, 'select').querySelectorAll('option').map(option => option.textContent)).toEqual([presetText.placeholder]);
+    expect(namedButton(presetText.apply).disabled).toBe(true);
+  });
   it('先应用配置可等待选文件，取消选择和不兼容文件都不消费意图，成功一次后换文件恢复普通预览', async () => {
     const choices = [null, {token: 'bad', name: 'bad.csv'}, {token: 'good', name: 'good.csv'}, {token: 'next', name: 'next.csv'}];
     await mount({
@@ -105,7 +112,7 @@ describe('导入配置正式TransferDialog流程（真实React RAM，零实际�
   it('打开不新增IPC；当前完整配置显式保存白名单，重新应用刷新metadata且不自动导入', async () => {
     await mount(); expect(requests('files.importPresets.list')).toHaveLength(0); await click(picker()); await header(false); await change(named('映射字段 第1列', 'select'), 'id'); await change(named('映射字段 第2列', 'select'), '内容');
     await click(namedButton(presetText.read)); await name('常用 导入'); await click(namedButton(presetText.create)); expect(requests('files.importPresets.save')).toHaveLength(1); const saved = requests('files.importPresets.save')[0];
-    expect(saved.configuration).toEqual(config()); expect(Object.keys(saved.configuration).sort()).toEqual(['columns', 'csvDelimiter', 'csvHasHeader', 'encoding', 'format', 'mapping']); expect(JSON.stringify(saved)).not.toMatch(/fileToken|connectionId|database|首条原文|current-file/);
+    expect(saved.configuration).toEqual({...config(), csvProtocol: 'tabrelio'}); expect(Object.keys(saved.configuration).sort()).toEqual(['columns', 'csvDelimiter', 'csvHasHeader', 'csvProtocol', 'encoding', 'format', 'mapping']); expect(JSON.stringify(saved)).not.toMatch(/fileToken|connectionId|database|首条原文|current-file/);
     await header(true); const metadata = requests('metadata.table').length; await click(namedButton(presetText.apply)); expect(requests('metadata.table')).toHaveLength(metadata + 1); expect(named(text.label, 'input').checked).toBe(false); expect(named('映射字段 第1列', 'select').value).toBe('id'); expect(named('映射字段 第2列', 'select').value).toBe('内容'); expect(doc.body.textContent).toContain(presetText.applied); expect(requests('files.import')).toHaveLength(0);
     await click(execute()); expect(requests('files.import')).toHaveLength(1); expect(requests('files.import')[0]).toMatchObject({ csvHasHeader: false, mapping: { 第1列: 'id', 第2列: '内容' } });
   });

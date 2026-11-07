@@ -1,6 +1,8 @@
 /** CSV 导入仅开放这三个单字符分隔符；省略参数时保持历史逗号行为。 */
 export const csvImportDelimiters = [',', ';', '\t'] as const;
 export type CsvImportDelimiter = typeof csvImportDelimiters[number];
+export const csvImportProtocols = ['tabrelio', 'postgres-native'] as const;
+export type CsvImportProtocol = typeof csvImportProtocols[number];
 
 /** 流式读取器也校验配置，避免内部调用绕过 IPC 后静默采用其他解析规则。 */
 export function csvImportDelimiter(format: string, delimiter?: CsvImportDelimiter): CsvImportDelimiter {

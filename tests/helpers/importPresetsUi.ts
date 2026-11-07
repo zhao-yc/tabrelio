@@ -42,7 +42,7 @@ export function importPresetsUiFixture(database: string, marker: string) {
   };
   return {
     database, marker, qualified, files, columns, targetColumns, presetName: '本例GB18030分号无标题配置', temporaryPresetName: '本例待删除临时导入配置', updatedPresetName: '本例已更新GB18030分号配置',
-    configuration: { format: 'csv' as const, encoding: 'gb18030' as const, csvDelimiter: ';' as const, csvHasHeader: false, columns, mapping: Object.fromEntries(columns.map((column, index) => [column, targetColumns[index]])) },
+    configuration: { format: 'csv' as const, encoding: 'gb18030' as const, csvProtocol: 'tabrelio' as const, csvDelimiter: ';' as const, csvHasHeader: false, columns, mapping: Object.fromEntries(columns.map((column, index) => [column, targetColumns[index]])) },
     creates: ['CREATE DATABASE `' + database + '` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin', 'CREATE TABLE `' + database + '`.`__owner` (marker VARCHAR(100) NOT NULL PRIMARY KEY) ENGINE=InnoDB', 'CREATE TABLE ' + qualified + ' (`第1列` BIGINT UNSIGNED NOT NULL PRIMARY KEY,amount DECIMAL(30,12) NOT NULL,payload BLOB NOT NULL,note TEXT NOT NULL,nullable_note VARCHAR(80) NULL,literal_slash VARCHAR(80) NOT NULL) ENGINE=InnoDB'],
     seedOwner: 'INSERT INTO `' + database + "`.`__owner` VALUES ('" + marker + "')", drop: 'DROP DATABASE `' + database + '`',
   };
