@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import iconv from 'iconv-lite';
 import type { DataRow } from '../../src/shared/contracts';
 import { csvImportColumnName, csvImportHasHeader, type CsvImportDelimiter } from '../../src/shared/csvImport';
+import { validateCommand } from '../../src/shared/validation';
+import { importPresetConfigurationSchema } from '../../src/shared/importPresets';
+import { sqliteImportSourceOptionsKey } from '../../src/shared/sqliteImportSource';
 
 const observed = vi.hoisted(() => ({ streams: [] as ReadStream[], closes: new Set<ReadStream>() }));
 // 仅旁路记录真实文件流；解析、磁盘读取和 close 均不替换为模拟结果。
@@ -41,6 +44,23 @@ afterEach(async () => {
 });
 
 describe('CSV 无标题共享规则', () => {
+  it('范围通过各导入合同并进入来源身份，拒绝非 CSV、逆序及无表头时指定字段名', () => {
+    const csvRowRange = { firstDataRow: 2, lastDataRow: 3 };
+    const request = { format: 'csv', encoding: 'utf8', fileToken: '文件', csvHasHeader: false, csvRowRange } as const;
+    const target = { connectionId: '连接', database: 'main', table: '数据', taskId: '任务' };
+    expect(validateCommand('files.preview', request)).toMatchObject({ csvRowRange });
+    expect(validateCommand('files.inspectImport', { ...request, taskId: '任务' })).toMatchObject({ csvRowRange });
+    expect(validateCommand('sqlite.tableImport.inspect', { ...target, ...request })).toMatchObject({ csvRowRange });
+    expect(importPresetConfigurationSchema.parse({
+      format: 'csv', encoding: 'utf8', csvHasHeader: false, csvRowRange, columns: ['第1列'], mapping: { 第1列: '数据' },
+    })).toMatchObject({ csvRowRange });
+    expect(sqliteImportSourceOptionsKey(request)).not.toBe(sqliteImportSourceOptionsKey({ ...request, csvRowRange: { ...csvRowRange, lastDataRow: 4 } }));
+    for (const patch of [
+      { format: 'txt' }, { csvRowRange: { firstDataRow: 3, lastDataRow: 2 } },
+      { csvRowRange: { headerRow: 1 } }, { csvRowRange: { firstDataRow: 1.5 } },
+    ]) expect(() => validateCommand('files.preview', { ...request, ...patch })).toThrow();
+  });
+
   it('缺省保持首行为标题，显式选项只接受 CSV 布尔值', () => {
     expect(csvImportHasHeader('csv')).toBe(true); expect(csvImportHasHeader('json')).toBe(true);
     expect(csvImportHasHeader('csv', true)).toBe(true); expect(csvImportHasHeader('csv', false)).toBe(false);

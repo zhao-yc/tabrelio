@@ -1,3 +1,5 @@
+import { importRecordRangeSchema } from './importRecordRange';
+import { csvRangeInvalid, validCsvRange } from './csvImport';
 import { excelImportOptionsSchema } from './excelTransfer';
 import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { txtImportOptionsSchema } from './txtImport';
@@ -259,13 +261,13 @@ export interface PostgresTableExportOutput { rows: number; fileCommitted: true }
 const scannedImportFile = z.object({ token, expectedSource: importFileSourceSchema }).strict();
 const recordImportEncoding = z.enum(['utf8', 'utf16le', 'gb18030']);
 export const postgresTableImportChooseSchema = z.union([
-  target.extend({ pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional() }).strict(),
+  target.extend({ pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional(), csvRowRange: importRecordRangeSchema.optional() }).strict().refine(validCsvRange, csvRangeInvalid),
   target.extend({ pageToken: token, format: z.literal('xml'), xmlOptions: xmlImportOptionsSchema,
     scannedFile: scannedImportFile.optional(),
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('csv'), encoding: recordImportEncoding,
-    csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), scannedFile: scannedImportFile.optional(),
-  }).strict(),
+    csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), csvRowRange: importRecordRangeSchema.optional(), scannedFile: scannedImportFile.optional(),
+  }).strict().refine(validCsvRange, csvRangeInvalid),
   target.extend({ pageToken: token, format: z.literal('txt'), encoding: recordImportEncoding,
     txtOptions: txtImportOptionsSchema, scannedFile: scannedImportFile.optional(),
   }).strict(),

@@ -1,22 +1,16 @@
 import { z } from 'zod';
+import { importRecordRange, importRecordRangeFields, importRecordRangeZh, validImportRecordRange, type ImportRecordRange } from './importRecordRange';
 
 export const txtRecordDelimiters = { lf: '\n', crlf: '\r\n', cr: '\r' } as const;
 export const txtFieldDelimiter = z.string().min(1).max(16).refine(value => [...value].length <= 8 && !/[\u0000\r\n\ud800-\udfff]/u.test(value));
 export const txtTextQualifier = z.enum(['double', 'single', 'none']);
 const recordDelimiter = z.enum(['auto', 'lf', 'crlf', 'cr']);
-const recordIndex = z.number().int().positive();
-const base = {
-  recordDelimiter, hasHeader: z.boolean(),
-  headerRow: recordIndex.max(Number.MAX_SAFE_INTEGER - 1).optional(),
-  firstDataRow: recordIndex.optional(),
-  lastDataRow: recordIndex.optional(),
-};
+const base = { recordDelimiter, hasHeader: z.boolean(), ...importRecordRangeFields };
 export const txtImportMaxOptions = 8;
 
 /** 保留旧配置的默认位置，结束记录包含在导入范围内。 */
-export function txtImportRange(options: { hasHeader: boolean; headerRow?: number; firstDataRow?: number; lastDataRow?: number }) {
-  const headerRow = options.hasHeader ? options.headerRow ?? 1 : 0;
-  return { headerRow, firstDataRow: options.firstDataRow ?? headerRow + 1, lastDataRow: options.lastDataRow ?? Infinity };
+export function txtImportRange(options: ImportRecordRange & { hasHeader: boolean }) {
+  return importRecordRange(options.hasHeader, options);
 }
 
 export function txtFixedWidths(value: string): number[] {
@@ -34,10 +28,7 @@ export const txtImportOptionsSchema = z.discriminatedUnion('mode', [
     }),
   }).strict(),
 ]).refine(value => value.mode !== 'delimited' || compatibleTxtQualifier(value))
-  .refine(value => {
-    const { headerRow, firstDataRow, lastDataRow } = txtImportRange(value);
-    return (value.hasHeader || value.headerRow === undefined) && headerRow < firstDataRow && firstDataRow <= lastDataRow;
-  });
+  .refine(value => validImportRecordRange(value.hasHeader, value));
 export type TxtImportOptions = z.infer<typeof txtImportOptionsSchema>;
 
 export function txtQualifier(quote: z.infer<typeof txtTextQualifier>): string {
@@ -54,8 +45,7 @@ export const txtImportZh = {
   custom: '自定义', tab: '制表符', comma: '逗号', semicolon: '分号', pipe: '竖线', space: '空格',
   quote: '文本限定符', double: '双引号', single: '单引号', none: '无',
   record: '记录换行', auto: '自动识别', hasHeader: 'TXT 包含字段名记录',
-  headerRow: '字段名记录号', firstDataRow: '首条数据记录号', lastDataRow: '最后数据记录号', throughEnd: '默认读到文件末尾',
-  rangeHint: '记录从 1 开始计数，包含最后一条。空白记录计数，限定符内的换行属于同一条记录。',
+  ...importRecordRangeZh,
   widths: '固定列宽（逗号分隔）', trim: '去除字段两端填充空格',
   widthHint: '按 Unicode 字符计数。例如 4,8,12 表示三列，每条记录必须符合所填总宽度。',
   hint: '空字段保留为空字符串，\\N 表示 NULL。关闭表头时，按选中记录的列位置映射。',

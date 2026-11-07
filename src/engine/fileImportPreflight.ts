@@ -1,3 +1,4 @@
+import { csvRangeOption } from '../shared/csvImport';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { importFileSourceSchema } from '../shared/importNewTable';
@@ -49,7 +50,7 @@ export async function preflightImportFile(context: StructureTaskContext, input: 
   const hash = createHash('sha256');
   let finished = false;
   try {
-    for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { signal: context.managed.signal, ...(input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source) } : {}), ...(input.txtOptions ? { txtOptions: input.txtOptions } : {}), ...(input.excelOptions ? { excelOptions: input.excelOptions, checkCancelled } : {}), onBytes: chunk => { hash.update(chunk); report.sourceBytes += chunk.length; } })) {
+    for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { signal: context.managed.signal, ...csvRangeOption(input.csvRowRange), ...(input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source) } : {}), ...(input.txtOptions ? { txtOptions: input.txtOptions } : {}), ...(input.excelOptions ? { excelOptions: input.excelOptions, checkCancelled } : {}), onBytes: chunk => { hash.update(chunk); report.sourceBytes += chunk.length; } })) {
       checkCancelled(); report.checkedRecords++;
       let invalid = false;
       for (const [source, target] of mapping) {

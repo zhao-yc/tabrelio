@@ -1,3 +1,4 @@
+import { ImportRecordRangeFields, importRangeAfterHeaderChange } from './ImportRecordRangeFields';
 import { excelImportDefaults, excelImportOptionsSchema, excelImportZh } from '../../shared/excelTransfer';
 import { ExcelImportFields } from './ExcelImportFields';
 import { txtImportDefaults, txtImportOptionsSchema, txtImportZh } from '../../shared/txtImport';
@@ -7,7 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TableCreateApplyOutput } from '../../shared/tableCreate';
 import type { SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 import { SqliteImportNewTableDialog, type SqliteImportNewTableServices } from './SqliteImportNewTableDialog';
-import { csvImportDelimiters, type CsvImportDelimiter } from '../../shared/csvImport';
+import { csvImportDelimiters, csvRangeInvalid, validCsvRange, csvRangeOption, type CsvImportDelimiter } from '../../shared/csvImport';
 import { ImportNewTableController, newTableXmlDefaults, type ImportNewTableServices } from '../importNewTableUi';
 import { cellPreview, invoke, uid } from '../lib';
 import { importNewTableZh as text } from '../locales/importNewTable.zh-CN';
@@ -80,6 +81,7 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
   const txt = state.options.format === 'txt', txtOptions = state.options.txtOptions ?? txtImportDefaults;
   const workbook = state.options.format === 'xlsx', excelOptions = state.options.excelOptions ?? excelImportDefaults;
   const validWorkbook = !workbook || !!state.file && excelImportOptionsSchema.safeParse(excelOptions).success;
+  const validCsv = state.options.format !== 'csv' || validCsvRange({ csvHasHeader: state.options.csvHasHeader, ...csvRangeOption(state.options.csvRowRange) });
   const validTxt = !txt || txtImportOptionsSchema.safeParse(txtOptions).success;
   const validXml = !xml || xmlImportOptionsSchema.safeParse(xmlOptions).success;
   return <Modal title={text.title} wide onClose={() => event(() => { void controller.close(state); })}><div className="modal-content" aria-busy={state.busy || state.closing}>
@@ -87,7 +89,10 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
     {state.stage === 'source' ? <>
       <div className="form-grid"><Field label={text.format}><select aria-label={text.format} value={state.options.format} disabled={disabled} onChange={value => event(() => controller.change(state, { format: value.target.value as RecordImportFormat }))}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xlsx">{excelImportZh.format}</option><option value="xml">XML</option></select></Field>
         <Field label={text.encoding}><select aria-label={text.encoding} value={state.options.encoding} disabled={disabled || xml || workbook} onChange={value => event(() => controller.change(state, { encoding: value.target.value as 'utf8' | 'utf16le' | 'gb18030' }))}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option></select></Field>
-        {state.options.format === 'csv' && <><Field label={text.delimiter}><select aria-label={text.delimiter} value={state.options.csvDelimiter ?? ','} disabled={disabled} onChange={value => event(() => controller.change(state, { csvDelimiter: value.target.value as CsvImportDelimiter }))}>{csvImportDelimiters.map(delimiter => <option key={delimiter} value={delimiter}>{text.separators[delimiter]}</option>)}</select></Field><label><input type="checkbox" aria-label={text.header} checked={state.options.csvHasHeader ?? true} disabled={disabled} onChange={value => event(() => controller.change(state, { csvHasHeader: value.target.checked }))}/>{text.header}</label></>}
+        {state.options.format === 'csv' && <><Field label={text.delimiter}><select aria-label={text.delimiter} value={state.options.csvDelimiter ?? ','} disabled={disabled} onChange={value => event(() => controller.change(state, { csvDelimiter: value.target.value as CsvImportDelimiter }))}>{csvImportDelimiters.map(delimiter => <option key={delimiter} value={delimiter}>{text.separators[delimiter]}</option>)}</select></Field><label><input type="checkbox" aria-label={text.header} checked={state.options.csvHasHeader ?? true} disabled={disabled} onChange={value => event(() => controller.change(state, { csvHasHeader: value.target.checked,
+          csvRowRange: importRangeAfterHeaderChange(value.target.checked, state.options.csvRowRange) }))}/>{text.header}</label>
+          <ImportRecordRangeFields hasHeader={state.options.csvHasHeader ?? true} range={state.options.csvRowRange} disabled={disabled}
+            onChange={csvRowRange => event(() => controller.change(state, { csvRowRange }))}/></>}
         {workbook && <ExcelImportFields fileToken={state.file?.token} options={excelOptions} disabled={disabled} onChange={options => event(() => controller.change(state, { excelOptions: options }))}/>}
         {txt && <TxtImportFields options={txtOptions} disabled={disabled} onChange={options => event(() => controller.change(state, { txtOptions: options }))}/>}
         {xml && <>
@@ -103,7 +108,7 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
       {postgres && state.options.format === 'csv' && <p>{text.postgresCsv}</p>}
       {postgres && state.options.format === 'json' && <p>{postgresTableImportZh.jsonNote}</p>}
       {workbook && <button disabled={disabled} onClick={() => event(() => { void controller.scan(state, true); })}>{excelImportZh.workbook}</button>}
-      <button disabled={disabled || !validXml || !validTxt || !validWorkbook} onClick={() => event(() => { void controller.scan(state); })}>{state.busy ? <Spinner/> : null}{workbook ? excelImportZh.inspect : text.choose}</button>
+      <button disabled={disabled || !validCsv || !validXml || !validTxt || !validWorkbook} onClick={() => event(() => { void controller.scan(state); })}>{state.busy ? <Spinner/> : null}{workbook ? excelImportZh.inspect : text.choose}</button>
       {state.file && <p>{text.source}：{state.file.name}</p>}
       {inspection && <section><p>{xml && xmlOptions.documentResult !== undefined ? xmlImportZh.documentRecords(inspection.records) : text.records(inspection.records)}</p><p>{xml && xmlOptions.documentResult !== undefined ? xmlImportZh.documentColumns : text.columns}：{inspection.columns.length}</p><p>{text.sample}</p>
         <div style={{ overflow: 'auto', maxHeight: 280 }}><table><thead><tr>{inspection.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{inspection.rows.map((row, index) => <tr key={index}>{inspection.columns.map(column => <td key={column}>{cellPreview(Object.hasOwn(row, column) ? row[column] : xml || postgres ? null : undefined, 120)}</td>)}</tr>)}</tbody></table></div>
@@ -112,6 +117,6 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
       </section>}
     </> : <section><h3>{text.created}</h3><p>{origin.database} / {state.postgresTable ?? state.created?.target.table}</p><p>{text.retained}</p>{!controller.canContinue && <p className="warning-text">{text.unverified}</p>}</section>}
     {state.progress && <p role="status">{state.progress.message} · {state.progress.progress}%</p>}
-    <ErrorBox message={state.invalid ? text.stale : !validXml ? xmlImportZh.invalid : !validTxt ? txtImportZh.invalid : state.error ?? ''}/>
+    <ErrorBox message={state.invalid ? text.stale : !validCsv ? csvRangeInvalid : !validXml ? xmlImportZh.invalid : !validTxt ? txtImportZh.invalid : state.error ?? ''}/>
   </div><footer className="modal-footer"><button disabled={state.closing} onClick={() => event(() => { void controller.close(state); })}>{state.closing ? text.closing : text.close}</button><span className="grow"/>{state.busy && <button disabled={state.closing} onClick={() => event(() => controller.cancel())}>{text.cancel}</button>}{state.stage === 'source' ? <button className="primary" disabled={disabled || !inspection || !state.reviewed || !state.tableName} onClick={() => event(() => { controller.design(state); })}>{text.design}</button> : <button className="primary" disabled={disabled || !controller.canContinue} onClick={() => event(() => controller.continue(state))}>{text.continue}</button>}</footer></Modal>;
 }

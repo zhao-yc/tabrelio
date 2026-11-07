@@ -1,3 +1,4 @@
+import { csvRangeOption } from '../shared/csvImport';
 import { createHash } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 import { lstat } from 'node:fs/promises';
@@ -37,7 +38,7 @@ function identical(before: BigIntStats, after: BigIntStats): boolean { return be
 /** 全部摘要只来自同一条readRecords原字节链；提前return只收尾，不会产生完整核验证明。 */
 async function* sourceRecords(input: ReadInput, checkCancelled: () => void, signal?: AbortSignal, onColumns?: (columns: string[]) => void, completed?: (source: ImportFileSource) => void, onBytes?: (bytes: number) => void): AsyncGenerator<DataRow> {
   const { filePath, expectedSource: rawExpected } = input;
-  const selected = importFileInspectInputSchema.parse({ fileToken: '内部来源核验', taskId: '内部来源核验', format: input.format, encoding: input.encoding, ...(Object.hasOwn(input, 'csvDelimiter') ? { csvDelimiter: input.csvDelimiter } : {}), ...(Object.hasOwn(input, 'csvHasHeader') ? { csvHasHeader: input.csvHasHeader } : {}), ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}), ...(Object.hasOwn(input, 'txtOptions') ? { txtOptions: input.txtOptions } : {}), ...(Object.hasOwn(input, 'excelOptions') ? { excelOptions: input.excelOptions } : {}) }), expected = rawExpected === undefined ? undefined : importFileSourceSchema.parse(rawExpected);
+  const selected = importFileInspectInputSchema.parse({ fileToken: '内部来源核验', taskId: '内部来源核验', format: input.format, encoding: input.encoding, ...(Object.hasOwn(input, 'csvDelimiter') ? { csvDelimiter: input.csvDelimiter } : {}), ...(Object.hasOwn(input, 'csvHasHeader') ? { csvHasHeader: input.csvHasHeader } : {}), ...csvRangeOption(input.csvRowRange), ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}), ...(Object.hasOwn(input, 'txtOptions') ? { txtOptions: input.txtOptions } : {}), ...(Object.hasOwn(input, 'excelOptions') ? { excelOptions: input.excelOptions } : {}) }), expected = rawExpected === undefined ? undefined : importFileSourceSchema.parse(rawExpected);
   const check = () => { checkCancelled(); if (signal?.aborted) throw new SourceReadError('导入文件读取已取消'); };
   check(); const strict = ['xml', 'txt', 'xlsx'].includes(selected.format) ? undefined : encodingCheck(input), before = await regularFile(filePath); check(); const hash = createHash('sha256'); let bytes = 0;
   const observeBytes = (chunk: Buffer) => {
@@ -49,7 +50,7 @@ async function* sourceRecords(input: ReadInput, checkCancelled: () => void, sign
     onBytes?.(bytes);
   };
   try {
-    for await (const row of readRecords(filePath, selected.format, selected.encoding, selected.csvDelimiter, selected.csvHasHeader, { signal, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions, requiredColumns: input.requiredColumns } : {}), ...(selected.txtOptions ? { txtOptions: selected.txtOptions } : {}), ...(selected.excelOptions ? { excelOptions: selected.excelOptions, checkCancelled: check } : {}), onColumns: columns => { check(); onColumns?.(columns); }, onBytes: observeBytes })) { check(); yield row; }
+    for await (const row of readRecords(filePath, selected.format, selected.encoding, selected.csvDelimiter, selected.csvHasHeader, { signal, ...csvRangeOption(selected.csvRowRange), ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions, requiredColumns: input.requiredColumns } : {}), ...(selected.txtOptions ? { txtOptions: selected.txtOptions } : {}), ...(selected.excelOptions ? { excelOptions: selected.excelOptions, checkCancelled: check } : {}), onColumns: columns => { check(); onColumns?.(columns); }, onBytes: observeBytes })) { check(); yield row; }
     check(); strict?.finish(); const after = await regularFile(filePath); check();
     if (!identical(before, after) || BigInt(bytes) !== before.size) throw changed();
     const source = { sha256: hash.digest('hex'), bytes };

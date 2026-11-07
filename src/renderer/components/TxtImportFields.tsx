@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { txtImportRange, txtImportZh as text, type TxtImportOptions } from '../../shared/txtImport';
+import { txtImportZh as text, type TxtImportOptions } from '../../shared/txtImport';
+import { ImportRecordRangeFields } from './ImportRecordRangeFields';
 import { Field } from './ui';
 
 const separators = new Map([['\t', text.tab], [',', text.comma], [';', text.semicolon], ['|', text.pipe], [' ', text.space]]);
@@ -33,12 +34,7 @@ export function TxtImportFields({ options, disabled, onChange }: {
 }) {
   const { recordDelimiter, hasHeader, headerRow, firstDataRow, lastDataRow } = options;
   const shared = { recordDelimiter, hasHeader, headerRow, firstDataRow, lastDataRow };
-  const range = txtImportRange(options);
-  const fields = [
-    { key: 'headerRow', placeholder: '1' },
-    { key: 'firstDataRow', placeholder: String(range.headerRow + 1) },
-    { key: 'lastDataRow', placeholder: text.throughEnd },
-  ] as const;
+  const range = { headerRow, firstDataRow, lastDataRow };
   return <>
     <Field label={text.layout}><select aria-label={text.layout} disabled={disabled} value={options.mode} onChange={event => {
       onChange(event.target.value === 'fixed' ? { ...shared, mode: 'fixed', widths: '', trimPadding: true }
@@ -57,10 +53,8 @@ export function TxtImportFields({ options, disabled, onChange }: {
     </>}
     <label className="check"><input type="checkbox" disabled={disabled} checked={hasHeader}
       onChange={event => onChange({ ...options, hasHeader: event.target.checked, headerRow: event.target.checked ? headerRow : undefined })}/>{text.hasHeader}</label>
-    {fields.filter(({ key }) => key !== 'headerRow' || hasHeader).map(({ key, placeholder }) =>
-      <Field key={key} label={text[key]}><input aria-label={text[key]} type="number" min={1} step={1}
-        placeholder={placeholder} value={options[key] ?? ''} disabled={disabled}
-        onChange={event => onChange({ ...options, [key]: event.target.value === '' ? undefined : event.target.valueAsNumber })}/></Field>)}
-    <p className="muted small">{options.mode === 'fixed' ? text.widthHint + ' ' : ''}{text.hint} {text.rangeHint}</p>
+    <ImportRecordRangeFields hasHeader={hasHeader} range={range} disabled={disabled}
+      onChange={next => onChange({ ...options, ...next })}/>
+    <p className="muted small">{options.mode === 'fixed' ? text.widthHint + ' ' : ''}{text.hint}</p>
   </>;
 }

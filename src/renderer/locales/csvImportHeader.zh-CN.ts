@@ -1,5 +1,5 @@
 export const csvImportHeaderZh = {
-  label: '首行是字段名',
-  hasHeaderHint: '首条CSV记录作为字段名，数据从下一条记录开始。',
-  noHeaderHint: '首条CSV记录也是数据；源字段按列位置显示为“第1列”“第2列”…，请手动映射到目标字段。',
+  label: 'CSV 包含字段名记录',
+  hasHeaderHint: '默认使用首条记录的字段名，数据从下一条开始。',
+  noHeaderHint: '按首条选中记录的列位置显示“第1列”“第2列”等源字段，请手动映射到目标字段。',
 } as const;

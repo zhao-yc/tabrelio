@@ -1,8 +1,9 @@
+import type { ImportRecordRange } from '../shared/importRecordRange';
 import type { ExcelImportOptions } from '../shared/excelTransfer';
 import type { TxtImportOptions } from '../shared/txtImport';
 import type { RecordImportFormat, XmlImportOptions } from '../shared/xmlImport';
 import type { DataRow, TableInfo } from '../shared/contracts';
-import { csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../shared/csvImport';
+import { csvImportDelimiter, csvImportHasHeader, csvRangeKey, type CsvImportDelimiter } from '../shared/csvImport';
 import { importPresetConfigurationSchema, resolveImportPresetMapping, type ImportPresetConfiguration } from '../shared/importPresets';
 import { importPresetsZh } from './locales/importPresets.zh-CN';
 import { matchImportColumns, type ImportMappingAction } from './importMapping';
@@ -11,7 +12,7 @@ export interface ImportPreviewTarget { connectionId: string; database: string; t
 export interface ImportPreviewContext extends ImportPreviewTarget {
   fileToken: string; format: RecordImportFormat; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
   csvDelimiter?: CsvImportDelimiter;
-  csvHasHeader?: boolean;
+  csvHasHeader?: boolean; csvRowRange?: ImportRecordRange;
 }
 export interface ImportSample { columns: string[]; rows: DataRow[]; }
 export interface ReadyImportPreview { key: string; status: 'ready'; info: TableInfo; sample: ImportSample; mapping: Record<string, string>; completeJson?: true; }
@@ -37,7 +38,7 @@ function targetKey(target: ImportPreviewTarget): string { return JSON.stringify(
 
 /** 使用结构化键避免名称分隔符碰撞；就绪判断在渲染阶段完成，不等待副作用失效旧状态。 */
 export function importPreviewKey(context: ImportPreviewContext): string {
-  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter), csvImportHasHeader(context.format, context.csvHasHeader), context.xmlOptions, context.txtOptions, context.excelOptions]);
+  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter), csvImportHasHeader(context.format, context.csvHasHeader), csvRangeKey(context.csvHasHeader, context.csvRowRange), context.xmlOptions, context.txtOptions, context.excelOptions]);
 }
 
 /** 只有完整匹配当前上下文的预览可见且可导入，旧预览和失败状态均不能借用旧映射。 */
@@ -71,7 +72,7 @@ export class ImportPreviewController {
       const sourceColumns = options.sourceColumns === undefined ? undefined : [...options.sourceColumns];
       if (sourceColumns && (!sourceColumns.length || new Set(sourceColumns).size !== sourceColumns.length || sourceColumns.some(name => typeof name !== 'string'))) throw Error(importPresetsZh.incompatible);
       if (configuration && (initialMapping || sourceColumns)) throw Error(importPresetsZh.incompatible);
-      if (configuration && (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions) || JSON.stringify(configuration.txtOptions) !== JSON.stringify(context.txtOptions))) throw Error(importPresetsZh.incompatible);
+      if (configuration && (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || csvRangeKey(configuration.csvHasHeader, configuration.csvRowRange) !== csvRangeKey(context.csvHasHeader, context.csvRowRange) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions) || JSON.stringify(configuration.txtOptions) !== JSON.stringify(context.txtOptions))) throw Error(importPresetsZh.incompatible);
       const info = await this.metadataFor(context, !!options.freshMetadata);
       if (generation !== this.generation) return;
       if ((configuration || initialMapping || sourceColumns) && (info.database !== context.database || info.name !== context.table)) throw Error(importPresetsZh.incompatible);
@@ -120,7 +121,7 @@ export class ImportPreviewController {
   /** 原就绪对象与完整配置同时核验，失败撤销整份ready，绝不保留自动映射继续导入。 */
   applyMapping(context: ImportPreviewContext, expected: ReadyImportPreview, configuration: ImportPresetConfiguration): boolean {
     if (this.ready(context) !== expected) return false;
-    try { if (context.format === 'json' && !expected.completeJson || configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions) || JSON.stringify(configuration.txtOptions) !== JSON.stringify(context.txtOptions)) throw Error(importPresetsZh.incompatible); const mapping = completeMapping(expected.info, expected.sample, configuration); this.update({ ...expected, mapping }); return true; }
+    try { if (context.format === 'json' && !expected.completeJson || configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || csvRangeKey(configuration.csvHasHeader, configuration.csvRowRange) !== csvRangeKey(context.csvHasHeader, context.csvRowRange) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions) || JSON.stringify(configuration.txtOptions) !== JSON.stringify(context.txtOptions)) throw Error(importPresetsZh.incompatible); const mapping = completeMapping(expected.info, expected.sample, configuration); this.update({ ...expected, mapping }); return true; }
     catch (reason) { this.update({ key: expected.key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason), ...(expected.completeJson ? { completeJson: true } : {}) }); return false; }
   }
 

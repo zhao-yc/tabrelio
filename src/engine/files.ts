@@ -7,7 +7,8 @@ import { parser } from 'stream-json';
 import { streamArray } from 'stream-json/streamers/StreamArray';
 import type { CellValue, DataRow } from '../shared/contracts';
 import { serializeCell } from './sql';
-import { csvImportColumnName, csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../shared/csvImport';
+import { csvImportColumnName, csvImportDelimiter, csvImportHasHeader, csvRangeInvalid, csvRangeKey, validCsvRange, type CsvImportDelimiter } from '../shared/csvImport';
+import { importRecordRange, type ImportRecordRange } from '../shared/importRecordRange';
 import type { CsvExportDelimiter } from '../shared/csvExport';
 import { validXmlImport, xmlImportZh, type RecordImportFormat, type XmlImportOptions } from '../shared/xmlImport';
 import { readXmlRecords, type XmlImportReadControl } from './xmlImport';
@@ -60,9 +61,10 @@ export function csvValue(value: string): CellValue {
 }
 
 /** 在同一条流上解析记录及校验原始字节，JSON 数字保留原始字符串。 */
-export async function* readRecords(filePath: string, format: RecordImportFormat, encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: XmlImportReadControl & { xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; checkCancelled?: () => void }): AsyncGenerator<DataRow> {
+export async function* readRecords(filePath: string, format: RecordImportFormat, encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: XmlImportReadControl & { csvRowRange?: ImportRecordRange; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; checkCancelled?: () => void }): AsyncGenerator<DataRow> {
   const selectedDelimiter = csvImportDelimiter(format, delimiter);
   const selectedHasHeader = csvImportHasHeader(format, hasHeader);
+  if (!validCsvRange({ ...control, format, csvHasHeader: hasHeader })) throw Error(csvRangeInvalid);
   // 所有配置先校验，错误选项不能触发文件打开或遗留尚未接入 pipeline 的句柄。
   const selectedEncoding = encodingName(encoding);
   if (!validXmlImport({ ...control, format, encoding })) throw Error(xmlImportZh.invalid);
@@ -78,8 +80,8 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
     return;
   }
   const txt = format === 'txt' ? txtImportOptionsSchema.parse(control?.txtOptions) : undefined;
-  const txtRange = txt && txtImportRange(txt);
-  const skipsTxtRecords = txtRange && (txtRange.firstDataRow > txtRange.headerRow + 1 || txtRange.headerRow > 1 || txtRange.lastDataRow < Infinity);
+  const csvRange = control?.csvRowRange && importRecordRange(selectedHasHeader, control.csvRowRange);
+  const range = txt ? txtImportRange(txt) : csvRange?.skipsRecords ? csvRange : undefined;
   const fixed = txt?.mode === 'fixed' ? txt : undefined;
   const widths = fixed ? txtFixedWidths(fixed.widths) : undefined;
   const width = widths?.reduce((total, value) => total + value, 0) ?? 0;
@@ -144,9 +146,10 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
   } });
   const output = delimited
     ? parse({ columns: false, delimiter: txt?.mode === 'delimited' ? txt.delimiter : fixed ? '\0' : selectedDelimiter,
-      ...(txt ? { quote, escape: quote, relax_column_count: skipsTxtRecords,
+      ...(txt ? { quote, escape: quote,
         ...(txt.recordDelimiter === 'auto' ? {} : { record_delimiter: txtRecordDelimiters[txt.recordDelimiter] }) } : {}),
-      bom: true, skip_empty_lines: !txt && selectedHasHeader, max_record_size: fixed && !skipsTxtRecords ? width * 4 : 64 * 1024 * 1024 })
+      relax_column_count: range?.skipsRecords ?? false,
+      bom: true, skip_empty_lines: !range && selectedHasHeader, max_record_size: fixed && !range?.skipsRecords ? width * 4 : 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
   const options = { signal: control?.signal };
   const decoding = [source, observed, ...(gbFrames ? [gbFrames] : []), decoder, codepoints];
@@ -159,8 +162,8 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
   try {
     for await (const item of output) {
       // 先由解析器确定逻辑记录，再跳过范围外记录的列校验。仍消费完整文件以校验编码和来源摘要。
-      if (txtRange && ++recordIndex !== txtRange.headerRow &&
-        (recordIndex < txtRange.firstDataRow || recordIndex > txtRange.lastDataRow)) continue;
+      if (range && ++recordIndex !== range.headerRow &&
+        (recordIndex < range.firstDataRow || recordIndex > range.lastDataRow)) continue;
       let values = item as string[];
       if (fixed && widths) {
         // 先限制 UTF-16 长度，随后按码点切列，非 BMP 字符只占一个位置。
@@ -200,6 +203,7 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
     }
     await completed;
     if (txt?.headerRow !== undefined && !headers) throw Error(txtImportZh.missingHeader);
+    if (csvRange?.skipsRecords && csvRange.headerRow > 0 && !headers) throw Error('CSV 文件没有指定的字段名记录');
     finished = true;
   } finally {
     source.destroy(); observed.destroy(); gbFrames?.destroy(); decoder.destroy(); codepoints.destroy(); numberTokens.destroy(); output.destroy();
@@ -218,18 +222,20 @@ export async function* readText(filePath: string, encoding: string): AsyncGenera
 }
 
 /** 样本最多 20 条，XML 与 TXT 继续读完以核对来源结构。 */
-export async function previewFile(input: { filePath: string; format: RecordImportFormat; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions }): Promise<{ columns: string[]; rows: DataRow[] }> {
+export async function previewFile(input: { filePath: string; format: RecordImportFormat; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; csvRowRange?: ImportRecordRange; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions }): Promise<{ columns: string[]; rows: DataRow[] }> {
   if (Object.hasOwn(input, 'csvHasHeader') && typeof input.csvHasHeader !== 'boolean') throw new Error('首行为标题选项必须为布尔值，且只适用于 CSV 导入');
   const rows: DataRow[] = [], columns = new Set<string>();
+  const complete = ['xml', 'txt', 'xlsx'].includes(input.format) || !!csvRangeKey(input.csvHasHeader, input.csvRowRange);
   const control = {
+    ...(Object.hasOwn(input, 'csvRowRange') ? { csvRowRange: input.csvRowRange } : {}),
     ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}),
     ...(Object.hasOwn(input, 'txtOptions') ? { txtOptions: input.txtOptions } : {}),
     ...(Object.hasOwn(input, 'excelOptions') ? { excelOptions: input.excelOptions } : {}),
-    ...(['xml', 'txt', 'xlsx'].includes(input.format) ? { onColumns: (names: string[]) => { for (const name of names) columns.add(name); } } : {}),
+    ...(complete ? { onColumns: (names: string[]) => { for (const name of names) columns.add(name); } } : {}),
   };
   let sampleBytes = 0;
   for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, control)) {
-    if (input.format === 'xml' || input.format === 'txt' || input.format === 'xlsx') {
+    if (complete) {
       // 整文件取得列的并集，样本只保留有界数据，避免大字段跨 IPC。
       Object.keys(row).forEach(name => columns.add(name));
       if (rows.length < 20 && sampleBytes < 2 * 1024 * 1024) {

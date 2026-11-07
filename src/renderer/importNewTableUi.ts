@@ -1,3 +1,4 @@
+import { csvRangeKey, csvRangeOption } from '../shared/csvImport';
 import { recordImportFormats, xmlImportOptionsSchema, xmlImportZh, type XmlImportOptions } from '../shared/xmlImport';
 import { txtImportDefaults, txtImportOptionsSchema, txtImportZh } from '../shared/txtImport';
 import { excelImportDefaults, excelImportOptionsSchema, excelImportZh } from '../shared/excelTransfer';
@@ -13,10 +14,10 @@ export type ImportNewTableOptions = ImportFileReadOptions;
 export const newTableXmlDefaults: XmlImportOptions = { rowTag: 'RECORD', attributes: true, binaryBase64: false };
 
 /** 扫描和建表来源种子采用同一套格式选项，避免将旧 CSV 或 XML 配置带入其它格式。 */
-function sourceOptions({ format, encoding, csvDelimiter, csvHasHeader, xmlOptions, txtOptions, excelOptions }: ImportNewTableOptions): ImportFileReadOptions {
+function sourceOptions({ format, encoding, csvDelimiter, csvHasHeader, csvRowRange, xmlOptions, txtOptions, excelOptions }: ImportNewTableOptions): ImportFileReadOptions {
   return {
     format, encoding,
-    ...(format === 'csv' ? { csvDelimiter: csvDelimiter ?? ',', csvHasHeader: csvHasHeader ?? true } : {}),
+    ...(format === 'csv' ? { csvDelimiter: csvDelimiter ?? ',', csvHasHeader: csvHasHeader ?? true, ...csvRangeOption(csvRowRange) } : {}),
     ...(format === 'xml' ? { xmlOptions: xmlImportOptionsSchema.parse(xmlOptions) } : {}),
     ...(format === 'txt' ? { txtOptions: txtImportOptionsSchema.parse(txtOptions) } : {}),
     ...(format === 'xlsx' ? { excelOptions: excelImportOptionsSchema.parse(excelOptions) } : {}),
@@ -64,7 +65,7 @@ export class ImportNewTableController {
   constructor(readonly target: ImportNewTableTarget, private readonly services: ImportNewTableServices, private readonly isCurrent: () => boolean, private readonly publish: (state: ImportNewTableState) => void, private readonly closed: () => void, private readonly created: (result: TableCreateApplyOutput, version: number) => void) {}
   get state(): ImportNewTableState { return this.value; }
   get canContinue(): boolean { return !!this.value.postgresTable || !!this.value.created?.definitionVerified && this.value.created.resourcesReleased; }
-  get dirty(): boolean { const options = this.value.options; return this.value.busy || this.value.closing || this.value.childDirty || this.value.stage !== 'source' || !!this.value.file || !!this.value.tableName || options.format !== 'csv' || options.encoding !== 'utf8' || options.csvDelimiter !== ',' || options.csvHasHeader !== true; }
+  get dirty(): boolean { const options = this.value.options; return this.value.busy || this.value.closing || this.value.childDirty || this.value.stage !== 'source' || !!this.value.file || !!this.value.tableName || options.format !== 'csv' || options.encoding !== 'utf8' || options.csvDelimiter !== ',' || options.csvHasHeader !== true || !!csvRangeKey(options.csvHasHeader, options.csvRowRange); }
   /** StrictMode每次挂载重新签发身份，旧Promise只保留真实终态锁，不能复活旧数据。 */
   mount(): void { this.lifetime = {}; this.update({}); }
   dispose(): void { this.lifetime = undefined; this.cancel(); }

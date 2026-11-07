@@ -1,5 +1,5 @@
 export const importNewTableZh = {
-  title: '从文件导入新表', source: '源文件', format: '文件格式', encoding: '文件编码', delimiter: 'CSV 分隔符', header: '首行是字段名', choose: '选择并完整扫描文件', scanning: '正在完整扫描源文件', cancel: '取消扫描', cancelling: '正在等待原扫描和取消请求结束', close: '退出向导', closing: '正在收尾',
+  title: '从文件导入新表', source: '源文件', format: '文件格式', encoding: '文件编码', delimiter: 'CSV 分隔符', header: 'CSV 包含字段名记录', choose: '选择并完整扫描文件', scanning: '正在完整扫描源文件', cancel: '取消扫描', cancelling: '正在等待原扫描和取消请求结束', close: '退出向导', closing: '正在收尾',
   table: '新表名称', reviewed: '我已核对新表名称', design: '进入正式表设计器', continue: '继续配置导入', created: '表已创建，继续导入',
   scope: '先完整扫描文件，再编辑并确认新表结构，最后单独确认导入。不会自动创建、自动导入或删除表。',
   ddl: '这是两个独立阶段：建表 DDL 不能随导入事务回滚。导入失败或退出向导时，已创建的表仍会保留。',

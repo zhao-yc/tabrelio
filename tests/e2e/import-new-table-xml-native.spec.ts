@@ -1,3 +1,4 @@
+import { importRecordRangeZh as rangeText } from '../../src/shared/importRecordRange';
 import { excelImportZh } from '../../src/shared/excelTransfer';
 import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
 import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
@@ -27,7 +28,7 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
     const [identity] = await observer.query<RowDataPacket[]>('SELECT @@hostname AS hostname');
     expect(identity[0].hostname).toBe(host);
     await mkdir(info.outputDir, {recursive: true});
-    const files = [info.outputPath('新表记录.xml'), info.outputPath('预检后变化.xml'), info.outputPath('位置映射样例.xml'), info.outputPath('固定列宽.txt'), info.outputPath('工作表.xlsx')];
+    const files = [info.outputPath('新表记录.xml'), info.outputPath('预检后变化.xml'), info.outputPath('位置映射样例.xml'), info.outputPath('固定列宽.txt'), info.outputPath('工作表.xlsx'), info.outputPath('CSV记录范围.csv')];
     const source = '<data><entry id="18446744073709551614" raw="AP8="><note/></entry><entry id="18446744073709551615" raw=""><late>尾部字段</late></entry></data>';
     for (const file of files.slice(0, 2)) await writeFile(file, source);
     await writeFile(files[2], positionalXmlFixture(['id', 'raw', 'note', 'late'], [
@@ -43,6 +44,7 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       ['18446744073709551614', '\\B:AP8=', '', null],
       ['18446744073709551615', '\\B:', null, '尾部字段'],
     ], true);
+    await writeFile(files[5], '报表说明\r\nid,raw,note,late\r\n注释\r\n18446744073709551614,base64:AP8=,,\\N\r\n18446744073709551615,base64:,\\N,尾部字段\r\n汇总');
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showOpenDialog;
       let count = 0;
@@ -59,12 +61,12 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
     const wizard = page.getByRole('dialog', {name: wizardText.title, exact: true});
     const designer = page.getByRole('dialog', {name: formatText(zh.schema.text009, database), exact: true});
     const confirmation = page.getByRole('dialog', {name: createText.title, exact: true});
-    for (const [index, table] of ['xml_created', 'xml_changed', 'xml_positioned', 'txt_fixed', 'xlsx_sheet'].entries()) {
+    for (const [index, table] of ['xml_created', 'xml_changed', 'xml_positioned', 'txt_fixed', 'xlsx_sheet', 'csv_range'].entries()) {
       const qualified = `\`${database}\`.\`${table}\``;
       const records = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id, HEX(raw) AS raw, note, late FROM ${qualified} ORDER BY ${qualified}.id`))[0].map(row => ({...row}));
       await (await sidebarMenuItem(databaseRow, {name: wizardText.title + ' ' + database, exact: true})).click();
-      const txt = index === 3, workbook = index === 4;
-      await wizard.getByLabel(wizardText.format, {exact: true}).selectOption(workbook ? 'xlsx' : txt ? 'txt' : 'xml');
+      const txt = index === 3, workbook = index === 4, csv = index === 5;
+      await wizard.getByLabel(wizardText.format, {exact: true}).selectOption(workbook ? 'xlsx' : txt ? 'txt' : csv ? 'csv' : 'xml');
       if (workbook) {
         await wizard.getByRole('button', {name: excelImportZh.workbook, exact: true}).click();
         await wizard.getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'});
@@ -78,6 +80,10 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
         await wizard.getByRole('checkbox', {name: txtImportZh.hasHeader, exact: true}).check();
         await wizard.getByLabel(txtImportZh.headerRow, {exact: true}).fill('2');
         await wizard.getByLabel(txtImportZh.lastDataRow, {exact: true}).fill('4');
+      } else if (csv) {
+        await wizard.getByLabel(rangeText.headerRow, {exact: true}).fill('2');
+        await wizard.getByLabel(rangeText.firstDataRow, {exact: true}).fill('4');
+        await wizard.getByLabel(rangeText.lastDataRow, {exact: true}).fill('5');
       } else if (index === 2) {
         await wizard.getByLabel(xmlImportZh.layout, {exact: true}).selectOption('document');
         await wizard.getByLabel(xmlImportZh.result, {exact: true}).fill('2');
@@ -85,7 +91,7 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
         await wizard.getByLabel(xmlImportZh.rowTag, {exact: true}).fill('entry');
         await wizard.getByRole('checkbox', {name: xmlImportZh.binary, exact: true}).check();
       }
-      if (!txt) await expect(wizard.getByLabel(wizardText.encoding, {exact: true})).toBeDisabled();
+      if (!txt && !csv) await expect(wizard.getByLabel(wizardText.encoding, {exact: true})).toBeDisabled();
       await wizard.getByRole('button', {name: workbook ? excelImportZh.inspect : wizardText.choose, exact: true}).click();
       await expect(wizard.getByText(index === 2 ? xmlImportZh.documentRecords(2) : wizardText.records(2), {exact: true})).toBeVisible();
       await expect(wizard.getByRole('columnheader', {name: 'late', exact: true})).toBeVisible();
@@ -94,6 +100,7 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       if (index === 0) await wizard.screenshot({path: info.outputPath('XML 新表来源扫描.png')});
       if (index === 2) await wizard.screenshot({path: info.outputPath('XML 文档新表来源扫描.png')});
       if (workbook) await wizard.screenshot({path: info.outputPath('XLSX 工作表扫描.png')});
+      if (csv) await wizard.screenshot({path: info.outputPath('CSV 记录范围新表扫描.png')});
       if (txt) await wizard.screenshot({path: info.outputPath('TXT 固定列宽新表扫描.png')});
       await wizard.getByRole('button', {name: wizardText.design, exact: true}).click();
       for (const [position, name] of ['id', 'raw', 'note', 'late'].entries()) {
@@ -121,6 +128,9 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       } else if (txt) {
         await expect(importer.getByLabel(txtImportZh.widths, {exact: true})).toHaveValue(widths.join(','));
         await expect(importer.getByLabel(txtImportZh.widths, {exact: true})).toBeDisabled();
+      } else if (csv) {
+        await expect(importer.getByLabel(rangeText.lastDataRow, {exact: true})).toHaveValue('5');
+        await expect(importer.getByLabel(rangeText.lastDataRow, {exact: true})).toBeDisabled();
       } else if (index === 2) {
         await expect(importer.getByLabel(xmlImportZh.result, {exact: true})).toHaveValue('2');
         await expect(importer.getByLabel(xmlImportZh.result, {exact: true})).toBeDisabled();
@@ -161,6 +171,6 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       await importer.getByRole('button', {name: zh.common.done, exact: true}).click();
       await expect(importer).toBeHidden();
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restoreXmlNewTablePicker(): number}).restoreXmlNewTablePicker())).toBe(5);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restoreXmlNewTablePicker(): number}).restoreXmlNewTablePicker())).toBe(6);
   }, info, {captureFailureScreenshot: false});
 });

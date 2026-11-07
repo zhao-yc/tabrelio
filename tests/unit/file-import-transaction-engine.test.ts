@@ -128,6 +128,24 @@ describe('整文件原子事务真实Engine调度', () => {
 describe('新表导入原文件指纹的真实Engine接线（离线驱动边界）', () => {
   /** 期望直接哈希独立手写文件，不调用产品扫描器生成期望摘要。 */
   async function fingerprint(filePath: string) { const bytes = await readFile(filePath); return { sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length }; }
+  it('CSV 新表只写指定记录，范围外汇总字节改动仍导致整批回滚', async () => {
+    const request = await input(1), content = '报表说明\nid,amount\n附注\n4,123.45\n5,\\N\n原汇总';
+    await writeFile(request.filePath, content);
+    const expectedSource = await fingerprint(request.filePath);
+    const selected = { ...request, expectedSource, transactionMode: 'atomic', csvRowRange: { headerRow: 2, firstDataRow: 4, lastDataRow: 5 } };
+    await expect(engine.handle('files.import', selected)).resolves.toEqual({ rows: 2, errors: [] });
+    expect(inserts().map(([, , params]) => params)).toEqual([['4', '123.45'], ['5', null]]);
+    expect(commands().at(-1)).toBe('COMMIT');
+
+    io.execute.mockClear();
+    await writeFile(request.filePath, content.replace('原汇总', '新汇总'));
+    const result = await engine.handle('files.import', { ...selected, taskId: '汇总变化后导入' });
+    expect(result.rows).toBe(0);
+    expect(result.errors.join(' ')).toContain('确认回滚');
+    expect(inserts()).toHaveLength(2);
+    expect(commands()).not.toContain('COMMIT');
+    expect(commands().at(-1)).toBe('ROLLBACK');
+  });
   it.each(['csv', 'json'] as const)('%s完整原字节匹配才允许502行一次提交，500处仍未提交', async format => {
     const request = await input(502, format), expectedSource = await fingerprint(request.filePath);
     step = (_managed, sql) => { if (sql.startsWith('INSERT')) expect(commands()).not.toContain('COMMIT'); return undefined; };

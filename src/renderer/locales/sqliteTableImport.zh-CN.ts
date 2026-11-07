@@ -1,7 +1,7 @@
 /** 现有SQLite表的完整文件检查、映射、预检与原子写入文案。 */
 export const sqliteTableImportZh = {
   entry: '导入 SQLite 表数据', title: '导入数据到 SQLite 表',
-  format: 'SQLite 导入格式', encoding: 'SQLite 导入编码', delimiter: 'SQLite CSV 分隔符', header: 'SQLite CSV 首行为标题',
+  format: 'SQLite 导入格式', encoding: 'SQLite 导入编码', delimiter: 'SQLite CSV 分隔符', header: 'SQLite CSV 包含字段名记录',
   choose: '选择 SQLite 导入文件', chooseAgain: '重新选择 SQLite 导入文件', noFile: '尚未选择文件',
   inspect: '检查 SQLite 导入文件', inspectHint: '完整读取选中的文件并核对原表目录；下方样本有界展示，不代表只导入样本。此阶段不写入数据库。',
   source: 'SQLite 导入源文件', records: (count: number) => `全文件 ${count} 条记录`, sourceHash: '源文件 SHA-256', sample: 'SQLite 导入有限样本',

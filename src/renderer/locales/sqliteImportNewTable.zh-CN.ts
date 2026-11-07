@@ -1,6 +1,6 @@
 /** SQLite导入为新表分阶段交接，DDL与数据提交分别陈述真实事实。 */
 export const sqliteImportNewTableZh = {
-  title: 'SQLite 导入为新表', format: '新表来源格式', encoding: '新表来源编码', delimiter: '新表 CSV 分隔符', header: '新表 CSV 首行为标题',
+  title: 'SQLite 导入为新表', format: '新表来源格式', encoding: '新表来源编码', delimiter: '新表 CSV 分隔符', header: '新表 CSV 包含字段名记录',
   choose: '选择新表来源文件', chooseAgain: '重新选择新表来源文件', inspect: '检查新表来源文件', file: '新表来源文件', noFile: '尚未选择文件',
   scope: '只检查明确选择的 CSV、JSON 或 XML 文件；完整扫描后人工选择字段，不从有限样本猜测数据库类型。初始字段使用 TEXT 保留数字、日期和 JSON 原文，NULL 保持 NULL。',
   transactions: '建表和数据导入是两次独立事务。表创建后不会自动导入；导入失败或原文件变化时保留已建表，不自动删除、重建或重试。',

@@ -1,3 +1,4 @@
+import { csvRangeOption } from '../shared/csvImport';
 import { inspectPostgresRecordImportSource, type PostgresRecordImportSource } from '../engine/postgres/recordImportFile';
 import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
 import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpTool';
@@ -1354,11 +1355,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         if (!path) return null;
         const { source, sample, sampleLimited } = records
           ? await inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
-            target.format === 'csv' ? { format: 'csv', encoding: target.encoding, csvDelimiter: target.csvDelimiter, csvHasHeader: target.csvHasHeader } :
+            target.format === 'csv' ? { format: 'csv', encoding: target.encoding, csvDelimiter: target.csvDelimiter, csvHasHeader: target.csvHasHeader, ...csvRangeOption(target.csvRowRange) } :
               target.format === 'txt' ? { format: 'txt', encoding: target.encoding, txtOptions: target.txtOptions } :
                 target.format === 'xlsx' ? { format: 'xlsx', encoding: 'utf8', excelOptions: target.excelOptions } :
                 { format: 'json', encoding: target.encoding }, check)
-          : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader);
+          : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader, target.csvRowRange, check);
         check();
         // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
         if (scanned && (!('sha256' in source) || source.sha256 !== scanned.expectedSource.sha256 || source.bytes !== scanned.expectedSource.bytes))

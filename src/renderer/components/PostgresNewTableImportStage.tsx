@@ -1,3 +1,4 @@
+import { csvRangeOption } from '../../shared/csvImport';
 import { useEffect, useState } from 'react';
 import type { ImportNewTableSeed } from '../../shared/importNewTable';
 import type { PostgresTableImportChoice, PostgresTablePage, PostgresTableTarget } from '../../shared/postgresTable';
@@ -38,7 +39,7 @@ export function PostgresNewTableImportStage({ connectionId, database, table, see
           seed.format === 'xlsx' ? { format: seed.format, excelOptions: seed.excelOptions!, scannedFile } :
           seed.format === 'txt' ? { format: seed.format, encoding: seed.encoding, txtOptions: seed.txtOptions!, scannedFile } :
           seed.format === 'csv' ? { format: seed.format, encoding: seed.encoding, csvDelimiter: seed.csvDelimiter ?? ',',
-            csvHasHeader: seed.csvHasHeader ?? true, scannedFile } : { format: seed.format, encoding: seed.encoding, scannedFile };
+            csvHasHeader: seed.csvHasHeader ?? true, ...csvRangeOption(seed.csvRowRange), scannedFile } : { format: seed.format, encoding: seed.encoding, scannedFile };
         const file = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...options });
         if (!live) return;
         if (!file || !isCurrent()) throw Error(text.stale);

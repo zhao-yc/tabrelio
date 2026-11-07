@@ -1,3 +1,4 @@
+import { importRecordRangeZh as rangeText } from '../../src/shared/importRecordRange';
 import { excelImportZh } from '../../src/shared/excelTransfer';
 import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
 import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
@@ -47,7 +48,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
     await expect(tab.getByRole('grid')).toBeVisible();
     const exact = '9007199254740993.123456789012';
     const cases = [
-      { name: '跳过已有.csv', format: 'csv', mode: 'skip-existing', data: 'tenant,code,payload\n华东,7,不覆盖\n华东,8,新增八\n', result: '新增 1 行，匹配更新 0 行，跳过已有 1 行，跳过未匹配 0 行' },
+      { name: '跳过已有.csv', format: 'csv', mode: 'skip-existing', data: '报表说明\r\ntenant,code,payload\r\n忽略\r\n华东,7,不覆盖\r\n华东,8,"新增八\r\n续行"\r\n华东,10,汇总', result: '新增 1 行，匹配更新 0 行，跳过已有 1 行，跳过未匹配 0 行' },
       { name: '新增或更新.json', format: 'json', mode: 'upsert', data: `[{"tenant":"华东","code":7,"payload":"更新七","amount":${exact},"raw":{"type":"binary","base64":"AP8="}},{"tenant":"华东","code":9223372036854775807,"payload":"新增大键","amount":0,"raw":{"type":"binary","base64":""}}]`, result: '新增 1 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
       { name: '仅更新已有.xml', format: 'xml', mode: 'update-existing', data: '<RECORDS><RECORD tenant="华东" code="8" id="999" payload="更新八"/><RECORD tenant="华东" code="9" id="1000" payload="不新增"/></RECORDS>', result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 1 行' },
       { name: '源键重复.json', format: 'json', mode: 'upsert', data: '[{"tenant":"华东","code":"7","payload":"甲"},{"tenant":"华东","code":"0007","payload":"乙"}]', result: '整批已回滚' },
@@ -59,7 +60,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         data: 'tenant;code;payload;raw;note;ignored\r\n华东;7;UTF-16 中文;base64:AP8=;\\N;跳过\r\n',
         result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行', expected: {payload: 'UTF-16 中文', raw: '00ff', note: null} },
       { name: 'GB18030 按键更新.csv', format: 'csv', mode: 'update-existing', encoding: 'gb18030',
-        data: 'tenant;code;payload;raw;note;ignored\r\n华东;7;GB18030 中文;base64:AAE=;"";跳过\r\n',
+        data: '说明\r\ntenant;code;payload;raw;note;ignored\r\n华东;7;GB18030 中文;base64:AAE=;"";跳过\r\n汇总',
         result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行', expected: {payload: 'GB18030 中文', raw: '0001', note: ''} },
       { name: '等待并发提交.json', format: 'json', mode: 'skip-existing', data: '[{"tenant":"华东","code":9,"payload":"不得覆盖并发写入"}]', result: '新增 0 行，匹配更新 0 行，跳过已有 1 行，跳过未匹配 0 行' },
       { name: '索引变化.json', format: 'json', mode: 'update-existing', data: '[{"tenant":"华东","code":7,"payload":"不写入"}]', result: '原匹配键已变化' },
@@ -97,7 +98,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         await page.evaluate(async name => {
           const snapshot = await window.dbark.invoke('files.importPresets.list', {});
           await window.dbark.invoke('files.importPresets.save', {generation: snapshot.generation, revision: snapshot.revision, name, configuration: {
-            format: 'csv', encoding: 'gb18030', csvProtocol: 'tabrelio', csvDelimiter: ';', csvHasHeader: true,
+            format: 'csv', encoding: 'gb18030', csvProtocol: 'tabrelio', csvDelimiter: ';', csvHasHeader: true, csvRowRange: {headerRow: 2, lastDataRow: 3},
             columns: ['tenant', 'code', 'payload', 'raw', 'note', 'ignored'],
             mapping: {tenant: 'tenant', code: 'code', payload: 'payload', raw: 'raw', note: 'note', ignored: ''},
           }});
@@ -108,12 +109,18 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       if (item.format === 'csv') {
         await expect(modal.getByLabel(text.csvProtocol, {exact: true})).toHaveValue('postgres-native');
         await expect(modal.getByLabel(text.encoding, {exact: true})).toBeDisabled();
+        if (index === 0) {
+          await modal.getByLabel(rangeText.headerRow, {exact: true}).fill('2');
+          await modal.getByLabel(rangeText.firstDataRow, {exact: true}).fill('4');
+          await modal.getByLabel(rangeText.lastDataRow, {exact: true}).fill('5');
+        }
         if ('encoding' in item) {
           if (item.encoding === 'gb18030') {
             await modal.locator('summary').filter({hasText: importPresetsZh.title}).click();
             await modal.getByRole('button', {name: importPresetsZh.read, exact: true}).click();
             await modal.getByLabel(importPresetsZh.choose, {exact: true}).selectOption({label: csvPresetName});
             await modal.getByRole('button', {name: importPresetsZh.apply, exact: true}).click();
+            await expect(modal.getByLabel(rangeText.lastDataRow, {exact: true})).toHaveValue('3');
           } else {
             await modal.getByLabel(text.csvProtocol, {exact: true}).selectOption('tabrelio');
             await modal.getByLabel(text.encoding, {exact: true}).selectOption(item.encoding);
@@ -207,6 +214,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         await expect(apply).toBeDisabled();
         await key.selectOption({label: 'import_match (tenant, code)'});
       }
+      if (index === 0) await modal.screenshot({path: info.outputPath('PostgreSQL 原生 CSV 范围.png')});
       if (index === 1) await modal.screenshot({path: info.outputPath('PostgreSQL 匹配键导入.png')});
       if (item.format === 'txt') await modal.screenshot({path: info.outputPath('PostgreSQL TXT 字段映射.png')});
       if (item.format === 'xlsx') await modal.screenshot({path: info.outputPath('PostgreSQL XLSX 字段映射.png')});
@@ -230,10 +238,10 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       await expect(modal).toBeHidden();
       await expect(tab).toContainText(item.result);
       const actual = await snapshot();
-      if (index === 0) expect(actual.map(row => [row.code, row.payload, row.note])).toEqual([['7', '原数据', '已保存'], ['8', '新增八', '默认值']]);
+      if (index === 0) expect(actual.map(row => [row.code, row.payload, row.note])).toEqual([['7', '原数据', '已保存'], ['8', '新增八\r\n续行', '默认值']]);
       if (index === 1) expect(actual).toEqual([
         {id: '1', tenant: '华东', code: '7', payload: '更新七', amount: exact, raw: '00ff', note: '已保存'},
-        {id: '2', tenant: '华东', code: '8', payload: '新增八', amount: null, raw: null, note: '默认值'},
+        {id: '2', tenant: '华东', code: '8', payload: '新增八\r\n续行', amount: null, raw: null, note: '默认值'},
         {id: '3', tenant: '华东', code: '9223372036854775807', payload: '新增大键', amount: '0.000000000000', raw: '', note: '默认值'},
       ]);
       if (index === 2) {

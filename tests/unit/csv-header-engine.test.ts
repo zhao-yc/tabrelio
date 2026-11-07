@@ -30,6 +30,18 @@ afterEach(async () => { await engine.closeAll(); for (const name of await readdi
 async function input(content: string) { const filePath = join(folder, 'source.csv'); await writeFile(filePath, content); return { ...target, filePath, format: 'csv', encoding: 'utf8' }; }
 
 describe('无标题CSV正式Engine预览与导入接线', () => {
+  it('CSV 预览、完整预检及写入采用相同范围，保留范围外字节的摘要', async () => {
+    const request = { ...await input('说明\r\n\r\nid,正文\r\n附注,跳过,列\r\n1,"正文\r\n换行"\r\n2,\\N\r\n汇总'), csvRowRange: { headerRow: 3, firstDataRow: 5, lastDataRow: 6 } };
+    const mapping = { id: 'id', 正文: '正文' };
+    expect(await engine.handle('files.preview', request)).toEqual({ columns: ['id', '正文'], rows: [{ id: '1', 正文: '正文\r\n换行' }, { id: '2', 正文: null }] });
+    const report = await engine.handle('files.preflight', { ...request, taskId: '范围预检', mapping });
+    expect(report).toMatchObject({ checkedRecords: 2, validRecords: 2, complete: true });
+    expect(report.sourceBytes).toBe(Buffer.byteLength('说明\r\n\r\nid,正文\r\n附注,跳过,列\r\n1,"正文\r\n换行"\r\n2,\\N\r\n汇总'));
+    io.execute.mockClear();
+    await expect(engine.handle('files.import', { ...request, mapping, taskId: '范围导入' })).resolves.toEqual({ rows: 2, errors: [] });
+    expect(io.execute.mock.calls.filter(([, sql]) => sql.startsWith('INSERT')).map(([, , params]) => params)).toEqual([['1', '正文\r\n换行'], ['2', null]]);
+  });
+
   it('false从正式入口传到完整流，首行及大数/NULL/字节参数精确保持', async () => {
     const request = { ...await input('18446744073709551615;123456789012345678.123456789012;"中文;双""引号""\r\n第二行";base64:AAH/;\\N;\\\\N\r\n18446744073709551614;0.000000000001;尾行;base64:;尾值;\r\n'), csvDelimiter: ';', csvHasHeader: false };
     const preview = await engine.handle('files.preview', request);
