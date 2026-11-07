@@ -1,0 +1,18 @@
+export const postgresRolesZh = {
+  title: 'PostgreSQL 角色与权限', connection: 'PostgreSQL 连接', database: '数据库',
+  defaultDatabase: '留空使用连接默认数据库', search: '角色名称包含', read: '读取角色', busy: '正在读取角色和权限',
+  previous: '上一页', next: '下一页', empty: '没有匹配角色', directory: '角色目录',
+  roleName: '角色', login: '可登录', noLogin: '组角色或禁止登录', superuser: '超级用户',
+  session: (database: string, login: string, current: string) => `数据库 ${database} · 登录角色 ${login} · 当前角色 ${current}`,
+  current: '查看当前角色', attributes: '角色属性', inherit: '角色 INHERIT 属性', createRole: '可创建角色', createDatabase: '可创建数据库',
+  replication: '复制角色', bypassRls: '可绕过行级安全', connectionLimit: '连接上限', unlimited: '无限制',
+  validUntil: '密码有效期', noExpiry: '无到期日期', yes: '是', no: '否', unknown: '—',
+  granted: '直接获授的角色', members: '直接成员', grantor: '授权者', admin: '管理选项', memberInherit: '继承选项',
+  memberSet: '切换选项', noMembership: '无直接成员关系',
+  limited: '单个方向最多显示 200 条直接授权记录。',
+  databasePrivileges: '数据库有效权限', schema: 'Schema 名称', relation: '表或视图名称（可选）', probe: '检查对象权限',
+  schemaPrivileges: 'Schema 有效权限', relationPrivileges: '表或视图有效权限', missing: '目录中没有匹配对象',
+  privilege: '权限', allowed: '拥有', grantable: '可转授', rowSecurity: '启用行级安全', forceRls: '强制行级安全',
+  hint: '只读目录按服务器可见范围返回。有效权限包含继承和 PUBLIC 授权。表权限与列级授权、具体行是否可见分别判定。',
+  changed: '原连接已变化，请重新读取。',
+} as const;

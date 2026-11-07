@@ -45,6 +45,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.checkEdit.preview': true, 'postgres.checkEdit.apply': true,
   'postgres.table.exportChoose': true, 'postgres.table.export': true,
   'postgres.query.export': true,
+  'postgres.roles.read': true,
   'postgres.workbookExport': true,
   'mysql.workbookExport': true,
   'postgres.backup.catalogue': true,

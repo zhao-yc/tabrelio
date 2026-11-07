@@ -100,6 +100,7 @@ import { tableCopyStructureServices, assertTableCopyStructureTargetAvailable } f
 import { tableCopyStructureZh } from './locales/tableCopyStructure.zh-CN';
 import { SchemaCompareDialog } from './components/SchemaCompareDialog';
 import { schemaCompareServices } from './schemaCompareServices';
+import { PostgresRolesDialog } from './components/PostgresRolesDialog';
 import { ServerMonitorEntry } from './components/ServerMonitorEntry';
 import { serverMonitorZhCN } from './serverMonitorZh';
 import { schemaCompareZh } from './locales/schemaCompare.zh-CN';
@@ -249,6 +250,7 @@ function WorkspaceApp() {
   }, [settings.activeTabId, tabOrderKey, tabScrollRevision]);
   const [schemaCompare, setSchemaCompare] = useState(false);
   const [serverMonitor, setServerMonitor] = useState(false);
+  const [postgresRoles, setPostgresRoles] = useState(false);
   const [structureSearch,setStructureSearch]=useState(false);
   const [dataSearch,setDataSearch]=useState(false);
   const [dataSearchEditDirty,setDataSearchEditDirty]=useState(false);
@@ -920,6 +922,7 @@ function WorkspaceApp() {
   const sqliteObjects = connections.find(profile => profile.id === state.selection?.connectionId)?.dialect === 'sqlite';
   const networkConnections = connections.filter((profile): profile is NetworkConnectionProfile => profile.dialect === 'mysql' || profile.dialect === 'mariadb');
   const monitorConnections = connections.filter(profile => profile.dialect !== 'sqlite' && !profile.pendingFiles?.length);
+  const roleConnections = monitorConnections.filter(profile => profile.dialect === 'postgresql');
   /** 类别入口只使用树中的明确库；没有库时由用户选择，不借当前查询补库。 */
   function openObjectBrowser(category: ObjectCategory, chosen?: { connectionId: string; database: string }) {
     if (!chosen && document.querySelector(appModalSelector)) return;
@@ -993,6 +996,7 @@ function WorkspaceApp() {
     // 全库搜索仍提供离线保存查询入口；数据库搜索由弹窗内的真实连接能力限制。
     'schema-compare': handler(() => setSchemaCompare(true), !!networkConnections.length), 'structure-search': handler(() => setStructureSearch(true)),
     'server-monitor': handler(() => setServerMonitor(true), !sqliteObjects && !!monitorConnections.length),
+    'postgres-roles': handler(() => { if (!document.querySelector(appModalSelector)) setPostgresRoles(true); }, !!roleConnections.length),
     'mysql-data-compare': handler(() => {
       if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setServerDataCompare('mysql');
@@ -1057,6 +1061,8 @@ function WorkspaceApp() {
     {objectLinkDialog && <ObjectLinkDialog onOpen={openWorkbenchTarget} onClose={closeObjectLink}/>}
 
     {schemaCompare && <SchemaCompareDialog connections={networkConnections} services={schemaCompareServices} onClose={() => setSchemaCompare(false)}/>}
+    {postgresRoles && <PostgresRolesDialog connections={roleConnections} preferred={state.selection ?? activeTab}
+      versions={state.connectionVersions} onClose={() => setPostgresRoles(false)}/>}
     <ServerMonitorEntry open={serverMonitor} connections={monitorConnections} versions={state.connectionVersions} preferredConnectionId={state.selection?.connectionId ?? activeTab?.connectionId} onClose={() => setServerMonitor(false)}/>
     {dataSearch&&<DataSearchDialog initialConnectionId={dataSearchConnection} onEditDirty={setDataSearchEditDirty} onClose={()=>setDataSearch(false)} onStructure={()=>{setDataSearch(false);setStructureSearch(true);}} onOpen={(connectionId,target)=>{setDataSearch(false);useWorkspace.getState().openTab({kind:"table",title:target.table,connectionId,database:target.database,table:target.table});}}/>}
     {savedQuerySearch&&<SavedQuerySearchDialog insertion={savedQueryInsertion} onClose={closeSavedQuerySearch} onStructure={()=>{closeSavedQuerySearch();setStructureSearch(true);}} onOpen={(result,hit)=>{const id=uid();if(hit?.sqlOccurrences&&result.sourceBinding?.id===hit.query.id&&result.sourceBinding.digest===hit.digest)setQuerySearchPositions(previous=>({...previous,[id]:{queryId:hit.query.id,digest:hit.digest,sql:result.query.sql,connectionId:result.connectionId,connectionVersion:useWorkspace.getState().connectionVersions[result.connectionId]??0,occurrences:hit.sqlOccurrences!}}));useWorkspace.getState().openTab({id,kind:'query',title:result.query.name,connectionId:result.connectionId,database:result.database,databaseContext:result.databaseContext,sql:result.query.sql,sourceBinding:result.sourceBinding});closeSavedQuerySearch();if(result.contextChanged)useWorkspace.getState().notify(savedQuerySearchZh.replaced);}}/>}

@@ -2028,6 +2028,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command.startsWith('schema.compare') && shuttingDown) throw new Error('客户端正在退出，不能开始结构比较');
   if (command.startsWith('serverMonitor.') && shuttingDown) throw new Error('客户端正在退出，不能开始服务器监控操作');
   let publishMonitor: ReturnType<ServerMonitorSignals['begin']> | undefined;
+  let assertRolesPublication: (() => void) | undefined;
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
     case 'result.presets.list':
@@ -2159,6 +2160,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       }catch(reason){release();throw reason;}
     }
     // 监控使用主进程解密的目标配置，避免为了打开只读窗口另建一次不受任务管理的测试连接。
+    case 'postgres.roles.read': {
+      columnsMain.assertCapturedOwner(columns);
+      const profile = store.resolveConnection(input.connectionId), revision = store.connectionRevision();
+      if (shuttingDown || profile.dialect !== 'postgresql' || tableValueOptionsClosing.has(profile.id))
+        throw Error('角色目录需要可用的 PostgreSQL 连接');
+      assertRolesPublication = () => {
+        columnsMain.assertCapturedOwner(columns);
+        connectionConfig.assertAvailable(profile.id);
+        if (shuttingDown || store.connectionRevision() !== revision || tableValueOptionsClosing.has(profile.id))
+          throw Error('角色目录的原连接已变化，请重新读取');
+      };
+      input = { ...input, profile };
+      break;
+    }
     case 'serverMonitor.read': {
       columnsMain.assertCapturedOwner(columns);
       if (tableValueOptionsClosing.has(input.connectionId)) throw Error('监控连接正在关闭');
@@ -2846,6 +2861,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       }
     }
     if (publishMonitor) result = publishMonitor(result);
+    assertRolesPublication?.();
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!(result);
     if (command === 'sqliteDraftFiles.restore') try { sqliteEditLease!.check(); } catch (reason) { await sqliteEdits.rejectRestored(result).catch(() => {}); throw reason; }
     if (sqlitePage) result = command === 'sqliteDraftFiles.restore' ? await sqlitePage.acceptRestored(result) : await sqlitePage.accept(result);
@@ -3281,7 +3297,7 @@ else {
             payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
-            payload.command === 'postgres.completion' || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
+            payload.command === 'postgres.completion' || payload.command === 'postgres.roles.read' || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);

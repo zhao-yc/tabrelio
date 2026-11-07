@@ -58,6 +58,8 @@ import { postgresDataCompareLimits, postgresDataCompareSchema, postgresDataCompa
 import { explainLimits } from '../../shared/explain';
 import { serverMonitorSignalSchema, validateServerMonitorInput, type ServerMonitorInput, type ServerMonitorSignalInput,
   type ServerMonitorSignalResult } from '../../shared/serverMonitor';
+import { readPostgresRoles } from './roles';
+import { postgresRolesSchema } from '../../shared/postgresRoles';
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
@@ -1070,6 +1072,13 @@ export class PostgresEngine {
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
   async handle(command: string, input: Input): Promise<any> {
     switch (command) {
+      case 'postgres.roles.read': {
+        const {profile, ...request} = input;
+        const parsed = postgresRolesSchema.parse(request);
+        if (profile?.dialect !== 'postgresql' || profile.id !== parsed.connectionId) throw Error('缺少可信的 PostgreSQL 角色目录连接');
+        return this.trackedRead(parsed.taskId, profile, '角色目录', (read, check) =>
+          read(parsed.database, connection => readPostgresRoles(connection, parsed, check)));
+      }
       case 'postgres.completion': {
         if (input.sessionId) return this.completeSession(input as PostgresCompletionInput);
         const profile = input.profile as PostgresConnectionProfile | undefined;

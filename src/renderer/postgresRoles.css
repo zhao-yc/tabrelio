@@ -1,0 +1,11 @@
+.postgres-roles { max-height: 74vh; overflow: auto; overflow-wrap: anywhere; }
+.postgres-roles form { margin-block: 10px; }
+.postgres-roles-actions { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; }
+.postgres-roles-list { max-height: 180px; overflow: auto; margin: 6px 0; padding: 0; list-style: none; }
+.postgres-roles-list li { display: flex; gap: 8px; align-items: center; padding-block: 3px; }
+.postgres-roles-list button[aria-pressed="true"] { border-color: var(--accent); }
+.postgres-roles-sections, .postgres-roles-attributes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px; }
+.postgres-roles-attributes dd { margin: 0; }
+.postgres-roles-attributes dt { color: var(--muted); }
+.postgres-roles table { width: 100%; border-collapse: collapse; }
+.postgres-roles th, .postgres-roles td { text-align: left; vertical-align: top; padding: 5px 6px; border-bottom: 1px solid var(--border); }

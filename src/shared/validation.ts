@@ -7,6 +7,7 @@ import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, xmlImportZ
 import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
 import { mysqlWorkbookExportSchema } from './mysqlWorkbookExport';
 import { postgresWorkbookExportSchema } from './postgresWorkbookExport';
+import { postgresRolesSchema } from './postgresRoles';
 import { postgresQueryExportSchema } from './postgresQueryExport';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './fullQueryExportProfiles';
@@ -311,6 +312,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.checkEdit.preview': postgresCheckPreviewSchema, 'postgres.checkEdit.apply': postgresCheckApplySchema,
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': z.union([postgresTableExportSchema, postgresBackupSetSchema]),
   'postgres.query.export': postgresQueryExportSchema,
+  'postgres.roles.read': postgresRolesSchema,
   'postgres.workbookExport': postgresWorkbookExportSchema,
   'mysql.workbookExport': mysqlWorkbookExportSchema,
   'postgres.backup.catalogue': postgresBackupCatalogueSchema,
