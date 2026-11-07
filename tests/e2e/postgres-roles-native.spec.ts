@@ -934,3 +934,130 @@ test('PostgreSQL 序列权限单独控制带默认编号的插入', async ({}, i
     expect(native.exitCode).toBe(0);
   } finally {await Promise.all([member.end(), owner.end()]);}
 });
+
+test('PostgreSQL 同名函数和过程按签名授予及撤销执行权限', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^[a-f0-9]{64}$/.test(password) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', recipient = prefix + 'recipient', dependent = prefix + 'dependent';
+  const schema = 'QA Routine ACL', name = 'Run"Job', qualified = '"QA Routine ACL"."Run""Job"';
+  const endpoint = {host: '127.0.0.1', port, database, password, connectionTimeoutMillis: 3000};
+  const owner = new Client({...endpoint, user: database}), member = new Client({...endpoint, user: recipient});
+  await owner.connect();
+  try {
+    await member.connect();
+    await owner.query(`CREATE SCHEMA "QA Routine ACL"; GRANT USAGE ON SCHEMA "QA Routine ACL" TO ${recipient},${dependent};
+      CREATE FUNCTION ${qualified}(integer) RETURNS text LANGUAGE sql AS 'SELECT ''int''::text';
+      CREATE FUNCTION ${qualified}(text) RETURNS text LANGUAGE sql AS 'SELECT ''text''::text';
+      CREATE PROCEDURE ${qualified}(IN x bigint, OUT output text) LANGUAGE plpgsql AS 'BEGIN output := ''proc '' || x; END;'`);
+    const execute = (type: 'integer' | 'text') => member.query(`SELECT ${qualified}('7'::${type}) AS value`);
+    const call = () => member.query(`CALL ${qualified}(7::bigint, NULL)`);
+    expect((await execute('integer')).rows).toEqual([{value: 'int'}]);
+    expect((await execute('text')).rows).toEqual([{value: 'text'}]);
+    expect((await call()).rows).toEqual([{output: 'proc 7'}]);
+    const role = (await owner.query('SELECT oid::text,rolname::text AS name FROM pg_catalog.pg_roles WHERE rolname=$1', [recipient])).rows[0];
+    const oidOf = async (type: string) => (await owner.query('SELECT $1::regprocedure::oid::text AS oid', [qualified + '(' + type + ')'])).rows[0].oid;
+    const direct = async (target: string) => (await owner.query(`SELECT a.grantee::text,a.is_grantable FROM pg_catalog.pg_proc p
+      CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+      WHERE p.oid=$1 AND a.grantee IN (0,$2::oid) AND a.grantor=p.proowner ORDER BY a.grantee`, [target, role.oid])).rows;
+    const edge = (grantee: string, is_grantable: boolean) => ({grantee, is_grantable});
+    const profiles = await page.evaluate(async ({database, port, password, recipient}) => {
+      const base = {id: '', dialect: 'postgresql' as const, group: '', color: '#123456', host: '127.0.0.1', port,
+        database, password, rememberPassword: false};
+      return {owner: (await window.dbark.invoke('connections.save', {...base, name: '例程授权所有者', user: database})).id,
+        member: (await window.dbark.invoke('connections.save', {...base, name: '例程授权受权者', user: recipient})).id};
+    }, {database, port, password, recipient});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    const locale = t.tablePrivileges.routine;
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profiles.owner);
+    await modal.getByLabel(t.search, {exact: true}).fill(recipient);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    await modal.getByRole('region', {name: t.directory, exact: true}).getByRole('button', {name: recipient, exact: true}).click();
+    await modal.getByLabel(t.schema, {exact: true}).fill(schema);
+    await modal.getByLabel(t.relation, {exact: true}).fill(name);
+    await modal.getByRole('button', {name: locale.inspect, exact: true}).click();
+    const listing = modal.getByRole('table', {name: locale.label, exact: true});
+    const row = (type: string) => listing.getByRole('row').filter({
+      has: page.getByRole('rowheader', {name: qualified + '(' + type + ')', exact: true}),
+    });
+    await expect(listing.getByRole('row')).toHaveCount(4);
+    const dialog = page.getByRole('dialog', {name: locale.title, exact: true});
+    const prepare = async (type: string, action: string, publicTarget = false) => {
+      await row(type).getByRole('button', {name: publicTarget ? locale.publicOpen : locale.open, exact: true}).click();
+      const actionField = dialog.getByLabel(t.tablePrivileges.action, {exact: true});
+      if (publicTarget) await expect(actionField.getByRole('option')).toHaveCount(2);
+      await actionField.selectOption(action);
+      await dialog.getByRole('checkbox', {name: 'EXECUTE', exact: true}).check();
+      await dialog.getByRole('button', {name: locale.preview, exact: true}).click();
+      const sql = dialog.getByLabel(locale.sql, {exact: true});
+      await expect(sql).toBeVisible();
+      return sql;
+    };
+    const apply = async (publicTarget = false, outcome: 'committed' | 'rolledBack' = 'committed') => {
+      await dialog.getByRole('checkbox', {name: publicTarget ? locale.confirmPublic : locale.confirm, exact: true}).check();
+      await dialog.getByRole('button', {name: locale.apply, exact: true}).click();
+      await expect(dialog.getByRole(outcome === 'committed' ? 'status' : 'alert').filter({hasText: t.result[outcome]})).toBeVisible();
+      await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+    const intOid = await oidOf('integer'), textOid = await oidOf('text'), procedureOid = await oidOf('bigint');
+    await expect(await prepare('integer', 'revoke', true)).toHaveText(`REVOKE EXECUTE ON ROUTINE ${qualified}(integer) FROM PUBLIC RESTRICT`);
+    expect(await direct(intOid)).toEqual([edge('0', false)]);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 例程 PUBLIC 权限预览.png')});
+    await apply(true);
+    await expect(execute('integer')).rejects.toMatchObject({code: '42501'});
+    expect((await execute('text')).rows).toEqual([{value: 'text'}]);
+    expect(await direct(textOid)).toEqual([edge('0', false)]);
+
+    await prepare('integer', 'grantOption');
+    await apply();
+    expect(await direct(intOid)).toEqual([edge(role.oid, true)]);
+    expect((await execute('integer')).rows).toEqual([{value: 'int'}]);
+    await member.query(`GRANT EXECUTE ON FUNCTION ${qualified}(integer) TO ${dependent}`);
+    await prepare('integer', 'revokeOption');
+    await apply(false, 'rolledBack');
+    expect(await direct(intOid)).toEqual([edge(role.oid, true)]);
+    await member.query(`REVOKE EXECUTE ON FUNCTION ${qualified}(integer) FROM ${dependent}`);
+    await prepare('integer', 'revokeOption');
+    await apply();
+    expect(await direct(intOid)).toEqual([edge(role.oid, false)]);
+    await prepare('integer', 'revoke');
+    await apply();
+    await expect(execute('integer')).rejects.toMatchObject({code: '42501'});
+    await prepare('integer', 'grant', true);
+    await apply(true);
+    expect((await execute('integer')).rows).toEqual([{value: 'int'}]);
+
+    await expect(row('bigint').getByText(locale.kinds.p, {exact: true})).toBeVisible();
+    await prepare('bigint', 'revoke', true);
+    await apply(true);
+    await expect(call()).rejects.toMatchObject({code: '42501'});
+    await expect(await prepare('bigint', 'grant')).toHaveText(`GRANT EXECUTE ON ROUTINE ${qualified}(bigint) TO "${recipient}"`);
+    await apply();
+    expect(await direct(procedureOid)).toEqual([edge(role.oid, false)]);
+    expect((await call()).rows).toEqual([{output: 'proc 7'}]);
+    const preview = (connectionId: string) => page.evaluate(async draft => window.dbark.invoke('postgres.roles.scopedPrivileges.preview', draft),
+      {connectionId, database, role, action: 'grant' as const, object: {kind: 'routine' as const, schema, name, oid: intOid},
+        privileges: ['EXECUTE' as const]});
+    await expect(preview(profiles.member)).rejects.toThrow('只有对象所有者或超级用户');
+    const stale = await preview(profiles.owner);
+    await owner.query(`DROP FUNCTION ${qualified}(integer); CREATE FUNCTION ${qualified}(integer) RETURNS text LANGUAGE sql AS 'SELECT ''replacement''::text'`);
+    const receipt = await page.evaluate(async ({connectionId, database, token}) =>
+      window.dbark.invoke('postgres.roles.scopedPrivileges.apply', {connectionId, database, token, confirmed: true}),
+      {connectionId: profiles.owner, database, token: stale.token});
+    expect(receipt.outcome).toBe('notSent');
+    expect(await direct(await oidOf('integer'))).toEqual([edge('0', false)]);
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(item => item.status === 'running').length)).toBe(0);
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const native = desktop.process();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally {await Promise.all([member.end(), owner.end()]);}
+});

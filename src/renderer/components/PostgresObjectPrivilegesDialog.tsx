@@ -23,6 +23,7 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
   const pending = useRef(false);
   const scope = 'columns' in editor ? 'column' : 'object' in editor ? editor.object.kind : 'table';
   const copy = scope === 'table' ? t : t[scope];
+  const publicTarget = 'object' in editor && editor.recipient === 'public';
   const locked = busy || !!outcome || !current();
   const reset = () => {setPreview(undefined); setConfirmed(false); setError('');};
   const selectionCount = scope === 'column' ? changes.length : selected.length;
@@ -44,7 +45,9 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
         ? await invoke('postgres.roles.columnPrivileges.preview', postgresColumnPrivilegeDraftSchema.parse({connectionId, database, role, action, table: editor.table, changes}))
         : 'table' in editor
           ? await invoke('postgres.roles.tablePrivileges.preview', postgresTablePrivilegeDraftSchema.parse({...draft, table: editor.table}))
-          : await invoke('postgres.roles.scopedPrivileges.preview', postgresScopedPrivilegeDraftSchema.parse({...draft, object: editor.object}));
+          : await invoke('postgres.roles.scopedPrivileges.preview', postgresScopedPrivilegeDraftSchema.parse({
+            ...draft, object: editor.object, ...(editor.recipient ? {recipient: editor.recipient} : {}),
+          }));
       if (!current()) throw Error(roles.changed);
       setPreview(result);
     } catch (reason) {setError(errorMessage(reason));}
@@ -70,13 +73,15 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
     <div className="modal-content postgres-roles" aria-busy={busy}>
       <p>{database}{'table' in editor ? ' · ' + editor.table.schema + ' / ' + editor.table.name :
         editor.object.kind === 'sequence' ? ' · ' + editor.object.schema + ' / ' + editor.object.name :
-        editor.object.kind === 'schema' ? ' · ' + editor.object.name : ''} · {roles.roleName} {role.name}</p>
+        editor.object.kind === 'routine' ? ' · ' + editor.signature :
+        editor.object.kind === 'schema' ? ' · ' + editor.object.name : ''} · {publicTarget ? 'PUBLIC' : roles.roleName + ' ' + role.name}</p>
       <p>{roles.grantor} {editor.grantor}</p>
-      <p>{t.hint} {copy.lockHint}</p>
+      <p>{t.hint} {publicTarget ? t.routine.publicHint : copy.lockHint}</p>
       {'direct' in editor && <p>{t.direct} · {editor.direct.map(item => item.privilege + (item.grantable ? ' WITH GRANT OPTION' : '')).join('、') || t.inherited}</p>}
       <Field label={t.action}><select aria-label={t.action} value={action} disabled={locked} onChange={event => {
         setAction(event.target.value as Action); setSelected([]); setChanges([]); reset();
-      }}>{Object.entries(t.actions).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
+      }}>{Object.entries(t.actions).filter(([key]) => !publicTarget || key === 'grant' || key === 'revoke')
+        .map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
       <fieldset><legend>{copy.selection}</legend>
         {'columns' in editor ? <PostgresColumnPrivilegesGrid rows={editor.columns} control={(column, privilege) => {
           const same = (item: PostgresColumnPrivilegeChange) => item.column.number === column.number && item.privilege === privilege.name;
@@ -104,7 +109,7 @@ export function PostgresObjectPrivilegesDialog({connectionId, database, role, ed
           </li>)}</ul>
         </section>}
         {!outcome && <label><input type="checkbox" checked={confirmed} disabled={locked}
-          onChange={event => setConfirmed(event.target.checked)}/>{copy.confirm}</label>}
+          onChange={event => setConfirmed(event.target.checked)}/>{publicTarget ? t.routine.confirmPublic : copy.confirm}</label>}
       </section>}
       {outcome && <p role={outcome.outcome === 'committed' ? 'status' : 'alert'}>{roles.result[outcome.outcome]} · {outcome.message}</p>}
       <ErrorBox message={error || (!current() ? roles.changed : '')}/>

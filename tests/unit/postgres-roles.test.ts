@@ -102,3 +102,19 @@ it('序列授权只接受精确 Schema、序列 OID 和序列权限', () => {
     {...draft, object: {...draft.object, kind: 'schema'}}, {...draft, cascade: true}])
     expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
 });
+
+it('例程授权只接受 OID 和 EXECUTE，PUBLIC 不能获得转授选项', () => {
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '42', name: '应用角色'}, action: 'revoke',
+    object: {kind: 'routine', schema: '租户 QA', oid: '102', name: '同名例程'}, privileges: ['EXECUTE']};
+  expect(validateCommand('postgres.roles.scopedPrivileges.preview', draft)).toEqual(draft);
+  expect(validateCommand('postgres.roles.scopedPrivileges.preview', {...draft, recipient: 'public'})).toEqual({...draft, recipient: 'public'});
+  for (const input of [{...draft, privileges: ['USAGE']}, {...draft, recipient: 'public', action: 'grantOption'},
+    {...draft, recipient: 'public', action: 'revokeOption'}, {...draft, recipient: 'PUBLIC'},
+    {...draft, object: {...draft.object, signature: 'foo(int)'}}, {...draft, object: {...draft.object, kind: 'sequence'},
+      privileges: ['USAGE'], recipient: 'public'}])
+    expect(() => validateCommand('postgres.roles.scopedPrivileges.preview', input)).toThrow();
+  const read = {connectionId: 'saved', taskId: 'read', kind: 'detail', role: draft.role,
+    scope: {schema: draft.object.schema, routine: draft.object.name}};
+  expect(validateCommand('postgres.roles.read', read)).toEqual(read);
+  expect(() => validateCommand('postgres.roles.read', {...read, scope: {...read.scope, relation: 'relation'}})).toThrow();
+});

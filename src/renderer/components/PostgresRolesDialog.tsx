@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresConnectionProfile } from '../../shared/contracts';
-import { postgresDatabasePrivileges, postgresSchemaPrivileges, postgresSequencePrivileges, postgresTablePrivileges, type PostgresObjectPrivilege,
+import { postgresDatabasePrivileges, postgresRoutinePrivileges, postgresSchemaPrivileges, postgresSequencePrivileges, postgresTablePrivileges, type PostgresObjectPrivilege,
   type PostgresColumnPrivilegeEditor, type PostgresScopedPrivilegeEditor, type PostgresTablePrivilegeEditor } from '../../shared/postgresRoles';
 import type { PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRoleRef, PostgresRolesInput, PostgresRolesList, PostgresRolesOutput } from '../../shared/postgresRoles';
 import { errorMessage, invoke, uid } from '../lib';
@@ -210,7 +210,11 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
         <form className="form-grid" onSubmit={event => {event.preventDefault(); if (schema) readDetail(role, {schema, ...(relation ? {relation} : {})});}}>
           <Field label={t.schema}><input value={schema} maxLength={256} disabled={busy} onChange={event => setSchema(event.target.value)}/></Field>
           <Field label={t.relation}><input value={relation} maxLength={256} disabled={busy} onChange={event => setRelation(event.target.value)}/></Field>
-          <div className="postgres-roles-actions"><button type="submit" disabled={!schema || busy}>{t.probe}</button></div>
+          <div className="postgres-roles-actions"><button type="submit" disabled={!schema || busy}>{t.probe}</button>
+            <button type="button" disabled={!schema || !relation || busy} onClick={() => readDetail(role, {schema, routine: relation})}>
+              {t.tablePrivileges.routine.inspect}
+            </button>
+          </div>
         </form>
         {detail.scope && detail.snapshot.scope && <div className="postgres-roles-sections">
           <div><Privileges label={t.schemaPrivileges + ' · ' + detail.scope.schema} rows={detail.snapshot.scope.schema}/>
@@ -233,6 +237,30 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
             </button>}
             {detail.snapshot.scope.relation && <p>{t.rowSecurity} · {yesNo(detail.snapshot.scope.relation.rls)} ／ {t.forceRls} · {yesNo(detail.snapshot.scope.relation.forceRls)}</p>}</div>}
         </div>}
+        {detail.snapshot.scope?.routines && <section aria-label={t.tablePrivileges.routine.label}>
+          <h4>{t.tablePrivileges.routine.label}</h4>
+          {detail.snapshot.scope.routines.rows.length ? <div className="postgres-column-privileges">
+            <table aria-label={t.tablePrivileges.routine.label}><thead><tr>
+              <th scope="col">{t.tablePrivileges.routine.signature}</th><th scope="col">{t.tablePrivileges.routine.kind}</th>
+              <th scope="col">{t.allowed}</th><th scope="col">{t.grantable}</th>
+              <th scope="col">{t.tablePrivileges.routine.direct}</th><th scope="col">{t.tablePrivileges.routine.publicExecute}</th>
+              <th scope="col">{t.tablePrivileges.action}</th>
+            </tr></thead><tbody>{detail.snapshot.scope.routines.rows.map(row => <tr key={row.oid}>
+              <th scope="row"><code>{row.signature}</code></th><td>{t.tablePrivileges.routine.kinds[row.kind]}</td>
+              <td>{yesNo(row.effective.allowed)}</td><td>{yesNo(row.effective.grantable)}</td>
+              <td>{row.direct ? t.tablePrivileges.routine.withOption : yesNo(row.direct !== null)}</td><td>{yesNo(row.publicExecute)}</td>
+              <td><div className="postgres-roles-actions">
+                {row.editor && <button disabled={busy} onClick={() => editPrivileges(row.editor!, postgresRoutinePrivileges)}>
+                  {t.tablePrivileges.routine.open}
+                </button>}
+                {row.publicEditor && <button disabled={busy} onClick={() => editPrivileges(row.publicEditor!, postgresRoutinePrivileges)}>
+                  {t.tablePrivileges.routine.publicOpen}
+                </button>}
+              </div></td>
+            </tr>)}</tbody></table>
+          </div> : <p>{t.tablePrivileges.routine.empty}</p>}
+          {detail.snapshot.scope.routines.limited && <p>{t.tablePrivileges.routine.limited}</p>}
+        </section>}
         {detail.snapshot.scope?.relation?.columns && <section aria-label={t.tablePrivileges.column.label}>
           <h4>{t.tablePrivileges.column.label} · {detail.scope?.relation}</h4>
           <p>{t.tablePrivileges.column.legend}</p>

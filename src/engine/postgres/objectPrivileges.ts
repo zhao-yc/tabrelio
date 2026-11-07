@@ -5,6 +5,7 @@ import type { DataRow } from '../../shared/contracts';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 import { startPostgresDdl } from './createTable';
+import { postgresRoutineSignatureSql } from './routine';
 
 type Scoped<T> = T & {owner: string; connectionRevision: number};
 type Connect = <T>(work: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -74,7 +75,7 @@ function readEdges(rows: DataRow[]) {
   return edges;
 }
 
-/** 数据库、Schema 和序列使用系统目录行版本验证实际写入，不改变序列状态。 */
+/** 使用目录行版本核对本事务修改的对象，并用系统目录生成例程签名。 */
 async function readScopedState(connection: PostgresConnection, draft: PostgresScopedPrivilegeDraft) {
   const {object, role} = draft;
   const target = {
@@ -86,12 +87,17 @@ async function readScopedState(connection: PostgresConnection, draft: PostgresSc
       FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
       WHERE c.relkind='S' AND c.relpersistence<>'t' AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
         AND n.nspname::text COLLATE pg_catalog."C"=$6`},
+    routine: {acl: 'f', sql: `SELECT p.oid,p.proname AS name,p.proowner AS owner,p.proacl AS acl,p.xmin,n.oid::text AS schema_oid,
+      ${postgresRoutineSignatureSql} AS signature FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+      WHERE p.prokind IN ('f','p','a','w') AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+        AND n.nspname::text COLLATE pg_catalog."C"=$6`},
   }[object.kind];
   const result = await connection.query(`WITH object AS (${target.sql})
     SELECT NULL::text,acl.grantor::text,acl.grantee::text,acl.privilege_type,acl.is_grantable,
       actor.rolname::text,owner.rolname::text,owner.oid::text,actor.oid::text,d.oid::text,d.datdba::text,
       extract(epoch FROM pg_catalog.pg_postmaster_start_time())::text,actor.rolsuper,
-      obj.xmin::text,obj.xmin=pg_catalog.pg_current_xact_id_if_assigned()::xid,obj.schema_oid
+      obj.xmin::text,obj.xmin=pg_catalog.pg_current_xact_id_if_assigned()::xid,obj.schema_oid,
+      ${object.kind === 'routine' ? 'obj.signature' : 'NULL::text'}
     FROM object obj JOIN pg_catalog.pg_roles owner ON owner.oid=obj.owner
     JOIN pg_catalog.pg_roles actor ON actor.rolname=current_user
     JOIN pg_catalog.pg_roles recipient ON recipient.oid=$3::oid AND recipient.rolname::text COLLATE pg_catalog."C"=$4
@@ -105,9 +111,11 @@ async function readScopedState(connection: PostgresConnection, draft: PostgresSc
   if (!row || typeof row.c5 !== 'string' || typeof row.c6 !== 'string' || typeof row.c7 !== 'string' || typeof row.c13 !== 'string')
     throw changed();
   const implicitOwner = object.kind === 'schema' && row.c6 === 'pg_database_owner' && row.c8 === row.c10;
-  if (row.c7 === role.oid || row.c7 !== row.c8 && row.c12 !== 't' && !implicitOwner) throw forbidden();
-  return {identity: [row.c5, row.c6, row.c7, row.c8, row.c9, row.c10, row.c11, row.c12, row.c15],
+  if (!draft.recipient && row.c7 === role.oid || row.c7 !== row.c8 && row.c12 !== 't' && !implicitOwner) throw forbidden();
+  if (object.kind === 'routine' && typeof row.c16 !== 'string') throw changed();
+  return {identity: [row.c5, row.c6, row.c7, row.c8, row.c9, row.c10, row.c11, row.c12, row.c15, row.c16],
     actor: row.c5, grantor: row.c6, grantorOid: row.c7, databaseOid: row.c9, rowVersion: row.c13, writtenHere: row.c14 === 't',
+    signature: typeof row.c16 === 'string' ? row.c16 : undefined,
     edges: readEdges(result.rows.filter(entry => entry.c1 !== null))};
 }
 
@@ -120,14 +128,22 @@ const qualified = (table: PostgresTablePrivilegeDraft['table']) => postgresIdent
 
 function prepare(draft: Draft, state: State) {
   const granting = draft.action === 'grant' || draft.action === 'grantOption';
-  const target = 'table' in draft ? 'TABLE ' + qualified(draft.table) :
-    draft.object.kind.toUpperCase() + ' ' + ('schema' in draft.object ? qualified(draft.object) : postgresIdentifier(draft.object.name));
+  let target: string;
+  if ('table' in draft) target = 'TABLE ' + qualified(draft.table);
+  else {
+    const object = draft.object;
+    const reference = object.kind === 'routine' && 'signature' in state ? state.signature :
+      'schema' in object ? qualified(object) : postgresIdentifier(object.name);
+    if (!reference) throw changed();
+    target = object.kind.toUpperCase() + ' ' + reference;
+  }
+  const publicRecipient = 'recipient' in draft && draft.recipient === 'public';
   const available = 'table' in draft ? postgresTablePrivileges : postgresScopedPrivileges[draft.object.kind];
   const expected = new Map(state.edges), columns: PostgresTablePrivilegePreview['columns'] = [];
   const changes = 'changes' in draft ? draft.changes.map(({column, privilege}) => ({column: column.name, privilege})) :
     available.filter(value => draft.privileges.some(selected => selected === value)).map(privilege => ({column: null, privilege}));
   for (const {column, privilege} of changes) {
-    const edge = {column, grantor: state.grantorOid, grantee: draft.role.oid, privilege, grantable: draft.action === 'grantOption'};
+    const edge = {column, grantor: state.grantorOid, grantee: publicRecipient ? '0' : draft.role.oid, privilege, grantable: draft.action === 'grantOption'};
     const key = keyOf(edge), original = state.edges.get(key);
     if (granting ? !!original && (original.grantable || !edge.grantable) : !original || draft.action === 'revokeOption' && !original.grantable)
       throw Error('所选权限没有对应的直接授权变化，请重新检查对象权限');
@@ -149,7 +165,7 @@ function prepare(draft: Draft, state: State) {
       .map(change => change.column).sort((a, b) => a.number - b.number).map(column => postgresIdentifier(column.name));
     return names.length ? [privilege + ' (' + names.join(', ') + ')'] : [];
   }) : changes.map(change => change.privilege);
-  const recipient = postgresIdentifier(draft.role.name);
+  const recipient = publicRecipient ? 'PUBLIC' : postgresIdentifier(draft.role.name);
   const sql = granting
     ? `GRANT ${privileges.join(', ')} ON ${target} TO ${recipient}${draft.action === 'grantOption' ? ' WITH GRANT OPTION' : ''}`
     : `REVOKE ${draft.action === 'revokeOption' ? 'GRANT OPTION FOR ' : ''}${privileges.join(', ')} ON ${target} FROM ${recipient} RESTRICT`;

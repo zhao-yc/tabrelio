@@ -59,3 +59,11 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 使用 `nextval` 生成默认值的插入，需要表上的 INSERT 和序列上的 USAGE 或 UPDATE。通常授予 USAGE 即可取号，UPDATE 还允许通过 `setval` 改值。授权预览和执行只处理权限目录，不读取或推进序列值。[PostgreSQL 序列函数](https://www.postgresql.org/docs/18/functions-sequence.html)
 
 确认绑定数据库、Schema、序列 OID 和角色。提交前会核对实际序列目录行由本事务写入以及权限变化是否符合预览。撤销使用 RESTRICT，有下游依赖时整批回滚。
+
+## 查看与管理例程执行权限
+
+在角色详情输入准确的 Schema 与例程名，点击「查找同名例程」。窗口显示最多 50 个重载的完整输入类型签名，包括函数、存储过程、聚合函数和窗口函数，并分别列出角色有效权限、转授选项、所有者直接授权及 PUBLIC 执行权限。调用例程还需要相应 Schema 的 USAGE。[PostgreSQL 权限](https://www.postgresql.org/docs/18/ddl-priv.html)
+
+对象所有者或超级用户可管理所选签名的 EXECUTE，分别授予或撤销指定角色的权限及转授选项。也可在独立的「管理 PUBLIC 执行权限」入口修改该签名对所有现有和未来角色的授权。PostgreSQL 通常会在创建例程时为 PUBLIC 提供 EXECUTE。撤销该授权后，仍拥有直接或继承权限的角色可以执行。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html)
+
+预览由系统目录生成参数类型签名。确认时绑定原例程 OID 和所选角色，提交前复核原签名和实际 ACL 差异。撤销使用 RESTRICT，有下游依赖时整批回滚。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)

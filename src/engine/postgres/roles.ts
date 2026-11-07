@@ -1,7 +1,8 @@
 import type { CellValue, DataRow } from '../../shared/contracts';
 import type { PostgresColumnPrivilege, PostgresColumnPrivilegeRow, PostgresRole, PostgresRoleDetail, PostgresRoleMembership,
-  PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput, PostgresObjectPrivilege } from '../../shared/postgresRoles';
+  PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput, PostgresObjectPrivilege, PostgresRoutinePrivilegeRow } from '../../shared/postgresRoles';
 import type { PostgresConnection } from './connection';
+import { postgresRoutineSignatureSql } from './routine';
 
 const roleFields = 'r.oid::text,r.rolname::text,r.rolcanlogin,r.rolsuper,r.rolinherit,r.rolcreaterole,r.rolcreatedb,r.rolreplication,r.rolbypassrls,r.rolconnlimit::text,r.rolvaliduntil::text';
 const pageSize = 50, memberLimit = 200;
@@ -104,6 +105,41 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       if (firstSchema && flag(firstSchema.c5)) {
         const oid = text(firstSchema.c3);
         scope.schemaEditor = {object: {kind: 'schema', oid, name: schema}, grantor: text(firstSchema.c4), direct: await directPrivileges('schema', oid)};
+      }
+      if (input.scope.routine !== undefined) {
+        // 输入参数类型由服务器在固定搜索路径下输出，客户端只提交例程 OID 和名称。
+        const setting = await connection.query('SET LOCAL search_path = pg_catalog', undefined, {rows: 0, bytes: 1024});
+        if (setting.postgresCommand !== 'SET') throw invalid();
+        const name = input.scope.routine;
+        const overloads = await rows(`SELECT p.oid::text,${postgresRoutineSignatureSql},p.prokind,owner.rolname::text,
+          p.proowner=actor.oid OR actor.rolsuper,
+          pg_catalog.has_function_privilege($1::oid,p.oid,'EXECUTE'),
+          pg_catalog.has_function_privilege($1::oid,p.oid,'EXECUTE WITH GRANT OPTION'),
+          acl.role_grant,COALESCE(acl.public_execute,false),acl.public_direct,p.proowner::text
+          FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+          JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner JOIN pg_catalog.pg_roles actor ON actor.oid=$4::oid
+          CROSS JOIN LATERAL (SELECT
+            pg_catalog.bool_or(a.is_grantable) FILTER (WHERE a.grantor=p.proowner AND a.grantee=$1::oid) AS role_grant,
+            pg_catalog.bool_or(true) FILTER (WHERE a.grantee=0) AS public_execute,
+            pg_catalog.bool_or(a.is_grantable) FILTER (WHERE a.grantor=p.proowner AND a.grantee=0) AS public_direct
+            FROM pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) a WHERE a.privilege_type='EXECUTE') acl
+          WHERE n.nspname::text COLLATE pg_catalog."C"=$2::text AND p.proname::text COLLATE pg_catalog."C"=$3::text
+            AND p.prokind IN ('f','p','a','w') AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+          ORDER BY p.proargtypes,p.oid LIMIT 51`, [role.oid, schema, name, context.current.oid], 51);
+        scope.routines = {limited: overloads.length > 50, rows: overloads.slice(0, 50).map(row => {
+          const oid = text(row.c0), signature = text(row.c1), kind = row.c2;
+          if (kind !== 'f' && kind !== 'p' && kind !== 'a' && kind !== 'w') throw invalid();
+          const direct = nullableFlag(row.c7), publicDirect = nullableFlag(row.c9);
+          const options = (grantable: boolean | null) => grantable === null ? [] : [{privilege: 'EXECUTE' as const, grantable}];
+          const output: PostgresRoutinePrivilegeRow = {oid, signature, kind, effective: {name: 'EXECUTE', allowed: flag(row.c5), grantable: flag(row.c6)},
+            direct, publicExecute: flag(row.c8)};
+          if (flag(row.c4)) {
+            const editor = {object: {kind: 'routine' as const, oid, schema, name}, signature, grantor: text(row.c3)};
+            if (row.c10 !== role.oid) output.editor = {...editor, direct: options(direct)};
+            output.publicEditor = {...editor, recipient: 'public', direct: options(publicDirect)};
+          }
+          return output;
+        })};
       }
       if (relation !== undefined) {
         const relations = await rows(`SELECT p.name,
