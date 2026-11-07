@@ -11,3 +11,19 @@ it('PostgreSQL 角色目录只接受已保存连接、目录筛选和精确对�
     {...detail, role: {...detail.role, oid: '4294967296'}}, {...detail, role: {...detail.role, name: 'x\0y'}}, {...list, after: ''}])
     expect(() => validateCommand('postgres.roles.read', input)).toThrow();
 });
+
+it('成员变更只接受明确目标和一次性确认，禁止渲染进程提供 SQL 或撤销模式', () => {
+  const member = {oid: '101', name: '成员'}, role = {oid: '102', name: '授权角色'};
+  const grantor = {oid: '10', name: 'postgres'};
+  const base = {connectionId: 'saved', database: 'postgres'};
+  const grant = {...base, action: 'grant', member, roleName: role.name, options: {admin: false, inherit: true, set: false}};
+  const revoke = {...base, action: 'revoke', member, role, grantor};
+  const apply = {...base, token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true};
+  expect(validateCommand('postgres.roles.membership.preview', grant)).toEqual(grant);
+  expect(validateCommand('postgres.roles.membership.preview', revoke)).toEqual(revoke);
+  expect(validateCommand('postgres.roles.membership.apply', apply)).toEqual(apply);
+  for (const input of [{...grant, sql: 'SELECT 1'}, {...revoke, cascade: true}, {...revoke, grantor: undefined}, {...grant, options: {admin: true}}])
+    expect(() => validateCommand('postgres.roles.membership.preview', input)).toThrow();
+  for (const input of [{...apply, confirmed: false}, {...apply, token: ''}, {...apply, role}])
+    expect(() => validateCommand('postgres.roles.membership.apply', input)).toThrow();
+});

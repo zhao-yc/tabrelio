@@ -50,12 +50,12 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       const owner = direction === 'granted' ? 'member' : 'roleid', peer = direction === 'granted' ? 'roleid' : 'member';
       // PG16 开始按授权记录保存 INHERIT 和 SET，旧版本显示未知而不猜权限。
       const result = await rows(`SELECT p.oid::text,p.rolname::text,g.rolname::text,m.admin_option,
-        (pg_catalog.to_jsonb(m)->>'inherit_option')::boolean,(pg_catalog.to_jsonb(m)->>'set_option')::boolean
+        (pg_catalog.to_jsonb(m)->>'inherit_option')::boolean,(pg_catalog.to_jsonb(m)->>'set_option')::boolean,g.oid::text
         FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles p ON p.oid=m.${peer}
         LEFT JOIN pg_catalog.pg_roles g ON g.oid=m.grantor WHERE m.${owner}=$1::oid
         ORDER BY p.rolname::text COLLATE pg_catalog."C",m.grantor LIMIT 201`, [role.oid], memberLimit + 1);
       return {limited: result.length > memberLimit, edges: result.slice(0, memberLimit).map((edge): PostgresRoleMembership => ({
-        peer: {oid: text(edge.c0), name: text(edge.c1)}, grantor: nullableText(edge.c2), admin: flag(edge.c3),
+        peer: {oid: text(edge.c0), name: text(edge.c1)}, grantor: nullableText(edge.c2), grantorOid: nullableText(edge.c6), admin: flag(edge.c3),
         inherit: nullableFlag(edge.c4), set: nullableFlag(edge.c5),
       }))};
     };

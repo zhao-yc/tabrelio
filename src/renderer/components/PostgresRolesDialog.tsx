@@ -6,6 +6,7 @@ import { postgresRolesZh as t } from '../locales/postgresRoles.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal } from './ui';
+import { PostgresMembershipDialog, type MembershipIntent } from './PostgresMembershipDialog';
 import '../postgresRoles.css';
 
 const yesNo = (value: boolean | null) => value === null ? t.unknown : value ? t.yes : t.no;
@@ -21,13 +22,18 @@ function Privileges({label, rows}: {label: string; rows: PostgresRolePrivilege[]
   </tr>)}</tbody></table> : <p>{t.missing}</p>}</section>;
 }
 
-function Memberships({label, edges, busy, read}: {label: string; edges: PostgresRoleMembership[]; busy: boolean; read(role: PostgresRoleRef): void}) {
+function Memberships({label, edges, busy, read, revoke, protectedPeer}: {
+  label: string; edges: PostgresRoleMembership[]; busy: boolean; read(role: PostgresRoleRef): void; revoke?(edge: PostgresRoleMembership): void;
+  protectedPeer(name: string): boolean;
+}) {
   return <section><h4>{label}</h4>{edges.length ? <table aria-label={label}><thead><tr>
     <th scope="col">{t.roleName}</th><th scope="col">{t.grantor}</th><th scope="col">{t.admin}</th>
-    <th scope="col">{t.memberInherit}</th><th scope="col">{t.memberSet}</th>
+    <th scope="col">{t.memberInherit}</th><th scope="col">{t.memberSet}</th>{revoke && <th scope="col">{t.membership}</th>}
   </tr></thead><tbody>{edges.map((edge, index) => <tr key={index}>
     <th scope="row"><button disabled={busy} onClick={() => read(edge.peer)}>{edge.peer.name}</button></th>
     <td>{edge.grantor ?? t.unknown}</td><td>{yesNo(edge.admin)}</td><td>{yesNo(edge.inherit)}</td><td>{yesNo(edge.set)}</td>
+    {revoke && <td>{edge.grantor && edge.grantorOid && edge.set !== null && !protectedPeer(edge.peer.name) &&
+      <button disabled={busy} aria-label={t.revoke + ' ' + edge.peer.name} onClick={() => revoke(edge)}>{t.revoke}</button>}</td>}
   </tr>)}</tbody></table> : <p>{t.noMembership}</p>}</section>;
 }
 
@@ -43,6 +49,8 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
   const [page, setPage] = useState<{key: string; snapshot: PostgresRolesList; search: string; trail: string[]}>();
   const [inspection, setInspection] = useState<{key: string; snapshot: PostgresRoleDetail; scope?: Scope}>();
   const [schema, setSchema] = useState(''), [relation, setRelation] = useState('');
+  const [membership, setMembership] = useState<{intent: MembershipIntent; connection: PostgresConnectionProfile;
+    version: number; database: string; role: PostgresRoleRef; scope?: Scope}>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
   const connection = connections.find(profile => profile.id === connectionId);
@@ -88,12 +96,34 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
   const context = detail?.snapshot ?? directory?.snapshot;
   const role = detail?.snapshot.role;
   const reset = () => { setError(''); setPage(undefined); setInspection(undefined); };
+  if (membership) {
+    const sourceCurrent = () => {
+      const current = useWorkspace.getState(), id = membership.connection.id;
+      return current.connections.find(profile => profile.id === id) === membership.connection &&
+        (current.connectionVersions[id] ?? 0) === membership.version;
+    };
+    return <PostgresMembershipDialog intent={membership.intent} connectionId={membership.connection.id}
+      database={membership.database} current={sourceCurrent} onClose={refresh => {
+        setMembership(undefined);
+        if (refresh && sourceCurrent()) readDetail(membership.role, membership.scope);
+      }}/>;
+  }
+  const edit = (intent: MembershipIntent) => {
+    if (!connection || !detail || !role || running.current) return;
+    setMembership({intent, connection, version, database: detail.snapshot.database, role, scope: detail.scope});
+  };
+  const protectedRole = (name: string) => name === context?.login || name === context?.current.name;
+  const revoke = (edge: PostgresRoleMembership, target: PostgresRoleRef, member: PostgresRoleRef) => {
+    if (!edge.grantor || !edge.grantorOid || protectedRole(target.name) || protectedRole(member.name)) return;
+    edit({action: 'revoke', member: {oid: member.oid, name: member.name}, role: {oid: target.oid, name: target.name},
+      grantor: {oid: edge.grantorOid, name: edge.grantor}});
+  };
   return <Modal title={t.title} wide onClose={onClose}>
     <div className="modal-content postgres-roles" aria-busy={busy}>
       <p>{t.hint}</p>
       <form onSubmit={event => {event.preventDefault(); readList(search);}}>
         <div className="form-grid">
-          <Field label={t.connection}><select value={connectionId} disabled={busy} onChange={event => {
+          <Field label={t.connection}><select aria-label={t.connection} value={connectionId} disabled={busy} onChange={event => {
             setConnectionId(event.target.value); setDatabase(''); reset();
           }}>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></Field>
           <Field label={t.database}><input value={database} maxLength={256} placeholder={t.defaultDatabase} disabled={busy}
@@ -118,14 +148,18 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose}:
       </section>}
       {detail && role && <section aria-label={t.attributes}>
         <h3>{role.name}</h3>
+        {!protectedRole(role.name) && <button disabled={busy}
+          onClick={() => edit({action: 'grant', member: {oid: role.oid, name: role.name}})}>{t.grant}</button>}
         <dl className="postgres-roles-attributes">{[
           [t.login, yesNo(role.login)], [t.superuser, yesNo(role.superuser)], [t.inherit, yesNo(role.inherit)], [t.createRole, yesNo(role.createRole)],
           [t.createDatabase, yesNo(role.createDatabase)], [t.replication, yesNo(role.replication)], [t.bypassRls, yesNo(role.bypassRls)],
           [t.connectionLimit, role.connectionLimit < 0 ? t.unlimited : role.connectionLimit], [t.validUntil, role.validUntil ?? t.noExpiry],
         ].map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>
         <div className="postgres-roles-sections">
-          <Memberships label={t.granted} edges={detail.snapshot.memberships.granted} busy={busy} read={readDetail}/>
-          <Memberships label={t.members} edges={detail.snapshot.memberships.members} busy={busy} read={readDetail}/>
+          <Memberships label={t.granted} edges={detail.snapshot.memberships.granted} busy={busy} read={readDetail} protectedPeer={protectedRole}
+            revoke={protectedRole(role.name) ? undefined : edge => revoke(edge, edge.peer, role)}/>
+          <Memberships label={t.members} edges={detail.snapshot.memberships.members} busy={busy} read={readDetail} protectedPeer={protectedRole}
+            revoke={protectedRole(role.name) ? undefined : edge => revoke(edge, role, edge.peer)}/>
         </div>
         {detail.snapshot.memberships.limited && <p>{t.limited}</p>}
         <Privileges label={t.databasePrivileges} rows={detail.snapshot.databasePrivileges}/>

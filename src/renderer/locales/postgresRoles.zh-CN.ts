@@ -15,4 +15,9 @@ export const postgresRolesZh = {
   privilege: '权限', allowed: '拥有', grantable: '可转授', rowSecurity: '启用行级安全', forceRls: '强制行级安全',
   hint: '只读目录按服务器可见范围返回。有效权限包含继承和 PUBLIC 授权。表权限与列级授权、具体行是否可见分别判定。',
   changed: '原连接已变化，请重新读取。',
+  membership: 'PostgreSQL 成员授权', grant: '授予角色', revoke: '撤销直接授权', targetRole: '获授角色名称', member: '成员', actor: '执行角色',
+  preview: '预览授权 SQL', confirm: '确认执行授权操作', execute: '执行成员变更', sql: '本次执行的 SQL',
+  grantHint: '使用准确的角色名。启用管理选项可让成员继续授权，启用切换选项可让成员切换到获授角色。',
+  revokeHint: '只撤销所列授权者的直接记录。若存在依赖授权，服务器将拒绝撤销。其他来源仍可能提供同一角色。',
+  result: {committed: '已提交', rolledBack: '已回滚', notSent: '未发送', unknown: '提交状态未知，请重新读取目录核对'},
 } as const;

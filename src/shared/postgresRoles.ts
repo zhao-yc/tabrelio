@@ -14,12 +14,29 @@ export const postgresRolesSchema = z.discriminatedUnion('kind', [
 ]);
 export type PostgresRolesInput = z.infer<typeof postgresRolesSchema>;
 export type PostgresRoleRef = z.infer<typeof role>;
+const membershipTarget = {connectionId: target.connectionId, database: target.database};
+export const postgresMembershipOptionsSchema = z.object({admin: z.boolean(), inherit: z.boolean(), set: z.boolean()}).strict();
+export const postgresMembershipPreviewSchema = z.discriminatedUnion('action', [
+  z.object({...membershipTarget, action: z.literal('grant'), member: role, roleName: identifier, options: postgresMembershipOptionsSchema}).strict(),
+  z.object({...membershipTarget, action: z.literal('revoke'), member: role, role, grantor: role}).strict(),
+]);
+export const postgresMembershipApplySchema = z.object({...membershipTarget, token: z.string().uuid(), confirmed: z.literal(true)}).strict();
+export type PostgresMembershipDraft = z.infer<typeof postgresMembershipPreviewSchema>;
+export type PostgresMembershipApply = z.infer<typeof postgresMembershipApplySchema>;
+export type PostgresMembershipOptions = z.infer<typeof postgresMembershipOptionsSchema>;
+export interface PostgresMembershipPreview {
+  token: string; database: string; actor: string; action: 'grant' | 'revoke'; sql: string;
+  member: PostgresRoleRef; role: PostgresRoleRef; grantor: PostgresRoleRef; options: PostgresMembershipOptions;
+}
+export interface PostgresMembershipOutcome {
+  outcome: 'committed' | 'rolledBack' | 'notSent' | 'unknown'; message: string;
+}
 export interface PostgresRole extends PostgresRoleRef {
   login: boolean; superuser: boolean; inherit: boolean; createRole: boolean; createDatabase: boolean;
   replication: boolean; bypassRls: boolean; connectionLimit: number; validUntil: string | null;
 }
 export interface PostgresRoleMembership {
-  peer: PostgresRoleRef; grantor: string | null; admin: boolean; inherit: boolean | null; set: boolean | null;
+  peer: PostgresRoleRef; grantor: string | null; grantorOid: string | null; admin: boolean; inherit: boolean | null; set: boolean | null;
 }
 export interface PostgresRolePrivilege {name: string; allowed: boolean; grantable: boolean;}
 export interface PostgresRolesContext {database: string; login: string; current: PostgresRoleRef;}

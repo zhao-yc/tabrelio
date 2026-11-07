@@ -92,3 +92,120 @@ test('普通 PostgreSQL 登录角色可核对继承、授予选项、对象级�
     expect(native.exitCode).toBe(0);
   } finally { await observer.end(); }
 });
+
+test('PostgreSQL 直接成员授权预览、受限撤销及目录回读', async ({}, info) => {
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  const token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(user)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^[a-f0-9]{64}$/.test(password) ||
+      !/^[a-f0-9]{64}$/.test(adminPassword) || !Number.isInteger(port) || port <= 1024 || port > 65535)
+    throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_';
+  const managed = prefix + 'managed', recipient = prefix + 'recipient', dependent = prefix + 'dependent';
+  const endpoint = {host: '127.0.0.1', port, database: user};
+  const observer = new Client({...endpoint, user, password, connectionTimeoutMillis: 3000});
+  const member = new Client({...endpoint, user: recipient, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await member.connect();
+    const native = desktop.process();
+    const profiles = await page.evaluate(async ({endpoint, user, password, adminPassword}) => {
+      const base = {id: '', dialect: 'postgresql' as const, group: '', color: '#123456', ...endpoint, rememberPassword: false};
+      const normal = await window.dbark.invoke('connections.save', {...base, name: '授权普通账号', user, password});
+      const superuser = await window.dbark.invoke('connections.save', {...base, name: '授权超级用户', user: 'postgres', password: adminPassword});
+      return {normal: normal.id, superuser: superuser.id};
+    }, {endpoint, user, password, adminPassword});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true}), edit = page.getByRole('dialog', {name: t.membership, exact: true});
+    async function selectRole(name: string) {
+      await modal.getByLabel(t.search, {exact: true}).fill(name);
+      await modal.getByRole('button', {name: t.read, exact: true}).click();
+      await modal.getByRole('region', {name: t.directory, exact: true}).getByRole('button', {name, exact: true}).click();
+      await expect(modal.getByRole('heading', {name, exact: true})).toBeVisible();
+    }
+    async function grants(memberName = recipient) {
+      return (await observer.query(`SELECT g.rolname::text AS grantor, m.admin_option AS admin, m.inherit_option AS inherit, m.set_option AS set
+        FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid=m.roleid
+        JOIN pg_catalog.pg_roles a ON a.oid=m.member JOIN pg_catalog.pg_roles g ON g.oid=m.grantor
+        WHERE r.rolname=$1 AND a.rolname=$2 ORDER BY g.rolname::text COLLATE "C"`, [managed, memberName])).rows;
+    }
+    const base = {grantor: 'postgres', admin: false, inherit: false, set: false};
+    const ours = {grantor: user, admin: true, inherit: true, set: true};
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profiles.normal);
+    await selectRole(recipient);
+    await modal.getByRole('button', {name: t.grant, exact: true}).click();
+    await edit.getByLabel(t.targetRole, {exact: true}).fill(managed);
+    await edit.getByRole('checkbox', {name: t.admin, exact: true}).check();
+    await edit.getByRole('button', {name: t.preview, exact: true}).click();
+    await expect(edit.getByLabel(t.sql)).toHaveText(`GRANT "${managed}" TO "${recipient}" WITH ADMIN true, INHERIT true, SET true GRANTED BY "${user}"`);
+    expect(await grants()).toEqual([base]);
+    const submit = edit.getByRole('button', {name: t.execute, exact: true});
+    await expect(submit).toBeDisabled();
+    await edit.getByRole('checkbox', {name: t.confirm, exact: true}).check();
+    await submit.dblclick();
+    await expect(edit.getByRole('status')).toContainText(t.result.committed);
+    expect(await grants()).toEqual([base, ours]);
+    await edit.getByRole('button', {name: zh.common.close, exact: true}).click();
+
+    async function previewRevoke() {
+      const edge = modal.getByRole('table', {name: t.granted, exact: true}).getByRole('row').filter({hasText: user});
+      await edge.getByRole('button', {name: t.revoke + ' ' + managed, exact: true}).click();
+      await edit.getByRole('button', {name: t.preview, exact: true}).click();
+      await expect(edit.getByLabel(t.sql)).toHaveText(`REVOKE "${managed}" FROM "${recipient}" GRANTED BY "${user}" RESTRICT`);
+      await edit.getByRole('checkbox', {name: t.confirm, exact: true}).check();
+    }
+    await member.query(`GRANT "${managed}" TO "${dependent}" WITH ADMIN FALSE, INHERIT TRUE, SET TRUE GRANTED BY "${recipient}"`);
+    await previewRevoke();
+    await submit.click();
+    await expect(edit.getByRole('alert')).toContainText(t.result.rolledBack);
+    expect(await grants()).toEqual([base, ours]);
+    expect(await grants(dependent)).toEqual([{grantor: recipient, admin: false, inherit: true, set: true}]);
+    await edit.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await member.query(`REVOKE "${managed}" FROM "${dependent}" GRANTED BY "${recipient}" RESTRICT`);
+    await previewRevoke();
+    await edit.screenshot({path: info.outputPath('PostgreSQL 成员撤销预览.png')});
+    await submit.click();
+    await expect(edit.getByRole('status')).toContainText(t.result.committed);
+    expect(await grants()).toEqual([base]);
+    await edit.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await expect(modal.getByRole('heading', {name: recipient, exact: true})).toBeVisible();
+    await expect(modal.getByRole('table', {name: t.granted, exact: true}).getByRole('row').filter({hasText: user})).toHaveCount(0);
+
+    const [memberIdentity, actorIdentity] = await Promise.all([recipient, user].map(name =>
+      observer.query<{oid: string; name: string}>('SELECT oid::text,rolname::text AS name FROM pg_catalog.pg_roles WHERE rolname=$1', [name])
+        .then(result => result.rows[0])));
+    const input = {connectionId: profiles.normal, database: user, action: 'grant' as const, member: memberIdentity,
+      roleName: managed, options: {admin: false, inherit: false, set: false}};
+    await expect(page.evaluate(draft => window.dbark.invoke('postgres.roles.membership.preview', draft), {...input, member: actorIdentity}))
+      .rejects.toThrow('不能修改登录角色');
+    const preview = await page.evaluate(draft => window.dbark.invoke('postgres.roles.membership.preview', draft), input);
+    await observer.query(`GRANT "${managed}" TO "${recipient}" WITH ADMIN FALSE, INHERIT TRUE, SET FALSE GRANTED BY "${user}"`);
+    const apply = () => page.evaluate(input => window.dbark.invoke('postgres.roles.membership.apply', input),
+      {connectionId: profiles.normal, database: user, token: preview.token, confirmed: true as const});
+    await expect(apply()).resolves.toMatchObject({outcome: 'notSent', message: expect.stringContaining('已变化')});
+    await expect(apply()).resolves.toMatchObject({outcome: 'notSent', message: expect.stringContaining('已失效')});
+    expect(await grants()).toEqual([base, {grantor: user, admin: false, inherit: true, set: false}]);
+
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profiles.superuser);
+    await selectRole(dependent);
+    await modal.getByRole('button', {name: t.grant, exact: true}).click();
+    await edit.getByLabel(t.targetRole, {exact: true}).fill(managed);
+    await edit.getByRole('button', {name: t.preview, exact: true}).click();
+    await expect(edit.getByLabel(t.sql)).toContainText('GRANTED BY "postgres"');
+    await edit.getByRole('checkbox', {name: t.confirm, exact: true}).check();
+    await submit.click();
+    await expect(edit.getByRole('status')).toContainText(t.result.committed);
+    expect(await grants(dependent)).toEqual([{grantor: 'postgres', admin: false, inherit: true, set: true}]);
+    await edit.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await expect(modal.getByRole('table', {name: t.granted, exact: true}).getByRole('button', {name: managed, exact: true})).toBeVisible();
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await quitDesktop();
+    expect(native.exitCode).toBe(0);
+  } finally { await member.end(); await observer.end(); }
+});
