@@ -58,6 +58,24 @@ export interface PostgresRoleMembership {
   peer: PostgresRoleRef; grantor: string | null; grantorOid: string | null; admin: boolean; inherit: boolean | null; set: boolean | null;
 }
 export interface PostgresRolePrivilege {name: string; allowed: boolean; grantable: boolean;}
+export const postgresTablePrivileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'] as const;
+const tablePrivilege = z.enum(postgresTablePrivileges);
+export type PostgresTablePrivilege = z.infer<typeof tablePrivilege>;
+export const postgresTablePrivilegeTargetSchema = z.object({oid, schema: identifier, name: identifier}).strict();
+export const postgresTablePrivilegeDraftSchema = z.object({...membershipTarget, database: identifier, role,
+  table: postgresTablePrivilegeTargetSchema, action: z.enum(['grant', 'grantOption', 'revoke', 'revokeOption']),
+  privileges: z.array(tablePrivilege).min(1).max(postgresTablePrivileges.length).refine(values => new Set(values).size === values.length),
+}).strict();
+export type PostgresTablePrivilegeDraft = z.infer<typeof postgresTablePrivilegeDraftSchema>;
+export type PostgresTablePrivilegeTarget = z.infer<typeof postgresTablePrivilegeTargetSchema>;
+export interface PostgresTablePrivilegeEditor {
+  table: PostgresTablePrivilegeTarget; grantor: string;
+  direct: {privilege: PostgresTablePrivilege; grantable: boolean}[];
+}
+export interface PostgresTablePrivilegePreview {
+  token: string; sql: string; actor: string; grantor: string;
+  columns: {name: string; privilege: PostgresTablePrivilege}[];
+}
 export interface PostgresRolesContext {database: string; login: string; current: PostgresRoleRef;}
 export interface PostgresRolesList extends PostgresRolesContext {
   kind: 'list'; roles: PostgresRole[]; next?: string;
@@ -66,6 +84,8 @@ export interface PostgresRoleDetail extends PostgresRolesContext {
   kind: 'detail'; role: PostgresRole;
   memberships: {granted: PostgresRoleMembership[]; members: PostgresRoleMembership[]; limited: boolean};
   databasePrivileges: PostgresRolePrivilege[];
-  scope?: {schema: PostgresRolePrivilege[] | null; relation?: {privileges: PostgresRolePrivilege[]; rls: boolean; forceRls: boolean} | null};
+  scope?: {schema: PostgresRolePrivilege[] | null; relation?: {
+    privileges: PostgresRolePrivilege[]; rls: boolean; forceRls: boolean; editor?: PostgresTablePrivilegeEditor;
+  } | null};
 }
 export type PostgresRolesOutput = PostgresRolesList | PostgresRoleDetail;

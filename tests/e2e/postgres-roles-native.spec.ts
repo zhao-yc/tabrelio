@@ -423,3 +423,125 @@ test('PostgreSQL 普通登录角色轮换密码并更新原连接配置', async 
     await quitDesktop();
   } finally { await admin.end(); }
 });
+
+test('PostgreSQL 普通表直接授权、仅撤销转授及列权限影响', async ({}, info) => {
+  const database = process.env.DBARK_PGSEARCH_USER ?? '', ownerPassword = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const adminPassword = process.env.DBARK_PG_ROLES_ADMIN_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), token = /^tabrelio_pgsearch_([a-f0-9]{12})$/.exec(database)?.[1];
+  if (!token || process.env.DBARK_INTEGRATION_ENABLED !== '1' || ![adminPassword, ownerPassword].every(value => /^[a-f0-9]{64}$/.test(value)) ||
+      !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮独占回环 PostgreSQL');
+  const prefix = 'tabrelio_roles_' + token + '_', recipient = prefix + 'recipient', dependent = prefix + 'dependent';
+  const schema = 'QA Privileges', relation = 'Sales"ACL', qualified = '"QA Privileges"."Sales""ACL"';
+  const endpoint = {host: '127.0.0.1', port, database, connectionTimeoutMillis: 3000};
+  const admin = new Client({...endpoint, user: 'postgres', password: adminPassword});
+  const owner = new Client({...endpoint, user: database, password: ownerPassword});
+  const member = new Client({...endpoint, user: recipient, password: ownerPassword});
+  await admin.connect();
+  try {
+    await owner.connect();
+    await member.connect();
+    await owner.query(`CREATE SCHEMA "QA Privileges"; CREATE TABLE ${qualified}(id int, body text);
+      INSERT INTO ${qualified} VALUES (1,'qa'); CREATE VIEW "QA Privileges".report AS SELECT id FROM ${qualified};
+      CREATE TABLE "QA Privileges".partitioned(id int) PARTITION BY RANGE(id);
+      GRANT USAGE ON SCHEMA "QA Privileges" TO ${recipient},${dependent}`);
+    const role = (await admin.query('SELECT oid::text,rolname::text AS name FROM pg_catalog.pg_roles WHERE rolname=$1', [recipient])).rows[0];
+    const object = async (name: string) => ({schema, name, oid: (await admin.query(`SELECT c.oid::text FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2`, [schema, name])).rows[0].oid});
+    const original = await object(relation);
+    const direct = async () => (await admin.query(`SELECT NULL::text AS column, acl.privilege_type,acl.is_grantable FROM pg_catalog.pg_class c
+      CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) acl WHERE c.oid=$1 AND acl.grantee=$2 AND acl.grantor=c.relowner
+      UNION ALL SELECT a.attname::text, acl.privilege_type,acl.is_grantable FROM pg_catalog.pg_attribute a
+      JOIN pg_catalog.pg_class c ON c.oid=a.attrelid CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) acl
+      WHERE c.oid=$1 AND acl.grantee=$2 AND acl.grantor=c.relowner ORDER BY 1 NULLS FIRST, 2`, [original.oid, role.oid])).rows;
+    const grant = (column: string | null, privilege_type: string, is_grantable: boolean) => ({column, privilege_type, is_grantable});
+    const profiles = await page.evaluate(async ({database, port, ownerPassword, adminPassword, recipient}) => {
+      const base = {id: '', name: '表权限所有者', dialect: 'postgresql' as const, group: '', color: '#123456', host: '127.0.0.1', port,
+        database, rememberPassword: false};
+      const add = (name: string, user: string, password: string) => window.dbark.invoke('connections.save', {...base, name, user, password});
+      return {owner: (await add(base.name, database, ownerPassword)).id, admin: (await add('表权限管理员', 'postgres', adminPassword)).id,
+        member: (await add('表权限受权者', recipient, ownerPassword)).id};
+    }, {database, port, ownerPassword, adminPassword, recipient});
+    await page.reload();
+    await expect.poll(() => desktop.evaluate(({Menu}) => Menu.getApplicationMenu()?.getMenuItemById('postgres-roles')?.enabled)).toBe(true);
+    await desktop.evaluate(({Menu, BrowserWindow}) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('postgres-roles'), [owner, extra] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !owner || extra) throw Error('原生工具菜单或窗口不匹配');
+      item.click(item, owner, {} as Electron.KeyboardEvent);
+    });
+    const modal = page.getByRole('dialog', {name: t.title, exact: true});
+    await modal.getByLabel(t.connection, {exact: true}).selectOption(profiles.owner);
+    await modal.getByLabel(t.search, {exact: true}).fill(recipient);
+    await modal.getByRole('button', {name: t.read, exact: true}).click();
+    await modal.getByRole('region', {name: t.directory, exact: true}).getByRole('button', {name: recipient, exact: true}).click();
+    await modal.getByLabel(t.schema, {exact: true}).fill(schema);
+    await modal.getByLabel(t.relation, {exact: true}).fill(relation);
+    await modal.getByRole('button', {name: t.probe, exact: true}).click();
+    const locale = t.tablePrivileges;
+    const edit = modal.getByRole('button', {name: locale.open, exact: true});
+    const dialog = page.getByRole('dialog', {name: locale.title, exact: true});
+    const prepare = async (action: string, privileges: string[]) => {
+      await edit.click();
+      await dialog.getByLabel(locale.action, {exact: true}).selectOption(action);
+      for (const name of privileges) await dialog.getByRole('checkbox', {name, exact: true}).check();
+      await dialog.getByRole('button', {name: locale.preview, exact: true}).click();
+      const sql = dialog.getByLabel(locale.sql, {exact: true});
+      await expect(sql).toBeVisible();
+      return sql;
+    };
+    const apply = async (outcome: 'committed' | 'rolledBack') => {
+      await dialog.getByRole('checkbox', {name: locale.confirm, exact: true}).check();
+      await dialog.getByRole('button', {name: locale.apply, exact: true}).click();
+      await expect(dialog.getByRole(outcome === 'committed' ? 'status' : 'alert').filter({hasText: t.result[outcome]})).toBeVisible();
+      await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    };
+
+    await expect(await prepare('grantOption', ['INSERT', 'SELECT'])).toHaveText(
+      `GRANT SELECT, INSERT ON TABLE ${qualified} TO "${recipient}" WITH GRANT OPTION`);
+    expect(await direct()).toEqual([]);
+    await expect(member.query(`SELECT id FROM ${qualified}`)).rejects.toMatchObject({code: '42501'});
+    await apply('committed');
+    expect(await direct()).toEqual([grant(null, 'INSERT', true), grant(null, 'SELECT', true)]);
+    expect((await member.query(`SELECT id FROM ${qualified}`)).rows).toEqual([{id: 1}]);
+
+    await member.query(`GRANT SELECT ON ${qualified} TO ${dependent}`);
+    await prepare('revoke', ['SELECT', 'INSERT']);
+    await apply('rolledBack');
+    expect(await direct()).toEqual([grant(null, 'INSERT', true), grant(null, 'SELECT', true)]);
+    await member.query(`REVOKE SELECT ON ${qualified} FROM ${dependent}`);
+    await owner.query(`GRANT SELECT(body) ON ${qualified} TO ${recipient} WITH GRANT OPTION; GRANT SELECT ON ${qualified} TO PUBLIC`);
+    await expect(await prepare('revokeOption', ['SELECT'])).toHaveText(`REVOKE GRANT OPTION FOR SELECT ON TABLE ${qualified} FROM "${recipient}" RESTRICT`);
+    await expect(dialog.getByRole('region', {name: locale.affected}).getByText('body · SELECT')).toBeVisible();
+    await apply('committed');
+    expect(await direct()).toEqual([grant(null, 'INSERT', true), grant(null, 'SELECT', false), grant('body', 'SELECT', false)]);
+    await prepare('revoke', ['SELECT']);
+    await expect(dialog.getByRole('region', {name: locale.affected}).getByText('body · SELECT')).toBeVisible();
+    await dialog.screenshot({path: info.outputPath('PostgreSQL 表权限撤销预览.png')});
+    await apply('committed');
+    expect(await direct()).toEqual([grant(null, 'INSERT', true)]);
+    expect((await member.query(`SELECT id FROM ${qualified}`)).rows).toEqual([{id: 1}]);
+
+    const prepareDirect = (connectionId: string, table: typeof original) => page.evaluate(async draft =>
+      window.dbark.invoke('postgres.roles.tablePrivileges.preview', draft),
+      {connectionId, database, table, role, action: 'grant', privileges: ['SELECT']});
+    const applyDirect = (connectionId: string, token: string) => page.evaluate(async input =>
+      window.dbark.invoke('postgres.roles.tablePrivileges.apply', input), {connectionId, database, token, confirmed: true});
+    await expect(prepareDirect(profiles.member, original)).rejects.toThrow('只有对象所有者或超级用户');
+    const view = await object('report');
+    const viewPreview = await prepareDirect(profiles.admin, view);
+    expect(viewPreview).toMatchObject({actor: 'postgres', grantor: database});
+    expect((await applyDirect(profiles.admin, viewPreview.token)).outcome).toBe('committed');
+    expect((await member.query('SELECT id FROM "QA Privileges".report')).rows).toEqual([{id: 1}]);
+
+    const partitioned = await object('partitioned');
+    const plan = await prepareDirect(profiles.owner, partitioned);
+    await owner.query('ALTER TABLE "QA Privileges".partitioned RENAME TO old_partitioned; CREATE TABLE "QA Privileges".partitioned(id int) PARTITION BY RANGE(id)');
+    expect((await applyDirect(profiles.owner, plan.token)).outcome).toBe('notSent');
+    await expect(member.query('SELECT id FROM "QA Privileges".partitioned')).rejects.toMatchObject({code: '42501'});
+    await expect(member.query('SELECT id FROM "QA Privileges".old_partitioned')).rejects.toMatchObject({code: '42501'});
+    const replacement = await prepareDirect(profiles.owner, await object('partitioned'));
+    expect((await applyDirect(profiles.owner, replacement.token)).outcome).toBe('committed');
+    expect((await member.query('SELECT id FROM "QA Privileges".partitioned')).rows).toEqual([]);
+    expect((await applyDirect(profiles.owner, replacement.token)).outcome).toBe('notSent');
+    await quitDesktop();
+  } finally { await Promise.all([member.end(), owner.end(), admin.end()]); }
+});

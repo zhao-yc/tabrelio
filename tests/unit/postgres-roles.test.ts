@@ -54,3 +54,15 @@ it('登录密码轮换预览只接受原角色身份，确认只接受一次性�
     {...apply, confirmed: false}, {...apply, role: draft.role}, {...apply, validUntil: 'infinity'}])
     expect(() => validateCommand('postgres.roles.password.apply', value)).toThrow();
 });
+
+it('表权限预览绑定实际对象和角色，只接受去重的权限白名单和明确动作', () => {
+  const draft = {connectionId: 'saved', database: 'qa', role: {oid: '42', name: '受权者'},
+    table: {oid: '100', schema: '带 空格', name: '含"引号'}, action: 'revokeOption', privileges: ['SELECT', 'INSERT']};
+  expect(validateCommand('postgres.roles.tablePrivileges.preview', draft)).toEqual(draft);
+  for (const input of [{...draft, sql: 'GRANT ALL'}, {...draft, cascade: true}, {...draft, database: undefined},
+    {...draft, privileges: ['ALL']}, {...draft, privileges: ['SELECT', 'SELECT']}, {...draft, table: {...draft.table, oid: '0'}}])
+    expect(() => validateCommand('postgres.roles.tablePrivileges.preview', input)).toThrow();
+  const apply = {connectionId: 'saved', database: 'qa', token: '0550f154-5fc9-4447-a835-fd56f9e9a17f', confirmed: true};
+  expect(validateCommand('postgres.roles.tablePrivileges.apply', apply)).toEqual(apply);
+  expect(() => validateCommand('postgres.roles.tablePrivileges.apply', {...apply, privileges: ['SELECT']})).toThrow();
+});

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresConnectionProfile } from '../../shared/contracts';
+import { postgresTablePrivileges, type PostgresTablePrivilege, type PostgresTablePrivilegeEditor } from '../../shared/postgresRoles';
 import type { PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRoleRef, PostgresRolesInput, PostgresRolesList, PostgresRolesOutput } from '../../shared/postgresRoles';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresRolesZh as t } from '../locales/postgresRoles.zh-CN';
@@ -9,6 +10,7 @@ import { ErrorBox, Field, Modal } from './ui';
 import { PostgresMembershipDialog, type MembershipIntent } from './PostgresMembershipDialog';
 import { PostgresRoleCreateDialog } from './PostgresRoleCreateDialog';
 import { PostgresRolePasswordDialog } from './PostgresRolePasswordDialog';
+import { PostgresTablePrivilegesDialog } from './PostgresTablePrivilegesDialog';
 import '../postgresRoles.css';
 
 const yesNo = (value: boolean | null) => value === null ? t.unknown : value ? t.yes : t.no;
@@ -59,6 +61,7 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
   const [schema, setSchema] = useState(''), [relation, setRelation] = useState('');
   const [membership, setMembership] = useState<RoleSource & {intent: MembershipIntent; role: PostgresRoleRef; scope?: Scope}>();
   const [creation, setCreation] = useState<RoleSource>();
+  const [tableAccess, setTableAccess] = useState<RoleSource & {role: PostgresRoleRef; scope: Scope; editor: PostgresTablePrivilegeEditor; privileges: PostgresTablePrivilege[]}>();
   const [rotation, setRotation] = useState<RoleSource & {role: PostgresRoleRef}>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
@@ -103,6 +106,12 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
   const context = detail?.snapshot ?? directory?.snapshot;
   const role = detail?.snapshot.role;
   const reset = () => { setError(''); setPage(undefined); setInspection(undefined); };
+  if (tableAccess) return <PostgresTablePrivilegesDialog connectionId={tableAccess.connection.id} database={tableAccess.database}
+    role={tableAccess.role} editor={tableAccess.editor} privileges={tableAccess.privileges}
+    current={() => sourceCurrent(tableAccess)} onClose={refresh => {
+      setTableAccess(undefined);
+      if (refresh && sourceCurrent(tableAccess)) readDetail(tableAccess.role, tableAccess.scope);
+    }}/>;
   if (rotation) return <PostgresRolePasswordDialog
     target={{connectionId: rotation.connection.id, database: rotation.database, role: rotation.role}}
     current={() => sourceCurrent(rotation)} onClose={invalidate => {
@@ -192,6 +201,11 @@ export function PostgresRolesDialog({connections, preferred, versions, onClose, 
           <Privileges label={t.schemaPrivileges + ' · ' + detail.scope.schema} rows={detail.snapshot.scope.schema}/>
           {detail.scope.relation && <div><Privileges label={t.relationPrivileges + ' · ' + detail.scope.relation}
             rows={detail.snapshot.scope.relation?.privileges ?? null}/>
+            {connection && detail.snapshot.scope.relation?.editor && <button disabled={busy} onClick={() => {
+              const relation = detail.snapshot.scope?.relation;
+              if (relation?.editor) setTableAccess({connection, version, database: detail.snapshot.database, role: {oid: role.oid, name: role.name},
+                scope: detail.scope, editor: relation.editor, privileges: postgresTablePrivileges.filter(name => relation.privileges.some(item => item.name === name))});
+            }}>{t.tablePrivileges.open}</button>}
             {detail.snapshot.scope.relation && <p>{t.rowSecurity} · {yesNo(detail.snapshot.scope.relation.rls)} ／ {t.forceRls} · {yesNo(detail.snapshot.scope.relation.forceRls)}</p>}</div>}
         </div>}
       </section>}

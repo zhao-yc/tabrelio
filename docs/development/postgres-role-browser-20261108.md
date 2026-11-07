@@ -29,3 +29,11 @@ PostgreSQL 16 及以上可在角色详情点击「授予角色」。当前详情
 在角色窗口读取目录，点击「查看当前角色」→「轮换登录密码」。窗口确认当前角色与连接的登录身份一致后才显示入口。预览列出角色、所用数据库和脱敏 SQL。确认时输入两次新密码，客户端在内存中生成带盐的 SCRAM 验证值，服务器执行 `ALTER ROLE CURRENT_USER`。轮换作用于整台 PostgreSQL 服务器，并保留原密码有效期。预览有效期为五分钟，确认令牌只能使用一次。[PostgreSQL ALTER ROLE](https://www.postgresql.org/docs/18/sql-alterrole.html)
 
 已提交后，可点击「编辑此连接的密码」，重新输入新密码、测试并保存。该入口沿用连接编辑的会话和凭据保护。已打开此连接的工作区标签时，请先按连接编辑页的提示处理查询、草稿和事务。轮换本身不会把输入填入连接配置。若提交状态未知，先用新的独立连接核对实际密码，再更新连接配置。
+
+## 管理表和视图的直接权限
+
+在角色详情填写准确的 schema 和表或视图名称，点击「检查对象权限」后打开「管理直接授权」。普通表、分区表和普通视图支持由对象所有者或超级用户修改所有者授予所选角色的直接权限。可以多选权限，一次授予权限、授予权限及转授选项、撤销直接权限或仅撤销转授选项。已有的直接权限在窗口内单独列出。PostgreSQL 17 起提供 MAINTAIN。有效权限还可能来自 PUBLIC、角色继承或其他授权者。[PostgreSQL GRANT](https://www.postgresql.org/docs/18/sql-grant.html)
+
+撤销一律使用 RESTRICT。预览列出 PostgreSQL 会一并撤销或降级的同来源列权限。存在需要级联撤销的下游依赖时，服务器拒绝操作，整批回滚。[PostgreSQL REVOKE](https://www.postgresql.org/docs/18/sql-revoke.html)
+
+确认后使用短事务独占锁定原对象，再核对对象、角色和原 ACL。普通视图遵循 PostgreSQL 的递归锁定规则，锁等待超过五秒会结束操作。提交前比较表级和列级 ACL 的实际变化。关闭回执后重新读取有效权限。[PostgreSQL LOCK](https://www.postgresql.org/docs/18/sql-lock.html)

@@ -1,5 +1,5 @@
 import type { CellValue, DataRow } from '../../shared/contracts';
-import type { PostgresRole, PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput } from '../../shared/postgresRoles';
+import type { PostgresRole, PostgresRoleDetail, PostgresRoleMembership, PostgresRolePrivilege, PostgresRolesInput, PostgresRolesOutput, PostgresTablePrivilege } from '../../shared/postgresRoles';
 import type { PostgresConnection } from './connection';
 
 const roleFields = 'r.oid::text,r.rolname::text,r.rolcanlogin,r.rolsuper,r.rolinherit,r.rolcreaterole,r.rolcreatedb,r.rolreplication,r.rolbypassrls,r.rolconnlimit::text,r.rolvaliduntil::text';
@@ -74,13 +74,26 @@ export async function readPostgresRoles(connection: PostgresConnection, input: P
       scope = {schema: schemas.length ? schemas.map(privilege) : null};
       if (relation !== undefined) {
         const relations = await rows(`SELECT p.name,pg_catalog.has_table_privilege($1::oid,c.oid,p.name),
-          pg_catalog.has_table_privilege($1::oid,c.oid,p.name||' WITH GRANT OPTION'),c.relrowsecurity,c.relforcerowsecurity
+          pg_catalog.has_table_privilege($1::oid,c.oid,p.name||' WITH GRANT OPTION'),c.relrowsecurity,c.relforcerowsecurity,
+          c.oid::text,pg_catalog.pg_get_userbyid(c.relowner)::text,
+          c.relowner<>$1::oid AND c.relkind IN ('r','p','v') AND c.relpersistence<>'t'
+            AND n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+            AND (c.relowner=$4::oid OR EXISTS(SELECT FROM pg_catalog.pg_roles WHERE oid=$4::oid AND rolsuper))
           FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
           CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER'),('MAINTAIN')) p(name)
           WHERE n.nspname::text=$2::text AND c.relname::text=$3::text AND c.relkind IN ('r','p','v','m','f')
             AND (p.name<>'MAINTAIN' OR pg_catalog.current_setting('server_version_num')::int>=170000)`,
-          [role.oid, schema, relation], 8);
-        scope.relation = relations.length ? {privileges: relations.map(privilege), rls: flag(relations[0].c3), forceRls: flag(relations[0].c4)} : null;
+          [role.oid, schema, relation, context.current.oid], 8);
+        const first = relations[0];
+        scope.relation = first ? {privileges: relations.map(privilege), rls: flag(first.c3), forceRls: flag(first.c4)} : null;
+        if (scope.relation && flag(first.c7)) {
+          const oid = text(first.c5);
+          const direct = await rows(`SELECT a.privilege_type,a.is_grantable FROM pg_catalog.pg_class c
+            CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+            WHERE c.oid=$1::oid AND a.grantor=c.relowner AND a.grantee=$2::oid ORDER BY a.privilege_type`, [oid, role.oid], 8);
+          scope.relation.editor = {table: {oid, schema, name: relation}, grantor: text(first.c6),
+            direct: direct.map(entry => ({privilege: text(entry.c0) as PostgresTablePrivilege, grantable: flag(entry.c1)}))};
+        }
       }
     }
     output = {kind: 'detail', ...context, role, memberships: {granted: granted.edges, members: members.edges, limited: granted.limited || members.limited},

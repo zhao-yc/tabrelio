@@ -20,6 +20,14 @@ export const postgresRolesZh = {
   grantHint: '使用准确的角色名。启用管理选项可让成员继续授权，启用切换选项可让成员切换到获授角色。',
   revokeHint: '只撤销所列授权者的直接记录。若存在依赖授权，服务器将拒绝撤销。其他来源仍可能提供同一角色。',
   result: {committed: '已提交', rolledBack: '已回滚', notSent: '未发送', unknown: '提交状态未知，请重新读取目录核对'},
+  tablePrivileges: {
+    title: '管理 PostgreSQL 表权限', open: '管理直接授权', action: '权限操作', selection: '所选表级权限',
+    hint: '此处管理对象所有者的直接授权。继承、PUBLIC 和其他授权者仍可能提供有效权限。',
+    lockHint: '确认后短暂独占锁定目标，普通视图也会锁定其引用的关系。已有下游依赖时，撤销会回滚。',
+    actions: {grant: '授予权限', grantOption: '授予权限及转授选项', revoke: '撤销直接权限', revokeOption: '仅撤销转授选项'},
+    direct: '已有直接权限', inherited: '无所有者直接授权', affected: '同时受影响的列权限',
+    preview: '预览表权限 SQL', sql: '本次表权限 SQL', confirm: '确认执行所选表权限变更', apply: '执行表权限变更',
+  },
   password: {
     title: '轮换 PostgreSQL 登录密码', open: '轮换登录密码',
     hint: '此操作修改当前登录角色在整个服务器上的密码，并保留原有效期。使用旧密码的连接配置需要更新后才能重新登录。',
