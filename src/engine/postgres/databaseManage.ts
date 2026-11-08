@@ -109,7 +109,7 @@ export async function postgresDatabasePlan(connection: PostgresConnection, input
           : 'COMMENT ON DATABASE ' + identifier + ' IS ' + (comment === null ? 'NULL' : postgresDdlLiteral(comment));
   const expected = stamp(original, target);
   return {
-    table: name, statements: [sql], autocommit: creating, protocol: 'extended' as const, readCommitted: true as const,
+    table: name, statements: [sql], ...(creating ? { autocommit: { tag: 'CREATE' as const } } : {}), protocol: 'extended' as const, readCommitted: true as const,
     success: creating ? 'PostgreSQL 数据库已确认创建' : 'PostgreSQL 数据库属性已确认提交',
     async preflight(current: PostgresConnection) {
       if (source) {

@@ -6,12 +6,26 @@ import { postgresTriggerEditorDraft, postgresTriggerChangeSchema } from '../../s
 import { postgresPolicyChangeSchema, postgresPolicyRequiresReplacement } from '../../src/shared/postgresPolicy';
 import { postgresSchemaApplySchema, postgresSchemaPreviewSchema } from '../../src/shared/postgresSchemaManage';
 import { postgresDatabaseManageApplySchema, postgresDatabaseManagePreviewSchema } from '../../src/shared/postgresDatabaseManage';
+import { postgresRelationMaintenanceApplySchema, postgresRelationMaintenancePreviewSchema, postgresRelationMaintenanceSql } from '../../src/shared/postgresRelationMaintenance';
 
 const draft: PostgresCreateTableInput = {
   connectionId: '原连接', database: '原库', schema: '业务"区', table: '新"表', comment: "注释'；\\",
   columns: [{ name: '原"列', type: 'text', nullable: false, primary: true, unique: false, identity: 'none',
     default: { mode: 'literal', value: "a\\'; DROP TABLE 其他; --" }, comment: '多行\n注释' }],
 };
+
+it('PostgreSQL 日常维护仅接受固定动作和原对象目录摘要', () => {
+  const request = { connectionId: '连接', database: '库', table: '"区"."表"', action: 'vacuum', stamp: 'a'.repeat(64) };
+  expect(postgresRelationMaintenancePreviewSchema.parse(request)).toEqual(request);
+  for (const value of [{ ...request, action: 'vacuumFull' }, { ...request, options: ['FULL'] }, { ...request, stamp: 'invalid' }])
+    expect(postgresRelationMaintenancePreviewSchema.safeParse(value).success).toBe(false);
+  const token = { connectionId: '连接', database: '库', token: '0550f154-5fc9-4447-a835-fd56f9e9a17f' };
+  expect(postgresRelationMaintenanceApplySchema.safeParse({ ...token, confirmed: false }).success).toBe(false);
+  expect(postgresRelationMaintenanceApplySchema.safeParse({ ...token, confirmed: true, table: '"另一个库"."表"' }).success).toBe(false);
+  expect(postgresRelationMaintenanceSql('区"', '表; VACUUM', 180000, 'vacuumAnalyze'))
+    .toBe('VACUUM (ANALYZE, TRUNCATE OFF) ONLY "区"""."表; VACUUM"');
+  expect(postgresRelationMaintenanceSql('区', '表', 170000, 'analyze')).toBe('ANALYZE "区"."表"');
+});
 
 describe('PostgreSQL 建表计划', () => {
   it('分区边界按数据转义，默认分区在显式分区之后创建', () => {

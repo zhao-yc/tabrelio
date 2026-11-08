@@ -1,4 +1,5 @@
 import { postgresDatabaseManagePreviewSchema, postgresDatabaseManageApplySchema } from './postgresDatabaseManage';
+import { postgresRelationMaintenancePreviewSchema, postgresRelationMaintenanceApplySchema } from './postgresRelationMaintenance';
 import { postgresPartitionManagePreviewSchema, postgresPartitionManageApplySchema } from './postgresPartitionManage';
 import { postgresExtensionPreviewSchema, postgresExtensionApplySchema } from './postgresExtensionManage';
 import { postgresSchemaReadSchema, postgresSchemaPreviewSchema, postgresSchemaApplySchema } from './postgresSchemaManage';
@@ -280,6 +281,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableLayout.get': sqliteLayoutTargetSchema, 'sqlite.tableLayout.save': sqliteLayoutSaveSchema, 'sqlite.tableLayout.reset': sqliteLayoutResetSchema,
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
   'postgres.completion': postgresCompletionSchema,
+  'postgres.relationMaintenance.read': postgresStructureInputSchema,
+  'postgres.relationMaintenance.preview': postgresRelationMaintenancePreviewSchema,
+  'postgres.relationMaintenance.apply': postgresRelationMaintenanceApplySchema,
   'postgres.partitionManage.read': postgresStructureInputSchema,
   'postgres.partitionManage.preview': postgresPartitionManagePreviewSchema,
   'postgres.partitionManage.apply': postgresPartitionManageApplySchema,

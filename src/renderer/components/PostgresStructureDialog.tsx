@@ -8,6 +8,8 @@ import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { PostgresMaterializedRefreshPanel } from './PostgresMaterializedRefreshPanel';
 import { postgresMaterializedRefreshZh as refreshText } from '../locales/postgresMaterializedRefresh.zh-CN';
+import { PostgresRelationMaintenanceDialog } from './PostgresRelationMaintenanceDialog';
+import { postgresRelationMaintenanceZh } from '../locales/postgresRelationMaintenance.zh-CN';
 import { PostgresPartitionManageDialog } from './PostgresPartitionManageDialog';
 import { postgresPartitionManageZh } from '../locales/postgresPartitionManage.zh-CN';
 import { PostgresRelationManagePanel } from './PostgresRelationManagePanel';
@@ -78,6 +80,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const [editing, setEditing] = useState<keyof typeof editors>();
   const [dependencies, setDependencies] = useState(false);
   const [partitions, setPartitions] = useState(false);
+  const [maintenance, setMaintenance] = useState(false);
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
   const matched = useRef<HTMLTableRowElement>(null);
@@ -131,6 +134,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
     editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp :
       editing === 'comments' ? output?.commentStamp : editing === 'identity' ? output?.identityStamp :
         editing === 'policies' ? output?.policyStamp : output?.editStamp;
+  if (maintenance) return <PostgresRelationMaintenanceDialog target={target} onDirtyChange={onDirtyChange}
+    beforeApply={() => beforeTableManage(target)} onBack={() => { setMaintenance(false); setAttempt(value => value + 1); }}/>;
   if (partitions) return <PostgresPartitionManageDialog target={target} readOnly={readOnly} onDirtyChange={onDirtyChange}
     beforeApply={child => beforeTableManage(target, child)}
     onResult={(child, message, unknown, appliedVersion) => onPartitionChanged(target, child, message, unknown, appliedVersion)}
@@ -228,6 +233,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
       {!readOnly && output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
+      {!readOnly && !editing && (output?.kind === 'r' || output?.kind === 'm') &&
+        <button onClick={() => setMaintenance(true)}>{postgresRelationMaintenanceZh.title}</button>}
       {output?.kind === 'p' && !editing && <button onClick={() => setPartitions(true)}>{postgresPartitionManageZh.title}</button>}
       {!readOnly && manageStamp && !editing && <button onClick={() => setEditing('manage')}>{output?.tableManage ? postgresTableManageZh.title : postgresViewManageZh.title}</button>}
       {!readOnly && output?.commentStamp && !editing && <button onClick={() => setEditing('comments')}>{editors.comments.label}</button>}

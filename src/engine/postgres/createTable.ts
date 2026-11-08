@@ -30,6 +30,8 @@ import { postgresTableTriggerPlan } from './tableTriggers';
 import { postgresTablePolicyPlan } from './tablePolicies';
 import { postgresSchemaPlan } from './schemaManage';
 import { postgresSchemaPreviewSchema, type PostgresSchemaPreviewInput } from '../../shared/postgresSchemaManage';
+import { postgresRelationMaintenancePlan } from './relationMaintenance';
+import { postgresRelationMaintenancePreviewSchema, type PostgresRelationMaintenancePreview } from '../../shared/postgresRelationMaintenance';
 import { postgresPartitionManagePlan } from './partitionManage';
 import { postgresPartitionManagePreviewSchema, type PostgresPartitionManagePreview } from '../../shared/postgresPartitionManage';
 import { postgresExtensionPlan } from './extensionManage';
@@ -39,11 +41,12 @@ import { postgresDatabaseManagePreviewSchema, type PostgresDatabaseManageInput }
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'partitionManage' | 'extensionManage' | 'databaseManage' | 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
+type RelationKind = 'relationMaintenance' | 'partitionManage' | 'extensionManage' | 'databaseManage' | 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
-  autocommit?: boolean;
+  autocommit?: { tag: 'CREATE' | 'VACUUM'; partial?: true; guard?: { sql: string; parseOnly?: true } };
+  requireNoWarnings?: true;
   dropConfirmation?: string;
   preflight(connection: PostgresConnection): Promise<string>;
   validate?(connection: PostgresConnection): Promise<void>;
@@ -272,6 +275,13 @@ export class PostgresCreateTableWorkspace {
     const { owner: _owner, connectionRevision: _revision, ...raw } = input;
     const draft = postgresSchemaPreviewSchema.parse(raw);
     return this.prepareRelation(input, 'schemaManage', connect, () => connection => postgresSchemaPlan(connection, draft));
+  }
+
+  /** 物理关系维护保留独占连接、原文档能力和一次性执行边界。 */
+  async prepareMaintenance(input: Scoped<PostgresRelationMaintenancePreview>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+    const draft = postgresRelationMaintenancePreviewSchema.parse(raw);
+    return this.prepareRelation(input, 'relationMaintenance', connect, () => connection => postgresRelationMaintenancePlan(connection, draft));
   }
 
   /** 分区维护复用按文档绑定的事务和一次性预览。 */
@@ -681,7 +691,9 @@ export class PostgresCreateTableWorkspace {
       if (this.plans.size >= 128) throw Error('PostgreSQL 关系创建预览已满，请稍后重试');
       const token = randomUUID();
       this.plans.set(key, { input: { connectionId, database, owner, connectionRevision }, token, targetStamp, plan, expires: now + 300_000 });
-      const first = plan.lock ?? (plan.guard && !plan.guard.parseOnly ? plan.guard.sql : undefined);
+      const autocommitGuard = plan.autocommit?.guard;
+      const first = plan.lock ?? (plan.guard && !plan.guard.parseOnly ? plan.guard.sql : undefined) ??
+        (autocommitGuard && !autocommitGuard.parseOnly ? autocommitGuard.sql : undefined);
       return { token, statements: first ? [first, ...plan.statements] : plan.statements,
         ...(plan.truncateScope ? { truncateScope: plan.truncateScope } : {}), ...(plan.moveScope ? { moveScope: plan.moveScope } : {}) };
     } finally { this.pending.delete(key); }
@@ -699,7 +711,28 @@ export class PostgresCreateTableWorkspace {
     this.pending.add(key);
     let receipt: PostgresCreateTableOutcome | undefined;
     try {
-      await connect(async connection => { receipt = await this.execute(connection, prepared); }, true);
+      const guard = prepared.plan.autocommit?.guard;
+      if (guard) {
+        // ACCESS SHARE 与普通 VACUUM 的锁兼容，同时阻止并发改名或删除原关系。
+        await connect(async pinned => {
+          await startPostgresDdl(pinned, true);
+          await pinned.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', undefined, budget());
+          await pinned.query("SET LOCAL idle_in_transaction_session_timeout = '150s'", undefined, budget());
+          const locked = await pinned.query(guard.sql, undefined, budget(), undefined, guard.parseOnly ? 'parse' : 'extended');
+          if (!guard.parseOnly && locked.postgresCommand !== 'LOCK' || !pinned.state().transactionKnown || !pinned.state().transactionOpen)
+            throw Error('未确认锁定原维护关系');
+          if (await prepared.plan.preflight(pinned) !== prepared.targetStamp) throw Error('原维护关系已变化');
+          await connect(async connection => { receipt = await this.execute(connection, prepared); }, true);
+          try {
+            const released = await pinned.query('ROLLBACK', undefined, budget());
+            if (released.postgresCommand !== 'ROLLBACK' || !pinned.state().transactionKnown || pinned.state().transactionOpen)
+              throw Error('维护对象锁的收尾未确认');
+          } catch (reason) {
+            if (receipt?.outcome === 'committed') receipt = { outcome: 'unknown', message: pinned.error(reason).message };
+            else throw reason;
+          }
+        }, true);
+      } else await connect(async connection => { receipt = await this.execute(connection, prepared); }, true);
       return receipt!;
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
@@ -709,7 +742,7 @@ export class PostgresCreateTableWorkspace {
 
   /** 创建、注释和核对属于同一事务，断线且终态无法确认时保留未知。 */
   private async execute(connection: PostgresConnection, prepared: Prepared): Promise<PostgresCreateTableOutcome> {
-    if (prepared.plan.autocommit) return this.executeCreateDatabase(connection, prepared);
+    if (prepared.plan.autocommit) return this.executeAutocommit(connection, prepared, prepared.plan.autocommit);
     let sent = false, committing = false;
     try {
       await startPostgresDdl(connection, false);
@@ -732,10 +765,14 @@ export class PostgresCreateTableWorkspace {
         throw Error(plan.guard ? plan.guard.changed ?? '原视图已变化，请刷新结构后继续' : '原 schema 已被替换，请重新预览');
       if (plan.statementTimeout) await connection.query(
         "SELECT pg_catalog.set_config('statement_timeout', $1, true)", [plan.statementTimeout], budget());
+      if (plan.requireNoWarnings) await connection.query('SET LOCAL client_min_messages = warning', undefined, budget());
       let insertedRows: number | undefined;
       for (const [index, statement] of plan.statements.entries()) {
         sent = true;
-        const result = await connection.query(statement, undefined, budget(), undefined, prepared.plan.protocol);
+        let warned = false;
+        const result = await connection.query(statement, undefined, budget(), undefined, plan.protocol,
+          plan.requireNoWarnings ? () => { warned = true; } : undefined);
+        if (warned) throw Error('服务器发出维护警告，未确认完成');
         const expected = plan.commands?.[index];
         const command = expected?.tag ?? (index === 0 && plan.firstCommand || statement.slice(0, statement.indexOf(' ')));
         if (result.postgresCommand !== command || expected?.rows !== undefined && (result.truncated || result.rows.length !== expected.rows)) {
@@ -769,27 +806,31 @@ export class PostgresCreateTableWorkspace {
     }
   }
 
-  /** CREATE DATABASE 由独立物理会话发送一次。服务器未确认或回读不符时保留未知状态。 */
-  private async executeCreateDatabase(connection: PostgresConnection, prepared: Prepared): Promise<PostgresCreateTableOutcome> {
+  /** 事务外命令由独立物理会话发送一次。可分阶段生效的维护失败保留未知。 */
+  private async executeAutocommit(connection: PostgresConnection, prepared: Prepared,
+    operation: NonNullable<Plan['autocommit']>): Promise<PostgresCreateTableOutcome> {
     let sent = false, acknowledged = false;
     try {
       const { plan, targetStamp } = prepared;
       if (plan.statements.length !== 1 || !connection.state().transactionKnown || connection.state().transactionOpen)
-        throw Error('建库需要独立的事务外会话');
+        throw Error('此操作需要独立的事务外会话');
       await connection.query("SET statement_timeout = '120s'", undefined, budget());
       await connection.query("SET lock_timeout = '5s'", undefined, budget());
-      if (await plan.preflight(connection) !== targetStamp) throw Error('原建库预览已变化');
+      if (plan.requireNoWarnings) await connection.query('SET client_min_messages = warning', undefined, budget());
+      if (await plan.preflight(connection) !== targetStamp) throw Error('原操作预览已变化');
       sent = true;
-      const reply = await connection.query(plan.statements[0], undefined, budget(), undefined, 'extended');
-      if (reply.postgresCommand !== 'CREATE' || !connection.state().transactionKnown || connection.state().transactionOpen)
-        throw Error('PostgreSQL 未确认建库回执');
+      let warned = false;
+      const reply = await connection.query(plan.statements[0], undefined, budget(), undefined, 'extended',
+        plan.requireNoWarnings ? () => { warned = true; } : undefined);
+      if (warned || reply.postgresCommand !== operation.tag || !connection.state().transactionKnown || connection.state().transactionOpen)
+        throw Error('PostgreSQL 未确认完整操作回执');
       acknowledged = true;
       await plan.verify(connection, targetStamp);
       return { outcome: 'committed', table: plan.table, message: plan.success };
     } catch (reason) {
       const error = connection.error(reason) as Error & { postgresSqlState?: string };
       if (!sent) return { outcome: 'notSent', message: error.message };
-      if (!acknowledged && error.postgresSqlState && connection.state().transactionKnown && !connection.state().transactionOpen)
+      if (!operation.partial && !acknowledged && error.postgresSqlState && connection.state().transactionKnown && !connection.state().transactionOpen)
         return { outcome: 'rolledBack', message: error.message };
       return { outcome: 'unknown', message: error.message };
     }

@@ -316,6 +316,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 在 PostgreSQL 的「新建表」中，可选择 RANGE、LIST 或 HASH 分区策略，并在同一次提交中建立父表和初始子分区。[PostgreSQL 分区建表](development/postgres-partition-table-design-20261108.md) 分区父表的「查看结构」中还可查看直接子分区、新建、挂接已有表或分离为独立表。[PostgreSQL 子分区维护](development/postgres-partition-management-20261108.md)
 
+在 PostgreSQL 普通表或物化视图的「查看结构」中，可进入关系维护，更新统计、执行普通 VACUUM 或重建表索引。[PostgreSQL 日常关系维护](development/postgres-relation-maintenance-20261108.md)
+
 右键 PostgreSQL 连接选择「管理 PostgreSQL 数据库」，可选择模板建库，编辑注释、所有者和连接设置，或从另一个维护库执行改名。[PostgreSQL 数据库管理](development/postgres-database-management-20261108.md)
 
 右键 PostgreSQL 数据库选择「管理 PostgreSQL Schema」，可查看可见 Schema 的所有者和权限，并在有权限时创建、改名、编辑注释、转移所有者或受限删除。改名和删除前先关闭受影响的表页或视图页。[PostgreSQL Schema 管理](development/postgres-schema-management-20261108.md)
