@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dataCompareMappingSchema } from './dataCompareMapping';
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 
@@ -7,7 +8,7 @@ const fields = sqliteTablePageSchema.shape;
 const endpoint = z.object({ connectionId: fields.connectionId, database: fields.database, table: fields.table }).strict();
 export const sqliteDataCompareSchema = z.object({
   source: endpoint, target: endpoint,
-  taskId: fields.taskId, summaryOnly: z.literal(true).optional(), filters: fields.filters, mode: fields.mode,
+  taskId: fields.taskId, summaryOnly: z.literal(true).optional(), mapping: dataCompareMappingSchema.optional(), filters: fields.filters, mode: fields.mode,
 }).strict().superRefine((input, context) => {
   if (!sqliteTablePageSchema.safeParse({ ...input.source, taskId: input.taskId, filters: input.filters, mode: input.mode, sort: [], limit: 1, offset: 0 }).success)
     context.addIssue({ code: 'custom', message: 'SQLite 比较筛选条件无效或超过预算' });

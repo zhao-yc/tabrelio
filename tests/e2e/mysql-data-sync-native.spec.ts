@@ -1,3 +1,4 @@
+import { dataCompareMappingZh as mapping } from '../../src/renderer/locales/dataCompareMapping.zh-CN';
 import { dataCompareBatchZh as batch } from '../../src/renderer/locales/dataCompareBatch.zh-CN';
 import { dataCompareBatchProfilesZh as batchProfiles, dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import mysql, { type RowDataPacket } from 'mysql2/promise';
@@ -61,6 +62,26 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
     const target = '`' + database + '`.`ledger`';
     await choose(text.source, 'mysql', database, 'ledger');
     await choose(text.target, 'mariadb', database, 'ledger');
+    await modal.getByText(mapping.title, { exact: true }).click();
+    const mapField = async (source: string, target: string, key: boolean) => {
+      await modal.getByLabel(mapping.source, { exact: true }).selectOption(source);
+      await modal.getByLabel(mapping.target, { exact: true }).selectOption(target);
+      await modal.getByRole('button', { name: mapping.add, exact: true }).click();
+      if (key) await modal.getByRole('checkbox', { name: mapping.key + ' ' + source, exact: true }).check();
+    };
+    await mapField('id', 'id', true);
+    await mapField('raw', 'raw', false);
+    await run.click();
+    await expect(modal.getByRole('status').filter({ hasText: mapping.keyLabel })).toContainText('相同 26 · 仅左侧 1 · 仅右侧 1 · 字段值不同 1');
+    await expect(preview).toHaveCount(0);
+    await modal.getByRole('row').filter({ hasText: max }).getByRole('button', { name: text.details, exact: true }).click();
+    const mappedDetails = modal.getByRole('group', { name: text.details, exact: true });
+    await expect(mappedDetails).toContainText('raw → raw');
+    await expect(mappedDetails).toContainText('AP+A');
+    await expect(mappedDetails).toContainText('AP+B');
+    await page.screenshot({ path: info.outputPath('MySQL与MariaDB字段映射.png') });
+    await modal.getByRole('button', { name: mapping.reset, exact: true }).click();
+    await modal.getByText(mapping.title, { exact: true }).click();
     const original = await values(right, database, 'ledger'), mysqlOriginal = await values(left, database, 'ledger');
     await modal.getByRole('button', { name: batch.open, exact: true }).click();
     const overview = page.getByRole('dialog', { name: batch.title, exact: true });

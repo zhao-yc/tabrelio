@@ -1,0 +1,13 @@
+export const dataCompareMappingZh = {
+  title: '自定义匹配键与字段',
+  hint: '添加需要比较的字段对，并至少标记一对作为匹配键。留空时沿用两侧同名主键和全部字段。',
+  readonly: '自定义映射只用于比较。匹配键在两侧读取范围内均须非空且唯一。',
+  source: '左侧字段',
+  target: '右侧字段',
+  key: '用作匹配键',
+  keyLabel: '匹配键',
+  add: '添加字段对',
+  remove: '移除字段对',
+  reset: '恢复默认比较',
+  loading: '正在读取两侧字段目录…',
+};

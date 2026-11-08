@@ -1,3 +1,4 @@
+import { mappedColumns, mappedKeyNames } from '../shared/dataCompareMapping';
 import type { SqliteSyncEvidence } from './sqliteDataSync';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
@@ -10,13 +11,13 @@ function integer(value: SqliteValue): number {
 }
 
 /** 普通表与主键身份由同一个读事务中的真实目录证明。 */
-async function describe(driver: SqliteDriverSession, table: string, control: SqliteTableBrowseControl) {
+async function describe(driver: SqliteDriverSession, table: string, control: SqliteTableBrowseControl, custom: boolean) {
   const type = await readSqliteTableRows(driver, "SELECT type FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY LIMIT 2", [table], 2, control);
   if (type.length !== 1 || type[0][0] !== 'table' || /^sqlite_/i.test(table)) throw Error('数据比较仅支持主库普通表');
   const catalogue = await readSqliteTableCatalogue(driver, table, control);
   const key = catalogue.xinfo.map(row => ({ name: row[1] as string, order: integer(row[5]) }))
     .filter(column => column.order > 0).sort((left, right) => left.order - right.order);
-  if (!key.length || key.some((column, index) => column.order !== index + 1)) throw Error('两侧普通表均须有完整的显式主键');
+  if (!custom && (!key.length || key.some((column, index) => column.order !== index + 1))) throw Error('两侧普通表均须有完整的显式主键');
   return { ...catalogue, key: key.map(column => column.name) };
 }
 
@@ -55,19 +56,26 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
   if (oneFile && input.source.table === input.target.table) throw Error('请选择两张不同的表');
   check();
   await left.execute('BEGIN'); check();
-  const source = await describe(left, input.source.table, control);
+  const { mapping } = input;
+  const source = await describe(left, input.source.table, control, !!mapping);
   if (!oneFile) { await right.execute('BEGIN'); check(); }
-  const target = await describe(right, input.target.table, control);
-  const columns = source.columns.map(column => column.name), targetNames = new Set(target.columns.map(column => column.name));
-  if (columns.length !== targetNames.size || columns.some(name => !targetNames.has(name))) throw Error('两侧字段名集合不同，请先进行结构比较');
-  if (source.key.length !== target.key.length || source.key.some(name => !target.key.includes(name))) throw Error('两侧主键字段不同，无法逐行匹配');
+  const target = await describe(right, input.target.table, control, !!mapping);
+  const columns = (mapping ? mappedColumns(source.columns, mapping, 'source') : source.columns).map(column => column.name);
+  const targetColumns = mapping ? mappedColumns(target.columns, mapping, 'target').map(column => column.name) : columns;
+  if (!mapping) {
+    const targetNames = new Set(target.columns.map(column => column.name));
+    if (columns.length !== targetNames.size || columns.some(name => !targetNames.has(name))) throw Error('两侧字段名集合不同，请先进行结构比较');
+    if (source.key.length !== target.key.length || source.key.some(name => !target.key.includes(name))) throw Error('两侧主键字段不同，无法逐行匹配');
+  }
 
-  const a = await data(left, input.source, source, columns, source.key, input, control);
-  const b = await data(right, input.target, target, columns, source.key, input, control);
+  const sourceKeys = mapping ? mappedKeyNames(mapping, 'source') : source.key;
+  const targetKeys = mapping ? mappedKeyNames(mapping, 'target') : source.key;
+  const a = await data(left, input.source, source, columns, sourceKeys, input, control);
+  const b = await data(right, input.target, target, targetColumns, targetKeys, input, control);
   const differences: SqliteDataCompareRow[] = [];
   const syncRows: SqliteSyncEvidence['rows'] = [];
   const identity = right.identity;
-  const sync = !!capture && identity && !input.filters.some(filter => filter.enabled !== false) && !target.columns.some(column => column.generated);
+  const sync = !!capture && !mapping && identity && !input.filters.some(filter => filter.enabled !== false) && !target.columns.some(column => column.generated);
 
   const counts = { 'source-only': 0, 'target-only': 0, different: 0 };
   let equal = 0, bytes = 0;
@@ -92,5 +100,5 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
     if (!version[0]?.[0] || typeof version[0][0] !== 'object' || version[0][0].type !== 'integer') throw Error('SQLite 同步目录版本无效');
     capture!({ target: input.target, identity, catalogue: target, schemaVersion: version[0][0].value, columns, keyColumns: source.key, rows: syncRows });
   }
-  return { snapshot: oneFile ? 'one-file' : 'two-files', columns, keyColumns: source.key, sourceRows: a.size, targetRows: b.size, equal, counts, differences: input.summaryOnly ? [] : differences };
+  return { snapshot: oneFile ? 'one-file' : 'two-files', columns, keyColumns: sourceKeys, sourceRows: a.size, targetRows: b.size, equal, counts, differences: input.summaryOnly ? [] : differences };
 }

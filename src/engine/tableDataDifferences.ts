@@ -1,3 +1,4 @@
+import type { DataCompareMapping } from '../shared/dataCompareMapping';
 import type { CellValue } from '../shared/contracts';
 import { postgresDataCompareLimits as limits, type PostgresDataCompareOutput } from '../shared/postgresDataCompare';
 
@@ -56,4 +57,11 @@ export function compareTableData(left: TableDataSnapshot, right: TableDataSnapsh
   }
   if (Buffer.byteLength(JSON.stringify(differences)) > limits.bytes * 2) throw Error(dialect + ' 差异结果超过显示预算，请缩小筛选范围');
   return { sharedSnapshot, columns: left.columns, keyColumns: left.keys, sourceRows: a.size, targetRows: b.size, equal, counts, differences };
+}
+
+/** 两侧已按映射顺序读取。右侧临时使用左侧列名对齐，原声明类型与行值继续参与原比较。 */
+export function compareMappedTableData(left: TableDataSnapshot, right: TableDataSnapshot, shared: boolean, dialect: string,
+  mapping: DataCompareMapping): PostgresDataCompareOutput {
+  const aligned = { ...right, keys: left.keys, columns: right.columns.map((column, index) => ({ ...column, name: mapping[index].source })) };
+  return compareTableData(left, aligned, shared, dialect);
 }

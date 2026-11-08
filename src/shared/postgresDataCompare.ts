@@ -1,16 +1,17 @@
 import { z } from 'zod';
+import { dataCompareMappingSchema } from './dataCompareMapping';
 import type { CellValue } from './contracts';
 import { postgresQuickTableFilterSchema, postgresTableTargetSchema } from './postgresTable';
 
 const endpoint = postgresTableTargetSchema.omit({ tabId: true });
 export const tableDataCompareRequestSchema = z.object({
-  source: endpoint, target: endpoint, taskId: z.uuid(), summaryOnly: z.literal(true).optional(), filter: postgresQuickTableFilterSchema.optional(),
+  source: endpoint, target: endpoint, taskId: z.uuid(), summaryOnly: z.literal(true).optional(), mapping: dataCompareMappingSchema.optional(), filter: postgresQuickTableFilterSchema.optional(),
 }).strict();
 export const postgresDataCompareSchema = tableDataCompareRequestSchema.refine(({ source, target }) =>
   source.connectionId !== target.connectionId || source.database !== target.database || source.table !== target.table,
 '请选择不同的 PostgreSQL 比较目标');
 
-export const postgresDataCompareCatalogueSchema = endpoint.omit({ table: true }).partial({ database: true });
+export const postgresDataCompareCatalogueSchema = endpoint.partial({ database: true, table: true }).refine(value => !value.table || !!value.database, '读取字段目录须指定数据库');
 export type PostgresDataCompareCatalogueInput = z.infer<typeof postgresDataCompareCatalogueSchema>;
 
 export type PostgresDataCompareInput = z.infer<typeof postgresDataCompareSchema>;

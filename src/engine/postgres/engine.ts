@@ -1,3 +1,4 @@
+import { compareMappedTableData } from '../tableDataDifferences';
 import { postgresSequenceTargets, postgresSequenceVisibleSql, readPostgresSequence } from './sequence';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -25,7 +26,7 @@ import {
   postgresSqlContentStart,
 } from '../../shared/postgresSql';
 import { PostgresConnection } from './connection';
-import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
+import { readRelation, PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
 import { postgresSchemaCatalog } from './schemaManage';
 import { readPostgresStorage, readPostgresStorageDetail } from './storage';
@@ -577,8 +578,8 @@ export class PostgresEngine {
 
   /** 同库共用一次只读事务。跨库逐侧读取并释放各自租约，取消只触及本轮独占连接。 */
   private async compareData(raw: Input) {
-    const { source, target, taskId, filter, summaryOnly } = postgresDataCompareSchema.parse({
-      source: raw.source, target: raw.target, taskId: raw.taskId, filter: raw.filter, summaryOnly: raw.summaryOnly,
+    const { source, target, taskId, filter, summaryOnly, mapping } = postgresDataCompareSchema.parse({
+      source: raw.source, target: raw.target, taskId: raw.taskId, filter: raw.filter, summaryOnly: raw.summaryOnly, mapping: raw.mapping,
     });
     const left = raw.sourceProfile as PostgresConnectionProfile, right = raw.targetProfile as PostgresConnectionProfile;
     if (left?.dialect !== 'postgresql' || right?.dialect !== 'postgresql' || left.id !== source.connectionId || right.id !== target.connectionId)
@@ -586,7 +587,7 @@ export class PostgresEngine {
     if (this.stopping || this.closing.has(left.id) || this.closing.has(right.id) || this.ownsTask(taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 比较任务已存在、连接关闭中或已达并发上限');
     this.syncSnapshot = undefined;
-    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text && !summaryOnly;
+    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text && !summaryOnly && !mapping;
     const task: TransferTask = { connectionId: left.id, otherConnectionId: right.id, cancelled: false, publishing: false };
     const shared = left.id === right.id && source.database === target.database;
     let timedOut = false;
@@ -614,17 +615,18 @@ export class PostgresEngine {
     const done = task.done = Promise.resolve().then(async () => {
       const [a, b] = shared
         ? await open(left, source.database, async managed => {
-          const a = await readPostgresCompareTable(managed, source, filter, check);
-          const b = await readPostgresCompareTable(managed, target, filter, check, capture);
+          const a = await readPostgresCompareTable(managed, source, filter, check, false, mapping);
+          const b = await readPostgresCompareTable(managed, target, filter, check, capture, mapping, 'target');
           return [a, b] as const;
         })
         : [
-          await open(left, source.database, managed => readPostgresCompareTable(managed, source, filter, check)),
-          await open(right, target.database, managed => readPostgresCompareTable(managed, target, filter, check, capture)),
+          await open(left, source.database, managed => readPostgresCompareTable(managed, source, filter, check, false, mapping)),
+          await open(right, target.database, managed => readPostgresCompareTable(managed, target, filter, check, capture, mapping, 'target')),
         ];
       check();
       let evidence: PostgresSyncEvidence | undefined;
-      const report = comparePostgresSnapshots(a, b, shared, capture ? value => { evidence = value; } : undefined);
+      const report = mapping ? compareMappedTableData(a, b, shared, 'PostgreSQL', mapping) :
+        comparePostgresSnapshots(a, b, shared, capture ? value => { evidence = value; } : undefined);
       // 批次只交付计数，不保留逐行值和同步能力。
       if (summaryOnly) return { ...report, differences: [] };
       if (!evidence) return report;
@@ -1424,12 +1426,16 @@ export class PostgresEngine {
         const profile = input.profile as PostgresConnectionProfile;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 比较连接');
         return this.use(profile, input.database, async managed => {
+          if (input.table) {
+            const relation = await readRelation(managed, input.table);
+            if (!['r', 'p'].includes(relation.kind)) throw Error('字段映射只支持 PostgreSQL 普通表或分区表');
+            return relation.columns.map(column => column.name);
+          }
           const sql = input.database ? `
             SELECT n.nspname, c.relname
             FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
             WHERE c.relkind IN ('r','p') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
               AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND pg_catalog.has_table_privilege(c.oid, 'SELECT')
-              AND EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid)
             ORDER BY n.nspname, c.relname LIMIT 10001
           ` : `
             SELECT datname FROM pg_catalog.pg_database

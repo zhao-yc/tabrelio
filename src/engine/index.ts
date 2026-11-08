@@ -320,7 +320,7 @@ export class Engine {
       });
       case 'mysql.compareData': {
         const request = mysqlDataCompareSchema.parse({
-          source: input.source, target: input.target, taskId: input.taskId, filter: input.filter, summaryOnly: input.summaryOnly,
+          source: input.source, target: input.target, taskId: input.taskId, filter: input.filter, summaryOnly: input.summaryOnly, mapping: input.mapping,
         });
         if (this.taskIdInUse(request.taskId)) throw Error('任务编号已使用');
         for (const [profile, target] of [[input.sourceProfile, request.source], [input.targetProfile, request.target]]) {
@@ -351,7 +351,7 @@ export class Engine {
           throw Error('缺少可信的 MySQL／MariaDB 比较连接');
         this.copySourceProfile(input);
         return this.withCopySourceTask(input.connectionId, randomUUID(),
-          context => mysqlCompareCatalogue(context, input.database), '读取比较目录', 'no-default-database');
+          context => mysqlCompareCatalogue(context, input.database, input.table), '读取比较目录', 'no-default-database');
       }
       case 'mysql.backup.tables': {
         const profile = input.profile;

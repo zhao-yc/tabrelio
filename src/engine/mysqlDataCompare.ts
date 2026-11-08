@@ -1,3 +1,4 @@
+import { mappedColumns, mappedKeyNames, type CompareSide } from '../shared/dataCompareMapping';
 import { randomUUID } from 'node:crypto';
 import type { TaskEvent } from '../shared/contracts';
 import { mysqlDataCompareSchema, mysqlDataCompareZh as text, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
@@ -5,7 +6,7 @@ import { postgresDataCompareLimits as limits, postgresDataSyncLimits as syncLimi
   postgresDataSyncPreviewSchema, postgresDataSyncApplySchema, type PostgresDataSyncPreview, type PostgresDataCompareEndpoint as Endpoint, type PostgresDataCompareInput as Input } from '../shared/postgresDataCompare';
 import { execute, type ManagedConnection } from './connection';
 import { identifier, qualified } from './sql';
-import { compareTableData, type TableDataSnapshot } from './tableDataDifferences';
+import { compareMappedTableData, compareTableData, type TableDataSnapshot } from './tableDataDifferences';
 import { applyMysqlDataSync, mysqlSyncSupported, readMysqlSyncTarget, type MysqlSyncContext, type MysqlSyncEvidence, type MysqlSyncRow, type MysqlSyncTarget } from './mysqlDataSync';
 
 interface QueryContext {
@@ -34,12 +35,11 @@ async function query<T = Record<string, unknown>[]>(context: QueryContext, sql: 
   finally { end(); }
 }
 
-export async function mysqlCompareCatalogue(context: QueryContext, database?: string): Promise<string[]> {
+export async function mysqlCompareCatalogue(context: QueryContext, database?: string, table?: string): Promise<string[]> {
+  if (database && table) return (await describe(context, { database, table }, true)).columns.map(column => column.name);
   const rows = database
     ? await query<{ name: string }[]>(context, `SELECT t.TABLE_NAME AS name FROM information_schema.TABLES t
       WHERE BINARY t.TABLE_SCHEMA = BINARY ? AND t.TABLE_TYPE = 'BASE TABLE' AND t.ENGINE = 'InnoDB'
-        AND EXISTS (SELECT 1 FROM information_schema.STATISTICS s
-          WHERE BINARY s.TABLE_SCHEMA = BINARY t.TABLE_SCHEMA AND BINARY s.TABLE_NAME = BINARY t.TABLE_NAME AND s.INDEX_NAME = 'PRIMARY')
       ORDER BY t.TABLE_NAME LIMIT 10001`, [database])
     : await query<{ name: string }[]>(context, `SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA
       WHERE LOWER(SCHEMA_NAME) NOT IN ('mysql','information_schema','performance_schema','sys')
@@ -53,7 +53,7 @@ function declaration(value: string) {
   return /\bzerofill\b/i.test(value) ? value : value.replace(/^(tinyint|smallint|mediumint|int|bigint)\(\d+\)/i, '$1');
 }
 
-async function describe(context: Context, target: Endpoint) {
+async function describe(context: QueryContext, target: Pick<Endpoint, 'database' | 'table'>, custom = false) {
   const params = [target.database, target.table];
   const tables = await query<{ engine: string; kind: string }[]>(context,
     'SELECT ENGINE AS engine, TABLE_TYPE AS kind FROM information_schema.TABLES' + scope, params);
@@ -62,19 +62,21 @@ async function describe(context: Context, target: Endpoint) {
   const columns = await query<{ name: string; type: string; dataType: string }[]>(context,
     'SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, DATA_TYPE AS dataType FROM information_schema.COLUMNS' +
     scope + ' ORDER BY BINARY COLUMN_NAME LIMIT 1025', params);
-  const keys = await query<{ name: string; prefix: string | null }[]>(context,
+  const keys = custom ? [] : await query<{ name: string; prefix: string | null }[]>(context,
     'SELECT COLUMN_NAME AS name, SUB_PART AS prefix FROM information_schema.STATISTICS' + scope +
     " AND INDEX_NAME = 'PRIMARY' ORDER BY SEQ_IN_INDEX LIMIT 1025", params);
-  if (!columns.length || columns.length > 1024 || !keys.length || keys.some(key => key.prefix !== null || !columns.some(col => col.name === key.name)))
+  if (!columns.length || columns.length > 1024 || (!custom && !keys.length) || keys.some(key => key.prefix !== null || !columns.some(col => col.name === key.name)))
     throw Error('两侧须有可完整读取的列和非前缀主键');
   return { columns, keys: keys.map(key => key.name) };
 }
 
 /** 先验目录，实际读取持有元数据锁，再复核原目录，防止混入并发 DDL。 */
-async function readTable(context: Context, target: Endpoint, filter: Input['filter']): Promise<TableDataSnapshot> {
-  const before = await describe(context, target);
+async function readTable(context: Context, target: Endpoint, filter: Input['filter'], mapping: Input['mapping'], side: CompareSide): Promise<TableDataSnapshot> {
+  const before = await describe(context, target, !!mapping);
+  const columns = mapping ? mappedColumns(before.columns, mapping, side) : before.columns;
+  const keys = mapping ? mappedKeyNames(mapping, side) : before.keys;
   const geometry = /^(?:geometry|point|linestring|polygon|multipoint|multilinestring|multipolygon|geometrycollection)$/i;
-  const projection = before.columns.map(({ name, dataType }) => {
+  const projection = columns.map(({ name, dataType }) => {
     const field = identifier(name);
     return geometry.test(dataType) ? 'CAST(' + field + ' AS BINARY) AS ' + field : field;
   });
@@ -93,11 +95,11 @@ async function readTable(context: Context, target: Endpoint, filter: Input['filt
   finally { end(); }
   context.checkCancelled();
   if (page.hasMore) throw Error('MySQL／MariaDB 比较超过每侧 10,000 行，请缩小筛选范围');
-  const after = await describe(context, target);
-  if (JSON.stringify(before) !== JSON.stringify(after) || page.columns.length !== before.columns.length ||
-      page.columns.some((column, index) => column.name !== before.columns[index].name)) throw Error('读取期间表结构已变化，请重新比较');
-  return { keys: before.keys, columns: before.columns.map(({ name, type }) => ({ name, type: declaration(type) })),
-    rows: page.rows.map(row => before.columns.map(column => row[column.name])) };
+  const after = await describe(context, target, !!mapping);
+  if (JSON.stringify(before) !== JSON.stringify(after) || page.columns.length !== columns.length ||
+      page.columns.some((column, index) => column.name !== columns[index].name)) throw Error('读取期间表结构已变化，请重新比较');
+  return { keys, columns: columns.map(({ name, type }) => ({ name, type: declaration(type) })),
+    rows: page.rows.map(row => columns.map(column => row[column.name])) };
 }
 
 /** 每个配置使用独占读连接。同一配置的两库可共享一个 InnoDB 读视图。 */
@@ -127,9 +129,9 @@ export class MysqlDataCompareTasks {
           const snapshots: TableDataSnapshot[] = [];
           for (const target of targets) {
             check();
-            const snapshot = await readTable(context, target, input.filter);
+            const snapshot = await readTable(context, target, input.filter, input.mapping, target === input.source ? 'source' : 'target');
             snapshots.push(snapshot);
-            if (scope && target === input.target && !input.filter?.text && !input.summaryOnly) {
+            if (scope && target === input.target && !input.filter?.text && !input.summaryOnly && !input.mapping) {
               // 无法证明写入权限或结构时仍保留只读比较。取消不得从这个分支降级成成功。
               try {
                 const candidate = await readMysqlSyncTarget(context, target);
@@ -154,7 +156,8 @@ export class MysqlDataCompareTasks {
         [(await read([input.source]))[0], (await read([input.target]))[0]];
       check();
       const rows: MysqlSyncRow[] = [];
-      const result = compareTableData(left, right, shared, 'MySQL／MariaDB',
+      const result = input.mapping ? compareMappedTableData(left, right, shared, 'MySQL／MariaDB', input.mapping) :
+        compareTableData(left, right, shared, 'MySQL／MariaDB',
         metadata ? (after, before) => { rows.push({ before, after }); } : undefined);
       // 批次只交付计数，不保留逐行值和同步能力。
       if (input.summaryOnly) return { ...result, differences: [] };

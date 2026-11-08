@@ -1,3 +1,4 @@
+import { mappedColumns, mappedKeyNames, type CompareSide, type DataCompareMapping } from '../../shared/dataCompareMapping';
 import type { CellValue } from '../../shared/contracts';
 import { postgresDataCompareLimits as limits, type PostgresDataCompareEndpoint, type PostgresDataCompareInput, type PostgresDataCompareOutput } from '../../shared/postgresDataCompare';
 import { postgresIdentifier } from '../../shared/postgresSql';
@@ -44,11 +45,11 @@ export async function inPostgresCompareSnapshot<T>(connection: PostgresConnectio
 }
 
 /** 列名和表名取自真实目录。只交付完整范围，任何截断都使本轮比较失败。 */
-export async function readPostgresCompareTable(connection: PostgresConnection, endpoint: PostgresDataCompareEndpoint, filter: PostgresDataCompareInput['filter'], check: () => void, capture = false): Promise<Snapshot> {
+export async function readPostgresCompareTable(connection: PostgresConnection, endpoint: PostgresDataCompareEndpoint, filter: PostgresDataCompareInput['filter'], check: () => void, capture = false, mapping?: DataCompareMapping, side: CompareSide = 'source'): Promise<Snapshot> {
   check();
   const relation = await readRelation(connection, endpoint.table);
   check();
-  if (!['r', 'p'].includes(relation.kind) || !relation.keys.length) throw Error('两侧须选择有主键的 PostgreSQL 普通表或分区表');
+  if (!['r', 'p'].includes(relation.kind) || (!mapping && !relation.keys.length)) throw Error('两侧须选择有主键的 PostgreSQL 普通表或分区表');
   if (relation.kind === 'p') {
     const remote = await connection.query(`
       WITH RECURSIVE members(oid) AS (
@@ -60,13 +61,15 @@ export async function readPostgresCompareTable(connection: PostgresConnection, e
     check();
     if (remote.rows[0]?.c0 !== 'f') throw Error('含外部表的分区无法保证 PostgreSQL 本地比较快照');
   }
-  const columns = relation.columns.map(({ name, type }) => ({ name, type })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const fullColumns = relation.columns.map(({ name, type }) => ({ name, type })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const columns = mapping ? mappedColumns(fullColumns, mapping, side) : fullColumns;
+  const keys = mapping ? mappedKeyNames(mapping, side) : relation.keys;
   const args: unknown[] = [limits.rows + 1];
   const condition = postgresTableCondition(filter, name => {
-    if (!columns.some(column => column.name === name)) throw Error('两侧表均须存在筛选列');
+    if (!fullColumns.some(column => column.name === name)) throw Error('两侧表均须存在筛选列');
     return postgresIdentifier(name);
   }, value => '$' + args.push(value));
-  const withVersion = capture && !filter?.text && relation.syncCompatible;
+  const withVersion = capture && !mapping && !filter?.text && relation.syncCompatible;
   const versionSql = withVersion ? ', pg_catalog.json_build_array(ctid::text, xmin::text, tableoid::oid::text)::text' : '';
   const sql = 'SELECT ' + columns.map(column => postgresIdentifier(column.name)).join(', ') + versionSql +
     ' FROM ' + (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql + (condition ? ' WHERE ' + condition : '') + ' LIMIT $1';
@@ -77,7 +80,7 @@ export async function readPostgresCompareTable(connection: PostgresConnection, e
     throw Error('PostgreSQL 比较读取的字段与目录不一致');
   const values = result.columns.slice(0, columns.length);
   const rows = result.rows.map(row => values.map(column => row[column.key]));
-  if (!withVersion) return { keys: relation.keys, columns, rows };
+  if (!withVersion) return { keys, columns, rows };
   const versions = result.rows.map(row => {
     const [tid, version, tableOid] = JSON.parse(String(row['c' + columns.length]));
     if (typeof tid !== 'string' || !/^\(\d+,\d+\)$/.test(tid) || typeof version !== 'string' || !/^\d+$/.test(version) || tableOid !== relation.oid)

@@ -9,6 +9,9 @@ import { mysqlDataCompareSchema, mysqlDataCompareZh, mysqlDataSyncZh } from '../
 import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '../../shared/dataCompareProfiles';
 import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
 import { DataCompareProfiles } from './DataCompareProfiles';
+import { DataCompareMapping } from './DataCompareMapping';
+import { type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
+import { dataCompareMappingZh as mappingText } from '../locales/dataCompareMapping.zh-CN';
 import { DataCompareBatchDialog } from './DataCompareBatchDialog';
 import { dataCompareBatchZh as batchText } from '../locales/dataCompareBatch.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
@@ -85,6 +88,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
   const initial = { connectionId: connections.length === 1 ? connections[0].id : '', database: '', table: '' };
   const [source, setSource] = useState<Endpoint>(initialPair?.source ?? initial), [target, setTarget] = useState<Endpoint>(initialPair?.target ?? initial);
   const [batch, setBatch] = useState(false);
+  const [mapping, setMapping] = useState<Mapping>([]);
   const [filter, setFilter] = useState({ column: '', text: '' });
   const [report, setReport] = useState<PostgresDataCompareOutput>(), [error, setError] = useState('');
   const [kind, setKind] = useState<PostgresDataCompareKind | 'all'>('all'), [page, setPage] = useState(0);
@@ -111,18 +115,20 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
     setReport(undefined); setError(''); setKind('all'); setPage(0); setSelected(undefined);
     setMarked(new Set()); setPreview(undefined); setConfirmation(''); setSyncStatus('');
   };
-  const ready = [source, target].every(side => side.table && connections.some(profile => profile.id === side.connectionId)) &&
+  const distinct = [source, target].every(side => side.table && connections.some(profile => profile.id === side.connectionId)) &&
     (source.connectionId !== target.connectionId || source.database !== target.database || source.table !== target.table) &&
     (!filter.text || !!filter.column);
+  const ready = distinct && (!mapping.length || mapping.some(item => item.key));
   const rows = report?.differences.filter(row => kind === 'all' || row.kind === kind) ?? [];
   const family = postgres ? 'postgresql' : 'mysql';
-  const configuration = dataCompareConfigurationSchema.safeParse({ family, source, target, ...(filter.text ? { filter } : {}) });
+  const options = { source, target, ...(filter.text ? { filter } : {}), ...(mapping.length ? { mapping } : {}) };
+  const configuration = dataCompareConfigurationSchema.safeParse({ family, ...options });
   const canConfigure = () => !task.current && !syncing.current && !preview && version === configurationVersion.current;
 
   /** 载入期间若用户已更改比较范围或开始同步预览，保留新的现场。 */
   function applyConfiguration(next: DataCompareConfiguration) {
     if (!mounted.current || !canConfigure() || next.family !== family) return false;
-    setSource(next.source); setTarget(next.target);
+    setSource(next.source); setTarget(next.target); setMapping(next.mapping ?? []);
     setFilter(next.filter ?? { column: '', text: '' });
     clear();
     return true;
@@ -130,12 +136,14 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
 
   function swap() {
     if (!canConfigure() || !ready) return;
-    setSource(target); setTarget(source); clear();
+    setSource(target); setTarget(source);
+    setMapping(mapping.map(item => ({ source: item.target, target: item.source, key: item.key })));
+    clear();
   }
 
   async function compare() {
     if (!ready || !canConfigure()) return;
-    const parsed = (postgres ? postgresDataCompareSchema : mysqlDataCompareSchema).safeParse({ source, target, taskId: uid(), ...(filter.text ? { filter } : {}) });
+    const parsed = (postgres ? postgresDataCompareSchema : mysqlDataCompareSchema).safeParse({ ...options, taskId: uid() });
     if (!parsed.success) { setError(errorMessage(parsed.error)); return; }
     const active = { id: parsed.data.taskId, cancelled: false };
     task.current = active; setBusy(true); clear();
@@ -175,6 +183,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
     finally { syncing.current = false; setSyncBusy(false); }
   }
   const locked = busy || syncBusy || !!preview;
+  const keyTitle = mapping.length ? mappingText.keyLabel : text.key;
   const close = () => { if (!task.current && !syncing.current) onClose(); };
   if (batch) return <DataCompareBatchDialog family={family} initial={{ source, target }} connections={connections} onClose={() => setBatch(false)}
     renderPair={(pair, back) => <ServerDataCompareDialog dialect={dialect} connections={connections} onClose={back} initialPair={pair}/>}/>;
@@ -182,14 +191,16 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
       <div className="sqlite-data-compare-pair">
-        <CompareEndpoint dialect={dialect} label={text.source} connections={connections} disabled={locked} value={source} change={next => { setSource(next); clear(); }}/>
-        <CompareEndpoint dialect={dialect} label={text.target} connections={connections} disabled={locked} value={target} change={next => { setTarget(next); clear(); }}/>
+        <CompareEndpoint dialect={dialect} label={text.source} connections={connections} disabled={locked} value={source} change={next => { setSource(next); setMapping([]); clear(); }}/>
+        <CompareEndpoint dialect={dialect} label={text.target} connections={connections} disabled={locked} value={target} change={next => { setTarget(next); setMapping([]); clear(); }}/>
       </div>
       <fieldset disabled={locked} className="sqlite-data-compare-filter">
         <legend>{text.filter}</legend>
         <Field label={text.filterColumn}><input aria-label={text.filterColumn} value={filter.column} maxLength={512} onChange={event => { setFilter({ ...filter, column: event.target.value }); clear(); }}/></Field>
         <Field label={text.filterValue}><input aria-label={text.filterValue} value={filter.text} maxLength={4096} onChange={event => { setFilter({ ...filter, text: event.target.value }); clear(); }}/></Field>
       </fieldset>
+      {distinct && <DataCompareMapping key={JSON.stringify([source.connectionId, source.database, source.table, target.connectionId, target.database, target.table])} family={family} source={source} target={target}
+        disabled={locked} mapping={mapping} change={next => { setMapping(next); clear(); }}/>}
       <DataCompareProfiles family={family} options={ready && configuration.success ? configuration.data : undefined}
         disabled={locked} onApply={applyConfiguration}/>
       <ErrorBox message={error}/>
@@ -198,9 +209,9 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
       {syncStatus && <p role="status">{syncStatus}</p>}
       {report && <>
         <p>{report.sharedSnapshot ? text.shared : text.split}</p>
-        <p role="status">{text.key}　{report.keyColumns.join('，')}　{[[text.sourceRows, report.sourceRows], [text.targetRows, report.targetRows], [text.equal, report.equal], ...kinds.map(item => [text[item], report.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
+        <p role="status">{keyTitle}　{report.keyColumns.join('，')}　{[[text.sourceRows, report.sourceRows], [text.targetRows, report.targetRows], [text.equal, report.equal], ...kinds.map(item => [text[item], report.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
         {report.syncSnapshotId ? <p>{postgres ? sync.scope : mysqlDataSyncZh.scope}　{sync.count(marked.size)}</p> :
-          report.differences.length > 0 && <p>{postgres ? sync.unavailable : mysqlDataSyncZh.unavailable}</p>}
+          report.differences.length > 0 && <p>{mapping.length ? mappingText.readonly : postgres ? sync.unavailable : mysqlDataSyncZh.unavailable}</p>}
         {preview && <fieldset ref={review} disabled={syncBusy}>
           <legend>{sync.preview}</legend>
           <p>{connections.find(item => item.id === target.connectionId)?.name}　{preview.confirmation}</p>
@@ -214,7 +225,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
           <option value="all">{text.all}</option>{kinds.map(item => <option value={item} key={item}>{text[item]}</option>)}
         </select></Field>
         {rows.length ? <>
-          <table><thead><tr>{report.syncSnapshotId && <th>{sync.select}</th>}<th>{text.kind}</th><th>{text.key}</th><th>{text.details}</th></tr></thead>
+          <table><thead><tr>{report.syncSnapshotId && <th>{sync.select}</th>}<th>{text.kind}</th><th>{keyTitle}</th><th>{text.details}</th></tr></thead>
             <tbody>{rows.slice(page * limits.page, (page + 1) * limits.page).map((row, index) => <tr key={index}>
               {report.syncSnapshotId && <td><input type="checkbox" aria-label={sync.select + ' ' + keyLabel(row, dialect)} checked={marked.has(row)}
                 disabled={locked || (!marked.has(row) && marked.size >= postgresDataSyncLimits.selected)} onChange={event => {
@@ -234,7 +245,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
             <h3>{text.details}</h3><pre>{selected.key.map(value => display(value, dialect)).join(' / ')}</pre>
             <table><thead><tr><th>{text.field}</th><th>{text.source}</th><th>{text.target}</th></tr></thead><tbody>
               {selected.cells.map(({ column, source, target }) => <tr key={column}>
-                <th>{report.columns[column].name}<br/>{report.columns[column].type}</th>
+                <th>{report.columns[column].name}{mapping[column] && ' → ' + mapping[column].target}<br/>{report.columns[column].type}</th>
                 <td><pre>{display(source, dialect)}</pre></td><td><pre>{display(target, dialect)}</pre></td>
               </tr>)}
             </tbody></table>

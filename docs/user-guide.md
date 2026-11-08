@@ -10,6 +10,8 @@
 
 重复核对相同的表时，可在多表窗口展开「多表比较方案」，命名保存两侧范围和映射顺序。下次打开多表窗口可直接载入。需要反向核对时，点击「交换左侧与右侧」，再手动比较。[多表方案与换向](development/data-compare-batch-profiles-20261108.md)
 
+比较列名不同或没有主键的表时，可展开「自定义匹配键与字段」，选择需要核对的列对，并标记一对或多对作为匹配键。键值在两侧读取范围内均须非空且唯一。映射可以随单表方案保存，比较结果可查看两侧原值。[自定义键与字段映射](development/data-compare-column-mapping-20261108.md)
+
 对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)
 
 从「工具」选择「比较 MySQL／MariaDB 表数据」，可按主键核对同连接或跨连接的 InnoDB 表，查看分类型的差异及逐列原值。[MySQL／MariaDB 表数据比较](development/mysql-data-compare-20261107.md)

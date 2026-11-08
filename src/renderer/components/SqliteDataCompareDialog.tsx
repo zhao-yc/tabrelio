@@ -5,6 +5,9 @@ import type { SqliteTableFilter } from '../../shared/sqliteTableBrowse';
 import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '../../shared/dataCompareProfiles';
 import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
 import { DataCompareProfiles } from './DataCompareProfiles';
+import { DataCompareMapping } from './DataCompareMapping';
+import { type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
+import { dataCompareMappingZh as mappingText } from '../locales/dataCompareMapping.zh-CN';
 import { DataCompareBatchDialog } from './DataCompareBatchDialog';
 import { dataCompareBatchZh as batchText } from '../locales/dataCompareBatch.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
@@ -37,7 +40,9 @@ function CompareEndpoint({ label, connections, disabled, selection, change }: {
   return <fieldset disabled={disabled} className="sqlite-data-compare-endpoint">
     <legend>{label}</legend>
     <Field label={text.connection}><select aria-label={label + text.connection} value={selection.connectionId} onChange={event => {
-      setObjects(undefined); change({ connectionId: event.target.value, table: '' });
+      const id = event.target.value;
+      if (id === selection.connectionId) return;
+      setObjects(undefined); change({ connectionId: id, table: '' });
     }}><option value="">—</option>{connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
     <Field label={text.table}><select aria-label={label + text.table} disabled={!selection.connectionId || loading} value={selection.table}
       onChange={event => change({ ...selection, table: event.target.value })}><option value="">—</option>{selection.table && !names.includes(selection.table) && <option>{selection.table}</option>}{names.map(name => <option key={name}>{name}</option>)}</select></Field>
@@ -63,6 +68,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
   const initial = { connectionId: connections.length === 1 ? connections[0].id : '', table: '' };
   const [source, setSource] = useState<Selection>(initialPair?.source ?? initial), [target, setTarget] = useState<Selection>(initialPair?.target ?? initial);
   const [batch, setBatch] = useState(false);
+  const [mapping, setMapping] = useState<Mapping>([]);
   const [filter, setFilter] = useState({ column: '', kind: 'text' as keyof typeof text.types, value: '' });
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [output, setOutput] = useState<SqliteDataCompareOutput>(), [kind, setKind] = useState<SqliteDataCompareKind | 'all'>('all');
@@ -88,10 +94,12 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
     setMarked(new Set()); setPreview(undefined); setConfirmation(''); setSyncStatus('');
   };
   const available = (side: Selection) => !!side.table && connections.some(profile => profile.id === side.connectionId);
-  const ready = available(source) && available(target) && (source.connectionId !== target.connectionId || source.table !== target.table);
+  const distinct = available(source) && available(target) && (source.connectionId !== target.connectionId || source.table !== target.table);
+  const ready = distinct && (!mapping.length || mapping.some(item => item.key));
   const family = 'sqlite';
   const configuration = dataCompareConfigurationSchema.safeParse({
     family, source: { ...source, database: 'main' }, target: { ...target, database: 'main' },
+    ...(mapping.length ? { mapping } : {}),
     ...(filter.column ? { filter: { column: filter.column, value: { kind: filter.kind, value: filter.value } } } : {}),
   });
   const canConfigure = () => !running.current && !syncRunning.current && !preview && version === configurationVersion.current;
@@ -99,7 +107,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
   /** 载入期间若用户已更改比较范围或开始同步预览，保留新的现场。 */
   function applyConfiguration(next: DataCompareConfiguration) {
     if (!mounted.current || !canConfigure() || next.family !== family) return false;
-    setSource(next.source); setTarget(next.target);
+    setSource(next.source); setTarget(next.target); setMapping(next.mapping ?? []);
     setFilter(next.filter ? { column: next.filter.column, ...next.filter.value } : { column: '', kind: 'text', value: '' });
     clear();
     return true;
@@ -107,7 +115,9 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
 
   function swap() {
     if (!canConfigure() || !ready) return;
-    setSource(target); setTarget(source); clear();
+    setSource(target); setTarget(source);
+    setMapping(mapping.map(item => ({ source: item.target, target: item.source, key: item.key })));
+    clear();
   }
 
   async function compare() {
@@ -115,7 +125,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
     const taskId = uid();
     const filters: SqliteTableFilter[] = filter.column ? [{ column: filter.column, operator: 'eq', value: { kind: filter.kind, value: filter.value } }] : [];
     running.current = taskId; setBusy(true); clear();
-    try { setOutput(await invoke('sqlite.compareData', { source: { ...source, database: 'main' }, target: { ...target, database: 'main' }, taskId, mode: 'and', filters })); }
+    try { setOutput(await invoke('sqlite.compareData', { source: { ...source, database: 'main' }, target: { ...target, database: 'main' }, taskId, mode: 'and', filters, ...(mapping.length ? { mapping } : {}) })); }
     catch (reason) { setError(errorMessage(reason)); }
     finally { running.current = undefined; setBusy(false); }
   }
@@ -141,14 +151,15 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
     finally { syncRunning.current = false; setSyncBusy(false); }
   }
   const locked = busy || syncBusy || !!preview;
+  const keyTitle = mapping.length ? mappingText.keyLabel : text.keys;
   if (batch) return <DataCompareBatchDialog family={family} initial={{ source: { ...source, database: 'main' }, target: { ...target, database: 'main' } }} connections={connections} onClose={() => setBatch(false)}
     renderPair={(pair, back) => <SqliteDataCompareDialog connections={connections} onClose={back} initialPair={pair}/>}/>;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
       <div className="sqlite-data-compare-pair">
-        <CompareEndpoint label={text.source} connections={connections} disabled={locked} selection={source} change={next => { setSource(next); clear(); }}/>
-        <CompareEndpoint label={text.target} connections={connections} disabled={locked} selection={target} change={next => { setTarget(next); clear(); }}/>
+        <CompareEndpoint label={text.source} connections={connections} disabled={locked} selection={source} change={next => { setSource(next); setMapping([]); clear(); }}/>
+        <CompareEndpoint label={text.target} connections={connections} disabled={locked} selection={target} change={next => { setTarget(next); setMapping([]); clear(); }}/>
       </div>
       <fieldset disabled={locked} className="sqlite-data-compare-filter">
         <legend>{text.filter}</legend>
@@ -157,6 +168,8 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
           {Object.entries(text.types).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
         <Field label={text.filterValue}><input aria-label={text.filterValue} value={filter.value} disabled={!filter.column} maxLength={65536} onChange={event => { setFilter({ ...filter, value: event.target.value }); clear(); }}/></Field>
       </fieldset>
+      {distinct && <DataCompareMapping key={JSON.stringify([source.connectionId, source.table, target.connectionId, target.table])} family={family} source={{ ...source, database: 'main' }} target={{ ...target, database: 'main' }}
+        disabled={locked} mapping={mapping} change={next => { setMapping(next); clear(); }}/>}
       <DataCompareProfiles family={family} options={ready && configuration.success ? configuration.data : undefined}
         disabled={locked} onApply={applyConfiguration}/>
       <ErrorBox message={error}/>
@@ -165,9 +178,9 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
       {syncStatus && <p role="status">{syncStatus}</p>}
       {output && <>
         <p>{output.snapshot === 'one-file' ? text.singleSnapshot : text.splitSnapshot}</p>
-        <p role="status">{text.keys}　{output.keyColumns.join('，')}　{[[text.sourceRows, output.sourceRows], [text.targetRows, output.targetRows], [text.equal, output.equal], ...kinds.map(item => [text[item], output.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
+        <p role="status">{keyTitle}　{output.keyColumns.join('，')}　{[[text.sourceRows, output.sourceRows], [text.targetRows, output.targetRows], [text.equal, output.equal], ...kinds.map(item => [text[item], output.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
         {output.syncSnapshotId ? <p>{syncText.scope}　{syncText.count(marked.size)}</p> :
-          output.differences.length > 0 && <p>{syncText.unavailable}</p>}
+          output.differences.length > 0 && <p>{mapping.length ? mappingText.readonly : syncText.unavailable}</p>}
         {preview && <fieldset disabled={syncBusy}>
           <legend>{syncText.preview}</legend>
           <p>{connections.find(item => item.id === target.connectionId)?.name}　{preview.confirmation}</p>
@@ -180,7 +193,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
         <Field label={text.kind}><select aria-label={text.kind} disabled={locked} value={kind} onChange={event => { setKind(event.target.value as typeof kind); setPage(0); setSelected(undefined); }}>
           <option value="all">{text.all}</option>{kinds.map(item => <option value={item} key={item}>{text[item]}</option>)}</select></Field>
         {visible.length ? <>
-          <table><thead><tr>{output.syncSnapshotId && <th>{syncText.select}</th>}<th>{text.kind}</th><th>{text.keys}</th><th>{text.detail}</th></tr></thead>
+          <table><thead><tr>{output.syncSnapshotId && <th>{syncText.select}</th>}<th>{text.kind}</th><th>{keyTitle}</th><th>{text.detail}</th></tr></thead>
             <tbody>{visible.slice(page * limits.page, (page + 1) * limits.page).map((row, index) => <tr key={index}>
               {output.syncSnapshotId && <td><input type="checkbox" aria-label={syncText.select + ' ' + keyLabel(row)}
                 checked={marked.has(row)} disabled={locked || (!marked.has(row) && marked.size >= sqliteDataSyncLimits.selected)} onChange={event => {
@@ -193,8 +206,8 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
           <div className="sqlite-data-compare-pager"><button disabled={!page} onClick={() => { setPage(page - 1); setSelected(undefined); }}>{text.prev}</button>
             <span>{page + 1} / {Math.ceil(visible.length / limits.page)}</span>
             <button disabled={(page + 1) * limits.page >= visible.length} onClick={() => { setPage(page + 1); setSelected(undefined); }}>{text.next}</button></div>
-          {selected && <div ref={detail}><pre>{text.keys}　{selected.key.map(display).join(' / ')}</pre><table aria-label={text.detail}><thead><tr><th>{text.field}</th><th>{text.source}</th><th>{text.target}</th></tr></thead>
-            <tbody>{selected.cells.map(cell => <tr key={cell.column}><th>{output.columns[cell.column]}</th><td><pre>{display(cell.source)}</pre></td><td><pre>{display(cell.target)}</pre></td></tr>)}</tbody></table></div>}
+          {selected && <div ref={detail}><pre>{keyTitle}　{selected.key.map(display).join(' / ')}</pre><table aria-label={text.detail}><thead><tr><th>{text.field}</th><th>{text.source}</th><th>{text.target}</th></tr></thead>
+            <tbody>{selected.cells.map(cell => <tr key={cell.column}><th>{output.columns[cell.column]}{mapping[cell.column] && ' → ' + mapping[cell.column].target}</th><td><pre>{display(cell.source)}</pre></td><td><pre>{display(cell.target)}</pre></td></tr>)}</tbody></table></div>}
         </> : <p>{text.noDiff}</p>}
       </>}
     </div>

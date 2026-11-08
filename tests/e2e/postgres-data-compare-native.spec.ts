@@ -1,3 +1,4 @@
+import { dataCompareMappingZh as mapping } from '../../src/renderer/locales/dataCompareMapping.zh-CN';
 import { dataCompareBatchZh as batch } from '../../src/renderer/locales/dataCompareBatch.zh-CN';
 import { dataCompareBatchProfilesZh as batchProfiles, dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import { Client } from 'pg';
@@ -38,6 +39,8 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
       ALTER TABLE "对照"."行级权限" FORCE ROW LEVEL SECURITY;
       CREATE TABLE "对照"."超限" (LIKE "对照"."明细" INCLUDING ALL);
       CREATE TABLE "对照"."不兼容" (id bigint PRIMARY KEY, amount text, raw bytea, note text, moment timestamptz);
+      CREATE TABLE "对照"."映射左"(code bigint, raw bytea, ignored text);
+      INSERT INTO "对照"."映射左" VALUES (9223372036854775807,decode('00ff80','hex'),'忽略');
       CREATE VIEW "对照"."视图" AS SELECT * FROM "对照"."明细";
       INSERT INTO "对照"."明细" SELECT i, i, NULL, '左', '2026-04-08T10:11:12.123456+08' FROM generate_series(1,26) i;
       INSERT INTO "对照"."明细" VALUES (101,0,NULL,'仅左',NULL),
@@ -48,7 +51,9 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await right.query(schema + `CREATE TABLE "对照"."明细" (note text, moment timestamptz, raw bytea, amount numeric, id bigint PRIMARY KEY);
       INSERT INTO "对照"."明细" (id,amount,raw,note,moment) SELECT i, i, NULL, '右', '2026-04-08T02:11:12.123456Z' FROM generate_series(1,26) i;
       INSERT INTO "对照"."明细" (id,amount,raw,note,moment) VALUES (102,0,NULL,'仅右',NULL),
-        (9223372036854775807,9007199254740993.000000000000000002,decode('00ff81','hex'),'',NULL);`);
+        (9223372036854775807,9007199254740993.000000000000000002,decode('00ff81','hex'),'',NULL);
+      CREATE TABLE "对照"."映射右"(identifier bigint, payload bytea);
+      INSERT INTO "对照"."映射右" VALUES (9223372036854775807,decode('00ff81','hex'));`);
     await right.query("ALTER DATABASE " + targetDatabase + " SET timezone = 'Pacific/Auckland'");
 
     const profileName = '对照隔离连接', secondProfile = '对照另一连接';
@@ -89,6 +94,27 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await run.click();
     await expect(summary).toContainText('相同 28');
 
+    await choose(text.source, database, '映射左');
+    await choose(text.target, targetDatabase, '映射右');
+    await modal.getByText(mapping.title, { exact: true }).click();
+    const mapField = async (source: string, target: string, key: boolean) => {
+      await modal.getByLabel(mapping.source, { exact: true }).selectOption(source);
+      await modal.getByLabel(mapping.target, { exact: true }).selectOption(target);
+      await modal.getByRole('button', { name: mapping.add, exact: true }).click();
+      if (key) await modal.getByRole('checkbox', { name: mapping.key + ' ' + source, exact: true }).check();
+    };
+    await mapField('code', 'identifier', true);
+    await mapField('raw', 'payload', false);
+    await run.click();
+    await expect(modal.getByRole('status')).toContainText('字段值不同 1');
+    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toHaveCount(0);
+    await modal.getByRole('button', { name: text.details, exact: true }).click();
+    const mappedDetails = modal.getByRole('group', { name: text.details, exact: true });
+    await expect(mappedDetails).toContainText('raw → payload');
+    await expect(mappedDetails).toContainText('AP+A');
+    await expect(mappedDetails).toContainText('AP+B');
+    await page.screenshot({ path: info.outputPath('PostgreSQL字段映射.png') });
+    await choose(text.source, database, '明细');
     await choose(text.target, targetDatabase, '明细');
     await run.click();
     await expect(modal.getByText(text.split, { exact: true })).toBeVisible();

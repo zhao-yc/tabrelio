@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dataCompareMappingSchema } from './dataCompareMapping';
 import { dataCompareBatchConfigurationSchema } from './dataCompareBatch';
 import { tableDataCompareRequestSchema } from './postgresDataCompare';
 import { sqliteDataCompareSchema } from './sqliteDataCompare';
@@ -17,7 +18,7 @@ const networkFilter = network.shape.filter.unwrap().refine(value => value.text.l
 export const dataCompareConfigurationSchema = z.discriminatedUnion('family', [
   network.extend({ family: z.enum(['mysql', 'postgresql']), filter: networkFilter.optional() }).strict(),
   z.object({
-    family: z.literal('sqlite'), source: sqlite.source, target: sqlite.target,
+    family: z.literal('sqlite'), source: sqlite.source, target: sqlite.target, mapping: dataCompareMappingSchema.optional(),
     filter: z.object({ column: sqliteTableFilterSchema.shape.column, value: sqliteTableFilterSchema.shape.value.unwrap() }).strict().optional(),
   }).strict(),
 ]).refine(({ source, target }) =>
