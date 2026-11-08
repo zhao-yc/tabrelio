@@ -13,6 +13,10 @@ describe('MySQL／MariaDB 多表同步合同', () => {
   it('限定一个右侧库，允许目录中带点号的原始表名', () => {
     expect(validateCommand('mysql.compareData.batchPreview', request)).toEqual(request);
     expect(validateCommand('mysql.compareData.batchPreview', { ...request, target: request.source })).toBeDefined();
+    const mapped = { ...request, pairs: [{ ...request.pairs[0], mapping: [
+      { source: 'code', target: 'identifier', key: true }, { source: 'raw', target: 'payload', key: false },
+    ] }, request.pairs[1]] };
+    expect(validateCommand('mysql.compareData.batchPreview', mapped)).toEqual(mapped);
   });
 
   it('拒绝来源目标重叠、重复操作以及注入的同步范围', () => {

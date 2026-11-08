@@ -1,7 +1,6 @@
 export const sqliteBatchSyncZh = {
   title: 'SQLite 多表同步',
   hint: '重新读取所列的表对并沿用各表的匹配键与字段映射。所选差异在同一个右侧文件内提交。',
-  mapped: '多表同步需要所有表对使用默认主键和完整字段比较。',
   preview: '预览多表同步',
   prepare: '正在重新读取两侧表并生成预览…',
   previewTitle: '多表同步预览',
@@ -23,7 +22,7 @@ export const postgresBatchSyncZh = {
 export const mysqlBatchSyncZh = {
   ...sqliteBatchSyncZh,
   title: 'MySQL／MariaDB 多表同步',
-  hint: '重新读取所列的表对。所选操作的全部差异会写入同一个右侧数据库的 InnoDB 表。',
+  hint: '重新读取所列的 InnoDB 表对并沿用各表的匹配键与字段映射。所选差异在同一个右侧数据库内提交。',
   working: '正在提交 MySQL／MariaDB 多表同步事务…',
   confirmed: 'MySQL／MariaDB 多表同步已确认提交',
 };

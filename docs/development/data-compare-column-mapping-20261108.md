@@ -13,7 +13,7 @@ SQLite、PostgreSQL、MySQL 和 MariaDB 的单表比较可以指定异名字段�
 
 单次最多 64 对字段。比较时重新核对两侧真实字段目录。键值有 NULL 或在任一侧重复时，整个比较会报错。PostgreSQL、MySQL 与 MariaDB 的对应列仍须具有兼容的声明类型，SQLite 保留动态存储类型和精确值。筛选继续使用当前比较窗口的两侧同名筛选列。
 
-SQLite 支持[自定义键与字段映射同步](sqlite-mapped-data-sync-20261108.md)。PostgreSQL 也支持[自定义键与字段映射同步](postgres-mapped-data-sync-20261108.md)。MySQL 和 MariaDB 的映射结果可用于只读比较。多表批次可以逐对选择默认比较或[自定义映射](data-compare-batch-column-mapping-20261108.md)，并将映射带入单表回查。
+SQLite 支持[自定义键与字段映射同步](sqlite-mapped-data-sync-20261108.md)。PostgreSQL 也支持[自定义键与字段映射同步](postgres-mapped-data-sync-20261108.md)。[MySQL 和 MariaDB](mysql-mapped-data-sync-20261108.md)也支持映射同步。多表批次可以逐对选择默认比较或[自定义映射](data-compare-batch-column-mapping-20261108.md)，并将映射带入单表回查。
 
 ## 验证
 

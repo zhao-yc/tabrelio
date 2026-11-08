@@ -9,7 +9,8 @@ import { postgresDataCompareLimits as limits, postgresDataSyncLimits as syncLimi
 import { execute, type ManagedConnection } from './connection';
 import { identifier, qualified } from './sql';
 import { compareMappedTableData, compareTableData, type TableDataSnapshot } from './tableDataDifferences';
-import { applyMysqlDataSyncGroups, mysqlSyncSupported, readMysqlSyncTarget, type MysqlSyncContext, type MysqlSyncEvidence, type MysqlSyncGroup, type MysqlSyncRow, type MysqlSyncTarget } from './mysqlDataSync';
+import { applyMysqlDataSyncGroups, mysqlMappedSyncSupported, mysqlSyncSupported, readMysqlCompareRows, readMysqlSyncTarget,
+  type MysqlSyncContext, type MysqlSyncEvidence, type MysqlSyncGroup, type MysqlSyncRow, type MysqlSyncTarget } from './mysqlDataSync';
 
 interface QueryContext {
   managed: ManagedConnection;
@@ -17,6 +18,9 @@ interface QueryContext {
   commandStarted(): () => void;
 }
 type Context = MysqlSyncContext;
+interface CompareSnapshot extends TableDataSnapshot {
+  originals?: { columns: TableDataSnapshot['columns']; rows: TableDataSnapshot['rows'] };
+}
 type Scope = { owner: string; connectionRevision: number };
 interface SyncRecord extends Scope {
   id: string; expires: number; source: Endpoint; target: Endpoint; evidence: MysqlSyncEvidence;
@@ -76,15 +80,11 @@ async function describe(context: QueryContext, target: Pick<Endpoint, 'database'
 }
 
 /** 先验目录，实际读取持有元数据锁，再复核原目录，防止混入并发 DDL。 */
-async function readTable(context: Context, target: Endpoint, filter: Input['filter'], mapping: Input['mapping'], side: CompareSide): Promise<TableDataSnapshot> {
+async function readTable(context: Context, target: Endpoint, filter: Input['filter'], mapping: Input['mapping'], side: CompareSide,
+  captureOriginals: boolean): Promise<CompareSnapshot> {
   const before = await describe(context, target, !!mapping);
   const columns = mapping ? mappedColumns(before.columns, mapping, side) : before.columns;
   const keys = mapping ? mappedKeyNames(mapping, side) : before.keys;
-  const geometry = /^(?:geometry|point|linestring|polygon|multipoint|multilinestring|multipolygon|geometrycollection)$/i;
-  const projection = columns.map(({ name, dataType }) => {
-    const field = identifier(name);
-    return geometry.test(dataType) ? 'CAST(' + field + ' AS BINARY) AS ' + field : field;
-  });
   const params: string[] = [];
   let where = '';
   if (filter?.text) {
@@ -93,18 +93,19 @@ async function readTable(context: Context, target: Endpoint, filter: Input['filt
     where = ' WHERE LOCATE(CAST(? AS BINARY), CAST(CONVERT(' + identifier(column.name) + ' USING utf8mb4) AS BINARY)) > 0';
     params.push(filter.text);
   }
-  const sql = 'SELECT ' + projection.join(', ') + ' FROM ' + qualified(target.database, target.table) + where + ' LIMIT ' + (limits.rows + 1);
-  const end = context.commandStarted();
-  let page: Awaited<ReturnType<Context['page']>>;
-  try { page = await context.page(sql, params); }
-  finally { end(); }
-  context.checkCancelled();
-  if (page.hasMore) throw Error('MySQL／MariaDB 比较超过每侧 10,000 行，请缩小筛选范围');
+  // 比较只显示映射列。完整右侧旧值超出预算时仍可返回原有只读结果。
+  let originalRows: Awaited<ReturnType<typeof readMysqlCompareRows>> | undefined;
+  if (captureOriginals) {
+    try { originalRows = await readMysqlCompareRows(context, target, before.columns); }
+    catch { context.checkCancelled(); }
+  }
+  const values = originalRows ?? await readMysqlCompareRows(context, target, columns, where, params);
   const after = await describe(context, target, !!mapping);
-  if (JSON.stringify(before) !== JSON.stringify(after) || page.columns.length !== columns.length ||
-      page.columns.some((column, index) => column.name !== columns[index].name)) throw Error('读取期间表结构已变化，请重新比较');
+  if (JSON.stringify(before) !== JSON.stringify(after)) throw Error('读取期间表结构已变化，请重新比较');
   return { keys, columns: columns.map(({ name, type }) => ({ name, type: declaration(type) })),
-    rows: page.rows.map(row => columns.map(column => row[column.name])) };
+    rows: values.map(row => columns.map(column => row[column.name])),
+    ...(originalRows ? { originals: { columns: before.columns.map(({ name, type }) => ({ name, type })),
+      rows: originalRows.map(row => before.columns.map(column => row[column.name])) } } : {}) };
 }
 
 /** 每个配置使用独占读连接。同一配置的两库可共享一个 InnoDB 读视图。 */
@@ -151,16 +152,21 @@ export class MysqlDataCompareTasks {
           await query(context, "SET SESSION time_zone = '+00:00'");
           await query(context, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
           await query(context, 'START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
-          const snapshots: TableDataSnapshot[] = [];
+          const snapshots: CompareSnapshot[] = [];
           for (const target of targets) {
             check();
-            const snapshot = await readTable(context, target, input.filter, input.mapping, target === input.source ? 'source' : 'target');
+            const right = target === input.target;
+            const captureRight = capture && right && !input.filter?.text && !input.summaryOnly;
+            const snapshot = await readTable(context, target, input.filter, input.mapping, right ? 'target' : 'source',
+              captureRight && !!input.mapping);
             snapshots.push(snapshot);
-            if (capture && target === input.target && !input.filter?.text && !input.summaryOnly && !input.mapping) {
+            if (captureRight && (!input.mapping || snapshot.originals)) {
               // 无法证明写入权限或结构时仍保留只读比较。取消不得从这个分支降级成成功。
               try {
                 const candidate = await readMysqlSyncTarget(context, target);
-                if (mysqlSyncSupported(candidate.source, snapshot.columns.map(column => column.name), snapshot.keys)) metadata = candidate;
+                const names = snapshot.columns.map(column => column.name);
+                if (input.mapping ? mysqlMappedSyncSupported(candidate.source, names) : mysqlSyncSupported(candidate.source, names, snapshot.keys))
+                  metadata = candidate;
               } catch { context.checkCancelled(); }
             }
           }
@@ -174,10 +180,13 @@ export class MysqlDataCompareTasks {
       [(await read([input.source]))[0], (await read([input.target]))[0]];
     check();
     const rows: MysqlSyncRow[] = [];
-    const result = input.mapping ? compareMappedTableData(left, right, shared, 'MySQL／MariaDB', input.mapping) :
-      compareTableData(left, right, shared, 'MySQL／MariaDB',
-      metadata ? (after, before) => { rows.push({ before, after }); } : undefined);
-    const evidence = metadata && rows.length ? { metadata, columns: right.columns.map(column => column.name), rows } : undefined;
+    const collect: Parameters<typeof compareTableData>[4] = metadata ? (after, before, position) => {
+      rows.push({ before: position === undefined ? undefined : right.originals?.rows[position] ?? before, after });
+    } : undefined;
+    const result = input.mapping ? compareMappedTableData(left, right, shared, 'MySQL／MariaDB', input.mapping, collect) :
+      compareTableData(left, right, shared, 'MySQL／MariaDB', collect);
+    const evidence = metadata && rows.length ? { metadata, columns: right.columns.map(column => column.name), rows,
+      ...(right.originals ? { mapped: { keys: right.keys, originals: right.originals.columns } } : {}) } : undefined;
     return { result, evidence };
   }
 
@@ -204,7 +213,7 @@ export class MysqlDataCompareTasks {
       for (const pair of input.pairs) {
         const target = { ...input.target, table: pair.target };
         const { result, evidence } = await this.readPair({
-          source: { ...input.source, table: pair.source }, target, taskId: input.taskId,
+          source: { ...input.source, table: pair.source }, target, taskId: input.taskId, mapping: pair.mapping,
         }, work, check, true);
         const table = qualified(target.database, target.table);
         const tableCounts = { insert: 0, update: 0, delete: 0 };

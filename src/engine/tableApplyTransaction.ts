@@ -8,6 +8,7 @@ interface TableApplyGroup {
   changes: RowChange[];
   lockInfo(): Promise<TableInfo>;
   afterWrite?(index: number): Promise<void>;
+  verifyWrites?(): Promise<void>;
 }
 
 export interface TableApplyControl extends Pick<TableApplyGroup, 'lockInfo' | 'afterWrite'> {
@@ -56,6 +57,10 @@ export async function applyTableTransactionGroups(groups: TableApplyGroup[], c: 
         });
         if (group.afterWrite) await group.afterWrite(index);
       }
+    }
+    for (const { group } of plans) if (group.verifyWrites) {
+      if (groups.length > 1) writeTable = qualified(group.info.database, group.info.name);
+      await group.verifyWrites();
     }
     writeTable = undefined;
     c.checkCancelled(); phase = 'committing'; e.commitMayHaveBeenSent = true; emit();

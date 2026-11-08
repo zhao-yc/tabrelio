@@ -24,6 +24,8 @@ PostgreSQL 单表及多表同步也支持异名字段和联合业务键。目标
 
 MySQL 和 MariaDB 可将多对 InnoDB 表的差异同步到同一个右侧数据库，支持两种引擎互为来源和目标。预览按目标表列出所选操作及记录键，确认后整批提交。[MySQL／MariaDB 多表事务同步](development/mysql-multi-table-sync-20261108.md)
 
+MySQL 和 MariaDB 的单表和多表同步都支持异名字段与联合业务键，包括没有主键的 InnoDB 目标表。[MySQL／MariaDB 自定义键与字段映射同步](development/mysql-mapped-data-sync-20261108.md)
+
 对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)
 
 从「工具」选择「比较 MySQL／MariaDB 表数据」，可按主键核对同连接或跨连接的 InnoDB 表，查看分类型的差异及逐列原值。[MySQL／MariaDB 表数据比较](development/mysql-data-compare-20261107.md)

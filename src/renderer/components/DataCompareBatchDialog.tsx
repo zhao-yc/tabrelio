@@ -221,7 +221,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
 
   const networkDialect = family === 'postgresql' ? 'postgres' : 'mysql';
   const batchSyncText = family === 'sqlite' ? sqliteBatchSyncZh : family === 'postgresql' ? postgresBatchSyncZh : mysqlBatchSyncZh;
-  const syncEligible = pairs.length > 1 && (family !== 'mysql' || !pairs.some(pair => pair.mapping));
+  const syncEligible = pairs.length > 1;
   async function prepareSync() {
     if (!syncEligible || !actions.length || !configuration.success || active.current || applying.current || syncWork.current || syncPreview) return;
     const taskId = uid();
@@ -229,12 +229,11 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     syncWork.current = { taskId, phase: 'preview' }; setSyncPhase('preview');
     setError(''); setNotice(''); setConfirmation('');
     try {
-      const request = { taskId, pairs: pairs.map(({ source, target }) => ({ source, target })), actions };
+      const request = { taskId, pairs, actions };
       const preview = family === 'sqlite'
-        ? displayBatchKeys(await invoke('sqlite.compareSync.batchPreview', { ...request, pairs, sourceConnectionId: source.connectionId,
+        ? displayBatchKeys(await invoke('sqlite.compareSync.batchPreview', { ...request, sourceConnectionId: source.connectionId,
           targetConnectionId: target.connectionId }), displaySqliteCompareValue)
-        : displayBatchKeys(await invoke(`${networkDialect}.compareData.batchPreview`, { ...request,
-          pairs: family === 'postgresql' ? pairs : request.pairs, source, target }),
+        : displayBatchKeys(await invoke(`${networkDialect}.compareData.batchPreview`, { ...request, source, target }),
           key => displayServerCompareValue(key, networkDialect));
       if (preview) setSyncPreview(preview); else setNotice(batchSyncText.noChanges);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -319,7 +318,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
       </table>}
       {pairs.length > 1 && <fieldset className="sqlite-data-compare-endpoint" disabled={locked}>
         <legend>{batchSyncText.title}</legend>
-        <p>{syncEligible ? batchSyncText.hint : batchSyncText.mapped}</p>
+        <p>{batchSyncText.hint}</p>
         <div className="check-row">
           {batchSyncActions.map(action => <label key={action} className="check">
             <input type="checkbox" disabled={!syncEligible} checked={actions.includes(action)} onChange={event => {

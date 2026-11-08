@@ -205,7 +205,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
         <p>{report.sharedSnapshot ? text.shared : text.split}</p>
         <p role="status">{keyTitle}　{report.keyColumns.join('，')}　{[[text.sourceRows, report.sourceRows], [text.targetRows, report.targetRows], [text.equal, report.equal], ...kinds.map(item => [text[item], report.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
         {report.syncSnapshotId ? <p>{mapping.length ? mappingText.sync : postgres ? sync.scope : mysqlDataSyncZh.scope}　{sync.count(marked.size)}</p> :
-          report.differences.length > 0 && <p>{mapping.length ? (postgres ? mappingText.postgresSyncUnavailable : mappingText.readonly) :
+          report.differences.length > 0 && <p>{mapping.length ? (postgres ? mappingText.postgresSyncUnavailable : mappingText.mysqlSyncUnavailable) :
             postgres ? sync.unavailable : mysqlDataSyncZh.unavailable}</p>}
         {preview && <fieldset ref={review} disabled={syncBusy}>
           <legend>{sync.preview}</legend>

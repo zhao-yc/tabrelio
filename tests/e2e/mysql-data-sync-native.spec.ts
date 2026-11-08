@@ -74,7 +74,7 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
     await mapField('raw', 'raw', false);
     await run.click();
     await expect(modal.getByRole('status').filter({ hasText: mapping.keyLabel })).toContainText('相同 26 · 仅左侧 1 · 仅右侧 1 · 字段值不同 1');
-    await expect(preview).toHaveCount(0);
+    await expect(preview).toBeDisabled();
     await modal.getByRole('row').filter({ hasText: max }).getByRole('button', { name: text.details, exact: true }).click();
     const mappedDetails = modal.getByRole('group', { name: text.details, exact: true });
     await expect(mappedDetails).toContainText('raw → raw');
@@ -273,6 +273,117 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
     await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
     expect(await readBatch(left)).toEqual(reverseBatch);
     expect(await readBatch(right)).toEqual(reverseBatch);
+    await overview.getByRole('button', { name: batch.return, exact: true }).click();
+
+    // 专项夹具的两张表没有主键，大小写不同的文本键也按比较的精确原值区分。
+    const mappedLeft = mirror + '.mapped_left', mappedRight = mirror + '.mapped_right';
+    await left.query('INSERT INTO ' + mappedLeft + " (code,seq,raw,conflict_token) VALUES ('Key'," + max + ",X'00FF80',70)");
+    await right.query('INSERT INTO ' + mappedRight + " (identifier,serial,payload,reserved) VALUES ('Key'," + max + ",X'00FF81',70)");
+    const readMappedRight = async () => (await right.query<RowDataPacket[]>('SELECT identifier AS code,CAST(serial AS CHAR) AS seq,' +
+      'HEX(payload) AS raw,reserved AS token,local_note FROM ' + mappedRight + ' ORDER BY BINARY identifier, local_note'))[0];
+    const readMappedLeft = async () => (await left.query<RowDataPacket[]>('SELECT code,CAST(seq AS CHAR) AS seq,' +
+      'HEX(raw) AS raw,conflict_token AS token,local_note FROM ' + mappedLeft + ' ORDER BY BINARY code'))[0];
+    await choose(text.source, 'mysql', mirror, 'mapped_left');
+    await choose(text.target, 'mariadb', mirror, 'mapped_right');
+    if (!await modal.getByLabel(mapping.source, { exact: true }).isVisible()) await modal.getByText(mapping.title, { exact: true }).click();
+    const fieldPairs = [['code', 'identifier', true], ['seq', 'serial', true],
+      ['raw', 'payload', false], ['conflict_token', 'reserved', false]] as const;
+    for (const [source, targetField, key] of fieldPairs) await mapField(source, targetField, key);
+    const mappedKey = '"Key" / "' + max + '"';
+    const prepareMapped = async () => {
+      await run.click();
+      await expect(modal.getByRole('status').filter({ hasText: mapping.keyLabel })).toContainText('字段值不同 1');
+      await modal.getByRole('checkbox', { name: sync.select + ' ' + mappedKey, exact: true }).check();
+      await preview.click();
+      await expect(modal.getByRole('group', { name: sync.preview, exact: true })).toContainText('更新　' + mappedKey);
+      await confirm.fill('`' + mirror + '`.`mapped_right`');
+    };
+    await prepareMapped();
+    await right.query('UPDATE ' + mappedRight + " SET local_note='右侧并发编辑'");
+    await apply.click();
+    await expect(modal.getByRole('alert')).toContainText('右侧映射键重复或原值已变化');
+    expect(await readMappedRight()).toEqual([{ code: 'Key', seq: max, raw: '00FF81', token: 70, local_note: '右侧并发编辑' }]);
+    await prepareMapped();
+    await page.screenshot({ path: info.outputPath('MySQL与MariaDB自定义字段单表同步.png') });
+    await apply.click();
+    await expect(committed).toBeVisible();
+    expect(await readMappedRight()).toEqual([{ code: 'Key', seq: max, raw: '00FF80', token: 70, local_note: '右侧并发编辑' }]);
+
+    await left.query('UPDATE ' + mappedLeft + " SET raw=X'00FF84' WHERE BINARY code=BINARY 'Key'");
+    await left.query('INSERT INTO ' + mappedLeft + " (code,seq,raw,conflict_token) VALUES ('new',2,X'00FF83',72)");
+    await right.query('INSERT INTO ' + mappedRight + " (identifier,serial,payload,reserved) VALUES ('key'," + max + ",X'00FF82',77)");
+    await left.query('UPDATE ' + mirror + ".mirror SET note='新一轮' WHERE id=1");
+    await left.query('INSERT INTO ' + mirror + ".mirror(id,note,conflict_value) VALUES (311,'新增',71)");
+    await right.query('INSERT INTO ' + mirror + ".mirror(id,note,conflict_value) VALUES (312,'仅右',71)");
+    const mappedOriginal = await readMappedRight(), mirrorOriginal = await values(right, mirror, 'mirror');
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    await overview.getByLabel(batch.source, { exact: true }).selectOption('mirror');
+    await overview.getByLabel(batch.target, { exact: true }).selectOption('mirror');
+    await overview.getByRole('button', { name: batch.add, exact: true }).click();
+    await expect(overview.getByRole('button', { name: batch.customFields(4), exact: true })).toBeVisible();
+    const mappedExact = '`' + mirror + '`.`mapped_right` 等 2 张表';
+    const confirmMapped = async (table = mappedExact) => { await batchConfirm.fill(table); await applyBatch.click(); };
+    await expect(deleteBatch).not.toBeChecked();
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 2 · 更新 2 · 删除 0');
+    await confirmMapped();
+    await expect(overview.getByRole('alert')).toContainText('整批已回滚：目标唯一约束冲突（`' + mirror + '`.`mirror`）');
+    expect(await readMappedRight()).toEqual(mappedOriginal);
+    expect(await values(right, mirror, 'mirror')).toEqual(mirrorOriginal);
+
+    await deleteBatch.check();
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 2 · 更新 2 · 删除 2');
+    await right.query('INSERT INTO ' + mappedRight + " (identifier,serial,payload,local_note) VALUES ('Key'," + max + ",X'FF','并发重复')");
+    const concurrentMapped = await readMappedRight();
+    await confirmMapped();
+    await expect(overview.getByRole('alert')).toContainText('右侧映射键重复或原值已变化');
+    expect(await readMappedRight()).toEqual(concurrentMapped);
+    expect(await values(right, mirror, 'mirror')).toEqual(mirrorOriginal);
+    await right.query('DELETE FROM ' + mappedRight + " WHERE local_note='并发重复'");
+
+    // 第二张表的行锁把执行停在首条 DML 前，此时另一连接不能向第一张无主键表插入新键。
+    const checkGap = async (server: typeof left, port: number, table: string, insert: string, confirmation: string) => {
+      const probe = await connect(port);
+      await server.query('START TRANSACTION');
+      try {
+        await server.query('SELECT id FROM ' + mirror + '.mirror WHERE id=1 FOR UPDATE');
+        await confirmMapped(confirmation);
+        const waiting = async () => Number((await server.query<RowDataPacket[]>(
+          "SELECT count(*) AS total FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND INFO LIKE ?",
+          ['%`mirror`%FOR UPDATE'],
+        ))[0][0].total);
+        await expect.poll(waiting, { timeout: 3500 }).toBe(1);
+        await probe.query('SET SESSION innodb_lock_wait_timeout=1');
+        await expect(probe.query('INSERT INTO ' + table + insert)).rejects.toMatchObject({ code: 'ER_LOCK_WAIT_TIMEOUT' });
+      } finally { await Promise.allSettled([server.query('ROLLBACK'), probe.end()]); }
+      await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+    };
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 2 · 更新 2 · 删除 2');
+    await batchConfirm.fill(mappedExact);
+    await page.screenshot({ path: info.outputPath('MySQL与MariaDB自定义字段多表同步.png') });
+    await checkGap(right, mariaPort, mappedRight, " (identifier,serial) VALUES ('插入探针',3)", mappedExact);
+    expect(await readMappedRight()).toEqual([
+      { code: 'Key', seq: max, raw: '00FF84', token: 70, local_note: '右侧并发编辑' },
+      { code: 'new', seq: '2', raw: '00FF83', token: 72, local_note: '目标默认' },
+    ]);
+    expect(await values(right, mirror, 'mirror')).toEqual(await values(left, mirror, 'mirror'));
+    await prepareBatch.click();
+    await expect(overview.getByRole('status')).toHaveText(batchSync.noChanges);
+
+    // 反向复用相同业务键和字段映射，让 MySQL 承担无主键目标写入及间隙锁。
+    await right.query('UPDATE ' + mappedRight + " SET payload=X'00FF85' WHERE BINARY identifier=BINARY 'Key'");
+    await right.query('UPDATE ' + mirror + ".mirror SET note='再次换向' WHERE id=1");
+    await overview.getByRole('button', { name: profiles.swap, exact: true }).click();
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 0 · 更新 2 · 删除 0');
+    await checkGap(left, mysqlPort, mappedLeft, " (code,seq) VALUES ('插入探针',3)", '`' + mirror + '`.`mapped_left` 等 2 张表');
+    expect(await readMappedLeft()).toEqual([
+      { code: 'Key', seq: max, raw: '00FF85', token: 70, local_note: '来源默认' },
+      { code: 'new', seq: '2', raw: '00FF83', token: 72, local_note: '来源默认' },
+    ]);
+    expect(await values(left, mirror, 'mirror')).toEqual(await values(right, mirror, 'mirror'));
     await overview.getByRole('button', { name: batch.return, exact: true }).click();
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();

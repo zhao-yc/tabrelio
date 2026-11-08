@@ -30,7 +30,7 @@ export function DataCompareMapping({ family, source, target, disabled, mapping, 
   }, [opened, family, leftId, leftDb, leftTable, rightId, rightDb, rightTable]);
 
   const content = <>
-    <p className="muted small">{text.hint} {text.readonly}</p>
+    <p className="muted small">{text.hint} {text.keyRequirement}</p>
     {!columns && !error && <p>{text.loading}</p>}
     <fieldset className="sqlite-data-compare-endpoint" disabled={disabled}>
       {columns && <div className="sqlite-data-compare-pair">
