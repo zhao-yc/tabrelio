@@ -525,6 +525,15 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await expect(batchConfirm).toHaveValue(targetDatabase + '."对照"."batch_alpha"');
     await batchReview.getByLabel(batchSync.filterKey, { exact: true }).fill('1124');
     await page.screenshot({ path: info.outputPath('PostgreSQL多表同步预览筛选.png') });
+    await batchReview.getByLabel(batchSync.filterKey, { exact: true }).fill('无匹配');
+    await expect(batchReview).toContainText(batchSync.hiddenSelected(1));
+    await batchReview.getByRole('button', { name: batchSync.reviewSelection, exact: true }).click();
+    await expect(batchReview.getByRole('listitem')).toHaveCount(1);
+    await expect(batchReview.getByRole('listitem')).toContainText('1124');
+    await expect(batchReview.getByRole('table', { name: batchSync.reviewSummary, exact: true })
+      .getByRole('row', { name: '"对照"."batch_alpha" 1 0 0', exact: true })).toBeVisible();
+    await expect(batchApply).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('PostgreSQL多表同步核对已选差异.png') });
     await batchApply.click();
     await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
     expect((await right.query(`SELECT id::text, note FROM "对照".batch_alpha WHERE id>=1000`)).rows)

@@ -427,6 +427,15 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
       await batchReview.getByRole('button', { name: batchSync.selectTableMatches + ' `' + mirror + '`.`mirror`', exact: true }).click();
       await batchConfirm.fill('`' + mirror + '`.`mirror`');
       if (capture) await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表同步预览筛选.png') });
+      await batchReview.getByLabel(batchSync.filterKey, { exact: true }).fill('无匹配');
+      await expect(batchReview).toContainText(batchSync.hiddenSelected(1));
+      await batchReview.getByRole('button', { name: batchSync.reviewSelection, exact: true }).click();
+      await expect(batchReview.getByRole('listitem')).toHaveCount(1);
+      await expect(batchReview.getByRole('listitem')).toContainText(String(start + 124));
+      await expect(batchReview.getByRole('table', { name: batchSync.reviewSummary, exact: true })
+        .getByRole('row', { name: '`' + mirror + '`.`mirror` 1 0 0', exact: true })).toBeVisible();
+      await expect(applyBatch).toBeEnabled();
+      if (capture) await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表同步核对已选差异.png') });
       await applyBatch.click();
       await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
       const result = (await client.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS id,note FROM ' + mirror +

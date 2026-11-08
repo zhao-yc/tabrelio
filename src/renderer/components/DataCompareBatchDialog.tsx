@@ -91,6 +91,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   const [omitted, setOmitted] = useState<ReadonlySet<number>>(new Set());
   const [previewPage, setPreviewPage] = useState(0);
   const [previewFilter, setPreviewFilter] = useState(emptyPreviewFilter);
+  const [reviewSelection, setReviewSelection] = useState(false);
   const [inspected, setInspected] = useState<number>();
   const [syncPhase, setSyncPhase] = useState<'preview' | 'apply'>();
   const [confirmation, setConfirmation] = useState('');
@@ -235,7 +236,13 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   const batchSyncText = family === 'sqlite' ? sqliteBatchSyncZh : family === 'postgresql' ? postgresBatchSyncZh : mysqlBatchSyncZh;
   const syncEligible = pairs.length > 1;
   const syncTables = useMemo(() => indexBatchPreview(syncPreview?.tables ?? []), [syncPreview]);
-  const matchedTables = useMemo(() => filterBatchPreview(syncTables, previewFilter), [syncTables, previewFilter]);
+  // 核对清单始终取完整勾选范围，沿用原序号，并与普通浏览的筛选独立。
+  const matchedTables = useMemo(() => reviewSelection
+    ? syncTables.flatMap(table => {
+      const rows = table.rows.filter(row => !omitted.has(row.ordinal));
+      return rows.length ? [{ ...table, rows }] : [];
+    })
+    : filterBatchPreview(syncTables, previewFilter), [syncTables, previewFilter, reviewSelection, omitted]);
   const filterActive = !!(previewFilter.table || previewFilter.action || previewFilter.key.trim());
   const selected = syncTables.flatMap(item => item.rows.filter(row => !omitted.has(row.ordinal)).map(row => row.ordinal));
   const selection = syncPreview && resolveBatchSyncSelection(syncPreview.tables, selected);
@@ -292,6 +299,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
         // 大批预览先留空，让用户逐页选中，避免默认准备超预算或大批量写入。
         setOmitted(new Set(batchSyncSelectionIssue(scope) ? Array.from({ length: scope.rowCount }, (_, index) => index) : []));
         changePreviewFilter(emptyPreviewFilter);
+        setReviewSelection(false);
         setSyncPreview(preview);
       } else setNotice(batchSyncText.noChanges);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -391,36 +399,53 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
         <p>{batchSyncActions.map(action => syncText[action] + ' ' + selection.counts[action]).join(' · ')}</p>
         <p>{batchSyncText.selectionCount(selection.rowCount, all?.rowCount ?? 0)}{!allFit && ' · ' + batchSyncText.largePreview}</p>
         {selectionIssue && <p role="alert">{selectionIssue}</p>}
-        <div className="sqlite-data-compare-pair">
-          <Field label={batchSyncText.filterTable}>
-            <select aria-label={batchSyncText.filterTable} value={previewFilter.table}
-              onChange={event => changePreviewFilter({ ...previewFilter, table: event.target.value })}>
-              <option value="">{batchSyncText.allTables}</option>
-              {syncTables.map(item => <option key={item.table} value={item.table}>{tableLabel(item.table)}</option>)}
-            </select>
-          </Field>
-          <Field label={batchSyncText.filterAction}>
-            <select aria-label={batchSyncText.filterAction} value={previewFilter.action}
-              onChange={event => changePreviewFilter({ ...previewFilter, action: event.target.value as BatchPreviewFilter['action'] })}>
-              <option value="">{batchSyncText.allActions}</option>
-              {batchSyncActions.map(action => <option key={action} value={action}>{syncText[action]}</option>)}
-            </select>
-          </Field>
-          <Field label={batchSyncText.filterKey}>
-            <input aria-label={batchSyncText.filterKey} value={previewFilter.key}
-              onChange={event => changePreviewFilter({ ...previewFilter, key: event.target.value })}/>
-          </Field>
-        </div>
-        {filterActive && <p>{batchSyncText.matches(matching.length)}
-          {hiddenSelected > 0 && ' · ' + batchSyncText.hiddenSelected(hiddenSelected)}</p>}
-        <div className="check-row">
-          <button type="button" disabled={!matchingFit || !unselectedMatches.length}
-            onClick={() => markPreviewRows(unselectedMatches, true)}>{filterActive ? batchSyncText.selectMatches : batchSyncText.selectAll}</button>
-          <button type="button" disabled={!selected.length} onClick={() => markPreviewRows(selected, false)}>{batchSyncText.clearAll}</button>
-          {pages > 1 && <button type="button" disabled={pageOrdinals.every(ordinal => !omitted.has(ordinal))}
-            onClick={() => markPreviewRows(pageOrdinals, true)}>{batchSyncText.selectPage}</button>}
-          {filterActive && <button type="button" onClick={() => changePreviewFilter(emptyPreviewFilter)}>{batchSyncText.clearFilter}</button>}
-        </div>
+        <button type="button" aria-pressed={reviewSelection} disabled={!selected.length}
+          onClick={() => { setReviewSelection(!reviewSelection); changePreviewPage(0); }}>{batchSyncText.reviewSelection}</button>
+        {reviewSelection ? <>
+          <p>{batchSyncText.reviewHint}</p>
+          <table aria-label={batchSyncText.reviewSummary}>
+            <thead><tr><th scope="col">{batchSyncText.targetTable}</th>
+              {batchSyncActions.map(action => <th key={action} scope="col">{syncText[action]}</th>)}
+            </tr></thead>
+            <tbody>{selection.groups.map(({ tableIndex, counts }) => {
+              const table = syncTables[tableIndex].table;
+              return <tr key={table}><th scope="row">{tableLabel(table)}</th>
+                {batchSyncActions.map(action => <td key={action}>{counts[action]}</td>)}
+              </tr>;
+            })}</tbody>
+          </table>
+        </> : <>
+          <div className="sqlite-data-compare-pair">
+            <Field label={batchSyncText.filterTable}>
+              <select aria-label={batchSyncText.filterTable} value={previewFilter.table}
+                onChange={event => changePreviewFilter({ ...previewFilter, table: event.target.value })}>
+                <option value="">{batchSyncText.allTables}</option>
+                {syncTables.map(item => <option key={item.table} value={item.table}>{tableLabel(item.table)}</option>)}
+              </select>
+            </Field>
+            <Field label={batchSyncText.filterAction}>
+              <select aria-label={batchSyncText.filterAction} value={previewFilter.action}
+                onChange={event => changePreviewFilter({ ...previewFilter, action: event.target.value as BatchPreviewFilter['action'] })}>
+                <option value="">{batchSyncText.allActions}</option>
+                {batchSyncActions.map(action => <option key={action} value={action}>{syncText[action]}</option>)}
+              </select>
+            </Field>
+            <Field label={batchSyncText.filterKey}>
+              <input aria-label={batchSyncText.filterKey} value={previewFilter.key}
+                onChange={event => changePreviewFilter({ ...previewFilter, key: event.target.value })}/>
+            </Field>
+          </div>
+          {filterActive && <p>{batchSyncText.matches(matching.length)}
+            {hiddenSelected > 0 && ' · ' + batchSyncText.hiddenSelected(hiddenSelected)}</p>}
+          <div className="check-row">
+            <button type="button" disabled={!matchingFit || !unselectedMatches.length}
+              onClick={() => markPreviewRows(unselectedMatches, true)}>{filterActive ? batchSyncText.selectMatches : batchSyncText.selectAll}</button>
+            <button type="button" disabled={!selected.length} onClick={() => markPreviewRows(selected, false)}>{batchSyncText.clearAll}</button>
+            {pages > 1 && <button type="button" disabled={pageOrdinals.every(ordinal => !omitted.has(ordinal))}
+              onClick={() => markPreviewRows(pageOrdinals, true)}>{batchSyncText.selectPage}</button>}
+            {filterActive && <button type="button" onClick={() => changePreviewFilter(emptyPreviewFilter)}>{batchSyncText.clearFilter}</button>}
+          </div>
+        </>}
         <div className="sqlite-data-sync-preview-rows" ref={reviewRows}>
           {!matching.length && <p>{batchSyncText.noMatches}</p>}
           {matchedTables.flatMap(item => {
@@ -431,13 +456,13 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
               : (checked ? batchSyncText.clearTable : batchSyncText.selectTable);
             return <div key={item.table}>
               <strong>{tableLabel(item.table)}</strong>{' '}
-              <button type="button" aria-label={tableAction + ' ' + tableLabel(item.table)}
-                onClick={() => markPreviewRows(item.rows.map(row => row.ordinal), !checked)}>{tableAction}</button>
+              {!reviewSelection && <button type="button" aria-label={tableAction + ' ' + tableLabel(item.table)}
+                onClick={() => markPreviewRows(item.rows.map(row => row.ordinal), !checked)}>{tableAction}</button>}
               <ul>{rows.map(row => <li key={row.ordinal}>
                 <div className="sqlite-data-sync-preview-choice">
-                  <label className="check"><input type="checkbox" checked={!omitted.has(row.ordinal)}
+                  {reviewSelection ? <span>{syncText[row.action]}　{row.key.join(' / ')}</span> : <label className="check"><input type="checkbox" checked={!omitted.has(row.ordinal)}
                     onChange={event => markPreviewRows([row.ordinal], event.target.checked)}/>
-                    {syncText[row.action]}　{row.key.join(' / ')}</label>
+                    {syncText[row.action]}　{row.key.join(' / ')}</label>}
                   <button type="button" aria-label={batchSyncText.details + ' ' + row.key.join(' / ')}
                     aria-expanded={inspected === row.ordinal} aria-controls={inspected === row.ordinal ? detailId : undefined}
                     onClick={() => setInspected(inspected === row.ordinal ? undefined : row.ordinal)}>{batchSyncText.details}</button>
