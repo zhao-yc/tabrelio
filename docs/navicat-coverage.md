@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。MySQL 与 MariaDB 查询及带方言标识的 SQL 预览支持方言着色。空闲查询可按原会话的 `ANSI_QUOTES` 与 `NO_BACKSLASH_ESCAPES` 调整引号和转义规则。Q01 仍为部分覆盖。[MySQL 与 MariaDB SQL 着色](development/mysql-editor-highlighting-20261108.md)
+
 2026-11-08 源码增量。SQLite 查询与带方言标识的 SQL 预览使用 SQLite 着色，区分标识符、BLOB、绑定参数及注释。Q01 仍为部分覆盖。[SQLite SQL 着色](development/sqlite-editor-highlighting-20261108.md)
 
 2026-11-08 源码增量。PostgreSQL 查询与 SQL 预览使用方言着色，识别跨行 dollar 引号、嵌套注释、位置参数及会话字符串模式。Q01 仍为部分覆盖。[PostgreSQL SQL 着色](development/postgres-editor-highlighting-20261108.md)

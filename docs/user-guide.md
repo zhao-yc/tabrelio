@@ -722,6 +722,8 @@ PostgreSQL 查询编辑器和 SQL 预览会区分 dollar-quoted 字符串、嵌�
 
 SQLite 查询和带方言标识的 SQL 预览会区分方括号、反引号、双引号标识符、BLOB 字面量及绑定参数。引号内的注释符号会随原类型着色。[SQLite SQL 着色](development/sqlite-editor-highlighting-20261108.md)
 
+MySQL 和 MariaDB 查询会区分反引号名称、二进制字面量、变量、注释及 `DELIMITER` 行。空闲查询已取得会话模式时，`ANSI_QUOTES` 使双引号按标识符着色，`NO_BACKSLASH_ESCAPES` 使反斜杠按普通字符着色。离线草稿及 SQL 预览使用默认引号规则。[MySQL 与 MariaDB SQL 着色](development/mysql-editor-highlighting-20261108.md)
+
 后续开发版可在命令栏打开“编辑器字号”，输入 8–32 的整数字号并保存；默认 13。恢复默认只修改弹窗草稿，保存才应用，取消保持当前值。“自动换行”可直接切换，按钮按下表示开启，偏好会在重启后恢复。这两项适用于 SQL 编辑器及只读 SQL 预览，字号不改变结果网格或窗口缩放；公开 0.20 尚不含该增量。
 
 创建查询时选择连接和可选数据库。每个标签保持独立会话，因此临时表、会话变量和事务不会在标签间共享。Monaco 提供本地高亮、元数据补全和格式化。

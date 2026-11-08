@@ -85,7 +85,7 @@ test('SQLite 方言着色区分绑定参数、BLOB 和三种标识符并保留�
     await page.screenshot({ path: info.outputPath('SQLite方言着色.png') });
     const open = (id: string, title: string) => page.locator('[data-workspace-tab-id="' + id + '"]').getByRole('button', { name: title, exact: true }).click();
     await open('mysql-editor', 'MySQL 对照');
-    await expect.poll(async () => (await inspect()).language).toBe('sql');
+    await expect.poll(async () => (await inspect()).language).toBe('dbark-mysql');
     await open('sqlite-editor', 'SQLite 着色');
     await expect.poll(async () => (await inspect()).id).toBe(initial.id);
     await box.focus();

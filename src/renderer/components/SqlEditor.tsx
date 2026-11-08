@@ -50,6 +50,7 @@ import { snippetCatalog } from '../snippetCompletion';
 import { createSnippetCompletionProvider } from '../snippetCompletionProvider';
 import { postgresEditorLanguage, postgresEditorLanguages, registerPostgresEditorLanguages } from '../postgresEditorLanguage';
 import { registerSqliteEditorLanguage, sqliteEditorLanguage } from '../sqliteEditorLanguage';
+import { mysqlEditorLanguage, mysqlEditorLanguages, registerMysqlEditorLanguages, type MysqlEditorMode } from '../mysqlEditorLanguage';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
@@ -60,15 +61,18 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
-  const language = requestedDialect === 'postgresql' ? postgresEditorLanguage(postgresStandardStrings) : requestedDialect === 'sqlite' ? sqliteEditorLanguage : 'sql';
-  const languageSelector = requestedDialect === 'postgresql' ? postgresEditorLanguages : language;
+  const network = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? requestedDialect : undefined;
+  const language = network ? mysqlEditorLanguage(network, mysqlMode) : requestedDialect === 'postgresql'
+    ? postgresEditorLanguage(postgresStandardStrings) : requestedDialect === 'sqlite' ? sqliteEditorLanguage : 'sql';
+  const languageSelector = network ? mysqlEditorLanguages[network] : requestedDialect === 'postgresql' ? postgresEditorLanguages : language;
   useLayoutEffect(() => {
     if (requestedDialect === 'postgresql') registerPostgresEditorLanguages(monaco.languages);
     if (requestedDialect === 'sqlite') registerSqliteEditorLanguage(monaco.languages);
-  }, [requestedDialect]);
+    if (network) registerMysqlEditorLanguages(monaco.languages, network);
+  }, [requestedDialect, network]);
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
@@ -311,7 +315,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     let active:AbortController|undefined,disposed=false;
     let hover: ReturnType<typeof createSqlFieldHoverProvider> | undefined;
     const scopeCurrent = () => aliveRef.current && !propsRef.current.readOnly && sameCompletionScope(completionRef.current, completion);
-    const provider = monaco.languages.registerCompletionItemProvider('sql', {
+    const provider = monaco.languages.registerCompletionItemProvider(languageSelector, {
       triggerCharacters:['.','`'],
       provideCompletionItems: async (model, position,_context,token) => {
         if (disposed||readOnly||suggestionsBlocked()||!scopeCurrent()||editorRef.current?.getModel()!==model||model.isDisposed()||token.isCancellationRequested)return{suggestions:[]};
@@ -356,9 +360,9 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         return invoke('query.temporaryCompletion', { sessionId, kind: 'columns', database: query.database, table: query.table, prefix: query.prefix, ...(query.details ? { details: true } : {}) });
       }
     });
-    const hoverRegistration = monaco.languages.registerHoverProvider('sql', hover.provider);
+    const hoverRegistration = monaco.languages.registerHoverProvider(languageSelector, hover.provider);
     return()=>{disposed=true;active?.abort();hoverRegistration.dispose();hover?.dispose();provider.dispose();worker.dispose();directory.dispose();};
-  },[readOnly,dialect,requestedDialect,completion?.connectionId,completion?.connectionVersion,completion?.database,completion?.databaseUnknown,completion?.sessionId]);
+  },[readOnly,dialect,requestedDialect,languageSelector,completion?.connectionId,completion?.connectionVersion,completion?.database,completion?.databaseUnknown,completion?.sessionId]);
   /** 字号与正文桥接可随布局恢复；执行动作及父层onReady不在这里重复发布。 */
   function attachContent(editor: monaco.editor.IStandaloneCodeEditor) {
     contentRef.current?.dispose(); editorRef.current = editor;
