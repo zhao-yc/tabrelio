@@ -64,6 +64,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.workbookExport': true,
   'mysql.workbookExport': true,
   'postgres.backup.catalogue': true,
+  'postgres.backup.nativeCatalogue': true,
   'postgres.backup.chooseDumpTool': true, 'postgres.backup.chooseDatabaseFile': true, 'postgres.backup.database': true,
   'mysql.backup.chooseTool': true, 'mysql.backup.chooseFile': true, 'mysql.backup.database': true,
   'mysql.sqlFile.choose': true, 'mysql.sqlFile.execute': true,

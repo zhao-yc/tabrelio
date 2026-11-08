@@ -376,6 +376,7 @@ export interface CommandMap {
   'postgres.query.export': { input: import('./postgresQueryExport').PostgresQueryExportInput; output: import('./postgresQueryExport').PostgresQueryExportOutput };
   'postgres.table.export': { input: import('./postgresTable').PostgresTableExportInput | import('./postgresTable').PostgresBackupSetInput; output: import('./postgresTable').PostgresTableExportOutput };
   'postgres.backup.catalogue': { input: import('./postgresTable').PostgresBackupCatalogueInput; output: string[] };
+  'postgres.backup.nativeCatalogue': { input: import('./postgresTable').PostgresBackupCatalogueInput; output: import('./postgresDatabaseBackup').PostgresNativeBackupRelation[] };
   'postgres.backup.chooseDumpTool': { input: Record<string, never>; output: FileChoice | null };
   'postgres.backup.chooseDatabaseFile': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupChooseInput; output: FileChoice | null };
   'postgres.backup.database': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupInput; output: import('./postgresDatabaseBackup').PostgresDatabaseBackupResult };

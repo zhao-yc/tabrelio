@@ -4,11 +4,13 @@ import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { getCACertificates } from 'node:tls';
-import { isPostgresCustomArchiveDestination, postgresDumpSelection, type PostgresDatabaseBackupInput, type PostgresDatabaseBackupResult } from '../../shared/postgresDatabaseBackup';
+import { isPostgresCustomArchiveDestination, postgresBackupRelationHasData, postgresDumpSelection,
+  type PostgresDatabaseBackupInput, type PostgresDatabaseBackupResult } from '../../shared/postgresDatabaseBackup';
 import { postgresSqlFileLimits } from '../../shared/postgresSqlFile';
 import { AtomicFile, privateAtomicFileIO } from '../atomicFile';
 import { openNativeBackupTunnel } from '../nativeBackupTunnel';
 import type { PostgresConnection } from './connection';
+import { matchPostgresNativeBackupSelection, readPostgresNativeBackupCatalogue } from './databaseBackupCatalogue';
 import { postgresSchemaCatalog } from './schemaManage';
 import { postgresToolEnvironment, readPostgresToolVersion, runPostgresNativeTool, type PostgresNativeTool } from './nativeTool';
 
@@ -59,6 +61,14 @@ async function dumpEnvironment(connection: PostgresConnection, directory: string
 const queryBudget = () => ({ rows: 1, bytes: 1024 });
 const quoteConnectionValue = (value: string) => "'" + value.replaceAll('\\', '\\\\').replaceAll("'", "\\'") + "'";
 
+async function checkSelectedRelations(connection: PostgresConnection, input: PostgresDatabaseBackupRequest) {
+  if (!input.relations) return;
+  const catalog = await readPostgresNativeBackupCatalogue(connection, input.database, input.relations);
+  const relations = matchPostgresNativeBackupSelection(catalog, input.relations);
+  if (input.content === 'data' && relations.some(item => !postgresBackupRelationHasData(item.kind)))
+    throw Error('仅数据备份请选择有本地数据的表、叶子分区或序列');
+}
+
 /** 子进程已退出时，服务端仍可能在等锁。仅结束本任务标记、角色、数据库、PID 和启动时间都相符的会话。 */
 async function stopDumpBackend(connection: PostgresConnection, applicationName: string) {
   const scope = ' FROM pg_catalog.pg_stat_activity WHERE application_name=$1 AND datname=pg_catalog.current_database() ' +
@@ -106,6 +116,7 @@ export async function exportPostgresDatabaseBackup(input: PostgresDatabaseBackup
           item.usage && item.name === selected.name && item.stamp === selected.stamp)))
           throw Error('备份 Schema 的身份或访问权限已变化，请重新读取并选择');
       }
+      await checkSelectedRelations(connection, input);
       check();
       let tunnel: Awaited<ReturnType<typeof dumpTunnel>>;
       let detail: string;
@@ -142,10 +153,12 @@ export async function exportPostgresDatabaseBackup(input: PostgresDatabaseBackup
       if ((await connection.query('COMMIT', undefined, queryBudget())).postgresCommand !== 'COMMIT' ||
           !connection.state().transactionKnown || connection.state().transactionOpen)
         throw Error('PostgreSQL 备份的原只读事务未确认结束');
+      // 使用新快照确认生成期间没有同名替换。失败时仍然保留原目标文件。
+      await checkSelectedRelations(connection, input);
       return detail ? connection.error(detail).message : undefined;
     });
     check();
-    if (!file) throw Error('PostgreSQL 未生成整库备份文件');
+    if (!file) throw Error('PostgreSQL 未生成数据库备份文件');
     await file.commit();
     return { bytes: file.bytesWritten, toolVersion, ...(warning ? { warning } : {}) };
   } finally {

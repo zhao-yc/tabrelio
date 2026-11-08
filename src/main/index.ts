@@ -1365,7 +1365,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         if (store.resolveConnection(target.connectionId).dialect !== 'postgresql') throw Error('数据库备份需要已保存的 PostgreSQL 连接');
         const name = target.database.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 120);
         const custom = target.format === 'custom';
-        const suffix = (target.schemas ? '-Schema备份' : '-整库备份') +
+        const suffix = (target.relations ? '-对象备份' : target.schemas ? '-Schema备份' : '-整库备份') +
           (target.content === 'schema' ? '-仅结构' : target.content === 'data' ? '-仅数据' : '');
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: postgresDatabaseBackupTitle,
           defaultPath: name + suffix + (custom ? '.dump' : '.sql'),
@@ -2540,12 +2540,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'postgres.compareData.cancel': return cancelNetworkCompare(input.taskId, columns);
     case 'mysql.compareData.catalogue':
     case 'postgres.backup.catalogue':
+    case 'postgres.backup.nativeCatalogue':
     case 'postgres.compareData.catalogue': {
       columnsMain.assertCapturedOwner(columns);
       connectionConfig.assertAvailable(input.connectionId);
       const revision = store.connectionRevision(), profile = store.resolveConnection(input.connectionId);
       const accepts = command === 'mysql.compareData.catalogue' ? profile.dialect === 'mysql' || profile.dialect === 'mariadb' : profile.dialect === 'postgresql';
-      const backup = command === 'postgres.backup.catalogue';
+      const backup = command.startsWith('postgres.backup.');
       if (!accepts || shuttingDown) throw Error(backup ? '备份目录需要已保存的 PostgreSQL 连接' : '比较目录需要此工具支持的已保存连接');
       const result = await broker.request(command, { ...input, profile });
       columnsMain.assertCapturedOwner(columns);
@@ -2675,6 +2676,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           selected.toolToken !== input.toolToken || selected.connectionId !== input.connectionId || selected.database !== input.database ||
           selected.portable !== input.portable || selected.format !== input.format ||
           selected.content !== input.content || JSON.stringify(selected.schemas ?? null) !== JSON.stringify(input.schemas ?? null) ||
+          JSON.stringify(selected.relations ?? null) !== JSON.stringify(input.relations ?? null) ||
           selected.revision !== store.connectionRevision() || selected.expires <= Date.now())
         throw Error('PostgreSQL 数据库备份的文件、工具或目标已变化，请重新选择');
       const profile = store.resolveConnection(input.connectionId);

@@ -26,6 +26,18 @@ it('指定 Schema 必须非空且唯一，并逐字转义 pg_dump 模式', () =>
     expect(postgresDatabaseBackupChooseSchema.safeParse({ ...input, schemas }).success).toBe(false);
 });
 
+it('指定关系逐段引用限定名，允许跨 Schema 同名并拒绝混用范围', () => {
+  const relation = { schema: '区域.a', name: '表.*"?', stamp: 'b'.repeat(64) };
+  const second = { ...relation, schema: '区域' };
+  const input = { connectionId: '连接', database: '库', portable: false, content: 'data',
+    toolToken: '7674d54f-8ab7-4718-a3d1-df39314bdfbb', relations: [relation, second] };
+  expect(postgresDumpSelection(postgresDatabaseBackupChooseSchema.parse(input)))
+    .toEqual(['--data-only', '--strict-names', '--table="区域.a"."表.*""?"', '--table="区域"."表.*""?"']);
+  for (const relations of [[], [relation, relation], [{ ...relation, schema: '' }], [{ ...relation, name: 'a\0b' }], [{ ...relation, oid: 5 }]])
+    expect(postgresDatabaseBackupChooseSchema.safeParse({ ...input, relations }).success).toBe(false);
+  expect(postgresDatabaseBackupChooseSchema.safeParse({ ...input, schemas: [{ name: relation.schema, stamp: relation.stamp }] }).success).toBe(false);
+});
+
 it('只选择对应系统的 pg_dump 普通文件，并观察工具文件修改代次', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'tabrelio-pg-tool-test-'));
   try {

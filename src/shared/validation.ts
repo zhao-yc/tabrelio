@@ -360,6 +360,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.workbookExport': postgresWorkbookExportSchema,
   'mysql.workbookExport': mysqlWorkbookExportSchema,
   'postgres.backup.catalogue': postgresBackupCatalogueSchema,
+  'postgres.backup.nativeCatalogue': postgresBackupCatalogueSchema,
   'postgres.backup.chooseDumpTool': postgresDatabaseBackupToolSchema,
   'postgres.backup.chooseDatabaseFile': postgresDatabaseBackupChooseSchema,
   'postgres.backup.database': postgresDatabaseBackupExecuteSchema,

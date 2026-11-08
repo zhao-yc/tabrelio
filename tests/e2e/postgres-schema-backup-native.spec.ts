@@ -72,11 +72,11 @@ test('PostgreSQL 原生多 Schema 备份与恢复，文件绑定范围并拒绝�
     await modal.getByLabel(text.database, { exact: true }).selectOption(database);
     await modal.getByLabel(text.selection, { exact: true }).selectOption('schemas');
     await modal.getByRole('checkbox', { name: first, exact: true }).check();
-    await modal.getByLabel(text.schemaSearch, { exact: true }).fill('另一');
+    await modal.getByLabel(text.schemaPicker.search, { exact: true }).fill('另一');
     await expect(modal.getByRole('checkbox', { name: first, exact: true })).toHaveCount(0);
     await modal.getByRole('checkbox', { name: second, exact: true }).check();
-    await expect(modal.getByText(text.selectedCount(2), { exact: true })).toBeVisible();
-    await modal.getByLabel(text.schemaSearch, { exact: true }).clear();
+    await expect(modal.getByText(text.schemaPicker.count(2), { exact: true })).toBeVisible();
+    await modal.getByLabel(text.schemaPicker.search, { exact: true }).clear();
     await modal.getByRole('checkbox', { name: text.portable, exact: true }).check();
     await button(text.tool).click();
     const backup = async (content: 'all' | 'schema' | 'data') => {

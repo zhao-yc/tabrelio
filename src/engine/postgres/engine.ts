@@ -50,6 +50,7 @@ import { exportPostgresTable, type PostgresTableExportRequest } from './tableExp
 import { exportPostgresWorkbook, type PostgresWorkbookExportRequest } from './workbookExport';
 import { exportPostgresQuery, type PostgresQueryExportRequest } from './queryExport';
 import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
+import { readPostgresNativeBackupCatalogue } from './databaseBackupCatalogue';
 import { exportPostgresDatabaseBackup, type PostgresDatabaseBackupRequest } from './databaseBackup';
 import { PostgresArchiveRestoreCleanupError, withPostgresArchiveSql, type PostgresArchiveRestoreSource } from './customArchive';
 import { readPostgresBackupCatalogue } from './tableBackup';
@@ -1380,6 +1381,11 @@ export class PostgresEngine {
         const profile = input.profile as PostgresConnectionProfile;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 备份连接');
         return this.use(profile, input.database, readPostgresBackupCatalogue);
+      }
+      case 'postgres.backup.nativeCatalogue': {
+        const profile = input.profile as PostgresConnectionProfile;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 备份连接');
+        return this.use(profile, input.database, connection => readPostgresNativeBackupCatalogue(connection, input.database));
       }
       case 'postgres.backup.database': {
         const profile = input.profile as PostgresConnectionProfile;
