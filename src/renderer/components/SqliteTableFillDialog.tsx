@@ -3,18 +3,20 @@ import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteEditValueSchema, sqliteTableEditLimits } from '../../shared/sqliteTableEdit';
 import { sqliteFillSourceLimits, type SqliteFillField } from '../sqliteTableFill';
 import { sqliteTableFillZh as text } from '../locales/sqliteTableFill.zh-CN';
+import type { SqliteWorkspaceFill } from '../sqliteEditWorkspace';
+import { sqliteEditWorkspaceZh as workspaceText } from '../locales/sqliteEditWorkspace.zh-CN';
 import { ErrorBox, Modal } from './ui';
 
 interface Props {
-  ticket: object; ownerId: string; page: SqliteTablePage; count: number; allNew: boolean; current(): boolean;
+  ticket: object; ownerId: string; page: SqliteTablePage; count: number; allNew: boolean; groups?: SqliteWorkspaceFill['pages']; current(): boolean;
   onSave(fields: readonly SqliteFillField[]): boolean; onClose(): void;
 }
 type FillKind = keyof typeof text.kinds;
 interface FieldDraft { include: boolean; kind: FillKind; value: string; epoch: object; }
 interface Draft { fields: FieldDraft[]; }
 /** 勾选记录只接相同typed字段赋值；所有字段初始不选，绝不读取原行值或借预览执行SQL。 */
-export function SqliteTableFillDialog({ ticket, ownerId, page, count, allNew, current, onSave, onClose }: Props) {
-  const owner = useRef({ ticket, ownerId, page, count, allNew, current, onSave, onClose }).current;
+export function SqliteTableFillDialog({ ticket, ownerId, page, count, allNew, groups, current, onSave, onClose }: Props) {
+  const owner = useRef({ ticket, ownerId, page, count, allNew, groups, current, onSave, onClose }).current;
   const invalid = useRef(false), propsInvalid = useRef(false), closed = useRef(false), mounted = useRef(false), saving = useRef(false), attempted = useRef(new WeakSet<Draft>());
   /** 目录快照仅含目标与字段能力，不读取edit.rows中的原数据。 */
   function metadata(): string { const edit = owner.page.edit; return JSON.stringify([owner.page.target, owner.page.schemaKey, owner.page.columns, edit?.kind === 'editable' ? [edit.kind, edit.snapshotId, edit.expiresAt, edit.columns, edit.locator] : edit?.kind]); }
@@ -27,7 +29,7 @@ export function SqliteTableFillDialog({ ticket, ownerId, page, count, allNew, cu
   });
   const [draft, setDraft] = useState<Draft>(() => ({ fields: source.columns.map(() => ({ include: false, kind: 'text' as const, value: '', epoch: {} })) })), live = useRef(draft); live.current = draft;
   const [error, setError] = useState(''), renderTicket = {}, committed = useRef<object | undefined>(undefined);
-  if (owner.ticket !== ticket || owner.ownerId !== ownerId || owner.page !== page || owner.count !== count || owner.allNew !== allNew) propsInvalid.current = true;
+  if (owner.ticket !== ticket || owner.ownerId !== ownerId || owner.page !== page || owner.count !== count || owner.allNew !== allNew || owner.groups !== groups) propsInvalid.current = true;
   function sourceCurrent(): boolean { try { if (propsInvalid.current || source.signature !== metadata() || !owner.current()) invalid.current = true; } catch { invalid.current = true; } return !invalid.current && !closed.current; }
   function local(): boolean { return mounted.current && committed.current === renderTicket && live.current === draft && !closed.current; }
   function inputCurrent(index: number, epoch: object): boolean { return mounted.current && !saving.current && countValid && !!source.columns.length && sourceCurrent() && live.current.fields[index]?.epoch === epoch; }
@@ -81,13 +83,14 @@ export function SqliteTableFillDialog({ ticket, ownerId, page, count, allNew, cu
   function close(): void { if (!local() || propsInvalid.current || saving.current) return; closed.current = true; owner.onClose(); }
   useLayoutEffect(() => { mounted.current = true; committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; mounted.current = false; }; });
   const valid = sourceCurrent(), chosen = draft.fields.filter(field => field.include).length, estimate = budget(draft), disabled = !valid || !countValid || !source.columns.length;
-  return <Modal title={text.title} wide onClose={close}><div className="dialog-body" data-sqlite-fill-owner={owner.ownerId}>
-    <p>{owner.page.target.database}.{owner.page.target.table}</p><p>{text.count(owner.count)}</p><p>{text.hint}</p><p>{owner.allNew ? text.allNewHint : text.existingHint}</p><p>{text.generatedHint}</p>
+  return <Modal title={text.title} wide onClose={close}><div className="modal-content" data-sqlite-fill-owner={owner.ownerId}>
+    <p>{owner.page.target.database}.{owner.page.target.table}</p><p>{text.count(owner.count)}</p><p>{owner.groups ? workspaceText.fillNotice : text.hint}</p>
+    {owner.groups && <ul>{owner.groups.map(group => <li key={group.index}>{workspaceText.fillGroup(group.index, group.count)}</li>)}</ul>}<p>{owner.allNew ? text.allNewHint : text.existingHint}</p><p>{text.generatedHint}</p>
     {source.columns.map((column, index) => { const field = draft.fields[index]; return <fieldset key={column.index}><legend>{column.name}</legend>
       <label><input type="checkbox" aria-label={text.include(column.name)} checked={field.include} disabled={disabled} onChange={event => change(index, { include: event.target.checked }, field.epoch, true)}/>{text.include(column.name)}</label>
       <select aria-label={text.type(column.name)} value={field.kind} disabled={disabled || !field.include} onChange={event => change(index, { kind: event.target.value as FillKind }, field.epoch, true)}>{Object.entries(text.kinds).filter(([kind]) => kind !== 'default' || owner.allNew).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select>
       <textarea aria-label={text.value(column.name)} value={field.value} maxLength={sqliteTableEditLimits.valueUnits} disabled={disabled || !field.include || field.kind === 'null' || field.kind === 'default'} onChange={event => change(index, { value: event.target.value }, field.epoch, false)}/>
     </fieldset>; })}<p role="status">{text.selectedFields(chosen)}</p>
     <ErrorBox message={!valid ? text.stale : !source.columns.length ? text.readonly : !countValid ? text.invalid : error || (estimate === text.budget ? estimate : '')}/>
-  </div><footer><button type="button" aria-label={text.cancel} onClick={close}>{text.cancel}</button><button type="button" className="primary" aria-label={text.save} disabled={disabled || !chosen || !!estimate || attempted.current.has(draft)} onClick={save}>{text.save}</button></footer></Modal>;
+  </div><footer className="modal-footer"><button type="button" aria-label={text.cancel} onClick={close}>{text.cancel}</button><button type="button" className="primary" aria-label={text.save} disabled={disabled || !chosen || !!estimate || attempted.current.has(draft)} onClick={save}>{text.save}</button></footer></Modal>;
 }

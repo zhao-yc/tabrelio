@@ -1,9 +1,18 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
-import { sqliteTableEditLimits, sqliteTableEditPreviewSchema, type SqliteTableEditPreviewInput, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
+import { sqliteTableEditLimits, sqliteTableEditPreviewSchema, type SqliteTableEditPreviewInput, type SqliteTableEditOutcome, type SqliteTableChange } from '../shared/sqliteTableEdit';
 import type { SqliteTableQuery } from './sqliteTableBrowser';
 import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
+import { prepareSqliteFill, sqliteFillSourceCurrent, sqliteFillSourceLimits, type SqliteFillField } from './sqliteTableFill';
 import { sqliteEditWorkspaceZh as text } from './locales/sqliteEditWorkspace.zh-CN';
 export interface SqliteEditBatch { input: Omit<SqliteTableEditPreviewInput, 'taskId'>; current(): boolean; }
+export interface SqliteWorkspaceFill {
+  readonly page: SqliteTablePage;
+  readonly pages: readonly { index: number; count: number }[];
+  readonly count: number;
+  readonly allNew: boolean;
+  current(): boolean;
+  stage(fields: readonly SqliteFillField[]): number;
+}
 interface PageChecks { revision: object; ids: ReadonlySet<string>; }
 interface Entry { editor: SqliteTableEditor; page: SqliteTablePage; key: string; signature: string; checks?: PageChecks; }
 interface Ports { now(): number; changed(): void; forgotten(page: SqliteTablePage): void; }
@@ -12,6 +21,7 @@ export class SqliteEditWorkspace {
   private entries = new Map<string, Entry>();
   private query?: SqliteTableQuery; private queryKey = ''; private scopeKey = ''; private dead = false;
   private selected?: SqliteTableEditor;
+  private selectionRevision: object = {};
   unknown = false;
   restored = false;
   constructor(private readonly ports: Ports) {}
@@ -58,7 +68,7 @@ export class SqliteEditWorkspace {
   }
   /** 返回准确缓存页，不按相同offset重新生成Editor或原值；失效页明确拒绝重新编辑。 */
   cached(offset:number,query:SqliteTableQuery):SqliteTableEditor|undefined {if(!this.current(query)||this.unknown)throw Error(this.unknown?text.unknown:text.stale);const editor=this.entries.get(offset+':'+query.limit)?.editor;if(editor){editor.observe();if(!editor.view.valid||editor.view.unknown)throw Error(text.stale);}return editor;}
-  select(editor:SqliteTableEditor):void{if(!this.has(editor))throw Error(text.stale);this.selected=editor;this.ports.changed();}
+  select(editor:SqliteTableEditor):void{if(!this.has(editor))throw Error(text.stale);this.selected=editor;this.selectionRevision={};this.ports.changed();}
   /** 逐页观察连接／结构墓碑，后台页变化也更新标签dirty与预览资格。 */
   observe():void{this.current();for(const editor of this.pages)editor.observe();}
   /** 勾选只记在准确编辑器和行数组上，刷新、改草稿或恢复文件不会迁移同名 UUID。 */
@@ -74,39 +84,96 @@ export class SqliteEditWorkspace {
     if (!this.dead && !this.unknown && !this.restored && entry?.editor === editor && entry.checks?.revision === editor.rowsRevision && editor.view.valid)
       return entry.checks.ids;
   }
-  /** 全部原页通过后先静默暂存，再发布各页通知。复核期间旧确认不得认领后来勾选。 */
-  planCheckedDeletion(actor: SqliteTableEditor) {
+  /** 两种跨页操作均绑定勾选、原快照和编辑器代次；填充可独占活动页的输入门。 */
+  private captureChecked(actor: SqliteTableEditor, allowActorInput = false) {
     this.observe();
     if (this.restored || this.unknown || !this.isActive(actor) || !actor.canEdit() || !this.current()) throw Error(text.stale);
+    const revision = this.selectionRevision;
     const source = [...this.entries.values()].map(entry => {
       const { editor } = entry, view = editor.view;
       const ids = this.checkedIds(editor);
-      if (editor.hasInput || view.busy || view.preview || (!view.valid || view.unknown) && (entry.checks?.revision === editor.rowsRevision || editor.changes.length))
+      const required = editor === actor || entry.checks?.revision === editor.rowsRevision || editor.changes.length > 0;
+      if (editor.hasInput && !(allowActorInput && editor === actor) || view.busy || view.preview || required && (!view.valid || view.unknown))
         throw Error(text.stale);
-      return { entry, editor, rows: view.rows, generation: editor.generation, checks: entry.checks,
-        plan: ids?.size ? editor.prepareRemoveRows([...ids], true) : undefined };
+      return { entry, editor, rows: view.rows, generation: editor.generation, checks: entry.checks, ids, required };
     });
-    const targets = source.filter(item => item.plan !== undefined).sort((left, right) => left.entry.page.offset - right.entry.page.offset);
-    if (!targets.some(item => item.editor !== actor)) throw Error(text.deleteNone);
-    const groups = source.flatMap(({ entry, editor, plan }) => {
-      const changes = plan?.changes ?? editor.changes, edit = entry.page.edit;
+    const targets = source.filter(item => item.ids?.size).sort((left, right) => left.entry.page.offset - right.entry.page.offset);
+    const pages = targets.map(({ entry, ids }) => ({ index: Math.floor(entry.page.offset / entry.page.limit) + 1, count: ids!.size }));
+    const current = () => this.current() && !this.unknown && !this.restored && this.selectionRevision === revision &&
+      this.isActive(actor) && this.entries.size === source.length && source.every(({ entry, editor, rows, generation, checks, required }) =>
+        this.entries.get(entry.key) === entry && editor.view.rows === rows && editor.generation === generation && entry.checks === checks &&
+        (!required || entry.page.edit?.kind === 'editable' && this.ports.now() < Date.parse(entry.page.edit.expiresAt)));
+    return { source, targets, pages, current };
+  }
+  /** 暂存前用真正的多页预览合同校验合计变化，包含未勾选的已有草稿。 */
+  private validateCheckedChanges(editors: readonly SqliteTableEditor[], changed: ReadonlyMap<SqliteTableEditor, readonly SqliteTableChange[]>): void {
+    const [primary, ...additionalPages] = editors.flatMap(editor => {
+      const changes = changed.get(editor) ?? editor.changes, edit = editor.page.edit;
       return changes.length && edit?.kind === 'editable' ? [{ snapshotId: edit.snapshotId, changes }] : [];
     });
-    const [primary, ...additionalPages] = groups;
-    if (primary) sqliteTableEditPreviewSchema.parse({ ...primary, taskId: 'sqlite-workspace-delete',
+    if (primary) sqliteTableEditPreviewSchema.parse({ ...primary, taskId: 'sqlite-workspace-checks',
       ...(additionalPages.length ? { additionalPages } : {}) });
-    const current = () => this.current() && !this.unknown && !this.restored && this.isActive(actor) && this.entries.size === source.length &&
-      source.every(({ entry, editor, rows, generation, checks }) => this.entries.get(entry.key) === entry &&
-        editor.view.rows === rows && editor.generation === generation && entry.checks === checks);
+  }
+  /** 全部原页通过后先静默暂存，再发布各页通知。复核期间旧确认不得认领后来勾选。 */
+  planCheckedDeletion(actor: SqliteTableEditor) {
+    const { source, targets, pages, current } = this.captureChecked(actor);
+    if (!targets.some(item => item.editor !== actor)) throw Error(text.deleteNone);
+    const plans = targets.map(item => ({ ...item, plan: item.editor.prepareRemoveRows([...item.ids!], true) }));
+    this.validateCheckedChanges(source.map(item => item.editor), new Map(plans.map(({ editor, plan }) => [editor, plan.changes])));
     return {
-      pages: targets.map(({ entry, plan }) => ({ index: Math.floor(entry.page.offset / entry.page.limit) + 1, count: plan!.count })),
-      current,
+      pages, current,
       stage: () => {
         if (!current() || !actor.canEdit()) throw Error(text.stale);
-        for (const { plan } of targets) plan!.check();
+        for (const { plan } of plans) plan.check();
         if (!current()) throw Error(text.stale);
-        for (const { entry, plan } of targets) { plan!.stage(); entry.checks = undefined; }
-        for (const { plan } of targets) plan!.publish();
+        for (const { entry, plan } of plans) { plan.stage(); entry.checks = undefined; }
+        for (const { plan } of plans) plan.publish();
+      },
+    };
+  }
+  /** 捕获各页完整值并冻结输入范围，只有所有页和合计预算通过后才更新各页历史。 */
+  planCheckedFill(actor: SqliteTableEditor): SqliteWorkspaceFill {
+    const captured = this.captureChecked(actor, true);
+    if (!captured.targets.some(item => item.editor !== actor)) throw Error(text.fillNone);
+    const count = captured.pages.reduce((sum, group) => sum + group.count, 0);
+    if (count > sqliteFillSourceLimits.rows) throw Error(text.fillLimit);
+    const sourceBudget = { bytes: 0 };
+    const targets = captured.targets.map(item => {
+      const ids = new Set(item.ids);
+      const selected = item.rows.filter(row => ids.has(row.id));
+      if (selected.length !== ids.size) throw Error(text.stale);
+      return { ...item, ids, source: prepareSqliteFill(item.entry.page, item.rows, selected, sourceBudget) };
+    });
+    let stopped = false;
+    const current = () => {
+      if (stopped || !captured.current() || targets.some(item => item.checks!.ids.size !== item.ids.size ||
+        [...item.ids].some(id => !item.checks!.ids.has(id)) || !sqliteFillSourceCurrent(item.source, item.entry.page, item.rows))) {
+        stopped = true;
+        return false;
+      }
+      return true;
+    };
+    return {
+      page: actor.page, pages: captured.pages, count, allNew: targets.every(item => item.source.allNew), current,
+      stage: fields => {
+        if (!current() || !actor.canEdit()) throw Error(text.stale);
+        if (!Array.isArray(fields) || !fields.length || fields.length * count > sqliteTableEditLimits.cells) throw Error(text.fillLimit);
+        const budget = { units: 0 };
+        const plans = targets.flatMap(item => {
+          const plan = item.editor.prepareFillRows([...item.ids], fields, { source: item.source, budget });
+          return plan ? [{ ...item, plan }] : [];
+        });
+        this.validateCheckedChanges(captured.source.map(item => item.editor), new Map(plans.map(({ editor, plan }) => [editor, plan.changes])));
+        for (const { plan } of plans) plan.check();
+        if (!current()) throw Error(text.stale);
+        stopped = true;
+        for (const { entry, editor, plan, ids } of plans) {
+          plan.stage();
+          // 填充保留原行身份，只有此处经过整组复核后可将勾选绑定到新代次。
+          entry.checks = { revision: editor.rowsRevision, ids };
+        }
+        for (const { plan } of plans) plan.publish();
+        return plans.reduce((sum, item) => sum + item.plan.count, 0);
       },
     };
   }

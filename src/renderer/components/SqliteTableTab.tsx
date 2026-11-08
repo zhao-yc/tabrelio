@@ -6,7 +6,7 @@ import { SqliteTableDraftDialog } from './SqliteTableDraftDialog';
 import { sqliteTableDraftZh as draftFileText } from '../locales/sqliteTableDraft.zh-CN';
 import type { SqliteDraftRestored, SqliteTableDraftDocument } from '../../shared/sqliteTableDraft';
 import type { SqliteTableEditPreviewInput } from '../../shared/sqliteTableEdit';
-import { SqliteEditWorkspace } from '../sqliteEditWorkspace';
+import { SqliteEditWorkspace, type SqliteWorkspaceFill } from '../sqliteEditWorkspace';
 import { sqliteEditWorkspaceZh as workspaceText } from '../locales/sqliteEditWorkspace.zh-CN';
 import { isSqliteRelatedTabId, sqliteRelatedTabPrefix } from '../../shared/sqliteRelatedTab';
 import { sqliteRelatedTableScope, registerSqliteRelatedTable, sqliteRelatedTableRelation, sqliteRelatedTargetGuard, watchSqliteRelatedScope, type SqliteRelatedTableScope } from '../sqliteRelatedTable';
@@ -129,7 +129,8 @@ interface PasteInputTicket { id: string; editor: SqliteTableEditor; page: Sqlite
 interface FindInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; valid: boolean; preview: boolean; staging: boolean; retiringPreview?: string; seed?: SqliteTableFindSeed; }
 interface EditPreviewTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; }
 interface CheckedRowsOwner { id: string; editor: SqliteTableEditor; capture: SqliteCheckedRows; }
-interface FillInputTicket { mode: 'fill' | 'records'; id: string; editor: SqliteTableEditor; source: SqliteFillSource; valid: boolean; attached: boolean; }
+type FillInputTicket = { id: string; editor: SqliteTableEditor; valid: boolean; attached: boolean } &
+  ({ mode: 'fill' | 'records'; source: SqliteFillSource } | { mode: 'workspace'; plan: SqliteWorkspaceFill });
 interface FilteredSelectOwner { id: string; intent: SqliteFilteredSelectIntent; page: SqliteTablePage; query: SqliteTableQuery; editor: SqliteTableEditor | null; rows?: SqliteDraftRow[]; attached: boolean; }
 
 /** 初次请求只读取无条件第一页，不恢复未明确应用的草稿条件。 */
@@ -1000,11 +1001,14 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     } catch (reason) { if (current()) setValidation(errorMessage(reason)); }
     finally { stop(); }
   }
+  /** 跨页勾选只在活动网格和其它输入均空闲时取得所有权。 */
+  function workspaceCheckedCurrent(): boolean {
+    return !!renderedEditor && editActionCurrent() && available() && !inputRef.current && !previewRef.current &&
+      !pasteRef.current && !rangeRef.current && !importRef.current && !fullExportRef.current && !exportData && !findRef.current?.preview;
+  }
   /** 确认期间持续核对活动表页和原工作区。提交前只改变本地草稿。 */
   function removeWorkspaceCheckedRows(): void {
-    const actor = renderedEditor;
-    const current = () => !!actor && editActionCurrent() && available() && !inputRef.current && !previewRef.current &&
-      !pasteRef.current && !rangeRef.current && !importRef.current && !fullExportRef.current && !exportData && !findRef.current?.preview;
+    const actor = renderedEditor, current = workspaceCheckedCurrent;
     if (!actor || !current()) return;
     try {
       const plan = drafts.planCheckedDeletion(actor);
@@ -1036,6 +1040,23 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       fillRef.current = ticket; ticket.editor.inputOpen(true); setFillOpen(ticket);
     } catch (reason) { setValidation(errorMessage(reason)); }
   }
+  /** 输入占用先登记，工作区快照捕获此次占用后的确切代次。 */
+  function openWorkspaceFill(): void {
+    const editor = renderedEditor;
+    if (!editor || !workspaceCheckedCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (findRef.current) closeFind(findRef.current);
+    editor.inputOpen(true);
+    try {
+      const plan = drafts.planCheckedFill(editor);
+      const ticket: FillInputTicket = { mode: 'workspace', id: uid(), editor, plan, valid: true, attached: false };
+      fillRef.current = ticket;
+      setFillOpen(ticket);
+      setValidation('');
+    } catch (reason) {
+      editor.inputOpen(false);
+      setValidation(errorMessage(reason));
+    }
+  }
   /** 只允许本票据唯一模态及原快照，失活／忙态／配置ABA留下永久墓碑。 */
   function fillCurrent(ticket: FillInputTicket): boolean {
     if (fillRef.current !== ticket || !ticket.valid) return false;
@@ -1043,7 +1064,9 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       const workspace = useWorkspace.getState(), dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
       const markers = dialogs.length === 1 ? dialogs[0].querySelectorAll('[data-sqlite-fill-owner]') : [];
       const own = dialogs.length === 0 ? !ticket.attached : dialogs.length === 1 && markers.length === 1 && markers[0].getAttribute('data-sqlite-fill-owner') === ticket.id;
-      if (own && editorRef.current === ticket.editor && ticket.editor.page === ticket.source.page && sqliteFillSourceCurrent(ticket.source, ticket.editor.page, ticket.editor.view.rows) && ticket.editor.canEdit() && latest.current.active && workspace.settings.activeTabId === tab.id && !workspace.activeJobs[tab.id] && !inputRef.current && !previewRef.current && !pasteRef.current && !rangeRef.current && !importRef.current && !fullExportRef.current && !exportData && !findRef.current?.preview) {
+      const sourceCurrent = () => ticket.mode === 'workspace' ? ticket.plan.current()
+        : ticket.editor.page === ticket.source.page && sqliteFillSourceCurrent(ticket.source, ticket.editor.page, ticket.editor.view.rows);
+      if (own && editorRef.current === ticket.editor && sourceCurrent() && ticket.editor.canEdit() && latest.current.active && workspace.settings.activeTabId === tab.id && !workspace.activeJobs[tab.id] && !inputRef.current && !previewRef.current && !pasteRef.current && !rangeRef.current && !importRef.current && !fullExportRef.current && !exportData && !findRef.current?.preview) {
         if (dialogs.length) ticket.attached = true;
         return true;
       }
@@ -1052,8 +1075,9 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   }
   /** 同步整批暂存仍由原editor验预算；输入成功不调用预览、提交或任何数据库接口。 */
   function stageFill(ticket: FillInputTicket, fields: readonly SqliteFillField[]): boolean {
-    if (ticket.mode !== 'fill' || !fillCurrent(ticket) || !ticket.attached) return false;
-    const changed = ticket.editor.fillRows(ticket.source.selected.map(row => row.id), fields);
+    if (ticket.mode === 'records' || !fillCurrent(ticket) || !ticket.attached) return false;
+    const changed = ticket.mode === 'workspace' ? ticket.plan.stage(fields)
+      : ticket.editor.fillRows(ticket.source.selected.map(row => row.id), fields);
     if (fillRef.current === ticket && editorRef.current === ticket.editor) {
       closeFill(ticket);
       if (checkedRef.current?.editor === ticket.editor) { checkedRef.current = undefined; setCheckedRows(undefined); }
@@ -1398,8 +1422,10 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
             onClick={() => discardRetainedPage(editor)}>{workspaceText.discardPageShort}</button>
         </span>;
       })}
-      {drafts.pages.some(editor => editor !== renderedEditor && drafts.checkedIds(editor)?.size) &&
-        <button type="button" disabled={!renderedEditor || editBlocked || !!previewOpen || view.busy} onClick={removeWorkspaceCheckedRows}>{workspaceText.deleteChecked}</button>}
+      {drafts.pages.some(editor => editor !== renderedEditor && drafts.checkedIds(editor)?.size) && <>
+        <button type="button" disabled={!renderedEditor || editBlocked || !!previewOpen || view.busy} onClick={openWorkspaceFill}>{workspaceText.fillChecked}</button>
+        <button type="button" disabled={!renderedEditor || editBlocked || !!previewOpen || view.busy} onClick={removeWorkspaceCheckedRows}>{workspaceText.deleteChecked}</button>
+      </>}
     </section>}
     <div className="tab-status"><button aria-label={text.first} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(0)}>{text.first}</button><button aria-label={text.previous} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(Math.max(0, page!.offset - page!.limit))}>{text.previous}</button><button aria-label={text.next} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page?.hasMore || externalBusy || page.offset + page.limit > sqliteTableBrowseLimits.offset} onClick={() => navigatePage(page!.offset + page!.limit)}>{text.next}</button>
       <button aria-label={text.last} title={text.lastHint} disabled={restoredDraftView || drafts.unknown || drafts.busy || !page || !active || invalidTarget || view.busy || externalBusy} onClick={() => navigatePage('last')}>{text.last}</button>
@@ -1434,7 +1460,12 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {filteredSelectOpen && <SqliteFilteredSelectDialog intent={filteredSelectOpen.intent} ownerId={filteredSelectOpen.id} onOpen={plan => openFilteredSelectQuery(filteredSelectOpen, plan)} onClose={() => closeFilteredSelect(filteredSelectOpen)}/>}
     {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease} target={{ connectionId: tab.connectionId, database: 'main', table: tab.table ?? '' }} dialect="sqlite" columns={templateDialog.columns} candidate={templateDialog.candidate} onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog)}/>}
     {fillOpen?.mode === 'records' && <SqliteRecordBatchDialog key={fillOpen.id} ticket={fillOpen} ownerId={fillOpen.id} source={fillOpen.source} current={() => fillCurrent(fillOpen)} onSave={patches => stageRecordBatch(fillOpen, patches)} onClose={() => closeFill(fillOpen)}/>}
-    {fillOpen && fillOpen.mode !== 'records' && <SqliteTableFillDialog key={fillOpen.id} ticket={fillOpen} ownerId={fillOpen.id} page={fillOpen.source.page} count={fillOpen.source.selected.length} allNew={fillOpen.source.allNew} current={() => fillCurrent(fillOpen)} onSave={fields => stageFill(fillOpen, fields)} onClose={() => closeFill(fillOpen)}/>}
+    {fillOpen && fillOpen.mode !== 'records' && <SqliteTableFillDialog key={fillOpen.id} ticket={fillOpen} ownerId={fillOpen.id}
+      page={fillOpen.mode === 'workspace' ? fillOpen.plan.page : fillOpen.source.page}
+      count={fillOpen.mode === 'workspace' ? fillOpen.plan.count : fillOpen.source.selected.length}
+      allNew={fillOpen.mode === 'workspace' ? fillOpen.plan.allNew : fillOpen.source.allNew}
+      groups={fillOpen.mode === 'workspace' ? fillOpen.plan.pages : undefined}
+      current={() => fillCurrent(fillOpen)} onSave={fields => stageFill(fillOpen, fields)} onClose={() => closeFill(fillOpen)}/>}
     {cellInput && <SqliteTableValueDialog key={cellInput.id} ticket={cellInput} page={cellInput.page} row={cellInput.row} column={cellInput.column} duplicate={!!cellInput.duplicate} duplicateOwner={cellInput.duplicate ? cellInput.id : undefined}
       navigation={cellInput.column === undefined && !cellInput.duplicate && cellInput.row.index !== undefined ? {
         ownerId: cellInput.id, previous: !!adjacentRecord(cellInput, -1) || sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, -1) !== undefined, next: !!adjacentRecord(cellInput, 1) || sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, 1) !== undefined,

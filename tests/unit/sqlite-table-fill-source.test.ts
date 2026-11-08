@@ -19,6 +19,15 @@ describe('SQLite多字段填充来源能力', () => {
     const f = fixture(), source = prepareSqliteFill(f.page, f.rows, [f.rows[2], f.rows[0]]);
     expect(source.selected).toEqual([f.rows[0], f.rows[2]]); expect(source.selected[0]).toBe(f.rows[0]); expect(source.rows).toBe(f.rows); expect(source.page).toBe(f.page); expect(source.columns).toEqual([0, 1, 2, 3, 4]); expect(source.allNew).toBe(false); expect(Object.isFrozen(source)).toBe(true); expect(Object.isFrozen(source.selected)).toBe(true); expect(Object.isFrozen(source.columns)).toBe(true); expect(Object.isFrozen(f.rows)).toBe(false); expect(sqliteFillSourceCurrent(source, f.page, f.rows)).toBe(true); expect(sqliteFillSourceCurrent({ ...source }, f.page, f.rows)).toBe(false);
   });
+  it('接纳原生主键标记并把它纳入来源签名', () => {
+    const f = fixture(), edit = f.page.edit;
+    if (edit?.kind !== 'editable') throw Error('缺少编辑原页');
+    edit.columns[0].primary = true;
+    const source = f.source();
+    expect(sqliteFillSourceCurrent(source, f.page, f.rows)).toBe(true);
+    delete edit.columns[0].primary;
+    expect(sqliteFillSourceCurrent(source, f.page, f.rows)).toBe(false);
+  });
   it('全新增才allNew，原DEFAULT槽／大原文／非有限REAL不改成NULL或有限新值', () => {
     const f = fixture(); const added: SqliteDraftRow = { id: 'new', deleted: false, values: f.rows[0].values.map(() => undefined) }; f.rows.push(added); const only = prepareSqliteFill(f.page, f.rows, [added]); expect(only.allNew).toBe(true); expect(prepareSqliteFill(f.page, f.rows, [added, f.rows[0]]).allNew).toBe(false);
     f.rows[0].values[4] = { kind: 'text', value: 'x'.repeat(65537) }; const source = f.source(); expect(sqliteFillSourceCurrent(source, f.page, f.rows)).toBe(true); expect(f.rows[0].values[3]).toEqual({ kind: 'real', value: 'Infinity' }); expect(added.values).toEqual(Array(6).fill(undefined));

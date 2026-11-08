@@ -103,3 +103,70 @@ it('有效原页的勾选受缓存保护，修改原行后不迁移到新草稿�
   first.undo();
   expect(f.workspace.checkedIds(first)).toBeUndefined();
 });
+
+it('跨页填充在相同本地行号的两个快照分别更新，保留勾选并逐页撤销', async () => {
+  const { workspace, make, preview } = fixture(), first = make(0);
+  workspace.rememberChecks(first, first.view.rows, first.view.rows);
+  const second = make(1);
+  workspace.rememberChecks(second, second.view.rows, second.view.rows);
+  second.inputOpen(true);
+  const plan = workspace.planCheckedFill(second);
+  expect(plan.pages).toEqual([{ index: 1, count: 1 }, { index: 2, count: 1 }]);
+  expect(plan.allNew).toBe(false);
+  expect(() => plan.stage([{ column: 0, value: undefined }])).toThrow();
+  expect(workspace.changes).toBe(0);
+  const value = { kind: 'integer' as const, value: '9007199254740993' };
+  expect(plan.stage([{ column: 0, value }])).toBe(2);
+  expect(first.view.rows[0].values[0]).toEqual(value);
+  expect(second.view.rows[0].values[0]).toEqual(value);
+  expect(workspace.checkedIds(first)).toEqual(new Set(['original-0']));
+  expect(workspace.checkedIds(second)).toEqual(new Set(['original-0']));
+  expect(() => plan.stage([{ column: 0, value }])).toThrow();
+  expect(workspace.planCheckedFill(second).stage([{ column: 0, value }])).toBe(0);
+  workspace.select(first);
+  first.undo();
+  expect(first.view.rows[0].values[0]).toEqual({ kind: 'text', value: '原0' });
+  expect(second.view.rows[0].values[0]).toEqual(value);
+  first.redo();
+  await first.preview();
+  expect(preview).toHaveBeenCalledExactlyOnceWith({
+    taskId: expect.any(String), snapshotId: 's0', changes: [{ kind: 'update', row: 0, values: [{ column: 'note', value }] }],
+    additionalPages: [{ snapshotId: 's1', changes: [{ kind: 'update', row: 0, values: [{ column: 'note', value }] }] }],
+  });
+});
+
+it('只有后台有勾选时可填充，勾选变化或往返切页后旧意图失效', () => {
+  const { workspace, make } = fixture(), first = make(0);
+  const original = first.view.rows;
+  workspace.rememberChecks(first, original, original);
+  const second = make(1);
+  const plan = workspace.planCheckedFill(second);
+  const fill = [{ column: 0, value: { kind: 'text' as const, value: '统一值' } }];
+  expect(plan.pages).toEqual([{ index: 1, count: 1 }]);
+  workspace.select(first);
+  workspace.select(second);
+  expect(plan.current()).toBe(false);
+  expect(() => plan.stage(fill)).toThrow();
+  expect(first.view.rows).toBe(original);
+  const current = workspace.planCheckedFill(second);
+  expect(current.stage(fill)).toBe(1);
+  expect(second.view.undo).toBe(false);
+  expect(first.view.undo).toBe(true);
+});
+
+it('跨页填充合计变化超限时保持所有行及历史', () => {
+  const { workspace, make } = fixture(), first = make(0);
+  const values = Array.from({ length: 250 }, () => [{ kind: 'text' as const, value: '已有草稿' }]);
+  first.appendRows(values);
+  const left = first.view.rows;
+  workspace.rememberChecks(first, left, [left[0]]);
+  const second = make(1);
+  second.appendRows(values);
+  const right = second.view.rows;
+  workspace.rememberChecks(second, right, [right[0]]);
+  const plan = workspace.planCheckedFill(second);
+  expect(() => plan.stage([{ column: 0, value: { kind: 'text', value: '超限' } }])).toThrow();
+  expect(first.view.rows).toBe(left);
+  expect(second.view.rows).toBe(right);
+  expect(workspace.changes).toBe(500);
+});

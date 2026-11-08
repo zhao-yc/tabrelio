@@ -31,7 +31,12 @@ function metadata(page: SqliteTablePage): { edit: Extract<NonNullable<SqliteTabl
   const source = data(page, 16), edit = data(source.edit, 8), target = data(source.target, 4);
   if (edit.kind !== 'editable' || target.database !== 'main' || target.kind !== 'table' || typeof edit.snapshotId !== 'string' || !edit.snapshotId || typeof edit.expiresAt !== 'string' || !Number.isFinite(Date.parse(edit.expiresAt)) || typeof source.schemaKey !== 'string') throw Error(text.invalid);
   const columns = array(source.columns, sqliteFillSourceLimits.columns), editColumns = array(edit.columns, sqliteFillSourceLimits.columns); if (!columns.length || columns.length !== editColumns.length) throw Error(text.invalid);
-  for (let i = 0; i < columns.length; i++) { const column = data(columns[i], 3), actual = data(editColumns[i], 5); if (typeof column.name !== 'string' || !column.name || column.name.length > 512 || !unicode(column.name) || column.name.includes('\0') || column.name !== actual.name || !!column.generated !== actual.generated) throw Error(text.invalid); }
+  for (let i = 0; i < columns.length; i++) {
+    // 编辑快照可额外标记主键，签名必须保留这个原生目录字段。
+    const column = data(columns[i], 3), actual = data(editColumns[i], 6);
+    if (typeof column.name !== 'string' || !column.name || column.name.length > 512 || !unicode(column.name) || column.name.includes('\0') ||
+      column.name !== actual.name || !!column.generated !== actual.generated || Object.hasOwn(actual, 'primary') && actual.primary !== true) throw Error(text.invalid);
+  }
   let nodes = 0, bytes = 0;
   /** 元数据也须有界且无访问器，避免JSON.stringify调用toJSON或复制巨量字段。 */
   const copy = (value: unknown, depth: number): unknown => {
@@ -71,10 +76,11 @@ function sameCell(raw: unknown, before: SqliteOriginalValue | undefined): boolea
   const value = Object.getOwnPropertyDescriptor(raw, 'value'); return !!value?.enumerable && 'value' in value && value.value === before.value;
 }
 /** 勾选来源按展示顺序签发，不冻结真实rows；私有副本只保存有界typed primitive与原物理引用。 */
-export function prepareSqliteFill(page: SqliteTablePage, rows: readonly SqliteDraftRow[], selected: readonly SqliteDraftRow[]): SqliteFillSource {
+export function prepareSqliteFill(page: SqliteTablePage, rows: readonly SqliteDraftRow[], selected: readonly SqliteDraftRow[], budget = { bytes: 0 }): SqliteFillSource {
   const info = metadata(page), all = array(rows, sqliteFillSourceLimits.rows), requested = array(selected, sqliteFillSourceLimits.rows), baseline = array(info.edit.rows, 1000);
   if (!requested.length) throw Error(text.invalid); const requestedSet = new Set(requested); if (requestedSet.size !== requested.length || requested.some(item => !all.includes(item))) throw Error(text.invalid);
-  let bytes = encoder.encode(info.signature).byteLength; const account = (size: number) => { bytes += size; if (bytes > sqliteFillSourceLimits.bytes) throw Error(text.invalid); };
+  const account = (size: number) => { budget.bytes += size; if (budget.bytes > sqliteFillSourceLimits.bytes) throw Error(text.invalid); };
+  account(encoder.encode(info.signature).byteLength);
   const owners = all.map(item => row(item, info.columns.length, baseline.length, account));
   if (new Set(owners.map(item => item.id)).size !== owners.length || owners.some(item => requestedSet.has(item.row) && item.deleted)) throw Error(text.invalid);
   const originals = new Map<number, RowOwner>();
