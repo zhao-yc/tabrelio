@@ -3,7 +3,8 @@ import { sqliteTableEditLimits, sqliteTableEditPreviewSchema, type SqliteTableEd
 import type { SqliteTableQuery } from './sqliteTableBrowser';
 import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
 import { prepareSqliteDuplicate, sqliteDuplicateSourceCurrent } from './sqliteTableDuplicate';
-import { prepareSqliteFill, sqliteFillSourceCurrent, sqliteFillSourceLimits, type SqliteFillField } from './sqliteTableFill';
+import { prepareSqliteFill, sqliteFillSourceCurrent, sqliteFillSourceLimits, type SqliteFillSource, type SqliteFillField } from './sqliteTableFill';
+import { readSqliteRecordPatches, sqliteWorkspaceRecordKey, type SqliteRecordPatch } from './sqliteRecordBatch';
 import { sqliteEditWorkspaceZh as text } from './locales/sqliteEditWorkspace.zh-CN';
 export interface SqliteEditBatch { input: Omit<SqliteTableEditPreviewInput, 'taskId'>; current(): boolean; }
 export interface SqliteWorkspaceFill {
@@ -13,6 +14,12 @@ export interface SqliteWorkspaceFill {
   readonly allNew: boolean;
   current(): boolean;
   stage(fields: readonly SqliteFillField[]): number;
+}
+export interface SqliteWorkspaceRecordEdit {
+  readonly sources: readonly SqliteFillSource[];
+  readonly pages: SqliteWorkspaceFill['pages'];
+  current(): boolean;
+  stage(patches: readonly SqliteRecordPatch[]): number;
 }
 interface PageChecks { revision: object; ids: ReadonlySet<string>; }
 interface Entry { editor: SqliteTableEditor; page: SqliteTablePage; key: string; signature: string; checks?: PageChecks; }
@@ -182,10 +189,10 @@ export class SqliteEditWorkspace {
       },
     };
   }
-  /** 捕获各页完整值并冻结输入范围，只有所有页和合计预算通过后才更新各页历史。 */
-  planCheckedFill(actor: SqliteTableEditor): SqliteWorkspaceFill {
+  /** 两种批量输入共用原页取证、合计原值预算及失效标记。 */
+  private captureCheckedInput(actor: SqliteTableEditor, none: string) {
     const captured = this.captureChecked(actor, true);
-    if (!captured.targets.some(item => item.editor !== actor)) throw Error(text.fillNone);
+    if (!captured.targets.some(item => item.editor !== actor)) throw Error(none);
     const count = captured.pages.reduce((sum, group) => sum + group.count, 0);
     if (count > sqliteFillSourceLimits.rows) throw Error(text.fillLimit);
     const sourceBudget = { bytes: 0 };
@@ -204,6 +211,12 @@ export class SqliteEditWorkspace {
       }
       return true;
     };
+    return { ...captured, targets, current, count, consume: () => { stopped = true; } };
+  }
+  /** 捕获各页完整值并冻结输入范围，只有所有页和合计预算通过后才更新各页历史。 */
+  planCheckedFill(actor: SqliteTableEditor): SqliteWorkspaceFill {
+    const captured = this.captureCheckedInput(actor, text.fillNone);
+    const { targets, current, count } = captured;
     return {
       page: actor.page, pages: captured.pages, count, allNew: targets.every(item => item.source.allNew), current,
       stage: fields => {
@@ -217,7 +230,7 @@ export class SqliteEditWorkspace {
         this.validateCheckedChanges(captured.source.map(item => item.editor), new Map(plans.map(({ editor, plan }) => [editor, plan.changes])));
         for (const { plan } of plans) plan.check();
         if (!current()) throw Error(text.stale);
-        stopped = true;
+        captured.consume();
         for (const { entry, editor, plan, ids } of plans) {
           plan.stage();
           // 填充保留原行身份，只有此处经过整组复核后可将勾选绑定到新代次。
@@ -225,6 +238,54 @@ export class SqliteEditWorkspace {
         }
         for (const { plan } of plans) plan.publish();
         return plans.reduce((sum, item) => sum + item.plan.count, 0);
+      },
+    };
+  }
+  /** 将窗口内跨页行标识转回各自原页的行标识，再通过同一提交合同整体校验。 */
+  planCheckedRecordEdit(actor: SqliteTableEditor): SqliteWorkspaceRecordEdit {
+    const captured = this.captureCheckedInput(actor, text.recordEditNone);
+    const keys = new Set<string>();
+    const members = new Map<string, { index: number; rowId: string }>();
+    for (const [index, item] of captured.targets.entries()) {
+      const edit = item.entry.page.edit;
+      for (const row of item.source.selected) {
+        if (row.index !== undefined) {
+          const key = edit?.kind === 'editable' ? edit.copy?.rowKeys[row.index] : undefined;
+          if (!key) throw Error(text.stale);
+          if (keys.has(key)) throw Error(text.recordEditOverlap);
+          keys.add(key);
+        }
+        members.set(sqliteWorkspaceRecordKey(item.entry.page, row.id), { index, rowId: row.id });
+      }
+    }
+    return {
+      sources: captured.targets.map(item => item.source), pages: captured.pages, current: captured.current,
+      stage: patches => {
+        if (!captured.current() || !actor.canEdit()) throw Error(text.stale);
+        const byPage = captured.targets.map((): SqliteRecordPatch[] => []);
+        const seen = new Set<string>();
+        for (const { rowId, fields } of readSqliteRecordPatches(patches)) {
+          const owner = members.get(rowId);
+          if (!owner || seen.has(rowId)) throw Error(text.stale);
+          seen.add(rowId);
+          byPage[owner.index].push({ rowId: owner.rowId, fields });
+        }
+        const budget = { cells: 0, units: 0 };
+        const plans = captured.targets.flatMap((item, index) => {
+          if (!byPage[index].length) return [];
+          const plan = item.editor.prepareEditRecords(item.source, byPage[index], budget);
+          return plan ? [{ ...item, plan }] : [];
+        });
+        this.validateCheckedChanges(captured.source.map(item => item.editor), new Map(plans.map(({ editor, plan }) => [editor, plan.changes])));
+        for (const { plan } of plans) plan.check();
+        if (!captured.current()) throw Error(text.stale);
+        captured.consume();
+        for (const { entry, editor, ids, plan } of plans) {
+          plan.stage();
+          entry.checks = { revision: editor.rowsRevision, ids };
+        }
+        for (const { plan } of plans) plan.publish();
+        return plans.reduce((count, { plan }) => count + plan.count, 0);
       },
     };
   }

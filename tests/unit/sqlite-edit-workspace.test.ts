@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { SqliteEditWorkspace } from '../../src/renderer/sqliteEditWorkspace';
+import { SqliteRecordBatch } from '../../src/renderer/sqliteRecordBatch';
 import { SqliteTableEditor } from '../../src/renderer/sqliteTableEditor';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
 import type { SqliteTableEditOutcome, SqliteTableEditPreview, SqliteTableEditPreviewInput } from '../../src/shared/sqliteTableEdit';
@@ -219,4 +220,57 @@ it('跨页复制拒绝原定位重叠、本地新增和确认期间原值变化'
     expect(left.view.rows).toBe(first);
     expect(right.view.rows).toBe(second);
   }
+});
+
+it('跨页逐条编辑区分页内同号记录，非法后页值不发布前页草稿，修正后分组预览', async () => {
+  const { workspace, make, preview } = fixture(), first = make(0);
+  const left = first.view.rows;
+  workspace.rememberChecks(first, left, left);
+  const second = make(1), right = second.view.rows;
+  workspace.rememberChecks(second, right, right);
+  second.inputOpen(true);
+  const plan = workspace.planCheckedRecordEdit(second), session = new SqliteRecordBatch(plan.sources);
+  const firstValue = { kind: 'text' as const, value: '第一页' }, secondValue = { kind: 'text' as const, value: '第二页' };
+  expect(session.page(0)).toBe(first.page);
+  expect(session.page(1)).toBe(second.page);
+  session.keep(0, [firstValue]);
+  const patches = session.patches(1, [secondValue]);
+  expect(patches.map(patch => patch.rowId)).toEqual(['0:original-0', '1:original-0']);
+  expect(() => plan.stage([patches[0], { ...patches[1], fields: [{ column: 1, value: secondValue }] }])).toThrow();
+  expect(first.view.rows).toBe(left);
+  expect(second.view.rows).toBe(right);
+  expect(first.view.undo).toBe(false);
+  expect(second.view.undo).toBe(false);
+  expect(plan.stage(patches)).toBe(2);
+  expect(plan.current()).toBe(false);
+  expect(workspace.checkedIds(first)).toEqual(new Set(['original-0']));
+  expect(workspace.checkedIds(second)).toEqual(new Set(['original-0']));
+  second.inputOpen(false);
+  workspace.select(first);
+  first.undo();
+  expect(first.view.rows).toBe(left);
+  expect(second.view.rows[0].values[0]).toEqual(secondValue);
+  first.redo();
+  await first.preview();
+  expect(preview).toHaveBeenCalledExactlyOnceWith({
+    taskId: expect.any(String), snapshotId: 's0', changes: [{ kind: 'update', row: 0, values: [{ column: 'note', value: firstValue }] }],
+    additionalPages: [{ snapshotId: 's1', changes: [{ kind: 'update', row: 0, values: [{ column: 'note', value: secondValue }] }] }],
+  });
+});
+
+it('跨页逐条编辑拒绝重复原定位，只有后台页勾选时仍可编辑', () => {
+  const { workspace, make } = fixture(), first = make(0);
+  const left = first.view.rows;
+  workspace.rememberChecks(first, left, left);
+  const second = make(1, undefined, 0), right = second.view.rows;
+  workspace.rememberChecks(second, right, right);
+  expect(() => workspace.planCheckedRecordEdit(second)).toThrow(text.recordEditOverlap);
+  expect(first.view.rows).toBe(left);
+  expect(second.view.rows).toBe(right);
+  workspace.rememberChecks(second, right, []);
+  const plan = workspace.planCheckedRecordEdit(second);
+  const session = new SqliteRecordBatch(plan.sources);
+  expect(plan.pages).toEqual([{ index: 1, count: 1 }]);
+  expect(plan.stage(session.patches(0, [{ kind: 'text', value: '只改后台勾选' }]))).toBe(1);
+  expect(second.view.rows).toBe(right);
 });

@@ -1,6 +1,8 @@
 /** 多条记录分别保留输入，只有明确暂存整组才进入原Editor；不将窗口导航当数据库提交。 */
 export const sqliteRecordBatchZh = {
   entry: '批量编辑 SQLite 勾选记录…', title: '批量编辑 SQLite 勾选记录',
+  workspaceHint: '跨页逐条编辑只在窗口保留输入，整批暂存后可逐页撤销，再统一预览并提交。',
+  sourcePage: (page: number) => `当前记录来自第 ${page} 页`,
   position: (position: number, count: number) => `第 ${position} / ${count} 条勾选记录`,
   hint: '只编辑当前页已勾选的记录，可逐条填写不同值。切换仅保留窗口内输入；“暂存全部”一次性生成可撤销草稿，取消则整组不变，最终仍须预览并明确提交。',
   previous: '上一条勾选记录', next: '下一条勾选记录',
