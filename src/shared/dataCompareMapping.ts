@@ -27,3 +27,8 @@ export function mappedColumns<Column extends { name: string }>(columns: Column[]
     return column;
   });
 }
+
+/** 左右互换时保持字段对顺序与联合键标记。 */
+export function reverseDataCompareMapping(mapping: DataCompareMapping): DataCompareMapping {
+  return mapping.map(({ source, target, key }) => ({ source: target, target: source, key }));
+}

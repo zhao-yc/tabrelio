@@ -1,11 +1,17 @@
 import { z } from 'zod';
-import { tableDataCompareRequestSchema } from './postgresDataCompare';
+import { dataCompareMappingSchema, reverseDataCompareMapping, type DataCompareMapping } from './dataCompareMapping';
+import { tableDataCompareRequestSchema, type PostgresDataCompareEndpoint } from './postgresDataCompare';
 import { sqliteDataCompareSchema } from './sqliteDataCompare';
 
 const network = tableDataCompareRequestSchema.shape.source;
 const sqlite = sqliteDataCompareSchema.shape.source;
 export const batchPairLimit = 32;
-export type ComparePair = { source: string; target: string };
+export type ComparePair = { source: string; target: string; mapping?: DataCompareMapping };
+export type ComparePairEndpoints = {
+  source: PostgresDataCompareEndpoint;
+  target: PostgresDataCompareEndpoint;
+  mapping?: DataCompareMapping;
+};
 export type CompareScope = Omit<z.infer<typeof network>, 'table'>;
 const networkScope = network.omit({ table: true });
 const sqliteScope = sqlite.omit({ table: true });
@@ -18,11 +24,11 @@ export function sameCompareScope(source: CompareScope, target: CompareScope): bo
 export const dataCompareBatchConfigurationSchema = z.discriminatedUnion('family', [
   z.object({
     family: z.enum(['mysql', 'postgresql']), source: networkScope, target: networkScope,
-    pairs: z.array(z.object({ source: network.shape.table, target: network.shape.table }).strict()).min(1).max(batchPairLimit),
+    pairs: z.array(z.object({ source: network.shape.table, target: network.shape.table, mapping: dataCompareMappingSchema.optional() }).strict()).min(1).max(batchPairLimit),
   }).strict(),
   z.object({
     family: z.literal('sqlite'), source: sqliteScope, target: sqliteScope,
-    pairs: z.array(z.object({ source: sqlite.shape.table, target: sqlite.shape.table }).strict()).min(1).max(batchPairLimit),
+    pairs: z.array(z.object({ source: sqlite.shape.table, target: sqlite.shape.table, mapping: dataCompareMappingSchema.optional() }).strict()).min(1).max(batchPairLimit),
   }).strict(),
 ]).refine(({ source, target, pairs }) =>
   new Set(pairs.map(pair => pair.source)).size === pairs.length &&
@@ -30,3 +36,7 @@ export const dataCompareBatchConfigurationSchema = z.discriminatedUnion('family'
   (!sameCompareScope(source, target) || pairs.every(pair => pair.source !== pair.target)),
 '比较方案含重复映射或将表与自身比较');
 export type DataCompareBatchConfiguration = z.infer<typeof dataCompareBatchConfigurationSchema>;
+
+export function reverseComparePair(pair: ComparePair): ComparePair {
+  return { source: pair.target, target: pair.source, ...(pair.mapping ? { mapping: reverseDataCompareMapping(pair.mapping) } : {}) };
+}

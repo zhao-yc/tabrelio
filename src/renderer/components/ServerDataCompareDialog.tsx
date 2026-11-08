@@ -10,7 +10,7 @@ import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '.
 import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
 import { DataCompareProfiles } from './DataCompareProfiles';
 import { DataCompareMapping } from './DataCompareMapping';
-import { type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
+import { reverseDataCompareMapping, type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
 import { dataCompareMappingZh as mappingText } from '../locales/dataCompareMapping.zh-CN';
 import { DataCompareBatchDialog } from './DataCompareBatchDialog';
 import { dataCompareBatchZh as batchText } from '../locales/dataCompareBatch.zh-CN';
@@ -83,12 +83,12 @@ function keyLabel(row: PostgresDataCompareRow, dialect: Dialect) {
   return label.length <= 200 ? label : label.slice(0, 200) + '…';
 }
 
-export function ServerDataCompareDialog({ connections, onClose, initialPair, dialect }: { connections: readonly Connection[]; onClose(): void; dialect: Dialect; initialPair?: { source: Endpoint; target: Endpoint } }) {
+export function ServerDataCompareDialog({ connections, onClose, initialPair, dialect }: { connections: readonly Connection[]; onClose(): void; dialect: Dialect; initialPair?: { source: Endpoint; target: Endpoint; mapping?: Mapping } }) {
   const text = compareLabels[dialect], postgres = dialect === 'postgres';
   const initial = { connectionId: connections.length === 1 ? connections[0].id : '', database: '', table: '' };
   const [source, setSource] = useState<Endpoint>(initialPair?.source ?? initial), [target, setTarget] = useState<Endpoint>(initialPair?.target ?? initial);
   const [batch, setBatch] = useState(false);
-  const [mapping, setMapping] = useState<Mapping>([]);
+  const [mapping, setMapping] = useState<Mapping>(initialPair?.mapping ?? []);
   const [filter, setFilter] = useState({ column: '', text: '' });
   const [report, setReport] = useState<PostgresDataCompareOutput>(), [error, setError] = useState('');
   const [kind, setKind] = useState<PostgresDataCompareKind | 'all'>('all'), [page, setPage] = useState(0);
@@ -137,7 +137,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
   function swap() {
     if (!canConfigure() || !ready) return;
     setSource(target); setTarget(source);
-    setMapping(mapping.map(item => ({ source: item.target, target: item.source, key: item.key })));
+    setMapping(reverseDataCompareMapping(mapping));
     clear();
   }
 
@@ -185,7 +185,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
   const locked = busy || syncBusy || !!preview;
   const keyTitle = mapping.length ? mappingText.keyLabel : text.key;
   const close = () => { if (!task.current && !syncing.current) onClose(); };
-  if (batch) return <DataCompareBatchDialog family={family} initial={{ source, target }} connections={connections} onClose={() => setBatch(false)}
+  if (batch) return <DataCompareBatchDialog family={family} initial={{ source, target, ...(mapping.length ? { mapping } : {}) }} connections={connections} onClose={() => setBatch(false)}
     renderPair={(pair, back) => <ServerDataCompareDialog dialect={dialect} connections={connections} onClose={back} initialPair={pair}/>}/>;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">

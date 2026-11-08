@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { DataCompareProfileFamily } from '../../shared/dataCompareProfiles';
-import type { PostgresDataCompareEndpoint, PostgresDataCompareOutput } from '../../shared/postgresDataCompare';
-import { batchPairLimit, dataCompareBatchConfigurationSchema, sameCompareScope, type ComparePair, type CompareScope,
+import type { PostgresDataCompareOutput } from '../../shared/postgresDataCompare';
+import { batchPairLimit, dataCompareBatchConfigurationSchema, reverseComparePair, sameCompareScope, type ComparePair, type ComparePairEndpoints, type CompareScope,
   type DataCompareBatchConfiguration } from '../../shared/dataCompareBatch';
 import { suggestComparePairs } from '../dataCompareBatch';
+import { mappedColumns, type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
+import { readDataCompareFields } from '../dataCompareFields';
+import { DataCompareMapping } from './DataCompareMapping';
 import { errorMessage, invoke, uid } from '../lib';
 import { dataCompareBatchZh as text } from '../locales/dataCompareBatch.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
 import { DataCompareProfiles } from './DataCompareProfiles';
 import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
 
-type Endpoints = { source: PostgresDataCompareEndpoint; target: PostgresDataCompareEndpoint };
 type Scopes = { source: CompareScope; target: CompareScope };
 type Catalogue = [string[], string[]];
 type Result = { counts: PostgresDataCompareOutput['counts']; equal: number } | { error: string };
@@ -28,33 +30,40 @@ async function readCatalogues(family: DataCompareProfileFamily, source: CompareS
   return [left, sameCompareScope(source, target) ? left : await catalogue(family, target)];
 }
 
-function compare(family: DataCompareProfileFamily, source: PostgresDataCompareEndpoint, target: PostgresDataCompareEndpoint, taskId: string) {
+function endpoints(scopes: Scopes, pair: ComparePair): ComparePairEndpoints {
+  return { source: { ...scopes.source, table: pair.source }, target: { ...scopes.target, table: pair.target },
+    ...(pair.mapping ? { mapping: pair.mapping } : {}) };
+}
+
+function compare(family: DataCompareProfileFamily, { source, target, mapping }: ComparePairEndpoints, taskId: string) {
   if (family === 'sqlite') {
     return invoke('sqlite.compareData', {
       source: { ...source, database: 'main' }, target: { ...target, database: 'main' }, taskId,
-      summaryOnly: true, mode: 'and', filters: [],
+      summaryOnly: true, mode: 'and', filters: [], mapping,
     });
   }
-  return invoke(family === 'postgresql' ? 'postgres.compareData' : 'mysql.compareData', { source, target, taskId, summaryOnly: true });
+  return invoke(family === 'postgresql' ? 'postgres.compareData' : 'mysql.compareData', { source, target, taskId, summaryOnly: true, mapping });
 }
 
 export function DataCompareBatchDialog({ family, initial, connections, onClose, renderPair }: {
   family: DataCompareProfileFamily;
-  initial: Endpoints;
+  initial: ComparePairEndpoints;
   connections: readonly { id: string; name: string }[];
   onClose(): void;
-  renderPair(pair: Endpoints, back: () => void): ReactNode;
+  renderPair(pair: ComparePairEndpoints, back: () => void): ReactNode;
 }) {
   const { connectionId: leftId, database: leftDb, table: initialSource } = initial.source;
   const { connectionId: rightId, database: rightDb, table: initialTarget } = initial.target;
   const [{ source, target }, setScopes] = useState<Scopes>({
     source: { connectionId: leftId, database: leftDb }, target: { connectionId: rightId, database: rightDb },
   });
+  const initialMapping = initial.mapping;
   const sameScope = sameCompareScope(source, target);
   const hasScope = !!(source.connectionId && source.database && target.connectionId && target.database);
   const [catalogues, setCatalogues] = useState<Catalogue>();
   const [pairs, setPairs] = useState<ComparePair[]>([]);
   const [draft, setDraft] = useState<ComparePair>({ source: '', target: '' });
+  const [editing, setEditing] = useState<string>();
   const [review, setReview] = useState<ComparePair>();
   const [results, setResults] = useState<Map<ComparePair, Result>>(() => new Map());
   const [error, setError] = useState('');
@@ -83,10 +92,10 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
       setCatalogues(result);
       if (result[0].includes(initialSource) && result[1].includes(initialTarget) &&
         (!sameCompareScope(leftScope, rightScope) || initialSource !== initialTarget))
-        setPairs([{ source: initialSource, target: initialTarget }]);
+        setPairs([{ source: initialSource, target: initialTarget, ...(initialMapping ? { mapping: initialMapping } : {}) }]);
     }).catch(reason => { if (current && requestVersion === generation.current) setCatalogueError(errorMessage(reason)); });
     return () => { current = false; };
-  }, [family, leftId, leftDb, rightId, rightDb, initialSource, initialTarget]);
+  }, [family, leftId, leftDb, rightId, rightDb, initialSource, initialTarget, initialMapping]);
 
   const configuration = dataCompareBatchConfigurationSchema.safeParse({ family, source, target, pairs });
   const label = (scope: CompareScope) => {
@@ -97,7 +106,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   function setBatch(scopes: Scopes, mappings: ComparePair[], names: Catalogue) {
     generation.current++;
     setScopes(scopes); setPairs(mappings); setCatalogues(names);
-    setResults(new Map()); setDraft({ source: '', target: '' });
+    setResults(new Map()); setDraft({ source: '', target: '' }); setEditing(undefined);
     setCatalogueError(''); setError(''); setNotice('');
   }
 
@@ -110,6 +119,18 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
       if (!mounted.current) return false;
       const missing = next.pairs.find(pair => !names[0].includes(pair.source) || !names[1].includes(pair.target));
       if (missing) throw Error(text.missing(missing.source, missing.target));
+      for (const pair of next.pairs) {
+        if (!pair.mapping) continue;
+        const targets = endpoints(next, pair);
+        try {
+          const [left, right] = await Promise.all([
+            readDataCompareFields(family, targets.source), readDataCompareFields(family, targets.target),
+          ]);
+          mappedColumns(left.map(name => ({ name })), pair.mapping, 'source');
+          mappedColumns(right.map(name => ({ name })), pair.mapping, 'target');
+        } catch (reason) { throw Error(text.invalidFields(pair.source, pair.target, errorMessage(reason))); }
+        if (!mounted.current) return false;
+      }
       setBatch({ source: next.source, target: next.target }, next.pairs, names);
       return true;
     } finally { applying.current = false; setLoadingProfile(false); }
@@ -117,7 +138,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
 
   function swap() {
     if (!catalogues || active.current || applying.current) return;
-    const reversed = pairs.map(pair => ({ source: pair.target, target: pair.source }));
+    const reversed = pairs.map(reverseComparePair);
     setBatch({ source: target, target: source }, reversed, [catalogues[1], catalogues[0]]);
   }
 
@@ -133,7 +154,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
 
   /** 每对复用既有只读任务。单对失败保留错误并继续，停止只取消当前任务并阻止后续派发。 */
   async function run() {
-    if (active.current || applying.current || !pairs.length) return;
+    if (active.current || applying.current || !configuration.success) return;
     generation.current++;
     const work: Active = { stopped: false };
     active.current = work;
@@ -144,7 +165,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
         work.taskId = uid();
         let result: Result;
         try {
-          const { counts, equal } = await compare(family, { ...source, table: pair.source }, { ...target, table: pair.target }, work.taskId);
+          const { counts, equal } = await compare(family, endpoints({ source, target }, pair), work.taskId);
           result = { counts, equal };
         } catch (reason) { result = { error: errorMessage(reason) }; }
         if (!work.stopped) setResults(previous => new Map(previous).set(pair, result));
@@ -172,7 +193,14 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     });
   }
 
-  if (review) return renderPair({ source: { ...source, table: review.source }, target: { ...target, table: review.target } },
+  function updateMapping(pair: ComparePair, mapping: Mapping) {
+    if (active.current || applying.current) return;
+    generation.current++;
+    const next: ComparePair = { source: pair.source, target: pair.target, ...(mapping.length ? { mapping } : {}) };
+    setPairs(pairs.map(item => item === pair ? next : item)); forget(pair);
+  }
+
+  if (review) return renderPair(endpoints({ source, target }, review),
     () => { forget(review); setReview(undefined); });
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">
@@ -199,13 +227,33 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
         <thead><tr><th>{text.source}</th><th>{text.target}</th><th>{text.result}</th><th>{text.review}</th></tr></thead>
         <tbody>{pairs.map(pair => {
           const result = results.get(pair);
-          return <tr key={JSON.stringify(pair)}><td>{pair.source}</td><td>{pair.target}</td>
-            <td>{!result ? text.pending : 'error' in result ? <>{text.failed} · {result.error}</> :
-              [text.equal + ' ' + result.equal, text.leftOnly + ' ' + result.counts['source-only'],
-                text.rightOnly + ' ' + result.counts['target-only'], text.different + ' ' + result.counts.different].join(' · ')}</td>
-            <td><button disabled={locked} onClick={() => { generation.current++; setReview(pair); }}>{text.review}</button>
-              <button disabled={locked} onClick={() => { generation.current++; setPairs(pairs.filter(item => item !== pair)); forget(pair); }}>{text.remove}</button></td>
-          </tr>;
+          const isEditing = editing === pair.source;
+          const needsKey = pair.mapping && !pair.mapping.some(item => item.key);
+          const targets = endpoints({ source, target }, pair);
+          return <Fragment key={pair.source}>
+            <tr><td>{pair.source}</td><td>{pair.target}</td>
+              <td>{needsKey ? text.needsKey : !result ? text.pending : 'error' in result ? <>{text.failed} · {result.error}</> :
+                [text.equal + ' ' + result.equal, text.leftOnly + ' ' + result.counts['source-only'],
+                  text.rightOnly + ' ' + result.counts['target-only'], text.different + ' ' + result.counts.different].join(' · ')}</td>
+              <td>
+                <button disabled={locked || needsKey} onClick={() => { generation.current++; setReview(pair); }}>{text.review}</button>
+                <button disabled={locked} aria-expanded={isEditing} onClick={() => { generation.current++; setEditing(isEditing ? undefined : pair.source); }}>
+                  {isEditing ? text.finishFields : pair.mapping ? text.customFields(pair.mapping.length) : text.editFields}
+                </button>
+                <button disabled={locked} onClick={() => {
+                  generation.current++; setPairs(pairs.filter(item => item !== pair)); forget(pair);
+                  if (isEditing) setEditing(undefined);
+                }}>{text.remove}</button>
+              </td>
+            </tr>
+            {isEditing && <tr><td colSpan={4}>
+              <section aria-label={text.fieldEditor(pair.source, pair.target)}>
+                <h3>{text.fieldEditor(pair.source, pair.target)}</h3>
+                <DataCompareMapping inline family={family} source={targets.source} target={targets.target}
+                  mapping={pair.mapping ?? []} disabled={locked} change={mapping => updateMapping(pair, mapping)}/>
+              </section>
+            </td></tr>}
+          </Fragment>;
         })}</tbody>
       </table>}
       {catalogues && !pairs.length && <p>{text.noPairs}</p>}
@@ -214,7 +262,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
       <ErrorBox message={catalogueError || error}/>
     </div>
     <footer className="modal-footer">
-      <button className="primary" disabled={locked || !pairs.length} onClick={() => void run()}>{text.run}</button>
+      <button className="primary" disabled={locked || !configuration.success} onClick={() => void run()}>{text.run}</button>
       {running && <button onClick={stop}>{text.cancel}</button>}
       <span className="grow"/>
       <button disabled={locked || !catalogues} onClick={swap}>{profileText.swap}</button>

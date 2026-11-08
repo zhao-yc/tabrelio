@@ -100,7 +100,10 @@ describe('数据比较方案', () => {
 describe('多表比较方案', () => {
   const scope = { ...sqlite, area: 'batch' } as const;
   const configuration = { ...sqlite, source: { connectionId: 'left', database: 'main' }, target: { connectionId: 'right', database: 'main' },
-    pairs: [{ source: 'ledger', target: 'ledger' }, { source: '旧名', target: '新名' }] };
+    pairs: [{ source: 'ledger', target: 'ledger' }, { source: '旧名', target: '新名', mapping: [
+      { source: '租户', target: '组织', key: true }, { source: '编码', target: '业务编号', key: true },
+      { source: '原值', target: '新值', key: false },
+    ] }] };
   const request = { ...scope, kind: 'add', profile: { name: profile.name, configuration } };
 
   it('独立于同名单表方案，重开后保持表对顺序，换路由及过期修订均拦截', async () => {
@@ -131,6 +134,8 @@ describe('多表比较方案', () => {
         { ...configuration, pairs: [{ source: 'a', target: 'x' }, { source: 'a', target: 'y' }] },
         { ...configuration, pairs: Array.from({ length: 33 }, (_, index) => ({ source: 'a' + index, target: 'b' + index })) },
         { ...configuration, target: configuration.source },
+        { ...configuration, pairs: [{ source: 'a', target: 'x', mapping: [{ source: 'k', target: 'n', key: false }] }] },
+        { ...configuration, pairs: [{ source: 'a', target: 'x', mapping: [{ source: 'k', target: 'n', key: true }], snapshotId: '旧快照' }] },
         { ...configuration, results: [] },
         { ...configuration, source: { ...configuration.source, password: '凭据' } },
       ].map(item => ({ ...request, profile: { ...request.profile, configuration: item } })),

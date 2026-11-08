@@ -6,7 +6,7 @@ import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '.
 import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
 import { DataCompareProfiles } from './DataCompareProfiles';
 import { DataCompareMapping } from './DataCompareMapping';
-import { type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
+import { reverseDataCompareMapping, type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
 import { dataCompareMappingZh as mappingText } from '../locales/dataCompareMapping.zh-CN';
 import { DataCompareBatchDialog } from './DataCompareBatchDialog';
 import { dataCompareBatchZh as batchText } from '../locales/dataCompareBatch.zh-CN';
@@ -64,11 +64,11 @@ function keyLabel(row: SqliteDataCompareRow): string {
   return value.length <= 200 ? value : value.slice(0, 200) + '…';
 }
 
-export function SqliteDataCompareDialog({ connections, onClose, initialPair }: { connections: readonly Connection[]; onClose(): void; initialPair?: { source: Selection; target: Selection } }) {
+export function SqliteDataCompareDialog({ connections, onClose, initialPair }: { connections: readonly Connection[]; onClose(): void; initialPair?: { source: Selection; target: Selection; mapping?: Mapping } }) {
   const initial = { connectionId: connections.length === 1 ? connections[0].id : '', table: '' };
   const [source, setSource] = useState<Selection>(initialPair?.source ?? initial), [target, setTarget] = useState<Selection>(initialPair?.target ?? initial);
   const [batch, setBatch] = useState(false);
-  const [mapping, setMapping] = useState<Mapping>([]);
+  const [mapping, setMapping] = useState<Mapping>(initialPair?.mapping ?? []);
   const [filter, setFilter] = useState({ column: '', kind: 'text' as keyof typeof text.types, value: '' });
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [output, setOutput] = useState<SqliteDataCompareOutput>(), [kind, setKind] = useState<SqliteDataCompareKind | 'all'>('all');
@@ -116,7 +116,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
   function swap() {
     if (!canConfigure() || !ready) return;
     setSource(target); setTarget(source);
-    setMapping(mapping.map(item => ({ source: item.target, target: item.source, key: item.key })));
+    setMapping(reverseDataCompareMapping(mapping));
     clear();
   }
 
@@ -152,7 +152,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
   }
   const locked = busy || syncBusy || !!preview;
   const keyTitle = mapping.length ? mappingText.keyLabel : text.keys;
-  if (batch) return <DataCompareBatchDialog family={family} initial={{ source: { ...source, database: 'main' }, target: { ...target, database: 'main' } }} connections={connections} onClose={() => setBatch(false)}
+  if (batch) return <DataCompareBatchDialog family={family} initial={{ source: { ...source, database: 'main' }, target: { ...target, database: 'main' }, ...(mapping.length ? { mapping } : {}) }} connections={connections} onClose={() => setBatch(false)}
     renderPair={(pair, back) => <SqliteDataCompareDialog connections={connections} onClose={back} initialPair={pair}/>}/>;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">

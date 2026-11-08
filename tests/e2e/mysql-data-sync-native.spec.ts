@@ -80,6 +80,14 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
     await expect(mappedDetails).toContainText('AP+A');
     await expect(mappedDetails).toContainText('AP+B');
     await page.screenshot({ path: info.outputPath('MySQL与MariaDB字段映射.png') });
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    const mappedOverview = page.getByRole('dialog', { name: batch.title, exact: true });
+    await expect(mappedOverview.getByRole('button', { name: batch.customFields(2), exact: true })).toBeVisible();
+    await mappedOverview.getByRole('button', { name: batch.run, exact: true }).click();
+    await expect(mappedOverview.getByRole('table', { name: batch.result, exact: true })).toContainText('相同 26 · 仅左侧 1 · 仅右侧 1 · 字段值不同 1');
+    await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表字段映射.png') });
+    await mappedOverview.getByRole('button', { name: batch.return, exact: true }).click();
+    await modal.getByText(mapping.title, { exact: true }).click();
     await modal.getByRole('button', { name: mapping.reset, exact: true }).click();
     await modal.getByText(mapping.title, { exact: true }).click();
     const original = await values(right, database, 'ledger'), mysqlOriginal = await values(left, database, 'ledger');

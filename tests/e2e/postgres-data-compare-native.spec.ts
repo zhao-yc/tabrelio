@@ -114,6 +114,13 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await expect(mappedDetails).toContainText('AP+A');
     await expect(mappedDetails).toContainText('AP+B');
     await page.screenshot({ path: info.outputPath('PostgreSQL字段映射.png') });
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    const mappedOverview = page.getByRole('dialog', { name: batch.title, exact: true });
+    await expect(mappedOverview.getByRole('button', { name: batch.customFields(2), exact: true })).toBeVisible();
+    await mappedOverview.getByRole('button', { name: batch.run, exact: true }).click();
+    await expect(mappedOverview.getByRole('table', { name: batch.result, exact: true })).toContainText('相同 0 · 仅左侧 0 · 仅右侧 0 · 字段值不同 1');
+    await page.screenshot({ path: info.outputPath('PostgreSQL多表字段映射.png') });
+    await mappedOverview.getByRole('button', { name: batch.return, exact: true }).click();
     await choose(text.source, database, '明细');
     await choose(text.target, targetDatabase, '明细');
     await run.click();

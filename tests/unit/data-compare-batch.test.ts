@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { reverseComparePair } from '../../src/shared/dataCompareBatch';
 import { suggestComparePairs } from '../../src/renderer/dataCompareBatch';
 import { validateCommand } from '../../src/shared/validation';
 
@@ -17,6 +18,19 @@ describe('多表数据比较', () => {
       { source: '"b"."dup"', target: '"b"."dup"' }, { source: '"a"."exact"', target: '"a"."exact"' },
       { source: '"a"."quoted""name"', target: '"b"."quoted""name"' },
     ]);
+  });
+
+  it('换向保留联合键、映射顺序及默认表对，两次换向恢复原方案', () => {
+    const pair = { source: '订单', target: '归档', mapping: [
+      { source: '租户', target: '组织', key: true }, { source: '编号', target: '业务键', key: true },
+      { source: '备注', target: '说明', key: false },
+    ] };
+    expect(reverseComparePair(pair)).toEqual({ source: '归档', target: '订单', mapping: [
+      { source: '组织', target: '租户', key: true }, { source: '业务键', target: '编号', key: true },
+      { source: '说明', target: '备注', key: false },
+    ] });
+    expect(reverseComparePair(reverseComparePair(pair))).toEqual(pair);
+    expect(reverseComparePair({ source: 'a', target: 'b' })).toEqual({ source: 'b', target: 'a' });
   });
 
   it('只接受显式摘要模式，已有逐行请求仍有效，模式不能进入已保存方案', () => {

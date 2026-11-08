@@ -2,22 +2,16 @@ import { useEffect, useState } from 'react';
 import { dataCompareMappingLimit, type DataCompareMapping as Mapping } from '../../shared/dataCompareMapping';
 import type { DataCompareProfileFamily } from '../../shared/dataCompareProfiles';
 import type { PostgresDataCompareEndpoint as Endpoint } from '../../shared/postgresDataCompare';
-import { errorMessage, invoke, uid } from '../lib';
+import { errorMessage } from '../lib';
+import { readDataCompareFields } from '../dataCompareFields';
 import { dataCompareMappingZh as text } from '../locales/dataCompareMapping.zh-CN';
 import { ErrorBox, Field } from './ui';
 
-async function fields(family: DataCompareProfileFamily, endpoint: Endpoint) {
-  if (family !== 'sqlite') return invoke(family === 'mysql' ? 'mysql.compareData.catalogue' : 'postgres.compareData.catalogue', endpoint);
-  const catalogue = await invoke('sqlite.columns.inspect', { ...endpoint, database: 'main', taskId: uid() });
-  try { return catalogue.columns.filter(column => column.hidden !== 1).map(column => column.name); }
-  finally { await invoke('sqlite.columns.release', { catalogueId: catalogue.catalogueId }); }
-}
-
-export function DataCompareMapping({ family, source, target, disabled, mapping, change }: {
+export function DataCompareMapping({ family, source, target, disabled, mapping, change, inline = false }: {
   family: DataCompareProfileFamily; source: Endpoint; target: Endpoint; disabled: boolean;
-  mapping: Mapping; change(next: Mapping): void;
+  mapping: Mapping; change(next: Mapping): void; inline?: boolean;
 }) {
-  const [opened, setOpened] = useState(false);
+  const [opened, setOpened] = useState(inline);
   const [columns, setColumns] = useState<[string[], string[]]>();
   const [error, setError] = useState('');
   const [left, setLeft] = useState(''), [right, setRight] = useState('');
@@ -28,15 +22,14 @@ export function DataCompareMapping({ family, source, target, disabled, mapping, 
     if (!opened) return;
     let current = true;
     void Promise.all([
-      fields(family, { connectionId: leftId, database: leftDb, table: leftTable }),
-      fields(family, { connectionId: rightId, database: rightDb, table: rightTable }),
+      readDataCompareFields(family, { connectionId: leftId, database: leftDb, table: leftTable }),
+      readDataCompareFields(family, { connectionId: rightId, database: rightDb, table: rightTable }),
     ]).then(result => { if (current) setColumns(result); })
       .catch(reason => { if (current) setError(errorMessage(reason)); });
     return () => { current = false; };
   }, [opened, family, leftId, leftDb, leftTable, rightId, rightDb, rightTable]);
 
-  return <details onToggle={event => { if (event.currentTarget.open) setOpened(true); }}>
-    <summary>{text.title}</summary>
+  const content = <>
     <p className="muted small">{text.hint} {text.readonly}</p>
     {!columns && !error && <p>{text.loading}</p>}
     <fieldset className="sqlite-data-compare-endpoint" disabled={disabled}>
@@ -65,5 +58,9 @@ export function DataCompareMapping({ family, source, target, disabled, mapping, 
       </>}
     </fieldset>
     <ErrorBox message={error}/>
+  </>;
+  return inline ? content : <details onToggle={event => { if (event.currentTarget.open) setOpened(true); }}>
+    <summary>{text.title}</summary>
+    {content}
   </details>;
 }
