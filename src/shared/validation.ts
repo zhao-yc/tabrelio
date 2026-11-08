@@ -419,7 +419,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.compareData': sqliteDataCompareSchema,
   'sqlite.compareData.cancel': z.object({ taskId: id }).strict(),
   'sqlite.compareSync.batchPreview': sqliteBatchSyncPreviewSchema,
-  'sqlite.compareSync.batchApply': sqliteTableEditApplySchema,
+  'sqlite.compareSync.batchApply': batchSyncApplySchema,
   'sqlite.compareSync.preview': sqliteDataSyncPreviewSchema,
   'sqlite.compareSync.apply': sqliteTableEditApplySchema,
   'sqlite.schemaScript': sqliteSchemaScriptSchema,

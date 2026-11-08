@@ -9,12 +9,12 @@ import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSql
 import { inspectMysqlRestoreSql } from '../engine/mysqlSqlFileInspection';
 import type { PostgresBatchSyncPreview, PostgresBatchSyncPreviewInput } from '../shared/postgresBatchSync';
 import type { MysqlBatchSyncPreviewInput } from '../shared/mysqlBatchSync';
-import type { BatchSyncApplyInput } from '../shared/dataCompareBatchSync';
+import { resolveBatchSyncSelection, type BatchSyncApplyInput } from '../shared/dataCompareBatchSync';
 import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
 import type { SqliteBatchSyncPreview, SqliteBatchSyncPreviewInput } from '../shared/sqliteBatchSync';
-import { buildSqliteBatchSync, buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
+import { buildSqliteBatchSync, buildSqliteSyncClaim, selectSqliteBatchSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
 import type { SqliteEditClaim } from './sqliteTableEdit';
 import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
 import { sameConnectionFamily } from '../shared/connectionDialect';
@@ -190,7 +190,7 @@ const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
 let networkSyncTarget: { dialect: 'postgres' | 'mysql'; snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
 let networkBatchSyncTarget: { dialect: 'mysql' | 'postgres'; previewId: string; owner: MainInvocation; revision: number; expires: number;
-  sourceId: string; target: PostgresBatchSyncPreviewInput['target']; confirmation: string } | undefined;
+  sourceId: string; target: PostgresBatchSyncPreviewInput['target']; tables: PostgresBatchSyncPreview['tables'] } | undefined;
 let networkDataComparison: { owner: MainInvocation; id: string; cancelled: boolean; done: Promise<unknown> } | undefined;
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
 interface SqliteSyncScope {
@@ -200,7 +200,7 @@ interface SqliteSynchronization extends SqliteSyncScope {
   id: string; evidence: SqliteSyncEvidence; preview?: { id: string; claim: SqliteEditClaim };
 }
 let sqliteSynchronization: SqliteSynchronization | undefined;
-let sqliteBatchSync: (SqliteSyncScope & { id: string; claim: SqliteEditClaim }) | undefined;
+let sqliteBatchSync: (SqliteSyncScope & { id: string; claim: SqliteEditClaim; tables: SqliteBatchSyncPreview['tables'] }) | undefined;
 
 let sqliteCopyTask: { id: string; owner: MainInvocation; abort: AbortController } | undefined;
 let binaryCellFileActive = false;
@@ -1108,7 +1108,7 @@ function previewNetworkBatchSync(dialect: 'postgres' | 'mysql', input: PostgresB
   return runNetworkDataComparison<PostgresBatchSyncPreview | null>(command, input, owner,
     scope => broker.request(command, { ...input, ...scope }), (result, revision) => {
       if (result) networkBatchSyncTarget = { dialect, previewId: result.previewId, owner: owner!, revision,
-        expires: Date.now() + postgresDataSyncLimits.lifetimeMs, sourceId: input.source.connectionId, target: input.target, confirmation: result.confirmation };
+        expires: Date.now() + postgresDataSyncLimits.lifetimeMs, sourceId: input.source.connectionId, target: input.target, tables: result.tables };
     });
 }
 
@@ -1142,9 +1142,10 @@ function applyNetworkBatchSync(dialect: 'postgres' | 'mysql', input: BatchSyncAp
   columnsMain.assertCapturedOwner(owner);
   const stale = dialect === 'postgres' ? postgresDataSyncZh.stale : mysqlDataSyncZh.stale;
   const record = networkBatchSyncTarget;
-  if (!record || record.dialect !== dialect || record.previewId !== input.previewId || record.confirmation !== input.confirmation ||
+  if (!record || record.dialect !== dialect || record.previewId !== input.previewId ||
       record.revision !== store.connectionRevision() || record.expires <= Date.now() || networkDataComparison ||
       shuttingDown || !columnsMain.sharesDocumentOwner(record.owner, owner!)) throw Error(stale);
+  if (resolveBatchSyncSelection(record.tables, input.selected).confirmation !== input.confirmation) throw Error(stale);
   if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('同步任务编号已使用');
   connectionConfig.assertAvailable(record.sourceId); connectionConfig.assertAvailable(record.target.connectionId);
   const targetProfile = store.resolveConnection(record.target.connectionId);
@@ -1239,7 +1240,7 @@ async function previewSqliteBatchSync(input: SqliteBatchSyncPreviewInput, owner:
     if (!prepared) return null;
     const { claim, tables } = prepared;
     const id = randomUUID();
-    sqliteBatchSync = { id, claim, owner: owner!, revision, expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, targetConnectionId: input.targetConnectionId };
+    sqliteBatchSync = { id, claim, tables, owner: owner!, revision, expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, targetConnectionId: input.targetConnectionId };
     setTimeout(() => { if (sqliteBatchSync?.id === id) sqliteBatchSync = undefined; }, sqliteDataSyncLimits.lifetimeMs).unref();
     return { previewId: id, confirmation: claim.confirmation, counts: claim.counts, tables };
   });
@@ -1276,13 +1277,17 @@ async function applySqliteSync(input: import('../shared/sqliteTableEdit').Sqlite
   return executeSqliteSync(input, preview.claim, () => assertSqliteSyncOwner(record, owner));
 }
 
-function applySqliteBatchSync(input: import('../shared/sqliteTableEdit').SqliteTableEditApplyInput, owner: MainInvocation | undefined) {
+function applySqliteBatchSync(input: BatchSyncApplyInput, owner: MainInvocation | undefined) {
   const record = sqliteBatchSync;
   assertSqliteSyncOwner(record, owner);
-  if (record.id !== input.previewId || record.claim.confirmation !== input.confirmation) throw Error(sqliteDataSyncZh.stale);
+  if (record.id !== input.previewId) throw Error(sqliteDataSyncZh.stale);
+  const selection = resolveBatchSyncSelection(record.tables, input.selected);
+  if (selection.confirmation !== input.confirmation) throw Error(sqliteDataSyncZh.stale);
   if (tasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('SQLite 任务编号已使用');
   sqliteBatchSync = undefined;
-  return executeSqliteSync(input, record.claim, () => assertSqliteSyncOwner(record, owner));
+  const { previewId, taskId, confirmation } = input;
+  return executeSqliteSync({ previewId, taskId, confirmation }, selectSqliteBatchSyncClaim(record.claim, selection),
+    () => assertSqliteSyncOwner(record, owner));
 }
 
 async function executeSqliteSync(input: import('../shared/sqliteTableEdit').SqliteTableEditApplyInput, claim: SqliteEditClaim, assertCurrent: () => void) {

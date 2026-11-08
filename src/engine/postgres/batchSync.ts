@@ -3,6 +3,7 @@ import type { PostgresBatchSyncPreview, PostgresBatchSyncPreviewInput } from '..
 import { postgresDataSyncLimits as limits, type PostgresDataCompareInput, type PostgresDataCompareOutput } from '../../shared/postgresDataCompare';
 import type { PostgresSyncEvidence } from './dataCompare';
 import type { PostgresSyncGroup } from './tableWorkspace';
+import { batchSyncConfirmation, batchSyncPreviewRow } from '../../shared/dataCompareBatchSync';
 
 type Compare = (input: Pick<PostgresDataCompareInput, 'source' | 'target' | 'mapping'>, capture: boolean) =>
   Promise<{ report: PostgresDataCompareOutput; evidence?: PostgresSyncEvidence }>;
@@ -19,7 +20,7 @@ export async function preparePostgresBatchSync(input: PostgresBatchSyncPreviewIn
     }, true);
     const selected = report.differences.flatMap((row, index) => {
       const action = actions[row.kind];
-      return input.actions.includes(action) ? [{ action, key: row.key, index }] : [];
+      return input.actions.includes(action) ? [{ action, row, index }] : [];
     });
     if (!selected.length) continue;
     if (!evidence) throw Error('右侧表不能生成同步证据：' + pair.target);
@@ -35,10 +36,12 @@ export async function preparePostgresBatchSync(input: PostgresBatchSyncPreviewIn
     });
     rows += selected.length;
     groups.push({ table: pair.target, rows: selectedRows, evidence: { ...evidence, rows: [] } });
-    tables.push({ table: evidence.relation.sql, counts: tableCounts, rows: selected.map(({ action, key }) => ({ action, key })) });
+    const columns = report.columns.map(column => column.name);
+    tables.push({ table: evidence.relation.sql, confirmation: input.target.database + '.' + evidence.relation.sql, counts: tableCounts,
+      rows: selected.map(({ action, row }) => batchSyncPreviewRow(action, row, columns, pair.mapping)) });
   }
   if (!groups.length) return null;
-  const confirmation = input.target.database + '.' + tables[0].table + (tables.length > 1 ? ` 等 ${tables.length} 张表` : '');
+  const confirmation = batchSyncConfirmation(tables.map(table => table.confirmation));
   const preview: PostgresBatchSyncPreview = { previewId: randomUUID(), confirmation, counts, tables };
   return { preview, groups };
 }

@@ -14,6 +14,8 @@
 
 在多表比较中，点某一行的「设置比较字段」可为该表对选择独立匹配键和字段。不同表对可以混用默认和自定义比较规则。多表方案会一起保存这些设置。[多表比较字段映射](development/data-compare-batch-column-mapping-20261108.md)
 
+多表同步预览可展开每条差异的左右原值，取消整张表或单条记录。确认文字及操作数会随选择更新。[多表同步预览逐表与逐行选择](development/data-compare-batch-row-selection-20261108.md)
+
 SQLite 多表比较窗口可对同一个可写右侧文件执行多表同步。选择操作后预览各表及记录键，输入窗口显示的目标确认文字后提交。默认选择插入和更新，删除需单独勾选。[SQLite 多表事务同步](development/sqlite-multi-table-sync-20261108.md)
 
 SQLite 单表和多表同步也可使用自定义业务键及异名字段。更新只写映射的非键列，插入的未映射列使用右侧默认值。[SQLite 自定义键与字段映射同步](development/sqlite-mapped-data-sync-20261108.md)

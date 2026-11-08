@@ -1,7 +1,7 @@
 import { mappedColumns, mappedKeyNames, type CompareSide } from '../shared/dataCompareMapping';
 import { randomUUID } from 'node:crypto';
 import type { CellValue, TaskEvent } from '../shared/contracts';
-import { batchSyncApplySchema, type BatchSyncPreview } from '../shared/dataCompareBatchSync';
+import { batchSyncApplySchema, batchSyncConfirmation, batchSyncPreviewRow, resolveBatchSyncSelection, type BatchSyncPreview } from '../shared/dataCompareBatchSync';
 import { mysqlBatchSyncPreviewSchema } from '../shared/mysqlBatchSync';
 import { mysqlDataCompareSchema, mysqlDataCompareZh as text, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareLimits as limits, postgresDataSyncLimits as syncLimits,
@@ -217,7 +217,8 @@ export class MysqlDataCompareTasks {
         }, work, check, true);
         const table = qualified(target.database, target.table);
         const tableCounts = { insert: 0, update: 0, delete: 0 };
-        const rows: MysqlSyncGroup['rows'] = [], keys: BatchSyncPreview<CellValue>['tables'][number]['rows'] = [];
+        const rows: MysqlSyncGroup['rows'] = [], details: BatchSyncPreview<CellValue>['tables'][number]['rows'] = [];
+        const columns = result.columns.map(column => column.name);
         for (const [index, difference] of result.differences.entries()) {
           const action = actions[difference.kind];
           if (!input.actions.includes(action)) continue;
@@ -227,15 +228,15 @@ export class MysqlDataCompareTasks {
           size += Buffer.byteLength(JSON.stringify(row));
           if (size > syncLimits.bytes) throw Error('MySQL／MariaDB 多表同步超过 1 MiB，请减少表对或操作范围');
           tableCounts[action]++; counts[action]++;
-          rows.push(row); keys.push({ action, key: difference.key });
+          rows.push(row); details.push(batchSyncPreviewRow(action, difference, columns, pair.mapping));
         }
         if (evidence && rows.length) {
           groups.push({ target, rows, evidence: { ...evidence, rows: [] } });
-          tables.push({ table, counts: tableCounts, rows: keys });
+          tables.push({ table, confirmation: table, counts: tableCounts, rows: details });
         }
       }
       if (!groups.length) return null;
-      const confirmation = tables[0].table + (tables.length > 1 ? ` 等 ${tables.length} 张表` : '');
+      const confirmation = batchSyncConfirmation(tables.map(table => table.confirmation));
       const report = { previewId: randomUUID(), confirmation, counts, tables };
       this.batch = { ...scope, expires: Date.now() + syncLimits.lifetimeMs, sourceId: input.source.connectionId, groups, report };
       setTimeout(() => { if (this.batch?.report.previewId === report.previewId) this.batch = undefined; }, syncLimits.lifetimeMs).unref();
@@ -276,12 +277,17 @@ export class MysqlDataCompareTasks {
   /** 批次预览只能由原窗口对原连接领取一次，数据库与目标表均来自冻结快照。 */
   async applyBatch(raw: unknown, scope: Scope, targetConnectionId: string) {
     const input = batchSyncApplySchema.parse(raw), record = this.batch;
-    if (!record || record.report.previewId !== input.previewId || record.report.confirmation !== input.confirmation ||
+    if (!record || record.report.previewId !== input.previewId ||
         record.owner !== scope.owner || record.connectionRevision !== scope.connectionRevision ||
         record.expires <= Date.now() || this.active.size || record.groups[0].target.connectionId !== targetConnectionId)
       throw Error(mysqlDataSyncZh.stale);
+    const selection = resolveBatchSyncSelection(record.report.tables, input.selected);
+    if (selection.confirmation !== input.confirmation) throw Error(mysqlDataSyncZh.stale);
     this.batch = undefined;
-    return this.write(input.taskId, record.groups);
+    return this.write(input.taskId, selection.groups.map(({ tableIndex, rows }) => {
+      const group = record.groups[tableIndex];
+      return { ...group, rows: rows.map(index => group.rows[index]) };
+    }));
   }
 
   private async write(taskId: string, groups: MysqlSyncGroup[]) {

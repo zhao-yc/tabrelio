@@ -7,3 +7,4 @@
 .sqlite-data-compare-key{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sqlite-data-compare-pager{display:flex;align-items:center;gap:10px;justify-content:center}
 .sqlite-data-sync-preview-rows{max-height:160px;overflow:auto;overflow-wrap:anywhere}
+.sqlite-data-sync-preview-choice{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

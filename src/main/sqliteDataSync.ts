@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { SqliteConnectionProfile } from '../shared/contracts';
 import type { SqliteBatchSyncPreview, SqliteBatchSyncPreviewInput } from '../shared/sqliteBatchSync';
+import { batchSyncConfirmation, batchSyncPreviewRow, resolveBatchSyncSelection } from '../shared/dataCompareBatchSync';
 import type { SqliteDataCompareEndpoint, SqliteDataCompareInput, SqliteDataCompareOutput } from '../shared/sqliteDataCompare';
 import { sqliteDataSyncLimits as limits } from '../shared/sqliteDataCompare';
 import type { SqliteFileIdentity, SqliteValue } from '../engine/sqlite/protocol';
@@ -74,7 +75,7 @@ export async function buildSqliteBatchSync(
     const output = await compare({
       source: { connectionId: input.sourceConnectionId, database: 'main', table: pair.source },
       target: { connectionId: input.targetConnectionId, database: 'main', table: pair.target },
-      taskId: input.taskId, mode: 'and', filters: [], summaryOnly: true, mapping: pair.mapping,
+      taskId: input.taskId, mode: 'and', filters: [], mapping: pair.mapping,
     }, value => { evidence = value; });
     const requested = input.actions.reduce((count, action) => count + output.counts[byDifference[action]], 0);
     if (!requested) continue;
@@ -85,7 +86,8 @@ export async function buildSqliteBatchSync(
     for (const [index, row] of evidence.rows.entries()) {
       const action = row.before ? row.after ? 'update' : 'delete' : 'insert';
       if (!input.actions.includes(action)) continue;
-      selected.push(index); rows.push({ action, key: row.key });
+      selected.push(index);
+      rows.push(batchSyncPreviewRow(action, output.differences[index], output.columns, pair.mapping));
       bytes += Buffer.byteLength(JSON.stringify(row));
       if (bytes > limits.bytes) throw Error('SQLite 多表同步超过 1 MiB，请减少表对或操作范围');
     }
@@ -94,15 +96,34 @@ export async function buildSqliteBatchSync(
     const first = groups[0]?.snapshot;
     if (first && (JSON.stringify(first.identity) !== JSON.stringify(group.snapshot.identity) || first.schemaVersion !== group.snapshot.schemaVersion))
       throw Error('预览期间右侧文件身份或表结构已变化，请重新比较');
-    groups.push(group); tables.push({ table: pair.target, counts: group.counts, rows });
+    groups.push(group); tables.push({ table: pair.target, confirmation: group.confirmation, counts: group.counts, rows });
     total += requested;
     for (const action of input.actions) counts[action] += group.counts[action];
   }
   const first = groups[0];
   if (!first) return;
-  const confirmation = groups.length > 1 ? `main.${first.snapshot.target.table} 等 ${groups.length} 张表` : first.confirmation;
-  const claim: SqliteEditClaim = groups.length === 1 ? first : {
-    snapshot: first.snapshot, statements: groups.flatMap(group => group.statements), counts, confirmation, batch: groups,
+  return { claim: combineSqliteSyncClaims(groups, counts, batchSyncConfirmation(tables.map(table => table.confirmation))), tables };
+}
+
+function combineSqliteSyncClaims(groups: SqliteEditClaim[], counts: SqliteEditClaim['counts'], confirmation: string): SqliteEditClaim {
+  return groups.length === 1 ? groups[0] : {
+    snapshot: groups[0].snapshot, statements: groups.flatMap(group => group.statements), counts, confirmation, batch: groups,
   };
-  return { claim, tables };
+}
+
+/** 从冻结计划提取所选项，同时重排行定位、原值和写后证据。 */
+export function selectSqliteBatchSyncClaim(claim: SqliteEditClaim, selection: ReturnType<typeof resolveBatchSyncSelection>): SqliteEditClaim {
+  const original = claim.batch ?? [claim];
+  const groups = selection.groups.map(({ tableIndex, rows, counts }) => {
+    const group = original[tableIndex], { snapshot } = group;
+    return { ...group, counts,
+      snapshot: { ...snapshot, rows: rows.map(index => snapshot.rows[index]), locators: rows.map(index => snapshot.locators[index]) },
+      statements: rows.map((index, row) => {
+        const statement = group.statements[index];
+        return statement.row === undefined ? statement : { ...statement, row };
+      }),
+      synchronization: { ...group.synchronization!, rows: rows.map(index => group.synchronization!.rows[index]) },
+    };
+  });
+  return combineSqliteSyncClaims(groups, selection.counts, selection.confirmation);
 }
