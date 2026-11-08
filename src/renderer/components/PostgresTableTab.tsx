@@ -1,3 +1,4 @@
+import { postgresQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridHeaderDetailsZh as headerText } from '../locales/gridHeaderDetails.zh-CN';
 import { postgresTableCopyZh } from '../locales/postgresTableCopy.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
@@ -1082,6 +1083,35 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setMessage(pasteText.staged(changes.length));
   }
 
+  function quickValueTarget(cell: QueryResultCopyCell, kind: GridQuickValue) {
+    if (!canEditGrid || !page || page.rows[cell.index] !== cell.row || !gridLayout.columns.some(column => column === cell.column))
+      return;
+    const column = page.columns.find(column => column === cell.column), rowKey = page.rowKeys?.[cell.index];
+    if (!column || !rowKey || !postgresQuickValueAllowed(column, kind)) return;
+    const original = ownCell(cell.row, column.key);
+    if (original === undefined) return;
+    const prior = draftRef.current.find(entry => entry.rowKey === rowKey)?.change;
+    if (prior?.kind === 'delete') return;
+    return { column, rowKey, original, fields: prior?.kind === 'update' ? prior.fields : [] };
+  }
+
+  /** 暂存仍沿用准确原行；值恢复为原值时只移除该格的差异。 */
+  function setQuickValue(cell: QueryResultCopyCell, kind: GridQuickValue): void {
+    if (!findIsCurrent() || recordInput.current) return;
+    const target = quickValueTarget(cell, kind);
+    if (!target) return;
+    const key = target.column.key, value = kind === 'null' ? null : '';
+    const previous = target.fields.find(field => field.column === key)?.value;
+    if (previous ? previous.mode === 'null' && value === null || previous.mode === 'text' && previous.value === value : target.original === value) return;
+    const fields = target.fields.filter(field => field.column !== key);
+    if (value !== target.original) fields.push({ column: key, value: value === null ? { mode: 'null' } : { mode: 'text', value } });
+    try {
+      const applied = fields.length ? stageChanges([{ kind: 'update', row: cell.index, fields }]) :
+        stageChanges([], { remove: new Set([target.rowKey]) });
+      if (applied) { setError(''); setMessage(''); }
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
   /** 单元格编辑只接收当前可见、可写且有原行身份的字段；字节仍走原查看和记录表单。 */
   function openInlineEdit(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
     if (!canEditGrid || !page || inlineOwner.current || lease.current || issued.current !== page.pageToken ||
@@ -1662,6 +1692,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           if (gridReturn) setGridReturn(undefined);
         }}
         onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
+        quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
         onCellPaste={(cell, data) => {
           if (!canEditGrid || !cell.column) return;

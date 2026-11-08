@@ -1,3 +1,5 @@
+import { mysqlQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
+import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { TableEditWorkspace, type TableEditBatch, type TableEditPage, type TableEditNavigation, type TableCheckedFill, type TableCheckedRecordEdit } from '../tableEditWorkspace';
 import { tableEditWorkspaceZh as workspaceText } from '../locales/tableEditWorkspace.zh-CN';
 import { TableEditWorkspaceBar } from './TableEditWorkspaceBar';
@@ -1908,6 +1910,21 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       setRows(current => current.map(row => row.id === activeRow.id ? { ...row, data: { ...row.data, [activeColumn.key]: value } } : row));
     }
   }
+  const quickValueRow = selection && rows.find(row => row.id === selection.rowId);
+  const quickValueColumn = selection && visibleKeys.includes(selection.key) ? info?.columns.find(column => column.name === selection.key) : undefined;
+  function canSetQuickValue(kind: GridQuickValue): boolean {
+    return !!quickValueRow && !!quickValueColumn && !gridEditing && !record.hasInput() &&
+      !recordReadonlyReason(getRecordContext(), quickValueRow, quickValueColumn.name) && mysqlQuickValueAllowed(quickValueColumn, kind);
+  }
+  /** 只更新原活动格，保留原始定位值及其他字段，沿用表页单步撤销。 */
+  function setQuickValue(kind: GridQuickValue): void {
+    if (!tableToolbarCurrent() || rowsRef.current !== rows || selectionRef.current !== selection ||
+        layoutRevision.current !== headerCopyLayoutRevision || blockedRef.current || activeGridEditor.current || !quickValueRow || !quickValueColumn || !canSetQuickValue(kind)) return;
+    const key = quickValueColumn.name, value = kind === 'null' ? null : '';
+    if (ownCell(quickValueRow.data, key) === value) return;
+    setRows(rows.map(row => row === quickValueRow ? { ...row, data: { ...row.data, [key]: value } } : row));
+    setError('');
+  }
   /** 单元格弹窗也使用相同 UUID、代次与输入缓冲，关闭不会无提示丢稿。 */
   function editCell() { if (selection && !blockedRef.current) record.openCell(selection.rowId, selection.key); }
   /** 固定预览草稿与代次；先处理输入，且在第一个 await 前阻止重复读取和后续编辑。 */
@@ -2001,6 +2018,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={recordTemplatesZh.open} disabled={!editable || blocked || record.dirty || gridEditing || !!templateDialog} onClick={openRecordTemplates}>{recordTemplatesZh.open}</button>
 <button aria-label={recordBatchEditZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={() => openRecordBatch()}>{recordBatchEditZh.action}</button>
 <button aria-label={recordBatchFillZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={() => openBatchFill('page')}>{recordBatchFillZh.action}</button>
+<button type="button" title={quickValueText.nullHint} disabled={!canSetQuickValue('null')} onClick={() => setQuickValue('null')}>{quickValueText.null}</button>
+<button type="button" title={quickValueText.emptyHint} disabled={!canSetQuickValue('empty')} onClick={() => setQuickValue('empty')}>{quickValueText.empty}</button>
 <button aria-label={draftHistoryZh.undo} title={draftHistoryZh.limit} disabled={!history.status.undo || historyBlocked} onClick={() => moveHistory("undo")}>{draftHistoryZh.undo} ({history.status.undo})</button>
 <button aria-label={draftHistoryZh.redo} title={draftHistoryZh.limit} disabled={!history.status.redo || historyBlocked} onClick={() => moveHistory("redo")}>{draftHistoryZh.redo} ({history.status.redo})</button>
 <button aria-label={savedDraftText.save} disabled={historyBlocked || !changes.length} onClick={() => openSavedDraft('save')}>{savedDraftText.save}</button>
