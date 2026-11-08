@@ -11,3 +11,11 @@ export const sqliteBatchSyncZh = {
   working: '正在提交 SQLite 多表同步事务…',
   confirmed: 'SQLite 多表同步已确认提交',
 };
+
+export const postgresBatchSyncZh = {
+  ...sqliteBatchSyncZh,
+  title: 'PostgreSQL 多表同步',
+  hint: '重新读取所列的表对。所选操作的全部差异会写入同一个右侧数据库。',
+  working: '正在提交 PostgreSQL 多表同步事务…',
+  confirmed: 'PostgreSQL 多表同步已确认提交',
+};

@@ -52,6 +52,8 @@ interface Relation {
 }
 interface Original extends PostgresReferenceRowVersion { digest: string; key: string; }
 interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; expected?: DataRow; }
+interface WriteGroup { expected: Relation; table: string; writes: Write[]; }
+export interface PostgresSyncGroup { evidence: PostgresSyncEvidence; table: string; rows: PostgresSyncRow[]; }
 interface FilteredWriteMatch { sql: string; values: unknown[]; signature: string; count: number; }
 type FilteredWrite = { kind: 'update'; fields: PostgresTableField[] } | { kind: 'delete' };
 type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
@@ -1020,9 +1022,8 @@ export class PostgresTableWorkspace {
     }
   }
 
-  /** 使用比较快照的右侧版本和冻结左值生成绑定参数。原有事务路径统一确认提交、回滚和断线未知。 */
-  async synchronize(evidence: PostgresSyncEvidence, table: string, rows: PostgresSyncRow[], connect: Connect,
-    configure: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+  /** 只使用可信原行版本和冻结的来源值编译绑定参数。 */
+  private compileSyncWrites(evidence: PostgresSyncEvidence, rows: PostgresSyncRow[]): Write[] {
     const relation = evidence.relation;
     const positions = relation.columns.map(column => evidence.columns.indexOf(column.name));
     const project = (row: CellValue[]) => Object.fromEntries(relation.columns.map((column, index) => [column.key, row[positions[index]]]));
@@ -1056,10 +1057,22 @@ export class PostgresTableWorkspace {
     // 同批先删除已选的旧行，释放其唯一键后再更新和插入。全部仍在同一事务中。
     const order = { delete: 0, update: 1, insert: 2 };
     writes.sort((a, b) => order[a.kind] - order[b.kind]);
+    return writes;
+  }
+
+  synchronize(evidence: PostgresSyncEvidence, table: string, rows: PostgresSyncRow[], connect: Connect,
+    configure: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+    return this.synchronizeBatch([{ evidence, table, rows }], connect, configure);
+  }
+
+  /** 所有右侧关系复用同一独占连接与事务。锁顺序只由目录限定名决定。 */
+  async synchronizeBatch(groups: PostgresSyncGroup[], connect: Connect, configure: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+    const writes = groups.map(({ evidence, table, rows }) => ({ expected: evidence.relation, table, writes: this.compileSyncWrites(evidence, rows) }));
+    writes.sort((a, b) => a.expected.sql < b.expected.sql ? -1 : a.expected.sql > b.expected.sql ? 1 : 0);
     let receipt: PostgresTableOutcome | undefined;
     try {
       await connect(async connection => {
-        receipt = await this.applyTransaction(connection, relation, table, writes, undefined, undefined, configure);
+        receipt = await this.applyTransactionGroups(connection, writes, undefined, undefined, configure);
       }, true);
       return receipt!;
     } catch (reason) {
@@ -1073,6 +1086,13 @@ export class PostgresTableWorkspace {
   private async applyTransaction(connection: PostgresConnection, expected: Relation, table: string, writes: Write[],
     related?: RelatedScope, filtered?: FilteredWriteMatch, synchronize?: (connection: PostgresConnection) => Promise<void>,
     checkSearchServer?: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+    return this.applyTransactionGroups(connection, [{ expected, table, writes }], related, filtered, synchronize, checkSearchServer);
+  }
+
+  private async applyTransactionGroups(connection: PostgresConnection, groups: WriteGroup[],
+    related?: RelatedScope, filtered?: FilteredWriteMatch, synchronize?: (connection: PostgresConnection) => Promise<void>,
+    checkSearchServer?: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+    let activeTable: string | undefined;
     let sent = false;
     let commitAttempted = false;
     try {
@@ -1080,29 +1100,33 @@ export class PostgresTableWorkspace {
       await begin(connection, filtered || synchronize ? 'filteredWrite' : 'write');
       if (synchronize) await synchronize(connection);
       if (checkSearchServer) await checkSearchServer(connection);
-      const current = await readRelation(connection, table);
-      if (current.fingerprint !== expected.fingerprint || current.sql !== expected.sql) throw Error('关系结构或权限已变化，请重新读取');
-      // 筛选集合复核和写入期间阻止其他事务增删改，避免新匹配行在核对后进入原范围。
-      await connection.query('LOCK TABLE ' + only(current) + (filtered || synchronize ? ' IN SHARE ROW EXCLUSIVE MODE' : ' IN ROW EXCLUSIVE MODE'), undefined, small());
-      const locked = await readRelation(connection, table);
-      if (locked.fingerprint !== expected.fingerprint || writes.some(write => !locked.capabilities[write.kind])) {
-        throw Error('锁定后的关系结构或权限已变化，请重新读取');
-      }
-      if (synchronize) {
-        // 目标表锁保证检查后不能并发增删触发器或入向外键，防止对所选行以外的写入。
-        const effects = await connection.query(`SELECT
-          EXISTS (SELECT 1 FROM pg_catalog.pg_trigger WHERE tgrelid = $1::oid AND NOT tgisinternal AND tgenabled <> 'D'),
-          EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE contype = 'f' AND confrelid = $1::oid)`,
-        [locked.oid], { rows: 1, bytes: 1024 });
-        if (effects.rows[0]?.c0 !== 'f' || effects.rows[0]?.c1 !== 'f') throw Error('右侧表有启用的触发器或被外键引用，整批未写入');
-      }
-      const projection = locked.columns.map(column => postgresIdentifier(column.name)).join(', ');
-      for (const { original } of writes) if (original) {
-        const args: unknown[] = [];
-        const row = await connection.query('SELECT ' + projection + ' FROM ' + only(locked) +
-          ' WHERE ' + rowPredicate(args, original) + ' FOR UPDATE', args, { rows: 2, bytes: 8 * 1024 * 1024 });
-        if (row.truncated || row.rows.length !== 1 || digest(row.rows[0]) !== original.digest) {
-          throw Error('原记录已被修改、删除或替换，整批未写入，请刷新');
+      // 首条 DML 前核对全部表的写权限、目录、侧效应与原行。
+      for (const { expected, table, writes } of groups) {
+        if (groups.length > 1) activeTable = expected.sql;
+        const current = await readRelation(connection, table);
+        if (current.fingerprint !== expected.fingerprint || current.sql !== expected.sql) throw Error('关系结构或权限已变化，请重新读取');
+        // 筛选集合复核和写入期间阻止其他事务增删改，避免新匹配行在核对后进入原范围。
+        await connection.query('LOCK TABLE ' + only(current) + (filtered || synchronize ? ' IN SHARE ROW EXCLUSIVE MODE' : ' IN ROW EXCLUSIVE MODE'), undefined, small());
+        const locked = await readRelation(connection, table);
+        if (locked.fingerprint !== expected.fingerprint || writes.some(write => !locked.capabilities[write.kind])) {
+          throw Error('锁定后的关系结构或权限已变化，请重新读取');
+        }
+        if (synchronize) {
+          // 目标表锁保证检查后不能并发增删触发器或入向外键，防止对所选行以外的写入。
+          const effects = await connection.query(`SELECT
+            EXISTS (SELECT 1 FROM pg_catalog.pg_trigger WHERE tgrelid = $1::oid AND NOT tgisinternal AND tgenabled <> 'D'),
+            EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE contype = 'f' AND confrelid = $1::oid)`,
+          [locked.oid], { rows: 1, bytes: 1024 });
+          if (effects.rows[0]?.c0 !== 'f' || effects.rows[0]?.c1 !== 'f') throw Error('右侧表有启用的触发器或被外键引用，整批未写入');
+        }
+        const projection = locked.columns.map(column => postgresIdentifier(column.name)).join(', ');
+        for (const { original } of writes) if (original) {
+          const args: unknown[] = [];
+          const row = await connection.query('SELECT ' + projection + ' FROM ' + only(locked) +
+            ' WHERE ' + rowPredicate(args, original) + ' FOR UPDATE', args, { rows: 2, bytes: 8 * 1024 * 1024 });
+          if (row.truncated || row.rows.length !== 1 || digest(row.rows[0]) !== original.digest) {
+            throw Error('原记录已被修改、删除或替换，整批未写入，请刷新');
+          }
         }
       }
       if (related) await this.verifyRelated(connection, related);
@@ -1110,22 +1134,27 @@ export class PostgresTableWorkspace {
         const match = await filteredWriteVersions(connection, filtered.sql, filtered.values);
         if (match.signature !== filtered.signature) throw Error('筛选匹配集合或原行版本已变化，整批未写入，请重新预览');
       }
-      for (const write of writes) {
-        sent = true;
-        const result = await connection.query(write.sql, write.values, write.expected ? { rows: 1, bytes: 8 * 1024 * 1024 } : small());
-        if (write.expected && (result.truncated || result.rows.length !== 1 || digest(result.rows[0]) !== digest(write.expected)))
-          throw Error('PostgreSQL 写入回读值与左侧快照不一致');
-        if (result.postgresCommand !== write.kind.toUpperCase() || result.affectedRows !== (filtered?.count ?? 1))
-          throw Error(filtered ? '数据库确认的影响行数与筛选预览不一致' : '数据库未确认该语句恰好影响一行');
+      for (const { expected, writes } of groups) {
+        if (groups.length > 1) activeTable = expected.sql;
+        for (const write of writes) {
+          sent = true;
+          const result = await connection.query(write.sql, write.values, write.expected ? { rows: 1, bytes: 8 * 1024 * 1024 } : small());
+          if (write.expected && (result.truncated || result.rows.length !== 1 || digest(result.rows[0]) !== digest(write.expected)))
+            throw Error('PostgreSQL 写入回读值与左侧快照不一致');
+          if (result.postgresCommand !== write.kind.toUpperCase() || result.affectedRows !== (filtered?.count ?? 1))
+            throw Error(filtered ? '数据库确认的影响行数与筛选预览不一致' : '数据库未确认该语句恰好影响一行');
+        }
       }
+      activeTable = undefined;
       commitAttempted = true;
       const result = await connection.query('COMMIT', undefined, small());
       if (result.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen) {
         throw Error('PostgreSQL未确认提交');
       }
-      return { outcome: 'committed', affected: filtered?.count ?? writes.length, message: 'PostgreSQL已确认整批提交' };
+      return { outcome: 'committed', affected: filtered?.count ?? groups.reduce((count, group) => count + group.writes.length, 0), message: 'PostgreSQL已确认整批提交' };
     } catch (reason) {
-      return this.rollbackWrite(connection, sent, commitAttempted, reason);
+      const outcome = await this.rollbackWrite(connection, sent, commitAttempted, reason);
+      return activeTable ? { ...outcome, message: activeTable + '：' + outcome.message } : outcome;
     }
   }
 

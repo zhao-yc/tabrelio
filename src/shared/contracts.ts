@@ -423,6 +423,8 @@ export interface CommandMap {
   'sqlite.tablePage': { input: import('./sqliteTableBrowse').SqliteTablePageInput; output: import('./sqliteTableBrowse').SqliteTablePage };
   'sqlite.valueOptions': { input: import('./sqliteValueOptions').SqliteValueOptionsInput; output: import('./sqliteValueOptions').SqliteValueOptionsOutput };
   'sqlite.statistics': { input: import('./sqliteStatistics').SqliteStatisticsInput; output: import('./sqliteStatistics').SqliteStatisticsOutput };
+  'postgres.compareData.batchPreview': { input: import('./postgresBatchSync').PostgresBatchSyncPreviewInput; output: import('./postgresBatchSync').PostgresBatchSyncPreview | null };
+  'postgres.compareData.batchApply': { input: import('./postgresBatchSync').PostgresBatchSyncApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.compareData.syncPreview': { input: import('./postgresDataCompare').PostgresDataSyncPreviewInput; output: import('./postgresDataCompare').PostgresDataSyncPreview };
   'postgres.compareData.syncApply': { input: import('./postgresDataCompare').PostgresDataSyncApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'mysql.compareData.syncPreview': { input: import('./postgresDataCompare').PostgresDataSyncPreviewInput; output: import('./postgresDataCompare').PostgresDataSyncPreview };

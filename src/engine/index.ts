@@ -256,7 +256,7 @@ export class Engine {
         throw Error('数据库引擎正在关闭，不能开始新操作');
       }
       // 各驱动共用任务事件和取消入口，必须在分流前保证编号唯一。
-      if ((postgresSessionSetting || command === 'postgres.roles.read' || command === 'postgres.workbookExport' || command === 'postgres.compareData' || command === 'postgres.compareData.syncApply' || command === 'query.execute' || command === 'query.executeParameterized' || command === 'postgres.explain' || command === 'postgres.analyze' || command === 'postgres.table.import' || command.startsWith('serverMonitor.') || command.startsWith('search.')) && this.taskIdInUse(input.taskId)) throw Error('任务编号已使用');
+      if ((postgresSessionSetting || command === 'postgres.roles.read' || command === 'postgres.workbookExport' || command === 'postgres.compareData' || command === 'postgres.compareData.syncApply' || command === 'postgres.compareData.batchPreview' || command === 'postgres.compareData.batchApply' || command === 'query.execute' || command === 'query.executeParameterized' || command === 'postgres.explain' || command === 'postgres.analyze' || command === 'postgres.table.import' || command.startsWith('serverMonitor.') || command.startsWith('search.')) && this.taskIdInUse(input.taskId)) throw Error('任务编号已使用');
       return this.postgres.handle(command, input);
     }
     if (command.startsWith('sqlite.')) throw Error('SQLite专用接口不能进入MySQL网络引擎');

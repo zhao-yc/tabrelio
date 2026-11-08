@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
-import { sqliteBatchSyncActions, type SqliteBatchSyncAction, type SqliteBatchSyncPreview } from '../../shared/sqliteBatchSync';
+import { batchSyncActions, type BatchSyncAction, type BatchSyncPreview } from '../../shared/dataCompareBatchSync';
 import { sqliteDataSyncZh as syncText } from '../../shared/sqliteDataCompare';
 import { displaySqliteCompareValue } from '../sqliteDataCompareValues';
-import { sqliteBatchSyncZh as batchSyncText } from '../locales/sqliteBatchSync.zh-CN';
+import { sqliteBatchSyncZh, postgresBatchSyncZh } from '../locales/sqliteBatchSync.zh-CN';
+import { displayServerCompareValue } from '../serverDataCompareValues';
 import type { DataCompareProfileFamily } from '../../shared/dataCompareProfiles';
 import type { PostgresDataCompareOutput } from '../../shared/postgresDataCompare';
 import { batchPairLimit, dataCompareBatchConfigurationSchema, reverseComparePair, sameCompareScope, type ComparePair, type ComparePairEndpoints, type CompareScope,
@@ -49,6 +50,12 @@ function compare(family: DataCompareProfileFamily, { source, target, mapping }: 
   return invoke(family === 'postgresql' ? 'postgres.compareData' : 'mysql.compareData', { source, target, taskId, summaryOnly: true, mapping });
 }
 
+function displayBatchKeys<Key>(preview: BatchSyncPreview<Key> | null, display: (key: Key) => string): BatchSyncPreview<string> | null {
+  return preview && { ...preview, tables: preview.tables.map(item => ({
+    ...item, rows: item.rows.map(row => ({ ...row, key: row.key.map(display) })),
+  })) };
+}
+
 export function DataCompareBatchDialog({ family, initial, connections, onClose, renderPair }: {
   family: DataCompareProfileFamily;
   initial: ComparePairEndpoints;
@@ -75,8 +82,8 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   const [catalogueError, setCatalogueError] = useState('');
   const [running, setRunning] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
-  const [actions, setActions] = useState<SqliteBatchSyncAction[]>(['insert', 'update']);
-  const [syncPreview, setSyncPreview] = useState<SqliteBatchSyncPreview>();
+  const [actions, setActions] = useState<BatchSyncAction[]>(['insert', 'update']);
+  const [syncPreview, setSyncPreview] = useState<BatchSyncPreview<string>>();
   const [syncPhase, setSyncPhase] = useState<'preview' | 'apply'>();
   const [confirmation, setConfirmation] = useState('');
   const syncWork = useRef<{ taskId: string; phase: 'preview' | 'apply' } | undefined>(undefined);
@@ -212,7 +219,9 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     setPairs(pairs.map(item => item === pair ? next : item)); forget(pair);
   }
 
-  const syncEligible = family === 'sqlite' && pairs.length > 1 && !pairs.some(pair => pair.mapping);
+  const supportsSync = family === 'sqlite' || family === 'postgresql';
+  const batchSyncText = family === 'postgresql' ? postgresBatchSyncZh : sqliteBatchSyncZh;
+  const syncEligible = supportsSync && pairs.length > 1 && !pairs.some(pair => pair.mapping);
   async function prepareSync() {
     if (!syncEligible || !actions.length || !configuration.success || active.current || applying.current || syncWork.current || syncPreview) return;
     const taskId = uid();
@@ -220,8 +229,12 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     syncWork.current = { taskId, phase: 'preview' }; setSyncPhase('preview');
     setError(''); setNotice(''); setConfirmation('');
     try {
-      const preview = await invoke('sqlite.compareSync.batchPreview', { taskId, sourceConnectionId: source.connectionId,
-        targetConnectionId: target.connectionId, pairs: pairs.map(({ source, target }) => ({ source, target })), actions });
+      const request = { taskId, pairs: pairs.map(({ source, target }) => ({ source, target })), actions };
+      const preview = family === 'sqlite'
+        ? displayBatchKeys(await invoke('sqlite.compareSync.batchPreview', { ...request, sourceConnectionId: source.connectionId,
+          targetConnectionId: target.connectionId }), displaySqliteCompareValue)
+        : displayBatchKeys(await invoke('postgres.compareData.batchPreview', { ...request, source, target }),
+          key => displayServerCompareValue(key, 'postgres'));
       if (preview) setSyncPreview(preview); else setNotice(batchSyncText.noChanges);
     } catch (reason) { setError(errorMessage(reason)); }
     finally { syncWork.current = undefined; setSyncPhase(undefined); }
@@ -232,7 +245,8 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     const taskId = uid();
     syncWork.current = { taskId, phase: 'apply' }; setSyncPhase('apply'); setError(''); setNotice('');
     try {
-      const result = await invoke('sqlite.compareSync.batchApply', { previewId: syncPreview.previewId, confirmation, taskId });
+      const request = { previewId: syncPreview.previewId, confirmation, taskId };
+      const result = await invoke(family === 'sqlite' ? 'sqlite.compareSync.batchApply' : 'postgres.compareData.batchApply', request);
       if (result.outcome === 'committed') setNotice(batchSyncText.confirmed + ' · ' + result.message);
       else setError(result.message);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -243,7 +257,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
 
   function stopSyncPreview() {
     const work = syncWork.current;
-    if (work?.phase === 'preview') void invoke('sqlite.compareData.cancel', { taskId: work.taskId }).catch(reason => setError(errorMessage(reason)));
+    if (work?.phase === 'preview') void invoke(family === 'sqlite' ? 'sqlite.compareData.cancel' : 'postgres.compareData.cancel', { taskId: work.taskId }).catch(reason => setError(errorMessage(reason)));
   }
 
   if (review) return renderPair(endpoints({ source, target }, review),
@@ -302,11 +316,11 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
           </Fragment>;
         })}</tbody>
       </table>}
-      {family === 'sqlite' && pairs.length > 1 && <fieldset className="sqlite-data-compare-endpoint" disabled={locked}>
+      {supportsSync && pairs.length > 1 && <fieldset className="sqlite-data-compare-endpoint" disabled={locked}>
         <legend>{batchSyncText.title}</legend>
         <p>{syncEligible ? batchSyncText.hint : batchSyncText.mapped}</p>
         <div className="check-row">
-          {sqliteBatchSyncActions.map(action => <label key={action} className="check">
+          {batchSyncActions.map(action => <label key={action} className="check">
             <input type="checkbox" disabled={!syncEligible} checked={actions.includes(action)} onChange={event => {
               setActions(event.target.checked ? [...actions, action] : actions.filter(value => value !== action));
             }}/>{syncText[action]}
@@ -316,11 +330,11 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
       {syncPreview && <fieldset ref={reviewSync} className="sqlite-data-compare-endpoint" disabled={!!syncPhase}>
         <legend>{batchSyncText.previewTitle}</legend>
         <p>{label(target)}　{syncPreview.confirmation}</p>
-        <p>{sqliteBatchSyncActions.map(action => syncText[action] + ' ' + syncPreview.counts[action]).join(' · ')}</p>
+        <p>{batchSyncActions.map(action => syncText[action] + ' ' + syncPreview.counts[action]).join(' · ')}</p>
         <div className="sqlite-data-sync-preview-rows">
           {syncPreview.tables.map(item => <div key={item.table}>
-            <strong>main.{item.table}</strong>
-            <ul>{item.rows.map((row, index) => <li key={index}>{syncText[row.action]}　{row.key.map(displaySqliteCompareValue).join(' / ')}</li>)}</ul>
+            <strong>{family === 'sqlite' ? 'main.' : ''}{item.table}</strong>
+            <ul>{item.rows.map((row, index) => <li key={index}>{syncText[row.action]}　{row.key.join(' / ')}</li>)}</ul>
           </div>)}
         </div>
         <Field label={syncText.confirm}><input aria-label={syncText.confirm} value={confirmation} onChange={event => setConfirmation(event.target.value)}/></Field>

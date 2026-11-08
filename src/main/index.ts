@@ -7,6 +7,7 @@ import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpToo
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
 import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSqlFile';
 import { inspectMysqlRestoreSql } from '../engine/mysqlSqlFileInspection';
+import type { PostgresBatchSyncApplyInput, PostgresBatchSyncPreview, PostgresBatchSyncPreviewInput } from '../shared/postgresBatchSync';
 import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
@@ -186,6 +187,8 @@ let choosingImportBatch = false;
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
 let networkSyncTarget: { dialect: 'postgres' | 'mysql'; snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
+let postgresBatchSyncTarget: { previewId: string; owner: MainInvocation; revision: number; expires: number;
+  sourceId: string; target: PostgresBatchSyncPreviewInput['target']; confirmation: string } | undefined;
 let networkDataComparison: { owner: MainInvocation; id: string; cancelled: boolean; done: Promise<unknown> } | undefined;
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
 interface SqliteSyncScope {
@@ -1048,9 +1051,14 @@ function networkCompareOwner(owner: MainInvocation): string {
 }
 
 /** 比较任务固定原文档和已保存配置，迟到的取消或结果不能越过窗口与连接修订。 */
-async function compareNetworkData(command: 'mysql.compareData' | 'postgres.compareData', input: PostgresDataCompareInput, owner: MainInvocation | undefined) {
+type NetworkCompareCommand = 'mysql.compareData' | 'postgres.compareData' | 'postgres.compareData.batchPreview';
+async function runNetworkDataComparison<T>(command: NetworkCompareCommand, input: {
+  taskId: string; source: { connectionId: string }; target: { connectionId: string };
+}, owner: MainInvocation | undefined,
+  request: (scope: { sourceProfile: ConnectionProfile; targetProfile: ConnectionProfile; owner: string; connectionRevision: number }) => Promise<T>,
+  publish: (result: T, revision: number) => void): Promise<T> {
   columnsMain.assertCapturedOwner(owner);
-  const postgres = command === 'postgres.compareData', text = postgres ? postgresDataCompareZh : mysqlDataCompareZh;
+  const postgres = command !== 'mysql.compareData', text = postgres ? postgresDataCompareZh : mysqlDataCompareZh;
   if (networkDataComparison || tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId))
     throw Error('已有表数据比较正在运行或任务编号已使用');
   const revision = store.connectionRevision();
@@ -1067,16 +1075,15 @@ async function compareNetworkData(command: 'mysql.compareData' | 'postgres.compa
   tasks.set(input.taskId, { id: input.taskId, kind: command, status: 'running', progress: 0,
     message: text.running, startedAt: new Date().toISOString() });
   networkSyncTarget = undefined;
-  const done = broker.request(command, { ...input, sourceProfile, targetProfile,
-    owner: networkCompareOwner(owner!), connectionRevision: revision });
+  postgresBatchSyncTarget = undefined;
+  const done = request({ sourceProfile, targetProfile, owner: networkCompareOwner(owner!), connectionRevision: revision });
   const record = { owner: owner!, id: input.taskId, cancelled: false, done };
   networkDataComparison = record;
   try {
     const result = await done;
     if (record.cancelled) throw Error(text.cancelled);
     check();
-    if (result.syncSnapshotId) networkSyncTarget = { dialect: postgres ? 'postgres' : 'mysql', snapshotId: result.syncSnapshotId, owner: owner!, revision,
-      expires: Date.now() + postgresDataSyncLimits.lifetimeMs, target: input.target };
+    publish(result, revision);
     taskEvent({ taskId: input.taskId, status: 'completed', progress: 100, message: '表数据比较完成' });
     return result;
   } catch (reason) {
@@ -1084,6 +1091,22 @@ async function compareNetworkData(command: 'mysql.compareData' | 'postgres.compa
       message: record.cancelled ? text.cancelled : '表数据比较未完成' });
     throw reason;
   } finally { networkDataComparison = undefined; }
+}
+
+function compareNetworkData(command: 'mysql.compareData' | 'postgres.compareData', input: PostgresDataCompareInput, owner: MainInvocation | undefined) {
+  return runNetworkDataComparison<import('../shared/postgresDataCompare').PostgresDataCompareOutput>(command, input, owner,
+    scope => broker.request(command, { ...input, ...scope }), (result, revision) => {
+      if (result.syncSnapshotId) networkSyncTarget = { dialect: command === 'postgres.compareData' ? 'postgres' : 'mysql',
+        snapshotId: result.syncSnapshotId, owner: owner!, revision, expires: Date.now() + postgresDataSyncLimits.lifetimeMs, target: input.target };
+    });
+}
+
+function previewPostgresBatchSync(input: PostgresBatchSyncPreviewInput, owner: MainInvocation | undefined) {
+  return runNetworkDataComparison<PostgresBatchSyncPreview | null>('postgres.compareData.batchPreview', input, owner,
+    scope => broker.request('postgres.compareData.batchPreview', { ...input, ...scope }), (result, revision) => {
+      if (result) postgresBatchSyncTarget = { previewId: result.previewId, owner: owner!, revision,
+        expires: Date.now() + postgresDataSyncLimits.lifetimeMs, sourceId: input.source.connectionId, target: input.target, confirmation: result.confirmation };
+    });
 }
 
 /** 只有比较结果的原文档可以预览或写入。写操作入队前固定目标和连接修订。 */
@@ -1109,18 +1132,44 @@ async function applyNetworkSync(dialect: 'postgres' | 'mysql', input: PostgresDa
     throw Error(dialect === 'postgres' ? postgresDataSyncZh.stale : mysqlDataSyncZh.stale);
   networkSyncTarget = undefined;
   const command = dialect + '.compareData.syncApply';
-  tasks.set(input.taskId, { id: input.taskId, kind: command, status: 'running', progress: 0,
+  return runNetworkSyncWrite(command, input.taskId, () => broker.request(command, { ...input, ...scope, targetProfile }));
+}
+
+function applyPostgresBatchSync(input: PostgresBatchSyncApplyInput, owner: MainInvocation | undefined) {
+  columnsMain.assertCapturedOwner(owner);
+  const record = postgresBatchSyncTarget;
+  if (!record || record.previewId !== input.previewId || record.confirmation !== input.confirmation ||
+      record.revision !== store.connectionRevision() || record.expires <= Date.now() || networkDataComparison ||
+      shuttingDown || !columnsMain.sharesDocumentOwner(record.owner, owner!)) throw Error(postgresDataSyncZh.stale);
+  if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('同步任务编号已使用');
+  connectionConfig.assertAvailable(record.sourceId); connectionConfig.assertAvailable(record.target.connectionId);
+  const targetProfile = store.resolveConnection(record.target.connectionId);
+  if (targetProfile.dialect !== 'postgresql') throw Error(postgresDataSyncZh.stale);
+  postgresBatchSyncTarget = undefined;
+  const command = 'postgres.compareData.batchApply';
+  return runNetworkSyncWrite(command, input.taskId, () => broker.request(command, {
+    ...input, owner: networkCompareOwner(owner!), connectionRevision: record.revision, targetProfile,
+  }));
+}
+
+async function runNetworkSyncWrite(command: string, taskId: string, apply: () => Promise<import('../shared/postgresTable').PostgresTableOutcome>) {
+  tasks.set(taskId, { id: taskId, kind: command, status: 'running', progress: 0,
     message: postgresDataSyncZh.working, startedAt: new Date().toISOString() });
-  try {
-    const result = await broker.request(command, { ...input, ...scope, targetProfile });
-    const committed = result.outcome === 'committed';
-    taskEvent({ taskId: input.taskId, status: committed ? 'completed' : 'failed', progress: committed ? 100 : 0,
-      message: committed ? '差异同步已确认提交' : result.outcome === 'unknown' ? '差异同步终态待核对' : '差异同步未提交' });
-    return result;
-  } catch (reason) {
-    taskEvent({ taskId: input.taskId, status: 'failed', progress: 0, message: '同步未取得完整回执，请核对右侧数据库' });
+  let result;
+  try { result = await apply(); }
+  catch (reason) {
+    taskEvent({ taskId, status: 'failed', progress: 0, message: '同步未取得完整回执，请核对右侧数据库' });
     throw reason;
   }
+  const committed = result.outcome === 'committed';
+  try {
+    taskEvent({ taskId, status: committed ? 'completed' : 'failed', progress: committed ? 100 : 0,
+      message: committed ? '差异同步已确认提交' : result.outcome === 'unknown' ? '差异同步终态待核对' : '差异同步未提交' });
+  } catch {
+    // 已取得的数据库终态优先于任务摘要的写盘或通知异常。
+    return { ...result, message: result.message + '，任务摘要未完整记录' };
+  }
+  return result;
 }
 
 async function cancelNetworkCompare(taskId: string, owner: MainInvocation | undefined) {
@@ -2419,7 +2468,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         importCheck.controller.abort();
         return;
       }
-      if (['postgres.compareData', 'mysql.compareData'].includes(tasks.get(input.taskId)?.kind ?? '')) return cancelNetworkCompare(input.taskId, columns);
+      if (['postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview'].includes(tasks.get(input.taskId)?.kind ?? '')) return cancelNetworkCompare(input.taskId, columns);
       if (['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get(input.taskId)?.kind ?? '')) {
         const backupOwner = sqlFileTaskOwners.get(input.taskId);
         if (backupOwner) {
@@ -2636,6 +2685,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'postgres.compareData': return compareNetworkData(command, input, columns);
     case 'mysql.compareData.syncPreview': return previewNetworkSync('mysql', input, columns);
     case 'mysql.compareData.syncApply': return applyNetworkSync('mysql', input, columns);
+    case 'postgres.compareData.batchPreview': return previewPostgresBatchSync(input, columns);
+    case 'postgres.compareData.batchApply': return applyPostgresBatchSync(input, columns);
     case 'postgres.compareData.syncPreview': return previewNetworkSync('postgres', input, columns);
     case 'postgres.compareData.syncApply': return applyNetworkSync('postgres', input, columns);
     case 'mysql.compareData.cancel':
@@ -3458,7 +3509,7 @@ else {
         if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') || payload.command.startsWith('mysql.backup.') ||
-            payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
+            payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||

@@ -12,7 +12,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.tableLayout.get': true, 'sqlite.tableLayout.save': true, 'sqlite.tableLayout.reset': true,
   'sqlite.tablePresets.list': true, 'sqlite.tablePresets.save': true, 'sqlite.tablePresets.delete': true, 'sqlite.tablePresets.read': true,
   'postgres.completion': true,
-  'postgres.compareData.syncPreview': true, 'postgres.compareData.syncApply': true,
+  'postgres.compareData.batchPreview': true, 'postgres.compareData.batchApply': true, 'postgres.compareData.syncPreview': true, 'postgres.compareData.syncApply': true,
   'mysql.compareData.syncPreview': true, 'mysql.compareData.syncApply': true,
   'mysql.compareData': true, 'mysql.compareData.catalogue': true, 'mysql.compareData.cancel': true,
   'postgres.compareData': true, 'postgres.compareData.catalogue': true, 'postgres.compareData.cancel': true,

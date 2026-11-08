@@ -1,3 +1,4 @@
+import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from './postgresBatchSync';
 import { sqliteBatchSyncPreviewSchema } from './sqliteBatchSync';
 import { postgresDatabaseManagePreviewSchema, postgresDatabaseManageApplySchema } from './postgresDatabaseManage';
 import { postgresStorageDetailSchema, postgresStorageReadSchema } from './postgresStorage';
@@ -399,6 +400,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tablePage': sqliteTablePageSchema,
   'sqlite.valueOptions': sqliteValueOptionsInputSchema,
   'sqlite.statistics': sqliteStatisticsInputSchema,
+  'postgres.compareData.batchPreview': postgresBatchSyncPreviewSchema,
+  'postgres.compareData.batchApply': postgresBatchSyncApplySchema,
   'postgres.compareData.syncPreview': postgresDataSyncPreviewSchema,
   'postgres.compareData.syncApply': postgresDataSyncApplySchema,
   'mysql.compareData.syncPreview': postgresDataSyncPreviewSchema,

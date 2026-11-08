@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CellValue } from '../../shared/contracts';
+import { displayServerCompareValue as display } from '../serverDataCompareValues';
 import {
   postgresDataCompareLimits as limits, postgresDataCompareSchema, postgresDataCompareZh,
   postgresDataSyncLimits, postgresDataSyncZh as sync, type PostgresDataSyncPreview,
@@ -70,12 +70,6 @@ function CompareEndpoint({ label, connections, disabled, value, change, dialect 
     {databaseError && <ErrorBox message={databaseError}/>}
     {tableError && <ErrorBox message={tableError}/>}
   </fieldset>;
-}
-
-function display(value: CellValue | undefined, dialect: Dialect): string {
-  if (value === undefined) return compareLabels[dialect].absent;
-  if (value === null) return 'NULL';
-  return typeof value === 'object' ? (dialect === 'postgres' ? 'BYTEA Base64 ' : '字节 Base64 ') + value.base64 : JSON.stringify(value);
 }
 
 function keyLabel(row: PostgresDataCompareRow, dialect: Dialect) {

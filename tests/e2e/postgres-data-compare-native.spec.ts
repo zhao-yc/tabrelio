@@ -1,3 +1,4 @@
+import { postgresBatchSyncZh as batchSync } from '../../src/renderer/locales/sqliteBatchSync.zh-CN';
 import { dataCompareMappingZh as mapping } from '../../src/renderer/locales/dataCompareMapping.zh-CN';
 import { dataCompareBatchZh as batch } from '../../src/renderer/locales/dataCompareBatch.zh-CN';
 import { dataCompareBatchProfilesZh as batchProfiles, dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
@@ -333,6 +334,78 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     expect((await right.query('SELECT id::text,val,derived FROM "对照"."标识"')).rows).toEqual([{ id: '99', val: 7, derived: 14 }]);
     expect((await right.query('SELECT last_value::text,is_called FROM "对照"."标识_id_seq"')).rows)
       .toEqual([{ last_value: '42', is_called: false }]);
+    // 约束只存在于右侧第二张表，第一张表的 DML 已执行时也必须整批回滚。
+    const batchDdl = 'CREATE TABLE "对照".batch_alpha(id bigint PRIMARY KEY, note text);';
+    await left.query(batchDdl + `CREATE TABLE "对照".batch_beta(id bigint PRIMARY KEY, note text, raw bytea);
+      INSERT INTO "对照".batch_alpha VALUES (1,'左'), (2,'新增');
+      INSERT INTO "对照".batch_beta VALUES (9223372036854775807,'block',decode('00ff80','hex'));`);
+    await right.query(batchDdl + `CREATE TABLE "对照".batch_beta(id bigint PRIMARY KEY, note text CHECK (note <> 'block'), raw bytea);
+      INSERT INTO "对照".batch_alpha VALUES (1,'右'), (3,'仅右');
+      INSERT INTO "对照".batch_beta VALUES (9223372036854775807,'旧',decode('00ff81','hex'));`);
+    const readBatch = async (client: Client) => [
+      (await client.query('SELECT id::text, note FROM "对照".batch_alpha ORDER BY id')).rows,
+      (await client.query(`SELECT id::text, note, encode(raw,'hex') AS raw FROM "对照".batch_beta ORDER BY id`)).rows,
+    ];
+    const initialBatch = await readBatch(right);
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    await overview.getByRole('button', { name: batch.remove, exact: true }).click();
+    for (const table of ['"对照"."batch_alpha"', '"对照"."batch_beta"']) {
+      await overview.getByLabel(batch.source, { exact: true }).selectOption(table);
+      await overview.getByLabel(batch.target, { exact: true }).selectOption(table);
+      await overview.getByRole('button', { name: batch.add, exact: true }).click();
+    }
+    const prepareSync = overview.getByRole('button', { name: batchSync.preview, exact: true });
+    const batchApply = overview.getByRole('button', { name: batchSync.apply, exact: true });
+    const batchReview = overview.getByRole('group', { name: batchSync.previewTitle, exact: true });
+    const batchConfirm = overview.getByLabel(sync.confirm, { exact: true });
+    const batchExact = targetDatabase + '."对照"."batch_alpha" 等 2 张表';
+    const confirmBatch = async () => { await batchConfirm.fill(batchExact); await batchApply.click(); };
+    await expect(overview.getByRole('checkbox', { name: sync.delete, exact: true })).not.toBeChecked();
+    await right.query('BEGIN; LOCK TABLE "对照".batch_beta IN ACCESS EXCLUSIVE MODE');
+    try {
+      const batchWaiting = async () => Number((await reader.query(
+        "SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE datname=$1 AND wait_event_type='Lock' AND query LIKE '%batch_beta%'",
+        [targetDatabase],
+      )).rows[0].count);
+      await prepareSync.click();
+      await expect.poll(batchWaiting).toBe(1);
+      await overview.getByRole('button', { name: batch.cancel, exact: true }).click();
+      await expect(overview.getByRole('alert')).toContainText(text.cancelled);
+      await expect.poll(batchWaiting).toBe(0);
+      await expect(batchReview).toHaveCount(0);
+    } finally { await right.query('ROLLBACK'); }
+
+    await prepareSync.click();
+    await expect(batchReview).toContainText('插入 1 · 更新 2 · 删除 0');
+    await expect(batchReview).toContainText('更新　"9223372036854775807"');
+    expect(await readBatch(right)).toEqual(initialBatch);
+    await batchConfirm.fill(targetDatabase + '."对照"."batch_alpha"');
+    await expect(batchApply).toBeDisabled();
+    await confirmBatch();
+    await expect(overview.getByRole('alert')).toContainText('"对照"."batch_beta"：整批已回滚');
+    expect(await readBatch(right)).toEqual(initialBatch);
+
+    await left.query(`UPDATE "对照".batch_beta SET note='通过'`);
+    await prepareSync.click();
+    await expect(batchReview).toContainText('更新 2');
+    await right.query('UPDATE "对照".batch_beta SET note=note');
+    await confirmBatch();
+    await expect(overview.getByRole('alert')).toContainText('原记录已被修改');
+    expect(await readBatch(right)).toEqual(initialBatch);
+
+    await overview.getByRole('checkbox', { name: sync.delete, exact: true }).check();
+    await prepareSync.click();
+    await expect(batchReview).toContainText('插入 1 · 更新 2 · 删除 1');
+    await batchConfirm.fill(batchExact);
+    await page.screenshot({ path: info.outputPath('PostgreSQL多表事务同步.png') });
+    const wantedBatch = await readBatch(left);
+    await batchApply.click();
+    await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+    expect(await readBatch(right)).toEqual(wantedBatch);
+    expect(await readBatch(left)).toEqual(wantedBatch);
+    await prepareSync.click();
+    await expect(overview.getByRole('status')).toHaveText(batchSync.noChanges);
+    await overview.getByRole('button', { name: batch.return, exact: true }).click();
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();
     await confirmOwnedDesktopExit(info);

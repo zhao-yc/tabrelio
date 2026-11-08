@@ -1,3 +1,5 @@
+import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
+import { preparePostgresBatchSync } from './batchSync';
 import { compareMappedTableData } from '../tableDataDifferences';
 import { postgresSequenceTargets, postgresSequenceVisibleSql, readPostgresSequence } from './sequence';
 import { randomUUID } from 'node:crypto';
@@ -185,6 +187,9 @@ export class PostgresEngine {
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
   private syncSnapshot?: SyncSnapshot;
+  private batchSync?: NonNullable<Awaited<ReturnType<typeof preparePostgresBatchSync>>> & {
+    sourceId: string; target: Omit<PostgresDataCompareEndpoint, 'table'>; owner: string; revision: number; expires: number;
+  };
   private readonly transfers = new Map<string, TransferTask>();
   private readonly completedTasks = new Set<string>();
   private readonly leases = new Set<Lease>();
@@ -576,20 +581,15 @@ export class PostgresEngine {
     }
   }
 
-  /** 同库共用一次只读事务。跨库逐侧读取并释放各自租约，取消只触及本轮独占连接。 */
-  private async compareData(raw: Input) {
-    const { source, target, taskId, filter, summaryOnly, mapping } = postgresDataCompareSchema.parse({
-      source: raw.source, target: raw.target, taskId: raw.taskId, filter: raw.filter, summaryOnly: raw.summaryOnly, mapping: raw.mapping,
-    });
-    const left = raw.sourceProfile as PostgresConnectionProfile, right = raw.targetProfile as PostgresConnectionProfile;
-    if (left?.dialect !== 'postgresql' || right?.dialect !== 'postgresql' || left.id !== source.connectionId || right.id !== target.connectionId)
-      throw Error('比较需要两条准确的已保存 PostgreSQL 连接配置');
+  /** 原文档的一次比较任务共享超时预算。取消只作用于本轮独占连接。 */
+  private async withCompareTask<T>(taskId: string, left: PostgresConnectionProfile, right: PostgresConnectionProfile,
+    run: (compare: (input: Pick<import('../../shared/postgresDataCompare').PostgresDataCompareInput, 'source' | 'target' | 'filter' | 'mapping'>,
+      capture: boolean) => Promise<{ report: import('../../shared/postgresDataCompare').PostgresDataCompareOutput; evidence?: PostgresSyncEvidence }>) => Promise<T>): Promise<T> {
     if (this.stopping || this.closing.has(left.id) || this.closing.has(right.id) || this.ownsTask(taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 比较任务已存在、连接关闭中或已达并发上限');
     this.syncSnapshot = undefined;
-    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text && !summaryOnly && !mapping;
+    this.batchSync = undefined;
     const task: TransferTask = { connectionId: left.id, otherConnectionId: right.id, cancelled: false, publishing: false };
-    const shared = left.id === right.id && source.database === target.database;
     let timedOut = false;
     const text = postgresDataCompareZh;
     const check = () => {
@@ -612,7 +612,8 @@ export class PostgresEngine {
     this.transfers.set(taskId, task);
     const timer = setTimeout(() => { timedOut = true; this.cancelTransfer(task); }, postgresDataCompareLimits.timeoutMs);
     timer.unref();
-    const done = task.done = Promise.resolve().then(async () => {
+    const done = Promise.resolve().then(() => run(async ({ source, target, filter, mapping }, capture) => {
+      const shared = left.id === right.id && source.database === target.database;
       const [a, b] = shared
         ? await open(left, source.database, async managed => {
           const a = await readPostgresCompareTable(managed, source, filter, check, false, mapping);
@@ -627,14 +628,9 @@ export class PostgresEngine {
       let evidence: PostgresSyncEvidence | undefined;
       const report = mapping ? compareMappedTableData(a, b, shared, 'PostgreSQL', mapping) :
         comparePostgresSnapshots(a, b, shared, capture ? value => { evidence = value; } : undefined);
-      // 批次只交付计数，不保留逐行值和同步能力。
-      if (summaryOnly) return { ...report, differences: [] };
-      if (!evidence) return report;
-      const id = randomUUID(), expires = Date.now() + postgresDataSyncLimits.lifetimeMs;
-      this.syncSnapshot = { id, owner: raw.owner, revision: raw.connectionRevision, source, target, evidence, expires };
-      setTimeout(() => { if (this.syncSnapshot?.id === id) this.syncSnapshot = undefined; }, postgresDataSyncLimits.lifetimeMs).unref();
-      return { ...report, syncSnapshotId: id };
-    });
+      return { report, evidence };
+    }));
+    task.done = done;
     try { return await done; }
     catch (reason) {
       await task.cancelPending;
@@ -645,6 +641,61 @@ export class PostgresEngine {
       this.transfers.delete(taskId);
       this.rememberCompleted(taskId);
     }
+  }
+
+  /** 同库共用一次只读事务。跨库逐侧读取并释放各自租约，取消只触及本轮独占连接。 */
+  private async compareData(raw: Input) {
+    const { source, target, taskId, filter, summaryOnly, mapping } = postgresDataCompareSchema.parse({
+      source: raw.source, target: raw.target, taskId: raw.taskId, filter: raw.filter, summaryOnly: raw.summaryOnly, mapping: raw.mapping,
+    });
+    const left = raw.sourceProfile as PostgresConnectionProfile, right = raw.targetProfile as PostgresConnectionProfile;
+    if (left?.dialect !== 'postgresql' || right?.dialect !== 'postgresql' || left.id !== source.connectionId || right.id !== target.connectionId)
+      throw Error('比较需要两条准确的已保存 PostgreSQL 连接配置');
+    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text && !summaryOnly && !mapping;
+    return this.withCompareTask(taskId, left, right, async compare => {
+      const { report, evidence } = await compare({ source, target, filter, mapping }, capture);
+      // 批次只交付计数，不保留逐行值和同步能力。
+      if (summaryOnly) return { ...report, differences: [] };
+      if (!evidence) return report;
+      const id = randomUUID(), expires = Date.now() + postgresDataSyncLimits.lifetimeMs;
+      this.syncSnapshot = { id, owner: raw.owner, revision: raw.connectionRevision, source, target, evidence, expires };
+      setTimeout(() => { if (this.syncSnapshot?.id === id) this.syncSnapshot = undefined; }, postgresDataSyncLimits.lifetimeMs).unref();
+      return { ...report, syncSnapshotId: id };
+    });
+  }
+
+  private async previewBatchSync(raw: Input) {
+    const { sourceProfile, targetProfile, owner, connectionRevision, ...request } = raw;
+    const input = postgresBatchSyncPreviewSchema.parse(request);
+    const left = sourceProfile as PostgresConnectionProfile, right = targetProfile as PostgresConnectionProfile;
+    if (left?.dialect !== 'postgresql' || right?.dialect !== 'postgresql' || left.id !== input.source.connectionId ||
+        right.id !== input.target.connectionId || typeof owner !== 'string' || !Number.isSafeInteger(connectionRevision))
+      throw Error(postgresDataSyncZh.stale);
+    return this.withCompareTask(input.taskId, left, right, async compare => {
+      const prepared = await preparePostgresBatchSync(input, compare);
+      if (!prepared) return null;
+      const expires = Date.now() + postgresDataSyncLimits.lifetimeMs;
+      const id = prepared.preview.previewId;
+      this.batchSync = { ...prepared, owner, revision: connectionRevision, expires, sourceId: left.id, target: input.target };
+      setTimeout(() => { if (this.batchSync?.preview.previewId === id) this.batchSync = undefined; }, postgresDataSyncLimits.lifetimeMs).unref();
+      return prepared.preview;
+    });
+  }
+
+  private async applyBatchSync(raw: Input) {
+    const { targetProfile, owner, connectionRevision, ...request } = raw;
+    const input = postgresBatchSyncApplySchema.parse(request);
+    const record = this.batchSync, profile = targetProfile as PostgresConnectionProfile;
+    if (!record || record.preview.previewId !== input.previewId || record.preview.confirmation !== input.confirmation ||
+        record.owner !== owner || record.revision !== connectionRevision || record.expires <= Date.now() || this.stopping ||
+        this.closing.has(record.sourceId) || this.closing.has(record.target.connectionId) ||
+        profile?.dialect !== 'postgresql' || profile.id !== record.target.connectionId)
+      throw Error(postgresDataSyncZh.stale);
+    if (this.ownsTask(input.taskId) || this.transfers.size >= 32) throw Error('PostgreSQL 同步任务编号已使用或已达并发上限');
+    this.batchSync = undefined;
+    return this.runSyncWrite(input.taskId, profile, () => this.tables.synchronizeBatch(record.groups,
+      (action, writing) => this.use(profile, record.target.database, action, false, false, writing),
+      connection => configurePostgresCompare(connection, () => {})));
   }
 
   private requireSyncSnapshot(raw: Input, id: string) {
@@ -684,17 +735,23 @@ export class PostgresEngine {
         profile?.dialect !== 'postgresql' || profile.id !== record.target.connectionId) throw Error(postgresDataSyncZh.stale);
     if (this.ownsTask(input.taskId) || this.transfers.size >= 32) throw Error('PostgreSQL 同步任务编号已使用或已达并发上限');
     this.syncSnapshot = undefined;
-    // 发起后的连接受写入保护，断开和退出等待原事务事实，不能用取消中止 COMMIT。
-    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: true };
-    this.transfers.set(input.taskId, task);
-    const done = task.done = this.tables.synchronize(record.evidence, record.target.table, preview.rows,
+    return this.runSyncWrite(input.taskId, profile, () => this.tables.synchronize(record.evidence, record.target.table, preview.rows,
       (action, writing) => this.use(profile, record.target.database, action, false, false, writing),
-      connection => configurePostgresCompare(connection, () => {}));
+      connection => configurePostgresCompare(connection, () => {})));
+  }
+
+  /** 发起后的连接受写入保护，断开和退出等待原事务事实。 */
+  private async runSyncWrite<T>(taskId: string, profile: PostgresConnectionProfile, apply: () => Promise<T>): Promise<T> {
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: true };
+    this.transfers.set(taskId, task);
+    const done = Promise.resolve().then(apply);
+    task.done = done;
     try { return await done; }
-    finally { this.transfers.delete(input.taskId); this.rememberCompleted(input.taskId); }
+    finally { this.transfers.delete(taskId); this.rememberCompleted(taskId); }
   }
 
   private invalidateSync(id: string) {
+    if (this.batchSync && [this.batchSync.sourceId, this.batchSync.target.connectionId].includes(id)) this.batchSync = undefined;
     if (this.syncSnapshot && [this.syncSnapshot.source.connectionId, this.syncSnapshot.target.connectionId].includes(id)) this.syncSnapshot = undefined;
   }
 
@@ -863,6 +920,7 @@ export class PostgresEngine {
   async closeAll(): Promise<void> {
     this.stopping = true;
     this.syncSnapshot = undefined;
+    this.batchSync = undefined;
     try {
       for (const id of new Set([
         ...this.profiles.keys(),
@@ -1392,6 +1450,8 @@ export class PostgresEngine {
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
       case 'postgres.compareData': return this.compareData(input);
+      case 'postgres.compareData.batchPreview': return this.previewBatchSync(input);
+      case 'postgres.compareData.batchApply': return this.applyBatchSync(input);
       case 'postgres.compareData.syncPreview': return this.previewSync(input);
       case 'postgres.compareData.syncApply': return this.applySync(input);
       case 'postgres.backup.catalogue': {
