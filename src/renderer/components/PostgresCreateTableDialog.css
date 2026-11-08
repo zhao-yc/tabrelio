@@ -11,4 +11,3 @@
 .pg-partition-list-value > label:not(.field) { align-self: center; display: flex; align-items: center; gap: 4px; }
 .pg-create-sql { max-height: min(50vh, 520px); overflow: auto; padding: 12px; background: var(--editor); border: 1px solid var(--line); }
 .pg-create-view-definition { font-family: var(--font-mono, monospace); min-height: 140px; }
-.pg-view-sample-grid { height: 240px; min-width: 0; }

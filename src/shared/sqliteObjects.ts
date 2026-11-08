@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { scanSqliteStatementPositions, sqliteLeadingKeyword } from './sqliteStatementScanner';
 
 /** 视图和触发器定义只在原会话短期保存；完整目录超限不截断。 */
 export const sqliteObjectsLimits = { catalogues: 64, previews: 64, catalogueBytes: 64 * 1024 * 1024, previewBytes: 64 * 1024 * 1024, catalogueLifetimeMs: 5 * 60 * 1000, previewLifetimeMs: 5 * 60 * 1000, statements: 4098, attachedTriggers: 4096, relatedObjects: 4096, eligibleRelations: 4096, ddlBytes: 2 * 1024 * 1024 } as const;
@@ -13,6 +14,12 @@ export const sqliteObjectsActionSchema = z.enum(['create', 'replace', 'drop']);
 export type SqliteObjectsAction = z.infer<typeof sqliteObjectsActionSchema>;
 export const sqliteObjectsTargetSchema = z.object({ connectionId: id, database: z.literal('main'), kind: sqliteObjectsKindSchema, name: name.refine(value => !/^sqlite_/i.test(value), 'SQLite系统对象不能管理定义') }).strict();
 export type SqliteObjectsTarget = z.infer<typeof sqliteObjectsTargetSchema>;
+export const sqliteViewQueryInspectSchema = sqliteObjectsTargetSchema.omit({ kind: true }).extend({
+  sql: sqlText.min(1),
+  mode: z.enum(['rows', 'explain']),
+}).strict();
+export const sqliteViewSampleRows = 100;
+export type SqliteViewQueryInspectInput = z.infer<typeof sqliteViewQueryInspectSchema>;
 export const sqliteObjectsAcknowledgementSchema = z.enum(['definition-effects', 'native-validation', 'dependent-objects', 'attached-view-triggers', 'drop-object']);
 export type SqliteObjectsAcknowledgement = z.infer<typeof sqliteObjectsAcknowledgementSchema>;
 const acknowledgements = z.array(sqliteObjectsAcknowledgementSchema).min(1).max(5).refine(value => new Set(value).size === value.length, 'SQLite对象风险确认不能重复');
@@ -82,7 +89,7 @@ export type SqliteObjectsOutcome = z.infer<typeof sqliteObjectsOutcomeSchema>;
 
 interface HeaderToken { value: string; quoted: boolean; }
 /** 只读有界CREATE头，理解原生注释和引用名称；不扫描ON/END，也不假装验证SQL正文。 */
-export function parseSqliteObjectsCreateHeader(raw: string): { kind: SqliteObjectsKind; database: 'main'; name: string } {
+function sqliteObjectsCreatePrefix(raw: string) {
   const sql = sqlText.min(1).parse(raw); let offset = 0;
   /** 单向跳过空白及原生非嵌套注释；块注释按SQLite规则可延伸至输入结尾。 */
   function skip(): void {
@@ -112,7 +119,43 @@ export function parseSqliteObjectsCreateHeader(raw: string): { kind: SqliteObjec
   // 对象名后的正文由native prepare/authorizer确认；这里只读取可能存在的schema点号。
   let nameToken = firstName;
   skip(); if (sql[offset] === '.') { offset++; if (fold(firstName.value) !== 'main') throw Error('SQLite对象定义只允许main schema'); nameToken = token(); }
-  const parsed = sqliteObjectsTargetSchema.parse({ connectionId: 'header-only', database: 'main', kind, name: nameToken.value }); return { kind, database: 'main', name: parsed.name };
+  const parsed = sqliteObjectsTargetSchema.parse({ connectionId: 'header-only', database: 'main', kind, name: nameToken.value });
+  const target = { kind, database: 'main' as const, name: parsed.name };
+  return { target, sql, token, offset: () => offset, take(character: string) {
+    skip();
+    if (sql[offset] !== character) return false;
+    offset++;
+    return true;
+  } };
+}
+
+export function parseSqliteObjectsCreateHeader(raw: string): { kind: SqliteObjectsKind; database: 'main'; name: string } {
+  return sqliteObjectsCreatePrefix(raw).target;
+}
+
+/** 从准确命名的 CREATE VIEW 提取单条查询及显式列名；正文仍由 SQLite 原生解析。 */
+export function sqliteViewDraftQuery(raw: string, expectedName: string): { query: string; columns: string[] } {
+  const { target, sql, token, offset, take } = sqliteObjectsCreatePrefix(raw);
+  if (target.kind !== 'view' || target.name !== expectedName) throw Error('SQLite 视图定义须与当前对象准确同名');
+  const columns: string[] = [];
+  if (take('(')) {
+    do {
+      if (columns.length >= 1024) throw Error('SQLite 视图显式列清单超过 1024 列');
+      columns.push(token().value);
+    } while (take(','));
+    if (!take(')')) throw Error('SQLite 视图列清单不完整');
+  }
+  const as = token();
+  if (as.quoted || fold(as.value) !== 'as') throw Error('SQLite 视图定义缺少 AS 查询');
+  let end: number | undefined;
+  scanSqliteStatementPositions(sql, (_start, last) => {
+    if (end !== undefined) throw Error('SQLite 视图预览只接受一条 CREATE VIEW 定义');
+    end = last;
+  });
+  const query = sql.slice(offset(), end);
+  if (!['SELECT', 'WITH', 'VALUES'].includes(sqliteLeadingKeyword(query) ?? ''))
+    throw Error('SQLite 视图预览需要 SELECT、WITH 或 VALUES 查询');
+  return { query, columns };
 }
 
 const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';

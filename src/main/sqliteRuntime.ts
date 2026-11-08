@@ -34,6 +34,7 @@ import { readSqliteReference } from './sqliteReference';
 import { sqliteReferenceInputSchema, sqliteReferenceLimits, type SqliteReferenceInput, type SqliteReferenceOutput } from '../shared/sqliteReference';
 import { readSqliteSchemaScript } from './sqliteSchemaExport';
 import { sqliteSchemaScriptSchema } from '../shared/sqliteSchemaScript';
+import { inspectSqliteViewQuery } from './sqliteViewQueryInspect';
 import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type SqliteRelationshipsOutput } from '../shared/sqliteRelationships';
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import { sqliteQueryExportSchema } from '../shared/sqliteQueryExport';
@@ -59,7 +60,7 @@ import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteT
 import { SqliteTableRenames, inspectSqliteTableRename, verifySqliteTableRename, applySqliteTableRename, sqliteTableRenameNotSent, type SqliteTableRenameInspectRequest, type SqliteTableRenamePreviewRequest, type SqliteTableRenameApplyRequest } from './sqliteTableRename';
 import { sqliteTableMaintenanceInspectSchema, sqliteTableMaintenancePreviewSchema, sqliteTableMaintenanceApplySchema, sqliteTableMaintenanceReleaseSchema, sqliteTableMaintenanceMessages, type SqliteTableMaintenanceInspectOutput, type SqliteTableMaintenancePreviewOutput, type SqliteTableMaintenanceOutcome } from '../shared/sqliteTableMaintenance';
 import { SqliteTableMaintenance, inspectSqliteTableMaintenance, verifySqliteTableMaintenance, applySqliteTableMaintenance, sqliteTableMaintenanceNotSent, type SqliteTableMaintenanceInspectRequest, type SqliteTableMaintenancePreviewRequest, type SqliteTableMaintenanceApplyRequest } from './sqliteTableMaintenance';
-import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsMessages, type SqliteObjectsInspectOutput, type SqliteObjectsPreviewOutput, type SqliteObjectsOutcome } from '../shared/sqliteObjects';
+import { sqliteViewQueryInspectSchema, sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsMessages, type SqliteObjectsInspectOutput, type SqliteObjectsPreviewOutput, type SqliteObjectsOutcome } from '../shared/sqliteObjects';
 import { SqliteObjects, inspectSqliteObjects, verifySqliteObjects, applySqliteObjects, sqliteObjectsNotSent, type SqliteObjectsInspectRequest, type SqliteObjectsPreviewRequest, type SqliteObjectsApplyRequest } from './sqliteObjects';
 
 /** SQLite文件导入独立并发上限；原任务settled之后才归还槽位。 */
@@ -1388,6 +1389,15 @@ export class SqliteRuntime {
         const source = sqliteSchemaScriptSchema.parse(input);
         // 短读自行确认 driver 关闭；边界检查只中止读取，不干预回滚或用户事务。
         return this.metadata(source, (driver, check) => readSqliteSchemaScript(driver, source, { check, beginCleanup: () => {}, cleanupFailed: () => {} }));
+      }
+      case 'sqlite.view.inspectQuery': {
+        const source = sqliteViewQueryInspectSchema.parse(input);
+        return this.metadata(source, async (driver, check) => {
+          check();
+          const result = await inspectSqliteViewQuery(driver, source);
+          check();
+          return result;
+        });
       }
       case 'sqlite.relationships': return this.relationships(input);
       case 'sqlite.incomingPage': return this.incoming(input);

@@ -4,7 +4,7 @@ import { clickSidebarAction } from './sidebar-menu';
 import { postgresCreateViewZh as create } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { postgresViewEditZh as edit } from '../../src/renderer/locales/postgresViewEdit.zh-CN';
 import { postgresStructureZh as structure } from '../../src/renderer/locales/postgresStructure.zh-CN';
-import { postgresViewQueryInspectZh as inspect } from '../../src/renderer/locales/postgresViewQueryInspect.zh-CN';
+import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 
 const enabled = process.env.DBARK_VIEW_INSPECT_ENABLED === '1';

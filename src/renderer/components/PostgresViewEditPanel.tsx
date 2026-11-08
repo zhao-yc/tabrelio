@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
-import { postgresEditViewPreviewSchema, preparePostgresViewDefinition } from '../../shared/postgresCreateView';
+import { postgresEditViewPreviewSchema, preparePostgresViewDefinition, postgresViewQuerySampleRows } from '../../shared/postgresCreateView';
 import { invoke } from '../lib';
 import { postgresViewEditZh as text } from '../locales/postgresViewEdit.zh-CN';
 import { ErrorBox } from './ui';
 import { usePostgresStructureEdit, type PostgresStructureEditProps } from './usePostgresStructureEdit';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
-import { PostgresViewQueryInspect } from './PostgresViewQueryInspect';
+import { ViewQueryInspect } from './ViewQueryInspect';
+import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import { useWorkspace } from '../store';
 
@@ -52,8 +53,9 @@ export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
         value={definition} disabled={busy || unknown} onChange={event => changeDefinition(event.target.value)}/></label>
       <ViewSqlFileImport owner={importOwner} value={definition} disabled={busy || unknown}
         hint={viewSqlFileZh.postgresHint} current={importCurrent} prepare={preparePostgresViewDefinition} apply={changeDefinition}/>
-      <PostgresViewQueryInspect target={target} owner={importOwner} definition={definition}
-        disabled={busy || unknown} current={importCurrent}/>
+      <ViewQueryInspect owner={importOwner} hint={viewQueryInspectZh.postgresHint(postgresViewQuerySampleRows)}
+        disabled={busy || unknown || !definition.trim()} current={importCurrent}
+        read={mode => invoke('postgres.createView.inspectQuery', { connectionId: target.connectionId, database: target.database, definition, mode })}/>
     </>}
     <div className="pg-column-edit-actions">
       {preview ? <>

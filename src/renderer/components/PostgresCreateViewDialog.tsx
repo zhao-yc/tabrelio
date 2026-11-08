@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview, PostgresCreateTableTarget } from '../../shared/postgresCreateTable';
-import { postgresCreateViewPreviewSchema, preparePostgresViewDefinition, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
+import { postgresCreateViewPreviewSchema, preparePostgresViewDefinition, postgresViewQuerySampleRows, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
 import { errorMessage, invoke } from '../lib';
 import { postgresCreateViewZh as text } from '../locales/postgresCreateView.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
-import { PostgresViewQueryInspect } from './PostgresViewQueryInspect';
+import { ViewQueryInspect } from './ViewQueryInspect';
+import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import './PostgresCreateTableDialog.css';
 
@@ -141,8 +142,9 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
             apply={sql => edit('definition', sql)}/>
           {materialized && <label><input type="checkbox" checked={draft.populate}
             onChange={event => edit('populate', event.target.checked)} /> {text.populate}</label>}
-          <PostgresViewQueryInspect target={target} owner={draft} definition={draft.definition}
-            disabled={busy || loading || unknown || !schemas.length} current={importCurrent}/>
+          <ViewQueryInspect owner={draft} hint={viewQueryInspectZh.postgresHint(postgresViewQuerySampleRows)}
+            disabled={busy || loading || unknown || !schemas.length || !draft.definition.trim()} current={importCurrent}
+            read={mode => invoke('postgres.createView.inspectQuery', { connectionId, database, definition: draft.definition, mode })}/>
         </fieldset>}
     </div>
     <footer className="modal-footer">

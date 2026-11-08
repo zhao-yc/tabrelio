@@ -55,7 +55,7 @@ import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema 
 import { sqliteIncomingInputSchema } from './sqliteIncoming';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema } from './sqliteTablePresets';
 import { postgresLayoutSchemas, sqliteLayoutTargetSchema, sqliteLayoutSaveSchema, sqliteLayoutResetSchema } from './sqliteTableLayout';
-import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema } from './sqliteObjects';
+import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteViewQueryInspectSchema } from './sqliteObjects';
 import { sqliteTableMaintenanceInspectSchema, sqliteTableMaintenancePreviewSchema, sqliteTableMaintenanceApplySchema, sqliteTableMaintenanceReleaseSchema } from './sqliteTableMaintenance';
 import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteTableRenameApplySchema, sqliteTableRenameReleaseSchema } from './sqliteTableRename';
 import { sqliteTableRebuildInspectSchema, sqliteTableRebuildPreviewSchema, sqliteTableRebuildApplySchema, sqliteTableRebuildReleaseSchema } from './sqliteTableRebuild';
@@ -454,6 +454,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableRebuild.inspect': sqliteTableRebuildInspectSchema,
   'sqlite.columns.inspect': sqliteColumnsInspectSchema,
   'sqlite.objects.preview': sqliteObjectsPreviewSchema,
+  'sqlite.view.inspectQuery': sqliteViewQueryInspectSchema,
   'sqlite.tableMaintenance.preview': sqliteTableMaintenancePreviewSchema,
   'sqlite.tableRename.preview': sqliteTableRenamePreviewSchema,
   'sqlite.tableRebuild.preview': sqliteTableRebuildPreviewSchema,

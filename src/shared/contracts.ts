@@ -476,6 +476,7 @@ export interface CommandMap {
   'sqlite.tableRebuild.inspect': { input: import('./sqliteTableRebuild').SqliteTableRebuildInspectInput; output: import('./sqliteTableRebuild').SqliteTableRebuildInspectOutput };
   'sqlite.columns.inspect': { input: import('./sqliteColumns').SqliteColumnsInspectInput; output: import('./sqliteColumns').SqliteColumnsInspectOutput };
   'sqlite.objects.preview': { input: import('./sqliteObjects').SqliteObjectsPreviewInput; output: import('./sqliteObjects').SqliteObjectsPreviewOutput };
+  'sqlite.view.inspectQuery': { input: import('./sqliteObjects').SqliteViewQueryInspectInput; output: QueryOutcome };
   'sqlite.tableMaintenance.preview': { input: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewInput; output: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewOutput };
   'sqlite.tableRename.preview': { input: import('./sqliteTableRename').SqliteTableRenamePreviewInput; output: import('./sqliteTableRename').SqliteTableRenamePreviewOutput };
   'sqlite.tableRebuild.preview': { input: import('./sqliteTableRebuild').SqliteTableRebuildPreviewInput; output: import('./sqliteTableRebuild').SqliteTableRebuildPreviewOutput };

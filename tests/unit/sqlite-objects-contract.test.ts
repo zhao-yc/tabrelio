@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { publicCommands } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
-import { parseSqliteObjectsCreateHeader, buildSqliteObjectsPlan, getSqliteObjectsAcknowledgements, assertSqliteObjectsAcknowledgements, sqliteObjectsInspectSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsFactSchema, sqliteObjectsOutcomeSchema, sqliteObjectsLimits, type SqliteObjectsInspectOutput } from '../../src/shared/sqliteObjects';
+import { sqliteViewDraftQuery, parseSqliteObjectsCreateHeader, buildSqliteObjectsPlan, getSqliteObjectsAcknowledgements, assertSqliteObjectsAcknowledgements, sqliteObjectsInspectSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsFactSchema, sqliteObjectsOutcomeSchema, sqliteObjectsLimits, type SqliteObjectsInspectOutput } from '../../src/shared/sqliteObjects';
 
 const target = { connectionId: 'owned', database: 'main' as const, kind: 'view' as const, name: 'owned_view' };
 /** 只验证固定构造的原生语义，不冒称utility授权门或真实文件验收。 */
@@ -11,6 +11,19 @@ function database(action: (db: DatabaseSync) => void): void { const db = new Dat
 function inspection(): SqliteObjectsInspectOutput { return { catalogueId: 'catalogue', target, action: 'replace', exists: true, sourceSql: 'CREATE VIEW owned_view AS SELECT note FROM subject', relatedObjects: [{ type: 'table', name: 'subject', table: 'subject', sql: 'CREATE TABLE subject(note TEXT)' }, { type: 'view', name: 'owned_view', table: 'owned_view', sql: 'CREATE VIEW owned_view AS SELECT note FROM subject' }], attachedTriggers: [], eligibleRelations: [{ name: 'subject', kind: 'table' }, { name: 'owned_view', kind: 'view' }], readOnly: false, expiresAt: '2030-01-01T00:00:00Z' }; }
 
 describe('SQLite视图与触发器公开合同和前缀词法', () => {
+  it('视图样本从单条同名定义取原查询，保留显式列名及字符串中的分号', () => {
+    const sql = 'CREATE VIEW main.owned_view ("列""名", [显示 AS]) /* AS */ AS\nSELECT 1, \';\'; -- 尾注释';
+    expect(sqliteViewDraftQuery(sql, target.name)).toEqual({ query: "\nSELECT 1, ';'", columns: ['列"名', '显示 AS'] });
+    expect(() => sqliteViewDraftQuery(sql + '\nSELECT 2;', target.name)).toThrow(/只接受一条/);
+    expect(() => sqliteViewDraftQuery(sql, 'other')).toThrow(/准确同名/);
+    expect(() => sqliteViewDraftQuery('CREATE VIEW owned_view AS DELETE FROM subject', target.name)).toThrow(/需要 SELECT/);
+  });
+  it('SQLite 视图样本公共命令只接收保存的 main 目标与单条定义草稿', () => {
+    const input = { connectionId: target.connectionId, database: target.database, name: target.name, mode: 'rows', sql: 'CREATE VIEW owned_view AS SELECT 1' };
+    expect(validateCommand('sqlite.view.inspectQuery', input)).toEqual(input);
+    for (const patch of [{ database: 'temp' }, { mode: 'apply' }, { filePath: '/tmp/private' }, { readOnly: false }])
+      expect(() => validateCommand('sqlite.view.inspectQuery', { ...input, ...patch })).toThrow();
+  });
   it('四命令严格公开边界，定义只进入preview而不是apply或私有authorizer配置', () => {
     const inspect = { ...target, action: 'replace', taskId: 'inspect' }, preview = { catalogueId: 'c', sql: 'CREATE VIEW owned_view AS SELECT 1', taskId: 'preview' }, apply = { previewId: 'p', taskId: 'apply', confirmation: 'main.owned_view', acknowledgements: getSqliteObjectsAcknowledgements(target, 'replace') };
     for (const command of ['sqlite.objects.inspect', 'sqlite.objects.preview', 'sqlite.objects.apply', 'sqlite.objects.release'] as const) expect(publicCommands[command]).toBe(true); expect(validateCommand('sqlite.objects.inspect', inspect)).toEqual(inspect); expect(validateCommand('sqlite.objects.preview', preview)).toEqual(preview); expect(validateCommand('sqlite.objects.apply', apply)).toEqual(apply); expect(validateCommand('sqlite.objects.release', { catalogueId: 'c' })).toEqual({ catalogueId: 'c' });
