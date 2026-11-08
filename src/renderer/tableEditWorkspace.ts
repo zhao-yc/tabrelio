@@ -8,6 +8,9 @@ import { parseTableDraftDocument, type TableDraftDocument, type TableDraftWorksp
 import { restoreTableDraftRows } from './tableDraft';
 import { assertCopiedRecordKeys } from './recordDuplicate';
 import { BatchFillIntent, prepareBatchFill, type BatchFillAssignment } from './recordBatchFill';
+import { RecordBatchEditIntent, assertRecordBatchCandidates } from './recordBatchEdit';
+import type { RecordCopyPage } from './recordCopySource';
+import { recordBatchEditZh } from './locales/recordBatchEdit.zh-CN';
 import { recordDuplicateZh } from './locales/recordDuplicate.zh-CN';
 import { recordReadonlyReason, recordTargetKey, type RecordContext } from './recordViews';
 
@@ -32,6 +35,14 @@ export interface TableCheckedFill {
   invalidate(): void;
   reason(rows: DraftRow[], selected: ReadonlySet<string>, context: RecordContext): string;
   stage(assignments: readonly BatchFillAssignment[], rows: DraftRow[], selected: ReadonlySet<string>, context: RecordContext): { rows: DraftRow[]; changed: number };
+}
+
+export interface TableCheckedRecordEdit extends Pick<RecordBatchEditIntent, 'id' | 'rows' | 'initial' | 'context' | 'invalidated' | 'invalidate' | 'reason'> {
+  readonly groups: TableCheckedStage['pages'];
+  readonly pageByRow: ReadonlyMap<string, number>;
+  check(candidates: DraftRow[]): DraftRow[];
+  stage(candidates: DraftRow[], rows: DraftRow[], selected: ReadonlySet<string>, context: RecordContext,
+    binding: RecordCopyPage | null, page: TablePage | null): { rows: DraftRow[]; changed: number };
 }
 
 /** 活动页使用实时勾选，后台页使用离页时登记的准确 UUID。 */
@@ -166,7 +177,7 @@ export class TableEditWorkspace {
   update(before:DraftRow[],after:DraftRow[]):void{if(!this.active||this.active.rows!==before||before===after)return;if(this.dead||this.pending)throw Error(text.stale);if(this.entries.size>1)this.budget(this.pages.map(page=>({rows:page===this.active?after:page.rows})));this.active.rows=after;this.publish();}
   /** 精确记住UI选择及复制标记；UUID属于原页，不按主键猜另一页的焦点。 */
   remember(rows:DraftRow[],selected:ReadonlySet<string>,selection:TableEditPage['selection'],copied:Set<string>):void{if(this.active?.rows!==rows)return;this.active.selected=selected;this.active.selection=selection;this.active.copied=copied;}
-  /** 两种跨页操作均绑定原页、勾选及历史代次，任何页变化都会撤销整组计划。 */
+  /** 跨页操作均绑定原页、勾选及历史代次，任何页变化都会撤销整组计划。 */
   private captureChecked(current: DraftRow[], activeSelected: ReadonlySet<string>) {
     const active = this.active, epoch = this.epoch, revision = this.revision;
     if (!active || active.rows !== current || this.dead || this.pending || this.restoredValue) throw Error(text.stale);
@@ -273,6 +284,90 @@ export class TableEditWorkspace {
         }
         if (plans.length) this.publish();
         return { rows: active.rows, changed: replacements.size };
+      },
+    };
+  }
+  /** 跨页窗口沿用各原页的独立编辑票据，整组暂存前复核来源、总预算和每页撤销预算。 */
+  planCheckedRecordEdit(current: DraftRow[], activeSelected: ReadonlySet<string>, context: RecordContext,
+    binding: RecordCopyPage | null, currentPage: TablePage | null, id: string): TableCheckedRecordEdit {
+    const { active, source, groups, isCurrent, counts } = this.captureChecked(current, activeSelected);
+    if (!groups.some(item => item.page !== active)) throw Error(text.recordEditNone);
+    if (context.info !== active.info || currentPage !== active.page || binding?.page !== currentPage) throw Error(text.stale);
+    if (source.some(item => item.selected.size !== item.selectedRows.length)) throw Error(recordBatchEditZh.source);
+    const keys = new Set<string>();
+    for (const item of groups) for (const row of item.selectedRows) if (!row.inserted) {
+      if (!row.original) throw Error(recordBatchEditZh.source);
+      const key = this.changeIdentity(row.original, active.info.editableKey);
+      if (keys.has(key)) throw Error(text.recordEditOverlap);
+      keys.add(key);
+    }
+    const target = recordTargetKey(context.target), sourceBudget = { rows: 0, cells: 0, bytes: 2 };
+    const pages = groups.map(item => {
+      const page = item.page.page;
+      const intent = new RecordBatchEditIntent(item.rows, item.selected, { ...context, info: item.page.info },
+        item.page === active ? binding : { page, target, connectionVersion: context.connectionVersion, generation: context.generation },
+        page, id, sourceBudget);
+      return { ...item, intent };
+    });
+    const initial = pages.flatMap(item => item.intent.initial);
+    const pageByRow = new Map(pages.flatMap(item => item.intent.initial.map(row => [row.id, item.page.index] as const)));
+    if (pageByRow.size !== initial.length) throw Error(text.stale);
+    Object.freeze(initial);
+    const rows = source.flatMap(item => item.rows);
+    let stopped = false;
+    const reason: TableCheckedRecordEdit['reason'] = (liveRows, selected, live, liveBinding, livePage) => {
+      if (stopped) return recordBatchEditZh.stale;
+      if (liveRows !== current || selected !== activeSelected || liveBinding !== binding || livePage !== currentPage ||
+          !isCurrent() || recordReadonlyReason(live) || live.info !== active.info ||
+          live.connectionVersion !== context.connectionVersion || live.generation !== context.generation || recordTargetKey(live.target) !== target) {
+        stopped = true;
+        return recordBatchEditZh.stale;
+      }
+      for (const { intent } of pages) {
+        const invalid = intent.reason(intent.rows, intent.selected, intent.context, intent.binding, intent.page);
+        if (invalid) { stopped = true; return invalid; }
+      }
+      return '';
+    };
+    function assertCurrent(liveRows = current, selected = activeSelected, live = context, liveBinding = binding, livePage = currentPage) {
+      const invalid = reason(liveRows, selected, live, liveBinding, livePage);
+      if (invalid) throw Error(invalid);
+    }
+    const prepare = (candidates: DraftRow[]) => {
+      assertRecordBatchCandidates(candidates, initial.length);
+      const budget = { bytes: 2, cells: 0 };
+      let offset = 0;
+      const plans = pages.flatMap(item => {
+        const start = offset;
+        offset += item.intent.initial.length;
+        const next = item.intent.check(candidates.slice(start, offset), budget);
+        return next === item.rows ? [] : [{ ...item, next }];
+      });
+      if (!plans.length) return { plans, rows };
+      const byPage = new Map(plans.map(item => [item.page, item.next]));
+      const updated = source.map(item => ({ rows: byPage.get(item.page) ?? item.rows }));
+      const combined = updated.flatMap(item => item.rows);
+      this.validateChanges(combined, active.info.editableKey);
+      this.budget(updated);
+      return { plans, rows: combined };
+    };
+    return {
+      id, rows, initial, context, pageByRow, groups: counts, reason,
+      get invalidated() { return stopped; },
+      invalidate: () => { stopped = true; },
+      check: candidates => { assertCurrent(); return prepare(candidates).rows; },
+      stage: (candidates, liveRows, selected, live, liveBinding, livePage) => {
+        assertCurrent(liveRows, selected, live, liveBinding, livePage);
+        const { plans } = prepare(candidates);
+        stopped = true;
+        let changed = 0;
+        for (const { page, rows, next } of plans) {
+          changed += next.filter((row, index) => row !== rows[index]).length;
+          page.history.record(rows, next);
+          page.rows = next;
+        }
+        if (changed) this.publish();
+        return { rows: active.rows, changed };
       },
     };
   }

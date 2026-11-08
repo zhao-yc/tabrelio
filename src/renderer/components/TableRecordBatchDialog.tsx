@@ -1,13 +1,15 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { DraftRow } from '../dataChanges';
 import { useRecordViews, type RecordViewController } from '../hooks/useRecordViews';
-import { RecordBatchEditIntent } from '../recordBatchEdit';
+import type { RecordBatchEditIntent } from '../recordBatchEdit';
+import type { TableCheckedRecordEdit } from '../tableEditWorkspace';
+import { tableEditWorkspaceZh as workspaceText } from '../locales/tableEditWorkspace.zh-CN';
 import { recordBatchEditZh as text } from '../locales/recordBatchEdit.zh-CN';
 import { errorMessage } from '../lib';
 import { RecordFormPanel, RecordEditorDialogs } from './RecordFormPanel';
 import { ErrorBox, Modal } from './ui';
 import '../recordBatchEdit.css';
-interface Props { intent: RecordBatchEditIntent; current(): boolean; onStage(rows: DraftRow[]): boolean; onDirty(dirty: boolean): void; onClose(): void; }
+interface Props { intent: RecordBatchEditIntent | TableCheckedRecordEdit; current(): boolean; onStage(rows: DraftRow[]): boolean; onDirty(dirty: boolean): void; onClose(): void; }
 /** 完整原记录编辑器只写窗口RAM；最后一次发布整组，不创建第二套类型转换或数据库操作。 */
 export function TableRecordBatchDialog(props: Props) {
   const owner = useRef(props).current, [rows, setRows] = useState(owner.intent.initial), rowsRef = useRef(rows); rowsRef.current = rows;
@@ -38,5 +40,9 @@ export function TableRecordBatchDialog(props: Props) {
     isFieldCurrent: (...args: Parameters<typeof editor.isFieldCurrent>) => eventCurrent() && editor.isFieldCurrent(...args),
   } as RecordViewController;
   useLayoutEffect(() => { mounted.current = true; committed.current = frame; if (!initialized.current) { initialized.current = true; editor.openForm(rowsRef.current[0]?.id); } return () => { if (committed.current === frame) committed.current = null; mounted.current = false; }; });
-  return <Modal title={text.title} onClose={close} wide><div className="modal-content dialog-body record-batch-workspace" data-record-batch-owner={owner.intent.id}><p>{text.hint}</p><div ref={pendingElement} tabIndex={-1} aria-label={text.pending}><RecordEditorDialogs batch editor={view} context={context()} rows={rows}/></div><RecordFormPanel batch editor={view} context={context()} rows={rows} visibleKeys={owner.intent.context.info!.columns.map(c => c.name)} onSelect={rowId => { if (eventCurrent() && !editor.pending) editor.select(rowId); }}/><ErrorBox message={invalid.current ? text.stale : error}/></div><footer className="modal-footer"><button onClick={close}>{text.cancel}</button><button className="primary" disabled={editor.pending || invalid.current} onClick={save}>{text.save}</button></footer></Modal>;
+  const workspace = 'groups' in owner.intent ? owner.intent : undefined;
+  const sourcePage = workspace?.pageByRow.get(editor.draft?.rowId ?? '');
+  return <Modal title={text.title} onClose={close} wide><div className="modal-content dialog-body record-batch-workspace" data-record-batch-owner={owner.intent.id}><p>{workspace ? text.workspaceHint : text.hint}</p>
+    {workspace && <ul>{workspace.groups.map(group => <li key={group.index}>{workspaceText.fillGroup(group.index, group.count)}</li>)}</ul>}
+    {sourcePage !== undefined && <p role="status">{text.sourcePage(sourcePage)}</p>}<div ref={pendingElement} tabIndex={-1} aria-label={text.pending}><RecordEditorDialogs batch editor={view} context={context()} rows={rows}/></div><RecordFormPanel batch editor={view} context={context()} rows={rows} visibleKeys={owner.intent.context.info!.columns.map(c => c.name)} onSelect={rowId => { if (eventCurrent() && !editor.pending) editor.select(rowId); }}/><ErrorBox message={invalid.current ? text.stale : error}/></div><footer className="modal-footer"><button onClick={close}>{text.cancel}</button><button className="primary" disabled={editor.pending || invalid.current} onClick={save}>{text.save}</button></footer></Modal>;
 }

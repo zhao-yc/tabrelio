@@ -14,6 +14,14 @@ function array(value: unknown, maximum: number): asserts value is unknown[] {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum || Reflect.ownKeys(value).length !== value.length + 1) throw Error(text.invalid);
   for (let i = 0; i < value.length; i++) { const d = Object.getOwnPropertyDescriptor(value, String(i)); if (!d?.enumerable || !('value' in d)) throw Error(text.invalid); }
 }
+/** 跨页切分前先校验外层数组，不能由切片触发候选访问器。 */
+export function assertRecordBatchCandidates(value: DraftRow[], count: number): void {
+  array(value, limits.rows);
+  if (value.length !== count) throw Error(text.invalid);
+}
+interface RecordBatchSourceBudget { rows: number; cells: number; bytes: number }
+interface RecordBatchInputBudget { cells: number; bytes: number }
+
 /** 行包装先检查自有数据，之后才读取身份及类型标记。 */
 function row(value: unknown): asserts value is DraftRow {
   assertRecordBatchFields(value); const keys = Object.keys(value);
@@ -42,7 +50,7 @@ function sourceBytes(value: unknown): number {
   return recordBatchCellBytes(value);
 }
 /** 当前完整页的准确勾选来源；混合新增可省略字段，已有记录必须保持完整旧值。 */
-function prepareSelectedRecords(rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null): DraftRow[] {
+function prepareSelectedRecords(rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null, sourceBudget?: RecordBatchSourceBudget): DraftRow[] {
   const reason = recordReadonlyReason(context); if (reason) throw Error(reason);
   array(rows, 10000); rows.forEach(row);
   if (!ids.size || ids.size > limits.rows || new Set(rows.map(r => r.id)).size !== rows.length) throw Error(text.source);
@@ -53,13 +61,15 @@ function prepareSelectedRecords(rows: DraftRow[], ids: ReadonlySet<string>, cont
   const originals = rows.filter(r => !r.inserted);
   if (originals.length !== page.rows.length || originals.some((r, i) => !r.original || !equal(r.original, page.rows[i]))) throw Error(text.source);
   const chosen = rows.filter(r => ids.has(r.id)); if (chosen.length !== ids.size || chosen.some(r => r.deleted)) throw Error(text.source);
-  let bytes = 2, cells = 0;
+  const budget = sourceBudget ?? { rows: 0, bytes: 2, cells: 0 };
+  budget.rows += chosen.length;
+  if (budget.rows > limits.rows) throw Error(text.budget);
   for (const r of chosen) {
     if (r.inserted ? r.original !== undefined : !r.original || names.some(name => !Object.hasOwn(r.original!, name) || !Object.hasOwn(r.data, name)) || Object.keys(r.original).length !== names.length || info.editableKey.some(key => r.original![key] === null || r.original![key] === undefined)) throw Error(text.source);
     for (const data of [r.data, r.original]) if (data) {
       for (const [key, value] of Object.entries(data)) {
-        if (!names.includes(key) || ++cells > limits.cells * 2) throw Error(text.source);
-        bytes += recordBatchCellBytes(key) + sourceBytes(value) + 4; if (bytes > recordBatchSourceLimits.bytes) throw Error(text.budget);
+        if (!names.includes(key) || ++budget.cells > limits.cells * 2) throw Error(text.source);
+        budget.bytes += recordBatchCellBytes(key) + sourceBytes(value) + 4; if (budget.bytes > recordBatchSourceLimits.bytes) throw Error(text.budget);
       }
     }
   }
@@ -78,10 +88,10 @@ export class RecordBatchEditIntent {
   private readonly references: { data: DataRow; original?: DataRow; inserted: boolean; deleted: boolean }[];
   readonly initial: DraftRow[];
   readonly context: RecordContext;
-  constructor(readonly rows: DraftRow[], readonly selected: ReadonlySet<string>, context: RecordContext, readonly binding: RecordCopyPage | null, readonly page: TablePage | null, readonly id: string) {
+  constructor(readonly rows: DraftRow[], readonly selected: ReadonlySet<string>, context: RecordContext, readonly binding: RecordCopyPage | null, readonly page: TablePage | null, readonly id: string, sourceBudget?: RecordBatchSourceBudget) {
     if (!id || id.length > 200) throw Error(text.invalid);
     this.rowRefs = [...rows];
-    this.chosen = prepareSelectedRecords(rows, this.selected, context, binding, page);
+    this.chosen = prepareSelectedRecords(rows, this.selected, context, binding, page, sourceBudget);
     this.references = this.chosen.map(r => ({ data: r.data, original: r.original, inserted: r.inserted, deleted: r.deleted }));
     this.sourceSignature = JSON.stringify(page?.copySource); this.target = recordTargetKey(context.target); this.metadata = tableCopyMetadataKey(context.info!); this.ids = new Set(this.selected);
     this.context = Object.freeze({ ...context, target: Object.freeze({ ...context.target }) });
@@ -100,10 +110,10 @@ export class RecordBatchEditIntent {
     } catch (reason) { this.stopped = true; return reason instanceof Error ? reason.message : text.stale; }
   }
   /** 每次保留及最终暂存都先校验整组，预算失败不发布最后一行或消费旧缓冲。 */
-  check(candidates: DraftRow[]): DraftRow[] {
+  check(candidates: DraftRow[], budget: RecordBatchInputBudget = { bytes: 2, cells: 0 }): DraftRow[] {
     const reason = this.reason(this.rows, this.selected, this.context, this.binding, this.page); if (reason) throw Error(reason);
-    array(candidates, limits.rows); if (candidates.length !== this.initial.length) throw Error(text.invalid);
-    let bytes = 2, cells = 0, history = 128; const replacements = new Map<string, DraftRow>();
+    assertRecordBatchCandidates(candidates, this.initial.length);
+    let history = 128; const replacements = new Map<string, DraftRow>();
     const columns = this.context.info!.columns;
     candidates.forEach((candidate, i) => {
       row(candidate); const base = this.initial[i], source = this.chosen[i];
@@ -113,7 +123,7 @@ export class RecordBatchEditIntent {
         const before = Object.fromEntries(Object.hasOwn(base.data, column.name) ? [[column.name, base.data[column.name]]] : []), after = Object.fromEntries(Object.hasOwn(candidate.data, column.name) ? [[column.name, candidate.data[column.name]]] : []);
         if (equal(before, after)) continue;
         const value = candidate.data[column.name];
-        bytes += recordBatchCellBytes(column.name) + (value === undefined ? 4 : recordBatchCellBytes(value)) + 4; if (++cells > limits.cells || bytes > limits.inputBytes) throw Error(text.budget);
+        budget.bytes += recordBatchCellBytes(column.name) + (value === undefined ? 4 : recordBatchCellBytes(value)) + 4; if (++budget.cells > limits.cells || budget.bytes > limits.inputBytes) throw Error(text.budget);
         if (column.generated || value === undefined && !base.inserted || value === null && !column.nullable || value !== undefined && value !== null && /^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(column.type) && typeof value !== 'object') throw Error(text.invalid);
       }
       if (equal(base.data, candidate.data)) return;

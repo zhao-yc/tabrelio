@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。MySQL 和 MariaDB 可在同一批量表单逐条编辑各保留页的勾选记录，整组暂存、逐页撤销和统一提交。D02 和 D04 仍为部分覆盖。[跨页逐条编辑](development/workspace-checked-record-edit-20261108.md)
+
 2026-11-08 源码增量。PostgreSQL 可跨页收集勾选记录，分别编辑副本后集中暂存、撤销和提交。D02、D04 和 R01 仍为部分覆盖。[PostgreSQL 跨页勾选复制](development/postgres-checked-duplicate-20261108.md)
 
 2026-11-08 源码增量。SQLite 可跨保留页将勾选已有记录复制为新增草稿，按来源页撤销并统一提交。D02、D04 和 R02 仍为部分覆盖。[SQLite 跨页勾选复制](development/sqlite-workspace-checked-duplicate-20261108.md)

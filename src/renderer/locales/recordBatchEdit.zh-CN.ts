@@ -2,6 +2,8 @@
 export const recordBatchEditZh = {
   action: '批量编辑勾选记录…', title: '批量编辑勾选记录', panel: '勾选记录表单',
   hint: '只浏览当前页的勾选记录，各条可填写不同值。保留本条仅进入窗口缓冲；取消整组不改变原草稿，“暂存全部”形成一步可撤销修改，最终仍须预览并明确提交。',
+  workspaceHint: '各条记录可填写不同值。保留本条只更新窗口缓冲，整批暂存后可回到各页单独撤销，再统一预览并提交。',
+  sourcePage: (page: number) => `当前记录来自第 ${page} 页`,
   stageHint: '保留本条仅更新窗口缓冲；暂存全部后仍须原预览和明确提交。',
   previous: '上一条勾选记录', next: '下一条勾选记录', position: (index: number, count: number) => `第 ${index} / ${count} 条勾选记录`,
   keep: '保留本条输入', kept: '本条已保留在窗口缓冲，尚未进入本页草稿。', discard: '放弃本条未保留输入',

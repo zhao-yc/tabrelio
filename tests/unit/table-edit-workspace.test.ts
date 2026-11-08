@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import type { TableInfo, TablePage } from '../../src/shared/contracts';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 import { TableEditWorkspace, tableEditWorkspaceLimits } from '../../src/renderer/tableEditWorkspace';
+import { recordTargetKey } from '../../src/renderer/recordViews';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 
 /** 仅RAM原页及精确标量，不代替实库事务或GUI。 */
@@ -196,5 +197,52 @@ it('跨页复制拒绝重叠原键、全组预算超限和勾选变动', () => {
     expect(first.rows).toBe(left);
     expect(edits.selected!.rows).toBe(current);
     expect(edits.pages.every(page => page.copied.size === 0)).toBe(true);
+  }
+});
+
+it('跨页逐条编辑先验证全部候选，分别暂存不同值并保留原页撤销', () => {
+  const { edits, first, add, info, scope } = fixture(true);
+  const before = first.rows;
+  edits.remember(before, new Set(['页1']), undefined, new Set());
+  const second = add(2), current = second.rows, checks = new Set(['页2']), context = fillContext(info);
+  const binding = { page: second.page, target: recordTargetKey(context.target), connectionVersion: 1, generation: 2 };
+  const intent = edits.planCheckedRecordEdit(current, checks, context, binding, second.page, '批次');
+  expect(intent.groups).toEqual([{ index: 1, count: 1 }, { index: 2, count: 1 }]);
+  expect([...intent.pageByRow]).toEqual([['页1', 1], ['页2', 2]]);
+  expect(intent.check(intent.initial)).toBe(intent.rows);
+  const candidates = intent.initial.map((row, index) => ({ ...row, data: { ...row.data, value: '修改' + index } }));
+  expect(() => intent.stage([candidates[0], { ...candidates[1], original: {} }], current, checks, context, binding, second.page)).toThrow();
+  expect(first.rows).toBe(before);
+  expect(second.rows).toBe(current);
+  expect(intent.check(candidates)).not.toBe(intent.rows);
+  expect(intent.stage(candidates, current, checks, context, binding, second.page).changed).toBe(2);
+  expect(first.rows[0].data.value).toBe('修改0');
+  expect(second.rows[0].data.value).toBe('修改1');
+  expect(() => intent.stage(candidates, current, checks, context, binding, second.page)).toThrow();
+  edits.select(edits.navigate(1, scope), first);
+  edits.update(first.rows, edits.history.move(first.rows, 'undo')!);
+  expect(first.rows[0].data).toEqual(before[0].data);
+  expect(second.rows[0].data.value).toBe('修改1');
+});
+
+it('仅后台有勾选可逐条编辑；同一原定位或原选择变动时拒绝整批', () => {
+  for (const overlap of [false, true]) {
+    const { edits, first, add, info } = fixture(true);
+    const checked = new Set(['页1']);
+    edits.remember(first.rows, checked, undefined, new Set());
+    const second = add(2, overlap ? 1 : 2), selected = new Set(overlap ? ['页2'] : []), context = fillContext(info);
+    const binding = { page: second.page, target: recordTargetKey(context.target), connectionVersion: 1, generation: 2 };
+    const prepare = () => edits.planCheckedRecordEdit(second.rows, selected, context, binding, second.page, '批次');
+    if (overlap) expect(prepare).toThrow(/同一条原记录/);
+    else {
+      const intent = prepare();
+      expect(intent.groups).toEqual([{ index: 1, count: 1 }]);
+      const candidates = intent.initial.map(row => ({ ...row, data: { ...row.data, value: '仅后台' } }));
+      expect(intent.stage(candidates, second.rows, selected, context, binding, second.page).changed).toBe(1);
+      const pending = prepare();
+      checked.clear();
+      expect(pending.reason(second.rows, selected, context, binding, second.page)).toMatch(/已变化/);
+      expect(first.rows[0].data.value).toBe('仅后台');
+    }
   }
 });
