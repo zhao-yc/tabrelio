@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { previewResultSql } from '../../src/engine/resultSql';
+import { previewResultSql, renderClipboardResultSql } from '../../src/engine/resultSql';
 import { assertResultSqlData, resultSqlLimits, type ResultSqlPreviewInput } from '../../src/shared/resultSql';
 import { validateCommand } from '../../src/shared/validation';
 import { ResultSqlPreviews } from '../../src/main/resultSqlPreviews';
@@ -60,6 +60,18 @@ describe('结果INSERT合同和模式无关字面量', () => {
   it('大字段预览按4MiB预算提前停止，不拼接整份25行SQL', () => {
     const value = input(); value.result.rows = Array.from({ length: 25 }, () => Object.fromEntries([['__proto__', 'x'.repeat(200000)]]));
     const preview = previewResultSql(value.result, value.target); expect(preview.shownRows).toBeGreaterThan(0); expect(preview.shownRows).toBeLessThan(20); expect(preview.totalRows).toBe(25); expect(Buffer.byteLength(preview.sql)).toBeLessThanOrEqual(resultSqlLimits.previewBytes);
+  });
+  it('剪贴板编译完整结果，超出 1 MiB 整体拒绝，并拒绝文件或连接参数', () => {
+    const { encoding, ...value } = input();
+    value.result.rows = Array.from({ length: 31 }, () => Object.fromEntries([['__proto__', '已返回']]));
+    expect(validateCommand('result.renderInsertSql', value)).toEqual(value);
+    expect(renderClipboardResultSql(value).match(/^INSERT INTO /gm)).toHaveLength(31);
+    for (const extra of [{ encoding }, { filePath: '/tmp/x.sql' }, { connectionId: 'other' }])
+      expect(() => validateCommand('result.renderInsertSql', { ...value, ...extra })).toThrow();
+    value.result.rows = Array.from({ length: 4 }, () => Object.fromEntries([['__proto__', 'a'.repeat(160000)]]));
+    expect(() => renderClipboardResultSql(value)).toThrow('超过 1 MiB');
+    value.result.rows = [];
+    expect(() => renderClipboardResultSql(value)).toThrow('没有可复制');
   });
 });
 

@@ -62,6 +62,7 @@ import { decodePostgresDraft, encodePostgresDraft, postgresDraftBytes, type Post
 import { bindTableDraft, assertTableDraftBinding } from './tableDraftBinding';
 import { explainSnapshotZh } from '../shared/explainSnapshot.zh-CN';
 import { ResultSqlPreviews } from './resultSqlPreviews';
+import { renderClipboardResultSql } from '../engine/resultSql';
 import { QueryInsertExports } from './queryInsertExports';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { connectionOrganizationZh } from '../shared/connectionOrganization.zh-CN';
@@ -2066,6 +2067,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (shuttingDown) throw Error(resultSqlZh.shuttingDown);
     return resultSqlPreviews.issue(input, columns!.owner.document);
   }
+  // 只编译调用方已持有的有界快照，不签发文件能力或读取剪贴板。
+  if (command === 'result.renderInsertSql') {
+    columnsMain.assertCapturedOwner(columns);
+    if (shuttingDown) throw Error(resultSqlZh.shuttingDown);
+    return renderClipboardResultSql(input);
+  }
   // 来源释放只撤销内存能力，配置保存和退出收尾时也必须可用，不建立任务或历史。
   if (command === 'table.copySourceRelease' || command === 'files.releaseExportColumns') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
@@ -3509,7 +3516,7 @@ else {
             (payload.command === 'table.preview' || payload.command === 'table.apply') &&
             !!payload.input && typeof payload.input === 'object' && 'searchRecordRef' in payload.input) columns = columnsMain.capture(event);
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
-        const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
+        const resultSql = payload.command === 'result.renderInsertSql' || payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['table.exportFiltered', 'sqlite.tableExport', 'sqlite.queryExport', 'sqlite.workbookExport', 'postgres.workbookExport', 'mysql.workbookExport'].includes(tasks.get(payload.input.taskId)?.kind ?? '') && tableFilteredExports.has(payload.input.taskId);
         const historyDeleteCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && typeof historyDelete !== 'undefined' && historyDelete.owns(payload.input.taskId);
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);

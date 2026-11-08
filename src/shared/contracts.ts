@@ -558,6 +558,7 @@ export interface CommandMap {
   'files.export': { input: ExportOptions; output: { rows: number } };
   'files.exportResult': { input: ResultExportOptions; output: { rows: number } };
   'files.previewResultSql': { input: import('./resultSql').ResultSqlPreviewInput; output: import('./resultSql').ResultSqlPreview };
+  'result.renderInsertSql': { input: import('./resultSql').ResultSqlRenderInput; output: string };
   'files.releaseResultSql': { input: { previewId: string }; output: void };
   'queries.list': { input: Record<string, never>; output: SavedQuery[] };
   'snippets.list': { input: Record<string, never>; output: SqlSnippet[] };

@@ -1,5 +1,5 @@
 import type { DataRow, ResultExportData } from '../shared/contracts';
-import { assertResultSqlData, resultSqlHeader, resultSqlLimits, type ResultSqlTarget } from '../shared/resultSql';
+import { assertResultSqlData, resultSqlHeader, resultSqlLimits, type ResultSqlRenderInput, type ResultSqlTarget } from '../shared/resultSql';
 import { resultSqlZh as text } from '../shared/resultSql.zh-CN';
 import { exportLiteral, identifier, qualified } from './sql';
 import { postgresIdentifier } from '../shared/postgresSql';
@@ -48,4 +48,19 @@ export function previewResultSql(result: ResultExportData, target: ResultSqlTarg
   }
   if (result.rows.length && !shownRows) throw Error(text.invalid);
   return { sql: parts.join(''), shownRows, totalRows: result.rows.length };
+}
+
+/** 剪贴板只接收完整脚本。逐行计量，超出预算时不发布部分结果或文件能力。 */
+export function renderClipboardResultSql({ result, target, sqliteStorage }: ResultSqlRenderInput): string {
+  assertResultSqlData(result, target, sqliteStorage);
+  if (!result.rows.length) throw Error(text.clipboardEmpty);
+  const header = resultSqlHeader(target), parts = [header], render = resultSqlRowWriter(target, sqliteStorage);
+  let bytes = Buffer.byteLength(header);
+  for (const [index, row] of result.rows.entries()) {
+    const statement = render(row, index);
+    bytes += Buffer.byteLength(statement);
+    if (bytes > resultSqlLimits.clipboardBytes) throw Error(text.clipboardTooLarge);
+    parts.push(statement);
+  }
+  return parts.join('');
 }

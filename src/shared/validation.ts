@@ -715,6 +715,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     }
   }),
   'files.previewResultSql': z.object({ result: resultExportData, target: resultSqlTargetSchema, sqliteStorage: resultSqlStorageSchema.optional(), encoding: z.enum(['utf8','utf16le','gb18030']) }).strict().superRefine((value, context) => { try { assertResultSqlData(value.result, value.target, value.sqliteStorage); assertResultSqlEncoding(value.target, value.encoding); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'INSERT结果无效' }); } }),
+  'result.renderInsertSql': z.object({ result: resultExportData, target: resultSqlTargetSchema, sqliteStorage: resultSqlStorageSchema.optional() }).strict(),
   'files.releaseResultSql': z.object({ previewId: z.string().uuid() }).strict(),
   'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), databaseContext:queryDatabaseContext.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),

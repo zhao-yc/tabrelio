@@ -86,6 +86,8 @@
 
 2026-11-09 源码增量。表格和查询结果的列标题菜单可冻结可见列前缀或取消全部冻结，同一批原行的勾选保持。D06、Q05、R01、R02 仍为部分覆盖。[从列标题冻结列](user-guide.md#从列标题冻结列)
 
+2026-11-09 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 查询结果可按明确目标映射预览并复制完整 INSERT 脚本，支持已返回及勾选快照。D02、Q05、R01、R02 仍为部分覆盖。[复制查询结果为 INSERT SQL](user-guide.md#复制查询结果为-insert-sql)
+
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 实体表可为当前记录或本页勾选行生成 UPDATE SQL，WHERE 使用完整原主键，SET 使用已加载的普通非键原值。D02、R01、R02 仍为部分覆盖。[复制记录为 UPDATE SQL](user-guide.md#复制记录为-update-sql)
 
 2026-11-08 源码增量。PostgreSQL 单文件原生 CSV 可在导入前完整检查编码、引号和列数，并保留列映射。写入沿已核对的字节范围并核对记录数。F01、R01 仍为部分覆盖。[原生 CSV 整文件检查](development/postgres-copy-csv-preflight-20261108.md)

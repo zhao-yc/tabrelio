@@ -5,7 +5,7 @@ import { resultSqlZh as text } from './resultSql.zh-CN';
 import { postgresNewIdentifier } from './postgresCreateTable';
 import { copySqliteResultStorage, sqliteResultStorageLimits, type SqliteResultStorage } from './sqliteResultStorage';
 
-export const resultSqlLimits = { previews: 8, ttlMs: 120000, previewRows: 20, previewBytes: 4 * 1024 ** 2, fileBytes: 512 * 1024 ** 2 } as const;
+export const resultSqlLimits = { previews: 8, ttlMs: 120000, previewRows: 20, previewBytes: 4 * 1024 ** 2, clipboardBytes: 1024 ** 2, fileBytes: 512 * 1024 ** 2 } as const;
 /** 无会话模式时保守限制名称，反引号由SQL生成器双写，不允许反斜线改变词法。 */
 export const mysqlInsertIdentifier = z.string().min(1, text.identifier).max(64, text.identifier).refine(value => !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff\\]/.test(value) && !/\s$/u.test(value), text.identifier);
 export const sqliteInsertIdentifier = z.string().min(1).max(256).refine(value => !!value.trim() &&
@@ -36,7 +36,8 @@ export const resultSqlSelectionSchema = z.object({
   acknowledged: z.literal(true), sqliteStorage: resultSqlStorageSchema.optional(),
 }).strict();
 export type ResultSqlSelection = z.infer<typeof resultSqlSelectionSchema>;
-export interface ResultSqlPreviewInput { result: ResultExportData; target: ResultSqlTarget; encoding: 'utf8' | 'utf16le' | 'gb18030'; sqliteStorage?: SqliteResultStorage }
+export interface ResultSqlRenderInput { result: ResultExportData; target: ResultSqlTarget; sqliteStorage?: SqliteResultStorage }
+export interface ResultSqlPreviewInput extends ResultSqlRenderInput { encoding: 'utf8' | 'utf16le' | 'gb18030' }
 export interface ResultSqlPreview { previewId: string; sql: string; shownRows: number; totalRows: number; expiresAt: string }
 /** 名称不是目录事实，映射只证明用户明确指定的唯一字段，不查询目标结构或解析SQL。 */
 export function assertResultSqlTarget(result: ResultExportData, target: ResultSqlTarget): void {

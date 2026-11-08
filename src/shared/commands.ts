@@ -214,6 +214,7 @@ export const publicCommands: Record<Command, true> = {
   'files.choose': true, 'files.createSqlite': true, 'files.path': true, 'files.preview': true, 'files.inspectImport': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
   'files.previewResultSql': true, 'files.releaseResultSql': true,
+  'result.renderInsertSql': true,
   'excel.sheets': true, 'excel.preview': true, 'excel.import': true, 'excel.export': true,
   'snippets.list': true, 'snippets.save': true, 'snippets.delete': true,
   'snippets.transferOpen': true, 'snippets.transferPreview': true, 'snippets.transferExport': true, 'snippets.transferApply': true, 'snippets.transferCancel': true,

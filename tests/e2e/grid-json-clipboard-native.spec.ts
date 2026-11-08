@@ -9,6 +9,8 @@ import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-C
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
 import { sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
+import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -270,6 +272,61 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await expectLabels(grid, 'A');
     await chooseHeaderAction(aliases.nth(0), gridHeaderMenuZh.clear);
     await expectLabels(grid, 'B');
+    const copyInsert = async (selected: boolean) => {
+      const title = selected ? zh.resultExport.selectedTitle : zh.resultExport.title;
+      await (await navigationMenuItem(query, { name: title, exact: true })).click();
+      const dialog = page.getByRole('dialog', { name: title, exact: true });
+      await dialog.getByLabel(zh.resultExport.format, { exact: true }).selectOption('sql');
+      await dialog.getByLabel(local ? resultSqlZh.sqliteDatabase : dialect === 'postgresql' ? resultSqlZh.postgresDatabase : resultSqlZh.database, { exact: true }).fill('target_db');
+      const target = dialog.getByLabel(resultSqlZh.table, { exact: true });
+      await target.fill('before');
+      for (const [index, name] of ['amount', 'label', 'payload', 'nullable'].entries())
+        await dialog.getByLabel(resultSqlZh.column(index + 1), { exact: true }).fill(name);
+      const preview = dialog.getByLabel(resultSqlZh.clipboardPreview, { exact: true });
+      const prepare = dialog.getByRole('button', { name: resultSqlZh.clipboardPreview, exact: true });
+      const copy = dialog.getByRole('button', { name: resultSqlZh.clipboardCopy, exact: true });
+      await prepare.click();
+      await expect(preview).toContainText('before');
+      await target.fill('target_table');
+      await expect(copy).toHaveCount(0);
+      await expect(preview).toHaveCount(0);
+      await prepare.click();
+      await expect(preview).toContainText('target_table');
+      await expect(dialog.getByRole('button', { name: zh.resultExport.chooseFile, exact: false })).toBeDisabled();
+      expect(await packets()).toHaveLength(count);
+      const sql = await preview.textContent();
+      if (!selected) {
+        await preview.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('复制结果为 INSERT SQL.png') });
+      }
+      await copy.click();
+      expect(await lastPacket()).toEqual({ 'text/plain': sql });
+      await dialog.getByRole('button', { name: zh.common.close, exact: true }).click();
+      await expect(dialog).toBeHidden();
+      return sql!.split('\n').filter(line => line.startsWith('INSERT INTO '));
+    };
+    const allSql = await copyInsert(false);
+    const amountLiteral = (value: string) => local || dialect === 'postgresql' ? value : Buffer.from(value).toString('hex');
+    expect(allSql).toHaveLength(2);
+    expect(allSql[0]).toContain(amountLiteral('9007199254740994'));
+    expect(allSql[1]).toContain(amountLiteral('9007199254740993'));
+    expect(allSql[1]).toContain('00ff');
+    expect(allSql[1]).toContain('NULL');
+    await resultA.getByRole('checkbox').check();
+    expect(await copyInsert(true)).toEqual([allSql[1]]);
+    if (local) {
+      const replay = new DatabaseSync(':memory:');
+      try {
+        replay.exec("ATTACH ':memory:' AS target_db; CREATE TABLE target_db.target_table(amount INTEGER, label TEXT, payload BLOB, nullable TEXT) STRICT;");
+        replay.exec(allSql.join('\n'));
+        const rows = replay.prepare('SELECT amount, label, hex(payload) AS hex, nullable FROM target_db.target_table ORDER BY rowid');
+        rows.setReadBigInts(true);
+        expect(rows.all()).toEqual([
+          { amount: 9007199254740994n, label: 'row B', hex: '', nullable: '' },
+          { amount: 9007199254740993n, label: 'row A', hex: '00FF', nullable: null },
+        ]);
+      } finally { replay.close(); }
+    }
     expect(await tableSorts()).toEqual(tableSortsBeforeResult);
     expect(await history()).toEqual(historyBefore);
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
