@@ -738,6 +738,8 @@ MySQL 和 MariaDB 查询会区分反引号名称、二进制字面量、变量�
 
 创建查询时选择连接和可选数据库。每个标签保持独立会话，因此临时表、会话变量和事务不会在标签间共享。Monaco 提供本地高亮、元数据补全和格式化。
 
+在左侧对象树或中央对象列表右键单击表或视图，选择「生成 SELECT 查询」。对象行或数据网格有焦点时，也可按 Windows 的 `Ctrl+Q` 或 macOS 的 `⌘⇧Y`。MySQL、MariaDB、PostgreSQL 和 SQLite 都支持。新标签沿用该对象的连接和数据库，生成带限定名称及 `LIMIT` 的 SELECT 草稿。打开草稿会保留原标签和其中的编辑，确认 SQL 后可手动执行。
+
 在查询编辑器中选中一段 SQL，右键点「从选区打开新查询」。MySQL、MariaDB 和 SQLite 也可从「更多查询操作」中的查询库分组进入，PostgreSQL 查询工具栏有同名入口。新标签只包含选区原文，沿用原连接和已确认的默认库，打开后可编辑或手动执行。[从选区打开新查询](development/query-selection-draft-20261108.md)
 
 0.16 开发版可在普通查询的 ORDER BY、GROUP BY、HAVING 中按 Ctrl + 空格补全 SELECT 输出别名，Enter 接受、Ctrl / Command + Z 撤销。比如 `SELECT SUM(amount) AS total FROM orders HAVING tot` 可补成引用后的 `total`。同 SELECT 列表和 WHERE 不使用该输出别名；GROUP BY 不推荐聚合别名，GROUP BY/HAVING 遇同名原字段时提供表限定字段。字符串形式的别名会转换为标识符引用，名称内的点号不拆分。UNION 的全局排序使用首分支输出名。无法确认冲突、模式或超出实际可引用长度时，可能省略建议并提示结果不完整；完整窗口、LATERAL 和例程局部名称仍在后续范围。

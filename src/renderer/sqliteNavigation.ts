@@ -1,10 +1,10 @@
 import type { DatabaseObject } from '../shared/contracts';
 import { errorMessage, invoke } from './lib';
 import { useWorkspace } from './store';
-import { sqliteSelectSource } from './sqliteWorkspace';
 import { sqliteZh } from './locales/sqlite.zh-CN';
 import { assertSqliteSchemaScript } from '../shared/sqliteSchemaScript';
 import { openSchemaScriptDraft } from './schemaScriptNavigation';
+import { openObjectQuery } from './objectQueryNavigation';
 
 /** 文件表和视图沿原 table 标签打开只读浏览，触发器仍使用原定义草稿。 */
 export function openSqliteObject(connectionId: string, database: string, object: DatabaseObject): boolean {
@@ -20,8 +20,7 @@ export function openSqliteSelect(connectionId: string, database: string, object:
   const workspace = useWorkspace.getState();
   if (workspace.connections.find(profile => profile.id === connectionId)?.dialect !== 'sqlite') return;
   if (database !== 'main') { workspace.notify(sqliteZh.mainOnly, true); return; }
-  if (object.kind !== 'table' && object.kind !== 'view') return;
-  workspace.openTab({ kind: 'query', connectionId, database, databaseContext: { state: 'known', database }, title: object.name, sql: sqliteSelectSource(database, object) });
+  openObjectQuery(connectionId, database, object);
 }
 /** 定义只作为查询草稿打开；读取期间连接修订、标签或选择变化会撤销迟到导航。 */
 export async function openSqliteDefinition(connectionId: string, database: string, object: DatabaseObject): Promise<void> {

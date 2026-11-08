@@ -1,4 +1,6 @@
 import { tableRefreshShortcut } from '../tableRefreshShortcut';
+import { objectQueryKeyShortcuts, objectQueryShortcutLabel, openTableObjectQuery, tableObjectQueryShortcut } from '../objectQueryNavigation';
+import { objectQueryZh } from '../locales/objectQuery.zh-CN';
 import { navigationZh } from '../locales/navigation.zh-CN';
 import { isGridContextKey, useGridCellActionMenu } from './GridCellActionMenu';
 import { useGridHeaderMenu } from './GridHeaderMenu';
@@ -2077,6 +2079,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 
   return <div ref={rootElement} className="workspace-tab table-tab" onKeyDown={event => {
     if (!blocked && tableRefreshShortcut(event)) refreshTable();
+    if (!blocked && !gridEditing && tableToolbarCurrent() && tableObjectQueryShortcut(event)) openTableObjectQuery(tab, connectionVersion);
   }}>{cellActionMenu.menu}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
   items={[
     { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} onClick={refreshTable} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button>) },
@@ -2127,7 +2130,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button title={tableAutoIncrementZh.title} aria-label={tableAutoIncrementZh.title} disabled={info?.objectKind !== 'table' || blocked} onClick={onTableAutoIncrement}>{tableAutoIncrementZh.title}</button>
 <button title={tableCommentZh.title} aria-label={tableCommentZh.title} disabled={info?.objectKind !== 'table' || blocked} onClick={onTableComment}>{tableCommentZh.title}</button>
 <button title={tableDefaultEncodingZh.title} aria-label={tableDefaultEncodingZh.title} disabled={info?.objectKind !== 'table' || blocked} onClick={onTableDefaultEncoding}>{tableDefaultEncodingZh.title}</button></ActionMenuSection>
-    <ActionMenuSection label={tableToolbarZh.generate}><button disabled={!templateAvailable} onClick={openQueryTemplate}>{templateText.entry}</button>
+    <ActionMenuSection label={tableToolbarZh.generate}><button disabled={!connection || blocked || gridEditing}
+      title={objectQueryShortcutLabel()} aria-keyshortcuts={objectQueryKeyShortcuts()}
+      onClick={() => { if (tableToolbarCurrent()) openTableObjectQuery(tab, connectionVersion); }}>{objectQueryZh.entry}</button>
+    <button disabled={!templateAvailable} onClick={openQueryTemplate}>{templateText.entry}</button>
 <button disabled={!structureScriptAvailable} onClick={openStructureScript}>{schemaScriptLabel}</button>
 <button aria-label={tableForeignKeyJoinZh.entry} title={tableForeignKeyJoinZh.scope} disabled={!foreignKeyJoinAvailable} onClick={openForeignKeyJoin}>{tableForeignKeyJoinZh.entry}</button>
 <button aria-label={filteredSelectText.entry} title={filteredSelectText.hint} disabled={!filteredSelectAvailable} onClick={openFilteredSelect}>{filteredSelectText.entry}</button>

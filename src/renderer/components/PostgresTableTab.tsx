@@ -1,4 +1,5 @@
 import { tableRefreshShortcut } from '../tableRefreshShortcut';
+import { objectQueryKeyShortcuts, objectQueryShortcutLabel, openTableObjectQuery, tableObjectQueryShortcut } from '../objectQueryNavigation';
 import { navigationZh } from '../locales/navigation.zh-CN';
 import { tableApplyShortcut } from '../tableApplyShortcut';
 import { gridQuickValueAssignment, postgresQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
@@ -8,7 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import type { ColumnWidths } from 'react-data-grid';
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutTarget } from '../../shared/sqliteTableLayout';
-import { postgresIdentifier, postgresRelationName, postgresRelationSelect } from '../../shared/postgresSql';
+import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import type { RecordTemplateContent, RecordTemplateTarget } from '../../shared/recordTemplates';
 import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../../shared/postgresPresetTab';
 import {
@@ -1459,6 +1460,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   return <div className="workspace-tab postgres-table-tab" aria-label={text.relation} onKeyDown={event => {
     if (!refreshDisabled && tableRefreshShortcut(event)) refreshTable();
+    if (active && !busy && tableObjectQueryShortcut(event)) openTableObjectQuery(tab, connectionVersion);
   }}>
     <div className="context-bar"><strong>{tab.title}</strong><span>PostgreSQL / {target.database}</span></div>
     <div className="query-toolbar pg-table-toolbar">
@@ -1473,9 +1475,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         onClick={() => setExportPage(page)}>{postgresTableExportZh.open}</button>
       <button disabled={frozenPage || requiresRefresh || !page?.exportToken || !page.canImport}
         onClick={() => setImportPage(page)}>{postgresTableImportZh.open}</button>
-      <button disabled={busy} onClick={() => useWorkspace.getState().openTab({
-        kind: 'query', title: tab.title, connectionId: target.connectionId, database: target.database, sql: postgresRelationSelect(target.table),
-      })}>{text.query}</button>
+      <button disabled={busy} title={objectQueryShortcutLabel(text.query)} aria-keyshortcuts={objectQueryKeyShortcuts()}
+        onClick={() => openTableObjectQuery(tab, connectionVersion)}>{text.query}</button>
       <button disabled={!canGenerateQuery} onClick={() => openQueryTemplate()}>{sqlTemplateText.entry}</button>
       <button disabled={!canGenerateQuery} onClick={() => openQueryTemplate(true)}>{filteredSelectText.entry}</button>
       <button disabled={!canFilteredUpdate} onClick={() => {

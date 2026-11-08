@@ -30,7 +30,7 @@ describe('PostgreSQL查询边界', () => {
     expect(() => splitPostgresSql('SELECT $标记$未闭合')).toThrow('dollar-quote未闭合');
     expect(() => splitPostgresSql('SELECT 1\0;')).toThrow('包含NUL');
     expect(postgresRelationSelect('"自定义"."带""引号"')).toBe('SELECT * FROM "自定义"."带""引号" LIMIT 1000;');
-    expect(postgresRelationSelect('t"; DROP TABLE t; --')).toBe('SELECT * FROM "t""; DROP TABLE t; --" LIMIT 1000;');
+    expect(postgresRelationSelect('t"; DROP TABLE t; --')).toBe('SELECT * FROM "public"."t""; DROP TABLE t; --" LIMIT 1000;');
   });
 });
 

@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import type { WorkbenchTarget } from '../../shared/workbench';
 import { useWorkspace } from '../store';
 import { sidebarContextMenuZh as text } from '../locales/sidebarContextMenu.zh-CN';
+import { objectQueryKeyShortcuts, objectQueryShortcut, openObjectQuery } from '../objectQueryNavigation';
 import '../sidebarContextMenu.css';
 
 export type SidebarNodeTarget = { kind: 'connection'; connectionId: string } | WorkbenchTarget;
@@ -268,15 +269,26 @@ export function SidebarTreeRow({ target, label, className, version, actions, chi
     if (node) context?.open(captured.target, captured.label, node, proof(node, captured), captured.actions, point);
   }
   const button = children as ReactElement<{ onClick?: (event: MouseEvent<HTMLButtonElement>) => void; onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void; title?: string }>;
+  const queryable = target.kind === 'table' || target.kind === 'view';
   return <div ref={row} className={`tree-row ${className}${context?.selected(target) ? ' active' : ''}`} data-sidebar-node={key} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); menu(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined); }}>
     {leading}
-    {cloneElement(button, { title: button.props.title ?? label, 'aria-haspopup': 'menu', onClick: (event: MouseEvent<HTMLButtonElement>) => {
+    {cloneElement(button, { title: button.props.title ?? label, 'aria-haspopup': 'menu',
+      'aria-keyshortcuts': queryable ? objectQueryKeyShortcuts() : undefined, onClick: (event: MouseEvent<HTMLButtonElement>) => {
       const node = row.current, captured = latest.current;
       if (!node || captured.token !== token) return;
       const lease = proof(node, captured); if (!lease.current()) return;
       context?.select(captured.target, lease); button.props.onClick?.(event);
     }, onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); event.stopPropagation(); menu(); } else button.props.onKeyDown?.(event);
+      if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); event.stopPropagation(); menu(); return; }
+      const node = row.current, captured = latest.current;
+      // 只使用有焦点的原行，刷新或卸载后不从全局选择补猜对象。
+      if (node && captured.token === token && proof(node, captured).current() &&
+          (captured.target.kind === 'table' || captured.target.kind === 'view') && objectQueryShortcut(event)) {
+        const { connectionId, database, name, kind } = captured.target;
+        openObjectQuery(connectionId, database, { name, kind });
+        return;
+      }
+      button.props.onKeyDown?.(event);
     } } as Partial<typeof button.props>)}
   </div>;
 }

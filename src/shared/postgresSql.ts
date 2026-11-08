@@ -265,12 +265,10 @@ export function postgresRelationName(value: string): { schema: string; name: str
   return parseQualifiedRelation(value) ?? { schema: 'public', name: value };
 }
 
-/** 草稿保留现有单标识符行为，目录复合名逐段重建。 */
+/** 草稿使用与数据页相同的 schema，避免同名关系受新会话 search_path 影响。 */
 export function postgresRelationSelect(name: string): string {
-  const relation = parseQualifiedRelation(name);
-  const target = relation
-    ? postgresIdentifier(relation.schema) + '.' + postgresIdentifier(relation.name)
-    : postgresIdentifier(name);
+  const relation = postgresRelationName(name);
+  const target = postgresIdentifier(relation.schema) + '.' + postgresIdentifier(relation.name);
   return 'SELECT * FROM ' + target + ' LIMIT 1000;';
 }
 
