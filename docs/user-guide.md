@@ -8,6 +8,8 @@
 
 需要核对多张表时，先选左右连接与数据库，再点「多表比较」。可以匹配同名表，也可以手动添加异名表。批次显示每对表的相同、仅左、仅右及字段值不同计数。点「打开表对」可重新比较、审阅逐行差异并按单表流程同步。[多表数据比较](development/data-compare-batch-20261108.md)
 
+重复核对相同的表时，可在多表窗口展开「多表比较方案」，命名保存两侧范围和映射顺序。下次打开多表窗口可直接载入。需要反向核对时，点击「交换左侧与右侧」，再手动比较。[多表方案与换向](development/data-compare-batch-profiles-20261108.md)
+
 对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)
 
 从「工具」选择「比较 MySQL／MariaDB 表数据」，可按主键核对同连接或跨连接的 InnoDB 表，查看分类型的差异及逐列原值。[MySQL／MariaDB 表数据比较](development/mysql-data-compare-20261107.md)

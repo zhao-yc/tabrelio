@@ -1,5 +1,5 @@
 import { dataCompareBatchZh as batch } from '../../src/renderer/locales/dataCompareBatch.zh-CN';
-import { dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
+import { dataCompareBatchProfilesZh as batchProfiles, dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import { Client } from 'pg';
 import { confirmOwnedDesktopExit, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -129,10 +129,19 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await page.screenshot({ path: info.outputPath('PostgreSQL比较方案.png') });
     await modal.getByRole('button', { name: batch.open, exact: true }).click();
     const overview = page.getByRole('dialog', { name: batch.title, exact: true });
+    const profilePanel = overview.locator('details').filter({ hasText: batchProfiles.title });
+    await overview.getByText(batchProfiles.title, { exact: true }).click();
+    await profilePanel.getByLabel(batchProfiles.name, { exact: true }).fill('日常校验');
+    await profilePanel.getByRole('button', { name: batchProfiles.add, exact: true }).click();
+    await expect(profilePanel.getByText(batchProfiles.saved, { exact: true })).toBeVisible();
+    await overview.getByRole('button', { name: profiles.swap, exact: true }).click();
+    await profilePanel.getByRole('button', { name: batchProfiles.apply, exact: true }).click();
+    await expect(profilePanel.getByText(batchProfiles.applied, { exact: true })).toBeVisible();
+    await expect(overview.getByText(batch.pending, { exact: true })).toHaveCount(1);
     const batchRun = overview.getByRole('button', { name: batch.run, exact: true });
     await batchRun.click();
     await expect(overview.getByRole('row').filter({ hasText: '"对照"."明细"' })).toContainText('仅左侧 1 · 仅右侧 1 · 字段值不同 27');
-    await page.screenshot({ path: info.outputPath('PostgreSQL多表比较.png') });
+    await page.screenshot({ path: info.outputPath('PostgreSQL多表方案.png') });
     await overview.getByRole('button', { name: batch.return, exact: true }).click();
     await run.click();
     await expect(modal.getByText(text.split, { exact: true })).toBeVisible();

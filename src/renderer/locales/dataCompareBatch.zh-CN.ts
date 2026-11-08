@@ -13,6 +13,8 @@ export const dataCompareBatchZh = {
   run: '比较所选表对',
   cancel: '停止批次',
   loading: '正在读取两侧表目录…',
+  chooseScope: '可直接载入多表方案。新建映射时，请先返回单表比较选择两侧范围。',
+  missing: (source: string, target: string) => `表映射已失效，目录缺少所需对象（${source} → ${target}）。请核对后更新方案。`,
   noMatches: '没有可新增的同名表映射，可手动选择表。',
   noPairs: '请匹配同名表或手动添加映射。',
   limit: '每批最多比较 32 对表，请分批选择。',

@@ -141,12 +141,8 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
     finally { syncRunning.current = false; setSyncBusy(false); }
   }
   const locked = busy || syncBusy || !!preview;
-  const hasScope = [source, target].every(side => connections.some(item => item.id === side.connectionId));
-  const scopeLabel = (side: Selection) => connections.find(item => item.id === side.connectionId)?.name ?? '';
-  if (batch) return <DataCompareBatchDialog family={family} source={{ ...source, database: 'main' }} target={{ ...target, database: 'main' }}
-    initial={{ source: source.table, target: target.table }} labels={[scopeLabel(source), scopeLabel(target)]} onClose={() => setBatch(false)}
-    renderPair={(pair, back) => <SqliteDataCompareDialog connections={connections} onClose={back}
-      initialPair={{ source: { ...source, table: pair.source }, target: { ...target, table: pair.target } }}/>}/>;
+  if (batch) return <DataCompareBatchDialog family={family} initial={{ source: { ...source, database: 'main' }, target: { ...target, database: 'main' } }} connections={connections} onClose={() => setBatch(false)}
+    renderPair={(pair, back) => <SqliteDataCompareDialog connections={connections} onClose={back} initialPair={pair}/>}/>;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
@@ -210,7 +206,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
         <button className="danger" disabled={syncBusy || confirmation !== preview.confirmation} onClick={() => void applySync()}>{syncText.apply}</button>
       </> : output?.syncSnapshotId && <button disabled={locked || !marked.size} onClick={() => void previewSync()}>{syncText.preview}</button>}
       <span className="grow"/>
-      {!initialPair && <button disabled={!hasScope || locked} onClick={() => {
+      {!initialPair && <button disabled={locked} onClick={() => {
         if (canConfigure()) { clear(); setBatch(true); }
       }}>{batchText.open}</button>}
       <button disabled={!ready || locked} onClick={swap}>{profileText.swap}</button><button disabled={busy || syncBusy} onClick={close}>{text.close}</button></footer>

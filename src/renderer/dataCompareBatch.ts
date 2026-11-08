@@ -1,7 +1,5 @@
+import type { ComparePair } from '../shared/dataCompareBatch';
 import { postgresRelationName } from '../shared/postgresSql';
-
-export type ComparePair = { source: string; target: string };
-export const batchPairLimit = 32;
 
 /** 先匹配准确全名。PostgreSQL 两端仅在同一个短名各自唯一时才跨 Schema 建议映射。 */
 export function suggestComparePairs(left: string[], right: string[], postgres: boolean, sameScope: boolean): ComparePair[] {

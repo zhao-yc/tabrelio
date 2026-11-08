@@ -96,3 +96,48 @@ describe('数据比较方案', () => {
     expect(readFileSync(file)).toEqual(before);
   });
 });
+
+describe('多表比较方案', () => {
+  const scope = { ...sqlite, area: 'batch' } as const;
+  const configuration = { ...sqlite, source: { connectionId: 'left', database: 'main' }, target: { connectionId: 'right', database: 'main' },
+    pairs: [{ source: 'ledger', target: 'ledger' }, { source: '旧名', target: '新名' }] };
+  const request = { ...scope, kind: 'add', profile: { name: profile.name, configuration } };
+
+  it('独立于同名单表方案，重开后保持表对顺序，换路由及过期修订均拦截', async () => {
+    const [single] = store.mutateDataCompareProfiles(add);
+    const [selected] = store.mutateDataCompareProfiles(request);
+    store.close();
+    store = await LocalStore.open(file, wasm, protector);
+    expect(store.listDataCompareProfiles(sqlite)).toEqual([single]);
+    expect(store.listDataCompareProfiles(scope)).toEqual([selected]);
+    expect(store.readDataCompareProfile({ ...scope, selected })).toEqual(configuration);
+    expect(() => store.readDataCompareProfile({ ...sqlite, selected })).toThrow('已变化');
+    store.saveConnection({ ...fileConnection, sqlite: { ...fileConnection.sqlite, filePath: '/fixtures/moved.sqlite' } });
+    expect(() => store.readDataCompareProfile({ ...scope, selected })).toThrow('连接配置已变化');
+    const [next] = store.mutateDataCompareProfiles({ ...request, kind: 'update', selected });
+    expect(() => store.mutateDataCompareProfiles({ ...scope, kind: 'delete', selected })).toThrow('已变化');
+    expect(store.mutateDataCompareProfiles({ ...scope, kind: 'delete', selected: next })).toEqual([]);
+    expect(store.listDataCompareProfiles(sqlite)).toEqual([single]);
+  });
+
+  it('拒绝混用入口、重复目标、无映射、同范围自比较和运行状态', () => {
+    const before = readFileSync(file);
+    for (const input of [
+      { ...request, area: undefined },
+      { ...add, area: 'batch' },
+      ...[
+        { ...configuration, pairs: [] },
+        { ...configuration, pairs: [{ source: 'a', target: 'x' }, { source: 'b', target: 'x' }] },
+        { ...configuration, pairs: [{ source: 'a', target: 'x' }, { source: 'a', target: 'y' }] },
+        { ...configuration, pairs: Array.from({ length: 33 }, (_, index) => ({ source: 'a' + index, target: 'b' + index })) },
+        { ...configuration, target: configuration.source },
+        { ...configuration, results: [] },
+        { ...configuration, source: { ...configuration.source, password: '凭据' } },
+      ].map(item => ({ ...request, profile: { ...request.profile, configuration: item } })),
+    ]) {
+      expect(() => validateCommand('dataCompareProfiles.mutate', input)).toThrow();
+      expect(() => store.mutateDataCompareProfiles(input)).toThrow();
+    }
+    expect(readFileSync(file)).toEqual(before);
+  });
+});

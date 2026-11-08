@@ -176,12 +176,8 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
   }
   const locked = busy || syncBusy || !!preview;
   const close = () => { if (!task.current && !syncing.current) onClose(); };
-  const hasScope = [source, target].every(side => side.database && connections.some(item => item.id === side.connectionId));
-  const scopeLabel = (side: Endpoint) => (connections.find(item => item.id === side.connectionId)?.name ?? '') + ' / ' + side.database;
-  if (batch) return <DataCompareBatchDialog family={family} source={source} target={target}
-    initial={{ source: source.table, target: target.table }} labels={[scopeLabel(source), scopeLabel(target)]} onClose={() => setBatch(false)}
-    renderPair={(pair, back) => <ServerDataCompareDialog dialect={dialect} connections={connections} onClose={back}
-      initialPair={{ source: { ...source, table: pair.source }, target: { ...target, table: pair.target } }}/>}/>;
+  if (batch) return <DataCompareBatchDialog family={family} initial={{ source, target }} connections={connections} onClose={() => setBatch(false)}
+    renderPair={(pair, back) => <ServerDataCompareDialog dialect={dialect} connections={connections} onClose={back} initialPair={pair}/>}/>;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
@@ -253,7 +249,7 @@ export function ServerDataCompareDialog({ connections, onClose, initialPair, dia
         <button className="danger" disabled={syncBusy || confirmation !== preview.confirmation} onClick={() => void applySync()}>{sync.apply}</button>
       </> : report?.syncSnapshotId && <button disabled={locked || !marked.size} onClick={() => void previewSync()}>{sync.preview}</button>}
       <span className="grow"/>
-      {!initialPair && <button disabled={!hasScope || locked} onClick={() => {
+      {!initialPair && <button disabled={locked} onClick={() => {
         if (canConfigure()) { clear(); setBatch(true); }
       }}>{batchText.open}</button>}
       <button disabled={!ready || locked} onClick={swap}>{profileText.swap}</button><button disabled={busy || syncBusy} onClick={close}>{text.close}</button>

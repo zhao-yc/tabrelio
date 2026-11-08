@@ -44,7 +44,7 @@ import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type Work
 import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
 import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { dataCompareProfileMutationSchema, dataCompareProfileReadSchema, dataCompareProfileScope, readDataCompareProfiles,
-  type DataCompareConfiguration, type DataCompareProfileFamily, type DataCompareProfileSummary, type StoredDataCompareProfile } from '../shared/dataCompareProfiles';
+  type DataCompareProfileConfiguration, type DataCompareProfileScope, type DataCompareProfileSummary, type StoredDataCompareProfile } from '../shared/dataCompareProfiles';
 import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, validateTablePresetBudget, type TablePresetTarget, type TablePresetSource, type TablePresetStoredSnapshot as TablePresetSnapshot, type TablePresetSelect } from '../shared/tablePresets';
 import { postgresPresetLayoutsSchema, postgresTablePresetDocumentSchema, postgresTablePresetListSchema, postgresTablePresetSaveSchema, postgresTablePresetSelectSchema, type TablePresetSave } from '../shared/tablePresets';
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
@@ -1177,19 +1177,23 @@ export class LocalStore {
     });
     return next;
   }
-  private savedDataCompareProfiles(family: DataCompareProfileFamily): StoredDataCompareProfile[] {
+  /** 单表沿用旧键，批次使用独立命名空间，无需迁移已保存的方案。 */
+  private dataCompareProfileKey(scope: DataCompareProfileScope): string {
+    return scope.area === 'batch' ? 'batch:' + scope.family : scope.family;
+  }
+  private savedDataCompareProfiles(scope: DataCompareProfileScope): StoredDataCompareProfile[] {
     if (!this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='data_compare_profiles'").length) return [];
-    const data = this.db.exec('SELECT data FROM data_compare_profiles WHERE family=?', [family])[0]?.values[0]?.[0];
-    return data === undefined ? [] : readDataCompareProfiles(family, String(data));
+    const data = this.db.exec('SELECT data FROM data_compare_profiles WHERE family=?', [this.dataCompareProfileKey(scope)])[0]?.values[0]?.[0];
+    return data === undefined ? [] : readDataCompareProfiles(scope, String(data));
   }
   listDataCompareProfiles(raw: unknown): DataCompareProfileSummary[] {
-    const { family } = dataCompareProfileScope.parse(raw);
-    return this.savedDataCompareProfiles(family).map(({ name, revision }) => ({ name, revision }));
+    const scope = dataCompareProfileScope.parse(raw);
+    return this.savedDataCompareProfiles(scope).map(({ name, revision }) => ({ name, revision }));
   }
   /** 复用实际连接的公开路由摘要。连接改名可继续使用，改目标或替换文件配置必须重新确认。 */
-  private dataCompareBindings(configuration: DataCompareConfiguration): [string, string] {
+  private dataCompareBindings(configuration: DataCompareProfileConfiguration): [string, string] {
     const profiles = this.connections();
-    const bind = (endpoint: DataCompareConfiguration['source']) => {
+    const bind = (endpoint: DataCompareProfileConfiguration['source']) => {
       const profile = profiles.find(item => item.id === endpoint.connectionId);
       if (!profile || profile.pendingFiles?.length || (configuration.family === 'mysql'
         ? profile.dialect !== 'mysql' && profile.dialect !== 'mariadb' : profile.dialect !== configuration.family) ||
@@ -1199,9 +1203,9 @@ export class LocalStore {
     };
     return [bind(configuration.source), bind(configuration.target)];
   }
-  readDataCompareProfile(raw: unknown): DataCompareConfiguration {
-    const { family, selected } = dataCompareProfileReadSchema.parse(raw);
-    const profile = this.savedDataCompareProfiles(family).find(item => item.name === selected.name && item.revision === selected.revision);
+  readDataCompareProfile(raw: unknown): DataCompareProfileConfiguration {
+    const { selected, ...scope } = dataCompareProfileReadSchema.parse(raw);
+    const profile = this.savedDataCompareProfiles(scope).find(item => item.name === selected.name && item.revision === selected.revision);
     if (!profile) throw Error('比较方案已变化，请重新读取后再操作');
     if (this.dataCompareBindings(profile.configuration).some((value, index) => value !== profile.bindings[index]))
       throw Error('比较方案的连接配置已变化，请核对目标后重新保存');
@@ -1210,7 +1214,7 @@ export class LocalStore {
   /** 原子更新命名方案，旧修订不能覆盖或删除另一个窗口已保存的配置。 */
   mutateDataCompareProfiles(raw: unknown): DataCompareProfileSummary[] {
     const input = dataCompareProfileMutationSchema.parse(raw);
-    const current = this.savedDataCompareProfiles(input.family);
+    const current = this.savedDataCompareProfiles(input);
     const index = input.kind === 'add' ? -1 : current.findIndex(item => item.name === input.selected.name && item.revision === input.selected.revision);
     if (input.kind !== 'add' && index < 0) throw Error('比较方案已变化，请重新读取后再操作');
     if (input.kind === 'delete') current.splice(index, 1);
@@ -1221,10 +1225,10 @@ export class LocalStore {
       else current[index] = entry;
     }
     const data = JSON.stringify({ version: 1, profiles: current });
-    readDataCompareProfiles(input.family, data);
+    readDataCompareProfiles(input, data);
     this.mutate(() => {
       this.db.run('CREATE TABLE IF NOT EXISTS data_compare_profiles (family TEXT PRIMARY KEY, data TEXT NOT NULL)');
-      this.db.run('INSERT INTO data_compare_profiles VALUES (?,?) ON CONFLICT(family) DO UPDATE SET data=excluded.data', [input.family, data]);
+      this.db.run('INSERT INTO data_compare_profiles VALUES (?,?) ON CONFLICT(family) DO UPDATE SET data=excluded.data', [this.dataCompareProfileKey(input), data]);
     });
     return current.map(({ name, revision }) => ({ name, revision }));
   }
