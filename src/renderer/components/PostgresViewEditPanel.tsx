@@ -51,7 +51,7 @@ export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
       <p>{text.hint}</p>
       <label>{text.definition}<textarea rows={10} spellCheck={false} maxLength={128 * 1024}
         value={definition} disabled={busy || unknown} onChange={event => changeDefinition(event.target.value)}/></label>
-      <ViewSqlFileImport owner={importOwner} value={definition} disabled={busy || unknown}
+      <ViewSqlFileImport owner={importOwner} name={target.table} value={definition} disabled={busy || unknown}
         hint={viewSqlFileZh.postgresHint} current={importCurrent} prepare={preparePostgresViewDefinition} apply={changeDefinition}/>
       <ViewQueryInspect owner={importOwner} hint={viewQueryInspectZh.postgresHint(postgresViewQuerySampleRows)}
         disabled={busy || unknown || !definition.trim()} current={importCurrent}

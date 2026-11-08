@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
+import { exportMysqlViewFileQuery, mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
 
 describe('MySQL 和 MariaDB 视图文件草稿', () => {
   it('在单条 CTE 中保留注释、字符串和原始换行，名称独立引用', () => {
@@ -31,6 +31,16 @@ describe('MySQL 和 MariaDB 视图文件草稿', () => {
     "SELECT 'escape\\' AS x",
   ])('拒绝无法限定为一条定义查询的文件 %s', sql => {
     expect(() => mysqlViewFileQuery(sql)).toThrow(/视图|SQL 文件/);
+  });
+
+  it('从完整草稿另存可再次载入的查询，保留末尾注释并剥离定义属性', () => {
+    const head = 'ALTER ALGORITHM=MERGE SQL SECURITY INVOKER VIEW `库`.`视图` (`列`) AS';
+    const query = "SELECT 'WITH CHECK OPTION' -- 草稿";
+    const saved = exportMysqlViewFileQuery(head + '\n' + query + '\nWITH LOCAL CHECK OPTION;', '库', '视图');
+    expect(saved).toBe(query + '\n;');
+    expect(mysqlViewFileQuery(saved)).toBe(query);
+    expect(() => exportMysqlViewFileQuery(head + ' SELECT 1 INTO @v', '库', '视图')).toThrow(/SQL 文件/);
+    expect(() => exportMysqlViewFileQuery(head + ' SELECT 1', '库', '另一视图')).toThrow(/无法确认/);
   });
 
   it('拒绝不匹配的库、目标名和额外语句', () => {

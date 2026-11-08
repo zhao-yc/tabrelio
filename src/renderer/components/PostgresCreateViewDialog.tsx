@@ -137,7 +137,7 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
           </div>
           <Field label={text.definition}><textarea className="pg-create-view-definition" value={draft.definition}
             spellCheck={false} rows={8} maxLength={128 * 1024} onChange={event => edit('definition', event.target.value)} /></Field>
-          <ViewSqlFileImport owner={draft} value={draft.definition} disabled={busy || loading || unknown || !schemas.length}
+          <ViewSqlFileImport owner={draft} name={draft.view} value={draft.definition} disabled={busy || loading || unknown || !schemas.length}
             hint={viewSqlFileZh.postgresHint} current={importCurrent} prepare={preparePostgresViewDefinition}
             apply={sql => edit('definition', sql)}/>
           {materialized && <label><input type="checkbox" checked={draft.populate}

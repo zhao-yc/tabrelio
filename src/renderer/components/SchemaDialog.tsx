@@ -23,7 +23,7 @@ import {databaseSearchZh} from '../locales/databaseSearch.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { completionIdentifier } from '../../shared/completionLexical';
-import { mysqlViewSampleRows, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../shared/mysqlViewFile';
+import { exportMysqlViewFileQuery, mysqlViewSampleRows, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../shared/mysqlViewFile';
 import type { TableCreateApplyOutput } from '../../shared/tableCreate';
 import { TableCreateConfirmation } from './TableCreateConfirmation';
 import { tableCreateZh } from '../locales/tableCreate.zh-CN';
@@ -352,8 +352,9 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
     try { await invoke('connections.open', { id: connectionId }); await invoke('schema.apply', { connectionId, database: database ?? '', sql: statement, taskId }); useWorkspace.getState().notify(zh.schema.text055); onApplied(); onClose(); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
-  return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} value={sql} disabled={viewReadDisabled}
-      hint={viewSqlFileZh.mysqlHint} current={fileCurrent} prepare={prepareViewFile} apply={setSql}/>}
+  return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} name={name} value={sql} disabled={viewReadDisabled}
+      hint={viewSqlFileZh.mysqlHint} current={fileCurrent} prepare={prepareViewFile}
+      prepareSave={value => exportMysqlViewFileQuery(value, database, name)} apply={setSql}/>}
     <SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/>
     {fileView && <ViewQueryInspect owner={fileOwner} hint={viewQueryInspectZh.mysqlHint(mysqlViewSampleRows)} current={fileCurrent}
       disabled={viewReadDisabled} read={mode => invoke('mysql.view.inspectQuery', { connectionId, database, name, sql, mode })}/>}

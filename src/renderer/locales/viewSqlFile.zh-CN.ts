@@ -1,4 +1,7 @@
 export const viewSqlFileZh = {
+  save: '另存定义为 SQL',
+  filename: (name: string) => name ? `视图-${name}.sql` : '视图定义.sql',
+  saved: (name: string) => `已保存视图定义到 ${name}`,
   open: '从 SQL 文件载入定义',
   replace: '用文件内容替换当前视图定义？',
   confirmReplace: '替换定义草稿',

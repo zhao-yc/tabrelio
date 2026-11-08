@@ -116,6 +116,17 @@ export function replaceMysqlViewFileQuery(source: string, database: string, view
   }, invalidDraft);
 }
 
+/** 另存文件只携带查询。用导入所需的四种词法模式核对正文边界，确保文件可重新载入。 */
+export function exportMysqlViewFileQuery(source: string, database: string, view: string): string {
+  const query = commonSql((quotes, escapes) => {
+    const { statement, headerEnd, option } = mysqlViewParts(source, database, view, quotes, escapes, true);
+    return source.slice(headerEnd, option?.start ?? statement.end).trim();
+  }, invalidDraft);
+  const file = query + '\n;';
+  mysqlViewFileQuery(file);
+  return file;
+}
+
 /** 按实际读取连接的引号模式提取单条查询，保留排序和外层 LIMIT。DDL 从不发给预览连接。 */
 export function mysqlViewDraftQuery(input: MysqlViewQueryInspectInput, ansiQuotes: boolean, noBackslashEscapes: boolean) {
   if (new TextEncoder().encode(input.sql).length > limit) throw Error('视图定义草稿超过 128 KiB。');

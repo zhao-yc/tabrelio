@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import mysql, { type RowDataPacket } from 'mysql2/promise';
 import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import { saveViewSql } from './view-sql-file-save';
 import { clickSidebarAction } from './sidebar-menu';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh as text } from '../../src/renderer/locales/viewSqlFile.zh-CN';
@@ -21,6 +22,7 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
       !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535)
     throw Error('只允许本例源码和隔离回环数据库');
   const root = await realpath(dataDir), valid = join(root, 'view-definition.sql'), invalid = join(root, 'view-batch.sql');
+  const saved = join(root, 'view-saved.sql'), edited = join(root, 'view-edited.sql');
   const old = '旧` 视图', fresh = '新` 视图', renamed = '新` 视图改名';
   const quote = (value: string) => '`' + value.replaceAll('`', '``') + '`';
   const target = (name: string) => quote(database) + '.' + quote(name);
@@ -130,6 +132,11 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
     await expect(create.getByText(/SQL 文件须包含一条/)).toBeVisible();
     await load(create, valid, true);
     await expect(editor(create)).toContainText('文件尾注释');
+    await saveViewSql(create, null);
+    await expect(create.getByText(/已保存视图定义到/)).toHaveCount(0);
+    await writeFile(saved, '待覆盖的旧文件');
+    await saveViewSql(create, saved);
+    expect(await readFile(saved, 'utf8')).toBe(query + '\n;');
     await preview(create, '新值');
     expect((await catalog()).some(item => item.name === fresh)).toBe(false);
     await viewName.fill(old);
@@ -150,10 +157,12 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
     await preview(edit, '原值');
     await load(edit, valid, false);
     await expect(editor(edit)).not.toContainText('文件尾注释');
-    await load(edit, valid, true);
+    await load(edit, saved, true);
     await expect(editor(edit)).toContainText(attributes);
     await expect(editor(edit)).toContainText('文件尾注释');
     await expect(editor(edit)).toContainText(/WITH\s+LOCAL\s+CHECK\s+OPTION/i);
+    await saveViewSql(edit, edited);
+    expect(await readFile(edited, 'utf8')).toBe(query + '\n;');
     await preview(edit, '新值');
     expect(await showCreate(old)).toBe(original);
     await apply(edit);

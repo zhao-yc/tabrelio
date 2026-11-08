@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import { saveViewSql } from './view-sql-file-save';
+import { queryFilesZh } from '../../src/renderer/locales/queryFiles.zh-CN';
 import { clickSidebarAction } from './sidebar-menu';
 import { postgresCreateViewZh as pg } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { postgresViewEditZh as edit } from '../../src/renderer/locales/postgresViewEdit.zh-CN';
@@ -32,6 +34,7 @@ test('载入文件只改变视图草稿，预览后由明确确认创建或替�
     : `SELECT '${marker}'::text AS marker;`;
   const first = sqlFor('文件原定义'), second = sqlFor('文件新定义');
   const valid = join(root, 'view-valid.sql'), changed = join(root, 'view-changed.sql'), invalid = join(root, 'view-invalid.sql');
+  const saved = join(root, 'view-saved.sql'), savedEdit = join(root, 'view-edited.sql'), savedMaterialized = join(root, 'view-materialized.sql');
   const batch = join(root, 'view-batch.sql');
   const invalidSql = local ? 'CREATE VIEW wrong_target AS SELECT 1;' : 'SELECT 1; DROP VIEW ignored;';
   const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(first, 'utf16le')]);
@@ -121,6 +124,12 @@ test('载入文件只改变视图草稿，预览后由明确确认创建或替�
       await load(create, batch);
       await expect(create.getByText(text.sqliteTarget, { exact: true })).toBeVisible();
       await load(create, valid);
+      await create.getByRole('combobox', { name: queryFilesZh.encoding, exact: true }).selectOption('utf16le');
+      await saveViewSql(create, saved);
+      expect(await readFile(saved)).toEqual(utf16);
+      await create.getByRole('combobox', { name: queryFilesZh.encoding, exact: true }).selectOption('utf8');
+      await load(create, changed, true);
+      await load(create, saved, true);
       await preview(create, first);
       expect(await catalog()).toEqual(before);
       await apply(create, 'create');
@@ -130,6 +139,10 @@ test('载入文件只改变视图草稿，预览后由明确确认创建或替�
       // SQLite 目录去掉了 CREATE 头中的 main 限定和结束分号。
       await preview(replacement, first.replace('CREATE VIEW main.', 'CREATE VIEW ').replace(/;$/, ''));
       await load(replacement, changed, true);
+      await saveViewSql(replacement, savedEdit);
+      expect(await readFile(savedEdit, 'utf8')).toBe(second);
+      await load(replacement, saved, true);
+      await load(replacement, savedEdit, true);
       await preview(replacement, second);
       expect(marker()).toBe('文件原定义');
       await apply(replacement, 'replace');
@@ -152,6 +165,12 @@ test('载入文件只改变视图草稿，预览后由明确确认创建或替�
       await expect(query).toHaveValue('');
       await load(modal, valid);
       await expect(query).toHaveValue(first);
+      await modal.getByRole('combobox', { name: queryFilesZh.encoding, exact: true }).selectOption('utf16le');
+      await saveViewSql(modal, saved);
+      expect(await readFile(saved)).toEqual(utf16);
+      await query.fill('');
+      await load(modal, saved);
+      await expect(query).toHaveValue(first);
       await modal.getByRole('button', { name: pg.preview, exact: true }).click();
       await expect(modal.locator('.pg-create-sql')).toContainText('文件原定义');
       expect(await catalog()).toEqual(before);
@@ -168,6 +187,10 @@ test('载入文件只改变视图草稿，预览后由明确确认创建或替�
       await load(panel, changed, false);
       await expect(panel.getByRole('textbox', { name: edit.definition, exact: true })).toHaveValue(/文件原定义/);
       await load(panel, changed, true);
+      await saveViewSql(panel, savedEdit);
+      expect(await readFile(savedEdit, 'utf8')).toBe(second);
+      await load(panel, saved, true);
+      await load(panel, savedEdit, true);
       await panel.getByRole('button', { name: edit.preview, exact: true }).click();
       await expect(panel.locator('pre')).toContainText('文件新定义');
       await expect(grid.getByRole('gridcell', { name: '文件原定义', exact: true })).toBeVisible();
@@ -177,7 +200,9 @@ test('载入文件只改变视图草稿，预览后由明确确认创建或替�
       await expect(grid.getByRole('gridcell', { name: '文件新定义', exact: true })).toBeVisible();
 
       const mat = await open(true);
-      await load(mat, valid);
+      await load(mat, saved);
+      await saveViewSql(mat, savedMaterialized);
+      expect(await readFile(savedMaterialized, 'utf8')).toBe(first);
       await mat.getByLabel(pg.populate).uncheck();
       await mat.getByRole('button', { name: pg.preview, exact: true }).click();
       await expect(mat.locator('.pg-create-sql')).toContainText('WITH NO DATA');
