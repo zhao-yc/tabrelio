@@ -3,7 +3,7 @@ import { gridQuickValueKinds, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { DataGrid, SelectColumn, type DataGridHandle, type ColumnWidths, type Column, type CellKeyDownArgs, type CellKeyboardEvent } from 'react-data-grid';
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
 import type { QueryResultSortRule, SortDialect } from '../queryResultSort';
@@ -17,6 +17,8 @@ import { useWorkspace } from '../store';
 import { cellClipboardType, copyGridCellValue, copyGridColumnNames, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
 import { saveGridCell } from '../gridCellFile';
 import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
+import { fitGridColumnWidths, gridResizeHandleColumn } from '../gridColumnFit';
+import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { GridHeaderDetails, type GridHeaderDetailsOptions } from './GridHeaderDetails';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
@@ -367,6 +369,21 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const binaryColumn = binary ? columns.find(column => column.key === binary.key) : undefined;
   // 查询结果受控，恢复默认后丢弃虚拟网格此前缓存的手动宽度。
   const controlledWidths = useMemo<ColumnWidths>(() => new Map(Array.from(columnWidths ?? [], ([key, width]) => [key, { type: 'resized', width }])), [columnWidths]);
+  /** 适宽与拖动共享布局接纳门，按内部列键区分同名结果列。 */
+  function fitHeaderColumn(event: MouseEvent): void {
+    const index = gridResizeHandleColumn(event, gridRef.current?.element);
+    if (index === undefined || !actionCurrent() || document.querySelector(appModalSelector)) return;
+    const column = columns[index - (onActiveRowChange ? 0 : 1)];
+    if (!column) return;
+    try {
+      const type = headerDetails ? (headerDetails.showType ? headerDetails.fields?.get(column.key)?.type ?? column.type : undefined) : column.type;
+      const width = fitGridColumnWidths({ columns: [{ ...column, type }], rowCount: rows.length,
+        cell: (row, key) => presentCell?.(rows[row], key)?.label ?? cellPreview(displayedValue(rows[row], key, presentCell)),
+      }, new Set([column.key])).get(column.key)!;
+      if (onColumnResize) onColumnResize(column.key, width);
+      else onColumnWidthsChange?.(new Map(controlledWidths).set(column.key, { type: 'resized', width }));
+    } catch { useWorkspace.getState().notify(gridColumnWidthBatchZh.fitUnavailable, true); }
+  }
   const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, frozen: index < frozenCount, headerCellClass: findTarget?.row === -1 && findTarget.key === column.key ? 'query-result-find-hit' : findMarks?.has('-1:' + column.key) ? 'pg-find-match' : undefined, cellClass: row => {
     const rowIndex = rowIndexes.get(row);
     if (activeHit?.row === rowIndex && activeHit?.column === index || findTarget?.row === rowIndex && findTarget?.key === column.key) return 'query-result-find-hit';
@@ -417,7 +434,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       const content=encodeClipboard(values);event.clipboardData.setData('text/plain',content.text);event.clipboardData.setData(cellClipboardType,content.typed);
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
-  const grid = onCellPaste ? <div style={{ display: 'contents' }} onPasteCapture={pasteGrid}>{dataGrid}</div> : dataGrid;
+  const fitHeader = onColumnResize || onColumnWidthsChange ? fitHeaderColumn : undefined;
+  const grid = onCellPaste || fitHeader ? <div style={{ display: 'contents' }} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。
   const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&

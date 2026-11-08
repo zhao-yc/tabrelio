@@ -80,6 +80,8 @@
 
 2026-11-09 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表格和查询结果可从右键菜单复制命中的单元格，保留其他勾选行及网格已有剪贴板格式。D02、Q05、R01、R02 仍为部分覆盖。[右键复制当前单元格](user-guide.md#右键复制当前单元格)
 
+2026-11-09 源码增量。双击表格或查询结果的表头分隔线，可按列头和已载入记录采样调整命中列宽，复用原布局规则。D06、Q05、R01、R02 仍为部分覆盖。[列宽设置](user-guide.md#设置列宽和布局)
+
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 实体表可为当前记录或本页勾选行生成 UPDATE SQL，WHERE 使用完整原主键，SET 使用已加载的普通非键原值。D02、R01、R02 仍为部分覆盖。[复制记录为 UPDATE SQL](user-guide.md#复制记录为-update-sql)
 
 2026-11-08 源码增量。PostgreSQL 单文件原生 CSV 可在导入前完整检查编码、引号和列数，并保留列映射。写入沿已核对的字节范围并核对记录数。F01、R01 仍为部分覆盖。[原生 CSV 整文件检查](development/postgres-copy-csv-preflight-20261108.md)

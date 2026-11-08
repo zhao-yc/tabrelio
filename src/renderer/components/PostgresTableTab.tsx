@@ -637,10 +637,15 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   };
 
   /** 布局只投影列定义；网格中的行索引和内部键继续对应原页，记录和导出都使用完整列。 */
+  const shownColumns = useRef<PostgresTableColumn[]>([]);
   const gridLayout = useMemo(() => {
     const columns = page?.columns ?? [], projection = exactTableLayoutProjection(columnNames, layoutView.preferences);
+    const nextColumns = projection.map(item => columns[item.index]);
+    // 宽度变更时保留同一组可见列的身份，避免重置原页勾选和活动格。
+    if (shownColumns.current.length !== nextColumns.length || nextColumns.some((column, index) => column !== shownColumns.current[index]))
+      shownColumns.current = nextColumns;
     return {
-      columns: projection.map(item => columns[item.index]),
+      columns: shownColumns.current,
       frozenKeys: projection.filter(item => item.frozen).map(item => columns[item.index].key),
       widths: new Map(projection.flatMap(item => item.width === undefined ? [] : [[columns[item.index].key, item.width] as const])),
     };

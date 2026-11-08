@@ -125,12 +125,30 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     const tableAmount = tableTab.getByRole('gridcell').filter({ hasText: /^(INTEGER · )?9007199254740993$/ });
     await menuCopy(tableAmount, expectedA.amount, expectedA.amount, local ? { kind: 'integer', value: expectedA.amount } : undefined);
     await expect(tableBCheck).toBeChecked();
+    const fitAmount = async () => {
+      const amountHeader = tableTab.getByRole('columnheader', { name: /^amount\b/ });
+      const labelHeader = tableTab.getByRole('columnheader', { name: /^label\b/ });
+      const headerWidth = (header: typeof amountHeader) => header.evaluate(element => Math.round(element.getBoundingClientRect().width));
+      const before = await headerWidth(amountHeader), labelWidth = await headerWidth(labelHeader);
+      await amountHeader.locator('.rdg-resize-handle').dblclick();
+      await expect.poll(() => headerWidth(amountHeader)).not.toBe(before);
+      const fitted = await headerWidth(amountHeader);
+      expect(fitted).toBeGreaterThanOrEqual(64);
+      expect(fitted).toBeLessThanOrEqual(640);
+      expect(await headerWidth(labelHeader)).toBe(labelWidth);
+    };
+    await fitAmount();
+    await expect(tableBCheck).toBeChecked();
+    await page.screenshot({ path: info.outputPath('表头双击适宽.png') });
     if (local) {
       await open('json-view');
       await expect(tableCell).toBeVisible();
       await tableCell.click();
       expect(await copy(tableTab)).toMatchObject([expectedA]);
       await menuCopy(tableAmount, expectedA.amount, expectedA.amount);
+      await tableBCheck.check();
+      await fitAmount();
+      await expect(tableBCheck).toBeChecked();
     }
     await open('json-query');
     const query = page.locator('.query-tab:visible');
@@ -146,6 +164,13 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     const historyBefore = await history();
     await rowA.locator('..').getByRole('checkbox').check();
     await rowB.locator('..').getByRole('checkbox').check();
+    const aliases = grid.getByRole('columnheader', { name: /^alias\b/ });
+    await expect(aliases).toHaveCount(2);
+    const aliasWidth = (index: number) => aliases.nth(index).evaluate(element => Math.round(element.getBoundingClientRect().width));
+    const amountWidth = await aliasWidth(0), labelWidth = await aliasWidth(1);
+    await aliases.nth(0).locator('.rdg-resize-handle').dblclick();
+    await expect.poll(() => aliasWidth(0)).not.toBe(amountWidth);
+    expect(await aliasWidth(1)).toBe(labelWidth);
     await page.screenshot({ path: info.outputPath('复制记录为JSON.png') });
     expect(await copy(query)).toEqual([
       { alias: '9007199254740994', 'alias [2]': 'row B', payload: { type: 'binary', base64: '' }, nullable: '' },

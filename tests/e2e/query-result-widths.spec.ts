@@ -13,7 +13,8 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再次执行仍用默认值', async () => {
   const id = 'offline-result-widths';
-  const sql = "SELECT '短文本' AS 重复列, '这是一段较长的内容，用于测量同名列不同的显示宽度' AS 重复列";
+  const sql = "WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<61) " +
+    "SELECT '短文本' AS 重复列, CASE WHEN n=61 THEN '这是一段较长的内容，用于测量同名列不同的显示宽度，最后一行在屏幕之外' ELSE '短文本' END AS 重复列 FROM seq";
   // 只为独立临时配置建立一个本地只读连接，查询仍经过正式 SQLite 引擎。
   await quitDesktop();
   const databasePath = join(dataDir, 'result-widths.sqlite');
@@ -105,6 +106,13 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   await apply.click();
   await expect.poll(() => width(0)).toBe(170);
   await expect.poll(() => width(1)).toBe(170);
+
+  // 最长文本在最后一行，双击仍按当前结果采样，并且只改变第二个同名列。
+  await expect(query.getByRole('gridcell').filter({ hasText: '最后一行在屏幕之外' })).toHaveCount(0);
+  await headers.nth(1).locator('.rdg-resize-handle').dblclick();
+  await expect.poll(() => width(1)).toBe(fitted[1]);
+  await expect.poll(() => width(0)).toBe(170);
+  await test.info().attach('双击分隔线按未渲染行适宽', { body: await page.screenshot(), contentType: 'image/png' });
 
   await open();
   await first.fill('290');

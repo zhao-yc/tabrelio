@@ -1,9 +1,22 @@
 import { tablePreferencesLimits } from '../shared/tablePreferences';
+import type { MouseEvent } from 'react';
 
 export interface GridColumnFitSource {
   columns: readonly { key: string; name: string; type?: string }[];
   rowCount: number;
   cell(row: number, key: string): string;
+}
+
+/** RDG 的原生双击只测已渲染元素。接管本表分隔线，按可见索引交给有界的全页采样。 */
+export function gridResizeHandleColumn(event: MouseEvent, grid: HTMLElement | null | undefined): number | undefined {
+  if (!grid || event.button !== 0 || event.defaultPrevented || !(event.target instanceof Element)) return;
+  const header = event.target.closest('.rdg-resize-handle')?.closest('[role="columnheader"]');
+  if (!header || header.closest('[role="grid"]') !== grid) return;
+  const index = Number(header.getAttribute('aria-colindex')) - 1;
+  if (!Number.isSafeInteger(index) || index < 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  return index;
 }
 
 /** 按实际界面字体测量，保留列头和正文的字号差异。 */
