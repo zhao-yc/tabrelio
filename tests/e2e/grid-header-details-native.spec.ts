@@ -1,6 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
@@ -10,6 +11,19 @@ import { sqliteTableBrowseZh as sqlite } from '../../src/renderer/locales/sqlite
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
 const taskIds = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
+
+/** 从真实数据格与列标题分别操作，并核对结果行而非只读排序图标。 */
+async function sortFromGrid(grid: Locator, last: string): Promise<void> {
+  const header = grid.getByRole('columnheader').filter({ hasText: /^label/ });
+  const labels = grid.getByRole('gridcell').filter({ hasText: /row [ABC]$/ });
+  await labels.filter({ hasText: /row A$/ }).click({ timeout: 5000 });
+  await page.keyboard.press('Meta+ArrowDown');
+  await expect(labels.first()).toHaveText(new RegExp(last + '$'));
+  await expect(header).toHaveAttribute('aria-sort', 'descending');
+  await header.press('Meta+ArrowUp');
+  await expect(labels.first()).toHaveText(/row A$/);
+  await expect(header).toHaveAttribute('aria-sort', 'ascending');
+}
 
 test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字段', async ({}, info) => {
   test.skip(process.env.DBARK_GRID_HEADER_SQLITE !== '1', '需要显式启用 SQLite 表头专项');
@@ -38,8 +52,10 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
       const connection = await window.dbark.invoke('connections.save', { id, dialect: 'sqlite', name: 'SQLite',
         group: '', color: '#123456', sqlite: { fileToken: picked.token, readOnly: false, busyTimeoutMs: 1000 } });
       const settings = await window.dbark.invoke('settings.get', {});
-      await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'subject', tabs: ['subject', 'subject_view'].map(table =>
-        ({ id: table, kind: 'table' as const, title: table, table, connectionId: connection.id, database: 'main' })) });
+      await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'subject', tabs: [
+        ...['subject', 'subject_view'].map(table => ({ id: table, kind: 'table' as const, title: table, table, connectionId: connection.id, database: 'main' })),
+        { id: 'header-query', kind: 'query', title: '结果排序', connectionId: connection.id, database: 'main', sql: 'SELECT label FROM subject ORDER BY id' },
+      ] });
     });
     await page.reload();
     const tab = page.locator('.sqlite-table-tab:visible');
@@ -58,11 +74,24 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await toggle(text.hideType);
     await expect(header('label').locator('.column-type')).toHaveCount(0);
     await expect(header('label')).toHaveAttribute('aria-sort', 'ascending');
+    if (process.platform === 'darwin') await sortFromGrid(tab, 'row B');
     await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
     await expect(header('label')).toBeVisible();
     await toggle(text.showType);
     await expect(header('label').locator('.column-type')).toHaveText('VARCHAR(17)');
     await page.screenshot({ path: info.outputPath('SQLite表头类型.png') });
+    if (process.platform === 'darwin') {
+      await sortFromGrid(tab, 'row B');
+      await page.locator('[data-workspace-tab-id="header-query"] .tab-select').click();
+      const query = page.locator('.query-tab:visible'), result = query.locator('.result-body');
+      await query.locator('.query-execute-split button.primary').click();
+      await expect(result.getByRole('gridcell', { name: 'row A', exact: true })).toBeVisible();
+      const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+      await expect.poll(async () => (await history()).length).toBeGreaterThan(0);
+      const prior = await history();
+      await sortFromGrid(result, 'row B');
+      expect(await history()).toEqual(prior);
+    }
     expect(await readFile(file)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
@@ -114,6 +143,7 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     await expect(header.locator('.grid-header-comment')).toHaveCount(0);
     await expect(header).toHaveText('label');
     expect(await taskIds()).toEqual(before);
+    if (process.platform === 'darwin') await sortFromGrid(tab, 'row C');
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

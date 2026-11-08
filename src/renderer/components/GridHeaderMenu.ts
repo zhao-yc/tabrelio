@@ -32,31 +32,44 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   const latest = useRef(source);
   latest.current = source;
 
-  function open(target: EventTarget | null, point?: { x: number; y: number }): boolean {
-    if (!(target instanceof Element)) return false;
-    const grid = source.grid(), header = target.closest('[role="columnheader"]');
-    if (!grid || !header || header.closest('[role="grid"]') !== grid) return false;
-    const index = Number(header.getAttribute('aria-colindex')) - 1;
+  function captureColumn(target: EventTarget | null, selector: string) {
+    if (!(target instanceof Element)) return;
+    const grid = source.grid(), cell = target.closest(selector);
+    if (!grid || !cell || cell.closest('[role="grid"]') !== grid) return;
+    const index = Number(cell.getAttribute('aria-colindex')) - 1;
     const column = Number.isSafeInteger(index) && index >= 0 ? source.column(index) : undefined;
-    if (!column || !source.owner || !source.current()) return false;
+    if (!column || !source.owner || !source.current()) return;
     const current = () => {
       const now = latest.current;
       return now.owner === source.owner && now.grid() === grid && now.column(index)?.key === column.key && now.current();
     };
+    return { grid, column, current };
+  }
+
+  /** 菜单和快捷键共用排序快照，读取或确认草稿期间仍核对原列和规则。 */
+  function captureSort(key: string, current: () => boolean) {
+    if (!source.canSort(key)) return;
+    const initial = source.sort.find(rule => rule.columnKey === key)?.direction;
+    const sortCurrent = () => {
+      const now = latest.current;
+      return current() && now.canSort(key) && now.sort.length === source.sort.length &&
+        now.sort.every((rule, i) => rule.columnKey === source.sort[i].columnKey && rule.direction === source.sort[i].direction);
+    };
+    return { initial, apply(direction?: SortColumn['direction']) {
+      if (direction !== initial && sortCurrent()) latest.current.applySort(changeHeaderSort(source.sort, key, direction), sortCurrent);
+    } };
+  }
+
+  function open(target: EventTarget | null, point?: { x: number; y: number }): boolean {
+    const captured = captureColumn(target, '[role="columnheader"]');
+    if (!captured) return false;
+    const { grid, column, current } = captured;
     const actions: GridCellAction[] = [];
-    if (source.canSort(column.key)) {
-      const initial = source.sort.find(rule => rule.columnKey === column.key)?.direction;
-      const sortCurrent = () => {
-        const now = latest.current;
-        return current() && now.canSort(column.key) && now.sort.length === source.sort.length &&
-          now.sort.every((rule, i) => rule.columnKey === source.sort[i].columnKey && rule.direction === source.sort[i].direction);
-      };
-      const apply = (direction?: SortColumn['direction']) => {
-        if (sortCurrent()) latest.current.applySort(changeHeaderSort(source.sort, column.key, direction), sortCurrent);
-      };
-      actions.push({ label: text.asc, disabled: initial === 'ASC', run: () => apply('ASC') },
-        { label: text.desc, disabled: initial === 'DESC', run: () => apply('DESC') },
-        { label: text.clear, disabled: initial === undefined, run: () => apply() });
+    const sort = captureSort(column.key, current);
+    if (sort) {
+      actions.push({ label: text.asc, disabled: sort.initial === 'ASC', run: () => sort.apply('ASC') },
+        { label: text.desc, disabled: sort.initial === 'DESC', run: () => sort.apply('DESC') },
+        { label: text.clear, disabled: sort.initial === undefined, run: () => sort.apply() });
     }
     if (source.freeze?.current()) {
       const apply = (key?: string) => {
@@ -69,6 +82,21 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     return openMenu(target, grid, { title: column.name, label: text.menu, targetRole: 'columnheader', current, actions }, point);
   }
 
+  /** 只接管 macOS 网格的 Command+上下方向键，输入控件继续处理自己的按键。 */
+  function sortFromKeyboard(event: KeyboardEvent): boolean {
+    if ((event.key !== 'ArrowUp' && event.key !== 'ArrowDown') || !event.metaKey || event.ctrlKey || event.altKey ||
+        event.shiftKey || event.repeat || event.nativeEvent.isComposing || event.keyCode === 229 ||
+        !navigator.platform.startsWith('Mac')) return false;
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || target.isContentEditable ||
+        target.closest('input, textarea, select, button, [role="textbox"]')) return false;
+    const captured = captureColumn(target, '[role="columnheader"], [role="gridcell"]');
+    const sort = captured && captureSort(captured.column.key, captured.current);
+    if (!sort) return false;
+    sort.apply(event.key === 'ArrowUp' ? 'ASC' : 'DESC');
+    return true;
+  }
+
   return {
     onContextMenuCapture(event: MouseEvent) {
       if (event.defaultPrevented || !open(event.target, { x: event.clientX, y: event.clientY })) return;
@@ -76,7 +104,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       event.stopPropagation();
     },
     onKeyDownCapture(event: KeyboardEvent) {
-      if (event.defaultPrevented || !isGridContextKey(event) || !open(event.target)) return;
+      if (event.defaultPrevented || !(isGridContextKey(event) ? open(event.target) : sortFromKeyboard(event))) return;
       event.preventDefault();
       event.stopPropagation();
     },
