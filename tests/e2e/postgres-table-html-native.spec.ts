@@ -6,6 +6,7 @@ import { Client } from 'pg';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { postgresTableExportZh as text } from '../../src/renderer/locales/postgresTableExport.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { fullQueryExportProfilesZh as profile } from '../../src/renderer/locales/fullQueryExportProfiles.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -23,7 +24,7 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
       INSERT INTO public.html_table SELECT 9007199254740993 + g, CASE WHEN g%2=1 THEN '匹配' ELSE '排除' END,
         CASE WHEN g=1 THEN '<img src=x> & 中文' WHEN g=3 THEN NULL WHEN g=5 THEN '' ELSE '行' || g END, decode('00ff','hex')
         FROM generate_series(1,18) g;
-      CREATE VIEW public.html_view AS SELECT id,bucket,note,raw FROM public.html_table`);
+      CREATE VIEW public.html_view AS SELECT id,bucket,raw,note FROM public.html_table`);
     await mkdir(info.outputDir, {recursive: true});
     const targets = ['表数据.html', '表数据.xml', '表数据-elements.xml', '表数据-attributes.xml', '表数据.txt', '视图数据.html', '视图数据.xml', '视图数据-elements.xml', '视图数据-attributes.xml', '视图数据.txt'].map(name => info.outputPath(name));
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
@@ -60,8 +61,22 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
       await (await navigationMenuItem(tab, {name: text.open, exact: true})).click();
       const modal = page.getByRole('dialog', {name: text.title, exact: true});
       await expect(modal).toContainText(text.filtered);
-      await modal.getByLabel(text.format, {exact: true}).selectOption('html');
-      for (const column of ['id', 'bucket']) await modal.getByRole('checkbox', {name: column, exact: true}).uncheck();
+      if (index === 0) {
+        await modal.getByRole('combobox', { name: text.format, exact: true }).selectOption('html');
+        for (const column of ['id', 'bucket']) await modal.getByRole('checkbox', {name: column, exact: true}).uncheck();
+        await modal.getByText(profile.title, { exact: true }).click();
+        await modal.getByLabel(profile.name, { exact: true }).fill('交付字段');
+        await modal.getByRole('button', { name: profile.add, exact: true }).click();
+        await expect(modal.getByText(profile.saved, { exact: true })).toBeVisible();
+      } else {
+        await modal.getByText(profile.title, { exact: true }).click();
+        await modal.getByRole('combobox', { name: profile.select, exact: true }).selectOption('交付字段');
+        await modal.getByRole('button', { name: profile.apply, exact: true }).click();
+        await expect(modal.getByText(profile.fieldOrder + ' · note、raw', { exact: true })).toBeVisible();
+        await modal.screenshot({ path: info.outputPath('PostgreSQL表导出方案.png') });
+      }
+      await expect(modal.getByRole('combobox', { name: text.format, exact: true })).toHaveValue('html');
+      await expect(modal.getByRole('button', {name: text.start, exact: true})).toBeDisabled();
       await modal.getByRole('button', {name: text.choose, exact: true}).click();
       await modal.getByRole('button', {name: text.start, exact: true}).click();
       await expect(modal.getByRole('status')).toHaveText(text.saved(9));

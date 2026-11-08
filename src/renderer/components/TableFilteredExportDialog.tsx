@@ -1,5 +1,8 @@
 import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema, type TxtExportOptions } from '../../shared/txtExport';
 import { TxtExportFields } from './TxtExportFields';
+import { tableExportProfileOptions, type FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
+import { fullQueryExportProfilesZh as profileText } from '../locales/fullQueryExportProfiles.zh-CN';
+import { FullQueryExportProfiles } from './FullQueryExportProfiles';
 import { tableSortRuleSummary } from '../tableSort';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FileChoice, TaskEvent } from '../../shared/contracts';
@@ -22,12 +25,12 @@ export interface TableFilteredExportServices {
 export const tableFilteredExportServices: TableFilteredExportServices = {
   choose: input => invoke('files.choose', input), execute: input => invoke('table.exportFiltered', input), cancel: taskId => invoke('query.cancel', { taskId }), subscribe: listener => window.dbark.onTask(listener),
 };
-interface Props { intent: TableFilteredExportIntent; services?: TableFilteredExportServices; onActivity(delta: 1 | -1): void; onClose(): void; onCleanupError(message: string): void; onCommitted?(result: TableFilteredExportOutput, sourceChanged: boolean): void; }
+interface Props { dialect: 'mysql' | 'mariadb'; intent: TableFilteredExportIntent; services?: TableFilteredExportServices; onActivity(delta: 1 | -1): void; onClose(): void; onCleanupError(message: string): void; onCommitted?(result: TableFilteredExportOutput, sourceChanged: boolean): void; }
 type Draft = { format: TableFilteredExportInput['format']; encoding: TableFilteredExportInput['encoding']; csvDelimiter: CsvExportDelimiter; txtOptions: TxtExportOptions; columns: string[]; file?: FileChoice; problem?: string; done?: { output: TableFilteredExportOutput; changed: boolean } };
 type Operation = { kind: 'choose' | 'export'; id?: string; cancelled: boolean; promise: Promise<void>; cancel?: Promise<void> };
 
 /** 全量服务器导出与本地数据草稿分离，所有异步回包只归属于原意图和原操作。 */
-export function TableFilteredExportDialog({ intent, services = tableFilteredExportServices, ...callbacks }: Props) {
+export function TableFilteredExportDialog({ dialect, intent, services = tableFilteredExportServices, ...callbacks }: Props) {
   const owner = useRef({ intent, services, callbacks }).current;
   const [draft, setDraft] = useState<Draft>({ format: 'csv', encoding: 'utf8', csvDelimiter: ',', txtOptions: txtExportDefaults, columns: owner.intent.source.columns.map(column => column.name) }), live = useRef(draft); live.current = draft;
   const [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [stale, setStale] = useState(false), [progress, setProgress] = useState<TaskEvent>();
@@ -61,6 +64,19 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
     // SQL只呈现可写入INSERT的选择；返回其它格式不偷偷补回此前取消的字段。
     const columns = [...(next.columns ?? draft.columns)].filter(name => next.format !== 'sql' || !owner.intent.source.columns.find(column => column.name === name)?.generated);
     replace({ format: next.format, encoding: next.format === 'xlsx' || dataMarkupText(next.format) ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, txtOptions: next.txtOptions ?? draft.txtOptions, columns });
+  }
+  /** 先用当前表页核对全部字段，再一次性应用。原筛选、排序和对象归属继续由意图持有。 */
+  function applyProfile(options: FullQueryExportOptions): boolean {
+    if (options.format !== 'table' || !editable()) return false;
+    const { format, columns, encoding, delimiter, txtOptions } = options.settings;
+    if (format === 'copy' || format === 'sql-backup' || format === 'sql' && owner.intent.source.objectKind !== 'table') {
+      replace({ ...draft, done: undefined, problem: profileText.unavailableFormat });
+      return false;
+    }
+    try { selectTableFilteredExportColumns(owner.intent.source, { format, columns }); }
+    catch { replace({ ...draft, done: undefined, problem: profileText.unavailableFields }); return false; }
+    change({ format, columns, encoding, csvDelimiter: delimiter, txtOptions });
+    return true;
   }
   /** 字段与顺序同属原草稿租约；旧渲染回调及运行中的选择不能替换已确定的输出范围。 */
   function changeFields(columns: string[]): void { change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, columns }); }
@@ -158,6 +174,8 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
       <ol aria-label={text.fieldOrder}>{draft.columns.map((name, position) => <li key={name}><span>{name}</span> <button type="button" aria-label={text.fieldUp(name)} disabled={disabled || position === 0} onClick={() => moveField(name, -1)}>{text.moveUp}</button> <button type="button" aria-label={text.fieldDown(name)} disabled={disabled || position + 1 === draft.columns.length} onClick={() => moveField(name, 1)}>{text.moveDown}</button></li>)}</ol>
       {!draft.columns.length && <p className="warning-text">{text.emptyFields}</p>}
     </section>
+    <FullQueryExportProfiles key={dialect} area="table" dialect={dialect} disabled={disabled}
+      options={tableExportProfileOptions({ ...draft, delimiter: draft.csvDelimiter })} onApply={applyProfile}/>
     <button className="file-picker" disabled={disabled || !validTxt || sqlUnavailable || !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
     {busy && <Spinner text={active?.kind === 'choose' ? text.choosing : text.running}/>} {closing && <p>{text.closing}</p>}
     {progress && <div className="transfer-progress"><span>{progress.message}</span><progress value={progress.progress} max={100}/></div>}

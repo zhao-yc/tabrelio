@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表和视图全量导出可保存并应用格式与字段顺序。应用时核对当前目录，沿用已应用的筛选及排序，并重新选择保存文件。F01、F02、F03、R01、R02 仍为部分覆盖。[表和视图全量导出方案](development/table-export-profiles-20261108.md)
+
 2026-11-07 源码增量。查询快照、完整查询和表／视图全量数据支持位置映射 XML，以及 Navicat 导出向导所示的列名标签和记录属性布局。Q05、F01、F03、R01、R02 仍为部分覆盖。[XML 数据导出](development/data-xml-export-20261107.md) · [XML 记录布局](development/xml-record-layouts-20261107.md)
 
 2026-11-07 源码增量。SQLite、PostgreSQL、MySQL 和 MariaDB 的表页全量导出支持 HTML，沿用当前筛选、排序和所选字段，普通视图也可直接导出。F01、R01、R02 仍为部分覆盖。[表和视图 HTML 导出](development/table-html-export-20261107.md)

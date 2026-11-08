@@ -6,6 +6,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tableFilteredExportZh as text } from '../../src/renderer/locales/tableFilteredExport.zh-CN';
 import { tableSortZh as sortText } from '../../src/renderer/locales/tableSort.zh-CN';
 import { tableValueOptionsZh as valuesText } from '../../src/renderer/locales/tableValueOptions.zh-CN';
+import { fullQueryExportProfilesZh as profile } from '../../src/renderer/locales/fullQueryExportProfiles.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -14,7 +15,9 @@ test.skip(process.env.DBARK_TABLE_HTML_EXPORT_NATIVE !== '1', '仅在隔离 MySQ
 
 test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段投影', async ({}, info) => {
   const port = Number(process.env.DBARK_TEST_PORT);
+  const dialect = process.env.DBARK_SEARCH_EDIT_DIALECT;
   if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || process.env.DBARK_TEST_HOST !== '127.0.0.1' ||
+    (dialect !== 'mysql' && dialect !== 'mariadb') ||
     !Number.isInteger(port) || port <= 1024 || port > 65535 || !/^[a-f0-9]{64}$/.test(process.env.DBARK_TEST_PASSWORD ?? '') ||
     !/^tabrelio-search-[a-f0-9]{12}$/.test(process.env.DBARK_MYSQL_SEARCH_CONTAINER ?? ''))
     throw Error('需要本轮回环隔离库');
@@ -28,6 +31,7 @@ test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段�
     ] as const);
     await observer.query(`INSERT INTO ${table} VALUES ?`, [data]);
     await observer.query(`CREATE VIEW \`${database}\`.html_view AS SELECT id, bucket, note, payload FROM ${table}`);
+    await observer.query(`CREATE VIEW \`${database}\`.note_only AS SELECT id, note FROM ${table}`);
     await mkdir(info.outputDir, {recursive: true});
     const paths = ['html_subject.html', 'html_subject.xml', 'html_subject.txt', 'html_view.html', 'html_view.xml', 'html_view.txt'].map(name => info.outputPath(name));
     for (const path of paths) await writeFile(path, '原文件');
@@ -47,6 +51,12 @@ test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段�
     if (!await node.locator('.object-row').getByRole('button', {name: 'html_subject', exact: true}).isVisible()) await databaseRow.click();
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     const baseline = await history();
+    const modal = page.getByRole('dialog', {name: text.title, exact: true});
+    const chooseProfile = async () => {
+      await modal.getByText(profile.title, { exact: true }).click();
+      await modal.getByRole('combobox', { name: profile.select, exact: true }).selectOption('交付字段');
+      await modal.getByRole('button', { name: profile.apply, exact: true }).click();
+    };
     for (const [index, name] of ['html_subject', 'html_view'].entries()) {
       await node.locator('.object-row .tree-label').getByText(name, {exact: true}).click();
       const tab = page.locator('.table-tab:visible');
@@ -70,12 +80,24 @@ test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段�
       await expect(grid.getByText('记录 119', {exact: true})).toHaveCount(0);
       await expect(grid.getByText('记录 117', {exact: true})).toBeVisible();
       await (await navigationMenuItem(tab, {name: text.entry, exact: true})).click();
-      const modal = page.getByRole('dialog', {name: text.title, exact: true});
-      await modal.getByLabel(text.format, {exact: true}).selectOption('html');
+      if (index === 0) {
+        await modal.getByRole('combobox', { name: text.format, exact: true }).selectOption('html');
+        for (const field of ['id', 'bucket']) await modal.getByRole('checkbox', {name: text.fieldLabel(field), exact: true}).uncheck();
+        await modal.getByRole('button', {name: text.fieldUp('payload'), exact: true}).click();
+        await modal.getByText(profile.title, { exact: true }).click();
+        await modal.getByLabel(profile.name, { exact: true }).fill('交付字段');
+        await modal.getByRole('button', { name: profile.add, exact: true }).click();
+        await expect(modal.getByText(profile.saved, { exact: true })).toBeVisible();
+      } else {
+        await chooseProfile();
+        await expect(modal.getByText(profile.applied, { exact: true })).toBeVisible();
+        await expect(modal.getByRole('list', { name: text.fieldOrder, exact: true }).locator('li > span')).toHaveText(['payload', 'note']);
+        await modal.screenshot({path: info.outputPath(dialect + ' 表导出方案.png')});
+      }
+      await expect(modal.getByRole('combobox', { name: text.format, exact: true })).toHaveValue('html');
+      await expect(modal.getByRole('button', { name: text.start, exact: true })).toBeDisabled();
       await expect(modal.getByLabel(text.encoding, {exact: true})).toHaveValue('utf8');
       await expect(modal.getByLabel(text.encoding, {exact: true})).toBeDisabled();
-      for (const field of ['id', 'bucket']) await modal.getByRole('checkbox', {name: text.fieldLabel(field), exact: true}).uncheck();
-      await modal.getByRole('button', {name: text.fieldUp('payload'), exact: true}).click();
       await modal.getByRole('button', {name: text.choose, exact: true}).click();
       await modal.getByRole('button', {name: text.start, exact: true}).click();
       await expect(modal.getByText(text.completed(40), {exact: true})).toBeVisible();
@@ -123,10 +145,25 @@ test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段�
       await modal.getByRole('button', {name: text.done, exact: true}).click();
       await expect(modal).toBeHidden();
     }
+    await test.step('缺字段的视图拒绝应用方案且不改当前导出配置', async () => {
+      const noteView = node.locator('.object-row .tree-label').getByText('note_only', {exact: true});
+      await expect(noteView).toBeVisible();
+      await noteView.click({ timeout: 5000 });
+      const tab = page.locator('.table-tab:visible'), grid = tab.getByRole('grid');
+      await expect(grid.getByRole('columnheader').filter({ hasText: /^note/ })).toBeVisible();
+      await expect(grid.getByRole('columnheader').filter({ hasText: /^payload/ })).toHaveCount(0);
+      await (await navigationMenuItem(tab, { name: text.entry, exact: true })).click({ timeout: 5000 });
+      await expect(modal.getByText(profile.title, { exact: true })).toBeVisible();
+      await chooseProfile();
+      await expect(modal.getByRole('alert')).toContainText(profile.unavailableFields);
+      await expect(modal.getByRole('combobox', { name: text.format, exact: true })).toHaveValue('csv');
+      await expect(modal.getByRole('button', { name: text.start, exact: true })).toBeDisabled();
+      await modal.getByRole('button', { name: text.close, exact: true }).click({ timeout: 5000 });
+    });
     expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restoreTableHtmlPicker(): number}).restoreTableHtmlPicker())).toBe(6);
     expect(await history()).toEqual(baseline);
     expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
     const [rows] = await observer.query<import('mysql2').RowDataPacket[]>(`SELECT COUNT(*) AS count FROM ${table}`);
     expect(Number(rows[0].count)).toBe(120);
-  }, info, { captureFailureScreenshot: false });
+  }, info, { captureFailureScreenshot: false, dialect });
 });

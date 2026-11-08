@@ -4,8 +4,9 @@ import { errorMessage, invoke } from '../lib';
 import { fullQueryExportProfilesZh as text } from '../locales/fullQueryExportProfiles.zh-CN';
 import { ErrorBox, Field } from './ui';
 
-export function FullQueryExportProfiles({ dialect, options, disabled, onApply }: {
+export function FullQueryExportProfiles({ dialect, area, options, disabled, onApply }: {
   dialect: FullQueryExportDialect;
+  area?: 'table';
   options?: FullQueryExportOptions;
   disabled: boolean;
   onApply(options: FullQueryExportOptions): boolean;
@@ -23,13 +24,13 @@ export function FullQueryExportProfiles({ dialect, options, disabled, onApply }:
   useEffect(() => {
     if (!opened) return;
     let active = true;
-    void invoke('queryExportProfiles.list', { dialect }).then(result => {
+    void invoke('queryExportProfiles.list', { dialect, ...(area ? { area } : {}) }).then(result => {
       if (active) setProfiles(result);
     }).catch(reason => {
       if (active) setError(errorMessage(reason));
     });
     return () => { active = false; };
-  }, [dialect, opened, reload]);
+  }, [dialect, area, opened, reload]);
 
   const selected = profiles?.find(item => item.name === selection);
   const blocked = disabled || saving || !profiles;
@@ -40,10 +41,11 @@ export function FullQueryExportProfiles({ dialect, options, disabled, onApply }:
     if (blocked || writing.current) return;
     const target = selected && { name: selected.name, revision: selected.revision };
     const profile = options && { name: name.trim(), options };
+    const scope = { dialect, ...(area ? { area } : {}) };
     let input: FullQueryExportProfileMutation;
-    if (kind === 'delete' && target) input = { dialect, kind, selected: target };
-    else if (kind === 'update' && target && profile?.name) input = { dialect, kind, selected: target, profile };
-    else if (kind === 'add' && profile?.name) input = { dialect, kind, profile };
+    if (kind === 'delete' && target) input = { ...scope, kind, selected: target };
+    else if (kind === 'update' && target && profile?.name) input = { ...scope, kind, selected: target, profile };
+    else if (kind === 'add' && profile?.name) input = { ...scope, kind, profile };
     else return;
 
     writing.current = true;
@@ -59,7 +61,7 @@ export function FullQueryExportProfiles({ dialect, options, disabled, onApply }:
 
   return <details onToggle={event => { if (event.currentTarget.open) setOpened(true); }}>
     <summary>{text.title}</summary>
-    <p className="muted small">{text.hint}</p>
+    <p className="muted small">{area === 'table' ? text.tableHint : text.hint}</p>
     {!profiles && !error && <p>{text.loading}</p>}
     <Field label={text.select}><select aria-label={text.select} value={selected?.name ?? ''} disabled={blocked} onChange={event => {
       setSelection(event.target.value); setName(event.target.value); setError(''); setNotice('');

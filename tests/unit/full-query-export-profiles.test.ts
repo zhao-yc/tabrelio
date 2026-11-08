@@ -124,4 +124,49 @@ describe('完整查询导出方案', () => {
     for (const settings of [record, text, zip, { format: 'xlsx' }, { format: 'html' }, { format: 'xml' }])
       expect(() => validateCommand('queryExportProfiles.mutate', add(settings))).not.toThrow();
   });
+
+  it('表页方案按方言独立持久化，并与已有查询方案使用独立的版本和命名空间', async () => {
+    const table = { ...sqlite, area: 'table' };
+    const projection = { name: csv.name, options: { format: 'table', settings: {
+      format: 'csv', encoding: 'utf16le', delimiter: ';', columns: ['payload', '原值'],
+    } } };
+    const [query] = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: csv });
+    const [stored] = store.mutateFullQueryExportProfiles({ ...table, kind: 'add', profile: projection });
+    for (const dialect of ['mysql', 'mariadb', 'postgresql']) {
+      const scope = { dialect, area: 'table' };
+      expect(store.fullQueryExportProfiles(scope)).toEqual([]);
+      store.mutateFullQueryExportProfiles({ ...scope, kind: 'add', profile: projection });
+    }
+    expect(() => store.mutateFullQueryExportProfiles({ ...table, kind: 'delete', selected: { name: query.name, revision: query.revision } })).toThrow('已变化');
+    store.close();
+    store = await LocalStore.open(file, wasm, protector);
+    expect(store.fullQueryExportProfiles(sqlite)).toEqual([query]);
+    expect(store.fullQueryExportProfiles(table)).toEqual([stored]);
+    expect(stored).toMatchObject(projection);
+    expect(store.fullQueryExportProfiles({ ...postgres, area: 'table' })).toMatchObject([projection]);
+  });
+
+  it('表页方案拒绝跨入口、无效方言选项、重复列及来自源对象的运行数据', () => {
+    const before = readFileSync(file);
+    const csvFields = { format: 'csv', encoding: 'utf8', delimiter: ';', columns: ['note', 'ID'] };
+    const copy = { ...csvFields, format: 'copy' };
+    const structure = { format: 'sql', sqlContent: 'structure', encoding: 'utf8', columns: [] };
+    const backup = { format: 'sql-backup', encoding: 'utf8', columns: [] };
+    const add = (settings: unknown, scope: object = { dialect: 'mysql', area: 'table' }) => ({
+      ...scope, kind: 'add', profile: { name: '字段', options: { format: 'table', settings } },
+    });
+    for (const request of [
+      add(csvFields, sqlite), { ...sqlite, area: 'table', kind: 'add', profile: csv },
+      add(copy), add(backup), add(structure, { ...postgres, area: 'table' }), add({ ...structure, columns: ['note'] }, { ...sqlite, area: 'table' }),
+      add({ ...csvFields, columns: ['note', 'note'] }), add({ ...csvFields, columns: [] }),
+      ...['filters', 'sort', 'source', 'fileToken', 'sql', 'connectionId', 'table'].map(field => add({ ...csvFields, [field]: '不保存' })),
+    ]) {
+      expect(() => validateCommand('queryExportProfiles.mutate', request)).toThrow();
+      expect(() => store.mutateFullQueryExportProfiles(request)).toThrow();
+    }
+    expect(readFileSync(file)).toEqual(before);
+    expect(() => validateCommand('queryExportProfiles.mutate', add(copy, { ...postgres, area: 'table' }))).not.toThrow();
+    expect(() => validateCommand('queryExportProfiles.mutate', add(backup, { ...postgres, area: 'table' }))).not.toThrow();
+    expect(() => validateCommand('queryExportProfiles.mutate', add(structure, { ...sqlite, area: 'table' }))).not.toThrow();
+  });
 });

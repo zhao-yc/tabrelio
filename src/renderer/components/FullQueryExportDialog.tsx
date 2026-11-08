@@ -72,7 +72,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
 
   /** 应用方案只更新导出选项，文件授权必须在新选项下重新获取。 */
   function applyProfile(options: FullQueryExportOptions): boolean {
-    if (options.format === 'stream' || picking.current || task.current || !current()) return false;
+    if (options.format === 'stream' || options.format === 'table' || picking.current || task.current || !current()) return false;
     setFormat(options.format);
     if (options.format === 'csv') setDelimiter(options.delimiter);
     if (options.format === 'txt') setTxtOptions(options.txtOptions);

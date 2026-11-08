@@ -1,6 +1,10 @@
 export const fullQueryExportProfilesZh = {
   title: '导出方案',
   hint: '保存当前格式和选项，供同类数据库的完整查询复用。每次导出请单独选择文件，查询参数也单独填写。',
+  tableHint: '保存格式和所选字段顺序。应用后沿用当前表页的筛选和排序，请重新选择保存文件。',
+  unavailableFields: '当前表或视图缺少方案字段，或字段不适用于该格式。请选择匹配的方案。',
+  unavailableFormat: '当前表或视图不支持方案中的导出格式。',
+  fieldOrder: '输出字段顺序',
   select: '已保存的方案',
   placeholder: '选择方案',
   apply: '应用方案',

@@ -71,12 +71,13 @@ export async function acceptNativeConfirmation(owner?:LiveDesktopOwner) {
 }
 
 /** 连接表单走真实 UI；测试追踪关闭，避免把临时数据库密码记录进 Playwright 参数轨迹。 */
-export async function connectAndCreate(database: string, owner?: LiveDesktopOwner): Promise<Omit<LiveContext, 'observer'>> {
+export async function connectAndCreate(database: string, owner?: LiveDesktopOwner, dialect?: 'mysql' | 'mariadb'): Promise<Omit<LiveContext, 'observer'>> {
   const connectionName = `E2E ${database}`;
   // 非严格分支仍按原时点读取全局page；严格分支始终只返回捕获页面，不降级回全局。
   const targetPage = () => { owner?.assertCurrent(); return owner ? owner.page : page; };
   await (await (await import('./navigation-menu')).navigationMenuItem(targetPage().locator('.navigation-toolbar'), { name: '新建连接', exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   const form = targetPage().getByRole('dialog', { name: '新建连接', exact: true });
+  if (dialect) { await form.getByRole('combobox', { name: zh.connections.text008, exact: true }).selectOption(dialect); owner?.assertCurrent(); }
   await form.getByLabel('连接名称', { exact: true }).fill(connectionName);owner?.assertCurrent();
   await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);owner?.assertCurrent();
   await form.getByLabel('端口', { exact: true }).fill(environment.DBARK_TEST_PORT ?? '3306');owner?.assertCurrent();
@@ -115,7 +116,8 @@ export async function connectAndCreate(database: string, owner?: LiveDesktopOwne
 }
 
 /** 外部观察连接仅用于断言和清理，不替代被测应用的连接、查询或提交链路。 */
-export async function isolatedDatabase(body: (context: LiveContext) => Promise<void>, testInfo: TestInfo, options: { captureFailureScreenshot?: boolean } = {}) {
+export async function isolatedDatabase(body: (context: LiveContext) => Promise<void>, testInfo: TestInfo,
+  options: { captureFailureScreenshot?: boolean; dialect?: 'mysql' | 'mariadb' } = {}) {
   const strictExit = preservesUnconfirmedExit(testInfo);
   if (strictExit) ownedDesktopResources(testInfo); // 旧TestInfo先拒绝，不能先建观察连接或打开下一例表单。
   if (!environment.DBARK_TEST_HOST || !environment.DBARK_TEST_USER) throw new Error('启用实库 E2E 时必须提供已核对服务器的测试连接配置');
@@ -126,7 +128,7 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
   try {
     if (strictExit) ownedDesktopResources(testInfo);
     const captured = strictExit ? ownedDesktopResources(testInfo) : undefined;
-    const context = await connectAndCreate(database, captured ? { page: captured.page, application: captured.application, assertCurrent: () => { ownedDesktopResources(testInfo); } } : undefined);
+    const context = await connectAndCreate(database, captured ? { page: captured.page, application: captured.application, assertCurrent: () => { ownedDesktopResources(testInfo); } } : undefined, options.dialect);
     if (strictExit) ownedDesktopResources(testInfo);
     await body({ observer, ...context });
     if (strictExit) ownedDesktopResources(testInfo);

@@ -1,5 +1,8 @@
 import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema } from '../../shared/txtExport';
 import { TxtExportFields } from './TxtExportFields';
+import { tableExportProfileOptions, type FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
+import { fullQueryExportProfilesZh as profileText } from '../locales/fullQueryExportProfiles.zh-CN';
+import { FullQueryExportProfiles } from './FullQueryExportProfiles';
 import { useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
@@ -24,22 +27,62 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
   const [encoding, setEncoding] = useState<PostgresTableExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [selected, setSelected] = useState(() => new Set(page.columns.map(column => column.key)));
+  const [profileOrder, setProfileOrder] = useState<ReadonlySet<string>>();
   const [file, setFile] = useState<FileChoice | null>(null);
   const [busy, setBusy] = useState(false), [taskId, setTaskId] = useState<string>();
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const occupied = useRef(false), cancelRequested = useRef(false);
+  const generation = useRef(0);
+  const version = generation.current;
   const backup = format === 'sql-backup';
   const sql = backup || format === 'sql';
   const available = sql ? page.columns.filter(isPostgresSqlExportColumn) : page.columns;
-  const output = backup ? available : available.filter(column => selected.has(column.key));
+  const eligible = available.filter(column => selected.has(column.key));
+  const byKey = new Map(eligible.map(column => [column.key, column]));
+  const output = backup ? available : profileOrder
+    ? [...Array.from(profileOrder).flatMap(key => byKey.get(key) ?? []), ...eligible.filter(column => !profileOrder.has(column.key))]
+    : eligible;
   const textEncoding = format === 'csv' || format === 'json' || format === 'txt';
   const extension = postgresTableExportExtension(format);
   const [txtOptions, setTxtOptions] = useState(txtExportDefaults);
   const validTxt = format !== 'txt' || txtExportOptionsSchema.safeParse(txtOptions).success;
 
+  /** 方案持有物理列名，应用时才解析当前页键，并保留方案列顺序。 */
+  function applyProfile(options: FullQueryExportOptions): boolean {
+    if (options.format !== 'table' || occupied.current || version !== generation.current || !isCurrent()) return false;
+    const settings = options.settings;
+    const nextFormat = settings.format;
+    if (nextFormat === 'sql-backup' && page.relationKind !== 'r' ||
+      nextFormat === 'sql' && !isPostgresSqlExportRelation(page.relationKind)) {
+      setError(profileText.unavailableFormat);
+      return false;
+    }
+    const nextColumns = new Map(page.columns.filter(column => nextFormat !== 'sql' || isPostgresSqlExportColumn(column))
+      .map(column => [column.name, column.key]));
+    const nextKeys = settings.columns.map(name => nextColumns.get(name));
+    if (nextKeys.some(key => key === undefined)) {
+      setError(profileText.unavailableFields);
+      return false;
+    }
+    if (nextFormat !== 'sql-backup') {
+      const keys = new Set(nextKeys.filter(key => key !== undefined));
+      setSelected(keys);
+      setProfileOrder(keys);
+    }
+    generation.current++;
+    setFormat(nextFormat);
+    setEncoding(settings.encoding);
+    if (settings.delimiter !== undefined) setDelimiter(settings.delimiter);
+    if (settings.txtOptions) setTxtOptions(settings.txtOptions);
+    setFile(null);
+    setError('');
+    setMessage('');
+    return true;
+  }
+
   /** 原生选择器只返回当前窗口一次性文件能力。 */
   async function choose() {
-    if (occupied.current || !validTxt) return;
+    if (occupied.current || version !== generation.current || !validTxt) return;
     occupied.current = true;
     setBusy(true);
     setError('');
@@ -54,7 +97,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
 
   /** 仅文件原子发布回执显示成功，取消请求等待原任务自己的终态。 */
   async function start() {
-    if (occupied.current || !validTxt || !file || !page.exportToken || !output.length) return;
+    if (occupied.current || version !== generation.current || !validTxt || !file || !page.exportToken || !output.length) return;
     if (!isCurrent()) { setError(text.stale); return; }
     occupied.current = true;
     cancelRequested.current = false;
@@ -114,8 +157,8 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
       {dataFileText(format) && <p>{dataFileText(format)?.hint}</p>}
       <fieldset disabled={locked || backup}>
         <legend>{text.columns}</legend>
-        <button onClick={() => setSelected(new Set(available.map(column => column.key)))}>{text.allColumns}</button>
-        <button onClick={() => setSelected(new Set())}>{text.noColumns}</button>
+        <button onClick={() => { setSelected(new Set(available.map(column => column.key))); setProfileOrder(undefined); }}>{text.allColumns}</button>
+        <button onClick={() => { setSelected(new Set()); setProfileOrder(undefined); }}>{text.noColumns}</button>
         <div className="pg-table-export-columns">{page.columns.map(column => {
           const eligible = !sql || isPostgresSqlExportColumn(column);
           return <label key={column.key}>
@@ -126,6 +169,12 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
           }}/> {column.name}{!eligible && ' · ' + text.generated}
         </label>; })}</div>
       </fieldset>
+      {profileOrder && !backup && <p>{profileText.fieldOrder} · {output.map(column => column.name).join('、')}</p>}
+      <FullQueryExportProfiles area="table" dialect="postgresql" disabled={locked}
+        options={tableExportProfileOptions({
+          format, encoding: textEncoding ? encoding : 'utf8', columns: backup ? [] : output.map(column => column.name),
+          delimiter, txtOptions,
+        })} onApply={applyProfile}/>
       <button disabled={locked || !validTxt} onClick={() => void choose()}>{text.choose}</button>
       {file && <p>{text.file} · {file.name}</p>}
       {taskId && <p role="status">{cancelling ? text.cancelling : text.progress}</p>}

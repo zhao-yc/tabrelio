@@ -616,6 +616,8 @@ PostgreSQL 完整导出可选择「PostgreSQL INSERT SQL」。填写目标 schem
 
 表和视图也可直接导出网页。打开记录页，应用需要的筛选和排序，再进入「导出全部筛选行」或 PostgreSQL 的「导出数据」，选择「HTML 网页」、字段和保存位置。文件包括所有匹配行，空结果也保留表头。详见 [表和视图 HTML 导出](development/table-html-export-20261107.md)。
 
+经常导出相同格式或字段时，在表页的导出窗口展开「导出方案」并保存当前配置。可在同类型数据库的其他表或视图应用，字段按原名及顺序核对。应用成功后使用当前表页的筛选和排序，再重新选择文件并开始导出。[表和视图全量导出方案](development/table-export-profiles-20261108.md)
+
 需要用程序处理导出结果时，可在上述查询或表页入口选择「XML 文档」。文件使用 UTF-8，按列位置保存原名称，区分 NULL、空文本和二进制。SQLite 和 PostgreSQL 的完整查询可把 XML 格式保存到命名方案。详见 [XML 数据导出](development/data-xml-export-20261107.md)。
 
 需要 `RECORDS/RECORD` 格式时，可选择「XML（列名标签）」或「XML（记录属性）」。两种布局均使用原列名，省略 NULL 字段并保留空文本。MySQL 和 MariaDB 的完整查询需指定行结果集序号。列名重复时可在查询中设置别名，或选择「XML 文档」保留原列名。详见 [XML 记录布局](development/xml-record-layouts-20261107.md)。

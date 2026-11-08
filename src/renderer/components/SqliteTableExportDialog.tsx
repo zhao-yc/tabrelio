@@ -1,5 +1,8 @@
 import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema, type TxtExportOptions } from '../../shared/txtExport';
 import { TxtExportFields } from './TxtExportFields';
+import { tableExportProfileOptions, type FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
+import { fullQueryExportProfilesZh as profileText } from '../locales/fullQueryExportProfiles.zh-CN';
+import { FullQueryExportProfiles } from './FullQueryExportProfiles';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FileChoice, TaskEvent } from '../../shared/contracts';
 import type { SqliteTableExportInput, SqliteTableExportOutput } from '../../shared/sqliteTableExport';
@@ -68,6 +71,22 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
       columns = [...columns.filter(name => required.includes(name)), ...required.filter(name => !columns.includes(name))];
     }
     replace({ format: next.format, encoding: next.format === 'xlsx' || dataMarkupText(next.format) ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, txtOptions: next.txtOptions ?? draft.txtOptions, columns, dataColumns: structure || complete ? [...draft.dataColumns] : [...columns], ...(sqlContent !== undefined ? { sqlContent } : {}) });
+  }
+  /** 结构和数据范围也来自方案，不能继承上一个 SQL 选项或自动补齐已变更的字段。 */
+  function applyProfile(options: FullQueryExportOptions): boolean {
+    if (options.format !== 'table' || !editable()) return false;
+    const { format, columns, encoding, delimiter, txtOptions, sqlContent } = options.settings;
+    const content = format === 'sql' ? sqlContent ?? 'data' : undefined;
+    if (format === 'copy' || format === 'sql-backup' ||
+      format === 'sql' && owner.intent.source.target.kind !== 'table' && content !== 'structure') {
+      replace({ ...draft, done: undefined, problem: profileText.unavailableFormat });
+      return false;
+    }
+    const selection = { format, columns, ...(content ? { sqlContent: content } : {}) };
+    try { selectSqliteExportColumns(owner.intent.source, selection); }
+    catch { replace({ ...draft, done: undefined, problem: profileText.unavailableFields }); return false; }
+    change({ ...selection, encoding, csvDelimiter: delimiter, txtOptions });
+    return true;
   }
   /** 字段与顺序同属原草稿租约；旧渲染回调及运行中的选择不能替换已确定的输出范围。 */
   function changeFields(columns: string[]): void { change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, columns }); }
@@ -175,6 +194,8 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
       <ol aria-label={text.fieldOrder}>{draft.columns.map((name, position) => <li key={name}><span>{name}</span> <button type="button" aria-label={text.fieldUp(name)} disabled={disabled || position === 0} onClick={() => moveField(name, -1)}>{text.moveUp}</button> <button type="button" aria-label={text.fieldDown(name)} disabled={disabled || position + 1 === draft.columns.length} onClick={() => moveField(name, 1)}>{text.moveDown}</button></li>)}</ol>
       {!draft.columns.length && <p className="warning-text">{text.emptyFields}</p>}
     </section>}
+    <FullQueryExportProfiles area="table" dialect="sqlite" disabled={disabled}
+      options={tableExportProfileOptions({ ...draft, delimiter: draft.csvDelimiter })} onApply={applyProfile}/>
     <button className="file-picker" aria-label={text.choose} disabled={disabled || !validTxt || sqlUnavailable || !structureOnly && !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
     {!draft.file && !draft.done && <p className="muted small">{text.fileRequired}</p>}
     {busy && <Spinner text={active?.kind === 'choose' ? text.choosing : structureOnly ? text.structureRunning : text.running}/>} {closing && <p>{text.closing}</p>}

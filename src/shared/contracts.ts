@@ -174,7 +174,7 @@ export interface CommandMap {
   'queryFileSources.cancel': { input: QueryFileSourceCancelInput; output: { cancelled: boolean } };
   'queryFileSources.release': { input: QueryFileSourceReleaseInput; output: { released: boolean } };
   'workbench.get': { input: Record<string, never>; output: WorkbenchSnapshot };
-  'queryExportProfiles.list': { input: { dialect: import('./fullQueryExportProfiles').FullQueryExportDialect }; output: import('./fullQueryExportProfiles').FullQueryExportProfile[] };
+  'queryExportProfiles.list': { input: import('./fullQueryExportProfiles').FullQueryExportProfileScope; output: import('./fullQueryExportProfiles').FullQueryExportProfile[] };
   'queryExportProfiles.mutate': { input: import('./fullQueryExportProfiles').FullQueryExportProfileMutation; output: import('./fullQueryExportProfiles').FullQueryExportProfile[] };
   'workbench.save': { input: WorkbenchSnapshot; output: WorkbenchSnapshot };
   'workbench.resolve': { input: WorkbenchTarget; output: WorkbenchTarget };
