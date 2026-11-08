@@ -1,4 +1,5 @@
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
+import { useGridHeaderSortMenu } from './GridHeaderSortMenu';
 import { gridQuickValueKinds, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -435,7 +436,17 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
   const fitHeader = onColumnResize || onColumnWidthsChange ? fitHeaderColumn : undefined;
-  const grid = onCellPaste || fitHeader ? <div style={{ display: 'contents' }} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
+  const headerSortMenu = useGridHeaderSortMenu(cellActionMenu.open, {
+    owner: scope, grid: () => gridRef.current?.element,
+    column: index => {
+      const column = columns[index - (onActiveRowChange ? 0 : 1)];
+      return column && !sortReasons?.get(column.key) ? column : undefined;
+    },
+    sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
+    current: () => !!onSortChange && actionCurrent(), apply: changeSortColumns,
+  });
+  const grid = onCellPaste || fitHeader || onSortChange ? <div style={{ display: 'contents' }}
+    {...(onSortChange ? headerSortMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。
   const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&

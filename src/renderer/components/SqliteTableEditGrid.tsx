@@ -1,4 +1,5 @@
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
+import { useGridHeaderSortMenu } from './GridHeaderSortMenu';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
@@ -240,6 +241,12 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       () => current(cell.row) && !disabled && noModal());
   }
   const cellActionMenu = useGridCellActionMenu();
+  const headerSortMenu = useGridHeaderSortMenu(cellActionMenu.open, {
+    owner, grid: () => grid.current?.element,
+    column: index => page.result.columns[order[index - 2]],
+    sort: sort ?? [], current: () => !!onSortChange && !disabled && baseCurrent() && noModal(),
+    apply: next => onSortChange?.(next),
+  });
   const quickValue = useRef(onQuickValue); quickValue.current = onQuickValue;
   function openCellActions(row: SqliteDraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const index = key?.startsWith('c') ? Number(key.slice(1)) : -1, edit = page.edit;
@@ -308,7 +315,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     selectionChanged(value => value + 1);
   }
 
-  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste} onDoubleClickCapture={fitSource && onColumnResize ? fitHeaderColumn : undefined}>{cellActionMenu.menu}{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+  return <div className="sqlite-edit-clipboard-region" {...headerSortMenu} onPasteCapture={paste} onDoubleClickCapture={fitSource && onColumnResize ? fitHeaderColumn : undefined}>{cellActionMenu.menu}{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
     <GridColumnJump key={'column:' + orderKey} scope={owner} columns={order.map(index => page.columns[index])}
       disabled={disabled} isCurrent={() => !disabled && baseCurrent() && noModal()} onJump={jumpToGridColumn}/>
     <button type="button" title={headerCopyText.namesHint} disabled={disabled} onClick={() => copyFromGrid('names')}>{headerCopyText.names}</button>

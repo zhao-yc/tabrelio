@@ -6,7 +6,7 @@ import { useWorkspace } from '../store';
 import '../sidebarContextMenu.css';
 
 export interface GridCellAction { label: string; disabled?: boolean; run(): void; }
-interface Request { title: string; label?: string; actions: readonly GridCellAction[]; current(): boolean; }
+interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; current(): boolean; }
 interface Owner extends Request { cell: HTMLElement; x: number; y: number; }
 
 export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat: boolean; keyCode: number; nativeEvent: { isComposing: boolean } }): boolean {
@@ -37,7 +37,7 @@ export function useGridCellActionMenu() {
   function open(target: EventTarget | null, grid: HTMLElement | null | undefined, request: Request, point?: { x: number; y: number }): boolean {
     if (!grid || !(target instanceof Element) || !request.actions.length ||
         target.closest('input,textarea,select,button,[contenteditable="true"]')) return false;
-    const cell = target.closest<HTMLElement>('[role="gridcell"]'), row = cell?.closest('[role="row"]');
+    const cell = target.closest<HTMLElement>(request.targetRole ? '[role="columnheader"]' : '[role="gridcell"]'), row = cell?.closest('[role="row"]');
     if (!cell || !row || cell.closest('[role="grid"]') !== grid) return false;
     const rowIndex = row.getAttribute('aria-rowindex'), columnIndex = cell.getAttribute('aria-colindex');
     const state = useWorkspace.getState(), tab = state.settings.tabs.find(item => item.id === state.settings.activeTabId);
