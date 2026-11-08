@@ -3,12 +3,14 @@ import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 import { postgresCreateViewZh as create } from '../../src/renderer/locales/postgresCreateView.zh-CN';
+import { postgresDependenciesZh as dependencies } from '../../src/renderer/locales/postgresDependencies.zh-CN';
 import { postgresViewEditZh as edit } from '../../src/renderer/locales/postgresViewEdit.zh-CN';
 import { postgresMaterializedColumnNamesZh as materializedColumns } from '../../src/renderer/locales/postgresMaterializedColumnNames.zh-CN';
 import { postgresStructureZh as structure } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { viewOutputColumnsZh as columnsText } from '../../src/renderer/locales/viewOutputColumns.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
 const enabled = process.env.DBARK_VIEW_INSPECT_ENABLED === '1';
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -150,9 +152,11 @@ test('在原数据库预览视图并编辑列名，确认前无写入且依赖�
     expect(await names()).toEqual(['原位置的新列名', '正文']);
     expect((await observer.query('SELECT "正文" FROM public.view_inspect_depend')).rows).toEqual([{ 正文: '更新前可预览' }]);
 
+    await observer.query('CREATE SCHEMA "源.表"; CREATE TABLE "源.表"."基""表" (n integer PRIMARY KEY); INSERT INTO "源.表"."基""表" VALUES (2)');
     const materialized = await open('view_inspect_mv', true);
     await materialized.getByLabel(create.populate).uncheck();
-    await definition(materialized).fill("SELECT '物化视图样本'::text AS marker, 2 AS suffix;");
+    await definition(materialized).fill(`SELECT '物化视图样本'::text AS marker, n AS suffix
+      FROM "源.表"."基""表" CROSS JOIN public.view_inspect_subject;`);
     await sample(materialized);
     await expect(cell(materialized, '物化视图样本')).toBeVisible();
     await columnButton(materialized, columnsText.add).click();
@@ -215,15 +219,55 @@ test('在原数据库预览视图并编辑列名，确认前无写入且依赖�
     await namesPanel.getByRole('button', { name: materializedColumns.apply, exact: true }).click();
     await expect(namesPanel).toBeHidden();
     await expect(mvStructure.getByRole('rowheader', { name: 'suffix', exact: true })).toBeVisible();
+    await mvStructure.getByRole('button', { name: dependencies.open, exact: true }).click();
+    const links = page.getByRole('dialog', { name: dependencies.title, exact: true });
+    const linkPreview = links.getByRole('region', { name: dependencies.definitionTitle, exact: true });
+    const linkSql = linkPreview.locator('.monaco-editor .view-lines');
+    const closeDefinition = linkPreview.getByRole('button', { name: dependencies.closeDefinition, exact: true });
+    const references = links.getByRole('region', { name: dependencies.references, exact: true });
+    const downstream = links.getByRole('region', { name: dependencies.referencedBy, exact: true });
+    const link = (scope: Locator, label: string) => scope.getByRole('row').filter({ hasText: label })
+      .getByRole('button', { name: /查看.+的定义/ });
+    await link(references, '"源.表"."基""表".n').click();
+    await expect(linkSql).toContainText('CREATE TABLE "源.表"."基""表"');
+    await expect(linkSql).toContainText('PRIMARY KEY');
+    await closeDefinition.click();
+    const dependent = link(downstream, 'view_inspect_mv_dep');
+    await dependent.click();
+    await expect(linkSql).toContainText('CREATE VIEW "public"."view_inspect_mv_dep"');
+    await closeDefinition.click();
+    // 原视图仍绑定改名前的字段身份；随后同名重建才按新列名绑定。
+    expect((await observer.query('SELECT "缓存" FROM public.view_inspect_mv_dep')).rows).toEqual([{ 缓存: '物化视图样本' }]);
+    await observer.query(`DROP VIEW public.view_inspect_mv_dep;
+      CREATE VIEW public.view_inspect_mv_dep AS SELECT "缓存" FROM public.view_inspect_mv WHERE "缓存" = 2`);
+    await dependent.click();
+    await expect(linkPreview.getByRole('alert')).toContainText('定义对象已变化');
+    await expect(linkSql).toHaveCount(0);
+    await links.getByRole('button', { name: zh.common.refresh, exact: true }).click();
+    await dependent.click();
+    await expect(linkSql).toContainText('CREATE VIEW "public"."view_inspect_mv_dep"');
+    await expect(linkSql).toContainText('WHERE');
+    await closeDefinition.click();
+    await links.getByRole('button', { name: dependencies.back, exact: true }).click();
+    await expect(mvStructure.getByRole('rowheader', { name: 'suffix', exact: true })).toBeVisible();
     await mvStructure.locator('.modal-footer').getByRole('button', { name: structure.close, exact: true }).click();
     const final = await readMaterialized();
     expect(final.comment).toBe('保留的视图备注');
     expect(final.columns.map(column => [column.name, column.comment])).toEqual([['suffix', '原第一列备注'], ['缓存', null]]);
     expect(await storage()).toEqual(beforeStorage);
     expect((await observer.query('SELECT suffix, "缓存" FROM public.view_inspect_mv')).rows).toEqual([{ suffix: '物化视图样本', 缓存: 2 }]);
-    expect((await observer.query('SELECT "缓存" FROM public.view_inspect_mv_dep')).rows).toEqual([{ 缓存: '物化视图样本' }]);
+    expect((await observer.query('SELECT "缓存" FROM public.view_inspect_mv_dep')).rows).toEqual([{ 缓存: 2 }]);
     await observer.query('REFRESH MATERIALIZED VIEW CONCURRENTLY public.view_inspect_mv');
     expect((await observer.query('SELECT suffix FROM public.view_inspect_mv')).rows).toEqual([{ suffix: '物化视图样本' }]);
+    await clickSidebarAction(connection.locator('.object-row').filter({ hasText: 'view_inspect_subject' }),
+      { name: structure.open + ' "public"."view_inspect_subject"', exact: true });
+    await infoDialog.getByRole('button', { name: dependencies.open, exact: true }).click();
+    await link(downstream, 'view_inspect_mv').click();
+    await expect(linkSql).toContainText('CREATE MATERIALIZED VIEW "public"."view_inspect_mv"');
+    await expect(linkSql).toContainText('view_inspect_mv_idx');
+    await closeDefinition.click();
+    await links.getByRole('button', { name: dependencies.back, exact: true }).click();
+    await infoDialog.locator('.modal-footer').getByRole('button', { name: structure.close, exact: true }).click();
     expect(await history()).toEqual(beforeHistory);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

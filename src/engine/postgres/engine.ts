@@ -80,7 +80,7 @@ import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMo
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
 import { preparePostgresSearchConnection, readPostgresDefinitionText } from './definitionSearch';
-import { postgresDefinitionTargetSchema } from '../../shared/databaseSearch';
+import { postgresDefinitionReadSchema } from '../../shared/databaseSearch';
 import { dataSearchInputSchema } from '../../shared/dataSearch';
 import { dataSearchCatalogueSchema } from '../../shared/dataSearchCatalogue';
 import { dataSearchRecordReadSchema } from '../../shared/dataSearchRecords';
@@ -1396,7 +1396,7 @@ export class PostgresEngine {
         }
         if (command === 'postgres.structure.definition') {
           const { profile: _, ...request } = input;
-          const target = postgresDefinitionTargetSchema.parse(request);
+          const target = postgresDefinitionReadSchema.parse(request);
           return this.use(profile, target.database, async connection => {
             await preparePostgresSearchConnection(connection, target.database);
             return readPostgresDefinitionText(connection, target);

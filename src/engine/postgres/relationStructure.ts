@@ -13,6 +13,11 @@ import { postgresIdentityStamp, postgresTableIdentityFactsSql } from './tableIde
 export const postgresStructureVisibleSql = `(pg_catalog.has_table_privilege(c.oid, 'SELECT') OR pg_catalog.pg_has_role(c.relowner, 'USAGE')
   OR (c.relkind = 'm' AND ${postgresMaterializedCanRefreshSql}))`;
 
+// 结构和依赖定义入口共享 schema 与关系权限条件，目录读取仍不访问业务数据。
+export const postgresReadableStructureSql = `n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+  AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+  AND (${postgresStructureVisibleSql} OR ${postgresTableCanDropSql} OR ${postgresTableCanTruncateSql})`;
+
 // 单条目录查询提供一致的关系、字段、约束和索引快照；绝不读取目标关系的数据行。
 const structureSql = `
 WITH target AS MATERIALIZED (
@@ -33,9 +38,7 @@ WITH target AS MATERIALIZED (
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname::text = $1 AND c.relname::text = $2
     AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-    AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
-    AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
-    AND (${postgresStructureVisibleSql} OR ${postgresTableCanDropSql} OR ${postgresTableCanTruncateSql})
+    AND ${postgresReadableStructureSql}
 )
 SELECT pg_catalog.jsonb_build_object(
   'database', pg_catalog.current_database(),

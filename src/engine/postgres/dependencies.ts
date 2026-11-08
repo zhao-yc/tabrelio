@@ -3,7 +3,7 @@ import type { PostgresRoutineDependencyInput } from '../../shared/postgresRoutin
 import { postgresRelationName } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 import { startPostgresDdl } from './createTable';
-import { postgresStructureVisibleSql } from './relationStructure';
+import { postgresStructureVisibleSql, postgresReadableStructureSql } from './relationStructure';
 import { postgresSequenceVisibleSql } from './sequence';
 import { readPostgresRoutineFacts } from './routine';
 
@@ -51,7 +51,8 @@ components(classid, objid) AS (
     AND NOT EXISTS (SELECT FROM components p WHERE p.classid = addr.classid AND p.objid = addr.objid)
 ), visible AS (
   SELECT DISTINCT r.direction, CASE WHEN ns.allowed THEN COALESCE(r.field_kind, i.type) END AS kind,
-    CASE WHEN ns.allowed THEN i.identity END AS identity, r.deptype::text AS deptype
+    CASE WHEN ns.allowed THEN i.identity END AS identity, r.deptype::text AS deptype,
+    link.oid, link.kind AS relkind, link.schema_name, link.relation_name
   FROM related r CROSS JOIN LATERAL pg_catalog.pg_identify_object(r.classid, r.objid, r.subid) i
   LEFT JOIN pg_catalog.pg_rewrite rw ON r.classid = 'pg_catalog.pg_rewrite'::regclass AND rw.oid = r.objid
   LEFT JOIN pg_catalog.pg_trigger t ON r.classid = 'pg_catalog.pg_trigger'::regclass AND t.oid = r.objid
@@ -64,8 +65,15 @@ components(classid, objid) AS (
     OR pg_catalog.has_schema_privilege(COALESCE(pg_catalog.to_regnamespace(i.schema)::oid, host.relnamespace), 'USAGE'))
     AND (proc.oid IS NULL OR pg_catalog.has_function_privilege(proc.oid, 'EXECUTE')
       OR pg_catalog.pg_has_role(proc.proowner, 'USAGE')) AS allowed) ns
+  -- 字段依赖指向其所属关系。仅对原结构读取也允许的对象提供定义入口。
+  LEFT JOIN LATERAL (
+    SELECT c.oid::text AS oid, c.relkind::text AS kind, n.nspname::text AS schema_name, c.relname::text AS relation_name
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE ns.allowed AND r.classid = 'pg_catalog.pg_class'::regclass AND c.oid = r.objid
+      AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND ${postgresReadableStructureSql}
+  ) link ON true
 )
-SELECT v.direction, v.kind, v.identity, v.deptype FROM focus
+SELECT v.direction, v.kind, v.identity, v.deptype, v.oid, v.relkind, v.schema_name, v.relation_name FROM focus
 LEFT JOIN (SELECT * FROM visible ORDER BY direction, identity NULLS LAST, kind, deptype LIMIT 201) v ON true
 ORDER BY v.direction, v.identity NULLS LAST, v.kind, v.deptype`;
 
@@ -76,6 +84,7 @@ async function readDependencies(connection: PostgresConnection, focus: string, v
   if ((await connection.query('COMMIT', undefined, { rows: 0, bytes: 1024 })).postgresCommand !== 'COMMIT') throw Error('依赖读取未完成');
   const entries = result.rows.slice(0, 200).filter(row => row.c0 !== null).map(row => postgresDependencySchema.parse({
     direction: row.c0, kind: row.c1, identity: row.c2, type: row.c3,
+    ...(row.c4 === null ? {} : { relation: { oid: row.c4, kind: row.c5, schema: row.c6, name: row.c7 } }),
   }));
   return { entries, limited: result.truncated || result.rows.length > 200 };
 }

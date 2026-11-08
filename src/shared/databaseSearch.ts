@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {databaseSearchPatternSchema} from './databaseSearchPattern';
 import type {DefinitionNavigationResult} from './definitionNavigation';
+import {postgresDependencyRelationSchema} from './postgresDependencies';
 
 /** 首批结构名称搜索按请求拉取一页，页间不保留数据库连接或未消费的结果批次。 */
 export const structureSearchLimits={databases:32,pageHits:50,pageQueries:10,maxHits:1000,pageBytes:128*1024,cursors:32,cursorMs:5*60*1000,definitionBytes:2*1024*1024,definitionPageObjects:10} as const;
@@ -24,6 +25,12 @@ export const postgresDefinitionTargetSchema = z.object({
   kind: z.enum(postgresDefinitionSearchKinds),
 }).strict();
 export type PostgresDefinitionTarget = z.infer<typeof postgresDefinitionTargetSchema>;
+
+export const postgresDefinitionReadSchema = postgresDefinitionTargetSchema.extend({
+  expectedRelation: postgresDependencyRelationSchema.pick({ oid: true, kind: true }).optional(),
+}).refine(target => !target.expectedRelation || target.kind ===
+  (target.expectedRelation.kind === 'v' || target.expectedRelation.kind === 'm' ? 'view' : 'table'));
+export type PostgresDefinitionReadTarget = z.infer<typeof postgresDefinitionReadSchema>;
 const unique=<T>(values:T[])=>new Set(values).size===values.length;
 export const structureSearchInputSchema=z.object({
   connectionId:z.string().min(1).max(200),taskId:z.string().uuid(),

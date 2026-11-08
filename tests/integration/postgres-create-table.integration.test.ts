@@ -596,19 +596,22 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         CREATE TRIGGER "不可见触发器" BEFORE INSERT ON "隐藏引用"."私有触发表"
           FOR EACH ROW WHEN (nextval('${catalogSequence}'::regclass) > 0) EXECUTE FUNCTION "隐藏引用"."触发函数"()`);
       const readDependencies = (table: string) => engine.handle('postgres.structure.dependencies', { ...target, table });
+      const tableRelation = { oid: await indexOid(catalogTable), kind: 'r', schema: '生成.甲', name: '依赖引用表' };
+      const viewRelation = { oid: await indexOid(catalogView), kind: 'v', schema: '生成.甲', name: '依赖引用视图' };
+      const hiddenRelation = { oid: await indexOid(hiddenView), kind: 'v', schema: '隐藏引用', name: '不可见视图' };
       const sequenceDependencies = await readDependencies(catalogSequence);
       expect(sequenceDependencies).toMatchObject({ limited: false, entries: expect.arrayContaining([
-        { direction: 'referencedBy', kind: 'column default', identity: catalogTable + '."自动编号"', type: 'n' },
-        { direction: 'referencedBy', kind: 'view', identity: hiddenView, type: 'n' },
+        { direction: 'referencedBy', kind: 'column default', identity: catalogTable + '."自动编号"', type: 'n', relation: tableRelation },
+        { direction: 'referencedBy', kind: 'view', identity: hiddenView, type: 'n', relation: hiddenRelation },
       ]) });
       expect(sequenceDependencies.entries.some((entry: { kind: string; identity: string }) =>
         entry.kind === 'trigger' && entry.identity.includes('不可见触发器'))).toBe(true);
       const tableDependencies = await readDependencies(catalogTable);
       expect(tableDependencies.entries).toContainEqual({ direction: 'references', kind: 'sequence', identity: catalogSequence, type: 'n' });
       expect(tableDependencies.entries.filter((entry: { identity: string }) => entry.identity === catalogView))
-        .toEqual([{ direction: 'referencedBy', kind: 'view', identity: catalogView, type: 'n' }]);
+        .toEqual([{ direction: 'referencedBy', kind: 'view', identity: catalogView, type: 'n', relation: viewRelation }]);
       expect((await readDependencies(catalogView)).entries).toContainEqual({ direction: 'references', kind: 'table column',
-        identity: catalogTable + '."说明"', type: 'n' });
+        identity: catalogTable + '."说明"', type: 'n', relation: tableRelation });
       expect((await client.query(`SELECT is_called FROM ${catalogSequence}`)).rows).toEqual([{ is_called: false }]);
 
       if (maintainer === database + '_limited') {
@@ -621,6 +624,10 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         expect(JSON.stringify(visible)).not.toContain('不可见视图');
         expect(JSON.stringify(visible)).not.toContain('不可见触发器');
         expect(JSON.stringify(visible)).not.toContain('私有触发表');
+        expect(JSON.stringify(visible)).not.toContain('隐藏引用');
+        expect(visible.entries).not.toEqual(expect.arrayContaining([expect.objectContaining({
+          identity: catalogTable + '."自动编号"', relation: expect.anything(),
+        })]));
         await expect(readAsLimited(hiddenView)).rejects.toThrow('没有读取依赖的权限');
       }
 

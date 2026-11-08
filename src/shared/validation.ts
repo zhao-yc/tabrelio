@@ -168,7 +168,7 @@ import { indexAcknowledgementIds } from './tableIndexTasks';
 import { completionLimits } from './sqlCompletion';
 import {completionIdentifier} from './completionLexical';
 import { objectDefinitionInputSchema } from './objectDefinition';
-import {postgresDefinitionTargetSchema,structureSearchInputSchema,structureSearchContinueSchema,structureSearchReleaseSchema} from './databaseSearch';
+import {postgresDefinitionReadSchema,structureSearchInputSchema,structureSearchContinueSchema,structureSearchReleaseSchema} from './databaseSearch';
 import {dataSearchInputSchema,dataSearchNextSchema,dataSearchReleaseSchema} from './dataSearch';
 import {dataSearchCatalogueSchema} from './dataSearchCatalogue';
 import{dataSearchRecordReadSchema,dataSearchRecordsReleaseSchema}from'./dataSearchRecords';
@@ -329,7 +329,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.sequence.manage.apply': postgresCreateTableApplySchema,
   'postgres.sequence.targets': postgresSequenceTargetsSchema,
   'postgres.structure.read': postgresStructureInputSchema,
-  'postgres.structure.definition': postgresDefinitionTargetSchema,
+  'postgres.structure.definition': postgresDefinitionReadSchema,
   'postgres.structure.dependencies': postgresStructureInputSchema,
   'postgres.routine.read': postgresRoutineReadSchema,
   'postgres.routine.dependencies': postgresRoutineDependencySchema,

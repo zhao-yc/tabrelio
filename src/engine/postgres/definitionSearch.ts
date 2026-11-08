@@ -1,4 +1,4 @@
-import { structureSearchLimits, type PostgresDefinitionTarget } from '../../shared/databaseSearch';
+import { structureSearchLimits, type PostgresDefinitionReadTarget } from '../../shared/databaseSearch';
 import type { DatabaseSearchPattern } from '../../shared/databaseSearchPattern';
 import { definitionTextWithinBudget } from '../../shared/definitionNavigation';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
@@ -49,13 +49,16 @@ function relationDefinition(output: PostgresStructureResult) {
 }
 
 /** 用目录完整限定名及输入类型签名核对对象，只返回与搜索窗口相同的展示正文。 */
-export async function readPostgresDefinitionText(connection: PostgresConnection, target: Omit<PostgresDefinitionTarget, 'connectionId'>) {
+export async function readPostgresDefinitionText(connection: PostgresConnection, target: Omit<PostgresDefinitionReadTarget, 'connectionId'>) {
   if (connection.database !== target.database) throw Error('PostgreSQL 定义连接未绑定目标数据库');
   let source: string;
   if (target.kind === 'table' || target.kind === 'view') {
-    const { output } = await readPostgresStructureFacts(connection, target.name);
+    const { output, oid } = await readPostgresStructureFacts(connection, target.name);
     const exact = postgresIdentifier(output.schema) + '.' + postgresIdentifier(output.name);
-    if (exact !== target.name || (target.kind === 'view') !== (output.kind === 'v' || output.kind === 'm'))
+    // 依赖行持有原目录身份，禁止同名重建的对象接管旧行。
+    const expected = target.expectedRelation;
+    if (exact !== target.name || (target.kind === 'view') !== (output.kind === 'v' || output.kind === 'm') ||
+        expected && (oid !== expected.oid || output.kind !== expected.kind))
       throw Error('PostgreSQL 定义对象已变化');
     source = relationDefinition(output);
   } else {

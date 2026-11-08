@@ -106,6 +106,15 @@ describe('PostgreSQL 结构名称搜索', () => {
     expect(definitionSearchOpenSchema.safeParse({ ...target, dialect: 'postgresql', connectionVersion: 1, invalidated: false }).success).toBe(true);
   });
 
+  it('依赖定义读取仅接受有效 OID 和匹配的关系类别', () => {
+    const target = { connectionId: input.connectionId, database: input.databases[0], name: '"目标"."依赖"', kind: 'view' };
+    const expectedRelation = { oid: '4294967295', kind: 'm' };
+    expect(validateCommand('postgres.structure.definition', { ...target, expectedRelation })).toEqual({ ...target, expectedRelation });
+    for (const invalid of [{ oid: '4294967296', kind: 'm' }, { oid: '123', kind: 'r' }]) {
+      expect(() => validateCommand('postgres.structure.definition', { ...target, expectedRelation: invalid })).toThrow();
+    }
+  });
+
   it('PostgreSQL 位置查询超时保留已确认命中，传输失败继续向上传播', async () => {
     const pattern = { mode: 'regexp' as const, text: 'x+', caseSensitive: false };
     const timeout = Object.assign(Error('statement timeout'), { postgresSqlState: '57014' });

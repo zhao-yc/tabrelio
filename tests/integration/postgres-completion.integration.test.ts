@@ -296,8 +296,10 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         CREATE TABLE "补全.甲"."例程默认值" (value integer DEFAULT "补全.甲"."图形""例程"(7))`);
       const originalDependencies = await routineDependencies(fixtureIdentity);
       expect(originalDependencies).toMatchObject({ limited: false, entries: expect.arrayContaining([
-        { direction: 'referencedBy', kind: 'view', identity: expect.stringContaining('例程依赖'), type: 'n' },
-        { direction: 'referencedBy', kind: 'column default', identity: expect.stringContaining('例程默认值'), type: 'n' },
+        { direction: 'referencedBy', kind: 'view', identity: expect.stringContaining('例程依赖'), type: 'n',
+          relation: { oid: expect.stringMatching(/^\d+$/), kind: 'v', schema: '补全.甲', name: '例程依赖' } },
+        { direction: 'referencedBy', kind: 'column default', identity: expect.stringContaining('例程默认值'), type: 'n',
+          relation: { oid: expect.stringMatching(/^\d+$/), kind: 'r', schema: '补全.甲', name: '例程默认值' } },
       ]) });
       expect(originalDependencies.entries).not.toEqual(expect.arrayContaining([expect.objectContaining({
         identity: expect.stringContaining('routine_side_effects'),

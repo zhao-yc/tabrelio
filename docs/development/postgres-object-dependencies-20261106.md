@@ -6,6 +6,8 @@
 
 窗口展示目录记录的直接依赖。最终删除由 PostgreSQL 实时检查，序列删除继续使用 `RESTRICT`。[PostgreSQL DROP SEQUENCE](https://www.postgresql.org/docs/18/sql-dropsequence.html)
 
+可从有读取权限的关系行点「查看定义」，打开表、视图或物化视图的只读目录定义。字段行打开所属关系。定义读取以目录中的 OID 和限定名定位，同名重建时需刷新依赖。关闭定义后可继续浏览列表，再返回原对象窗口。
+
 ## 验证
 
 - macOS 上 Node.js 24.17.0 运行时检查、类型检查和源码构建通过。
