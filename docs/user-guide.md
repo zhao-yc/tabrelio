@@ -865,6 +865,8 @@ PostgreSQL 的「参数执行」也支持[本标签参数暂存](development/pos
 
 PostgreSQL 普通表和只读视图的网格上方也有「复制（含列名）」和「复制当前列」。两者使用当前页及其勾选范围，按显示顺序取值。内部粘贴保留 SQL NULL、二进制和精确数值原文。[PostgreSQL 表页复制](development/postgres-grid-copy-20261108.md)
 
+在 PostgreSQL 普通表或分区表的网格上方，选择一个数据格后可点「复制当前行为 INSERT SQL」，也可勾选多行后点「复制选中行为 INSERT SQL」。所选行有草稿时，先提交或撤销再复制。SQL 沿用原表的 schema 和列名，保留标识列值，计算生成列由目标表重算。[PostgreSQL 表页复制 INSERT](development/postgres-copy-insert-sql-20261108.md)
+
 表格和查询结果支持「跳到行」。焦点在网格内时，可按 Ctrl＋G 或选择「编辑 → 跳到行／行列」。输入从 1 开始的当前网格行号并按 Enter，焦点会移到对应行；按 Escape 可取消。行号按当前显示顺序计算，表格只定位当前页，查询结果只定位已载入的可见行。
 
 PostgreSQL 表和只读视图可从网格上方点「跳到行」。跳转保留当前数据列和已勾选记录，翻页时会清除旧页的行号输入。[PostgreSQL 表页跳到行](development/postgres-grid-row-jump-20261108.md)

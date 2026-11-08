@@ -7,7 +7,7 @@ import { postgresIdentifier, postgresRelationName, postgresRelationSelect } from
 import type { RecordTemplateContent, RecordTemplateTarget } from '../../shared/recordTemplates';
 import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../../shared/postgresPresetTab';
 import {
-  isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresTableLimits, postgresTablePageOffset, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField,
+  isPostgresFilteredUpdateColumn, isPostgresSqlExportRelation, isPostgresTableFiltered, postgresTableLimits, postgresTablePageOffset, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
 } from '../../shared/postgresTable';
 import { cellPreview, cellText, errorMessage, invoke, ownCell, uid } from '../lib';
@@ -64,6 +64,7 @@ import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
 import { capturePostgresCheckedDelete, planPostgresCheckedDelete, type PostgresCheckedDeletePage } from '../postgresCheckedDelete';
+import { postgresCopyInsertSql } from '../postgresCopyInsertSql';
 import { planPostgresCheckedEdit } from '../postgresCheckedEdit';
 import { capturePostgresCheckedFill, planPostgresCheckedFill, postgresCheckedFillBytes, type PostgresCheckedFillPage } from '../postgresCheckedFill';
 import { capturePostgresCheckedDuplicate, planPostgresCheckedDuplicate, postgresCheckedDuplicateBytes, type PostgresCheckedDuplicatePage } from '../postgresCheckedDuplicate';
@@ -1559,7 +1560,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows}
         rowJump={canFind} rowJumpCurrent={findIsCurrent}
-        tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
+        tableCopy={{ enabled: canFind, isCurrent: findIsCurrent,
+          insertSql: !page.truncated && isPostgresSqlExportRelation(page.relationKind)
+            ? indices => postgresCopyInsertSql(target.table, page, indices, draftRef.current) : undefined }}
         presentCell={draftGrid?.cell} skipRowInInversion={draftGrid?.isDeleted}
         renderRowSelectionAction={(selected, current, tools) =>
           <div className="pg-table-controls pg-batch-actions">

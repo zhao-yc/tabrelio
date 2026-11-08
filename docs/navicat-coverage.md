@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。PostgreSQL 表页可从当前行或勾选的原始行复制 INSERT SQL，保留精确值和标识列，跳过计算生成列。D02 和 R01 仍为部分覆盖。[PostgreSQL 表页复制 INSERT](development/postgres-copy-insert-sql-20261108.md)
+
 2026-11-08 源码增量。PostgreSQL 可逐页收集更新目标，在同一窗口为各条记录设置不同值，按原版本整批暂存、撤销和提交。D02、D04 和 R01 仍为部分覆盖。[PostgreSQL 跨页逐条编辑](development/postgres-checked-edit-20261108.md)
 
 2026-11-08 源码增量。SQLite 可在同一窗口逐条编辑各保留页的勾选记录，按来源页暂存和撤销，并通过原快照统一预览提交。D02、D04 和 R02 仍为部分覆盖。[SQLite 跨页逐条编辑](development/sqlite-workspace-checked-record-edit-20261108.md)

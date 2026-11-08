@@ -19,6 +19,8 @@ import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { encodeQueryResultColumn, encodeQueryResultWithHeaders, encodeTableGridCopy, writeQueryResultClipboard, type QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { queryResultCopyZh as copyText } from '../locales/queryResultCopy.zh-CN';
+import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
+import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { tableHeaderCopyZh as tableCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import '../queryResultCopy.css';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
@@ -49,7 +51,7 @@ function displayedValue(row: DataRow, key: string, present?: PresentGridCell) {
 }
 
 /** 表页可覆盖展示值，定位、编辑及原页能力仍引用原网格数据。查询结果默认使用原值。 */
-export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, tableCopy, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu, onCellEdit, onCellPaste, findTarget, findMarks, navigateTo, onGridAnchor, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; tableCopy?: { enabled: boolean; isCurrent(): boolean }; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; onGridAnchor?(anchor: GridFindTarget | undefined): void; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
+export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, tableCopy, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu, onCellEdit, onCellPaste, findTarget, findMarks, navigateTo, onGridAnchor, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; tableCopy?: { enabled: boolean; isCurrent(): boolean; insertSql?(indices: ReadonlySet<number>): string }; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; onGridAnchor?(anchor: GridFindTarget | undefined): void; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
   const height = readGridRowHeight(rowHeight);
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
@@ -346,6 +348,17 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&
     (selectionBefore?.scope === scope ? selectionBefore.indices === selectedRows : !selectedRows.size);
+  /** 从同一活动格或勾选代次生成 SQL，失败时整次不触碰剪贴板。 */
+  function copyRowsAsInsert(checked: boolean) {
+    const current = () => !!tableCopy?.enabled && selectedActionCurrent() &&
+      copyRevisionRef.current === copyRevision && tableCopy.isCurrent();
+    if (!tableCopy?.insertSql || !current() || (!checked && !activeCopyCell)) return;
+    try {
+      const sql = tableCopy.insertSql(checked ? selectedRows : new Set([activeCopyCell!.index]));
+      writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
+      useWorkspace.getState().notify(insertCopyText.copied);
+    } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+  }
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
   const jump = rowJump ? <GridRowJump grid={gridRef} scope={scope} count={rows.length}
     disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/> : undefined;
@@ -356,6 +369,8 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
       onClick={() => copyResult('headers')}>{copyLabels.action}</button>
     <button type="button" title={copyLabels.columnHint} disabled={!copyEnabled || !activeCopyCell?.column}
       onClick={() => copyResult('column')}>{copyLabels.column}</button>
+    {tableCopy?.insertSql && <CopyInsertSqlButtons disabled={!copyEnabled}
+      current={!!activeCopyCell} selected={!!selectedRows.size} onCopy={copyRowsAsInsert}/>}
   </>;
   const selectionTools = !onActiveRowChange && (rowJump || hasResultTools) ?
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={tableCopy?.enabled === false}
