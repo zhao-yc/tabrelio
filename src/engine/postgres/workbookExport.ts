@@ -32,7 +32,7 @@ export async function exportPostgresWorkbook(input: PostgresWorkbookExportReques
       async function* sheets(): AsyncGenerator<ExcelExportSheet> {
         for (const [index, object] of objects.entries()) {
           check();
-          const relation = await readRelation(connection, object.name, true);
+          const relation = await readRelation(connection, object.name, { catalogueOnly: true });
           const isView = relation.kind === 'v' || relation.kind === 'm';
           if (isView !== (object.kind === 'view') || relation.kind === 'f') throw Error('PostgreSQL 导出对象类型已变化或为外部表');
           const { sql, args } = readPostgresTableSelect(relation, {});

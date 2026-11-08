@@ -100,11 +100,16 @@ const valueOptionTypes = new Set([
 const small = () => ({ rows: 1024, bytes: 2 * 1024 * 1024 });
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const only = (relation: Relation) => (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql;
+const postgresHeaderCommentLimit = 160;
+function postgresHeaderComment(value: string): string {
+  const characters = Array.from(value);
+  return characters.length > postgresHeaderCommentLimit ? characters.slice(0, postgresHeaderCommentLimit).join('') + '…' : value;
+}
 const pageScope = ({ filter, sort }: Snapshot['options']) =>
   JSON.stringify([filter, postgresTableSortRules(sort).map(({ column, direction, nulls }) => [column, direction, nulls])]);
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
-export async function readRelation(connection: PostgresConnection, table: string, catalogueOnly = false): Promise<Relation> {
+export async function readRelation(connection: PostgresConnection, table: string, { catalogueOnly = false, headerComments = false } = {}): Promise<Relation> {
   const { schema, name } = postgresRelationName(table);
   const header = await connection.query(`
     SELECT c.oid, pg_catalog.pg_relation_filenode(c.oid), c.relkind, c.relispartition, c.relhasrules,
@@ -138,10 +143,12 @@ export async function readRelation(connection: PostgresConnection, table: string
              WHERE dependency.classid = 'pg_catalog.pg_attrdef'::regclass AND dependency.objid = d.oid
                AND dependency.refclassid = 'pg_catalog.pg_class'::regclass AND dependency.refobjsubid = 0
            )
+           ${headerComments ? ', pg_catalog.left(pg_catalog.col_description(a.attrelid, a.attnum), ' + (postgresHeaderCommentLimit + 1) + ')' : ''}
     FROM pg_catalog.pg_attribute a
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
-  `, [info.c0], catalogueOnly ? { rows: maxColumns + 1, bytes: 4 * 1024 * 1024 } : small());
+  `, [info.c0], catalogueOnly ? { rows: maxColumns + 1, bytes: 4 * 1024 * 1024 } :
+    { ...small(), bytes: small().bytes + (headerComments ? maxColumns * ((postgresHeaderCommentLimit + 1) * 4 + 76) : 0) });
   if (!fields.rows.length || fields.truncated || fields.rows.length > maxColumns) throw Error('PostgreSQL列目录不完整或超过读取预算');
   const columns = fields.rows.map((field, index): PostgresTableColumn => ({
     key: 'c' + index, name: String(field.c0), type: String(field.c1), nullable: field.c2 !== 't',
@@ -149,6 +156,7 @@ export async function readRelation(connection: PostgresConnection, table: string
     primary: Number(field.c7) > 0, binary: field.c6 === '17', ...(field.c5 === 'a' ? { identityAlways: true } : {}),
     ...(valueOptionTypes.has(String(field.c6)) ? { valueOptions: true } : {}),
     ...(field.c11 === 't' ? { sequenceDefault: true } : {}),
+    ...(typeof field.c12 === 'string' && field.c12 ? { comment: postgresHeaderComment(field.c12) } : {}),
   }));
   const keys = fields.rows.map((field, index) => ({ index, position: Number(field.c7) }))
     .filter(item => item.position > 0).sort((a, b) => a.position - b.position)
@@ -160,7 +168,8 @@ export async function readRelation(connection: PostgresConnection, table: string
     valueOptionTypes.has(String(fields.rows[index].c6))).map(column => column.name);
   return {
     oid: info.c0, sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
-    fingerprint: digest([info, fields.rows]),
+    // 注释仅用于展示，不参与原行指纹或草稿修订。
+    fingerprint: digest([info, fields.rows.map(({ c12: _comment, ...field }) => field)]),
     syncColumns,
     syncCompatible: syncEligible &&
       (info.c5 === 't' || info.c6 === 't' || info.c7 === 't') &&
@@ -316,7 +325,7 @@ export class PostgresTableWorkspace {
         const locked = await connection.query('LOCK TABLE ONLY ' + postgresIdentifier(schema) + '.' + postgresIdentifier(name) +
           ' IN ACCESS SHARE MODE', undefined, small());
         if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 搜索编辑原表锁未确认');
-        const relation = await readRelation(connection, input.table);
+        const relation = await readRelation(connection, input.table, { headerComments: true });
         if (!relation.capabilities.update) throw Error('此 PostgreSQL 表没有记录更新能力');
         const { original, checkServer } = await verify(connection);
         if (original.tableOid !== relation.oid) throw Error('PostgreSQL 搜索编辑原表已变化，请重新搜索');
@@ -381,7 +390,7 @@ export class PostgresTableWorkspace {
       }
       const result = await connect(async connection => {
         await begin(connection, 'page');
-        const relation = await readRelation(connection, input.table);
+        const relation = await readRelation(connection, input.table, { headerComments: true });
         const restored = file ? await this.verifyDraft(connection, relation, file) : undefined;
         let counted: ReturnType<typeof postgresCountedWindow> | undefined;
         if (input.navigation) {
@@ -709,7 +718,7 @@ export class PostgresTableWorkspace {
       const { relation, row } = await connect(async connection => {
         await begin(connection, 'page');
         await this.verifyRelated(connection, scope);
-        const relation = await readRelation(connection, input.table);
+        const relation = await readRelation(connection, input.table, { headerComments: true });
         if (!relation.capabilities.update || relation.fingerprint !== source.relation.fingerprint)
           throw Error('关联目标结构或编辑权限已变化，请刷新');
         const row = await readOriginalRow(connection, relation, original);

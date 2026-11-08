@@ -1,5 +1,6 @@
+import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from 'react';
-import { DataGrid, SelectColumn, renderCheckbox, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
+import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableEditZh as text } from '../locales/sqliteTableEdit.zh-CN';
@@ -27,9 +28,9 @@ import { useWorkspace } from '../store';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenPrimaryKeyQuery?(sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
+interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenPrimaryKeyQuery?(sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenPrimaryKeyQuery, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, rowHeight }: Props) {
+export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenPrimaryKeyQuery, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, rowHeight }: Props) {
   const height = readGridRowHeight(rowHeight);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
@@ -131,6 +132,10 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
   function inputTarget(event: ClipboardEvent<HTMLDivElement>): boolean { const node = event.target as HTMLElement | null; return !!node && (node.isContentEditable || ['TEXTAREA', 'SELECT'].includes(node.tagName) || node.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes((node as HTMLInputElement).type)); }
   const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...display.map(({ index, width, frozen }): Column<SqliteDraftRow> => ({
     key: 'c' + index, name: page.columns[index].name + (page.columns[index].generated ? ' · ' + text.generated : ''), minWidth: 64, width: width ?? 180, frozen, resizable: true, sortable: !!onSortChange && !disabled,
+    // 仅替换显示名称，保留 RDG 自带的排序方向和多列优先级。
+    renderHeaderCell: props => renderHeaderCell({ ...props, column: { ...props.column, name:
+      <GridHeaderDetails name={String(props.column.name)} type={showFieldType ? page.columns[index].declaredType || browseText.dynamic : undefined}/>
+    } }),
     renderCell: ({ row }) => {
       const value = row.values[index], matched = findHit?.page === page && findHit.rows === rows && findHit.row === row && findHit.column === index && !row.deleted;
       const raw = value === undefined ? text.omitted : value.kind === 'null' ? 'NULL' : value.value, range = matched ? findHit.range : undefined;

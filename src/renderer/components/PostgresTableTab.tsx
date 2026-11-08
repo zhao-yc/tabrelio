@@ -1,3 +1,4 @@
+import { gridHeaderDetailsZh as headerText } from '../locales/gridHeaderDetails.zh-CN';
 import { postgresTableCopyZh } from '../locales/postgresTableCopy.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { ColumnWidths } from 'react-data-grid';
@@ -157,6 +158,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const workspaceBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
+  const [showFieldType, setShowFieldType] = useState(true);
+  const [showFieldComment, setShowFieldComment] = useState(false);
+  const headerDetails = useMemo(() => ({ showType: showFieldType, showComment: showFieldComment,
+    fields: new Map(page?.columns.map(column => [column.key, column])) }), [showFieldType, showFieldComment, page?.columns]);
   const [pageConnectionVersion, setPageConnectionVersion] = useState<number>();
   const [deletePages, setDeletePages] = useState<readonly PostgresCheckedDeletePage[]>([]);
   const deletePagesRef = useRef(deletePages);
@@ -1513,6 +1518,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <button disabled={blocked || !layoutView.ready || layoutView.pending || !layoutScope.current.current()} onClick={() => {
         setLayoutError(''); setLayoutDialog(layoutKey);
       }}>{layoutText.entry}</button>
+      <button type="button" disabled={!page || blocked} onClick={() => setShowFieldType(value => !value)}>{showFieldType ? headerText.hideType : headerText.showType}</button>
+      <button type="button" disabled={!page || blocked} onClick={() => setShowFieldComment(value => !value)}>{showFieldComment ? headerText.hideComment : headerText.showComment}</button>
       <div className="pg-view-switch" role="group" aria-label={recordText.title}>
         <button type="button" disabled={!page || blocked} aria-pressed={!recordView} onClick={() => switchRecordView(false)}>{recordText.grid}</button>
         <button type="button" disabled={!page || blocked} aria-pressed={recordView} onClick={() => switchRecordView(true)}>{recordText.view}</button>
@@ -1559,7 +1566,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           return postgresFindPlan(page, findRows, gridLayout.columns, patches,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
-        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows}
+        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
         rowJump={canFind} rowJumpCurrent={findIsCurrent}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         insertSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind)

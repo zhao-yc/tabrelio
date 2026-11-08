@@ -91,7 +91,7 @@ async function searchTarget(connection: PostgresConnection, raw: DataSearchTarge
   // PREPARE 解析并锁定关系。先复核目录种类，再允许规划查询，防止旧表被换成未确认的视图。
   const scope = await connection.query('PREPARE dbark_search_scope AS SELECT ' + columnsSql + ' FROM ' + target.table, undefined, budget());
   if (scope.postgresCommand !== 'PREPARE') throw Error('PostgreSQL 搜索关系锁未确认');
-  const relation = await readRelation(connection, target.table, true);
+  const relation = await readRelation(connection, target.table, { catalogueOnly: true });
   const view = relation.kind === 'v' || relation.kind === 'm';
   if (target.table !== relation.sql || view !== (target.kind === 'view') || !['r','p','v','m'].includes(relation.kind))
     throw Error('PostgreSQL 搜索关系已变化或不支持，请重新读取目录');

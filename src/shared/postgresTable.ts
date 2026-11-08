@@ -321,6 +321,8 @@ export type PostgresFilteredUpdateInput = z.infer<typeof postgresFilteredUpdateS
 export type PostgresTableApplyInput = z.infer<typeof postgresTableApplySchema>;
 export type PostgresTableReleaseInput = z.infer<typeof postgresTableReleaseSchema>;
 export interface PostgresTableColumn extends ResultColumn {
+  /** 表头使用有界目录注释，排序和写入仍沿用原列契约。 */
+  comment?: string;
   valueOptions?: true;
   nullable: boolean;
   defaultValue: boolean;
