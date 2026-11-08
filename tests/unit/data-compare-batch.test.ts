@@ -1,9 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { reverseComparePair } from '../../src/shared/dataCompareBatch';
-import { suggestComparePairs } from '../../src/renderer/dataCompareBatch';
+import { filterBatchPreview, indexBatchPreview, suggestComparePairs } from '../../src/renderer/dataCompareBatch';
 import { validateCommand } from '../../src/shared/validation';
 
 describe('多表数据比较', () => {
+  it('预览组合筛选按显示键文本匹配，保留原表与原序号', () => {
+    const counts = { insert: 0, update: 0, delete: 0 };
+    const tables = indexBatchPreview([
+      { table: 'main.a', confirmation: 'main.a', counts, rows: [
+        { action: 'update', key: ['"项目A"', '18446744073709551615'], cells: [], writeBytes: 12 },
+        { action: 'insert', key: ['"项目A"', '18446744073709551615'], cells: [], writeBytes: 12 },
+      ] },
+      { table: 'main.b', confirmation: 'main.b', counts, rows: [
+        { action: 'insert', key: ['"项目A"', '18446744073709551614'], cells: [], writeBytes: 12 },
+        { action: 'insert', key: ['"项目A"', '18446744073709551615'], cells: [], writeBytes: 12 },
+      ] },
+    ]);
+    const match = filterBatchPreview(tables, { table: 'main.b', action: 'insert', key: ' 项目a" / 18446744073709551615 ' });
+    expect(match.map(table => [table.table, table.rows.map(row => row.ordinal)])).toEqual([['main.b', [3]]]);
+    expect(filterBatchPreview(tables, { table: 'main.b', action: 'update', key: '项目' })).toEqual([]);
+    expect(filterBatchPreview(tables, { table: '', action: '', key: '  ' })).toEqual(tables);
+  });
+
   it('严格匹配同名对象，跳过相同连接同库的自比较', () => {
     expect(suggestComparePairs(['a', 'B', 'c'], ['b', 'c', 'a'], false, false))
       .toEqual([{ source: 'a', target: 'a' }, { source: 'c', target: 'c' }]);

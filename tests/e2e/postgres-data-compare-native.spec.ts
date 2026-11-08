@@ -516,9 +516,15 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await expect(batchReview).toContainText(batchSync.selectionCount(0, 125));
     await batchReview.getByRole('combobox', { name: batchSync.jumpPage, exact: true }).selectOption('4');
     await expect(batchReview.locator('[aria-live="polite"]')).toHaveText(batchSync.page(5, 5));
-    await batchReview.getByRole('listitem').filter({ hasText: '"1124"' }).getByRole('checkbox').check();
+    await batchReview.getByLabel(batchSync.filterKey, { exact: true }).fill('1124');
+    await expect(batchReview.getByRole('listitem')).toHaveCount(1);
+    await batchReview.getByRole('button', { name: batchSync.selectMatches, exact: true }).click();
     await batchConfirm.fill(targetDatabase + '."对照"."batch_alpha"');
-    await page.screenshot({ path: info.outputPath('PostgreSQL多表同步大批分页.png') });
+    await batchReview.getByRole('button', { name: batchSync.clearFilter, exact: true }).click();
+    await expect(batchReview.locator('[aria-live="polite"]')).toHaveText(batchSync.page(1, 5));
+    await expect(batchConfirm).toHaveValue(targetDatabase + '."对照"."batch_alpha"');
+    await batchReview.getByLabel(batchSync.filterKey, { exact: true }).fill('1124');
+    await page.screenshot({ path: info.outputPath('PostgreSQL多表同步预览筛选.png') });
     await batchApply.click();
     await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
     expect((await right.query(`SELECT id::text, note FROM "对照".batch_alpha WHERE id>=1000`)).rows)

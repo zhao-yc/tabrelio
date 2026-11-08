@@ -421,9 +421,12 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
       await prepareBatch.click();
       await expect(batchReview).toContainText(batchSync.selectionCount(0, 125));
       await batchReview.getByRole('combobox', { name: batchSync.jumpPage, exact: true }).selectOption('4');
-      await batchReview.getByRole('listitem').filter({ hasText: '"' + (start + 124) + '"' }).getByRole('checkbox').check();
+      await batchReview.getByLabel(batchSync.filterTable, { exact: true }).selectOption('`' + mirror + '`.`mirror`');
+      await batchReview.getByLabel(batchSync.filterKey, { exact: true }).fill(String(start + 124));
+      await expect(batchReview.getByRole('listitem')).toHaveCount(1);
+      await batchReview.getByRole('button', { name: batchSync.selectTableMatches + ' `' + mirror + '`.`mirror`', exact: true }).click();
       await batchConfirm.fill('`' + mirror + '`.`mirror`');
-      if (capture) await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表同步大批分页.png') });
+      if (capture) await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表同步预览筛选.png') });
       await applyBatch.click();
       await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
       const result = (await client.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS id,note FROM ' + mirror +
