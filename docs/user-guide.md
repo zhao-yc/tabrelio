@@ -14,6 +14,8 @@
 
 在多表比较中，点某一行的「设置比较字段」可为该表对选择独立匹配键和字段。不同表对可以混用默认和自定义比较规则。多表方案会一起保存这些设置。[多表比较字段映射](development/data-compare-batch-column-mapping-20261108.md)
 
+SQLite 多表比较窗口可对同一个可写右侧文件执行多表同步。选择操作后预览各表及记录键，输入窗口显示的目标确认文字后提交。默认选择插入和更新，删除需单独勾选。[SQLite 多表事务同步](development/sqlite-multi-table-sync-20261108.md)
+
 对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)
 
 从「工具」选择「比较 MySQL／MariaDB 表数据」，可按主键核对同连接或跨连接的 InnoDB 表，查看分类型的差异及逐列原值。[MySQL／MariaDB 表数据比较](development/mysql-data-compare-20261107.md)

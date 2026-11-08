@@ -8,11 +8,11 @@ interface Ports { task(id: string): TaskRecord | undefined; replace(task: TaskRe
 /** Main在COMMIT发送前同步持久最小事实；内存中的真实ACK不能因后续磁盘失败被抹去。 */
 export class SqliteWriteRecords {
   constructor(private readonly ports: Ports) {}
-  begin(taskId: string, target: SqliteEditTarget, requestedRows: number): { operationId: string; record(fact: SqliteWriteFact): void } {
+  begin(taskId: string, target: SqliteEditTarget, requestedRows: number, batchTables?: string[]): { operationId: string; record(fact: SqliteWriteFact): void } {
     const operationId = randomUUID();
     const record = (value: SqliteWriteFact) => {
       const fact = sqliteWriteFactSchema.parse(value), task = this.ports.task(taskId);
-      if (!task || task.kind !== 'sqlite.tableEdit.apply' || fact.operationId !== operationId || fact.target.connectionId !== target.connectionId || fact.target.database !== target.database || fact.target.table !== target.table || fact.requestedRows !== requestedRows) throw Error('SQLite提交回执不属于原操作');
+      if (!task || task.kind !== 'sqlite.tableEdit.apply' || fact.operationId !== operationId || fact.target.connectionId !== target.connectionId || fact.target.database !== target.database || fact.target.table !== target.table || fact.requestedRows !== requestedRows || JSON.stringify(fact.batchTables) !== JSON.stringify(batchTables)) throw Error('SQLite提交回执不属于原操作');
       const previous = task.sqliteWrite;
       if (previous && (previous.operationId !== operationId || previous.commitAcknowledged && !fact.commitAcknowledged || previous.rollbackAcknowledged && fact.phase !== 'rolled-back' || previous.commitMayHaveBeenSent && !fact.commitMayHaveBeenSent && !fact.rollbackAcknowledged)) throw Error('SQLite提交事实不能倒退或换绑');
       const next: TaskRecord = { ...task, sqliteWrite: structuredClone(fact), message: sqliteWriteFactMessage(fact), ...(fact.commitAcknowledged ? { status: 'completed', progress: 100, finishedAt: new Date().toISOString() } : {}) };
@@ -20,7 +20,7 @@ export class SqliteWriteRecords {
       // 每行进度只更新内存；阶段变化及所有提交/回滚边界必须同步落盘，避免整库配置每行重复fsync。
       if (previous?.phase !== 'writing' || fact.phase !== 'writing') { this.ports.save(next); this.ports.notify?.(next); }
     };
-    record({ operationId, target: { ...target }, requestedRows, appliedRows: 0, phase: 'not-sent', commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: false });
+    record({ operationId, target: { ...target }, ...(batchTables ? { batchTables } : {}), requestedRows, appliedRows: 0, phase: 'not-sent', commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: false });
     return { operationId, record };
   }
   /** 可信内存ACK优先，避免Main其它收尾异常把已提交批次显示成可重试失败。 */

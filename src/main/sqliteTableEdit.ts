@@ -32,7 +32,7 @@ interface Snapshot {
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
 interface Statement { sql: string; parameters: SqliteValue[]; row?: number; source?: number; kind: SqliteTableChange['kind']; }
-export interface SqliteEditClaim { snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; synchronization?: (SqliteValue[] | undefined)[]; }
+export interface SqliteEditClaim { batch?: SqliteEditClaim[]; snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; synchronization?: (SqliteValue[] | undefined)[]; }
 interface Preview extends SqliteEditClaim { id: string; expires: number; bytes: number; }
 export interface SqliteEditApplyRequest extends SqliteTableEditApplyInput {
   operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteWriteFact): void;
@@ -295,60 +295,80 @@ export class SqliteTableEdits {
 
 /** 领取后但尚未取得driver的失败也返回明确not-sent，不把参数错误冒充未知写入。 */
 export function sqliteEditNotSent(claim: SqliteEditClaim, input: SqliteEditApplyRequest, message: string): SqliteTableEditOutcome {
-  const fact: SqliteWriteFact = { operationId: input.operationId, target: { ...claim.snapshot.target }, phase: 'not-sent', requestedRows: claim.statements.length, appliedRows: 0, commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: false };
+  const fact: SqliteWriteFact = { operationId: input.operationId, target: { ...claim.snapshot.target }, ...(claim.batch ? { batchTables: claim.batch.map(group => group.snapshot.target.table) } : {}), phase: 'not-sent', requestedRows: claim.statements.length, appliedRows: 0, commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: false };
   let warning = false; try { input.recordWriteFact(fact); } catch { warning = true; }
   return { operationId: input.operationId, target: { ...claim.snapshot.target }, outcome: 'not-sent', counts: { ...claim.counts }, fact, message, ...(warning ? { cleanupWarning: true } : {}) };
 }
 
 /** 独立rw BEGIN IMMEDIATE包住全批；每条DML前核完整旧行，trigger改动后继行也会整批回滚。 */
 export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: SqliteEditClaim, input: SqliteEditApplyRequest, control: SqliteEditApplyControl): Promise<SqliteTableEditOutcome> {
-  const snapshot = claim.snapshot, requestedRows = claim.statements.length; let appliedRows = 0, begun = false, commitSent = false, committed = false, rollback = false, warning = false, failure: unknown;
-  const fact = (phase: SqliteWriteFact['phase']): SqliteWriteFact => ({ operationId: input.operationId, target: { ...snapshot.target }, phase, requestedRows, appliedRows, commitMayHaveBeenSent: commitSent || phase === 'commit-pending', commitAcknowledged: committed, rollbackAcknowledged: rollback });
+  const snapshot = claim.snapshot, requestedRows = claim.statements.length;
+  const groups = claim.batch ?? [claim];
+  const batchTables = claim.batch?.map(group => group.snapshot.target.table);
+  let currentTable: string | undefined;
+  let appliedRows = 0, begun = false, commitSent = false, committed = false, rollback = false, warning = false, failure: unknown;
+  const fact = (phase: SqliteWriteFact['phase']): SqliteWriteFact => ({ operationId: input.operationId, target: { ...snapshot.target }, ...(batchTables ? { batchTables } : {}), phase, requestedRows, appliedRows, commitMayHaveBeenSent: commitSent || phase === 'commit-pending', commitAcknowledged: committed, rollbackAcknowledged: rollback });
   const record = (phase: SqliteWriteFact['phase']) => { const value: unknown = input.recordWriteFact(fact(phase)); if (value && typeof (value as { then?: unknown }).then === 'function') throw Error('SQLite写入事实必须同步持久化，不能使用异步替身'); };
   try {
     control.check(); if (driver.readOnly || !equal(driver.identity, snapshot.identity)) throw Error('SQLite实际数据库文件身份已变化，原修改未发送');
     await assertSnapshotFile(snapshot, control); record('not-sent'); await driver.execute('BEGIN IMMEDIATE'); begun = true; control.check();
     await assertSnapshotFile(snapshot, control);
-    const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1);
-    const catalogue = await readSqliteTableCatalogue(driver, snapshot.target.table, control);
-    if (integer(schema[0]?.[0]) !== snapshot.schemaVersion || catalogue.schemaKey !== snapshot.catalogue.schemaKey || !equal(catalogue.xinfo, snapshot.catalogue.xinfo)) throw Error('SQLite表结构已变化，请重新读取原页');
-    await verifySqliteTableScope(driver, { table: snapshot.target.table, relation: snapshot.relation }, control);
-    if (claim.synchronization) {
-      const table = snapshot.target.table;
-      const effects = await read(driver, `SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE),
-        EXISTS(SELECT 1 FROM main.sqlite_schema m JOIN pragma_foreign_key_list(m.name,'main') f
-          WHERE m.type='table' AND f."table"=? COLLATE NOCASE)`, [table, table], control, 1);
-      if (effects.length !== 1 || effects[0].length !== 2 || effects[0].some(value => integer(value) !== '0'))
-        throw Error('右侧表有触发器或被外键引用，本次同步未写入');
+    // 先锁住同一个右侧文件并核对所有表，再发送第一条 DML。
+    for (const group of groups) {
+      const snapshot = group.snapshot;
+      if (batchTables) currentTable = snapshot.target.table;
+      if (!equal(driver.identity, snapshot.identity)) throw Error('SQLite 批次内的目标文件身份不一致');
+      const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1);
+      const catalogue = await readSqliteTableCatalogue(driver, snapshot.target.table, control);
+      if (integer(schema[0]?.[0]) !== snapshot.schemaVersion || catalogue.schemaKey !== snapshot.catalogue.schemaKey || !equal(catalogue.xinfo, snapshot.catalogue.xinfo)) throw Error('SQLite表结构已变化，请重新读取原页');
+      await verifySqliteTableScope(driver, { table: snapshot.target.table, relation: snapshot.relation }, control);
+      if (group.synchronization) {
+        const table = snapshot.target.table;
+        const effects = await read(driver, `SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE),
+          EXISTS(SELECT 1 FROM main.sqlite_schema m JOIN pragma_foreign_key_list(m.name,'main') f
+            WHERE m.type='table' AND f."table"=? COLLATE NOCASE)`, [table, table], control, 1);
+        if (effects.length !== 1 || effects[0].length !== 2 || effects[0].some(value => integer(value) !== '0'))
+          throw Error('右侧表有触发器或被外键引用，本次同步未写入');
+      }
     }
     record('writing');
-    for (const statement of claim.statements) {
-      control.check();
-      if (statement.row !== undefined) {
-        const source = (claim.sources ?? [snapshot])[statement.source ?? 0]; if (!source) throw Error(text.stale);
-        const where = locate(source, statement.row), fields = snapshot.columns.map(column => projection('"__dbark_source".' + quote(column.name)) + ' AS ' + quote(column.name)).join(',');
-        const scoped = snapshot.relation ? buildSqliteTableRelationWhere(snapshot.relation) : undefined;
-        const scopeWhere = scoped?.sql ?? '';
-        const current = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' AS "__dbark_source" WHERE ' + where.sql + (scopeWhere ? ' AND (' + scopeWhere + ')' : '') + ' LIMIT 2', [...where.parameters, ...(scoped?.parameters ?? [])], control, 2);
-        if (current.length !== 1 || !equal(current[0], source.rows[statement.row])) throw Error('SQLite原记录已被其他操作修改、删除或trigger改变，整批未继续');
-      }
-      control.check(); await driver.execute(statement.sql, { parameters: statement.parameters });
-      const changed = await read(driver, 'SELECT changes()', [], control, 1); if (integer(changed[0]?.[0]) !== '1') throw Error('SQLite顶层修改行数不是1，整批必须回滚');
-      appliedRows++; record('writing');
-    }
-    if (claim.synchronization) {
-      const fields = snapshot.columns.map(column => projection(quote(column.name))).join(', ');
-      for (const [row, expected] of claim.synchronization.entries()) {
-        const where = locate(snapshot, row);
-        const actual = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' WHERE ' + where.sql + ' LIMIT 2', where.parameters, control, 2);
-        if (!equal(actual, expected === undefined ? [] : [expected])) throw Error('同步后原值复核不一致，整批回滚');
+    for (const group of groups) {
+      const snapshot = group.snapshot;
+      if (batchTables) currentTable = snapshot.target.table;
+      for (const statement of group.statements) {
+        control.check();
+        if (statement.row !== undefined) {
+          const source = (group.sources ?? [snapshot])[statement.source ?? 0]; if (!source) throw Error(text.stale);
+          const where = locate(source, statement.row), fields = snapshot.columns.map(column => projection('"__dbark_source".' + quote(column.name)) + ' AS ' + quote(column.name)).join(',');
+          const scoped = snapshot.relation ? buildSqliteTableRelationWhere(snapshot.relation) : undefined;
+          const scopeWhere = scoped?.sql ?? '';
+          const current = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' AS "__dbark_source" WHERE ' + where.sql + (scopeWhere ? ' AND (' + scopeWhere + ')' : '') + ' LIMIT 2', [...where.parameters, ...(scoped?.parameters ?? [])], control, 2);
+          if (current.length !== 1 || !equal(current[0], source.rows[statement.row])) throw Error('SQLite原记录已被其他操作修改、删除或trigger改变，整批未继续');
+        }
+        control.check(); await driver.execute(statement.sql, { parameters: statement.parameters });
+        const changed = await read(driver, 'SELECT changes()', [], control, 1); if (integer(changed[0]?.[0]) !== '1') throw Error('SQLite顶层修改行数不是1，整批必须回滚');
+        appliedRows++; record('writing');
       }
     }
+    // 所有写入完成后逐表复核，后续表引起的副作用也不能绕过校验。
+    for (const group of groups) {
+      const snapshot = group.snapshot;
+      if (batchTables) currentTable = snapshot.target.table;
+      if (group.synchronization) {
+        const fields = snapshot.columns.map(column => projection(quote(column.name))).join(', ');
+        for (const [row, expected] of group.synchronization.entries()) {
+          const where = locate(snapshot, row);
+          const actual = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' WHERE ' + where.sql + ' LIMIT 2', where.parameters, control, 2);
+          if (!equal(actual, expected === undefined ? [] : [expected])) throw Error('同步后原值复核不一致，整批回滚');
+        }
+      }
+    }
+    currentTable = undefined;
     await assertSnapshotFile(snapshot, control); control.check(); record('commit-pending'); control.check(); control.beginCommit(); commitSent = true;
     await driver.execute('COMMIT'); committed = true;
     try { record('committed'); } catch { warning = true; }
   } catch (reason) {
-    failure = reason;
+    failure = currentTable && reason instanceof Error ? Error('main.' + currentTable + '：' + reason.message, { cause: reason }) : reason;
     // 单条COMMIT的statementEnd已由原driver按operation顺序确认；随后completed丢失/进程退出不能抹掉提交ACK。
     const acknowledged = commitSent && reason instanceof SqliteDriverError && reason.completedStatements === 1 && reason.completedResults.length === 1
       && reason.completedResults[0].index === 0 && reason.completedResults[0].rows === 0 && !reason.completedResults[0].truncated && reason.completedResults[0].transaction === false;

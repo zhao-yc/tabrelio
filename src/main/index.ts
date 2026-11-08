@@ -10,7 +10,8 @@ import { inspectMysqlRestoreSql } from '../engine/mysqlSqlFileInspection';
 import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
-import { buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
+import type { SqliteBatchSyncPreview, SqliteBatchSyncPreviewInput } from '../shared/sqliteBatchSync';
+import { buildSqliteBatchSync, buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
 import type { SqliteEditClaim } from './sqliteTableEdit';
 import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
 import { sameConnectionFamily } from '../shared/connectionDialect';
@@ -187,11 +188,14 @@ const queryFileOperations = new Set<Promise<unknown>>();
 let networkSyncTarget: { dialect: 'postgres' | 'mysql'; snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
 let networkDataComparison: { owner: MainInvocation; id: string; cancelled: boolean; done: Promise<unknown> } | undefined;
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
-interface SqliteSynchronization {
-  id: string; owner: MainInvocation; expires: number; revision: number; evidence: SqliteSyncEvidence;
-  preview?: { id: string; claim: SqliteEditClaim };
+interface SqliteSyncScope {
+  owner: MainInvocation; expires: number; revision: number; targetConnectionId: string;
+}
+interface SqliteSynchronization extends SqliteSyncScope {
+  id: string; evidence: SqliteSyncEvidence; preview?: { id: string; claim: SqliteEditClaim };
 }
 let sqliteSynchronization: SqliteSynchronization | undefined;
+let sqliteBatchSync: (SqliteSyncScope & { id: string; claim: SqliteEditClaim }) | undefined;
 
 let sqliteCopyTask: { id: string; owner: MainInvocation; abort: AbortController } | undefined;
 let binaryCellFileActive = false;
@@ -1130,44 +1134,69 @@ async function cancelNetworkCompare(taskId: string, owner: MainInvocation | unde
 }
 
 /** 比较只接受保存的两端连接和固定筛选。关闭、改配置或原文档撤销后不发布差异。 */
-async function compareSqliteData(input: SqliteDataCompareInput, owner: MainInvocation | undefined) {
+async function withSqliteComparison<T>(taskId: string, sourceId: string, targetId: string, owner: MainInvocation | undefined,
+  run: (context: { signal: AbortSignal; assertOwner(): void; revision: number }) => Promise<T>): Promise<T> {
   columnsMain.assertCapturedOwner(owner);
   if (sqliteComparison) throw Error('已有 SQLite 数据比较正在运行');
   const revision = store.connectionRevision(), controller = new AbortController();
   const assertOwner = () => {
     columnsMain.assertCapturedOwner(owner);
     if (shuttingDown || revision !== store.connectionRevision()) throw Error('SQLite 比较的原窗口或连接已变化');
-    connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId);
+    connectionConfig.assertAvailable(sourceId); connectionConfig.assertAvailable(targetId);
     controller.signal.throwIfAborted();
   };
   assertOwner();
   sqliteSynchronization = undefined;
-  sqliteComparison = { owner: owner!, id: input.taskId, controller };
+  sqliteBatchSync = undefined;
+  sqliteComparison = { owner: owner!, id: taskId, controller };
   const timer = setTimeout(() => controller.abort(Error(sqliteDataCompareZh.timeout)), sqliteDataCompareLimits.timeoutMs);
   timer.unref();
-  try {
-    const profile = store.connections().find(value => value.id === input.target.connectionId);
-    let evidence: SqliteSyncEvidence | undefined;
-    const capture = !input.summaryOnly && !input.mapping && profile?.dialect === 'sqlite' && !profile.sqlite.readOnly ? (value: SqliteSyncEvidence) => { evidence = value; } : undefined;
-    const output = await broker.request('sqlite.compareData', { source: input, signal: controller.signal, assertOwner, capture });
-    assertOwner();
-    if (!evidence) return output;
-    const record = { id: randomUUID(), owner: owner!, expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, revision, evidence };
-    sqliteSynchronization = record;
-    const snapshotId = record.id;
-    setTimeout(() => { if (sqliteSynchronization?.id === snapshotId) sqliteSynchronization = undefined; }, sqliteDataSyncLimits.lifetimeMs).unref();
-    return { ...output, syncSnapshotId: snapshotId };
-  } catch (reason) {
+  try { return await run({ signal: controller.signal, assertOwner, revision }); }
+  catch (reason) {
     if (controller.signal.aborted && !(reason instanceof AggregateError)) controller.signal.throwIfAborted();
     throw reason;
   } finally { clearTimeout(timer); sqliteComparison = undefined; }
 }
 
-function assertSqliteSyncOwner(record: SqliteSynchronization | undefined, owner: MainInvocation | undefined): asserts record is SqliteSynchronization {
+async function compareSqliteData(input: SqliteDataCompareInput, owner: MainInvocation | undefined) {
+  return withSqliteComparison(input.taskId, input.source.connectionId, input.target.connectionId, owner, async ({ signal, assertOwner, revision }) => {
+    const profile = store.connections().find(value => value.id === input.target.connectionId);
+    let evidence: SqliteSyncEvidence | undefined;
+    const capture = !input.summaryOnly && !input.mapping && profile?.dialect === 'sqlite' && !profile.sqlite.readOnly ? (value: SqliteSyncEvidence) => { evidence = value; } : undefined;
+    const output = await broker.request('sqlite.compareData', { source: input, signal, assertOwner, capture });
+    assertOwner();
+    if (!evidence) return output;
+    const record = { id: randomUUID(), owner: owner!, expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, revision, targetConnectionId: input.target.connectionId, evidence };
+    sqliteSynchronization = record;
+    const snapshotId = record.id;
+    setTimeout(() => { if (sqliteSynchronization?.id === snapshotId) sqliteSynchronization = undefined; }, sqliteDataSyncLimits.lifetimeMs).unref();
+    return { ...output, syncSnapshotId: snapshotId };
+  });
+}
+
+async function previewSqliteBatchSync(input: SqliteBatchSyncPreviewInput, owner: MainInvocation | undefined): Promise<SqliteBatchSyncPreview | null> {
+  return withSqliteComparison(input.taskId, input.sourceConnectionId, input.targetConnectionId, owner, async ({ signal, assertOwner, revision }) => {
+    const profile = store.resolveConnection(input.targetConnectionId);
+    if (profile.dialect !== 'sqlite') throw Error('多表同步需要 SQLite 右侧连接');
+    const prepared = await buildSqliteBatchSync(input, profile, async (source, capture) => {
+      assertOwner();
+      return broker.request('sqlite.compareData', { source, signal, assertOwner, capture });
+    });
+    assertOwner();
+    if (!prepared) return null;
+    const { claim, tables } = prepared;
+    const id = randomUUID();
+    sqliteBatchSync = { id, claim, owner: owner!, revision, expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, targetConnectionId: input.targetConnectionId };
+    setTimeout(() => { if (sqliteBatchSync?.id === id) sqliteBatchSync = undefined; }, sqliteDataSyncLimits.lifetimeMs).unref();
+    return { previewId: id, confirmation: claim.confirmation, counts: claim.counts, tables };
+  });
+}
+
+function assertSqliteSyncOwner<Scope extends SqliteSyncScope>(record: Scope | undefined, owner: MainInvocation | undefined): asserts record is Scope {
   columnsMain.assertCapturedOwner(owner);
   if (!record || shuttingDown || record.revision !== store.connectionRevision() || record.expires <= Date.now() || !columnsMain.sharesDocumentOwner(record.owner, owner!))
     throw Error(sqliteDataSyncZh.stale);
-  connectionConfig.assertAvailable(record.evidence.target.connectionId);
+  connectionConfig.assertAvailable(record.targetConnectionId);
 }
 
 /** 预览的行值来自比较快照。提交领取一次预览并沿现有 SQLite 写回执登记。 */
@@ -1190,14 +1219,25 @@ async function applySqliteSync(input: import('../shared/sqliteTableEdit').Sqlite
   const preview = record.preview;
   if (!preview || preview.id !== input.previewId || preview.claim.confirmation !== input.confirmation) throw Error(sqliteDataSyncZh.stale);
   if (tasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('SQLite 任务编号已使用');
-  const { claim } = preview;
   sqliteSynchronization = undefined;
-  const assertCurrent = () => assertSqliteSyncOwner(record, owner);
+  return executeSqliteSync(input, preview.claim, () => assertSqliteSyncOwner(record, owner));
+}
+
+function applySqliteBatchSync(input: import('../shared/sqliteTableEdit').SqliteTableEditApplyInput, owner: MainInvocation | undefined) {
+  const record = sqliteBatchSync;
+  assertSqliteSyncOwner(record, owner);
+  if (record.id !== input.previewId || record.claim.confirmation !== input.confirmation) throw Error(sqliteDataSyncZh.stale);
+  if (tasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('SQLite 任务编号已使用');
+  sqliteBatchSync = undefined;
+  return executeSqliteSync(input, record.claim, () => assertSqliteSyncOwner(record, owner));
+}
+
+async function executeSqliteSync(input: import('../shared/sqliteTableEdit').SqliteTableEditApplyInput, claim: SqliteEditClaim, assertCurrent: () => void) {
   const startedAt = new Date().toISOString();
   const task: TaskRecord = { id: input.taskId, kind: 'sqlite.tableEdit.apply', status: 'running', progress: 0, message: sqliteDataSyncZh.working, startedAt };
   tasks.set(task.id, task);
   try {
-    const write = sqliteWrites.begin(task.id, claim.snapshot.target, claim.statements.length);
+    const write = sqliteWrites.begin(task.id, claim.snapshot.target, claim.statements.length, claim.batch?.map(group => group.snapshot.target.table));
     const result = sqliteWrites.outcome(task.id, await broker.request('sqlite.compareSync.apply', {
       claim, request: { ...input, operationId: write.operationId, recordWriteFact: write.record, assertCurrent }
     }));
@@ -2617,6 +2657,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       connectionConfig.assertAvailable(input.connectionId);
       return result;
     }
+    case 'sqlite.compareSync.batchPreview': return previewSqliteBatchSync(input, columns);
+    case 'sqlite.compareSync.batchApply': return applySqliteBatchSync(input, columns);
     case 'sqlite.compareSync.preview': return previewSqliteSync(input, columns);
     case 'sqlite.compareSync.apply': return applySqliteSync(input, columns);
     case 'sqlite.compareData': return compareSqliteData(input, columns);

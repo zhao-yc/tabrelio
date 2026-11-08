@@ -793,7 +793,7 @@ export class SqliteRuntime {
       this.editCheck(task);
       outcome = await applySqliteTableEdit(task.driver, task.claim, task.input, { check: () => this.editCheck(task), beginCommit: () => { this.editCheck(task); task.committing = true; }, beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; } });
     } catch (reason) { outcome = sqliteEditNotSent(task.claim, task.input, reason instanceof Error ? reason.message : 'SQLite修改未发送'); }
-    if (!task.claim.synchronization) this.edits.settle(task.claim, outcome.outcome);
+    if (!task.claim.synchronization && !task.claim.batch) this.edits.settle(task.claim, outcome.outcome);
     if (task.driver) {
       task.cleaning = true;
       try { await task.driver.close(); }
@@ -1378,7 +1378,7 @@ export class SqliteRuntime {
       }
       case 'sqlite.compareData': return this.compareData(input.source, input.signal, input.assertOwner, input.capture);
       case 'sqlite.compareSync.apply':
-        if (!input.claim?.synchronization) throw Error('SQLite 同步缺少准确的比较预览');
+        if (!input.claim?.synchronization && !input.claim?.batch) throw Error('SQLite 同步缺少准确的比较预览');
         return this.tableEditApply(input.request, input.claim);
       case 'sqlite.tablePage': return this.tablePage(input);
       case 'sqlite.valueOptions': return this.valueOptions(input);

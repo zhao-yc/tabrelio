@@ -87,7 +87,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.valueOptions': true,
   'sqlite.statistics': true,
   'sqlite.compareData': true, 'sqlite.compareData.cancel': true,
-  'sqlite.compareSync.preview': true, 'sqlite.compareSync.apply': true,
+  'sqlite.compareSync.batchPreview': true, 'sqlite.compareSync.batchApply': true, 'sqlite.compareSync.preview': true, 'sqlite.compareSync.apply': true,
   'sqlite.schemaScript': true,
   'sqlite.countRows': true,
   'sqlite.tableExport': true,

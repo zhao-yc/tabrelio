@@ -1,4 +1,8 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { sqliteBatchSyncActions, type SqliteBatchSyncAction, type SqliteBatchSyncPreview } from '../../shared/sqliteBatchSync';
+import { sqliteDataSyncZh as syncText } from '../../shared/sqliteDataCompare';
+import { displaySqliteCompareValue } from '../sqliteDataCompareValues';
+import { sqliteBatchSyncZh as batchSyncText } from '../locales/sqliteBatchSync.zh-CN';
 import type { DataCompareProfileFamily } from '../../shared/dataCompareProfiles';
 import type { PostgresDataCompareOutput } from '../../shared/postgresDataCompare';
 import { batchPairLimit, dataCompareBatchConfigurationSchema, reverseComparePair, sameCompareScope, type ComparePair, type ComparePairEndpoints, type CompareScope,
@@ -71,12 +75,20 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   const [catalogueError, setCatalogueError] = useState('');
   const [running, setRunning] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [actions, setActions] = useState<SqliteBatchSyncAction[]>(['insert', 'update']);
+  const [syncPreview, setSyncPreview] = useState<SqliteBatchSyncPreview>();
+  const [syncPhase, setSyncPhase] = useState<'preview' | 'apply'>();
+  const [confirmation, setConfirmation] = useState('');
+  const syncWork = useRef<{ taskId: string; phase: 'preview' | 'apply' } | undefined>(undefined);
+  const reviewSync = useRef<HTMLFieldSetElement>(null);
   const active = useRef<Active | undefined>(undefined);
   const applying = useRef(false);
   const mounted = useRef(false);
   const generation = useRef(0);
   const version = generation.current;
-  const locked = running || loadingProfile;
+  const busy = running || loadingProfile || !!syncPhase;
+  const locked = busy || !!syncPreview;
+  useEffect(() => { if (syncPreview) reviewSync.current?.scrollIntoView({ block: 'center' }); }, [syncPreview]);
 
   useEffect(() => {
     mounted.current = true;
@@ -107,12 +119,12 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     generation.current++;
     setScopes(scopes); setPairs(mappings); setCatalogues(names);
     setResults(new Map()); setDraft({ source: '', target: '' }); setEditing(undefined);
-    setCatalogueError(''); setError(''); setNotice('');
+    setCatalogueError(''); setError(''); setNotice(''); setActions(['insert', 'update']);
   }
 
   /** 先核对两侧表目录，任何失效映射都保留原工作区和已有结果。 */
   async function applyProfile(next: DataCompareBatchConfiguration) {
-    if (!mounted.current || generation.current !== version || active.current || applying.current || next.family !== family) return false;
+    if (!mounted.current || generation.current !== version || active.current || applying.current || syncWork.current || syncPreview || next.family !== family) return false;
     applying.current = true; setLoadingProfile(true);
     try {
       const names = await readCatalogues(family, next.source, next.target);
@@ -137,7 +149,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   }
 
   function swap() {
-    if (!catalogues || active.current || applying.current) return;
+    if (!catalogues || active.current || applying.current || syncWork.current || syncPreview) return;
     const reversed = pairs.map(reverseComparePair);
     setBatch({ source: target, target: source }, reversed, [catalogues[1], catalogues[0]]);
   }
@@ -150,11 +162,11 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     generation.current++;
     setPairs([...pairs, ...next]); setNotice('');
   };
-  const close = () => { if (!active.current && !applying.current) onClose(); };
+  const close = () => { if (!active.current && !applying.current && !syncWork.current) onClose(); };
 
   /** 每对复用既有只读任务。单对失败保留错误并继续，停止只取消当前任务并阻止后续派发。 */
   async function run() {
-    if (active.current || applying.current || !configuration.success) return;
+    if (active.current || applying.current || syncWork.current || syncPreview || !configuration.success) return;
     generation.current++;
     const work: Active = { stopped: false };
     active.current = work;
@@ -194,10 +206,44 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   }
 
   function updateMapping(pair: ComparePair, mapping: Mapping) {
-    if (active.current || applying.current) return;
+    if (active.current || applying.current || syncWork.current || syncPreview) return;
     generation.current++;
     const next: ComparePair = { source: pair.source, target: pair.target, ...(mapping.length ? { mapping } : {}) };
     setPairs(pairs.map(item => item === pair ? next : item)); forget(pair);
+  }
+
+  const syncEligible = family === 'sqlite' && pairs.length > 1 && !pairs.some(pair => pair.mapping);
+  async function prepareSync() {
+    if (!syncEligible || !actions.length || !configuration.success || active.current || applying.current || syncWork.current || syncPreview) return;
+    const taskId = uid();
+    generation.current++;
+    syncWork.current = { taskId, phase: 'preview' }; setSyncPhase('preview');
+    setError(''); setNotice(''); setConfirmation('');
+    try {
+      const preview = await invoke('sqlite.compareSync.batchPreview', { taskId, sourceConnectionId: source.connectionId,
+        targetConnectionId: target.connectionId, pairs: pairs.map(({ source, target }) => ({ source, target })), actions });
+      if (preview) setSyncPreview(preview); else setNotice(batchSyncText.noChanges);
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { syncWork.current = undefined; setSyncPhase(undefined); }
+  }
+
+  async function applySync() {
+    if (!syncPreview || confirmation !== syncPreview.confirmation || syncWork.current) return;
+    const taskId = uid();
+    syncWork.current = { taskId, phase: 'apply' }; setSyncPhase('apply'); setError(''); setNotice('');
+    try {
+      const result = await invoke('sqlite.compareSync.batchApply', { previewId: syncPreview.previewId, confirmation, taskId });
+      if (result.outcome === 'committed') setNotice(batchSyncText.confirmed + ' · ' + result.message);
+      else setError(result.message);
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally {
+      syncWork.current = undefined; setSyncPhase(undefined); setSyncPreview(undefined); setConfirmation(''); setResults(new Map());
+    }
+  }
+
+  function stopSyncPreview() {
+    const work = syncWork.current;
+    if (work?.phase === 'preview') void invoke('sqlite.compareData.cancel', { taskId: work.taskId }).catch(reason => setError(errorMessage(reason)));
   }
 
   if (review) return renderPair(endpoints({ source, target }, review),
@@ -256,6 +302,30 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
           </Fragment>;
         })}</tbody>
       </table>}
+      {family === 'sqlite' && pairs.length > 1 && <fieldset className="sqlite-data-compare-endpoint" disabled={locked}>
+        <legend>{batchSyncText.title}</legend>
+        <p>{syncEligible ? batchSyncText.hint : batchSyncText.mapped}</p>
+        <div className="check-row">
+          {sqliteBatchSyncActions.map(action => <label key={action} className="check">
+            <input type="checkbox" disabled={!syncEligible} checked={actions.includes(action)} onChange={event => {
+              setActions(event.target.checked ? [...actions, action] : actions.filter(value => value !== action));
+            }}/>{syncText[action]}
+          </label>)}
+        </div>
+      </fieldset>}
+      {syncPreview && <fieldset ref={reviewSync} className="sqlite-data-compare-endpoint" disabled={!!syncPhase}>
+        <legend>{batchSyncText.previewTitle}</legend>
+        <p>{label(target)}　{syncPreview.confirmation}</p>
+        <p>{sqliteBatchSyncActions.map(action => syncText[action] + ' ' + syncPreview.counts[action]).join(' · ')}</p>
+        <div className="sqlite-data-sync-preview-rows">
+          {syncPreview.tables.map(item => <div key={item.table}>
+            <strong>main.{item.table}</strong>
+            <ul>{item.rows.map((row, index) => <li key={index}>{syncText[row.action]}　{row.key.map(displaySqliteCompareValue).join(' / ')}</li>)}</ul>
+          </div>)}
+        </div>
+        <Field label={syncText.confirm}><input aria-label={syncText.confirm} value={confirmation} onChange={event => setConfirmation(event.target.value)}/></Field>
+      </fieldset>}
+      {syncPhase && <p role="status">{syncPhase === 'preview' ? batchSyncText.prepare : batchSyncText.working}</p>}
       {catalogues && !pairs.length && <p>{text.noPairs}</p>}
       {running && <p role="status">{text.progress(results.size, pairs.length)}</p>}
       {notice && <p role="status">{notice}</p>}
@@ -264,9 +334,14 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     <footer className="modal-footer">
       <button className="primary" disabled={locked || !configuration.success} onClick={() => void run()}>{text.run}</button>
       {running && <button onClick={stop}>{text.cancel}</button>}
+      {syncPhase === 'preview' && <button onClick={stopSyncPreview}>{text.cancel}</button>}
+      {syncPreview ? <>
+        <button disabled={!!syncPhase} onClick={() => { setSyncPreview(undefined); setConfirmation(''); }}>{batchSyncText.back}</button>
+        <button className="danger" disabled={!!syncPhase || confirmation !== syncPreview.confirmation} onClick={() => void applySync()}>{batchSyncText.apply}</button>
+      </> : syncEligible && <button disabled={locked || !actions.length || !configuration.success} onClick={() => void prepareSync()}>{batchSyncText.preview}</button>}
       <span className="grow"/>
       <button disabled={locked || !catalogues} onClick={swap}>{profileText.swap}</button>
-      <button disabled={locked} onClick={close}>{text.return}</button>
+      <button disabled={busy} onClick={close}>{text.return}</button>
     </footer>
   </Modal>;
 }

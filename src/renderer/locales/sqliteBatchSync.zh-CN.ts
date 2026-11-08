@@ -1,0 +1,13 @@
+export const sqliteBatchSyncZh = {
+  title: 'SQLite 多表同步',
+  hint: '重新读取所列的表对。所选操作的全部差异会写入同一个右侧文件。',
+  mapped: '多表同步需要所有表对使用默认主键和完整字段比较。',
+  preview: '预览多表同步',
+  prepare: '正在重新读取两侧表并生成预览…',
+  previewTitle: '多表同步预览',
+  noChanges: '所选操作没有需要同步的差异。',
+  back: '放弃同步预览',
+  apply: '确认多表同步',
+  working: '正在提交 SQLite 多表同步事务…',
+  confirmed: 'SQLite 多表同步已确认提交',
+};

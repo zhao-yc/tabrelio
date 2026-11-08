@@ -1,3 +1,4 @@
+import { sqliteBatchSyncPreviewSchema } from './sqliteBatchSync';
 import { postgresDatabaseManagePreviewSchema, postgresDatabaseManageApplySchema } from './postgresDatabaseManage';
 import { postgresStorageDetailSchema, postgresStorageReadSchema } from './postgresStorage';
 import { postgresRelationMaintenancePreviewSchema, postgresRelationMaintenanceApplySchema } from './postgresRelationMaintenance';
@@ -410,6 +411,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.compareData.cancel': z.object({ taskId: z.uuid() }).strict(),
   'sqlite.compareData': sqliteDataCompareSchema,
   'sqlite.compareData.cancel': z.object({ taskId: id }).strict(),
+  'sqlite.compareSync.batchPreview': sqliteBatchSyncPreviewSchema,
+  'sqlite.compareSync.batchApply': sqliteTableEditApplySchema,
   'sqlite.compareSync.preview': sqliteDataSyncPreviewSchema,
   'sqlite.compareSync.apply': sqliteTableEditApplySchema,
   'sqlite.schemaScript': sqliteSchemaScriptSchema,

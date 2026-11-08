@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SqliteValue } from '../../engine/sqlite/protocol';
+import { displaySqliteCompareValue as display, sqliteCompareKeyLabel } from '../sqliteDataCompareValues';
 import { sqliteDataCompareLimits as limits, sqliteDataCompareZh as text, sqliteDataSyncLimits, sqliteDataSyncZh as syncText, type SqliteDataSyncPreview, type SqliteDataCompareKind, type SqliteDataCompareOutput, type SqliteDataCompareRow } from '../../shared/sqliteDataCompare';
 import type { SqliteTableFilter } from '../../shared/sqliteTableBrowse';
 import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '../../shared/dataCompareProfiles';
@@ -48,20 +48,6 @@ function CompareEndpoint({ label, connections, disabled, selection, change }: {
       onChange={event => change({ ...selection, table: event.target.value })}><option value="">—</option>{selection.table && !names.includes(selection.table) && <option>{selection.table}</option>}{names.map(name => <option key={name}>{name}</option>)}</select></Field>
     <ErrorBox message={catalogueError}/>
   </fieldset>;
-}
-
-/** 不混淆空值、缺行、文本和原生数值。二进制显示为原始 Base64。 */
-function display(value: SqliteValue | undefined): string {
-  if (value === undefined) return text.absent;
-  if (value === null) return 'NULL';
-  if (typeof value === 'string') return 'TEXT ' + JSON.stringify(value);
-  if (value.type === 'binary') return 'BLOB Base64 ' + value.base64;
-  return (value.type === 'integer' ? 'INTEGER ' : 'REAL ') + value.value;
-}
-
-function keyLabel(row: SqliteDataCompareRow): string {
-  const value = row.key.map(display).join(' / ');
-  return value.length <= 200 ? value : value.slice(0, 200) + '…';
 }
 
 export function SqliteDataCompareDialog({ connections, onClose, initialPair }: { connections: readonly Connection[]; onClose(): void; initialPair?: { source: Selection; target: Selection; mapping?: Mapping } }) {
@@ -186,7 +172,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
           <p>{connections.find(item => item.id === target.connectionId)?.name}　{preview.confirmation}</p>
           <p>{syncText.insert} {preview.counts.insert} · {syncText.update} {preview.counts.update} · {syncText.delete} {preview.counts.delete}</p>
           <div className="sqlite-data-sync-preview-rows">
-            <ul>{[...marked].map((row, index) => <li key={index}>{syncActions[row.kind]}　{keyLabel(row)}</li>)}</ul>
+            <ul>{[...marked].map((row, index) => <li key={index}>{syncActions[row.kind]}　{sqliteCompareKeyLabel(row.key)}</li>)}</ul>
           </div>
           <Field label={syncText.confirm}><input aria-label={syncText.confirm} value={confirmation} onChange={event => setConfirmation(event.target.value)}/></Field>
         </fieldset>}
@@ -195,12 +181,12 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
         {visible.length ? <>
           <table><thead><tr>{output.syncSnapshotId && <th>{syncText.select}</th>}<th>{text.kind}</th><th>{keyTitle}</th><th>{text.detail}</th></tr></thead>
             <tbody>{visible.slice(page * limits.page, (page + 1) * limits.page).map((row, index) => <tr key={index}>
-              {output.syncSnapshotId && <td><input type="checkbox" aria-label={syncText.select + ' ' + keyLabel(row)}
+              {output.syncSnapshotId && <td><input type="checkbox" aria-label={syncText.select + ' ' + sqliteCompareKeyLabel(row.key)}
                 checked={marked.has(row)} disabled={locked || (!marked.has(row) && marked.size >= sqliteDataSyncLimits.selected)} onChange={event => {
                   const checked = event.target.checked;
                   setMarked(previous => { const next = new Set(previous); if (checked) next.add(row); else next.delete(row); return next; });
                 }}/></td>}
-              <td>{text[row.kind]}</td><td className="sqlite-data-compare-key">{keyLabel(row)}</td>
+              <td>{text[row.kind]}</td><td className="sqlite-data-compare-key">{sqliteCompareKeyLabel(row.key)}</td>
               <td><button onClick={() => setSelected(row)}>{text.detail}</button></td>
             </tr>)}</tbody></table>
           <div className="sqlite-data-compare-pager"><button disabled={!page} onClick={() => { setPage(page - 1); setSelected(undefined); }}>{text.prev}</button>

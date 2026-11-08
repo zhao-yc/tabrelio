@@ -435,6 +435,8 @@ export interface CommandMap {
   'postgres.compareData.cancel': { input: { taskId: string }; output: void };
   'sqlite.compareData': { input: import('./sqliteDataCompare').SqliteDataCompareInput; output: import('./sqliteDataCompare').SqliteDataCompareOutput };
   'sqlite.compareData.cancel': { input: { taskId: string }; output: void };
+  'sqlite.compareSync.batchPreview': { input: import('./sqliteBatchSync').SqliteBatchSyncPreviewInput; output: import('./sqliteBatchSync').SqliteBatchSyncPreview | null };
+  'sqlite.compareSync.batchApply': { input: import('./sqliteTableEdit').SqliteTableEditApplyInput; output: import('./sqliteTableEdit').SqliteTableEditOutcome };
   'sqlite.compareSync.preview': { input: import('./sqliteDataCompare').SqliteDataSyncPreviewInput; output: import('./sqliteDataCompare').SqliteDataSyncPreview };
   'sqlite.compareSync.apply': { input: import('./sqliteTableEdit').SqliteTableEditApplyInput; output: import('./sqliteTableEdit').SqliteTableEditOutcome };
   'sqlite.schemaScript': { input: import('./sqliteSchemaScript').SqliteSchemaScriptInput; output: import('./sqliteSchemaScript').SqliteSchemaScriptOutput };

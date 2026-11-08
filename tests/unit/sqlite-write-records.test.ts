@@ -5,10 +5,10 @@ import { recoverSqliteWriteTask, sqliteWriteFactSchema } from '../../src/shared/
 import { validateCommand } from '../../src/shared/validation';
 
 const target = { connectionId: 'sqlite', database: 'main' as const, table: 'subject' };
-function fixture() {
+function fixture(batchTables?: string[]) {
   let task: TaskRecord = { id: 'write', kind: 'sqlite.tableEdit.apply', status: 'running', progress: 0, message: '', startedAt: '2026-11-01T00:00:00Z' };
   const save = vi.fn((_value: TaskRecord) => {}), records = new SqliteWriteRecords({ task: () => task, replace: value => { task = value; }, save });
-  const operation = records.begin('write', target, 2); return { records, operation, save, task: () => task, fact: () => structuredClone(task.sqliteWrite!) };
+  const operation = records.begin('write', target, 2, batchTables); return { records, operation, save, task: () => task, fact: () => structuredClone(task.sqliteWrite!) };
 }
 describe('SQLite写入最小事实与恢复', () => {
   it('COMMIT前同步保存抛错会拒绝继续，内存保留已投递边界；ACK后保存失败不抹成功', () => {
@@ -23,6 +23,17 @@ describe('SQLite写入最小事实与恢复', () => {
     f.operation.record({ ...f.fact(), phase: 'writing', appliedRows: 1 }); f.operation.record({ ...f.fact(), phase: 'rolled-back', rollbackAcknowledged: true });
     expect(f.fact()).toMatchObject({ phase: 'rolled-back', appliedRows: 1, rollbackAcknowledged: true, commitAcknowledged: false });
   });
+  it('多表事实绑定目标列表，重启保留每张表的回滚状态', () => {
+    const f = fixture(['subject', '另一张表']);
+    expect(() => f.operation.record({ ...f.fact(), batchTables: ['subject', '其它表'] })).toThrow('不属于原操作');
+    expect(() => f.operation.record({ ...f.fact(), batchTables: undefined })).toThrow('不属于原操作');
+    f.operation.record({ ...f.fact(), phase: 'writing', appliedRows: 1 });
+    f.operation.record({ ...f.fact(), phase: 'rolled-back', appliedRows: 1, rollbackAcknowledged: true });
+    expect(recoverSqliteWriteTask(f.task()).sqliteWrite).toMatchObject({
+      batchTables: ['subject', '另一张表'], phase: 'rolled-back', appliedRows: 1, rollbackAcknowledged: true,
+    });
+  });
+
   it('重启在途写入和COMMIT变未知，已确认commit/rollback仍保持，绝不执行或补造ACK', () => {
     const f = fixture();
     for (const phase of ['writing', 'commit-pending'] as const) { const restored = recoverSqliteWriteTask({ ...f.task(), sqliteWrite: { ...f.fact(), phase, commitMayHaveBeenSent: phase === 'commit-pending' } }); expect(restored.sqliteWrite?.phase).toBe('unknown'); expect(restored.status).toBe('failed'); expect(restored.message).toContain('未知'); }

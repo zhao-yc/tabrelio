@@ -5,7 +5,9 @@ import { sqliteTableEditMessages as text, type SqliteWriteFact } from './sqliteT
 
 const target = z.object({ connectionId: z.string().min(1).max(200), database: z.literal('main'), table: sqliteTablePageSchema.shape.table }).strict();
 /** 最小回执拒绝附带SQL、行值和路径；相互矛盾的ACK不能成为已提交事实。 */
-export const sqliteWriteFactSchema = z.object({ operationId: z.uuid(), target, phase: z.enum(['not-sent', 'writing', 'commit-pending', 'committed', 'rolled-back', 'unknown']), requestedRows: z.number().int().min(1).max(500), appliedRows: z.number().int().min(0).max(500), commitMayHaveBeenSent: z.boolean(), commitAcknowledged: z.boolean(), rollbackAcknowledged: z.boolean() }).strict().superRefine((fact, context) => {
+export const sqliteWriteFactSchema = z.object({ operationId: z.uuid(), target, batchTables: z.array(target.shape.table).min(2).max(32).optional(), phase: z.enum(['not-sent', 'writing', 'commit-pending', 'committed', 'rolled-back', 'unknown']), requestedRows: z.number().int().min(1).max(500), appliedRows: z.number().int().min(0).max(500), commitMayHaveBeenSent: z.boolean(), commitAcknowledged: z.boolean(), rollbackAcknowledged: z.boolean() }).strict().superRefine((fact, context) => {
+  if (fact.batchTables && (fact.batchTables[0] !== fact.target.table || new Set(fact.batchTables).size !== fact.batchTables.length))
+    context.addIssue({ code: 'custom', message: 'SQLite 批次回执的目标表范围无效' });
   if (fact.appliedRows > fact.requestedRows || fact.commitAcknowledged !== (fact.phase === 'committed') || fact.rollbackAcknowledged !== (fact.phase === 'rolled-back') || fact.commitAcknowledged && !fact.commitMayHaveBeenSent || fact.phase === 'commit-pending' && !fact.commitMayHaveBeenSent || fact.phase === 'not-sent' && (fact.appliedRows !== 0 || fact.commitMayHaveBeenSent)) context.addIssue({ code: 'custom', message: 'SQLite提交记录包含矛盾的执行事实' });
 });
 /** 固定概要只使用确认事实，不使用驱动错误原文或用户输入生成持久消息。 */
