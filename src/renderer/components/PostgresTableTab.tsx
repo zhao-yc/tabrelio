@@ -37,6 +37,8 @@ import { postgresFindPlan, postgresFindRows, type PostgresFindPlan } from '../po
 import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh-CN';
 import { useUiCommandScope } from '../uiCommands';
 import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
+import { postgresSelectedTableValues } from '../postgresTableValues';
+import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import type { FilterDraft } from '../tableFilters';
 import { TableSortPanel } from './TableSortPanel';
@@ -165,6 +167,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [advancedFilters, setAdvancedFilters] = useState(false);
   const [columnDialog, setColumnDialog] = useState<{ kind: 'values' | 'statistics'; source: PostgresColumnReadSource }>();
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
+  const [selectedFilter, setSelectedFilter] = useState<{
+    scope: object; column: string; rowCount: number; values: readonly (string | null)[]; current(): boolean;
+  }>();
+  const [selectionColumn, setSelectionColumn] = useState<string>();
   const [cellMenu, setCellMenu] = useState<{
     scope: object; cell: QueryResultCopyCell; anchor: GridCellMenuAnchor; seed: FilterDraft;
   }>();
@@ -558,6 +564,12 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const cellScope = useMemo(() => ({}), [page, gridLayout.columns, connectionVersion]);
   const cellMenuEnabled = active && !frozenPage && !requiresRefresh && pageConnectionVersion === connectionVersion && !!page?.exportToken;
+  const selectedFilterColumn = findAnchor.current?.scope === cellScope
+    ? page?.columns.find(column => column.key === selectionColumn && column.valueOptions && !column.binary) : undefined;
+
+  useLayoutEffect(() => {
+    if (selectedFilter && (!cellMenuEnabled || recordView || selectedFilter.scope !== cellScope)) setSelectedFilter(undefined);
+  }, [cellMenuEnabled, cellScope, recordView, selectedFilter]);
 
   function closeCellMenu(menu: typeof cellMenu, restoreFocus: boolean) {
     if (!menu || cellMenuOwner.current !== menu) return;
@@ -598,6 +610,19 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       setCellFilterSeed(exclude ? postgresTableCellFilterDraft(menu.cell, gridLayout.columns, page.rows, true) : current);
       setAdvancedFilters(true);
     } catch { /* 原值失效时保留当前条件。 */ }
+  }
+
+  /** 捕获只建立本地预览。加入条件前仍须持有原页、活动格及勾选集合。 */
+  function openSelectedFilter(indices: ReadonlySet<number>, gridCurrent: () => boolean) {
+    const column = selectedFilterColumn, anchor = findAnchor.current;
+    const current = () => canFilterCell() && gridCurrent() && findAnchor.current === anchor;
+    if (!page || !column || anchor?.scope !== cellScope || anchor.value?.key !== column.key || !current()) return;
+    try {
+      const values = postgresSelectedTableValues(column, page.rows, indices);
+      setSelectedFilter({ scope: cellScope, column: column.name, rowCount: indices.size, values, current });
+      setAdvancedFilters(true);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
   const canChangeGrid = !recordView && active && writable && pageConnectionVersion === connectionVersion;
@@ -801,6 +826,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   function closeAdvancedFilters() {
     setAdvancedFilters(false);
     setCellFilterSeed(undefined);
+    setSelectedFilter(undefined);
     if (columnDialog?.kind === 'values') setColumnDialog(undefined);
   }
 
@@ -1185,6 +1211,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
+      selected={selectedFilter?.scope === cellScope ? selectedFilter : undefined} onCloseSelected={() => setSelectedFilter(undefined)}
       values={columnDialog?.kind === 'values' ? columnDialog.source : undefined} canReadValues={canReadValues}
       onOpenValues={() => openColumnReader('values')} onCloseValues={() => setColumnDialog(undefined)}
       replacesQuick={!!(options.filter && 'text' in options.filter && options.filter.text)}
@@ -1238,11 +1265,18 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             <button type="button" title={transfer ? transferText.replaced : transferText.limits}
               disabled={!canCaptureTransfer || !selected.size || selected.size > postgresTableLimits.changes}
               onClick={() => captureTransfer(selected, current)}>{transferText.capture}</button>
+            <button type="button" title={selectedFilterText.postgresUnsupported}
+              disabled={!cellMenuEnabled || !selected.size || !selectedFilterColumn}
+              onClick={() => openSelectedFilter(selected, current)}>{selectedFilterText.entry}</button>
             {!!selected.size && <span>{fillText.count(selected.size)}</span>}
           </div>}
         onActiveRowIndexChange={recordView ? undefined : setRow}
         findTarget={findTarget} findMarks={findMarks} navigateTo={gridReturn?.page === page ? gridReturn.position : undefined}
-        onGridAnchor={value => { findAnchor.current = { scope: cellScope, value }; if (gridReturn) setGridReturn(undefined); }}
+        onGridAnchor={value => {
+          findAnchor.current = { scope: cellScope, value };
+          setSelectionColumn(value && value.row >= 0 ? value.key : undefined);
+          if (gridReturn) setGridReturn(undefined);
+        }}
         onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
         onCellPaste={(cell, data) => {

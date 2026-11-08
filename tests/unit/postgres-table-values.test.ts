@@ -1,9 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { postgresTableValuesSchema } from '../../src/shared/postgresTable';
-import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
+import { postgresTableValuesSchema, type PostgresTableColumn } from '../../src/shared/postgresTable';
+import { appendPostgresValueFilter, postgresSelectedTableValues } from '../../src/renderer/postgresTableValues';
 import { filterDraftFromRule, filterRuleFromDraft } from '../../src/renderer/tableFilters';
 
 describe('PostgreSQL 不同值筛选草稿', () => {
+  const field: PostgresTableColumn = {
+    key: 'c0', name: '值', type: 'text', nullable: true, generated: false, valueOptions: true,
+    defaultValue: false, primary: false, binary: false,
+  };
+
+  it('按显示顺序读取勾选原值并去重，保留精确数字、空串、文字 NULL 与真正空值', () => {
+    const rows = ['9007199254740993', '', 'NULL', null, '', '未勾选'].map(c0 => ({ c0 }));
+    expect(postgresSelectedTableValues(field, rows, new Set([4, 3, 1, 0, 2])))
+      .toEqual(['9007199254740993', '', 'NULL', null]);
+  });
+
+  it('拒绝整份失效选择、不可比较字段和超预算值', () => {
+    const take = new Set([0]);
+    expect(() => postgresSelectedTableValues(field, [{ c0: '' }], new Set([1]))).toThrow();
+    expect(() => postgresSelectedTableValues({ ...field, valueOptions: undefined }, [{ c0: '' }], take)).toThrow();
+    expect(() => postgresSelectedTableValues(field, [{ c0: 'a'.repeat(4097) }], take)).toThrow();
+    expect(() => postgresSelectedTableValues(field, [{ c0: 'a\u0000b' }], take)).toThrow();
+    expect(() => postgresSelectedTableValues(field, [{ c0: 9007199254740992 }], take)).toThrow();
+  });
   it('保留旧的任一满足分组并与新候选相交，空串和多行值保持原文', () => {
     const rules = [{ column: 'id', operator: '=' as const, value: '1' }, { column: 'id', operator: '=' as const, value: '2' }];
     const selected = ['','a\r\nb', null];

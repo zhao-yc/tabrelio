@@ -304,6 +304,8 @@ PostgreSQL 表页的「按当前筛选删除」会预览目标表中所有匹配
 
 在「按不同值筛选」中，可选「按字段值」「出现次数最多」或「出现次数最少」，再点「读取不同值」。PostgreSQL 排完所有匹配分组后返回前 500 项。已有勾选时，重新读取前会请你确认清除。详见[PostgreSQL 不同值次数排序](development/postgres-value-frequency-20261106.md)。
 
+已有目标记录时，可勾选本页行并聚焦取值字段，直接核对原值并生成包含或排除条件。[PostgreSQL 按勾选行值筛选](development/postgres-selected-value-filter-20261108.md)
+
 点击「字段概况」可[统计筛选范围内的已提交记录](development/postgres-column-statistics-20261106.md)，查看 NULL、不同值、极值和相应字段的数值聚合。
 
 在 PostgreSQL「字段概况」选数值字段及 5、10 或 20 个目标区间，再点「读取数值分布」。直方图覆盖当前筛选的全部匹配行，NULL、NaN 和无穷值单独显示。详见[PostgreSQL 数值直方图](development/postgres-table-histogram-20261106.md)。

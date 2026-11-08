@@ -22,7 +22,9 @@
 .pg-page-jump { display: inline-flex; align-items: center; gap: 4px; }
 .pg-page-jump input { width: 82px; }
 .pg-table-filter-panel { max-height: 42%; overflow: auto; border-bottom: 1px solid var(--border); }
-.pg-table-filter-panel > .expanded-filter-panel,
+.pg-selected-filter { min-width: 0; }
+.pg-selected-filter ul { max-height: 96px; overflow: auto; overflow-wrap: anywhere; }
+.pg-filter-editor > .expanded-filter-panel,
 .pg-table-sort-dialog > .expanded-filter-panel { max-height: none; overflow: visible; }
 .postgres-table-tab .table-preferences-display-controls {
   display: flex;
@@ -36,6 +38,7 @@
 .postgres-table-tab .table-preferences-display-controls input[type="search"] { width: min(200px, 55vw); }
 .pg-table-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pg-table-grid .results-grid { flex: 1; }
+.postgres-table-tab:has(.pg-selected-filter) .pg-table-grid .results-grid { height: auto; min-height: 0; }
 .pg-view-switch { display: inline-flex; gap: 4px; }
 .pg-view-switch button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); }
 .pg-record-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }

@@ -1,6 +1,9 @@
 export const tableSelectedFilterZh = {
   entry: '按勾选行值筛选', excludeEntry: '排除勾选行值', title: '勾选值筛选预览',
   apply: '应用勾选值筛选', cancel: '取消',
+  postgresHint: '按当前字段收集勾选行原值。选定包含或排除后，条件会与当前高级筛选草稿整体以 AND 连接，应用前可以继续检查和编辑。',
+  postgresSource: (column: string, count: number) => `字段「${column}」 · ${count} 条勾选记录`,
+  postgresUnsupported: '请勾选本页记录，再聚焦支持按值筛选的字段。',
   unavailable: '当前字段、勾选行或原值已变化，请重新选择。',
   budget: '勾选值筛选超过原筛选预算，请减少勾选值或已有条件。',
   declined: '未应用，原筛选和数据草稿保持。',

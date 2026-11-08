@@ -1,5 +1,27 @@
-import type { FilterGroup, FilterRule } from '../shared/contracts';
-import { postgresAdvancedTableFilterSchema, type PostgresAdvancedTableFilter } from '../shared/postgresTable';
+import type { DataRow, FilterGroup, FilterRule } from '../shared/contracts';
+import { FILTER_LIMITS } from '../shared/filtering';
+import { postgresAdvancedTableFilterSchema, type PostgresAdvancedTableFilter, type PostgresTableColumn } from '../shared/postgresTable';
+import { tableSelectedFilterZh as text } from './locales/tableSelectedFilter.zh-CN';
+
+/** 只取勾选行的原值，按服务器可原生比较的字段准入。任一值无效时拒绝整组。 */
+export function postgresSelectedTableValues(column: PostgresTableColumn, rows: readonly DataRow[], selected: ReadonlySet<number>) {
+  if (!column.valueOptions || column.binary || !selected.size || selected.size > rows.length) throw Error(text.unavailable);
+  const values = new Set<string | null>();
+  for (const index of [...selected].sort((left, right) => left - right)) {
+    const row = rows[index];
+    const value: unknown = Number.isSafeInteger(index) && row ? Object.getOwnPropertyDescriptor(row, column.key)?.value : undefined;
+    if (value !== null && typeof value !== 'string' && typeof value !== 'boolean' &&
+        !(typeof value === 'number' && Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value))))
+      throw Error(text.unavailable);
+    const literal = value === null ? null : String(value);
+    if (literal !== null && literal.length > FILTER_LIMITS.valueLength) throw Error(text.budget);
+    values.add(literal);
+    if (values.size - Number(values.has(null)) > FILTER_LIMITS.setValues) throw Error(text.budget);
+  }
+  const result = [...values];
+  appendPostgresValueFilter({ rules: [], mode: 'all' }, column.name, result, false);
+  return result;
+}
 
 /** 将包含／排除的完整 NULL 补集与当前草稿相交，保留原 OR 条件及子组。 */
 export function appendPostgresValueFilter(
