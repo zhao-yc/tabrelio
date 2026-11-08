@@ -21,7 +21,9 @@ import { NewTableIndexEditor } from './NewTableIndexEditor';
 import { tableCreateDesignSchema, tableCreateDraftSchema, type TableCreateIndex, type TableCreateDraft } from '../../shared/tableCreate';
 import {databaseSearchZh} from '../locales/databaseSearch.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { completionIdentifier } from '../../shared/completionLexical';
+import { mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../shared/mysqlViewFile';
 import type { TableCreateApplyOutput } from '../../shared/tableCreate';
 import { TableCreateConfirmation } from './TableCreateConfirmation';
 import { tableCreateZh } from '../locales/tableCreate.zh-CN';
@@ -34,6 +36,8 @@ import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import type { DefinitionSearchOpen } from '../../shared/definitionNavigation';
 import { DatabaseCreateDialog } from './DatabaseCreateDialog';
 import { DefinitionViewer } from './DefinitionViewer';
+import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import { SqliteTableCreateDialog } from './SqliteTableCreateDialog';
 import type { SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 
@@ -291,26 +295,61 @@ export function DdlDialog(props: DdlDialogProps) {
 function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, readOnly=false }: DdlDialogProps) {
   const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(database ? template('view', database, '') : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
+  const [viewLoaded, setViewLoaded] = useState(false);
+  const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
+  const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
+  const fileOwner = useMemo(() => ({}), [connectionId, database, object, profile, version, kind, name, sql]);
   useEffect(() => {
     if (!object || !database) return;
+    let active = true;
+    setViewLoaded(false);
+    setBusy(true);
     // 定义读取不依赖树节点是否展开，连接准备失败时只展示原始错误。
     void invoke('connections.open', { id: connectionId }).then(() => invoke('metadata.ddl', { connectionId, database, name: object.name, kind: object.kind })).then(ddl => {
+      if (!active) return;
       // 搜索按名称导航时只展示重新读取的原定义，不把新同名对象变成可执行重建脚本。
       if(readOnly)setSql(ddl);
-      else if (object.kind === 'view') setSql(ddl.replace(/^CREATE\s+/i, 'CREATE OR REPLACE '));
+      else if (object.kind === 'view') {
+        setSql(ddl.replace(/^CREATE\s+/i, 'CREATE OR REPLACE '));
+        setViewLoaded(true);
+      }
       else if (['procedure', 'function', 'trigger', 'event'].includes(object.kind)) setSql(`DROP ${object.kind.toUpperCase()} IF EXISTS ${qualifiedName(database, object.name)};\nDELIMITER $$\n${ddl.replace(/;\s*$/, '')}$$\nDELIMITER ;`);
       else setSql(ddl);
-    }).catch(reason => setError(errorMessage(reason))).finally(() => setBusy(false));
+    }).catch(reason => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setBusy(false); });
+    return () => { active = false; };
   }, [connectionId, database, object, readOnly]);
+  const fileView = !!database && !readOnly && kind === 'view' && (profile?.dialect === 'mysql' || profile?.dialect === 'mariadb');
+  const newHeader = (value: string) => 'CREATE VIEW ' + qualifiedName(database!, value || zh.schema.text050) + ' AS\n';
+  const importedNew = fileView && !object && sql.startsWith(newHeader(name));
+  const missingName = importedNew && !completionIdentifier(name);
   const statement = database ? sql : name ? `CREATE DATABASE ${identifier(name)} CHARACTER SET utf8mb4;` : '';
+
+  /** 修改新视图名称时保留已载入查询，目标仍由表单重新生成。 */
+  function changeName(value: string) {
+    setName(value);
+    if (database) setSql(importedNew ? newHeader(value) + sql.slice(newHeader(name).length) : template(kind, database, value));
+  }
+
+  function prepareViewFile(source: string): string {
+    const query = mysqlViewFileQuery(source);
+    return object ? replaceMysqlViewFileQuery(sql, database!, name, query) : mysqlNewViewHeader(database!, name) + query + '\n;';
+  }
+
+  function fileCurrent(): boolean {
+    const state = useWorkspace.getState();
+    return state.connections.find(item => item.id === connectionId) === profile &&
+      (state.connectionVersions[connectionId] ?? 0) === version;
+  }
   /** 用户确认后独立准备连接并执行一次 SQL，连接失败或写入失败均不自动重试。 */
   async function apply() {
-    if(readOnly)return;
+    if(readOnly || missingName)return;
     if (!statement.trim()) { setError(zh.schema.text053); return; }
     if (!window.confirm(zh.schema.text054)) return;
     setBusy(true); setError(''); const taskId = uid(); setApplyTaskId(taskId);
     try { await invoke('connections.open', { id: connectionId }); await invoke('schema.apply', { connectionId, database: database ?? '', sql: statement, taskId }); useWorkspace.getState().notify(zh.schema.text055); onApplied(); onClose(); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
-  return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => { setName(event.target.value); if (database) setSql(template(kind, database, event.target.value)); }}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}<SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>{busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}{!readOnly&&<button className="primary" disabled={busy || !statement.trim()} onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button>}</footer></Modal>;
+  return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} value={sql} disabled={busy || !completionIdentifier(name) || !!object && !viewLoaded}
+      hint={viewSqlFileZh.mysqlHint} current={fileCurrent} prepare={prepareViewFile} apply={setSql}/>}
+    <SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>{busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}{!readOnly&&<button className="primary" disabled={busy || missingName || !statement.trim()} onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button>}</footer></Modal>;
 }

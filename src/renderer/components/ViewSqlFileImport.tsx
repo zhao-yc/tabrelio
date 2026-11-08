@@ -6,13 +6,13 @@ import { viewSqlFileZh as text } from '../locales/viewSqlFile.zh-CN';
 import { ErrorBox, Field } from './ui';
 
 /** 读取本机 SQL 只替换当前定义草稿。切换目标、修改正文或开始预览后丢弃迟到结果。 */
-export function ViewSqlFileImport({ owner, value, disabled, hint, current, validate, apply }: {
+export function ViewSqlFileImport({ owner, value, disabled, hint, current, prepare, apply }: {
   owner: object;
   value: string;
   disabled: boolean;
   hint: string;
   current(): boolean;
-  validate(sql: string): void;
+  prepare(sql: string): string;
   apply(sql: string): void;
 }) {
   const [encoding, setEncoding] = useState<QueryFileEncoding>('utf8');
@@ -36,10 +36,10 @@ export function ViewSqlFileImport({ owner, value, disabled, hint, current, valid
       if (!selected || !live()) return;
       const { sql } = await invoke('files.readQuery', { fileToken: selected.token, encoding });
       if (!live()) return;
-      validate(sql);
-      if (sql === value) return;
-      if (value.trim()) setReplacement({ sql, token });
-      else apply(sql);
+      const draft = prepare(sql);
+      if (draft === value) return;
+      if (value.trim()) setReplacement({ sql: draft, token });
+      else apply(draft);
     } catch (reason) {
       if (live()) setError(errorMessage(reason));
     } finally {

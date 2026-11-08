@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { postgresEditViewPreviewSchema, validatePostgresViewDefinition } from '../../shared/postgresCreateView';
+import { postgresEditViewPreviewSchema, preparePostgresViewDefinition } from '../../shared/postgresCreateView';
 import { invoke } from '../lib';
 import { postgresViewEditZh as text } from '../locales/postgresViewEdit.zh-CN';
 import { ErrorBox } from './ui';
@@ -50,7 +50,7 @@ export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
       <label>{text.definition}<textarea rows={10} spellCheck={false} maxLength={128 * 1024}
         value={definition} disabled={busy || unknown} onChange={event => changeDefinition(event.target.value)}/></label>
       <ViewSqlFileImport owner={importOwner} value={definition} disabled={busy || unknown}
-        hint={viewSqlFileZh.postgresHint} current={importCurrent} validate={validatePostgresViewDefinition} apply={changeDefinition}/>
+        hint={viewSqlFileZh.postgresHint} current={importCurrent} prepare={preparePostgresViewDefinition} apply={changeDefinition}/>
     </>}
     <div className="pg-column-edit-actions">
       {preview ? <>

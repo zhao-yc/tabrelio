@@ -22,7 +22,7 @@ export function quoteCompletionIdentifier(value:string):string{if(!completionIde
 const blocked=(reason:Extract<CompletionLexicalResult,{status:'blocked'}>['reason']):CompletionLexicalResult=>({status:'blocked',reason});
 
 /** 单个确定模式的纯词法扫描，不执行SQL、不读取连接，也不记录用户文本。 */
-function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number,signature?:'mysql'|'sqlite',complete=false):CompletionLexicalResult{
+function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number,signature?:'mysql'|'sqlite',complete=false,whole=false):CompletionLexicalResult{
   const statements:Statement[]=[],regions:Region[]=[];let current:Statement={start:0,end:source.length,tokens:[],executable:false};
   let index=0,depth=0,total=0,delimiter=';',lineStart=true,hasCode=false;
   /** 限制全文件token数与括号深度，避免大脚本在每次键盘输入时无限分配。 */
@@ -52,7 +52,7 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
     }
     if(char==='/'&&next==='*'){
       const start=index,end=source.indexOf('*/',index+2);index=end<0?source.length:end+2;
-      if(complete&&end<0&&offset>=current.start)return blocked('comment');
+      if(complete&&end<0&&(whole||offset>=current.start))return blocked('comment');
       if(signature!=='sqlite'&&(source[start+2]==='!'||source.slice(start+2,start+4)==='M!')){current.executable=true;hasCode=true;}
       regions.push({start,end:index,kind:'comment',open:end<0});continue;
     }
@@ -78,6 +78,13 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
     if(char==='('&&++depth>completionLimits.depth)return blocked('budget');index++;
   }
   statements.push(current);
+  if(whole){
+    const [statement, extra]=statements.filter(item=>item.tokens.length||item.executable);
+    if(!statement||extra||regions.some(item=>item.kind==='directive'))return blocked('directive');
+    if(statement.executable)return blocked('executable-comment');
+    if(statement.tokens.some(item=>!item.closed))return blocked('identifier');
+    return{status:'ready',statement:{start:statement.start,end:statement.end},tokens:statement.tokens,target:{start:0,end:0,prefix:'',qualifiers:[],quoted:false}};
+  }
   const region=regions.find(item=>offset>=item.start&&(offset<item.end||item.open&&offset===item.end));
   if(region)return blocked(region.kind);
   const statement=statements.find(item=>offset>=item.start&&offset<=item.end);
@@ -111,6 +118,13 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
     qualifiers.unshift(previous.value);
   }
   return{status:'ready',statement:{start:statement.start,end:statement.end},tokens:statement.tokens,target:{start,end,prefix,qualifiers,quoted}};
+}
+
+/** 结构草稿检查单条原文，不以光标、客户端分隔符或可执行注释推断正文。 */
+export function mysqlDefinitionTokens(source:string,ansiQuotes:boolean,noBackslashEscapes:boolean):CompletionLexicalContext|undefined{
+  if(source.length>completionLimits.sourceUnits||/[\u0000\uD800-\uDFFF]/u.test(source))return;
+  const result=scan(source,0,ansiQuotes,noBackslashEscapes,completionLimits.aliasUnits,undefined,true,true);
+  return result.status==='ready'?result:undefined;
 }
 
 /** 未知会话模式分别扫描四种组合；仅当前语句及编辑范围完全一致时提供候选。 */

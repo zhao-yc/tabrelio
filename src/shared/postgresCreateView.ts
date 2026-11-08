@@ -41,8 +41,9 @@ export function postgresViewQuery(definition: string): string {
 }
 
 /** 文件载入先核对正文预算和单条查询边界，保留原文供设计器预览。 */
-export function validatePostgresViewDefinition(definition: string): void {
+export function preparePostgresViewDefinition(definition: string): string {
   postgresViewQuery(definitionSchema.parse(definition));
+  return definition;
 }
 
 /** 定义只允许一条不带参数的查询，保留字符串、注释和美元引号原文。 */
