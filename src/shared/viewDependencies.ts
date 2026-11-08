@@ -6,12 +6,18 @@ export const mysqlViewDependenciesSchema = z.object({
   database: z.string().refine(completionIdentifier),
   name: z.string().refine(completionIdentifier),
 }).strict();
+export const sqliteViewDependenciesSchema = z.object({
+  connectionId: z.string().min(1).max(200),
+  database: z.literal('main'),
+  name: z.string().min(1).max(512).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
+}).strict();
+export type SqliteViewDependenciesInput = z.infer<typeof sqliteViewDependenciesSchema>;
 export type MysqlViewDependenciesInput = z.infer<typeof mysqlViewDependenciesSchema>;
-export interface MysqlViewDependency { database: string; name: string; }
-export interface MysqlViewDependencies {
+export interface ViewDependency { database: string; name: string; }
+export interface ViewDependencies {
   source: 'catalogue' | 'definitions';
-  referenced: MysqlViewDependency[];
-  referencing: MysqlViewDependency[];
+  referenced: ViewDependency[];
+  referencing: ViewDependency[];
   skipped: number;
   referencedUnknown: boolean;
   truncated: boolean;

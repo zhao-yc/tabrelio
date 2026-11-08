@@ -1,5 +1,5 @@
 import { readMysqlViewDependencies } from './mysqlViewDependencies';
-import { mysqlViewDependenciesSchema } from '../shared/mysqlViewDependencies';
+import { mysqlViewDependenciesSchema } from '../shared/viewDependencies';
 import { inspectMysqlViewQuery } from './mysqlViewQueryInspect';
 import { mysqlViewQueryInspectSchema } from '../shared/mysqlViewFile';
 import { excelImportZh, validExcelImport } from '../shared/excelTransfer';

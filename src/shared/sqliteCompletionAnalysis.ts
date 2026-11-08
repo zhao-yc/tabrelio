@@ -63,6 +63,15 @@ function lex(source: string, offset: number, complete = false): Token[] {
   return tokens;
 }
 
+/** 目录分析仅接收完整语句正文，复用 SQLite 词法而不借用光标恢复规则。 */
+export function sqliteDefinitionTokens(source: string): Token[] {
+  if (source.length > limits.sourceUnits || !unicode(source)) fail('budget');
+  const tokens = lex(source, -1, true);
+  if (tokens.some(token => token.closed === false || token.kind === 'parameter' ||
+      token.kind === 'symbol' && ['(', ')'].includes(token.value) && token.pair === undefined)) fail('syntax');
+  return tokens;
+}
+
 /** 全引号范围替换；prefix只解码光标之前的原文，UTF16坐标不转换成码点下标。 */
 function targetAt(source: string, tokens: Token[], offset: number, intent?: SqliteAnalysisIntent): Ready['target'] {
   const token = tokens.find(item => item.kind === 'id' && item.start <= offset && offset <= item.end);

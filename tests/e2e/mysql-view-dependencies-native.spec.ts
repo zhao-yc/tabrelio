@@ -1,7 +1,7 @@
 import mysql, { type RowDataPacket } from 'mysql2/promise';
 import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
-import { mysqlViewDependenciesZh as text } from '../../src/renderer/locales/mysqlViewDependencies.zh-CN';
+import { viewDependenciesZh as text } from '../../src/renderer/locales/viewDependencies.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 

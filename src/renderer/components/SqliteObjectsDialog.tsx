@@ -8,6 +8,7 @@ import { assertSqliteObjectsTargetAvailable } from '../sqliteObjectsAvailability
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteObjectsZh as text } from '../locales/sqliteObjects.zh-CN';
 import { SqlEditor } from './SqlEditor';
+import { ViewDependenciesPanel } from './ViewDependenciesPanel';
 import { ViewOutputColumns } from './ViewOutputColumns';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
@@ -142,6 +143,8 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
   useEffect(() => { const now = Date.now(), times = [catalogue?.expiresAt, previewed?.expiresAt].filter((value): value is string => !!value).map(Date.parse).filter(value => value > now); if (!times.length) return; const timer = setTimeout(() => tick(value => value + 1), Math.max(1, Math.min(...times) - now + 1)); return () => clearTimeout(timer); }, [catalogue, previewed, timeRevision]);
   const draftDisabled = disabled || catalogueExpired, isReadOnly = fixed.profile?.dialect === 'sqlite' && fixed.profile.sqlite.readOnly;
   const viewEditor = fixed.action !== 'drop' && fixed.scope.kind === 'view';
+  const savedView = fixed.scope.kind === 'view' && fixed.action !== 'create' && catalogue?.exists;
+  const dependencyOwner = useMemo(() => ({}), [catalogue, fixed.scope, fixed.profile, fixed.version]);
   const [sampleColumns, setSampleColumns] = useState<{ owner: Draft; names: string[] }>();
   // 清空预览列会触发渲染，读取回包按原草稿身份校验，不绑定一次性点击票据。
   const viewReadCurrent = () => live.current === draft && current() && !operation.current && !closing && !draft.locked;
@@ -173,6 +176,8 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
   function fillTemplate(): void { if (!editable() || !catalogueUsable() || !catalogue) return; const relation=catalogue.eligibleRelations.find(value=>value.name===draft.relation); if(fixed.scope.kind==='trigger'&&!relation){setError(text.chooseRelation);return;} const sql=fixed.scope.kind==='view'?'CREATE VIEW main.'+quote(draft.name)+' AS\nSELECT 1 AS value;':'CREATE TRIGGER main.'+quote(draft.name)+'\n'+(relation!.kind==='view'?'INSTEAD OF':'AFTER')+' INSERT ON '+quote(relation!.name)+'\nBEGIN\n  SELECT 1;\nEND;'; if(draft.sql&&!templateConfirm){setTemplateConfirm(true);return;} setTemplateConfirm(false); changeSql(sql); }
   return <Modal title={text.title(fixed.action,fixed.scope.kind)} wide onClose={() => close()}><div className="modal-content sqlite-objects" aria-busy={busy||closing}><p>{fixed.scope.connectionId} / {fixed.scope.database} / {text.kinds[fixed.scope.kind]}</p><UsageHelp><p>{text.scope[fixed.action]}</p><p>{text.dependenciesHint}</p><p>{text.futureEffects}</p></UsageHelp>{isReadOnly&&<p className="warning-text">{text.readonly}</p>}<Field label={text.name}><input aria-label={text.name} value={draft.name} readOnly={fixed.action!=='create'} disabled={disabled} onChange={event=>changeName(event.target.value)}/></Field><button type="button" disabled={disabled||!draft.name} onClick={()=>inspect()}>{text.read}</button>
     {catalogue&&<><p>{catalogue.exists?text.exists:text.absent}</p><details><summary>{text.sourceSql}</summary><pre aria-label={text.sourceSql}>{catalogue.sourceSql??text.noSource}</pre></details><details><summary>{text.related}</summary><p>{text.fullCatalogueHint}</p><section aria-label={text.related}>{catalogue.relatedObjects.map(object=><details key={object.type+':'+object.name}><summary>{text.objectKinds[object.type]} · {object.name} / {object.table}</summary><pre aria-label={text.relatedSql(object.type,object.name)}>{object.sql??text.noSql}</pre></details>)}</section></details><section aria-label={text.attachedTriggers}><h3>{text.attachedTriggers}</h3>{catalogue.attachedTriggers.length?catalogue.attachedTriggers.map(trigger=><details key={trigger.name}><summary>{trigger.name}</summary><pre aria-label={text.attachedSql(trigger.name)}>{trigger.sql}</pre></details>):<p>{text.noAttachedTriggers}</p>}</section></>}
+    {savedView && <ViewDependenciesPanel owner={dependencyOwner} disabled={disabled} current={current}
+      load={() => invoke('sqlite.view.dependencies', { connectionId: fixed.scope.connectionId, database: fixed.scope.database, name: draft.name })}/>}
     {/* 渲染只读只依据状态与来源；editable包含提交后才成立的事件票据，不能用于渲染属性。 */}
     {fixed.action!=='drop'&&<section aria-label={text.editor}><h3>{text.editor}</h3><p>{text.editorHint}</p><SqlEditor value={draft.sql} onChange={changeSql} dialect="sqlite" completion={undefined} height={260} readOnly={disabled}/>
       {fixed.scope.kind === 'view' && <ViewSqlFileImport owner={draft} name={draft.name} value={draft.sql} disabled={disabled || !draft.name}

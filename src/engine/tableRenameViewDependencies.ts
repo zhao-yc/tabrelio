@@ -1,3 +1,4 @@
+import { readViewReferences, viewReferenceLimits, type ViewReference } from '../shared/viewReferences';
 import { createHash } from 'node:crypto';
 import { types } from 'node:util';
 import type { TableDefinitionContext } from '../shared/tableColumnPatches';
@@ -5,160 +6,20 @@ import { tableDefinitionTokens, type TableDefinitionToken as Token } from './tab
 import { qualified } from './sql';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 
-export interface RenameViewReference { database: string; table: string; }
+export type RenameViewReference = ViewReference;
 export interface RenameViewDefinition extends RenameViewReference { definition: string; charset: string; collation: string; }
-export const renameViewLimits = { views: 4096, page: 128, definitionBytes: 256 * 1024, bytes: 8 * 1024 * 1024, depth: 64, references: 32768 } as const;
+export const renameViewLimits = { views: 4096, page: 128, definitionBytes: 256 * 1024, bytes: 8 * 1024 * 1024, ...viewReferenceLimits } as const;
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value).toString('hex')}' USING utf8mb4)`;
 const key = (value: RenameViewReference) => JSON.stringify([value.database, value.table]);
 const word = (token: Token | undefined, value?: string) => token?.kind === 'word' && (value === undefined || token.value.toUpperCase() === value);
 const symbol = (token: Token | undefined, value: string) => token?.kind === 'symbol' && token.value === value;
 const named = (token: Token | undefined) => token?.kind === 'word' || token?.kind === 'identifier';
-const clauses = new Set(['WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'PROCEDURE', 'INTO', 'FOR', 'LOCK', 'WINDOW', 'QUALIFY', 'UNION', 'EXCEPT', 'INTERSECT']);
-const joinWords = new Set(['JOIN', 'INNER', 'CROSS', 'LEFT', 'RIGHT', 'NATURAL', 'STRAIGHT_JOIN']);
-
-/** 只解析服务器已接受的SELECT关系语法；表达式中的列、别名和文字不充当表名，未知关系语法拒绝证明。 */
-class ViewReferences {
-  private readonly pairs = new Map<number, number>();
-  private readonly refs = new Map<string, RenameViewReference>();
-  constructor(private readonly tokens: Token[], private readonly database: string) {
-    const stack: number[] = [];
-    for (let i = 0; i < tokens.length; i++) {
-      if (tokens[i].kind === 'executable' || tokens[i].value === ';' && tokens[i].kind === 'symbol') throw Error('视图含不受控可执行内容或语句分隔符');
-      if (symbol(tokens[i], '(') && tokens[i].kind === 'symbol') { if (stack.length >= renameViewLimits.depth) throw Error('视图嵌套超过证明预算'); stack.push(i); }
-      if (symbol(tokens[i], ')') && tokens[i].kind === 'symbol') { const start = stack.pop(); if (start === undefined) throw Error('视图括号不完整'); this.pairs.set(start, i); }
-    }
-    if (stack.length) throw Error('视图括号不完整');
-  }
-  /** 只剥覆盖整个候选范围的括号；“((SELECT...) / 2)”仍是表达式而非整段子查询。 */
-  private queryLike(start: number, end: number): boolean {
-    while (symbol(this.tokens[start], '(') && this.pairs.get(start) === end - 1) { start++; end--; }
-    return !!(word(this.tokens[start], 'SELECT') || word(this.tokens[start], 'WITH'));
-  }
-  /** CTE按声明顺序建立作用域，只有RECURSIVE允许正文引用自身。 */
-  private query(start: number, end: number, inherited: ReadonlySet<string>, depth: number): void {
-    if (depth > renameViewLimits.depth) throw Error('视图查询嵌套超过证明预算');
-    while (symbol(this.tokens[start], '(') && this.pairs.get(start) === end - 1) { start++; end--; }
-    let i = start; const scope = new Set(inherited), local = new Set<string>();
-    if (word(this.tokens[i], 'WITH')) {
-      i++; const recursive = word(this.tokens[i], 'RECURSIVE'); if (recursive) i++;
-      while (i < end) {
-        const name = this.tokens[i++]; if (!named(name) || local.has(name.value.toLowerCase())) throw Error('视图CTE声明不能唯一证明'); const id = name.value.toLowerCase(); local.add(id);
-        if (symbol(this.tokens[i], '(')) { const close = this.pairs.get(i); if (close === undefined || close >= end) throw Error('视图CTE列名不完整'); for (let j = i + 1; j < close; j++) if (!named(this.tokens[j]) && !symbol(this.tokens[j], ',')) throw Error('视图CTE列名语法未知'); i = close + 1; }
-        if (!word(this.tokens[i++], 'AS') || !symbol(this.tokens[i], '(')) throw Error('视图CTE正文语法未知');
-        const close = this.pairs.get(i); if (close === undefined || close >= end) throw Error('视图CTE正文不完整');
-        // 非递归CTE正文只能看到前序CTE；同名真实表及前向同名表不能被尚未生效的CTE遮蔽。
-        const bodyScope = new Set(scope); if (recursive) bodyScope.add(id); this.query(i + 1, close, bodyScope, depth + 1); scope.add(id); i = close + 1;
-        if (!symbol(this.tokens[i], ',')) break; i++;
-      }
-    }
-    // UNION等集合两侧均独立解析，不能只证明第一个SELECT。
-    let part = i;
-    for (; i < end; i++) {
-      if (symbol(this.tokens[i], '(')) { i = this.pairs.get(i)!; continue; }
-      if (word(this.tokens[i]) && ['UNION', 'EXCEPT', 'INTERSECT'].includes(this.tokens[i].value.toUpperCase())) {
-        this.select(part, i, scope, depth); i++; if (word(this.tokens[i], 'ALL') || word(this.tokens[i], 'DISTINCT')) i++; part = i; i--;
-      }
-    }
-    this.select(part, end, scope, depth);
-  }
-  /** 表达式只递归完整子查询；FROM出现在EXTRACT、字符串或注释中不成为关系。 */
-  private expression(start: number, end: number, scope: ReadonlySet<string>, depth: number): void {
-    if (depth > renameViewLimits.depth) throw Error('视图表达式超过证明预算');
-    let first = start, candidateEnd = end; while (symbol(this.tokens[first], '(') && this.pairs.get(first) === candidateEnd - 1) { first++; candidateEnd--; }
-    if (word(this.tokens[first], 'TABLE') || word(this.tokens[first], 'VALUES')) throw Error('视图表达式含尚未证明的查询构造');
-    for (let i = start; i < end; i++) {
-      if (!symbol(this.tokens[i], '(') || this.tokens[i].kind !== 'symbol') continue;
-      const close = this.pairs.get(i); if (close === undefined || close >= end) throw Error('视图表达式括号范围未知');
-      if (this.queryLike(i + 1, close)) this.query(i + 1, close, scope, depth + 1);
-      else this.expression(i + 1, close, scope, depth + 1);
-      i = close;
-    }
-  }
-  private select(start: number, end: number, scope: ReadonlySet<string>, depth: number): void {
-    while (symbol(this.tokens[start], '(') && this.pairs.get(start) === end - 1) { start++; end--; }
-    // 集合查询允许最后一个括号primary后带整体ORDER/LIMIT，尾部不能被并入SELECT正文或静默丢弃。
-    if (symbol(this.tokens[start], '(')) {
-      const close = this.pairs.get(start); if (close === undefined || close >= end) throw Error('视图括号查询范围未知');
-      this.query(start + 1, close, scope, depth + 1); this.queryTail(close + 1, end, scope, depth + 1); return;
-    }
-    if (!word(this.tokens[start], 'SELECT')) throw Error('视图查询不是已证明的SELECT');
-    let from = -1, stop = end;
-    for (let i = start + 1; i < end; i++) {
-      if (symbol(this.tokens[i], '(')) { i = this.pairs.get(i)!; continue; }
-      if (word(this.tokens[i], 'FROM')) { if (from !== -1) throw Error('视图存在未知多重FROM'); from = i; }
-      else if (from !== -1 && word(this.tokens[i]) && clauses.has(this.tokens[i].value.toUpperCase())) { stop = i; break; }
-      else if (word(this.tokens[i], 'INTO') || word(this.tokens[i], 'PROCEDURE')) throw Error('视图含不支持的SELECT副作用语法');
-    }
-    this.expression(start + 1, from === -1 ? end : from, scope, depth + 1);
-    if (from !== -1) { if (stop === from + 1) throw Error('视图FROM为空'); this.relations(from + 1, stop, scope, depth + 1); this.expression(stop, end, scope, depth + 1); }
-    // SELECT后半部若出现另一裸SELECT/FROM，不能当普通表达式忽略。
-    for (let i = from === -1 ? start + 1 : stop; i < end; i++) { if (symbol(this.tokens[i], '(')) { i = this.pairs.get(i)!; continue; } if (word(this.tokens[i], 'WITH') && word(this.tokens[i + 1], 'ROLLUP')) { i++; continue; } if (word(this.tokens[i], 'FROM') || word(this.tokens[i], 'SELECT') || word(this.tokens[i], 'WITH') || word(this.tokens[i], 'INTO') || word(this.tokens[i], 'PROCEDURE')) throw Error('视图SELECT尾部语法尚未证明'); }
-  }
-  /** 括号查询的外层尾部只接受完整ORDER BY和整数LIMIT；排序表达式中的子查询仍递归收集。 */
-  private queryTail(start: number, end: number, scope: ReadonlySet<string>, depth: number): void {
-    let i = start;
-    if (word(this.tokens[i], 'ORDER')) {
-      i++; if (!word(this.tokens[i++], 'BY')) throw Error('视图集合排序缺少BY'); const expression = i;
-      for (; i < end; i++) {
-        if (symbol(this.tokens[i], '(')) { i = this.pairs.get(i)!; continue; }
-        if (word(this.tokens[i], 'LIMIT')) break;
-        if (word(this.tokens[i]) && ['SELECT', 'WITH', 'FROM', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'JOIN', 'INTO', 'PROCEDURE', 'FOR', 'LOCK'].includes(this.tokens[i].value.toUpperCase())) throw Error('视图集合排序存在未知语法');
-      }
-      if (expression === i) throw Error('视图集合排序为空'); this.expression(expression, i, scope, depth + 1);
-    }
-    if (word(this.tokens[i], 'LIMIT')) {
-      const integer = (token: Token | undefined) => token?.kind === 'number' && /^\d+$/.test(token.value);
-      i++; if (!integer(this.tokens[i++])) throw Error('视图集合LIMIT未知');
-      if (symbol(this.tokens[i], ',') || word(this.tokens[i], 'OFFSET')) { i++; if (!integer(this.tokens[i++])) throw Error('视图集合LIMIT偏移未知'); }
-    }
-    if (i !== end) throw Error('视图括号查询尾部尚未完整证明');
-  }
-  private relations(start: number, end: number, scope: ReadonlySet<string>, depth: number): void {
-    if (depth > renameViewLimits.depth) throw Error('视图关系嵌套超过证明预算');
-    let i = start, needRelation = true;
-    while (i < end) {
-      if (needRelation) {
-        if (symbol(this.tokens[i], '(')) {
-          const close = this.pairs.get(i); if (close === undefined || close >= end) throw Error('视图派生关系范围未知');
-          if (this.queryLike(i + 1, close)) this.query(i + 1, close, scope, depth + 1); else this.relations(i + 1, close, scope, depth + 1);
-          i = close + 1;
-        } else {
-          const first = this.tokens[i++]; if (!named(first) || word(first) && ['LATERAL', 'JSON_TABLE', 'SELECT', 'WITH'].includes(first.value.toUpperCase())) throw Error('视图含未知表函数或关系语法');
-          let database = this.database, table = first.value, qualifiedName = false;
-          if (symbol(this.tokens[i], '.')) { qualifiedName = true; database = table; const second = this.tokens[++i]; if (!named(second)) throw Error('视图限定关系名称未知'); table = second.value; i++; }
-          if (symbol(this.tokens[i], '(') || symbol(this.tokens[i], '.')) throw Error('视图表函数或多段限定名尚未证明');
-          if (qualifiedName || !scope.has(table.toLowerCase()) && !word(first, 'DUAL')) { const value = { database, table }; this.refs.set(key(value), value); if (this.refs.size > renameViewLimits.references) throw Error('视图引用超过证明预算'); }
-        }
-        if (word(this.tokens[i], 'AS')) { i++; if (!named(this.tokens[i])) throw Error('视图关系别名缺失'); i++; }
-        else if (this.tokens[i]?.kind === 'identifier' || word(this.tokens[i]) && !joinWords.has(this.tokens[i].value.toUpperCase()) && !['ON', 'USING', 'USE', 'FORCE', 'IGNORE', 'PARTITION'].includes(this.tokens[i].value.toUpperCase())) i++;
-        // 分区/索引提示不是额外数据源，但必须完整消费其受控语法。
-        while (word(this.tokens[i]) && ['USE', 'FORCE', 'IGNORE'].includes(this.tokens[i].value.toUpperCase())) { i++; if (!word(this.tokens[i], 'INDEX') && !word(this.tokens[i], 'KEY')) throw Error('视图索引提示未知'); i++; if (word(this.tokens[i], 'FOR')) { i++; if (word(this.tokens[i], 'JOIN')) i++; else if (word(this.tokens[i], 'ORDER') || word(this.tokens[i], 'GROUP')) { i++; if (!word(this.tokens[i++], 'BY')) throw Error('视图索引提示未知'); } else throw Error('视图索引提示未知'); } if (!symbol(this.tokens[i], '(')) throw Error('视图索引提示不完整'); const close = this.pairs.get(i)!; for (let j = i + 1; j < close; j++) if (!named(this.tokens[j]) && !symbol(this.tokens[j], ',')) throw Error('视图索引提示未知'); i = close + 1; }
-        needRelation = false; continue;
-      }
-      if (symbol(this.tokens[i], ',')) { i++; needRelation = true; continue; }
-      if (word(this.tokens[i]) && joinWords.has(this.tokens[i].value.toUpperCase())) {
-        if (word(this.tokens[i], 'STRAIGHT_JOIN') || word(this.tokens[i], 'JOIN')) i++;
-        else { if (word(this.tokens[i], 'NATURAL')) i++; if (word(this.tokens[i]) && ['INNER', 'CROSS', 'LEFT', 'RIGHT'].includes(this.tokens[i].value.toUpperCase())) i++; if (word(this.tokens[i], 'OUTER')) i++; if (!word(this.tokens[i++], 'JOIN')) throw Error('视图JOIN语法未知'); }
-        needRelation = true; continue;
-      }
-      if (word(this.tokens[i], 'USING')) { i++; if (!symbol(this.tokens[i], '(')) throw Error('视图USING范围未知'); const close = this.pairs.get(i)!; for (let j = i + 1; j < close; j++) if (!named(this.tokens[j]) && !symbol(this.tokens[j], ',')) throw Error('视图USING列语法未知'); i = close + 1; continue; }
-      if (word(this.tokens[i], 'ON')) {
-        const from = ++i; for (; i < end; i++) { if (symbol(this.tokens[i], '(')) { i = this.pairs.get(i)!; continue; } if (symbol(this.tokens[i], ',') || word(this.tokens[i]) && joinWords.has(this.tokens[i].value.toUpperCase()) && !symbol(this.tokens[i + 1], '(')) break; }
-        if (from === i) throw Error('视图ON条件为空'); this.expression(from, i, scope, depth + 1); continue;
-      }
-      throw Error('视图关系语法尚未完整证明');
-    }
-    if (needRelation) throw Error('视图缺少关系来源');
-  }
-  read(): RenameViewReference[] { if (!this.tokens.length) throw Error('视图定义为空'); this.query(0, this.tokens.length, new Set(), 0); return [...this.refs.values()]; }
-}
-
 /** 只接受完整单SELECT词法和受控关系语法，不调用宽容编辑器补全器，也不搜索名称子串。 */
 export function tableRenameViewReferences(definition: string, database: string, context: TableDefinitionContext): RenameViewReference[] {
   if (typeof definition !== 'string' || Buffer.byteLength(definition) > renameViewLimits.definitionBytes) throw Error('视图定义超过单对象证明预算');
   // 三个已验旧基线在四种创建/读取模式下均输出固定反引号和反斜杠转义canonical正文；不能用当前NBE/ANSI误解存储正文。
   const canonical = { ...context, mode: { ansiQuotes: false, noBackslashEscapes: false } };
-  return new ViewReferences(tableDefinitionTokens(definition, canonical), database).read();
+  return readViewReferences(tableDefinitionTokens(definition, canonical), database);
 }
 /** 视图图遍历直接与间接引用；CTE不是全局视图，精确库名与表名不按原型键或子串匹配。 */
 export function tableRenameViewsDependOn(views: readonly RenameViewDefinition[], target: RenameViewReference, context: TableDefinitionContext): boolean {

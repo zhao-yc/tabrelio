@@ -6,6 +6,7 @@ import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, re
 import { clickSidebarAction } from './sidebar-menu';
 import { sqliteObjectsZh as objects } from '../../src/renderer/locales/sqliteObjects.zh-CN';
 import { viewOutputColumnsZh as columnText } from '../../src/renderer/locales/viewOutputColumns.zh-CN';
+import { viewDependenciesZh as dependencies } from '../../src/renderer/locales/viewDependencies.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh as fileText } from '../../src/renderer/locales/viewSqlFile.zh-CN';
 
@@ -157,10 +158,32 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
     expect(readView()).toMatchObject({ 展示编号: 9007199254740993n, 展示标记: '原样本' });
 
     const attached = new DatabaseSync(database);
-    try { attached.exec(trigger); } finally { attached.close(); }
+    try {
+      attached.exec(trigger);
+      attached.exec(`
+        CREATE VIEW direct_consumer AS WITH first_cte AS (SELECT * FROM later_cte),
+          later_cte AS (SELECT * FROM main.${quoted}) SELECT * FROM first_cte;
+        CREATE VIEW indirect_consumer AS SELECT * FROM direct_consumer;
+        CREATE VIEW shadowing_consumer AS WITH ${quoted} AS (VALUES (1)) SELECT * FROM ${quoted};
+        CREATE VIEW unparsed_consumer AS SELECT * FROM json_each('[]');
+      `);
+    } finally { attached.close(); }
     expect(attachedTrigger()).toBe(trigger);
     await writeFile(source, next);
     const replacement = await open('replace');
+    const beforeDependencies = await readFile(database);
+    await change(replacement, `CREATE VIEW main.${quoted} AS SELECT 1 AS draft_only;`);
+    const dependencyPanel = replacement.getByRole('region', { name: dependencies.title, exact: true });
+    await dependencyPanel.getByRole('button', { name: dependencies.read, exact: true }).click();
+    await expect(dependencyPanel.getByText(dependencies.definitions, { exact: true })).toBeVisible();
+    const sources = dependencyPanel.getByRole('region', { name: dependencies.referenced, exact: true });
+    await expect(sources.getByRole('cell', { name: 'sample_source', exact: true })).toBeVisible();
+    await expect(sources.locator('tbody tr')).toHaveCount(1);
+    const consumers = dependencyPanel.getByRole('region', { name: dependencies.referencing, exact: true });
+    await expect(consumers.getByRole('cell', { name: 'direct_consumer', exact: true })).toBeVisible();
+    await expect(consumers.locator('tbody tr')).toHaveCount(1);
+    await expect(dependencyPanel.getByText(dependencies.skipped(1), { exact: true })).toBeVisible();
+    expect(await readFile(database)).toEqual(beforeDependencies);
     await load(replacement, true);
     await action(replacement, inspect.rows);
     await expect(region(replacement).getByRole('gridcell', { name: '替换样本', exact: true })).toBeVisible();

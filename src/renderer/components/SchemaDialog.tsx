@@ -38,7 +38,7 @@ import { DatabaseCreateDialog } from './DatabaseCreateDialog';
 import { DefinitionViewer } from './DefinitionViewer';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
 import { MysqlViewColumns } from './MysqlViewColumns';
-import { MysqlViewDependenciesPanel } from './MysqlViewDependenciesPanel';
+import { ViewDependenciesPanel } from './ViewDependenciesPanel';
 import { MysqlViewAttributes } from './MysqlViewAttributes';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
@@ -361,8 +361,8 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
   return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} name={name} value={sql} disabled={viewReadDisabled}
       hint={viewSqlFileZh.mysqlHint} current={fileCurrent} prepare={prepareViewFile}
       prepareSave={value => exportMysqlViewFileQuery(value, database, name)} apply={setSql}/>}
-    {fileView && object && <MysqlViewDependenciesPanel owner={dependenciesOwner} current={fileCurrent}
-      disabled={busy} target={{ connectionId, database, name: object.name }}/>}
+    {fileView && object && <ViewDependenciesPanel owner={dependenciesOwner} current={fileCurrent}
+      disabled={busy} load={() => invoke('mysql.view.dependencies', { connectionId, database, name: object.name })}/>}
     {fileView && <MysqlViewAttributes database={database} view={name} sql={sql} disabled={viewReadDisabled}
       current={fileCurrent} change={value => { setSql(value); setError(''); }}/>}
     <SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/>

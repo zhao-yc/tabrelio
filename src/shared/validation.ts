@@ -1,4 +1,4 @@
-import { mysqlViewDependenciesSchema } from './mysqlViewDependencies';
+import { mysqlViewDependenciesSchema, sqliteViewDependenciesSchema } from './viewDependencies';
 import { mysqlViewQueryInspectSchema } from './mysqlViewFile';
 import { batchSyncApplySchema } from './dataCompareBatchSync';
 import { mysqlBatchSyncPreviewSchema } from './mysqlBatchSync';
@@ -458,6 +458,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableRebuild.inspect': sqliteTableRebuildInspectSchema,
   'sqlite.columns.inspect': sqliteColumnsInspectSchema,
   'sqlite.objects.preview': sqliteObjectsPreviewSchema,
+  'sqlite.view.dependencies': sqliteViewDependenciesSchema,
   'sqlite.view.inspectQuery': sqliteViewQueryInspectSchema,
   'sqlite.tableMaintenance.preview': sqliteTableMaintenancePreviewSchema,
   'sqlite.tableRename.preview': sqliteTableRenamePreviewSchema,

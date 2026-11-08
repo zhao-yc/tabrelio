@@ -1,3 +1,5 @@
+import { readSqliteViewDependencies } from './sqliteViewDependencies';
+import { sqliteViewDependenciesSchema } from '../shared/viewDependencies';
 import { importBatchFormats, importBatchLimit } from '../shared/fileImportBatch';
 import type { SqliteSyncEvidence } from './sqliteDataSync';
 import { compareSqliteTables } from './sqliteDataCompare';
@@ -1389,6 +1391,10 @@ export class SqliteRuntime {
         const source = sqliteSchemaScriptSchema.parse(input);
         // 短读自行确认 driver 关闭；边界检查只中止读取，不干预回滚或用户事务。
         return this.metadata(source, (driver, check) => readSqliteSchemaScript(driver, source, { check, beginCleanup: () => {}, cleanupFailed: () => {} }));
+      }
+      case 'sqlite.view.dependencies': {
+        const source = sqliteViewDependenciesSchema.parse(input);
+        return this.metadata(source, (driver, check) => readSqliteViewDependencies(driver, source, check));
       }
       case 'sqlite.view.inspectQuery': {
         const source = sqliteViewQueryInspectSchema.parse(input);

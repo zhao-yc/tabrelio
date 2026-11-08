@@ -434,7 +434,7 @@ export interface CommandMap {
   'mysql.compareData.syncPreview': { input: import('./postgresDataCompare').PostgresDataSyncPreviewInput; output: import('./postgresDataCompare').PostgresDataSyncPreview };
   'mysql.compareData.syncApply': { input: import('./postgresDataCompare').PostgresDataSyncApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'mysql.compareData': { input: import('./postgresDataCompare').PostgresDataCompareInput; output: import('./postgresDataCompare').PostgresDataCompareOutput };
-  'mysql.view.dependencies': { input: import('./mysqlViewDependencies').MysqlViewDependenciesInput; output: import('./mysqlViewDependencies').MysqlViewDependencies };
+  'mysql.view.dependencies': { input: import('./viewDependencies').MysqlViewDependenciesInput; output: import('./viewDependencies').ViewDependencies };
   'mysql.view.inspectQuery': { input: import('./mysqlViewFile').MysqlViewQueryInspectInput; output: QueryOutcome };
   'mysql.compareData.catalogue': { input: import('./postgresDataCompare').PostgresDataCompareCatalogueInput; output: string[] };
   'mysql.compareData.cancel': { input: { taskId: string }; output: void };
@@ -478,6 +478,7 @@ export interface CommandMap {
   'sqlite.tableRebuild.inspect': { input: import('./sqliteTableRebuild').SqliteTableRebuildInspectInput; output: import('./sqliteTableRebuild').SqliteTableRebuildInspectOutput };
   'sqlite.columns.inspect': { input: import('./sqliteColumns').SqliteColumnsInspectInput; output: import('./sqliteColumns').SqliteColumnsInspectOutput };
   'sqlite.objects.preview': { input: import('./sqliteObjects').SqliteObjectsPreviewInput; output: import('./sqliteObjects').SqliteObjectsPreviewOutput };
+  'sqlite.view.dependencies': { input: import('./viewDependencies').SqliteViewDependenciesInput; output: import('./viewDependencies').ViewDependencies };
   'sqlite.view.inspectQuery': { input: import('./sqliteObjects').SqliteViewQueryInspectInput; output: QueryOutcome };
   'sqlite.tableMaintenance.preview': { input: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewInput; output: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewOutput };
   'sqlite.tableRename.preview': { input: import('./sqliteTableRename').SqliteTableRenamePreviewInput; output: import('./sqliteTableRename').SqliteTableRenamePreviewOutput };

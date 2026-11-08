@@ -1,7 +1,7 @@
-export const mysqlViewDependenciesZh = {
+export const viewDependenciesZh = {
   title: '视图依赖',
   read: '读取视图依赖',
-  hint: '读取服务器已保存的定义，仅显示当前账号可见的直接依赖。',
+  hint: '读取已保存的视图定义，仅显示当前连接可见的直接依赖。',
   working: '正在读取视图依赖…',
   referenced: '此视图引用的表和视图',
   referencing: '引用此视图的视图',
@@ -9,7 +9,7 @@ export const mysqlViewDependenciesZh = {
   name: '对象名称',
   empty: '本次读取未发现可见对象。',
   catalogue: '来源为服务器的视图依赖目录。',
-  definitions: '来源为当前账号可见的视图定义。',
+  definitions: '来源为当前连接可见的视图定义。',
   referencedUnknown: '无法确认此视图引用的对象。',
   skipped: (count: number) => `有 ${count} 条定义不可读取或无法解析，引用此视图的结果可能不完整。`,
   truncated: '目录已达读取上限，部分依赖可能未列出。',

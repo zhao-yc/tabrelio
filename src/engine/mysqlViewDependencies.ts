@@ -1,11 +1,11 @@
-import type { MysqlViewDependencies, MysqlViewDependenciesInput, MysqlViewDependency } from '../shared/mysqlViewDependencies';
+import type { ViewDependencies, MysqlViewDependenciesInput, ViewDependency } from '../shared/viewDependencies';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { renameViewLimits, tableRenameViewReferences } from './tableRenameViewDependencies';
 
 const edgeLimit = 1024, pageSize = 32;
 const literal = (value: string) => `CAST(X'${Buffer.from(value).toString('hex')}' AS BINARY)`;
 const binary = (column: string) => 'CAST(' + column + ' AS BINARY)';
-const exact = (schema: string, name: string, target: MysqlViewDependency) =>
+const exact = (schema: string, name: string, target: ViewDependency) =>
   `${binary(schema)}=${literal(target.database)} AND ${binary(name)}=${literal(target.name)}`;
 type ViewRow = { database: string; name: string; definition: string | null; fingerprint: string | null };
 const columns = `TABLE_SCHEMA AS \`database\`, TABLE_NAME AS name,
@@ -16,7 +16,7 @@ function missingCatalogue(reason: unknown): boolean {
 }
 
 /** 独立短会话只读取目录。MySQL 以原生直接边为准，缺少目录时逐条解析可见的规范定义。 */
-export async function readMysqlViewDependencies(context: StructureTaskContext, input: MysqlViewDependenciesInput): Promise<MysqlViewDependencies> {
+export async function readMysqlViewDependencies(context: StructureTaskContext, input: MysqlViewDependenciesInput): Promise<ViewDependencies> {
   const read = async <T>(sql: string): Promise<T[]> => (await structureTaskQuery<T[]>(context, sql)).rows;
   const target = { database: input.database, name: input.name };
   const targetWhere = exact('TABLE_SCHEMA', 'TABLE_NAME', target);
@@ -27,13 +27,13 @@ export async function readMysqlViewDependencies(context: StructureTaskContext, i
     return rows[0];
   };
   const before = await readTarget();
-  const result: MysqlViewDependencies = { source: 'catalogue', referenced: [], referencing: [], skipped: 0, referencedUnknown: false, truncated: false };
+  const result: ViewDependencies = { source: 'catalogue', referenced: [], referencing: [], skipped: 0, referencedUnknown: false, truncated: false };
   const dialect = context.managed.status.dialect;
   let useDefinitions = dialect === 'mariadb';
   if (!useDefinitions) {
     const edges = async (direction: 'referenced' | 'referencing') => {
       const [other, own] = direction === 'referenced' ? ['TABLE', 'VIEW'] : ['VIEW', 'TABLE'];
-      const rows = await read<MysqlViewDependency>(`SELECT ${other}_SCHEMA AS \`database\`, ${other}_NAME AS name
+      const rows = await read<ViewDependency>(`SELECT ${other}_SCHEMA AS \`database\`, ${other}_NAME AS name
         FROM information_schema.VIEW_TABLE_USAGE WHERE ${exact(own + '_SCHEMA', own + '_NAME', target)}
         ORDER BY BINARY ${other}_SCHEMA,BINARY ${other}_NAME LIMIT ${edgeLimit + 1}`);
       if (rows.length > edgeLimit) result.truncated = true;
@@ -60,7 +60,7 @@ export async function readMysqlViewDependencies(context: StructureTaskContext, i
     result.referencedUnknown = referenced === undefined;
     result.referenced = referenced?.slice(0, edgeLimit) ?? [];
     result.truncated = (referenced?.length ?? 0) > edgeLimit;
-    let last: MysqlViewDependency | undefined, scanned = 0, bytes = 0;
+    let last: ViewDependency | undefined, scanned = 0, bytes = 0;
     scan: for (;;) {
       const after = last ? ` AND (${binary('TABLE_SCHEMA')}>${literal(last.database)}
         OR (${binary('TABLE_SCHEMA')}=${literal(last.database)} AND ${binary('TABLE_NAME')}>${literal(last.name)}))` : '';

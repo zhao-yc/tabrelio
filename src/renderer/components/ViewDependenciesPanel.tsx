@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { MysqlViewDependencies, MysqlViewDependenciesInput, MysqlViewDependency } from '../../shared/mysqlViewDependencies';
-import { errorMessage, invoke } from '../lib';
-import { mysqlViewDependenciesZh as text } from '../locales/mysqlViewDependencies.zh-CN';
+import type { ViewDependencies, ViewDependency } from '../../shared/viewDependencies';
+import { errorMessage } from '../lib';
+import { viewDependenciesZh as text } from '../locales/viewDependencies.zh-CN';
 import { ErrorBox, Spinner } from './ui';
 
-function DependenciesTable({ title, rows, unknown = false }: { title: string; rows: MysqlViewDependency[]; unknown?: boolean }) {
+function DependenciesTable({ title, rows, unknown = false }: { title: string; rows: ViewDependency[]; unknown?: boolean }) {
   return <section aria-label={title}>
     <h3>{title}</h3>
     {rows.length ? <table className="design-table">
@@ -15,12 +15,12 @@ function DependenciesTable({ title, rows, unknown = false }: { title: string; ro
 }
 
 /** 结果仅绑定已保存对象的原窗口和连接，草稿编辑不改变依赖来源。 */
-export function MysqlViewDependenciesPanel({ owner, current, disabled, target }: {
-  owner: object; current(): boolean; disabled: boolean; target: MysqlViewDependenciesInput;
+export function ViewDependenciesPanel({ owner, current, disabled, load }: {
+  owner: object; current(): boolean; disabled: boolean; load(): Promise<ViewDependencies>;
 }) {
   const active = useRef<object | undefined>(undefined), pending = useRef(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const [data, setData] = useState<MysqlViewDependencies>();
+  const [data, setData] = useState<ViewDependencies>();
   useLayoutEffect(() => {
     const lease = {};
     active.current = lease;
@@ -38,7 +38,7 @@ export function MysqlViewDependenciesPanel({ owner, current, disabled, target }:
     setError('');
     setData(undefined);
     try {
-      const result = await invoke('mysql.view.dependencies', target);
+      const result = await load();
       if (live()) setData(result);
     } catch (reason) {
       if (live()) setError(errorMessage(reason));
