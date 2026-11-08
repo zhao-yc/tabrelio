@@ -1,3 +1,5 @@
+import { batchSyncApplySchema } from './dataCompareBatchSync';
+import { mysqlBatchSyncPreviewSchema } from './mysqlBatchSync';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from './postgresBatchSync';
 import { sqliteBatchSyncPreviewSchema } from './sqliteBatchSync';
 import { postgresDatabaseManagePreviewSchema, postgresDatabaseManageApplySchema } from './postgresDatabaseManage';
@@ -404,6 +406,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.compareData.batchApply': postgresBatchSyncApplySchema,
   'postgres.compareData.syncPreview': postgresDataSyncPreviewSchema,
   'postgres.compareData.syncApply': postgresDataSyncApplySchema,
+  'mysql.compareData.batchPreview': mysqlBatchSyncPreviewSchema,
+  'mysql.compareData.batchApply': batchSyncApplySchema,
   'mysql.compareData.syncPreview': postgresDataSyncPreviewSchema,
   'mysql.compareData.syncApply': postgresDataSyncApplySchema,
   'mysql.compareData': mysqlDataCompareSchema,

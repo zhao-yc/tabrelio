@@ -7,6 +7,7 @@ import { navigationMenuItem } from './navigation-menu';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { mysqlDataCompareZh as text } from '../../src/shared/mysqlDataCompare';
 import { postgresDataSyncZh as sync } from '../../src/shared/postgresDataCompare';
+import { mysqlBatchSyncZh as batchSync } from '../../src/renderer/locales/sqliteBatchSync.zh-CN';
 
 test.skip(process.env.DBARK_MYSQL_DATA_SYNC_NATIVE !== '1', '仅运行隔离 MySQL／MariaDB 数据同步');
 test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' });
@@ -208,6 +209,71 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
     await apply.click();
     await expect(committed).toBeVisible();
     expect(await values(right, database, 'ledger')).toEqual(original);
+
+    // 第一张表允许写入，第二张表保留的右侧记录触发唯一约束，核验前一张表也回滚。
+    for (const client of [left, right]) await client.query('UPDATE ' + mirror + '.mirror SET conflict_value=NULL WHERE conflict_value=55');
+    await right.query('UPDATE ' + mirror + ".mirror SET note='左' WHERE id BETWEEN 1 AND 26");
+    await left.query('INSERT INTO ' + mirror + ".mismatched (id,amount,raw,note,conflict_value) VALUES (201,'左值',X'00FF80','新增',55)");
+    await right.query('INSERT INTO ' + mirror + ".mismatched (id,amount,raw,note,conflict_value) VALUES (202,'右值',X'00FF81','仅右',55)");
+    const readBatch = async (client: typeof left) => Promise.all(['mirror', 'mismatched'].map(table => values(client, mirror, table)));
+    const sourceBatch = await readBatch(left), originalBatch = await readBatch(right);
+    await choose(text.source, 'mysql', mirror, 'mirror');
+    await choose(text.target, 'mariadb', mirror, 'mirror');
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    await overview.getByLabel(batch.source, { exact: true }).selectOption('mismatched');
+    await overview.getByLabel(batch.target, { exact: true }).selectOption('mismatched');
+    await overview.getByRole('button', { name: batch.add, exact: true }).click();
+    const prepareBatch = overview.getByRole('button', { name: batchSync.preview, exact: true });
+    const applyBatch = overview.getByRole('button', { name: batchSync.apply, exact: true });
+    const batchReview = overview.getByRole('group', { name: batchSync.previewTitle, exact: true });
+    const batchConfirm = overview.getByLabel(sync.confirm, { exact: true });
+    const deleteBatch = overview.getByRole('checkbox', { name: sync.delete, exact: true });
+    const exactBatch = '`' + mirror + '`.`mirror` 等 2 张表';
+    const confirmBatch = async () => { await batchConfirm.fill(exactBatch); await applyBatch.click(); };
+    await expect(deleteBatch).not.toBeChecked();
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 2 · 更新 1 · 删除 0');
+    await expect(batchReview).toContainText('更新　"' + max + '"');
+    expect(await readBatch(right)).toEqual(originalBatch);
+    await batchConfirm.fill('`' + mirror + '`.`mirror`');
+    await expect(applyBatch).toBeDisabled();
+    await confirmBatch();
+    await expect(overview.getByRole('alert')).toContainText('整批已回滚：目标唯一约束冲突（`' + mirror + '`.`mismatched`）');
+    expect(await readBatch(right)).toEqual(originalBatch);
+
+    await deleteBatch.check();
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 2 · 更新 1 · 删除 2');
+    await right.query('UPDATE ' + mirror + ".mismatched SET note='并发改值' WHERE id=202");
+    const concurrentBatch = await readBatch(right);
+    await confirmBatch();
+    await expect(overview.getByRole('alert')).toContainText('右侧原值已变化');
+    expect(await readBatch(right)).toEqual(concurrentBatch);
+    await right.query('UPDATE ' + mirror + ".mismatched SET note='仅右' WHERE id=202");
+
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 2 · 更新 1 · 删除 2');
+    await batchConfirm.fill(exactBatch);
+    await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表事务同步.png') });
+    await applyBatch.click();
+    await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+    expect(await readBatch(right)).toEqual(sourceBatch);
+    expect(await readBatch(left)).toEqual(sourceBatch);
+    await prepareBatch.click();
+    await expect(overview.getByRole('status')).toHaveText(batchSync.noChanges);
+
+    // 换向后右侧由 MySQL 承担事务，并保留 MariaDB 来源表的原值。
+    await right.query('UPDATE ' + mirror + ".mirror SET note='反向更新' WHERE id=1");
+    await right.query('UPDATE ' + mirror + ".mismatched SET amount='反向精确文本' WHERE id=201");
+    const reverseBatch = await readBatch(right);
+    await overview.getByRole('button', { name: profiles.swap, exact: true }).click();
+    await prepareBatch.click();
+    await expect(batchReview).toContainText('插入 0 · 更新 2 · 删除 0');
+    await confirmBatch();
+    await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+    expect(await readBatch(left)).toEqual(reverseBatch);
+    expect(await readBatch(right)).toEqual(reverseBatch);
+    await overview.getByRole('button', { name: batch.return, exact: true }).click();
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();
     await confirmOwnedDesktopExit(info);

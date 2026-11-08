@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { CellValue } from './contracts';
 import { batchPairLimit, sameCompareScope } from './dataCompareBatch';
-import { batchSyncActions, type BatchSyncPreview } from './dataCompareBatchSync';
+import { batchSyncActions, batchSyncApplySchema, type BatchSyncApplyInput, type BatchSyncPreview } from './dataCompareBatchSync';
 import { postgresRelationName } from './postgresSql';
 import { tableDataCompareRequestSchema } from './postgresDataCompare';
 
@@ -21,9 +21,7 @@ export const postgresBatchSyncPreviewSchema = z.object({
     (!sameCompareScope(source, target) || pairs.every(pair => !sources.has(relation(pair.target))));
 }, '多表同步不允许重复表、重复操作或同库内的来源与目标重叠');
 
-export const postgresBatchSyncApplySchema = z.object({
-  previewId: z.uuid(), taskId: z.uuid(), confirmation: z.string().min(1).max(1024),
-}).strict();
+export const postgresBatchSyncApplySchema = batchSyncApplySchema;
 export type PostgresBatchSyncPreviewInput = z.infer<typeof postgresBatchSyncPreviewSchema>;
-export type PostgresBatchSyncApplyInput = z.infer<typeof postgresBatchSyncApplySchema>;
+export type PostgresBatchSyncApplyInput = BatchSyncApplyInput;
 export type PostgresBatchSyncPreview = BatchSyncPreview<CellValue>;

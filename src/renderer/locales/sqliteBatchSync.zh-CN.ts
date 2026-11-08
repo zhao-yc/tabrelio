@@ -19,3 +19,11 @@ export const postgresBatchSyncZh = {
   working: '正在提交 PostgreSQL 多表同步事务…',
   confirmed: 'PostgreSQL 多表同步已确认提交',
 };
+
+export const mysqlBatchSyncZh = {
+  ...sqliteBatchSyncZh,
+  title: 'MySQL／MariaDB 多表同步',
+  hint: '重新读取所列的表对。所选操作的全部差异会写入同一个右侧数据库的 InnoDB 表。',
+  working: '正在提交 MySQL／MariaDB 多表同步事务…',
+  confirmed: 'MySQL／MariaDB 多表同步已确认提交',
+};

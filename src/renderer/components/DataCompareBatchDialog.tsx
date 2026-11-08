@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { batchSyncActions, type BatchSyncAction, type BatchSyncPreview } from '../../shared/dataCompareBatchSync';
 import { sqliteDataSyncZh as syncText } from '../../shared/sqliteDataCompare';
 import { displaySqliteCompareValue } from '../sqliteDataCompareValues';
-import { sqliteBatchSyncZh, postgresBatchSyncZh } from '../locales/sqliteBatchSync.zh-CN';
+import { sqliteBatchSyncZh, postgresBatchSyncZh, mysqlBatchSyncZh } from '../locales/sqliteBatchSync.zh-CN';
 import { displayServerCompareValue } from '../serverDataCompareValues';
 import type { DataCompareProfileFamily } from '../../shared/dataCompareProfiles';
 import type { PostgresDataCompareOutput } from '../../shared/postgresDataCompare';
@@ -219,9 +219,9 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     setPairs(pairs.map(item => item === pair ? next : item)); forget(pair);
   }
 
-  const supportsSync = family === 'sqlite' || family === 'postgresql';
-  const batchSyncText = family === 'postgresql' ? postgresBatchSyncZh : sqliteBatchSyncZh;
-  const syncEligible = supportsSync && pairs.length > 1 && !pairs.some(pair => pair.mapping);
+  const networkDialect = family === 'postgresql' ? 'postgres' : 'mysql';
+  const batchSyncText = family === 'sqlite' ? sqliteBatchSyncZh : family === 'postgresql' ? postgresBatchSyncZh : mysqlBatchSyncZh;
+  const syncEligible = pairs.length > 1 && !pairs.some(pair => pair.mapping);
   async function prepareSync() {
     if (!syncEligible || !actions.length || !configuration.success || active.current || applying.current || syncWork.current || syncPreview) return;
     const taskId = uid();
@@ -233,8 +233,8 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
       const preview = family === 'sqlite'
         ? displayBatchKeys(await invoke('sqlite.compareSync.batchPreview', { ...request, sourceConnectionId: source.connectionId,
           targetConnectionId: target.connectionId }), displaySqliteCompareValue)
-        : displayBatchKeys(await invoke('postgres.compareData.batchPreview', { ...request, source, target }),
-          key => displayServerCompareValue(key, 'postgres'));
+        : displayBatchKeys(await invoke(`${networkDialect}.compareData.batchPreview`, { ...request, source, target }),
+          key => displayServerCompareValue(key, networkDialect));
       if (preview) setSyncPreview(preview); else setNotice(batchSyncText.noChanges);
     } catch (reason) { setError(errorMessage(reason)); }
     finally { syncWork.current = undefined; setSyncPhase(undefined); }
@@ -246,7 +246,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     syncWork.current = { taskId, phase: 'apply' }; setSyncPhase('apply'); setError(''); setNotice('');
     try {
       const request = { previewId: syncPreview.previewId, confirmation, taskId };
-      const result = await invoke(family === 'sqlite' ? 'sqlite.compareSync.batchApply' : 'postgres.compareData.batchApply', request);
+      const result = await invoke(family === 'sqlite' ? 'sqlite.compareSync.batchApply' : `${networkDialect}.compareData.batchApply`, request);
       if (result.outcome === 'committed') setNotice(batchSyncText.confirmed + ' · ' + result.message);
       else setError(result.message);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -257,7 +257,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
 
   function stopSyncPreview() {
     const work = syncWork.current;
-    if (work?.phase === 'preview') void invoke(family === 'sqlite' ? 'sqlite.compareData.cancel' : 'postgres.compareData.cancel', { taskId: work.taskId }).catch(reason => setError(errorMessage(reason)));
+    if (work?.phase === 'preview') void invoke(family === 'sqlite' ? 'sqlite.compareData.cancel' : `${networkDialect}.compareData.cancel`, { taskId: work.taskId }).catch(reason => setError(errorMessage(reason)));
   }
 
   if (review) return renderPair(endpoints({ source, target }, review),
@@ -316,7 +316,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
           </Fragment>;
         })}</tbody>
       </table>}
-      {supportsSync && pairs.length > 1 && <fieldset className="sqlite-data-compare-endpoint" disabled={locked}>
+      {pairs.length > 1 && <fieldset className="sqlite-data-compare-endpoint" disabled={locked}>
         <legend>{batchSyncText.title}</legend>
         <p>{syncEligible ? batchSyncText.hint : batchSyncText.mapped}</p>
         <div className="check-row">

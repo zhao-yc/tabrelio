@@ -7,7 +7,9 @@ import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpToo
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
 import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSqlFile';
 import { inspectMysqlRestoreSql } from '../engine/mysqlSqlFileInspection';
-import type { PostgresBatchSyncApplyInput, PostgresBatchSyncPreview, PostgresBatchSyncPreviewInput } from '../shared/postgresBatchSync';
+import type { PostgresBatchSyncPreview, PostgresBatchSyncPreviewInput } from '../shared/postgresBatchSync';
+import type { MysqlBatchSyncPreviewInput } from '../shared/mysqlBatchSync';
+import type { BatchSyncApplyInput } from '../shared/dataCompareBatchSync';
 import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
@@ -187,7 +189,7 @@ let choosingImportBatch = false;
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
 let networkSyncTarget: { dialect: 'postgres' | 'mysql'; snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
-let postgresBatchSyncTarget: { previewId: string; owner: MainInvocation; revision: number; expires: number;
+let networkBatchSyncTarget: { dialect: 'mysql' | 'postgres'; previewId: string; owner: MainInvocation; revision: number; expires: number;
   sourceId: string; target: PostgresBatchSyncPreviewInput['target']; confirmation: string } | undefined;
 let networkDataComparison: { owner: MainInvocation; id: string; cancelled: boolean; done: Promise<unknown> } | undefined;
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
@@ -1051,14 +1053,14 @@ function networkCompareOwner(owner: MainInvocation): string {
 }
 
 /** 比较任务固定原文档和已保存配置，迟到的取消或结果不能越过窗口与连接修订。 */
-type NetworkCompareCommand = 'mysql.compareData' | 'postgres.compareData' | 'postgres.compareData.batchPreview';
+type NetworkCompareCommand = `${'mysql' | 'postgres'}.compareData${'' | '.batchPreview'}`;
 async function runNetworkDataComparison<T>(command: NetworkCompareCommand, input: {
   taskId: string; source: { connectionId: string }; target: { connectionId: string };
 }, owner: MainInvocation | undefined,
   request: (scope: { sourceProfile: ConnectionProfile; targetProfile: ConnectionProfile; owner: string; connectionRevision: number }) => Promise<T>,
   publish: (result: T, revision: number) => void): Promise<T> {
   columnsMain.assertCapturedOwner(owner);
-  const postgres = command !== 'mysql.compareData', text = postgres ? postgresDataCompareZh : mysqlDataCompareZh;
+  const postgres = command.startsWith('postgres.'), text = postgres ? postgresDataCompareZh : mysqlDataCompareZh;
   if (networkDataComparison || tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId))
     throw Error('已有表数据比较正在运行或任务编号已使用');
   const revision = store.connectionRevision();
@@ -1075,7 +1077,7 @@ async function runNetworkDataComparison<T>(command: NetworkCompareCommand, input
   tasks.set(input.taskId, { id: input.taskId, kind: command, status: 'running', progress: 0,
     message: text.running, startedAt: new Date().toISOString() });
   networkSyncTarget = undefined;
-  postgresBatchSyncTarget = undefined;
+  networkBatchSyncTarget = undefined;
   const done = request({ sourceProfile, targetProfile, owner: networkCompareOwner(owner!), connectionRevision: revision });
   const record = { owner: owner!, id: input.taskId, cancelled: false, done };
   networkDataComparison = record;
@@ -1101,10 +1103,11 @@ function compareNetworkData(command: 'mysql.compareData' | 'postgres.compareData
     });
 }
 
-function previewPostgresBatchSync(input: PostgresBatchSyncPreviewInput, owner: MainInvocation | undefined) {
-  return runNetworkDataComparison<PostgresBatchSyncPreview | null>('postgres.compareData.batchPreview', input, owner,
-    scope => broker.request('postgres.compareData.batchPreview', { ...input, ...scope }), (result, revision) => {
-      if (result) postgresBatchSyncTarget = { previewId: result.previewId, owner: owner!, revision,
+function previewNetworkBatchSync(dialect: 'postgres' | 'mysql', input: PostgresBatchSyncPreviewInput | MysqlBatchSyncPreviewInput, owner: MainInvocation | undefined) {
+  const command = `${dialect}.compareData.batchPreview` as const;
+  return runNetworkDataComparison<PostgresBatchSyncPreview | null>(command, input, owner,
+    scope => broker.request(command, { ...input, ...scope }), (result, revision) => {
+      if (result) networkBatchSyncTarget = { dialect, previewId: result.previewId, owner: owner!, revision,
         expires: Date.now() + postgresDataSyncLimits.lifetimeMs, sourceId: input.source.connectionId, target: input.target, confirmation: result.confirmation };
     });
 }
@@ -1135,18 +1138,19 @@ async function applyNetworkSync(dialect: 'postgres' | 'mysql', input: PostgresDa
   return runNetworkSyncWrite(command, input.taskId, () => broker.request(command, { ...input, ...scope, targetProfile }));
 }
 
-function applyPostgresBatchSync(input: PostgresBatchSyncApplyInput, owner: MainInvocation | undefined) {
+function applyNetworkBatchSync(dialect: 'postgres' | 'mysql', input: BatchSyncApplyInput, owner: MainInvocation | undefined) {
   columnsMain.assertCapturedOwner(owner);
-  const record = postgresBatchSyncTarget;
-  if (!record || record.previewId !== input.previewId || record.confirmation !== input.confirmation ||
+  const stale = dialect === 'postgres' ? postgresDataSyncZh.stale : mysqlDataSyncZh.stale;
+  const record = networkBatchSyncTarget;
+  if (!record || record.dialect !== dialect || record.previewId !== input.previewId || record.confirmation !== input.confirmation ||
       record.revision !== store.connectionRevision() || record.expires <= Date.now() || networkDataComparison ||
-      shuttingDown || !columnsMain.sharesDocumentOwner(record.owner, owner!)) throw Error(postgresDataSyncZh.stale);
+      shuttingDown || !columnsMain.sharesDocumentOwner(record.owner, owner!)) throw Error(stale);
   if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('同步任务编号已使用');
   connectionConfig.assertAvailable(record.sourceId); connectionConfig.assertAvailable(record.target.connectionId);
   const targetProfile = store.resolveConnection(record.target.connectionId);
-  if (targetProfile.dialect !== 'postgresql') throw Error(postgresDataSyncZh.stale);
-  postgresBatchSyncTarget = undefined;
-  const command = 'postgres.compareData.batchApply';
+  if (dialect === 'postgres' ? targetProfile.dialect !== 'postgresql' : !['mysql', 'mariadb'].includes(targetProfile.dialect)) throw Error(stale);
+  networkBatchSyncTarget = undefined;
+  const command = dialect + '.compareData.batchApply';
   return runNetworkSyncWrite(command, input.taskId, () => broker.request(command, {
     ...input, owner: networkCompareOwner(owner!), connectionRevision: record.revision, targetProfile,
   }));
@@ -2468,7 +2472,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         importCheck.controller.abort();
         return;
       }
-      if (['postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview'].includes(tasks.get(input.taskId)?.kind ?? '')) return cancelNetworkCompare(input.taskId, columns);
+      if (['postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview', 'mysql.compareData.batchPreview'].includes(tasks.get(input.taskId)?.kind ?? '')) return cancelNetworkCompare(input.taskId, columns);
       if (['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get(input.taskId)?.kind ?? '')) {
         const backupOwner = sqlFileTaskOwners.get(input.taskId);
         if (backupOwner) {
@@ -2685,8 +2689,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'postgres.compareData': return compareNetworkData(command, input, columns);
     case 'mysql.compareData.syncPreview': return previewNetworkSync('mysql', input, columns);
     case 'mysql.compareData.syncApply': return applyNetworkSync('mysql', input, columns);
-    case 'postgres.compareData.batchPreview': return previewPostgresBatchSync(input, columns);
-    case 'postgres.compareData.batchApply': return applyPostgresBatchSync(input, columns);
+    case 'postgres.compareData.batchPreview': return previewNetworkBatchSync('postgres', input, columns);
+    case 'postgres.compareData.batchApply': return applyNetworkBatchSync('postgres', input, columns);
+    case 'mysql.compareData.batchPreview': return previewNetworkBatchSync('mysql', input, columns);
+    case 'mysql.compareData.batchApply': return applyNetworkBatchSync('mysql', input, columns);
     case 'postgres.compareData.syncPreview': return previewNetworkSync('postgres', input, columns);
     case 'postgres.compareData.syncApply': return applyNetworkSync('postgres', input, columns);
     case 'mysql.compareData.cancel':
@@ -3509,7 +3515,7 @@ else {
         if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') || payload.command.startsWith('mysql.backup.') ||
-            payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
+            payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview', 'mysql.compareData.batchPreview'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||

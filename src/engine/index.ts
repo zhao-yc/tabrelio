@@ -33,6 +33,8 @@ import type { MysqlPageParameters } from './mysqlDataSync';
 import { MysqlDataCompareTasks, mysqlCompareCatalogue } from './mysqlDataCompare';
 import { auditDatabaseBackupTarget } from './databaseBackupTargetAudit';
 import { mysqlDataCompareSchema } from '../shared/mysqlDataCompare';
+import { mysqlBatchSyncPreviewSchema } from '../shared/mysqlBatchSync';
+import { batchSyncApplySchema } from '../shared/dataCompareBatchSync';
 import { readSchemaComparisonTarget } from './schemaCompare';
 import { open, rename, rm } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
@@ -318,22 +320,41 @@ export class Engine {
         const managed = await connect(profile);
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
       });
-      case 'mysql.compareData': {
-        const request = mysqlDataCompareSchema.parse({
-          source: input.source, target: input.target, taskId: input.taskId, filter: input.filter, summaryOnly: input.summaryOnly, mapping: input.mapping,
-        });
-        if (this.taskIdInUse(request.taskId)) throw Error('任务编号已使用');
-        for (const [profile, target] of [[input.sourceProfile, request.source], [input.targetProfile, request.target]]) {
-          if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== target.connectionId)
-            throw Error('主进程未提供有效的 MySQL／MariaDB 比较连接配置');
+      case 'mysql.compareData':
+      case 'mysql.compareData.batchPreview': {
+        const { owner, connectionRevision, sourceProfile, targetProfile, ...raw } = input;
+        const scope = typeof owner === 'string' && Number.isSafeInteger(connectionRevision) ? { owner, connectionRevision } : undefined;
+        const prepare = <T>(request: { taskId: string; source: { connectionId: string }; target: { connectionId: string } }, read: () => Promise<T>) => {
+          if (this.taskIdInUse(request.taskId)) throw Error('任务编号已使用');
+          for (const [profile, target] of [[sourceProfile, request.source], [targetProfile, request.target]]) {
+            if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== target.connectionId)
+              throw Error('主进程未提供有效的 MySQL／MariaDB 比较连接配置');
+          }
+          return this.withConnectionUse(request.source.connectionId, () => this.withConnectionUse(request.target.connectionId, () => {
+            this.copySourceProfile({ connectionId: request.source.connectionId, profile: sourceProfile });
+            this.copySourceProfile({ connectionId: request.target.connectionId, profile: targetProfile });
+            return read();
+          }));
+        };
+        if (command === 'mysql.compareData.batchPreview') {
+          if (!scope) throw Error('同步缺少可信文档及连接修订');
+          const request = mysqlBatchSyncPreviewSchema.parse(raw);
+          return prepare(request, () => this.mysqlDataComparisons.previewBatch(request, scope));
         }
-        return this.withConnectionUse(request.source.connectionId, () => this.withConnectionUse(request.target.connectionId, () => {
-          this.copySourceProfile({ connectionId: request.source.connectionId, profile: input.sourceProfile });
-          this.copySourceProfile({ connectionId: request.target.connectionId, profile: input.targetProfile });
-          const scope = typeof input.owner === 'string' && Number.isSafeInteger(input.connectionRevision)
-            ? { owner: input.owner, connectionRevision: input.connectionRevision } : undefined;
-          return this.mysqlDataComparisons.compare(request, scope);
-        }));
+        const request = mysqlDataCompareSchema.parse(raw);
+        return prepare(request, () => this.mysqlDataComparisons.compare(request, scope));
+      }
+      case 'mysql.compareData.batchApply': {
+        const { owner, connectionRevision, targetProfile, ...raw } = input;
+        const request = batchSyncApplySchema.parse(raw);
+        if (typeof owner !== 'string' || !Number.isSafeInteger(connectionRevision) ||
+            (targetProfile?.dialect !== 'mysql' && targetProfile?.dialect !== 'mariadb') || typeof targetProfile.id !== 'string')
+          throw Error('同步缺少可信文档或右侧连接配置');
+        if (this.taskIdInUse(request.taskId)) throw Error('任务编号已使用');
+        return this.withConnectionUse(targetProfile.id, () => {
+          this.copySourceProfile({ connectionId: targetProfile.id, profile: targetProfile });
+          return this.mysqlDataComparisons.applyBatch(request, { owner, connectionRevision }, targetProfile.id);
+        });
       }
       case 'mysql.compareData.syncPreview':
       case 'mysql.compareData.syncApply': {
@@ -1143,13 +1164,13 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead: boolean | 'no-default-database' = false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }, taskFinalizer?: (succeeded: boolean) => Promise<void>, protectSubmitted?: () => boolean): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead: boolean | 'no-default-database' = false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: ({ target: { database: string; table: string } } | { targets: { database: string; table: string }[] }) & { commitProtected(): boolean }, taskFinalizer?: (succeeded: boolean) => Promise<void>, protectSubmitted?: () => boolean): Promise<T> {
     let resourcesStarted = false;
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
-      const executionTargets = [...(dataWrite ? [dataWrite.target] : []), ...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
+      const executionTargets = [...(dataWrite ? 'targets' in dataWrite ? dataWrite.targets : [dataWrite.target] : []), ...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
       if (options?.executionDatabase !== undefined && executionTargets.length) throw new Error('库级与表级结构执行范围不能混用；未发送 DDL');
       const releaseExecution = options?.executionDatabase !== undefined ? this.structureExecutions.acquireDatabase(connectionId, options.executionDatabase) : this.structureExecutions.acquire(connectionId, executionTargets);
       let resources: IndependentTaskResourceLease;

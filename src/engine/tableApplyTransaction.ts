@@ -1,45 +1,63 @@
 import type { ResultSetHeader } from 'mysql2';
 import type { RowChange, SqlPreview, TableInfo, CellValue } from '../shared/contracts';
 import { emptyTableApplyEvidence, type TableApplyEvidence, type TableApplyProgress } from '../shared/tableApplyReceipt';
-import { buildChanges } from './sql';
+import { buildChanges, qualified } from './sql';
 
-export interface TableApplyControl {
+interface TableApplyGroup {
+  info: TableInfo;
+  changes: RowChange[];
+  lockInfo(): Promise<TableInfo>;
+  afterWrite?(index: number): Promise<void>;
+}
+
+export interface TableApplyControl extends Pick<TableApplyGroup, 'lockInfo' | 'afterWrite'> {
   evidence: TableApplyEvidence; operationId?: string; expectedPlan?: SqlPreview['statements'];
   checkCancelled(): void; broken(): boolean; cancelled(): boolean;
   send(sql: string, params: CellValue[], acknowledged: (result: ResultSetHeader) => void): Promise<ResultSetHeader>;
-  lockInfo(): Promise<TableInfo>; rollback(): Promise<ResultSetHeader>; emit(p: TableApplyProgress): void;
-  afterWrite?(index: number): Promise<void>;
+  rollback(): Promise<ResultSetHeader>; emit(p: TableApplyProgress): void;
   strictSync?: true;
   searchKey?: { sql: string; params: CellValue[] };
 }
 
-/** 保留原单表InnoDB事务；实际ACK先于取消/收尾，未知提交不补发、不反称回滚。 */
-export async function applyTableTransaction(info: TableInfo, changes: RowChange[], c: TableApplyControl): Promise<{ affectedRows: number }> {
+export function applyTableTransaction(info: TableInfo, changes: RowChange[], control: TableApplyControl): Promise<{ affectedRows: number }> {
+  return applyTableTransactionGroups([{ info, changes, lockInfo: () => control.lockInfo(),
+    afterWrite: control.afterWrite && (index => control.afterWrite!(index)) }], control);
+}
+
+/** 在同一 InnoDB 事务内先锁定并复核全部目标，再发送写入。未知提交不重放。 */
+export async function applyTableTransactionGroups(groups: TableApplyGroup[], c: Omit<TableApplyControl, 'lockInfo' | 'afterWrite'>): Promise<{ affectedRows: number }> {
   const e = c.evidence; let transactionStarted = false; let sequence = 0, phase: TableApplyProgress['phase'] = 'executing', reason: TableApplyProgress['reason'] = 'validation';
+  let writeTable: string | undefined;
   const emit = () => { if (c.operationId) c.emit({ operationId: c.operationId, sequence: ++sequence, phase, reason, evidence: { ...e } }); };
   const acknowledged = (r: ResultSetHeader) => { e.transactionKnown = Number.isInteger(r.serverStatus) && r.serverStatus >= 0 && r.serverStatus <= 65535; e.transactionOpen = e.transactionKnown && Boolean(r.serverStatus & 1); };
   try {
     const options = { ...(c.strictSync || c.searchKey ? { binaryText: 'cast' as const } : {}), searchKey: c.searchKey };
-    const plan = buildChanges(info, changes, options);
-    if (c.expectedPlan && JSON.stringify(c.expectedPlan) !== JSON.stringify(plan.statements)) throw Error('提交计划自预览后已变化，请重新预览；未发送本批数据写入');
+    const plans = groups.map(group => ({ group, statements: buildChanges(group.info, group.changes, options).statements }));
+    if (c.expectedPlan && JSON.stringify(c.expectedPlan) !== JSON.stringify(plans.flatMap(plan => plan.statements))) throw Error('提交计划自预览后已变化，请重新预览；未发送本批数据写入');
     await c.send('START TRANSACTION', [], r => { transactionStarted = true; acknowledged(r); });
     if (!e.transactionKnown || !e.transactionOpen) throw Error('未确认事务已开始，未发送本批数据写入');
     // LIMIT 0取得目标MDL并在同一事务内保持；重新读取引擎后才具备目标回滚保证。
-    const lockedPlan = buildChanges(await c.lockInfo(), changes, options);
-    if (JSON.stringify(lockedPlan.statements) !== JSON.stringify(plan.statements)) throw Error('目标结构在提交前已变化，请重新预览');
-    e.transactionProtected = true; reason = 'none'; emit();
-    for (const [index, item] of lockedPlan.statements.entries()) {
-      c.checkCancelled(); e.dmlMayHaveBeenSent = true; emit();
-      await c.send(item.sql, item.params, r => {
-        acknowledged(r);
-        if (!e.transactionKnown || !e.transactionOpen) { e.transactionProtected = false; reason = 'transaction-unconfirmed'; throw Error('无法确认目标写入仍在同一事务内'); }
-        if (!Number.isSafeInteger(r.affectedRows) || r.affectedRows < 0 || !Number.isSafeInteger(e.serverReportedRows + r.affectedRows)) throw Error('服务器返回的行数无效');
-        e.dmlAcknowledged++; e.serverReportedRows += r.affectedRows; emit();
-        if (c.strictSync && r.warningStatus !== 0) throw Error('服务器返回写入警告');
-        if (r.affectedRows !== 1) { reason = 'conflict'; throw Error('数据已被其他连接修改、删除或行定位不唯一'); }
-      });
-      if (c.afterWrite) await c.afterWrite(index);
+    for (const { group, statements } of plans) {
+      const lockedPlan = buildChanges(await group.lockInfo(), group.changes, options);
+      if (JSON.stringify(lockedPlan.statements) !== JSON.stringify(statements)) throw Error('目标结构在提交前已变化，请重新预览');
     }
+    e.transactionProtected = true; reason = 'none'; emit();
+    for (const { group, statements } of plans) {
+      if (groups.length > 1) writeTable = qualified(group.info.database, group.info.name);
+      for (const [index, item] of statements.entries()) {
+        c.checkCancelled(); e.dmlMayHaveBeenSent = true; emit();
+        await c.send(item.sql, item.params, r => {
+          acknowledged(r);
+          if (!e.transactionKnown || !e.transactionOpen) { e.transactionProtected = false; reason = 'transaction-unconfirmed'; throw Error('无法确认目标写入仍在同一事务内'); }
+          if (!Number.isSafeInteger(r.affectedRows) || r.affectedRows < 0 || !Number.isSafeInteger(e.serverReportedRows + r.affectedRows)) throw Error('服务器返回的行数无效');
+          e.dmlAcknowledged++; e.serverReportedRows += r.affectedRows; emit();
+          if (c.strictSync && r.warningStatus !== 0) throw Error('服务器返回写入警告');
+          if (r.affectedRows !== 1) { reason = 'conflict'; throw Error('数据已被其他连接修改、删除或行定位不唯一'); }
+        });
+        if (group.afterWrite) await group.afterWrite(index);
+      }
+    }
+    writeTable = undefined;
     c.checkCancelled(); phase = 'committing'; e.commitMayHaveBeenSent = true; emit();
     await c.send('COMMIT', [], r => { acknowledged(r); e.commitAcknowledged = e.transactionKnown && !e.transactionOpen; emit(); });
     if (!e.commitAcknowledged) { reason = 'commit-unconfirmed'; throw Error('提交回应无法确认事务终态'); }
@@ -60,7 +78,7 @@ export async function applyTableTransaction(info: TableInfo, changes: RowChange[
       const code = (error as { code?: unknown } | null)?.code;
       const message = code === 'ER_DUP_ENTRY' ? '目标唯一约束冲突' : typeof code === 'string' ? '数据库写入失败' :
         error instanceof Error ? error.message : '写入校验失败';
-      throw Error('整批已回滚：' + message);
+      throw Error('整批已回滚：' + message + (writeTable ? '（' + writeTable + '）' : ''));
     }
     if ((reason as TableApplyProgress['reason']) === 'conflict') throw Error('数据并发冲突，目标表事务内整批修改已回滚；不包含触发器或外部副作用');
     reason = c.cancelled() ? 'cancelled' : 'statement-failed'; throw Error('本批修改未完成，已确认目标表事务回滚；不包含触发器或外部副作用');
