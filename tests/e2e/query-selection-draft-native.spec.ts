@@ -117,6 +117,37 @@ test('四种数据库从单一选区打开独立查询，保留原正文、选�
       if (dialect === 'postgresql') await page.screenshot({ path: info.outputPath('从选区打开新查询.png') });
       await open(parent.id);
       await expect.poll(inspect).toEqual(original);
+
+      const targetDialect = ({ mysql: 'sqlite', mariadb: 'postgresql', postgresql: 'mysql', sqlite: 'mariadb' } as const)[dialect];
+      const target = before.tabs.find(tab => tab.id === targetDialect)!;
+      await (await navigationMenuItem(query, { name: text.targetAction, exact: true })).click();
+      const dialog = page.getByRole('dialog', { name: text.targetAction, exact: true });
+      const submit = dialog.getByRole('button', { name: text.targetOpen, exact: true });
+      await expect(submit).toBeDisabled();
+      await dialog.getByLabel(text.targetConnection, { exact: true }).selectOption(target.connectionId);
+      const database = dialog.getByLabel(text.targetDatabase, { exact: true });
+      await expect(database).toHaveValue(target.database!);
+      const expectedDatabase = targetDialect === 'sqlite' ? 'main' : targetDialect === 'mysql' ? null : 'explicit_target';
+      if (targetDialect === 'sqlite') await expect(database).not.toBeEditable();
+      else await database.fill(expectedDatabase ?? '');
+      if (dialect === 'postgresql') await page.screenshot({ path: info.outputPath('在指定连接打开查询副本.png') });
+      await submit.click();
+      await expect(dialog).toBeHidden();
+      await expect.poll(async () => {
+        const snapshot = await settings();
+        return snapshot.tabs.find(tab => tab.id === snapshot.activeTabId);
+      }).toMatchObject({ title: parent.title + text.suffix, kind: 'query', sql: original.sql, connectionId: target.connectionId,
+        databaseContext: { state: 'known', database: expectedDatabase } });
+      const updated = await settings(), targetDraft = updated.tabs.find(tab => tab.id === updated.activeTabId)!;
+      expect(targetDraft.id).not.toBe(parent.id);
+      expect(targetDraft.database).toBe(expectedDatabase ?? undefined);
+      expect(targetDraft.fileSourceBinding).toBeUndefined();
+      expect(targetDraft.sourceBinding).toBeUndefined();
+      expect(updated.tabs.find(tab => tab.id === parent.id)).toEqual(parent);
+      await expect(box).toBeEditable();
+      expect((await inspect()).sql).toBe(original.sql);
+      await open(parent.id);
+      await expect.poll(inspect).toEqual(original);
     }
     expect(await history()).toEqual(beforeHistory);
     expect(await tasks()).toEqual(beforeTasks);

@@ -1190,6 +1190,10 @@ SQLite 也可切换到「搜索数据」，在 `main` 中勾选普通表、视�
 
 在 PostgreSQL 查询页点击「复制为新查询」，可将当前完整 SQL 和数据库上下文复制到独立草稿。副本可以单独编辑和保存，原标签仍可查看已有结果及处理活动事务。[PostgreSQL 复制查询](development/postgres-query-duplicate-20261107.md)
 
+### 在指定连接打开查询副本
+
+在查询操作菜单选择「在指定连接打开副本」，指定目标连接并核对数据库。也可以点击「读取目标库列表」再选库。MySQL 和 MariaDB 可清空默认库，SQLite 固定使用 `main`。确认后新标签以目标方言打开当前完整 SQL，原标签保留会话、结果和保存来源。核对方言和目标后，可手动执行新草稿。
+
 PostgreSQL 查询页也可打开「SQL 片段库」，将本地片段插入原光标或选区，并可一次撤销。选中 SQL 后，可在右键或应用菜单点击「将选区保存为片段」。内置模板使用 PostgreSQL 双引号，用户片段保持原文；保存和插入均不执行 SQL。[PostgreSQL 片段库](development/postgres-snippets-20261107.md)
 
 在 PostgreSQL 新语句中输入至少两个字符的片段名称前缀，可直接从补全列表插入原文或内置模板，并可一次撤销。已有会话沿用原字符串模式，离线且语句边界有歧义时不提供片段。名称补全适用于不超过 65,536 个 UTF-16 单元的脚本；长脚本可继续从片段库插入。[PostgreSQL 片段名称补全](development/postgres-snippet-completion-20261107.md)

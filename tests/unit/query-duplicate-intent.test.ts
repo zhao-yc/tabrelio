@@ -79,6 +79,17 @@ describe('查询复制意图与既有正文桥', () => {
     expect(f.getScope().tab!.sourceBinding).toBe(binding); expect(f.model.getValue()).toBe('SELECT 用户刚输入;'); expect(f.model.version).toBe(version); expect(f.model.controlledEdits).toBe(0); expect(f.editor.undoStops).toBe(0); expect(f.editor.edits).toEqual([]);
     f.model.flush(); expect(f.open).toHaveBeenCalledTimes(1); await expect(intent.run()).rejects.toThrow('已变化'); f.close();
   });
+  it('指定目标只交付最新正文和来源标签，未知默认库或活动会话也不触发协议读取', async () => {
+    const f = fixture(), chooseTarget = vi.fn(), database = vi.fn(() => ({ state: 'unknown' } as const));
+    f.change({ sessionId: 'original-session', tab: { ...f.getScope().tab!, databaseContext: { state: 'unknown' } } });
+    f.model.deferred = true;
+    f.editor.nativeInput('SELECT 最新正文;');
+    await new QueryDuplicateIntent({ ...f.ports, database, chooseTarget }, 'target').run();
+    expect(chooseTarget).toHaveBeenCalledExactlyOnceWith({ sourceTabId: 'q', title: '已保存查询（副本）', sql: 'SELECT 最新正文;' });
+    expect(database).not.toHaveBeenCalled();
+    expect(f.open).not.toHaveBeenCalled();
+    f.close();
+  });
   it('外部新草稿尚未进模型时不允许flush把旧模型覆盖回store', async () => {
     const f = fixture(); f.change({ tab: { ...f.getScope().tab!, sql: 'SELECT 外部新草稿;' } }); const intent = new QueryDuplicateIntent(f.ports);
     await expect(intent.run()).rejects.toThrow(); expect(f.getScope().tab!.sql).toBe('SELECT 外部新草稿;'); expect(f.model.getValue()).toBe('SELECT 原文;'); expect(f.open).not.toHaveBeenCalled(); f.close();

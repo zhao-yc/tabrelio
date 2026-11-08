@@ -15,8 +15,10 @@ export interface QueryDuplicatePorts {
   flush(editor: monaco.editor.IStandaloneCodeEditor, expectedDraft: string): string | Promise<string>;
   database(scope: QueryDuplicateScope): QueryDatabaseContext | Promise<QueryDatabaseContext>;
   open(tab: Omit<WorkspaceTab, 'id'>): void;
+  chooseTarget?(draft: QueryTargetDraft): void;
 }
-export type QueryDuplicateMode = 'all' | 'selection';
+export interface QueryTargetDraft { sourceTabId: string; title: string; sql: string }
+export type QueryDuplicateMode = 'all' | 'selection' | 'target';
 const contextKey = (tab?: WorkspaceTab) => JSON.stringify([tab?.database ?? null, tab?.databaseContext?.state ?? 'legacy', tab?.databaseContext?.state === 'known' ? tab.databaseContext.database : null]);
 /** 标题保留Unicode字符边界，符合既有settings保存的256单元限制。 */
 function copyTitle(title: string, suffix: string): string {
@@ -46,7 +48,7 @@ export class QueryDuplicateIntent {
   #valid = true;
   #started = false;
   #flushing = true;
-  constructor(private readonly ports: QueryDuplicatePorts, mode: QueryDuplicateMode = 'all') {
+  constructor(private readonly ports: QueryDuplicatePorts, private readonly mode: QueryDuplicateMode = 'all') {
     const editor = ports.editor(), model = editor?.getModel(), scope = ports.scope();
     if (!editor || !model || model.isDisposed() || editor.getRawOptions().readOnly || !scope.tab || scope.tab.kind !== 'query' || !scope.connection || !scope.present || !scope.active || scope.blocked) throw Error(text.unavailable);
     this.#editor = editor; this.#model = model; this.#version = model.getVersionId(); this.#sql = model.getValue(); this.#scope = scope; this.#source = { ...scope.tab }; this.#context = contextKey(scope.tab); this.#draft = scope.tab.sql ?? '';
@@ -94,6 +96,12 @@ export class QueryDuplicateIntent {
       this.#assert(); const sql = await this.ports.flush(this.#editor, this.#draft); this.#assert();
       if (sql !== this.#sql) throw Error(text.changed);
       this.#flushing = false; this.#assert();
+      // 指定目标时不读取原会话的默认库。选择器只接收已核对的正文快照。
+      if (this.mode === 'target') {
+        if (!this.ports.chooseTarget) throw Error(text.unavailable);
+        this.ports.chooseTarget({ sourceTabId: this.#source.id, title: copyTitle(this.#source.title, text.suffix), sql });
+        return;
+      }
       const context = await this.ports.database(this.#scope); this.#assert();
       if (context.state !== 'known') throw Error(text.contextUnknown);
       const candidate: Omit<WorkspaceTab, 'id'> = { kind: 'query', title: copyTitle(this.#source.title, this.#selected ? text.selectionSuffix : text.suffix),

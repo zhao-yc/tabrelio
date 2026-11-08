@@ -88,6 +88,8 @@
 
 2026-11-09 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 查询结果可按明确目标映射预览并复制完整 INSERT 脚本，支持已返回及勾选快照。D02、Q05、R01、R02 仍为部分覆盖。[复制查询结果为 INSERT SQL](user-guide.md#复制查询结果为-insert-sql)
 
+2026-11-09 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询可将当前完整正文复制到明确选定连接和数据库的独立标签，原会话和来源保持。Q02、Q03、R01、R02 仍为部分覆盖。[在指定连接打开查询副本](user-guide.md#在指定连接打开查询副本)
+
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 实体表可为当前记录或本页勾选行生成 UPDATE SQL，WHERE 使用完整原主键，SET 使用已加载的普通非键原值。D02、R01、R02 仍为部分覆盖。[复制记录为 UPDATE SQL](user-guide.md#复制记录为-update-sql)
 
 2026-11-08 源码增量。PostgreSQL 单文件原生 CSV 可在导入前完整检查编码、引号和列数，并保留列映射。写入沿已核对的字节范围并核对记录数。F01、R01 仍为部分覆盖。[原生 CSV 整文件检查](development/postgres-copy-csv-preflight-20261108.md)

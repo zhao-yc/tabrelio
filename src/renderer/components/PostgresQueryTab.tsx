@@ -64,7 +64,7 @@ import { queryAnalyzeZh } from '../locales/queryAnalyze.zh-CN';
 import { ErrorBox, Spinner, Empty, Modal } from './ui';
 import { QueryCloseDialog } from './QueryCloseDialog';
 import { QueryBindingDialog } from './QueryBindingDialog';
-import { QueryDuplicateIntent, type QueryDuplicateMode } from '../queryDuplicateIntent';
+import { QueryDuplicateIntent, type QueryDuplicateMode, type QueryTargetDraft } from '../queryDuplicateIntent';
 import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { QueryTransactionSettingsIntent } from '../queryTransactionSettingsIntent';
@@ -158,6 +158,7 @@ export function PostgresQueryTab({
   onHistory,
   searchNavigation,
   historyInsertionRegistry,
+  onChooseQueryTarget,
 }: {
   tab: WorkspaceTab;
   closeRequest?: QueryCloseRequest;
@@ -165,6 +166,7 @@ export function PostgresQueryTab({
   onHistory(): void;
   searchNavigation?: SavedQueryNavigationSource;
   historyInsertionRegistry?: HistoryInsertionRegistry;
+  onChooseQueryTarget?(draft: QueryTargetDraft): void;
 }) {
   const workspace = useWorkspace((s) => s),
     profile = workspace.connections.find((p) => p.id === tab.connectionId),
@@ -1673,6 +1675,7 @@ export function PostgresQueryTab({
           if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany);
           workspace.openTab(candidate);
         },
+        chooseTarget: onChooseQueryTarget,
       }, mode);
       duplicateIntent.current = intent;
       setDuplicating(true);
@@ -1798,6 +1801,8 @@ export function PostgresQueryTab({
               onClick={() => void duplicateQuery()}>{queryDuplicateZh.action}</button>
             <button disabled={!canDuplicateQuery || !editorSelection.single || resultsOnly} title={queryDuplicateZh.selectionHint}
               onClick={() => void duplicateQuery('selection')}>{queryDuplicateZh.selection}</button>
+            {onChooseQueryTarget && <button disabled={!canDuplicateQuery} title={queryDuplicateZh.targetHint}
+              onClick={() => void duplicateQuery('target')}>{queryDuplicateZh.targetAction}</button>}
             <button disabled={locked} onClick={onHistory}>
               {text.history}
             </button>

@@ -11,6 +11,7 @@ import { sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -52,7 +53,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
         return { canceled: false, filePaths: [filePath] };
       }) as typeof open;
     }, filePath);
-    await page.evaluate(async ({ profile, table, sql, database }) => {
+    const targetProfile = await page.evaluate(async ({ profile, table, sql, database }) => {
       const id = 'json-sqlite';
       const picked = profile ? undefined : await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
       if (!profile && !picked) throw Error('本例 SQLite 文件未授权');
@@ -65,6 +66,8 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
         ...(profile ? [] : [{ id: 'json-view', kind: 'table' as const, title: 'json_view', connectionId: connection.id, database, table: 'json_view' }]),
         { id: 'json-query', kind: 'query', title: '查询结果 JSON', connectionId: connection.id, database, sql },
       ] });
+      // 第二个独立配置只指向本例授权的隔离端点。
+      return profile ? window.dbark.invoke('connections.save', { ...profile, name: '独立副本目标' }) : undefined;
     }, { profile, table, sql, database });
     await page.reload();
     await page.evaluate(() => {
@@ -326,6 +329,22 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
           { amount: 9007199254740993n, label: 'row A', hex: '00FF', nullable: null },
         ]);
       } finally { replay.close(); }
+    }
+    if (targetProfile) {
+      await (await navigationMenuItem(query, { name: queryDuplicateZh.targetAction, exact: true })).click();
+      const chooser = page.getByRole('dialog', { name: queryDuplicateZh.targetAction, exact: true });
+      await chooser.getByLabel(queryDuplicateZh.targetConnection, { exact: true }).selectOption(targetProfile.id);
+      await expect(chooser.locator('datalist option')).toHaveCount(0);
+      await chooser.getByRole('button', { name: queryDuplicateZh.targetRead, exact: true }).click();
+      await expect.poll(() => chooser.locator('datalist option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toContain(database);
+      await chooser.getByRole('button', { name: queryDuplicateZh.targetOpen, exact: true }).click();
+      await expect(chooser).toBeHidden();
+      await expect.poll(() => page.evaluate(async () => {
+        const state = await window.dbark.invoke('settings.get', {});
+        return state.tabs.find(tab => tab.id === state.activeTabId);
+      })).toMatchObject({ connectionId: targetProfile.id, sql, databaseContext: { state: 'known', database } });
+      await open('json-query');
+      await expect(rowA).toBeVisible();
     }
     expect(await tableSorts()).toEqual(tableSortsBeforeResult);
     expect(await history()).toEqual(historyBefore);

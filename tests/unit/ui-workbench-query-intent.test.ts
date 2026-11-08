@@ -7,6 +7,8 @@ import { UiCommandRegistry } from '../../src/renderer/uiCommandRegistry';
 import { uiMenuStateSchema, type UiCommandInvocation, type UiMenuState } from '../../src/shared/uiCommands';
 import type { DesktopApi } from '../../src/shared/contracts';
 import { errorMessage } from '../../src/renderer/lib';
+import { appDialogSelector, appModalSelector } from '../../src/renderer/modalSelectors';
+import type { QueryTargetDraft } from '../../src/renderer/queryDuplicateIntent';
 
 const { request, saveSettings } = vi.hoisted(() => ({ request: vi.fn(), saveSettings: vi.fn() }));
 // 新标签的本地保存不能消耗待交付的导航响应；其它命令仍由原导航spy核对。
@@ -34,7 +36,7 @@ function appHandlers(navigation: unknown, workspace: typeof import('../../src/re
     return value && ts.isJsxAttribute(value) && value.initializer && ts.isJsxExpression(value.initializer) ? value.initializer.expression?.getText(file) : undefined;
   }
   function visit(node: ts.Node) {
-    if (ts.isFunctionDeclaration(node) && node.name && /^(openWorkbenchManager|closeWorkbenchManager|openObjectLink|closeObjectLink|openNewQueryDialog|closeNewQueryDialog|openQueryTabEntry)$/.test(node.name.text)) helpers.push(node.getText(file));
+    if (ts.isFunctionDeclaration(node) && node.name && /^(openWorkbenchManager|closeWorkbenchManager|openObjectLink|closeObjectLink|openNewQueryDialog|closeNewQueryDialog|openQueryTabEntry|openQueryTarget)$/.test(node.name.text)) helpers.push(node.getText(file));
     if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'button') {
       if (node.children.some(child => ts.isJsxExpression(child) && child.expression?.getText(file) === 'zh.common.newQuery')) found.set('工具栏', attribute(node.openingElement, 'onClick')!);
       if (node.openingElement.attributes.properties.some(item => ts.isJsxAttribute(item) && item.name.getText(file) === 'className' && item.initializer && ts.isStringLiteral(item.initializer) && item.initializer.text === 'add-tab')) found.set('标签加号', attribute(node.openingElement, 'onClick')!);
@@ -69,7 +71,7 @@ function appHandlers(navigation: unknown, workspace: typeof import('../../src/re
   runtimeVisit(runtimeFile);
   expect(handlerDeclaration).not.toBe(''); expect(newQueryCommand).not.toBe('');
   expect([...found.keys()].sort()).toEqual([...entries, '关闭查询'].sort());
-  const shown = { query: false, modal: false }, connection = vi.fn();
+  const shown = { query: false, modal: false, target: undefined as QueryTargetDraft | undefined }, connection = vi.fn();
   const registry = new UiCommandRegistry(), nativeListeners = new Set<(event: UiCommandInvocation) => void>(); let menuState: UiMenuState | undefined;
   const bridge: Pick<DesktopApi, 'invoke' | 'onCommand'> = {
     invoke: (async (command: string, input: unknown) => {
@@ -80,11 +82,12 @@ function appHandlers(navigation: unknown, workspace: typeof import('../../src/re
   };
   const state = workspace.useWorkspace.getState();
   const context = createContext({ workbenchNavigation: navigation, useWorkspace: workspace.useWorkspace, connections: [{ id: '当前连接' }], state, settings: state.settings, available: true,
-    uiCommands: registry, modal: () => shown.modal, errorMessage,
+    uiCommands: registry, modal: () => shown.modal, errorMessage, appModalSelector, appDialogSelector,
     commands: { run: (id: 'new-query') => { void registry.execute({ id, revision: registry.getSnapshot().revision }); } },
     setNewQuery: (value: boolean) => { shown.query = value; }, setConnectionDialog: connection,
+    setQueryTarget: (value: QueryTargetDraft) => { shown.target = value; },
     document: { querySelector: () => shown.modal ? {} : null }, setWorkbenchDialog: vi.fn(), setObjectLinkDialog: vi.fn() });
-  const code = helpers.join('\n') + '\nconst ' + handlerDeclaration + ';\nglobalThis.newQueryCommand=(' + newQueryCommand + ');\nglobalThis.handlers={' + [...found].map(([name, callback]) => JSON.stringify(name) + ':(' + callback + ')').join(',') + '};';
+  const code = helpers.join('\n') + '\nconst ' + handlerDeclaration + ';\nglobalThis.openQueryTarget=openQueryTarget;\nglobalThis.newQueryCommand=(' + newQueryCommand + ');\nglobalThis.handlers={' + [...found].map(([name, callback]) => JSON.stringify(name) + ':(' + callback + ')').join(',') + '};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   const offState = registry.subscribe(() => { void bridge.invoke('app.menuState', registry.getSnapshot()); });
   registry.setBlocked(false); registry.update('app', {}, { active: true, contextKey: '原App新查询入口', handlers: { 'new-query': context.newQueryCommand } });
@@ -145,6 +148,18 @@ describe('正式App新查询入口撤销W02迟到意图', () => {
     const next = navigation.open(current); latest.resolve(current); expect(await next).toBe(true);
     expect(workspace.useWorkspace.getState().settings.tabs).toMatchObject([{ kind: 'query', connectionId: '最新连接', database: '新库', sql: '' }]);
     expect(saveSettings).toHaveBeenCalledOnce(); expect(saveSettings.mock.calls[0][0].tabs).toMatchObject([{ kind: 'query', connectionId: '最新连接' }]);
+  });
+  it('指定目标选择器接管导航且只接纳活动来源的正文', async () => {
+    const state = workspace.useWorkspace.getState();
+    state.openTab({ id: '来源', kind: 'query', title: '原查询', connectionId: '当前连接', sql: 'SELECT 1' });
+    const draft = { sourceTabId: '来源', title: '原查询（副本）', sql: 'SELECT 1' };
+    const old = pending(); request.mockReturnValueOnce(old.promise); const opening = navigation.open(target);
+    handlers.context.openQueryTarget({ ...draft, sourceTabId: '过期来源' });
+    expect(handlers.shown.target).toBeUndefined();
+    handlers.context.openQueryTarget(draft);
+    expect(handlers.shown.target).toBe(draft);
+    old.resolve(target); expect(await opening).toBe(false);
+    expect(workspace.useWorkspace.getState().settings.tabs.map(tab => tab.id)).toEqual(['来源']);
   });
   it('无连接的标签加号转入建连表单前也撤销旧导航', async () => {
     const old = pending(); request.mockReturnValueOnce(old.promise); const opening = navigation.open(target); handlers.context.connections = [];
