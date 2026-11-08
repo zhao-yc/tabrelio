@@ -64,6 +64,7 @@ import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
 import { capturePostgresCheckedDelete, planPostgresCheckedDelete, type PostgresCheckedDeletePage } from '../postgresCheckedDelete';
+import { planPostgresCheckedEdit } from '../postgresCheckedEdit';
 import { capturePostgresCheckedFill, planPostgresCheckedFill, postgresCheckedFillBytes, type PostgresCheckedFillPage } from '../postgresCheckedFill';
 import { capturePostgresCheckedDuplicate, planPostgresCheckedDuplicate, postgresCheckedDuplicateBytes, type PostgresCheckedDuplicatePage } from '../postgresCheckedDuplicate';
 import { postgresCheckedPageCurrent, postgresCheckedPagePins, retainPostgresCheckedPages } from '../postgresCheckedPages';
@@ -107,7 +108,7 @@ type CheckedDeleteIntent = ReturnType<typeof planPostgresCheckedDelete> & {
   pageToken: string;
   scope: object;
 };
-type CheckedFillIntent = {
+type CheckedUpdateIntent = {
   source: readonly PostgresCheckedFillPage[];
   originalDraft: DraftEntry[];
   columns: readonly PostgresTableColumn[];
@@ -115,7 +116,7 @@ type CheckedFillIntent = {
   count: number;
   pageToken: string;
   scope: object;
-};
+} & ({ kind: 'fill' } | { kind: 'edit'; plan: ReturnType<typeof planPostgresCheckedEdit> });
 type CheckedDuplicateIntent = {
   source: readonly PostgresCheckedDuplicatePage[];
   originalDraft: DraftEntry[];
@@ -166,8 +167,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   }
   const [fillPages, setFillPages] = useState<readonly PostgresCheckedFillPage[]>([]);
   const fillPagesRef = useRef(fillPages);
-  const [checkedFill, setCheckedFill] = useState<CheckedFillIntent>();
-  const checkedFillRef = useRef<CheckedFillIntent | undefined>(undefined);
+  const [checkedUpdate, setCheckedUpdate] = useState<CheckedUpdateIntent>();
+  const checkedUpdateRef = useRef<CheckedUpdateIntent | undefined>(undefined);
   function publishFillPages(next: readonly PostgresCheckedFillPage[]) {
     if (next === fillPagesRef.current || !next.length && !fillPagesRef.current.length) return;
     fillPagesRef.current = next;
@@ -370,7 +371,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || checkedDeleteRef.current || checkedFillRef.current || checkedDuplicateRef.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || checkedDeleteRef.current || checkedUpdateRef.current || checkedDuplicateRef.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const sameWindow = next.limit === options.limit && JSON.stringify(next.filter) === JSON.stringify(options.filter) &&
       JSON.stringify(next.sort) === JSON.stringify(options.sort);
@@ -507,7 +508,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedFill || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedUpdate || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -848,25 +849,25 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   }
 
   const fillPage = fillPages.find(item => item.offset === options.offset);
-  function closeCheckedFill(intent: CheckedFillIntent) {
-    if (checkedFillRef.current !== intent) return;
-    checkedFillRef.current = undefined;
-    setCheckedFill(undefined);
+  function closeCheckedUpdate(intent: CheckedUpdateIntent) {
+    if (checkedUpdateRef.current !== intent) return;
+    checkedUpdateRef.current = undefined;
+    setCheckedUpdate(undefined);
   }
 
   useLayoutEffect(() => {
     publishFillPages([]);
-    if (checkedFillRef.current) closeCheckedFill(checkedFillRef.current);
+    if (checkedUpdateRef.current) closeCheckedUpdate(checkedUpdateRef.current);
   }, [fillScope]);
   useLayoutEffect(() => {
-    if (!active && checkedFillRef.current) closeCheckedFill(checkedFillRef.current);
+    if (!active && checkedUpdateRef.current) closeCheckedUpdate(checkedUpdateRef.current);
   }, [active]);
   /** 同步观察活动标签、连接或作业切换，避免快速切走再切回后旧弹窗仍可暂存。 */
   useEffect(() => useWorkspace.subscribe((state, previous) => {
-    const intent = checkedFillRef.current;
+    const intent = checkedUpdateRef.current;
     if (intent && (state.settings.activeTabId !== tab.id || state.settings.tabs.find(item => item.id === tab.id) !== tab ||
         state.connections.find(item => item.id === tab.connectionId) !== previous.connections.find(item => item.id === tab.connectionId) ||
-        (state.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion || state.activeJobs[tab.id])) closeCheckedFill(intent);
+        (state.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion || state.activeJobs[tab.id])) closeCheckedUpdate(intent);
   }), [tab, connectionVersion]);
 
   /** 保留原令牌和有界字段原值，刷新当前页的收集会明确替换该页来源。 */
@@ -885,34 +886,38 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
-  function openCheckedFill() {
-    if (!page?.pageToken || !canEditGrid || !findIsCurrent() || checkedFillRef.current || fillPagesRef.current !== fillPages || !fillPages.length) return;
+  function openCheckedUpdate(kind: CheckedUpdateIntent['kind']) {
+    if (!page?.pageToken || !canEditGrid || !findIsCurrent() || checkedUpdateRef.current || fillPagesRef.current !== fillPages || !fillPages.length) return;
     try {
       if (fillPages.some(item => !postgresCheckedPageCurrent(item))) throw Error(fillText.pagesExpired);
       const columns = fillColumns.filter(column => fillPages.every(item => item.columns.has(column.key)));
       if (!columns.length) throw Error(fillText.fields);
       const groups = [...fillPages].sort((left, right) => left.offset - right.offset).map(item =>
         ({ index: Math.floor(item.offset / options.limit) + 1, count: item.rows.length }));
-      const intent = { source: fillPages, originalDraft: draftRef.current, columns, groups,
+      const originalDraft = draftRef.current;
+      const base = { source: fillPages, originalDraft, columns, groups,
         count: groups.reduce((count, group) => count + group.count, 0), pageToken: page.pageToken, scope: fillScope };
-      checkedFillRef.current = intent;
-      setCheckedFill(intent);
+      const intent: CheckedUpdateIntent = kind === 'fill' ? { ...base, kind }
+        : { ...base, kind, plan: planPostgresCheckedEdit(fillPages, columns, originalDraft, options.limit) };
+      checkedUpdateRef.current = intent;
+      setCheckedUpdate(intent);
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
-  /** 整组选区只生成一步草稿，原页令牌和既有草稿字段随各行一起保留。 */
-  function stageCheckedFill(intent: CheckedFillIntent, fields: readonly PostgresTableField[]) {
+  /** 跨页更新共用选区与草稿的占用检查，再用原账本合同验证整组变更。 */
+  function stageCheckedUpdate(intent: CheckedUpdateIntent, build: () => { entries: DraftEntry[]; count: number }) {
+    const labels = intent.kind === 'fill' ? fillText : batchEditText;
     const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
-    if (checkedFillRef.current !== intent || fillPagesRef.current !== intent.source || draftRef.current !== intent.originalDraft ||
+    if (checkedUpdateRef.current !== intent || fillPagesRef.current !== intent.source || draftRef.current !== intent.originalDraft ||
         intent.scope !== fillScope || issued.current !== intent.pageToken || !layoutScope.current.current() ||
-        dialogs.length !== 1 || dialogs[0].getAttribute('aria-label') !== fillText.collectedTitle ||
-        lease.current || requiresRefresh || recordInput.current || inlineOwner.current || useWorkspace.getState().activeJobs[tab.id]) throw Error(fillText.stale);
-    const planned = planPostgresCheckedFill(intent.source, intent.columns, fields, intent.originalDraft);
+        dialogs.length !== 1 || dialogs[0].getAttribute('aria-label') !== labels.collectedTitle ||
+        lease.current || requiresRefresh || recordInput.current || inlineOwner.current || useWorkspace.getState().activeJobs[tab.id]) throw Error(labels.stale);
+    const planned = build();
     validateChanges(planned.entries, intent.pageToken);
-    setChanges(planned.entries, 'fill');
-    closeCheckedFill(intent);
+    setChanges(planned.entries, intent.kind);
+    closeCheckedUpdate(intent);
     setError('');
-    setMessage(planned.count ? fillText.staged(planned.count) : fillText.unchanged);
+    setMessage(planned.count ? labels.staged(planned.count) : labels.unchanged);
   }
 
   const duplicatePage = duplicatePages.find(item => item.offset === options.offset);
@@ -1598,7 +1603,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
               }}>{fillText.removePage}</button>}
               {!!fillPages.length && <>
                 <button type="button" disabled={!canEditGrid || fillPages.some(item => !postgresCheckedPageCurrent(item))}
-                  onClick={openCheckedFill}>{fillText.collectedAction}</button>
+                  onClick={() => openCheckedUpdate('fill')}>{fillText.collectedAction}</button>
+                <button type="button" disabled={!canEditGrid || fillPages.some(item => !postgresCheckedPageCurrent(item))}
+                  onClick={() => openCheckedUpdate('edit')}>{batchEditText.collectedAction}</button>
                 <button type="button" disabled={!canChangeGrid} onClick={() => {
                   if (findIsCurrent() && fillPagesRef.current === fillPages) publishFillPages([]);
                 }}>{fillText.clear}</button>
@@ -1670,8 +1677,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         changes: postgresBatchFillChanges(batch.page, gridLayout.columns, batch.selected, fields,
           key => batch.originalDraft.find(entry => entry.rowKey === key)?.change),
       }))} onClose={() => closeBatch(batch)}/>}
-    {checkedFill && <PostgresBatchFillDialog columns={checkedFill.columns} count={checkedFill.count} groups={checkedFill.groups}
-      onStage={fields => stageCheckedFill(checkedFill, fields)} onClose={() => closeCheckedFill(checkedFill)}/>}
+    {checkedUpdate?.kind === 'fill' && <PostgresBatchFillDialog columns={checkedUpdate.columns} count={checkedUpdate.count} groups={checkedUpdate.groups}
+      onStage={fields => stageCheckedUpdate(checkedUpdate, () => planPostgresCheckedFill(checkedUpdate.source, checkedUpdate.columns, fields, checkedUpdate.originalDraft))}
+      onClose={() => closeCheckedUpdate(checkedUpdate)}/>}
+    {checkedUpdate?.kind === 'edit' && <PostgresBatchEditDialog rows={checkedUpdate.plan.rows} columns={checkedUpdate.columns}
+      primary={page?.columns.filter(column => column.primary) ?? []} offset={0} collected={checkedUpdate.plan}
+      onStage={inputs => stageCheckedUpdate(checkedUpdate, () => checkedUpdate.plan.entries(inputs))}
+      onClose={() => closeCheckedUpdate(checkedUpdate)}/>}
     {checkedDelete && <PostgresBatchDeleteDialog plan={checkedDelete.plan} offset={0} collected
       onStage={() => stageCheckedDelete(checkedDelete)} onClose={() => closeCheckedDelete(checkedDelete)}/>}
     {batch?.kind === 'delete' && <PostgresBatchDeleteDialog plan={batch.plan} offset={options.offset}

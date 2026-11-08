@@ -1,10 +1,30 @@
-import type { PostgresTableChange, PostgresTableField, PostgresTablePage } from '../shared/postgresTable';
+import type { DataRow } from '../shared/contracts';
+import type { PostgresTableChange, PostgresTableColumn, PostgresTableField, PostgresTablePage } from '../shared/postgresTable';
 import { ownCell } from './lib';
 import { postgresBatchEditZh as text } from './locales/postgresBatchEdit.zh-CN';
 import { postgresBatchEditableColumn, postgresBatchValueEqual, postgresBatchValueValid, type PostgresBatchRow } from './postgresBatchSelection';
 
 export type PostgresBatchEditValues = ReadonlyMap<string, PostgresTableField['value']>;
 export type PostgresBatchEditInput = ReadonlyMap<number, PostgresBatchEditValues>;
+
+/** 未开放字段照原草稿保留，空数组表示明确撤回，undefined 表示没有变化。 */
+export function postgresBatchEditedFields(columns: ReadonlyMap<string, PostgresTableColumn>, original: DataRow,
+  values: PostgresBatchEditValues, previous?: PostgresTableChange): PostgresTableField[] | undefined {
+  const prior = previous?.kind === 'update' ? previous.fields : [];
+  const priorByColumn = new Map(prior.map(field => [field.column, field]));
+  const fields = prior.filter(field => !columns.has(field.column));
+  let changed = prior.some(field => columns.has(field.column) && !values.has(field.column));
+  for (const [key, value] of values) {
+    const column = columns.get(key), raw = ownCell(original, key), old = priorByColumn.get(key);
+    if (!column || raw === undefined || !postgresBatchValueValid(column, value)) throw Error(text.invalid);
+    if (old && postgresBatchValueEqual(value, old.value, raw)) { fields.push(old); continue; }
+    if (!postgresBatchValueEqual(value, undefined, raw)) {
+      fields.push({ column: key, value });
+      changed = true;
+    } else if (old) changed = true;
+  }
+  return changed ? fields : undefined;
+}
 
 /** 构造逐行更新和明确撤回的原草稿。保持未开放字段及首次编辑时的原行版本。 */
 export function postgresBatchEditPlan(page: PostgresTablePage, rows: readonly PostgresBatchRow[], inputs: PostgresBatchEditInput) {
@@ -14,20 +34,8 @@ export function postgresBatchEditPlan(page: PostgresTablePage, rows: readonly Po
   for (const [index, values] of [...inputs].sort(([left], [right]) => left - right)) {
     const row = byIndex.get(index);
     if (!row || page.rows[index] !== row.original || page.rowKeys?.[index] !== row.key) throw Error(text.stale);
-    const prior = row.previous?.kind === 'update' ? row.previous.fields : [];
-    const priorByColumn = new Map(prior.map(field => [field.column, field]));
-    const fields = prior.filter(field => !columns.has(field.column));
-    let changed = prior.some(field => columns.has(field.column) && !values.has(field.column));
-    for (const [key, value] of values) {
-      const column = columns.get(key), original = ownCell(row.original, key), old = priorByColumn.get(key);
-      if (!column || original === undefined || !postgresBatchValueValid(column, value)) throw Error(text.invalid);
-      if (old && postgresBatchValueEqual(value, old.value, original)) { fields.push(old); continue; }
-      if (!postgresBatchValueEqual(value, undefined, original)) {
-        fields.push({ column: key, value });
-        changed = true;
-      } else if (old) changed = true;
-    }
-    if (!changed) continue;
+    const fields = postgresBatchEditedFields(columns, row.original, values, row.previous);
+    if (!fields) continue;
     if (fields.length) changes.push({ kind: 'update', row: index, fields });
     else remove.add(row.key);
   }

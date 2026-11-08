@@ -314,11 +314,13 @@ PostgreSQL 表页的「按当前筛选删除」会预览目标表中所有匹配
 
 在 PostgreSQL「字段概况」选数值字段及 5、10 或 20 个目标区间，再点「读取数值分布」。直方图覆盖当前筛选的全部匹配行，NULL、NaN 和无穷值单独显示。详见[PostgreSQL 数值直方图](development/postgres-table-histogram-20261106.md)。
 
-勾选 PostgreSQL 网格中的记录后，可[批量填充指定字段](development/postgres-batch-fill-20261106.md)，整批暂存、撤销，并通过原表页预览确认后提交。 在不同页点击「收集本页填充目标」后，可用「填充跨页收集记录」核对页号和数量，为多个字段填写统一值，再整批暂存、撤销和提交。[PostgreSQL 跨页勾选填充](development/postgres-checked-fill-20261108.md)
+勾选 PostgreSQL 网格中的记录后，可[批量填充指定字段](development/postgres-batch-fill-20261106.md)，整批暂存、撤销，并通过原表页预览确认后提交。 在不同页点击「收集本页更新目标」后，可用「填充跨页收集记录」核对页号和数量，为多个字段填写统一值，再整批暂存、撤销和提交。[PostgreSQL 跨页勾选填充](development/postgres-checked-fill-20261108.md)
 
 「[删除勾选记录](development/postgres-batch-delete-20261106.md)」可按原行号和主键核对本页多条记录，暂存后可整批撤销，最后从表页预览确认提交。
 
 「[逐条编辑勾选记录](development/postgres-batch-edit-20261106.md)」可给本页勾选的记录分别填写不同值，切换时保留各自输入，再整批暂存、撤销或预览提交。
+
+需要为不同页的记录分别设置值时，逐页勾选并点「收集本页更新目标」，再选「逐条编辑跨页收集记录」。窗口显示记录的来源页和主键。可整批暂存、撤销或重做，再预览并确认提交。[PostgreSQL 跨页逐条编辑](development/postgres-checked-edit-20261108.md)
 
 「[复制当前记录](development/postgres-record-duplicate-20261106.md)」可从网格或记录表单打开预填的新增草稿，调整手动主键或唯一字段，再预览确认提交。
 

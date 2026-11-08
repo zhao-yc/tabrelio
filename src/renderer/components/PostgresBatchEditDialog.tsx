@@ -3,6 +3,7 @@ import type { PostgresTableColumn } from '../../shared/postgresTable';
 import { errorMessage } from '../lib';
 import { postgresBatchEditZh as text } from '../locales/postgresBatchEdit.zh-CN';
 import { postgresBatchDuplicateZh as duplicateText } from '../locales/postgresBatchDuplicate.zh-CN';
+import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
 import { postgresTableZh } from '../locales/postgresTable.zh-CN';
 import type { PostgresBatchEditInput } from '../postgresBatchEdit';
 import type { PostgresBatchRow } from '../postgresBatchSelection';
@@ -10,9 +11,10 @@ import { PostgresRecordFields, type PostgresRecordValues } from './PostgresRecor
 import { ErrorBox, Modal } from './ui';
 
 /** 每条原记录使用独立缓冲。只在确认整批时把各条输入交回表页。 */
-export function PostgresBatchEditDialog({ rows, columns, primary, offset, duplicate, onStage, onClose }: {
+export function PostgresBatchEditDialog({ rows, columns, primary, offset, duplicate, collected, onStage, onClose }: {
   rows: readonly PostgresBatchRow[]; columns: readonly PostgresTableColumn[]; primary: readonly PostgresTableColumn[];
   duplicate?: { initial: ReadonlyMap<number, PostgresRecordValues>; omitted: readonly string[]; groups?: readonly { index: number; count: number }[]; positions?: readonly { page: number; row: number }[] };
+  collected?: { groups: readonly { index: number; count: number }[]; positions: readonly { page: number; row: number }[] };
   offset: number; onStage(inputs: PostgresBatchEditInput): void; onClose(): void;
 }) {
   const [active, setActive] = useState(0);
@@ -20,6 +22,7 @@ export function PostgresBatchEditDialog({ rows, columns, primary, offset, duplic
   const [error, setError] = useState('');
   const row = rows[active];
   const labels = duplicate ? duplicateText : text;
+  const groups = collected?.groups ?? duplicate?.groups;
 
   function originalFields(target: PostgresBatchRow): PostgresRecordValues {
     if (duplicate) return duplicate.initial.get(target.index) ?? new Map();
@@ -29,14 +32,14 @@ export function PostgresBatchEditDialog({ rows, columns, primary, offset, duplic
   }
 
   function rowLabel(target: PostgresBatchRow): string {
-    const position = duplicate?.positions?.[target.index];
-    return position ? duplicateText.pageRow(position.page, position.row) : text.record(offset + target.index + 1);
+    const position = (collected ?? duplicate)?.positions?.[target.index];
+    return position ? labels.pageRow(position.page, position.row) : text.record(offset + target.index + 1);
   }
 
-  return <Modal title={duplicate?.groups ? duplicateText.collectedTitle : labels.title} onClose={onClose} wide>
+  return <Modal title={collected ? text.collectedTitle : duplicate?.groups ? duplicateText.collectedTitle : labels.title} onClose={onClose} wide>
     <div className="modal-content pg-batch-edit">
       <p>{labels.notice}</p>
-      {duplicate?.groups && <ul>{duplicate.groups.map(group => <li key={group.index}>{duplicateText.pageCount(group.index, group.count)}</li>)}</ul>}
+      {groups && <ul>{groups.map(group => <li key={group.index}>{fillText.pageCount(group.index, group.count)}</li>)}</ul>}
       {!!duplicate?.omitted.length && <p>{duplicateText.omitted(duplicate.omitted.join('、'))}</p>}
       <div className="pg-batch-edit-records">
         <nav aria-label={text.rows}>{rows.map((target, index) => {

@@ -7,4 +7,8 @@ export const postgresBatchEditZh = {
   unchanged: '没有新的记录草稿变化。',
   stale: '原表页、连接、勾选或草稿已变化，请重新打开逐条编辑。',
   invalid: '字段或填充值无效，整批未暂存。',
+  collectedAction: '逐条编辑跨页收集记录', collectedTitle: '逐条编辑 PostgreSQL 跨页记录',
+  pageRow: (page: number, row: number) => `第 ${page} 页第 ${row} 行`,
+  pagesExpired: '部分编辑目标的原页已失效，请移除或在当前页重新收集。',
+  pagesOverlap: '不同原页包含同一主键，请调整编辑范围。',
 } as const;

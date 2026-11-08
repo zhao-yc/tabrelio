@@ -71,8 +71,10 @@ test('PostgreSQL 逐条编辑勾选记录及准确提交', async ({}, info) => {
     await mode(edit).selectOption('text');
     await value(edit).fill('原有草稿');
     await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
-    for (const note of ['甲原', '丙原']) await grid.getByRole('row')
-      .filter({ has: page.getByRole('gridcell', { name: note, exact: true }) }).getByRole('checkbox').check();
+    // 网格会展示已暂存字段，按保持不变的精确主键勾选原记录。
+    await expect(noteCell('原有草稿')).toBeVisible();
+    for (const id of ['9007199254740993', '9007199254740995']) await grid.getByRole('row')
+      .filter({ has: page.getByRole('gridcell', { name: id, exact: true }) }).getByRole('checkbox').check();
 
     await button(text.action).click();
     await expect(value(batch)).toHaveValue('原有草稿');
@@ -116,6 +118,8 @@ test('PostgreSQL 逐条编辑勾选记录及准确提交', async ({}, info) => {
     const review = page.getByRole('dialog', { name: tableText.preview, exact: true });
     expect(await readRows()).toEqual(originals);
     await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    // 网格在预览前已显示草稿值，等待真实事务确认后才回读。
+    await expect(tab).toContainText('PostgreSQL已确认整批提交');
     await expect(noteCell('甲新值')).toBeVisible();
     expect(await readRows()).toEqual([{ ...originals[0], note: '甲新值' }, originals[1], { ...originals[2], note: null }]);
     await mark('确认原预览后两条勾选记录分别写入，未勾选记录保持');

@@ -14,7 +14,7 @@ export interface PostgresCheckedFillPage extends PostgresCheckedPage {
   readonly rows: readonly FillRow[];
 }
 
-/** 只保存勾选行的可填充字段原值。缓存总预算独立于最终写入字段的线路预算。 */
+/** 只保存勾选行的可更新字段及用于核对的主键。缓存预算独立于写入预算。 */
 export const postgresCheckedFillBytes = 4 * postgresTableLimits.draft;
 
 export function capturePostgresCheckedFill(page: PostgresTablePage, offset: number, visible: readonly PostgresTableColumn[],
@@ -26,14 +26,16 @@ export function capturePostgresCheckedFill(page: PostgresTablePage, offset: numb
   const columns = visible.filter(column => page.columns.includes(column) && postgresBatchEditableColumn(column) &&
     rows.every(row => ownCell(row.original, column.key) !== undefined));
   if (!columns.length) throw Error(text.fields);
+  const capturedColumns = [...page.columns.filter(column => column.primary), ...columns];
   let bytes = 128;
   const data = rows.map(({ key: rowKey, index: row, original }) => {
     bytes += 128 + rowKey.length * 2;
-    const values = Object.fromEntries(columns.map(({ key }) => {
-      const value = ownCell(original, key)!;
+    const values = Object.fromEntries(capturedColumns.flatMap(({ key }) => {
+      const value = ownCell(original, key);
+      if (value === undefined) return [];
       bytes += 64 + (key.length + (typeof value === 'string' ? value.length : value && typeof value === 'object' ? value.base64.length : 0)) * 2;
       if (bytes > remaining) throw Error(text.pagesBudget);
-      return [key, value && typeof value === 'object' ? { ...value } : value];
+      return [[key, value && typeof value === 'object' ? { ...value } : value]];
     }));
     return { row, rowKey, original: values };
   });
