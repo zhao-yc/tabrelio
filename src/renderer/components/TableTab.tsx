@@ -1,4 +1,4 @@
-import { mysqlQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
+import { gridQuickValueAssignment, gridQuickValueKinds, mysqlQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { TableEditWorkspace, type TableEditBatch, type TableEditPage, type TableEditNavigation, type TableCheckedFill, type TableCheckedRecordEdit } from '../tableEditWorkspace';
 import { tableEditWorkspaceZh as workspaceText } from '../locales/tableEditWorkspace.zh-CN';
@@ -1920,7 +1920,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   function setQuickValue(kind: GridQuickValue): void {
     if (!tableToolbarCurrent() || rowsRef.current !== rows || selectionRef.current !== selection ||
         layoutRevision.current !== headerCopyLayoutRevision || blockedRef.current || activeGridEditor.current || !quickValueRow || !quickValueColumn || !canSetQuickValue(kind)) return;
-    const key = quickValueColumn.name, value = kind === 'null' ? null : '';
+    const key = quickValueColumn.name, value = gridQuickValueAssignment(kind);
     if (ownCell(quickValueRow.data, key) === value) return;
     setRows(rows.map(row => row === quickValueRow ? { ...row, data: { ...row.data, [key]: value } } : row));
     setError('');
@@ -2018,8 +2018,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={recordTemplatesZh.open} disabled={!editable || blocked || record.dirty || gridEditing || !!templateDialog} onClick={openRecordTemplates}>{recordTemplatesZh.open}</button>
 <button aria-label={recordBatchEditZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={() => openRecordBatch()}>{recordBatchEditZh.action}</button>
 <button aria-label={recordBatchFillZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={() => openBatchFill('page')}>{recordBatchFillZh.action}</button>
-<button type="button" title={quickValueText.nullHint} disabled={!canSetQuickValue('null')} onClick={() => setQuickValue('null')}>{quickValueText.null}</button>
-<button type="button" title={quickValueText.emptyHint} disabled={!canSetQuickValue('empty')} onClick={() => setQuickValue('empty')}>{quickValueText.empty}</button>
+{gridQuickValueKinds.map(kind => <button key={kind} type="button" title={quickValueText[`${kind}Hint`]}
+  disabled={!canSetQuickValue(kind)} onClick={() => setQuickValue(kind)}>{quickValueText[kind]}</button>)}
 <button aria-label={draftHistoryZh.undo} title={draftHistoryZh.limit} disabled={!history.status.undo || historyBlocked} onClick={() => moveHistory("undo")}>{draftHistoryZh.undo} ({history.status.undo})</button>
 <button aria-label={draftHistoryZh.redo} title={draftHistoryZh.limit} disabled={!history.status.redo || historyBlocked} onClick={() => moveHistory("redo")}>{draftHistoryZh.redo} ({history.status.redo})</button>
 <button aria-label={savedDraftText.save} disabled={historyBlocked || !changes.length} onClick={() => openSavedDraft('save')}>{savedDraftText.save}</button>

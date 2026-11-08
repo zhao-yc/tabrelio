@@ -1,4 +1,4 @@
-import { postgresQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
+import { gridQuickValueAssignment, postgresQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridHeaderDetailsZh as headerText } from '../locales/gridHeaderDetails.zh-CN';
 import { postgresTableCopyZh } from '../locales/postgresTableCopy.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
@@ -1100,7 +1100,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (!findIsCurrent() || recordInput.current) return;
     const target = quickValueTarget(cell, kind);
     if (!target) return;
-    const key = target.column.key, value = kind === 'null' ? null : '';
+    const key = target.column.key, value = gridQuickValueAssignment(kind);
     const previous = target.fields.find(field => field.column === key)?.value;
     if (previous ? previous.mode === 'null' && value === null || previous.mode === 'text' && previous.value === value : target.original === value) return;
     const fields = target.fields.filter(field => field.column !== key);

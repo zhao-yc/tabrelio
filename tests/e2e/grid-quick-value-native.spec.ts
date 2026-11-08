@@ -1,4 +1,4 @@
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
@@ -8,24 +8,26 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { sqliteTableEditZh as sqliteText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { draftHistoryZh } from '../../src/renderer/locales/draftHistory.zh-CN';
+import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('活动格快速暂存 NULL 和空字符串并逐步撤销', async ({}, info) => {
+test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}, info) => {
   const dialect = process.env.DBARK_GRID_QUICK_VALUE_DIALECT;
   test.skip(!dialect, '需要显式启用隔离单元格暂存专项');
   const local = dialect === 'sqlite', database = local ? 'main' : process.env.DBARK_GRID_QUICK_VALUE_DATABASE ?? '';
   const port = Number(process.env.DBARK_GRID_QUICK_VALUE_PORT), password = process.env.DBARK_GRID_QUICK_VALUE_PASSWORD ?? '';
   if (process.env.DBARK_DEV_URL || process.env.DBARK_EXECUTABLE_PATH ||
       (local ? process.env.DBARK_INTEGRATION_ENABLED !== '0' : process.env.DBARK_INTEGRATION_ENABLED !== '1' ||
-        !['postgresql', 'mysql', 'mariadb'].includes(dialect!) || !/^tabrelio_qv_[a-f0-9]{12}$/.test(database) ||
+        !['postgresql', 'mysql', 'mariadb'].includes(dialect!) || !/^tabrelio_qu_[a-f0-9]{12}$/.test(database) ||
         !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535))
     throw Error('仅允许本例独占 SQLite 文件或回环实库');
   const file = join(await realpath(dataDir), 'grid-quick-value.sqlite');
   if (local) {
     const fixture = new DatabaseSync(file);
     try {
-      fixture.exec("CREATE TABLE update_subject(id INTEGER PRIMARY KEY, label TEXT, numeric_value INTEGER NOT NULL); INSERT INTO update_subject VALUES(1,'row A',17),(2,'row B',18);");
+      fixture.exec("CREATE TABLE update_subject(id INTEGER PRIMARY KEY, label TEXT, numeric_value INTEGER NOT NULL, uuid_value TEXT); INSERT INTO update_subject VALUES(1,'row A',17,NULL),(2,'row B',18,NULL);");
     } finally { fixture.close(); }
   }
   const baseline = local ? await readFile(file) : undefined;
@@ -92,8 +94,53 @@ test('活动格快速暂存 NULL 和空字符串并逐步撤销', async ({}, inf
     await expect(cell).toHaveText('NULL');
     await clickAction(undo);
     await expect(cell).toHaveText(local ? 'TEXT · row A' : 'row A');
+
+    const namedCell = async (name: string) => {
+      const index = await grid.getByRole('columnheader').filter({ hasText: new RegExp('^' + name) }).getAttribute('aria-colindex');
+      if (!index) throw Error('验收列位置缺失');
+      return grid.locator(`[role="row"][aria-rowindex="${rowIndex}"] > [role="gridcell"][aria-colindex="${index}"]`);
+    };
+    const restricted = await namedCell(local ? 'numeric_value' : 'scope');
+    await restricted.click();
+    await expect(await action(text.uuid)).toBeDisabled();
+    await page.keyboard.press('Escape');
+    const uuidCell = await namedCell('uuid_value');
+    const uuidPattern = /[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/;
+    const generate = async () => {
+      await uuidCell.click();
+      await clickAction(text.uuid);
+      await expect(uuidCell).toHaveText(uuidPattern);
+      return (await uuidCell.textContent())!.match(uuidPattern)![0];
+    };
+    const first = await generate();
+    await clickAction(undo);
+    await expect(uuidCell).toHaveText('NULL');
+    const second = await generate();
+    expect(second).not.toBe(first);
+    await expect(other).toBeVisible();
     expect(await jobs()).toEqual(before);
     if (baseline) expect(await readFile(file)).toEqual(baseline);
+    await page.screenshot({ path: info.outputPath('活动格 UUID 草稿.png') });
+
+    // 只允许向上面的专用 SQLite 文件或独占回环库执行真实确认提交。
+    const pg = dialect === 'postgresql';
+    await clickAction(local ? sqliteText.preview : pg ? postgresTableZh.preview : zh.table.text019);
+    const review = page.getByRole('dialog', { name: local ? sqliteText.previewTitle : pg ? postgresTableZh.preview : zh.table.text031, exact: true });
+    await expect(review).toBeVisible();
+    if (local) await review.getByRole('checkbox', { name: sqliteText.confirmation, exact: true }).check();
+    await review.getByRole('button', { name: local ? sqliteText.submit : pg ? postgresTableZh.apply : zh.common.confirmApply, exact: true }).click();
+    await expect(review).toBeHidden();
+    await expect(uuidCell).toHaveText(uuidPattern);
+    expect((await uuidCell.textContent())!.match(uuidPattern)![0]).toBe(second);
+    if (local) {
+      const check = new DatabaseSync(file, { readOnly: true });
+      try {
+        const result = check.prepare('SELECT id,label,uuid_value,typeof(uuid_value) AS storage FROM update_subject ORDER BY id').all();
+        expect(result.map(row => [row.id, row.label, row.uuid_value, row.storage])).toEqual([
+          [1, 'row A', second, 'text'], [2, 'row B', null, 'null'],
+        ]);
+      } finally { check.close(); }
+    } else await writeFile(info.outputPath('已提交UUID.txt'), second);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

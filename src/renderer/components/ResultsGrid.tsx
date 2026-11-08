@@ -1,4 +1,4 @@
-import type { GridQuickValue } from '../gridQuickValue';
+import { gridQuickValueKinds, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
@@ -444,8 +444,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     quickValueActions.apply(cell, kind);
   }
   const copyTools = <>
-    {quickValueActions && (['null', 'empty'] as const).map(kind =>
-      <button key={kind} type="button" title={kind === 'null' ? quickValueText.nullHint : quickValueText.emptyHint}
+    {quickValueActions && gridQuickValueKinds.map(kind =>
+      <button key={kind} type="button" title={quickValueText[`${kind}Hint`]}
         disabled={!activeCopyCell || !quickValueActions.allowed(activeCopyCell, kind)} onClick={() => applyQuickValue(kind)}>{quickValueText[kind]}</button>)}
     <button type="button" title={gridCellFileZh.hint} disabled={!copyEnabled || !activeCopyCell?.column || !!skipRowInInversion?.(activeCopyCell.row)}
       onClick={saveActiveCell}>{gridCellFileZh.action}</button>
