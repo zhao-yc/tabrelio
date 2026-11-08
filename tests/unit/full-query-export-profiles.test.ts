@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { LocalStore } from '../../src/main/storage';
 import { validateCommand } from '../../src/shared/validation';
+import { txtExportDefaults } from '../../src/shared/txtExport';
 
 const wasm = createRequire(import.meta.url).resolve('sql.js/dist/sql-wasm.wasm');
 const protector = { available: () => false, encrypt: () => '', decrypt: (value: string) => value };
@@ -83,5 +84,44 @@ describe('完整查询导出方案', () => {
     expect(store.fullQueryExportProfiles(sqlite)).toEqual([{ ...csv, revision }]);
     rmdirSync(file + '.tmp');
     expect(store.mutateFullQueryExportProfiles(update)).toMatchObject([update.profile]);
+  });
+
+  it('按 MySQL 和 MariaDB 独立存储完整流式导出方案，原方案重开仍可读', async () => {
+    const old = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: csv });
+    const mysql = { dialect: 'mysql' }, mariadb = { dialect: 'mariadb' };
+    const streamCsv = { name: '日报', options: { format: 'stream', settings: { ...csv.options, ordinal: 2 } } };
+    const streamInsert = { name: '日报', options: { format: 'stream', settings: {
+      format: 'sql', encoding: 'utf16le', target: { database: '备份库', table: '日报', columns: ['id', '附注'] },
+    } } };
+    expect(store.mutateFullQueryExportProfiles({ ...mysql, kind: 'add', profile: streamCsv })).toMatchObject([streamCsv]);
+    expect(store.mutateFullQueryExportProfiles({ ...mariadb, kind: 'add', profile: streamInsert })).toMatchObject([streamInsert]);
+    store.close();
+    store = await LocalStore.open(file, wasm, protector);
+    expect(store.fullQueryExportProfiles(mysql)).toMatchObject([streamCsv]);
+    expect(store.fullQueryExportProfiles(mariadb)).toMatchObject([streamInsert]);
+    expect(store.fullQueryExportProfiles(sqlite)).toEqual(old);
+  });
+
+  it('只接受与流式格式相符的设置，禁止将运行数据或安全确认放入方案', () => {
+    const before = readFileSync(file);
+    const add = (settings: unknown, dialect = 'mysql') => ({
+      dialect, kind: 'add', profile: { name: '日报', options: { format: 'stream', settings } },
+    });
+    const record = { format: 'xml-attributes', ordinal: 200 };
+    const text = { format: 'txt', encoding: 'utf16le', txtOptions: txtExportDefaults, ordinal: 1 };
+    const zip = { format: 'csv-zip', encoding: 'gb18030', delimiter: ';' };
+    for (const request of [
+      add({ ...record, ordinal: 201 }), add({ format: 'csv', encoding: 'utf8', delimiter: ';' }),
+      add({ ...zip, ordinal: 2 }), add({ ...record, encoding: 'gb18030' }),
+      add({ ...text, parameters: [] }), add({ ...text, sql: 'SELECT 1' }), add({ ...text, fileToken: '旧文件' }),
+      add({ ...text, acknowledged: true }), add({ ...text, protocol: 'binary-explicit' }), add(record, 'postgresql'),
+      { dialect: 'mariadb', kind: 'add', profile: csv },
+    ]) {
+      expect(() => validateCommand('queryExportProfiles.mutate', request)).toThrow();
+      expect(() => store.mutateFullQueryExportProfiles(request)).toThrow();
+    }
+    expect(readFileSync(file)).toEqual(before);
+    for (const settings of [record, text, zip, { format: 'xlsx' }, { format: 'html' }, { format: 'xml' }])
+      expect(() => validateCommand('queryExportProfiles.mutate', add(settings))).not.toThrow();
   });
 });

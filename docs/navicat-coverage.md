@@ -6,7 +6,7 @@
 
 2026-11-07 源码增量。已返回和勾选结果、SQLite 与 PostgreSQL 完整查询、MySQL／MariaDB 同会话完整导出可生成 HTML 网页。Q05、R01、R02 仍为部分覆盖。[查询结果 HTML 导出](development/query-html-export-20261107.md)
 
-2026-11-07 源码增量。SQLite 和 PostgreSQL 的完整查询导出支持命名方案，可复用 CSV 分隔符、文本编码、Excel 格式和 INSERT 目标映射。Q05、R01、R02 仍为部分覆盖。[完整查询导出方案](development/full-query-export-profiles-20261107.md)
+2026-11-08 源码增量。MySQL、MariaDB、SQLite 和 PostgreSQL 的完整查询导出支持命名方案，可复用 CSV 分隔符、文本编码、Excel 格式和 INSERT 目标映射。MySQL／MariaDB 还可复用指定行结果集序号，应用后须重新选择文件并确认执行。Q05、R01、R02 仍为部分覆盖。[完整查询导出方案](development/full-query-export-profiles-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 完整查询可通过独立只读游标流式导出 INSERT SQL，支持显式 schema、表和列映射。Q05、R01 仍为部分覆盖。[PostgreSQL 完整查询 INSERT SQL](development/postgres-full-query-sql-20261107.md)
 

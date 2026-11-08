@@ -28,7 +28,7 @@ async function mount(){
   events=new Set();requests=[];execute=vi.fn(()=>new Promise<QueryStreamExportOutput>(resolve=>{settle=resolve;}));cancel=vi.fn(async()=>undefined);close=vi.fn();
   (window as any).dbark={onTask:(listener:(value:any)=>void)=>{events.add(listener);return()=>events.delete(listener);},invoke:async(command:string,input:any)=>{requests.push({command,input});if(command==='files.choose')return{token:'selected',name:'已选择.sql'};return undefined;}};
   const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);
-  await act(async()=>root!.render(<StrictMode><Dialog source="SELECT 精确来源" sessionBusy={false} loadNames={vi.fn()} onExecute={execute} onCancel={cancel} onClose={close}/></StrictMode>));
+  await act(async()=>root!.render(<StrictMode><Dialog dialect="mysql" source="SELECT 精确来源" sessionBusy={false} loadNames={vi.fn()} onExecute={execute} onCancel={cancel} onClose={close}/></StrictMode>));
 }
 function button(name:string){const node=document.querySelectorAll('button').find(node=>node.textContent.includes(name));expect(node,name).toBeDefined();return node!;}
 function callback(node:any,event='onClick'){const key=Object.keys(node).find(key=>key.startsWith('__reactProps$'));if(!key)throw Error('缺少React回调');return node[key][event]as(value?:any)=>void;}

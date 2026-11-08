@@ -8,7 +8,7 @@ import { queryExportFileFormat, queryExportSelectsRowResult, queryCsvResultFile,
 import { errorMessage, invoke, uid } from '../lib';
 import { zh, formatText } from '../locales/zh-CN';
 import { queryStreamZh as text } from '../locales/queryStreamExport.zh-CN';
-import { streamExecutionAllowed, streamResultSelection } from '../queryStreamExport';
+import { streamExecutionAllowed, streamResultOrdinal, streamResultSelection } from '../queryStreamExport';
 import { UsageHelp, ErrorBox, Field, Modal  } from './ui';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import '../queryStreamExport.css';
@@ -17,11 +17,16 @@ import { queryInsertZh as insertText } from '../../shared/queryInsertExport.zh-C
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText } from '../../shared/dataMarkupExport';
+import { queryStreamProfileSettingsSchema, type FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
+import { FullQueryExportProfiles } from './FullQueryExportProfiles';
 
 export type StreamExportOptions = Omit<QueryStreamExportInput, 'sql' | 'sessionId'>;
 
 /** 只持有打开时捕获的 SQL；选文件、识别参数都不会执行用户 SQL。 */
-export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel, onClose, sessionBusy }: { source: string; sessionBusy: boolean; loadNames(): Promise<QueryParameterNames>; onExecute(options: StreamExportOptions): Promise<QueryStreamExportOutput>; onCancel(taskId: string): Promise<void>; onClose(): void }) {
+export function QueryStreamExportDialog({ dialect, source, loadNames, onExecute, onCancel, onClose, sessionBusy }: {
+  dialect: 'mysql' | 'mariadb'; source: string; sessionBusy: boolean; loadNames(): Promise<QueryParameterNames>;
+  onExecute(options: StreamExportOptions): Promise<QueryStreamExportOutput>; onCancel(taskId: string): Promise<void>; onClose(): void;
+}) {
   const live=useRef(true),configuration=useRef(0),completedRef=useRef(false);
   const [generation, setGeneration] = useState(0);
   const [format, setFormat] = useState<QueryStreamExportInput['format']>('json'); const [encoding, setEncoding] = useState<QueryStreamExportInput['encoding']>('utf8');
@@ -39,6 +44,14 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   const [database,setDatabase]=useState(''),[table,setTable]=useState(''),[columns,setColumns]=useState('');
   const [pending,setPending]=useState<QueryInsertPending|null>(null),[confirmation,setConfirmation]=useState(''),[publishAck,setPublishAck]=useState(false),[publishing,setPublishing]=useState(false);
   const publishingRef=useRef(false);
+  const profileSettings = queryStreamProfileSettingsSchema.safeParse({
+    format,
+    ...(!fixedEncoding ? { encoding } : {}),
+    ...(format === 'csv' || format === 'csv-zip' ? { delimiter: csvDelimiter } : {}),
+    ...(format === 'txt' ? { txtOptions } : {}),
+    ...(queryExportSelectsRowResult(format) ? { ordinal: streamResultOrdinal(ordinal) } : {}),
+    ...(format === 'sql' ? { target: { database, table, columns: columns.split('\n') } } : {}),
+  });
   useEffect(() => window.dbark?.onTask(event => { if (event.taskId !== task.current)return;if(event.queryExport)setProgress(event.queryExport);if(event.queryInsert){setPending(event.queryInsert);setConfirmation('');setPublishAck(false);} }), []);
   useEffect(()=>{live.current=true;return()=>{live.current=false;if(busyRef.current)void onCancel(task.current).catch(()=>undefined);};},[]);
   useEffect(() => {
@@ -85,6 +98,25 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   function invalidate() { setGeneration(++configuration.current);setAcknowledged(false); setBinaryAcknowledged(false);setPending(null);setConfirmation('');setPublishAck(false); }
   /** 分隔符变化同步撤销原文件及确认；旧渲染闭包不能借A→B→A恢复执行。 */
   function changeDelimiter(value: CsvExportDelimiter) { if (!canConfigure() || generation !== configuration.current || value === csvDelimiter) return; setCsvDelimiter(value); setFile(null); invalidate(); }
+  /** 方案只还原文件格式，撤销原文件授权与确认，保留当前 SQL、参数和执行协议。 */
+  function applyProfile(options: FullQueryExportOptions): boolean {
+    if (options.format !== 'stream' || !canConfigure() || generation !== configuration.current || sessionBusy) return false;
+    const settings = options.settings;
+    setFormat(settings.format);
+    if ('encoding' in settings) setEncoding(settings.encoding);
+    if ('delimiter' in settings) setCsvDelimiter(settings.delimiter);
+    if ('ordinal' in settings) setOrdinal(String(settings.ordinal));
+    if (settings.format === 'txt') setTxtOptions(settings.txtOptions);
+    if (settings.format === 'sql') {
+      setDatabase(settings.target.database);
+      setTable(settings.target.table);
+      setColumns(settings.target.columns.join('\n'));
+    }
+    setFile(null);
+    setError('');
+    invalidate();
+    return true;
+  }
   return <>{!parameterDialog && <Modal title={text.title} wide onClose={close}><div className="modal-content">
     <div className="info-strip">{text.warning}</div><h3>{text.source}</h3>{source.length > 65536 && <p className="muted small">{text.sourceLimit}</p>}<pre className="query-stream-source" aria-label={text.source}>{source.slice(0, 65536)}</pre>
     <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} aria-label={text.format} onChange={event => { if(!canConfigure())return;setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option><option value="xlsx">{text.xlsx}</option><option value="sql">{insertText.format}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}</select></Field><Field label={text.encoding}><select disabled={busy || completed || fixedEncoding} value={fixedEncoding ? 'utf8' : encoding} onChange={event => { if(!canConfigure())return;setEncoding(event.target.value as typeof encoding); if (format === 'txt') setFile(null); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
@@ -98,6 +130,8 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
     {queryExportSelectsRowResult(format) && <><Field label={text.ordinal}><input disabled={busy || completed} value={ordinal} inputMode="numeric" onChange={event => { if(!canConfigure())return;setOrdinal(event.target.value); invalidate(); }}/></Field><UsageHelp><p>{text.ordinalHint}</p></UsageHelp></>}
     <Field label={text.protocol}><select disabled={busy || completed} value={protocol} onChange={event => { if(!canConfigure())return;setProtocol(event.target.value as typeof protocol); invalidate(); }}><option value="text-strict">{text.text}</option><option value="binary-explicit">{text.binary}</option></select></Field><p className="warning-text">{protocol === 'text-strict' ? text.textHint : text.binaryHint}</p>
     <div className="parameter-actions"><button disabled={busy || choosing || completed || sessionBusy} onClick={() => {if(canConfigure())setParameterDialog(true);}}>{text.parameters}</button><span>{parameters ? formatText(text.parameterCount, parameters.length) : text.noParameters}</span>{parameters && <button disabled={busy || completed} onClick={() => { if(!canConfigure())return;setParameters(undefined); invalidate(); }}>{text.clearParameters}</button>}</div>
+    <FullQueryExportProfiles key={dialect} dialect={dialect} disabled={busy || choosing || completed || sessionBusy}
+      options={profileSettings.success ? { format: 'stream', settings: profileSettings.data } : undefined} onApply={applyProfile}/>
     <button className="file-picker" disabled={busy || choosing || completed || !validTxt} onClick={() => void chooseFile()}><Download size={20}/><span><strong>{file?.name ?? text.choose}</strong><small>{text.fileHint}</small></span></button>
     {pending&&<section aria-label={insertText.preview}><h3>{insertText.pending}</h3><p>{insertText.stats(pending.totalRows,pending.shownRows,pending.bytes,pending.encoding)}</p><pre className="query-stream-source">{pending.target.database}.{pending.target.table}{'\n'}{pending.target.columns.join('\n')}</pre><pre className="query-stream-source" aria-label={insertText.preview}>{pending.sql}</pre><Field label={insertText.confirmation}><input disabled={publishing||cancelling} value={confirmation} aria-label={insertText.confirmation} onChange={event=>setConfirmation(event.target.value)}/></Field><label className="query-stream-confirm"><input type="checkbox" aria-label={insertText.acknowledge} checked={publishAck} disabled={publishing||cancelling} onChange={event=>setPublishAck(event.target.checked)}/>{insertText.acknowledge}</label><button className="primary" disabled={publishing||cancelling||!publishAck||confirmation!==pending.target.database+'.'+pending.target.table} onClick={()=>void publish()}>{insertText.publish}</button></section>}
     {failed && <p className="warning-text">{text.retry}</p>}

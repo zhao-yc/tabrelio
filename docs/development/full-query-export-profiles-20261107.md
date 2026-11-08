@@ -2,13 +2,15 @@
 
 ## 使用范围
 
-SQLite 和 PostgreSQL 的「执行并导出完整结果」及「导出当前语句的完整结果」共用导出方案。方案按数据库类型独立保存，可跨同类连接复用。Navicat 导出向导也支持保存设置供后续复用。[Navicat 导出向导](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/export_wizard.html#save-profile)
+SQLite 和 PostgreSQL 的「执行并导出完整结果」及「导出当前语句的完整结果」共用导出方案。MySQL 和 MariaDB 在「新执行并完整导出」中提供同样的方案管理。方案按数据库类型独立保存，可跨同类连接复用。Navicat 导出向导也支持保存设置供后续复用。[Navicat 导出向导](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/export_wizard.html#save-profile)
 
 1. 配置导出格式和选项，在「导出方案」填写名称，点击「另存为新方案」。
 2. 下次在同类数据库的导出窗口选中方案，点击「应用方案」。窗口会填入选项并清除已选文件。按本次查询设置参数、选择文件后，即可执行导出。
 3. 要修改方案，选中方案并配置当前选项，点击「更新所选方案」。此时更改名称也会同步改名。可用「删除所选方案」清理不再需要的条目。
 
 CSV 保存编码与分隔符，JSON 保存编码，Excel 保存格式，INSERT SQL 保存目标数据库或 schema、表及可选列映射。方案文档仅包含名称、格式选项和本地版本标识。实际执行继续使用当前查询的 SQL、绑定值和单次文件授权。
+
+MySQL 和 MariaDB 的单 CSV、TXT 和两种 XML 记录布局还会保存行结果集序号。CSV ZIP 保存编码和分隔符，INSERT SQL 保存编码及明确的目标库、表和字段位置。TXT 同时保存换行、分隔符、文本限定符和表头选项。应用方案保留当前窗口的 SQL、绑定值和执行协议，清除已选文件及所有执行确认。重新选文件后须明确确认新执行，INSERT SQL 仍需要单独确认发布。
 
 ## 本地存储
 
@@ -21,3 +23,10 @@ CSV 保存编码与分隔符，JSON 保存编码，Excel 保存格式，INSERT S
 - Server-200 隔离 PostgreSQL 18.6 的两个源码 Electron 用例通过。验证恢复分号 CSV、应用后重新选择文件、恢复 INSERT 目标映射、4,099 行导出及回放、参数绑定和原会话隔离。验收后临时容器及转发已清理。
 - 首轮原生验收发现两处控件名称受选项或映射值影响。显式指定辅助技术标签后复测通过。
 - Windows、macOS x64 及安装包验收待补。覆盖矩阵 Q05、R01、R02 维持部分覆盖。
+
+### MySQL 和 MariaDB 增量（2026-11-08）
+
+- macOS arm64 通过原生运行时、严格类型检查、构建及 84 项相关单测。测试覆盖分方言存储、配置库重开、原方案兼容、格式校验及 SQL、参数、文件授权和执行协议等运行数据的拒绝。
+- Server-200 的 MySQL 8.4.11 和 MariaDB 11.4.13 各通过 1 项 Electron 用例。验证刷新窗口后应用 INSERT 映射和第二个行结果集的 UTF-16LE 分号 CSV 方案。应用方案后，原文件未生成，任务、历史和数据库写入均为空。重新选择文件并确认后，CSV 保留无符号 64 位整数及带分号的中文文本，独立连接读回一次写入。
+- SQLite 与隔离 PostgreSQL 18.6 的既有完整查询导出各通过 1 项 Electron 回归。两轮双库验收及 PostgreSQL 回归的临时容器和转发均已清理。
+- 首轮双库用例因文件编码控件的定位超时。保留原报告，改用可访问角色定位后通过。WIN11-TEST 不可达，本轮使用 macOS。Windows、安装包、其他服务器版本和应用内 SSH／TLS 待验。

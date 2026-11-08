@@ -15,11 +15,13 @@ export function FullQueryExportProfiles({ dialect, options, disabled, onApply }:
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [opened, setOpened] = useState(false);
   const [reload, setReload] = useState(0);
   const [saving, setSaving] = useState(false);
   const writing = useRef(false);
 
   useEffect(() => {
+    if (!opened) return;
     let active = true;
     void invoke('queryExportProfiles.list', { dialect }).then(result => {
       if (active) setProfiles(result);
@@ -27,7 +29,7 @@ export function FullQueryExportProfiles({ dialect, options, disabled, onApply }:
       if (active) setError(errorMessage(reason));
     });
     return () => { active = false; };
-  }, [dialect, reload]);
+  }, [dialect, opened, reload]);
 
   const selected = profiles?.find(item => item.name === selection);
   const blocked = disabled || saving || !profiles;
@@ -55,7 +57,7 @@ export function FullQueryExportProfiles({ dialect, options, disabled, onApply }:
     finally { writing.current = false; setSaving(false); }
   }
 
-  return <details>
+  return <details onToggle={event => { if (event.currentTarget.open) setOpened(true); }}>
     <summary>{text.title}</summary>
     <p className="muted small">{text.hint}</p>
     {!profiles && !error && <p>{text.loading}</p>}

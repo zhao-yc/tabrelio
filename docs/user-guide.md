@@ -610,7 +610,7 @@ SQLite 的完整查询导出也可选择「SQLite INSERT SQL」。在导出窗�
 
 PostgreSQL 完整导出可选择「PostgreSQL INSERT SQL」。填写目标 schema 和表名，按需指定目标字段，选择文件后执行查询并保存。文件使用 UTF-8，日期、时间等会话设置在回放事务内生效。详见 [PostgreSQL 完整查询 INSERT SQL](development/postgres-full-query-sql-20261107.md)。
 
-重复导出时，可在 SQLite 或 PostgreSQL 完整查询导出窗口展开「导出方案」。设置格式和选项，填写名称，再点击「另存为新方案」。下次选择同类数据库的方案并点击「应用方案」，然后填写本次查询参数并重新选择文件。更新方案会保存窗口中的当前选项，修改名称后更新可同时改名。详见 [完整查询导出方案](development/full-query-export-profiles-20261107.md)。
+重复导出时，可在 SQLite 或 PostgreSQL 的完整查询导出窗口，或 MySQL／MariaDB 的「新执行并完整导出」窗口展开「导出方案」。设置格式和选项，填写名称，再点击「另存为新方案」。下次选择同类数据库的方案并点击「应用方案」，按需填写本次查询参数并重新选择文件。MySQL／MariaDB 还需重新确认执行 SQL。更新方案会保存窗口中的当前选项，修改名称后更新可同时改名。详见 [完整查询导出方案](development/full-query-export-profiles-20261107.md)。
 
 要在浏览器查看或分享查询结果，可在已返回结果、勾选行或完整查询导出窗口选择「HTML 网页」。导出使用 UTF-8，区分 NULL、空字符串和二进制。MySQL／MariaDB 的完整流式入口把所有结果组和语句回执写入同一网页，仍需确认新执行。详见 [查询结果 HTML 导出](development/query-html-export-20261107.md)。
 

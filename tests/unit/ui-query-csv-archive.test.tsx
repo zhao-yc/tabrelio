@@ -9,6 +9,7 @@ import { queryExportFileFormat } from '../../src/shared/queryStreamExport';
 import { streamExecutionAllowed, streamResultSelection } from '../../src/renderer/queryStreamExport';
 import { queryStreamZh } from '../../src/renderer/locales/queryStreamExport.zh-CN';
 import { csvExportOptions } from '../../src/shared/csvExport';
+import { txtExportDefaults, txtExportOptions } from '../../src/shared/txtExport';
 
 // 参数窗口此项不打开；隔离其Monaco模块加载，仍渲染真实导出窗口与按钮。
 vi.mock('../../src/renderer/components/QueryParametersDialog', () => ({ QueryParametersDialog: () => null }));
@@ -21,6 +22,7 @@ function fixture() {
   const context = createContext({ csvExportOptions, csvDelimiter: ',', queryExportFileFormat, dataExportExtension, dataMarkupText, streamExecutionAllowed, streamResultSelection, text: queryStreamZh, Error, format: 'csv-zip', encoding: 'utf8', protocol: 'text-strict', ordinal: 'unused', file: { token: 'zip-target' }, acknowledged: false, binaryAcknowledged: false, sessionBusy: false, completed: false, parameters: undefined, task: { current: '' }, busyRef: { current: false }, choosingRef: { current: false }, uid: () => 'single-task', invoke, onExecute, errorMessage: (error: unknown) => String(error) });
   // 正式表单增加归属与配置代次；本夹具模拟每次状态更新后的当前渲染，保留全部原断言。
   context.live={current:true};context.configuration={current:0};context.completedRef={current:false};context.publishingRef={current:false};
+  Object.assign(context, { validTxt: true, fixedEncoding: false, txtOptions: txtExportDefaults, txtExportOptions });
   Object.defineProperty(context,'generation',{get:()=>context.configuration.current});
   for (const name of ['Choosing', 'Error', 'Acknowledged', 'BinaryAcknowledged', 'Busy', 'Progress', 'Cancelling', 'Output', 'Completed', 'Failed', 'File','Publishing','Pending','Confirmation','PublishAck','Generation']) context['set' + name] = vi.fn((value: unknown) => { if (name === 'Acknowledged') context.acknowledged = value; if (name === 'BinaryAcknowledged') context.binaryAcknowledged = value; if (name === 'Completed') context.completed = value; });
   runInContext(ts.transpileModule(functions.join('\n') + '\nglobalThis.handlers={chooseFile,execute}', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -29,7 +31,7 @@ function fixture() {
 
 describe('多CSV容器的实际导出入口', () => {
   it('真实组件公开CSV ZIP选项，保留明确新执行与已有单CSV入口', () => {
-    const html = renderToStaticMarkup(<QueryStreamExportDialog source="SELECT 1;SELECT 2" sessionBusy={false} loadNames={vi.fn()} onExecute={vi.fn()} onCancel={vi.fn()} onClose={vi.fn()}/>);
+    const html = renderToStaticMarkup(<QueryStreamExportDialog dialect="mysql" source="SELECT 1;SELECT 2" sessionBusy={false} loadNames={vi.fn()} onExecute={vi.fn()} onCancel={vi.fn()} onClose={vi.fn()}/>);
     expect(html).toContain('value="csv-zip"'); expect(html).toContain(queryStreamZh.csvZip); expect(html).toContain(queryStreamZh.acknowledge); expect(html).toContain(queryStreamZh.csv); expect(html).toContain('disabled=""');
   });
   it('先选择ZIP文件只授权不执行，设置变化撤销确认，明确确认后才单次投递全部结果', async () => {

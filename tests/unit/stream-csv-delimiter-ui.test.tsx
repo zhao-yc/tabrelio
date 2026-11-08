@@ -26,7 +26,7 @@ async function mount(format:'csv'|'csv-zip',choose?:()=>Promise<any>){
   let file=0;requests=[];execute=vi.fn(()=>new Promise<QueryStreamExportOutput>(resolve=>{settle=resolve;}));names=vi.fn();
   (window as any).dbark={onTask:()=>()=>{},invoke:async(command:string,input:any)=>{requests.push({command,input});if(command==='files.choose')return choose?choose():{token:'file-'+ ++file,name:'已选'+file+'.'+input.format};throw Error('不得访问其它IPC');}};
   const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);
-  await act(async()=>root!.render(<StrictMode><Dialog source="固定SQL不得在选择文件时执行" sessionBusy={false} loadNames={names} onExecute={execute} onCancel={vi.fn(async()=>undefined)} onClose={vi.fn()}/></StrictMode>));
+  await act(async()=>root!.render(<StrictMode><Dialog dialect="mysql" source="固定SQL不得在选择文件时执行" sessionBusy={false} loadNames={names} onExecute={execute} onCancel={vi.fn(async()=>undefined)} onClose={vi.fn()}/></StrictMode>));
   await change(document.querySelector(`select[aria-label="${text.format}"]`)! ,format);
 }
 function callback(node:any,event='onClick'){const key=Object.keys(node).find(key=>key.startsWith('__reactProps$'));if(!key)throw Error('缺少React真实回调');return node[key][event] as(value?:any)=>void;}
