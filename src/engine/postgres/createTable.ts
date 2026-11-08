@@ -8,12 +8,12 @@ import {
   type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget, type PostgresTruncateScope, type PostgresTableMoveScope,
 } from '../../shared/postgresCreateTable';
 import type { PostgresConnection } from './connection';
-import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery, postgresViewColumnsSql,
+import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery, postgresViewColumnsSql, postgresViewOptionsSql,
   type PostgresCreateViewInput, type PostgresEditViewInput, type PostgresViewManageInput } from '../../shared/postgresCreateView';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import { postgresMaterializedRefreshSchema, type PostgresMaterializedRefreshInput } from '../../shared/postgresMaterializedView';
 import { readPostgresMaterializedFacts } from './materializedView';
-import { postgresViewOptionsSql, readPostgresViewFacts, postgresViewColumnRenames } from './viewDefinition';
+import { readPostgresViewFacts, postgresViewColumnRenames } from './viewDefinition';
 import { compilePostgresRoutine } from './createRoutine';
 import { postgresRoutineCreateSchema, postgresRoutineManageSchema, type PostgresRoutineCreateInput,
   type PostgresRoutineManageInput } from '../../shared/postgresRoutine';
@@ -479,8 +479,8 @@ export class PostgresCreateTableWorkspace {
   /** 预览仅读取目标目录；视图定义由服务器在确认后的扩展协议 DDL 中校验。 */
   async prepareView(input: Scoped<PostgresCreateViewInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'view', connect, () => {
-      const { connectionId, database, schema, view, definition, comment, materialized, columnNames } = input;
-      const draft = { connectionId, database, schema, view, definition, comment, materialized, columnNames };
+      const { connectionId, database, schema, view, definition, comment, materialized, columnNames, options } = input;
+      const draft = { connectionId, database, schema, view, definition, comment, materialized, columnNames, options };
       const plan = postgresCreateViewPlan(draft);
       const label = materialized ? '物化视图' : '视图';
       return { ...plan, success: 'PostgreSQL 新' + label + '已确认创建', protocol: 'extended',
@@ -489,15 +489,17 @@ export class PostgresCreateTableWorkspace {
         preflight: connection => preflight(connection, draft, view, columnNames ?? [], label),
         async verify(connection, oid) {
           const result = await connection.query(`
-            SELECT pg_catalog.obj_description(c.oid, 'pg_class'), c.relispopulated, c.oid::text
+            SELECT pg_catalog.obj_description(c.oid, 'pg_class'), c.relispopulated, c.oid::text,
+              COALESCE(c.reloptions, ARRAY[]::text[]) @> $5::text[] AND COALESCE(c.reloptions, ARRAY[]::text[]) <@ $5::text[]
             FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
             WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3
               AND c.relkind = $4::pg_catalog."char" AND c.relpersistence = 'p'
-          `, [oid, schema, view, materialized ? 'm' : 'v'], budget());
+          `, [oid, schema, view, materialized ? 'm' : 'v', options ?? []], budget());
           const row = result.rows[0];
           if (result.truncated || result.rows.length !== 1 || row.c0 !== (comment || null) ||
               materialized && row.c1 !== (materialized.populate ? 't' : 'f'))
             throw Error('新视图的实际 schema、类别、注释或填充状态与预览不同，未提交');
+          if (options && row.c3 !== 't') throw Error('新视图的实际选项与预览不同，未提交');
           if (columnNames?.length) {
             const actual = await connection.query(`
               SELECT a.attname::text FROM pg_catalog.pg_attribute a WHERE a.attrelid = $1::oid

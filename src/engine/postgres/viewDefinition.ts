@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 
@@ -52,15 +51,6 @@ export async function readPostgresViewFacts(connection: PostgresConnection, sche
     throw Error('视图不存在、权限已变化或目录超出预算');
   const { definition, revision, options, catalogRevision, columns, ...identity } = factsSchema.parse(JSON.parse(raw));
   return { oid: identity.oid, namespace: identity.namespace, revision, definition, columns, stamp: postgresViewStamp(raw), preserved: JSON.stringify({ ...identity, options: [...options].sort() }), options };
-}
-
-/** 把原服务器选项逐项转义，避免替换定义时 PostgreSQL 重置选项。 */
-export function postgresViewOptionsSql(options: string[]): string {
-  if (!options.length) return '';
-  return ' WITH (' + options.map(option => {
-    const delimiter = option.indexOf('=');
-    return postgresIdentifier(option.slice(0, delimiter)) + ' = ' + postgresDdlLiteral(option.slice(delimiter + 1));
-  }).join(', ') + ')';
 }
 
 /** 先释放冲突名称，再分配最终名称，交换列名也不会改变列号或依赖。 */

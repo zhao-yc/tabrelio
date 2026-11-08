@@ -19,6 +19,8 @@ import { postgresTableManageZh } from '../locales/postgresTableManage.zh-CN';
 import { postgresViewManageZh } from '../locales/postgresViewManage.zh-CN';
 import { PostgresViewEditPanel } from './PostgresViewEditPanel';
 import { postgresViewEditZh } from '../locales/postgresViewEdit.zh-CN';
+import { PostgresCreateViewDialog, type PostgresCreateViewCopyDraft } from './PostgresCreateViewDialog';
+import { postgresCreateViewZh as createViewText } from '../locales/postgresCreateView.zh-CN';
 import { PostgresColumnEditPanel } from './PostgresColumnEditPanel';
 import { PostgresTableCommentsPanel } from './PostgresTableCommentsPanel';
 import { PostgresIdentityColumnsPanel, postgresIdentityColumns } from './PostgresIdentityColumnsPanel';
@@ -69,12 +71,13 @@ function CatalogTable({ headers, children, empty }: { headers: readonly string[]
 }
 
 /** 在原窗口、连接修订和关系目标下读取结构，刷新、关闭及切换来源废弃迟到回包。 */
-export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged, beforeTableManage, onPartitionChanged }: {
+export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged, beforeTableManage, onPartitionChanged, onViewCopied }: {
   target: PostgresStructureInput; readOnly?: boolean; searchFocus?: PostgresStructureSearchFocus; onClose(): void; onDirtyChange(value: boolean): void;
   beforeTableManage(target: PostgresStructureInput, destination?: string, truncateTables?: readonly string[]): void;
   onManaged(target: PostgresStructureInput, message: string, unknown: boolean, version: number, kind: 'table' | 'view', destination?: string, identity?: string, truncateTables?: readonly string[]): void;
   onPartitionChanged(target: PostgresStructureInput, child: string, message: string, unknown: boolean, version: number): void;
   onEdited(target: PostgresStructureInput, message: string, unknown: boolean, version: number): void;
+  onViewCopied(view: string, version: number, message: string): void;
 }) {
   const version = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
   const dialect = useWorkspace(state => state.connections.find(profile => profile.id === target.connectionId)?.dialect);
@@ -84,6 +87,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const [dependencies, setDependencies] = useState(false);
   const [partitions, setPartitions] = useState(false);
   const [maintenance, setMaintenance] = useState(false);
+  const [copy, setCopy] = useState<{ source: PostgresCreateViewCopyDraft; kind: 'ordinary' | 'materialized' }>();
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
   const matched = useRef<HTMLTableRowElement>(null);
@@ -125,6 +129,17 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
     onClose();
   }
 
+  /** 原目录定义作为本地种子，创建只针对用户选择的新对象。 */
+  function copyView() {
+    if (!output?.viewDefinition || (output.kind !== 'v' && output.kind !== 'm') || !owner.current ||
+        (useWorkspace.getState().connectionVersions[connectionId] ?? 0) !== version) return;
+    setCopy({ kind: output.kind === 'm' ? 'materialized' : 'ordinary', source: {
+      version, schema: output.schema, name: output.name, definition: output.viewDefinition,
+      comment: output.comment ?? '', columnNames: output.columns.map(column => column.name),
+      options: output.viewOptions ?? undefined,
+    } });
+  }
+
   const sections: Section[] = ['columns', 'constraints', 'indexes'];
   if (output?.triggers && output.kind !== 'm') sections.push('triggers');
   if (output?.policies && (output.kind === 'r' || output.kind === 'p')) sections.push('policies');
@@ -137,6 +152,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
     editing === 'manage' ? manageStamp : editing === 'materializedColumns' ? output?.materializedManageStamp : editing === 'definition' ? output?.viewEditStamp :
       editing === 'comments' ? output?.commentStamp : editing === 'identity' ? output?.identityStamp :
         editing === 'policies' ? output?.policyStamp : output?.editStamp;
+  if (copy) return <PostgresCreateViewDialog target={target} kind={copy.kind} copy={copy.source} onDirtyChange={onDirtyChange}
+    onCreated={onViewCopied} onClose={() => setCopy(undefined)}/>;
   if (maintenance) return <PostgresRelationMaintenanceDialog target={target} onDirtyChange={onDirtyChange}
     beforeApply={() => beforeTableManage(target)} onBack={() => { setMaintenance(false); setAttempt(value => value + 1); }}/>;
   if (partitions) return <PostgresPartitionManageDialog target={target} readOnly={readOnly} onDirtyChange={onDirtyChange}
@@ -249,6 +266,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         {postgresViewEditZh.title}
       </button>}
       {section === 'definition' && output?.viewDefinition && !editing && <button onClick={openDraft}>{text.openDraft}</button>}
+      {!readOnly && section === 'definition' && output?.viewDefinition && !editing &&
+        <button onClick={copyView}>{output.kind === 'm' ? createViewText.materializedCopyTitle : createViewText.copyTitle}</button>}
       <span className="grow"/><button disabled={!!editing} onClick={onClose}>{text.close}</button>
     </footer>
   </Modal>;

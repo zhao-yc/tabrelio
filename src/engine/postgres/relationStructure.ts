@@ -21,7 +21,7 @@ export const postgresReadableStructureSql = `n.nspname <> 'information_schema' A
 // 单条目录查询提供一致的关系、字段、约束和索引快照；绝不读取目标关系的数据行。
 const structureSql = `
 WITH target AS MATERIALIZED (
-  SELECT c.oid, c.relkind, c.relname, c.relispartition, c.relpartbound,
+  SELECT c.oid, c.relkind, c.relname, c.relispartition, c.relpartbound, c.reloptions,
          c.relrowsecurity, c.relforcerowsecurity, n.nspname,
          CASE WHEN ${postgresEditableViewSql} THEN (${postgresViewFactsSql})::text END AS view_edit,
          CASE WHEN c.relkind = 'm' THEN (${postgresMaterializedFactsSql})::text END AS materialized,
@@ -52,6 +52,7 @@ SELECT pg_catalog.jsonb_build_object(
   'rowSecurity', t.relrowsecurity,
   'forceRowSecurity', t.relforcerowsecurity,
   'viewDefinition', CASE WHEN t.relkind IN ('v', 'm') THEN pg_catalog.pg_get_viewdef(t.oid, false) END,
+  'viewOptions', CASE WHEN t.relkind = 'v' THEN COALESCE(t.reloptions, ARRAY[]::text[]) END,
   'columns', COALESCE((SELECT pg_catalog.jsonb_agg(field.item ORDER BY field.position) FROM (
     SELECT a.attnum AS position, pg_catalog.jsonb_build_object(
       'position', a.attnum,

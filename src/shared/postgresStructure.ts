@@ -11,6 +11,8 @@ export const postgresStructureInputSchema = z.object({
 export type PostgresStructureInput = z.infer<typeof postgresStructureInputSchema>;
 
 export const postgresStructureKind = z.enum(['r', 'p', 'v', 'm', 'f']);
+export const postgresViewOptionsSchema = z.array(z.string().max(512).regex(/^[a-z_][a-z_0-9]*=.+$/)
+  .refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value))).max(32);
 const structureColumn = z.object({
   position: z.number().int().positive(),
   name: identifier,
@@ -77,6 +79,7 @@ export const postgresStructureResultSchema = z.object({
   rowSecurity: z.boolean(),
   forceRowSecurity: z.boolean(),
   viewDefinition: optionalText,
+  viewOptions: postgresViewOptionsSchema.nullish(),
   columns: z.array(structureColumn).max(2000),
   constraints: z.array(structureConstraint).max(2000),
   indexes: z.array(structureIndex).max(2000),

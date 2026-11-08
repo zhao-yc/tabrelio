@@ -1,5 +1,11 @@
 export const postgresCreateViewZh = {
   materializedTitle: '新建 PostgreSQL 物化视图',
+  copyTitle: '复制 PostgreSQL 视图定义',
+  materializedCopyTitle: '复制 PostgreSQL 物化视图定义',
+  copySource: (schema: string, name: string) => `原视图 ${schema} / ${name}`,
+  copyHint: '已载入原视图的查询、列名、视图注释和普通视图选项。新对象使用目标 schema 的默认权限。',
+  materializedCopyHint: '已载入原物化视图的查询、列名和视图注释。填充时重新执行查询，索引可在创建后单独建立。',
+  copyOptions: '沿用原视图选项',
   materializedName: '物化视图名',
   populate: '创建时填充数据',
   materializedHint: '输入单条查询，并用 schema 限定业务对象。勾选后将在确认创建时执行定义查询；留空则可稍后刷新填充。',

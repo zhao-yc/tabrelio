@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { postgresCreateTableSchemasSchema, postgresDdlLiteral, postgresDdlText, postgresNewIdentifier } from './postgresCreateTable';
-import { postgresStructureInputSchema } from './postgresStructure';
+import { postgresStructureInputSchema, postgresViewOptionsSchema } from './postgresStructure';
 import { postgresIdentifier, splitPostgresSql } from './postgresSql';
 
 const sqlBudget = 128 * 1024;
@@ -18,8 +18,9 @@ export const postgresCreateViewPreviewSchema = postgresCreateTableSchemasSchema.
   definition: definitionSchema,
   columnNames: postgresViewColumnsSchema.optional(),
   comment: postgresDdlText,
+  options: postgresViewOptionsSchema.optional(),
   materialized: z.object({ populate: z.boolean() }).strict().optional(),
-}).strict();
+}).strict().refine(input => !input.materialized || !input.options?.length, '普通视图选项不能应用于物化视图');
 export type PostgresCreateViewKind = 'ordinary' | 'materialized';
 export type PostgresCreateViewInput = z.infer<typeof postgresCreateViewPreviewSchema>;
 export const postgresEditViewPreviewSchema = postgresStructureInputSchema.extend({
@@ -68,6 +69,15 @@ export function postgresViewColumnsSql(names: readonly string[] | undefined): st
   return names?.length ? ' (' + names.map(postgresIdentifier).join(', ') + ')' : '';
 }
 
+/** 服务器目录中的选项名与值分别转义，原值不能扩展成其它 DDL。 */
+export function postgresViewOptionsSql(options: readonly string[]): string {
+  if (!options.length) return '';
+  return ' WITH (' + options.map(option => {
+    const delimiter = option.indexOf('=');
+    return postgresIdentifier(option.slice(0, delimiter)) + ' = ' + postgresDdlLiteral(option.slice(delimiter + 1));
+  }).join(', ') + ')';
+}
+
 /** 定义只允许一条不带参数的查询，保留字符串、注释和美元引号原文。 */
 export function postgresCreateViewPlan(raw: PostgresCreateViewInput) {
   const input = postgresCreateViewPreviewSchema.parse(raw);
@@ -75,7 +85,8 @@ export function postgresCreateViewPlan(raw: PostgresCreateViewInput) {
   const table = postgresIdentifier(input.schema) + '.' + postgresIdentifier(input.view);
   const type = input.materialized ? 'MATERIALIZED VIEW ' : 'VIEW ';
   const fill = input.materialized ? input.materialized.populate ? 'WITH DATA' : 'WITH NO DATA' : '';
-  const statements = ['CREATE ' + type + table + postgresViewColumnsSql(input.columnNames) + ' AS\n' + postgresViewQuery(input.definition) + fill];
+  const statements = ['CREATE ' + type + table + postgresViewColumnsSql(input.columnNames) +
+    postgresViewOptionsSql(input.options ?? []) + ' AS\n' + postgresViewQuery(input.definition) + fill];
   if (input.comment) statements.push('COMMENT ON ' + type + table + ' IS ' + postgresDdlLiteral(input.comment));
   return { table, statements };
 }

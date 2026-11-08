@@ -250,6 +250,22 @@ test('在原数据库预览视图并编辑列名，确认前无写入且依赖�
     await closeDefinition.click();
     await links.getByRole('button', { name: dependencies.back, exact: true }).click();
     await expect(mvStructure.getByRole('rowheader', { name: 'suffix', exact: true })).toBeVisible();
+    await mvStructure.getByRole('button', { name: structure.sections.definition, exact: true }).click();
+    await mvStructure.getByRole('button', { name: create.materializedCopyTitle, exact: true }).click();
+    const mvCopy = page.getByRole('dialog', { name: create.materializedCopyTitle, exact: true });
+    await expect(mvCopy.getByLabel(create.populate, { exact: true })).not.toBeChecked();
+    await expect(mvCopy.getByLabel(create.comment, { exact: true })).toHaveValue('保留的视图备注');
+    await mvCopy.getByLabel(create.materializedName, { exact: true }).fill('副本"物化');
+    await mvCopy.getByRole('button', { name: create.preview, exact: true }).click();
+    await expect(mvCopy.locator('.pg-create-sql')).toContainText('CREATE MATERIALIZED VIEW "public"."副本""物化" ("suffix", "缓存")');
+    await expect(mvCopy.locator('.pg-create-sql')).toContainText('WITH NO DATA');
+    expect((await viewNames()).some(name => name.includes('副本'))).toBe(false);
+    await mvCopy.getByRole('button', { name: create.materializedApply, exact: true }).click();
+    await expect(mvCopy).toBeHidden();
+    const mvCopyFacts = await page.evaluate(target => window.dbark.invoke('postgres.structure.read', target),
+      { ...mvTarget, table: '"public"."副本""物化"' });
+    expect(mvCopyFacts).toMatchObject({ kind: 'm', comment: '保留的视图备注', materialized: { populated: false }, indexes: [] });
+    expect(mvCopyFacts.columns.map(column => column.name)).toEqual(['suffix', '缓存']);
     await mvStructure.locator('.modal-footer').getByRole('button', { name: structure.close, exact: true }).click();
     const final = await readMaterialized();
     expect(final.comment).toBe('保留的视图备注');
@@ -259,6 +275,11 @@ test('在原数据库预览视图并编辑列名，确认前无写入且依赖�
     expect((await observer.query('SELECT "缓存" FROM public.view_inspect_mv_dep')).rows).toEqual([{ 缓存: 2 }]);
     await observer.query('REFRESH MATERIALIZED VIEW CONCURRENTLY public.view_inspect_mv');
     expect((await observer.query('SELECT suffix FROM public.view_inspect_mv')).rows).toEqual([{ suffix: '物化视图样本' }]);
+    await observer.query(`CREATE TABLE "源.表".copy_base (a text, b text);
+      INSERT INTO "源.表".copy_base VALUES ('更新前可预览', '更新辅助');
+      CREATE OR REPLACE VIEW public.view_inspect_subject WITH (security_barrier = true, security_invoker = true, check_option = local)
+        AS SELECT a AS "原位置的新列名", b AS "正文" FROM "源.表".copy_base WHERE a <> '';
+      COMMENT ON VIEW public.view_inspect_subject IS '普通视图注释'`);
     await clickSidebarAction(connection.locator('.object-row').filter({ hasText: 'view_inspect_subject' }),
       { name: structure.open + ' "public"."view_inspect_subject"', exact: true });
     await infoDialog.getByRole('button', { name: dependencies.open, exact: true }).click();
@@ -267,6 +288,32 @@ test('在原数据库预览视图并编辑列名，确认前无写入且依赖�
     await expect(linkSql).toContainText('view_inspect_mv_idx');
     await closeDefinition.click();
     await links.getByRole('button', { name: dependencies.back, exact: true }).click();
+    await infoDialog.getByRole('button', { name: structure.sections.definition, exact: true }).click();
+    await infoDialog.getByRole('button', { name: create.copyTitle, exact: true }).click();
+    const copy = page.getByRole('dialog', { name: create.copyTitle, exact: true });
+    const copyName = copy.getByLabel(create.name, { exact: true });
+    const copyPreview = copy.getByRole('button', { name: create.preview, exact: true });
+    await expect(copy.getByLabel(create.schema, { exact: true })).toHaveValue('public');
+    await expect(copy.getByLabel(create.comment, { exact: true })).toHaveValue('普通视图注释');
+    await copyName.fill('view_inspect_subject');
+    await copyPreview.click();
+    await expect(copy.getByRole('alert')).toContainText('目标 schema 已存在同名关系');
+    await copy.getByLabel(create.schema, { exact: true }).selectOption('源.表');
+    await copyPreview.click();
+    const copySql = copy.locator('.pg-create-sql');
+    await expect(copySql).toContainText('CREATE VIEW "源.表"."view_inspect_subject" ("原位置的新列名", "正文")');
+    await expect(copySql).toContainText('"security_invoker" = E\'true\'');
+    await expect(copySql).toContainText('"check_option" = E\'local\'');
+    expect((await observer.query(`SELECT to_regclass('"源.表".view_inspect_subject') AS oid`)).rows[0].oid).toBeNull();
+    await copy.getByRole('button', { name: create.apply, exact: true }).click();
+    await expect(copy).toBeHidden();
+    const ordinaryCopy = await page.evaluate(target => window.dbark.invoke('postgres.structure.read', target),
+      { ...target, table: '"源.表"."view_inspect_subject"' });
+    expect(ordinaryCopy).toMatchObject({ kind: 'v', schema: '源.表', comment: '普通视图注释' });
+    expect([...ordinaryCopy.viewOptions!].sort()).toEqual(['check_option=local', 'security_barrier=true', 'security_invoker=true']);
+    expect((await observer.query('SELECT * FROM "源.表".view_inspect_subject')).rows)
+      .toEqual([{ 原位置的新列名: '更新前可预览', 正文: '更新辅助' }]);
+    expect(await oid()).toBe(originalOid);
     await infoDialog.locator('.modal-footer').getByRole('button', { name: structure.close, exact: true }).click();
     expect(await history()).toEqual(beforeHistory);
     expect(pageErrors).toEqual([]);

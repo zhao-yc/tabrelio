@@ -265,6 +265,16 @@ describe('PostgreSQL 视图输出列名', () => {
     ]);
   });
 
+  it('普通视图副本保留目录选项并验证选项边界', () => {
+    const draft = { connectionId: 'pg', database: 'db', schema: 'public', view: 'v', definition: 'SELECT 1;', comment: '',
+      options: ['security_barrier=true', 'security_invoker=true', 'check_option=local'] };
+    expect(postgresCreateViewPlan(draft).statements).toEqual([
+      'CREATE VIEW ' + table + ' WITH ("security_barrier" = E\'true\', "security_invoker" = E\'true\', "check_option" = E\'local\') AS\nSELECT 1\n',
+    ]);
+    expect(() => postgresCreateViewPlan({ ...draft, materialized: { populate: true } })).toThrow('普通视图选项');
+    expect(() => postgresCreateViewPlan({ ...draft, options: ['unsafe) AS=x'] })).toThrow();
+  });
+
   it('交换列名前释放两列名称，跳过已占用的临时名且保留未指定列', () => {
     expect(postgresViewColumnRenames(table, ['a', 'b', '_tabrelio_1'], ['b', 'a'])).toEqual([
       'ALTER VIEW ' + table + ' RENAME COLUMN "a" TO "_tabrelio_2"',

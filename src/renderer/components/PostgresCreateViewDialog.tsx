@@ -13,10 +13,21 @@ import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import './PostgresCreateTableDialog.css';
 
+export interface PostgresCreateViewCopyDraft {
+  version: number;
+  schema: string;
+  name: string;
+  definition: string;
+  comment: string;
+  columnNames: string[];
+  options?: string[];
+}
+
 /** 编辑、预览及确认绑定原数据库和连接修订，提交结果未知时停止再次发送。 */
-export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreated, onClose }: {
+export function PostgresCreateViewDialog({ target, kind, copy, onDirtyChange, onCreated, onClose }: {
   target: PostgresCreateTableTarget;
   kind: PostgresCreateViewKind;
+  copy?: PostgresCreateViewCopyDraft;
   onDirtyChange(value: boolean): void;
   onCreated(view: string, version: number, message: string): void;
   onClose(): void;
@@ -24,10 +35,12 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
   const materialized = kind === 'materialized';
   const { connectionId, database } = target;
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
+  const stale = !!copy && version !== copy.version;
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
   const dialect = profile?.dialect;
   const [schemas, setSchemas] = useState<string[]>([]);
-  const [draft, setDraft] = useState({ schema: '', view: '', definition: '', comment: '', populate: true, columnNames: [] as string[] });
+  const [draft, setDraft] = useState(() => ({ schema: copy?.schema ?? '', view: '', definition: copy?.definition ?? '',
+    comment: copy?.comment ?? '', populate: !copy, columnNames: copy?.columnNames ?? [] }));
   const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
   const [preview, setPreview] = useState<(PostgresCreateTablePreview & { version: number })>();
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
@@ -44,7 +57,7 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
     queueMicrotask(async () => {
       if (lifecycle.current !== owner) return;
       try {
-        if (dialect !== 'postgresql') throw Error(text.changed);
+        if (stale || dialect !== 'postgresql') throw Error(text.changed);
         const list = await invoke('postgres.createTable.schemas', { connectionId, database });
         if (lifecycle.current !== owner) return;
         setSchemas(list);
@@ -56,7 +69,7 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
       }
     });
     return () => { if (lifecycle.current === owner) lifecycle.current = undefined; };
-  }, [connectionId, database, dialect, version]);
+  }, [connectionId, database, dialect, stale, version]);
   useEffect(() => { onDirtyChange(dirty || busy); }, [dirty, busy, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
@@ -72,7 +85,7 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
   /** 预览只读取目录，确认才消费准确令牌并请求创建。 */
   async function submit(apply: boolean) {
     const owner = lifecycle.current;
-    if (!owner || operation.current || unknown || loading || dialect !== 'postgresql' ||
+    if (!owner || operation.current || stale || unknown || loading || dialect !== 'postgresql' ||
         (useWorkspace.getState().connectionVersions[connectionId] ?? 0) !== version ||
         apply && preview?.version !== version) return;
     operation.current = true;
@@ -85,6 +98,7 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
         const { populate, ...fields } = draft;
         const input = postgresCreateViewPreviewSchema.parse({ connectionId, database, ...fields,
           ...(materialized ? { materialized: { populate } } : {}),
+          ...(copy?.options ? { options: copy.options } : {}),
         });
         const result = await invoke('postgres.createView.preview', input);
         if (lifecycle.current === owner) setPreview({ ...result, version });
@@ -117,50 +131,56 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
 
   function importCurrent(): boolean {
     const state = useWorkspace.getState();
-    return !!lifecycle.current && !operation.current && !unknown &&
+    return !!lifecycle.current && !operation.current && !stale && !unknown &&
       (state.connectionVersions[connectionId] ?? 0) === version &&
       state.connections.find(item => item.id === connectionId) === profile;
   }
 
-  return <Modal title={materialized ? text.materializedTitle : text.title} wide onClose={close}>
+  const title = copy ? materialized ? text.materializedCopyTitle : text.copyTitle : materialized ? text.materializedTitle : text.title;
+  const editingDisabled = stale || busy || loading || unknown || !schemas.length;
+  return <Modal title={title} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>PostgreSQL / {database}</strong>
+      {copy && <p>{text.copySource(copy.schema, copy.name)}</p>}
+      {copy && <p>{materialized ? text.materializedCopyHint : text.copyHint}</p>}
       <p>{preview ? text.review : materialized ? text.materializedHint : text.hint}</p>
       {loading && <Spinner text={text.wait} />}
       {busy && <Spinner text={text.working} />}
-      <ErrorBox message={error || (!loading && !schemas.length ? text.empty : '')} />
-      {preview ? <pre className="pg-create-sql">{preview.statements.join(';\n\n') + ';'}</pre> :
-        <fieldset disabled={busy || loading || unknown || !schemas.length}>
+      <ErrorBox message={stale ? text.changed : error || (!loading && !schemas.length ? text.empty : '')} />
+      {preview && !stale ? <pre className="pg-create-sql">{preview.statements.join(';\n\n') + ';'}</pre> :
+        <fieldset disabled={editingDisabled}>
           <div className="pg-create-target">
-            <Field label={text.schema}><select value={draft.schema} onChange={event => edit('schema', event.target.value)}>
+            <Field label={text.schema}><select aria-label={text.schema} value={draft.schema} onChange={event => edit('schema', event.target.value)}>
               {schemas.map(schema => <option key={schema}>{schema}</option>)}</select></Field>
             <Field label={materialized ? text.materializedName : text.name}><input value={draft.view} maxLength={63} onChange={event => edit('view', event.target.value)} /></Field>
             <Field label={text.comment}><input value={draft.comment} maxLength={4096} onChange={event => edit('comment', event.target.value)} /></Field>
           </div>
+          {!!copy?.options?.length && <p>{text.copyOptions} <code>{copy.options.join(', ')}</code></p>}
           <Field label={text.definition}><textarea className="pg-create-view-definition" value={draft.definition}
             spellCheck={false} rows={8} maxLength={128 * 1024} onChange={event => edit('definition', event.target.value)} /></Field>
-          <ViewSqlFileImport owner={draft} name={draft.view} value={draft.definition} disabled={busy || loading || unknown || !schemas.length}
+          <ViewSqlFileImport owner={draft} name={draft.view} value={draft.definition} disabled={editingDisabled}
             hint={viewSqlFileZh.postgresHint} current={importCurrent} prepare={preparePostgresViewDefinition}
             apply={sql => edit('definition', sql)}/>
           {materialized && <label><input type="checkbox" checked={draft.populate}
             onChange={event => edit('populate', event.target.checked)} /> {text.populate}</label>}
           <ViewQueryInspect owner={draft} hint={viewQueryInspectZh.postgresHint(postgresViewQuerySampleRows)}
-            disabled={busy || loading || unknown || !schemas.length || !draft.definition.trim()} current={importCurrent}
+            disabled={editingDisabled || !draft.definition.trim()} current={importCurrent}
             read={mode => {
               if (mode === 'rows') setPreviewColumns(undefined);
               return invoke('postgres.createView.inspectQuery', { connectionId, database, definition: draft.definition, columnNames: draft.columnNames, mode });
             }} onRows={columns => setPreviewColumns({ owner: draft, names: columns.map(column => column.name) })}/>
-          <ViewOutputColumns owner={draft} original={draft.columnNames} partial disabled={busy || loading || unknown || !schemas.length}
+          <ViewOutputColumns owner={draft} original={draft.columnNames} partial disabled={editingDisabled}
             current={importCurrent} previewColumns={previewColumns?.owner === draft ? previewColumns.names : undefined}
             applyNames={names => edit('columnNames', postgresViewColumnsSchema.parse(names))}/>
         </fieldset>}
     </div>
     <footer className="modal-footer">
-      {preview && <button disabled={busy} onClick={() => setPreview(undefined)}>{text.edit}</button>}
+      {preview && !stale && <button disabled={busy} onClick={() => setPreview(undefined)}>{text.edit}</button>}
       <span className="grow"/>
       <button disabled={busy} onClick={close}>{zh.common.close}</button>
-      <button className="primary" disabled={busy || loading || unknown || !schemas.length}
-        onClick={() => void submit(!!preview)}>{preview ? materialized ? text.materializedApply : text.apply : text.preview}</button>
+      <button disabled={editingDisabled || !!preview} onClick={() => void submit(false)}>{text.preview}</button>
+      <button className="primary" disabled={editingDisabled || !preview}
+        onClick={() => void submit(true)}>{materialized ? text.materializedApply : text.apply}</button>
     </footer>
   </Modal>;
 }
