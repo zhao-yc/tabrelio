@@ -1,3 +1,5 @@
+import { tableRefreshShortcut } from '../tableRefreshShortcut';
+import { navigationZh } from '../locales/navigation.zh-CN';
 import { isGridContextKey, useGridCellActionMenu } from './GridCellActionMenu';
 import { useGridHeaderMenu } from './GridHeaderMenu';
 import { gridQuickValueAssignment, gridQuickValueKinds, mysqlQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
@@ -2068,9 +2070,16 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     export: { enabled: !!connection, run: () => { if (tableToolbarCurrent()) onTransfer('export'); } }
   }, { active: settings.activeTabId === tab.id, contextKey: tableToolbarContextKey });
 
-  return <div ref={rootElement} className="workspace-tab table-tab">{cellActionMenu.menu}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
+  /** 刷新沿原页与已应用条件，放弃草稿前后都复核标签及连接归属。 */
+  function refreshTable() {
+    if (canReload(undefined, () => tableToolbarCurrent() && !reloadBlocked())) { checkedExport.clear(); void load(); }
+  }
+
+  return <div ref={rootElement} className="workspace-tab table-tab" onKeyDown={event => {
+    if (!blocked && tableRefreshShortcut(event)) refreshTable();
+  }}>{cellActionMenu.menu}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
   items={[
-    { key: 'refresh', content: (<button onClick={() => { if (canReload()) { checkedExport.clear(); void load(); } }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button>) },
+    { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} onClick={refreshTable} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button>) },
     { key: 'insert', content: (<button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button>) },
     { key: 'delete', content: (<button disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button>) },
     { key: 'filter', content: (<button className={showFilter || filters.length ? 'selected' : ''} onClick={() => { setCellFilterSeed(undefined); setShowFilter(!showFilter); }}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button>) },

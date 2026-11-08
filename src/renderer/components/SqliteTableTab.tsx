@@ -1,3 +1,4 @@
+import { tableRefreshShortcut } from '../tableRefreshShortcut';
 import { tableApplyShortcut } from '../tableApplyShortcut';
 import { gridQuickValueAssignment, gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
@@ -1479,7 +1480,13 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const exportChecksReady = !!page && active && !view.busy && !externalBusy && !drafts.protected && !drafts.busy
     && !drafts.unknown && !cellInput && !exportData && controller.pageCurrent(page);
   const readCheckedCount = checkedReadRows && checkedReadRows.selection.scope === page && checkedReadRows.selection.columns === displayColumns ? checkedReadRows.selection.indices.size : 0;
-  return <div className="workspace-tab table-tab sqlite-table-tab" onKeyDownCapture={findKey} aria-label={text.title} data-readonly={editView ? 'false' : 'true'}>
+  const refreshDisabled = !active || invalidTarget || !!exportData || externalBusy && !view.busy;
+  /** 刷新使用已应用条件及原偏移，避免把尚未提交的筛选或排序草稿带入读取。 */
+  function refreshTable() { if (!refreshDisabled) read(page?.offset ?? 0); }
+
+  return <div className="workspace-tab table-tab sqlite-table-tab" onKeyDownCapture={findKey} onKeyDown={event => {
+    if (!refreshDisabled && tableRefreshShortcut(event)) refreshTable();
+  }} aria-label={text.title} data-readonly={editView ? 'false' : 'true'}>
     {related && <p role="status">{related.current() ? relatedText.scope(related.relation.parentTable, related.relation.childColumns) : relatedText.expired}</p>}{related?.current() && <p>{relatedText.keys(related.relation.parentColumns, related.relation.values)}</p>}
     <div className="context-bar"><span className="connection-dot" style={{ background: profile?.color }}/><strong>{profile?.name ?? tab.connectionId}</strong><span>/</span><span>{tab.database}</span><span>/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">SQLite · {text.title}</span></div>
     {/* 只展示放得下的完整操作，其余沿原菜单回调展开，不让应用根容器被横向撑开。 */}
@@ -1488,7 +1495,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       contextKey={JSON.stringify([tab.id, version, refreshVersion, page?.schemaKey, page?.offset, editView?.page.edit?.kind === 'editable' ? editView.page.edit.snapshotId : undefined, drafts.changes, view.busy, externalBusy, !!editView?.dirty, checkedRows?.id, rangeCell?.row.id, rangeCell?.column, cellFilterOwner?.id, checkedReadRows?.id])}
       isCurrent={() => !!page && available() && (controller.pageCurrent(page) || editActionCurrent())}
       items={[
-        { key: 'refresh', content: (<button aria-label={text.refresh} disabled={!active || invalidTarget || !!exportData || externalBusy && !view.busy} onClick={() => read(page?.offset ?? 0)}>{text.refresh}</button>) },
+        { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} aria-label={text.refresh} disabled={refreshDisabled} onClick={refreshTable}>{text.refresh}</button>) },
         { key: 'stop', content: (<button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button>) },
         { key: 'conditions', content: (<button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button>) },
         ...(page?.target.kind === 'table' ? [{ key: 'import', content: (<button aria-label={importText.entry} title={editView?.dirty || editView?.busy || editView?.unknown || externalBusy ? importText.busyDraft : undefined} disabled={!active || invalidTarget || view.busy || externalBusy || !!fullExport || !!exportData || !!tableImport || drafts.dirty || drafts.busy || !!editView?.unknown || !!cellInput || !!previewOpen} onClick={openImport}>{importText.entry}</button>) }] : []),

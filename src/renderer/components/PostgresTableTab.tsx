@@ -1,3 +1,5 @@
+import { tableRefreshShortcut } from '../tableRefreshShortcut';
+import { navigationZh } from '../locales/navigation.zh-CN';
 import { tableApplyShortcut } from '../tableApplyShortcut';
 import { gridQuickValueAssignment, postgresQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridHeaderDetailsZh as headerText } from '../locales/gridHeaderDetails.zh-CN';
@@ -1443,12 +1445,25 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setRecordView(next);
   }
 
-  return <div className="workspace-tab postgres-table-tab" aria-label={text.relation}>
+  const retryPreset = presetTab && !page;
+  const refreshDisabled = !active || (retryPreset ? blocked : frozenPage);
+  /** 重读仍走原导航门，保留已应用筛选、排序及未提交草稿保护。 */
+  function refreshTable() {
+    const state = useWorkspace.getState();
+    if (refreshDisabled || !lifetime.current || state.settings.activeTabId !== tab.id ||
+        state.settings.tabs.find(item => item.id === tab.id) !== tab ||
+        (state.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion) return;
+    if (retryPreset) void run(openPresetPage);
+    else navigate({ ...options, limit: pageSize });
+  }
+
+  return <div className="workspace-tab postgres-table-tab" aria-label={text.relation} onKeyDown={event => {
+    if (!refreshDisabled && tableRefreshShortcut(event)) refreshTable();
+  }}>
     <div className="context-bar"><strong>{tab.title}</strong><span>PostgreSQL / {target.database}</span></div>
     <div className="query-toolbar pg-table-toolbar">
-      {presetTab && !page
-        ? <button disabled={blocked} onClick={() => void run(openPresetPage)}>{tablePresetsZh.treeRetry}</button>
-        : <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>}
+      <button data-table-refresh title={navigationZh.tableRefreshShortcut} disabled={refreshDisabled}
+        onClick={refreshTable}>{retryPreset ? tablePresetsZh.treeRetry : text.refresh}</button>
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
       {onCopyTable && <button disabled={blocked || requiresRefresh || page?.relationKind !== 'r' || !!draft.length} onClick={onCopyTable}>{postgresTableCopyZh.open}</button>}
       <button disabled={!canBrowseReference} onClick={() => browseReference('parent')}>{referenceText.browse}</button>

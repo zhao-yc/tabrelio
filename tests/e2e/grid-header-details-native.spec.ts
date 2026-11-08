@@ -2,7 +2,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
-import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import { answerDialogs, confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridHeaderDetailsZh as text } from '../../src/renderer/locales/gridHeaderDetails.zh-CN';
@@ -10,12 +10,45 @@ import { sqliteTableBrowseZh as sqlite } from '../../src/renderer/locales/sqlite
 import { postgresTableZh as postgres } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { sqliteTableEditZh as sqliteEdit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
+import { sqliteEditWorkspaceZh as sqliteWorkspace } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
 const taskIds = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
 const applyKey = process.platform === 'darwin' ? 'Meta+r' : 'Control+r';
 const rowLabels = (grid: Locator) => grid.getByRole('gridcell').filter({ hasText: /row [ABC]$/ });
+
+/** 旁观正式分页回包，只记录筛选、排序和分页条件，不替换 Main 或驱动结果。 */
+async function observeReads(command: 'sqlite.tablePage' | 'postgres.table.page' | 'table.page') {
+  await desktop.evaluate(({ ipcMain }, command) => {
+    type Request = { command: string; input: Record<string, unknown> };
+    type Handler = (event: Electron.IpcMainInvokeEvent, request: Request) => Promise<{ ok: boolean }>;
+    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, Handler> })._invokeHandlers;
+    const original = handlers.get('dbark:request');
+    if (!original) throw Error('缺少正式表页 IPC 入口');
+    const reads: Record<string, unknown>[] = [];
+    Object.assign(globalThis, { gridHeaderTestReads: reads });
+    handlers.set('dbark:request', async (event, request) => {
+      const reply = await original(event, request);
+      if (request.command === command && reply.ok) {
+        const { page, pageSize, offset, limit, filter, filters, filterMode, filterGroup, mode, sort } = request.input;
+        reads.push({ page, pageSize, offset, limit, filter, filters, filterMode, filterGroup, mode, sort });
+      }
+      return reply;
+    });
+  }, command);
+  return () => desktop.evaluate(() => (globalThis as typeof globalThis & { gridHeaderTestReads: Record<string, unknown>[] }).gridHeaderTestReads);
+}
+
+/** 从真实活动格发起读取，核对只成功重读一次及沿用应用前的分页条件。 */
+async function refreshFromGrid(grid: Locator, reads: Awaited<ReturnType<typeof observeReads>>, key: string) {
+  const before = await reads();
+  expect(before.length).toBeGreaterThan(0);
+  await rowLabels(grid).first().press(key);
+  await expect.poll(async () => (await reads()).length).toBe(before.length + 1);
+  expect((await reads()).at(-1)).toEqual(before.at(-1));
+}
 
 /** 从真实数据格与列标题分别操作，并核对结果行而非只读排序图标。 */
 async function sortFromGrid(grid: Locator, last: string): Promise<void> {
@@ -62,6 +95,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
         { id: 'header-query', kind: 'query', title: '结果排序', connectionId: connection.id, database: 'main', sql: 'SELECT label FROM subject ORDER BY id' },
       ] });
     });
+    const reads = await observeReads('sqlite.tablePage');
     await page.reload();
     const tab = page.locator('.sqlite-table-tab:visible');
     const header = (name: string) => tab.getByRole('columnheader').filter({ has: page.locator('.grid-header-detail-name').filter({ hasText: new RegExp('^' + name + '$') }) });
@@ -99,6 +133,34 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(rowLabels(tab)).toHaveCount(1);
     await direction.press(applyKey);
     await expect(rowLabels(tab)).toHaveCount(2);
+    await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    // 未应用的筛选留在编辑区，网格刷新继续用已提交的条件。
+    await tab.getByRole('button', { name: sqlite.addFilter, exact: true }).click();
+    await tab.getByLabel(sqlite.filterColumn(1), { exact: true }).selectOption('label');
+    await filter.fill('row A');
+    await refreshFromGrid(tab, reads, 'F5');
+    if (process.platform === 'darwin') await refreshFromGrid(tab, reads, 'Meta+r');
+    await expect(filter).toHaveValue('row A');
+    await expect(rowLabels(tab)).toHaveCount(2);
+    await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+
+    const beforeDraft = await reads();
+    await rowLabels(tab).first().dblclick();
+    const editor = page.getByRole('dialog', { name: sqliteEdit.editCell, exact: true });
+    await expect(editor).toBeVisible();
+    const input = editor.getByLabel('SQLite 字段 label 值', { exact: true });
+    await input.fill('只留在本地的值');
+    await input.press('F5');
+    await expect(input).toHaveValue('只留在本地的值');
+    await editor.getByRole('button', { name: sqliteEdit.saveInput, exact: true }).click();
+    const draft = tab.getByRole('gridcell').filter({ hasText: /只留在本地的值$/ });
+    await expect(draft).toBeVisible();
+    await answerDialogs([1]);
+    const [confirmation] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }), draft.press('F5')]);
+    expect(confirmation.message()).toBe(sqliteWorkspace.confirmDiscard);
+    await expect(draft).toBeVisible();
+    expect(await reads()).toEqual(beforeDraft);
+    await (await navigationMenuItem(tab, { name: sqliteEdit.undo, exact: true })).click();
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
     await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
     await expect(header('label')).toBeVisible();
@@ -149,6 +211,7 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
           table: profile.dialect === 'postgresql' ? '"public"."update_subject"' : 'update_subject' },
       ] });
     }, profile);
+    const reads = await observeReads(dialect === 'postgresql' ? 'postgres.table.page' : 'table.page');
     await page.reload();
     const tab = page.locator('.table-tab:visible, .postgres-table-tab:visible');
     const header = tab.getByRole('columnheader').filter({ has: page.locator('.grid-header-detail-name').filter({ hasText: /^label$/ }) });
@@ -206,6 +269,10 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     await value.fill('row C');
     await expect(rowLabels(tab)).toHaveCount(3);
     await value.press(applyKey);
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await expect(rowLabels(tab).first()).toHaveText(/row C$/);
+    await refreshFromGrid(tab, reads, 'F5');
+    if (process.platform === 'darwin') await refreshFromGrid(tab, reads, 'Meta+r');
     await expect(rowLabels(tab)).toHaveCount(1);
     await expect(rowLabels(tab).first()).toHaveText(/row C$/);
     expect(pageErrors).toEqual([]);
