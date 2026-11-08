@@ -60,6 +60,8 @@
 
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表格与查询结果可按可见列名或序号横向定位，支持同名列、虚拟滚动和空结果表头。D06、R01、R02 仍为部分覆盖。[跳到列](user-guide.md#跳到列)
 
+2026-11-08 源码增量。MySQL／MariaDB 命名筛选排序方案可附带当前列布局，读取第一页成功后恢复布局，替换未保存布局前需要确认。旧方案继续兼容。D06 仍为部分覆盖。[表页使用说明](user-guide.md)
+
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 实体表可为当前记录或本页勾选行生成 UPDATE SQL，WHERE 使用完整原主键，SET 使用已加载的普通非键原值。D02、R01、R02 仍为部分覆盖。[复制记录为 UPDATE SQL](user-guide.md#复制记录为-update-sql)
 
 2026-11-08 源码增量。PostgreSQL 单文件原生 CSV 可在导入前完整检查编码、引号和列数，并保留列映射。写入沿已核对的字节范围并核对记录数。F01、R01 仍为部分覆盖。[原生 CSV 整文件检查](development/postgres-copy-csv-preflight-20261108.md)

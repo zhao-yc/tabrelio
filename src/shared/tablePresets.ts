@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { filterRuleSchema, filterGroupSchema, assertFilterGroupInput, sortRulesSchema, validateFilterGroup, FILTER_LIMITS } from './filtering';
-import { tablePreferencesLimits, tablePreferenceTargetSchema, type TablePreferences } from './tablePreferences';
+import { strictTableLayoutPreferences, tablePreferencesLimits, tablePreferenceTargetSchema, type TablePreferences } from './tablePreferences';
 import { postgresAdvancedTableFilterSchema, postgresQuickTableFilterSchema, postgresTableLayoutPreferencesSchema, postgresTablePageSchema, postgresTableSortRules, postgresTableSortSchema, postgresTableTargetSchema, type PostgresTablePage, type PostgresTablePageInput } from './postgresTable';
 import { postgresPresetIdFromTab } from './postgresPresetTab';
 
@@ -12,10 +12,13 @@ const configurationShape = z.object({ filters:z.array(filterRuleSchema).max(FILT
   catch(reason){context.addIssue({code:'custom',message:reason instanceof Error?reason.message:'筛选条件无效'});}
 });
 /** 先核原始自有分组，不允许对象schema把继承或访问器变成缺省平铺；旧缺项不补树。 */
-export const tablePresetConfigurationSchema = z.unknown().transform((input,context):z.output<typeof configurationShape>=>{
-  try { assertFilterGroupInput(input);return configurationShape.parse(input); }
-  catch(reason){context.addIssue({code:'custom',message:reason instanceof Error?reason.message:'筛选条件无效'});return z.NEVER;}
-});
+function checkedConfiguration<T>(shape: z.ZodType<T>) {
+  return z.unknown().transform((input, context): T => {
+    try { assertFilterGroupInput(input); return shape.parse(input); }
+    catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选条件无效' }); return z.NEVER; }
+  });
+}
+export const tablePresetConfigurationSchema = checkedConfiguration(configurationShape);
 const name = z.string().min(1).max(tablePresetLimits.name).refine(value=>value.trim().length>0&&!/[\u0000-\u001f\u007f]/u.test(value),'方案名不能为空或包含控制字符');
 /** PostgreSQL 快速筛选沿用原始子串语义，不能转换为 LIKE 或与高级规则混用。 */
 const postgresConfiguration = configurationShape.safeExtend({ quickFilter: postgresQuickTableFilterSchema.optional() }).superRefine((value, context) => {
@@ -25,15 +28,24 @@ const postgresConfiguration = configurationShape.safeExtend({ quickFilter: postg
   }
 });
 /** 布局保存在独立补充表，旧筛选方案文档继续用原严格形状读取。 */
-const postgresPresetLayout = postgresTableLayoutPreferencesSchema.refine(value => value.columns.length > 0 &&
-  new TextEncoder().encode(JSON.stringify(value)).byteLength <= tablePreferencesLimits.entryBytes, '方案布局须包含显示列且不能超过512 KiB');
+function presetLayout(schema: z.ZodType<TablePreferences>) {
+  return schema.refine(value => value.columns.length > 0 &&
+    new TextEncoder().encode(JSON.stringify(value)).byteLength <= tablePreferencesLimits.entryBytes, '方案布局须包含显示列且不能超过512 KiB');
+}
+const mysqlPresetLayout = presetLayout(strictTableLayoutPreferences(z.string().min(1).max(256), tablePreferencesLimits.columns));
+const postgresPresetLayout = presetLayout(postgresTableLayoutPreferencesSchema);
+const mysqlTablePresetConfigurationSchema = checkedConfiguration(configurationShape.safeExtend({ layout: mysqlPresetLayout.optional() }));
 const postgresProfile = postgresConfiguration.safeExtend({ layout: postgresPresetLayout.optional() });
 const postgresTablePresetConfigurationSchema = z.unknown().transform((input, context): z.output<typeof postgresProfile> => {
   try { assertFilterGroupInput(input); return postgresProfile.parse(input); }
   catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : 'PostgreSQL 方案无效' }); return z.NEVER; }
 });
-export const postgresPresetLayoutsSchema = z.array(z.object({ id: z.uuid(), digest, layout: postgresPresetLayout }).strict())
-  .max(tablePresetLimits.perTarget).refine(items => new Set(items.map(item => item.id)).size === items.length, '方案布局编号重复');
+function presetLayoutsSchema(layout: z.ZodType<TablePreferences>) {
+  return z.array(z.object({ id: z.uuid(), digest, layout }).strict())
+    .max(tablePresetLimits.perTarget).refine(items => new Set(items.map(item => item.id)).size === items.length, '方案布局编号重复');
+}
+export const mysqlPresetLayoutsSchema = presetLayoutsSchema(mysqlPresetLayout);
+export const postgresPresetLayoutsSchema = presetLayoutsSchema(postgresPresetLayout);
 
 /** 两种持久化格式复用预算和修订规则，既有文档仍按原格式校验。 */
 function presetDocument<T extends TablePresetConfiguration>(configuration: z.ZodType<T>) {
@@ -52,7 +64,7 @@ export const postgresTablePresetDocumentSchema = presetDocument(z.unknown().tran
 export const tablePresetSourceSchema = z.object({connectionRevision:revision,connectionDigest:digest}).strict();
 export const tablePresetListSchema = tablePreferenceTargetSchema;
 const checked = tablePreferenceTargetSchema.extend({expectedRevision:revision,source:tablePresetSourceSchema,bindingToken:z.string().uuid()}).strict();
-export const tablePresetSaveSchema = checked.extend({name,configuration:tablePresetConfigurationSchema,replaceId:z.string().uuid().optional()}).strict();
+export const tablePresetSaveSchema = checked.extend({name,configuration:mysqlTablePresetConfigurationSchema,replaceId:z.string().uuid().optional()}).strict();
 export const tablePresetSelectSchema = checked.extend({id:z.string().uuid()}).strict();
 export const tablePresetApplySchema = tablePresetSelectSchema.extend({taskId:z.string().uuid()}).strict();
 export const postgresTablePresetListSchema = postgresTableTargetSchema.pick({ connectionId: true, database: true, table: true });
@@ -86,8 +98,9 @@ export function validateTablePresetBudget(targets:number,entries:number,bytes:nu
 
 /** 缺任意字段就拒整份；值保持原字符串及NULL操作符语义，不删条件或强转数值。 */
 export function validateTablePresetColumns(raw:TablePresetConfiguration,columns:readonly string[], postgres = false):TablePresetConfiguration {
-  const configuration: TablePresetConfiguration = (postgres ? postgresTablePresetConfigurationSchema : tablePresetConfigurationSchema).parse(raw), available = new Set(columns);
+  const configuration: TablePresetConfiguration = (postgres ? postgresTablePresetConfigurationSchema : mysqlTablePresetConfigurationSchema).parse(raw), available = new Set(columns);
   if ([...configuration.filters, ...configuration.sort, ...(configuration.quickFilter ? [configuration.quickFilter] : [])].some(item => !available.has(item.column))) throw Error('方案字段已不存在，整份方案未应用');
+  if (!postgres && configuration.layout?.columns.some(column => !available.has(column.name))) throw Error('方案布局中的字段已不存在，整份方案未应用');
   return configuration;
 }
 

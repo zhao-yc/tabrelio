@@ -13,7 +13,7 @@ interface Props {
 export function TablePresetPanel(props:Props) {
   const [snapshot,setSnapshot]=useState<TablePresetSnapshot|null>(null),[name,setName]=useState(''),[selected,setSelected]=useState(''),[pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [confirmation,setConfirmation]=useState<{kind:'replace'|'delete'|'apply';key:string}>();
-  const [includeLayout, setIncludeLayout] = useState(true);
+  const [includeLayout, setIncludeLayout] = useState(props.postgres === true);
   const { layout, ...conditions } = props.configuration;
   const captured = includeLayout ? props.configuration : conditions;
   const identity=JSON.stringify([props.postgres,props.target,props.connectionVersion,props.refreshVersion,props.columns]);
@@ -38,11 +38,11 @@ export function TablePresetPanel(props:Props) {
     const current=latest.current;if(lock.current||activeRead.current||current.disabled||!snapshot)return;
     const same=snapshot.entries.find(item=>item.name===name),entry=snapshot.entries.find(item=>item.id===selected);
     if(kind==='replace'&&!same||kind==='delete'&&!entry||kind==='apply'&&!entry)return;
-    if (kind === 'replace' || kind === 'delete' || (kind === 'apply' && current.postgres && (confirmed || current.layoutDirty && entry?.configuration?.layout))) {
+    if (kind === 'replace' || kind === 'delete' || (kind === 'apply' && (confirmed || current.layoutDirty && entry?.configuration?.layout))) {
       const chosen = kind === 'replace' ? same! : entry!;
-      if (current.postgres) {
+      if (current.postgres || kind === 'apply') {
         // 确认绑定选中的方案和当前条件，避免旧确认覆盖新版本或另一项。
-        const key = JSON.stringify([kind, environment.current.epoch, configurationEpoch.current.epoch, snapshot.revision, chosen.id]);
+        const key = JSON.stringify([kind, environment.current.epoch, configurationEpoch.current.epoch, snapshot.revision, chosen.id, kind === 'apply' ? layout : undefined]);
         if (!confirmed) { setConfirmation({ kind, key }); return; }
         setConfirmation(undefined);
         if (confirmation?.key !== key) { setError(t.changed); return; }
@@ -64,8 +64,9 @@ export function TablePresetPanel(props:Props) {
         if(!mounted.current||id!==request.current)return;
         if(readRequest?.cancelled||epoch!==environment.current.epoch||latest.current.disabled||configuration!==configurationEpoch.current.epoch)throw Error(t.changed);
         const next=validateTablePresetColumns(result,latest.current.columns,current.postgres);
+        if (readRequest && activeRead.current === readRequest) { activeRead.current = null; setReading(false); }
         if (!await latest.current.onApply(next)) throw Error(t.changed);
-        if (mounted.current && id === request.current && epoch === environment.current.epoch) setNotice(t.applied);
+        if (mounted.current && id === request.current && epoch === environment.current.epoch) setNotice(next.layout ? t.appliedWithLayout : t.applied);
       }else{
         const result=kind==='delete'?await invoke(current.postgres?'postgres.table.presets.delete':'table.presets.delete',{...checked,id:entry!.id}):await invoke(current.postgres?'postgres.table.presets.save':'table.presets.save',{...checked,name,configuration:validateTablePresetColumns(current.configuration,current.columns,current.postgres),...(kind==='replace'?{replaceId:same!.id}:{})});
         if (current.postgres) postgresPresetsChanged(current.target);
@@ -79,14 +80,14 @@ export function TablePresetPanel(props:Props) {
   }
   const disabled=props.disabled||pending||reading||!snapshot,editingDisabled=disabled||!!confirmation,same=snapshot?.entries.some(item=>item.name===name);
   const selectedEntry = snapshot?.entries.find(entry => entry.id === selected);
-  return <section aria-label={t.title}><strong>{t.title}</strong><UsageHelp><p>{props.postgres ? t.postgresNotice : t.notice}</p></UsageHelp><div className="filter-inputs">
+  return <section aria-label={t.title}><strong>{t.title}</strong><UsageHelp><p>{props.postgres || layout ? t.postgresNotice : t.notice}</p></UsageHelp><div className="filter-inputs">
     <input aria-label={t.name} maxLength={tablePresetLimits.name} value={name} disabled={!!confirmation} onChange={event=>setName(event.target.value)}/>
     <button disabled={editingDisabled||!name.trim()||same} onClick={()=>void action('save')}>{t.save}</button>
     <button disabled={editingDisabled||!same} onClick={()=>void action('replace')}>{t.replace}</button>
     <select aria-label={t.choose} value={selected} disabled={editingDisabled} onChange={event=>setSelected(event.target.value)}><option value="">{t.none}</option>{snapshot?.entries.map(entry=><option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
     <button disabled={editingDisabled||!selected} onClick={()=>void action('apply')}>{t.apply}</button><button disabled={editingDisabled||!selected} onClick={()=>void action('delete')}>{t.remove}</button><button disabled={pending||props.disabled||!!confirmation} onClick={()=>void reload()}>{t.reload}</button>{reading&&<button onClick={cancelRead}>{t.cancel}</button>}
-  </div>{props.postgres && layout && <label className="check"><input type="checkbox" checked={includeLayout} disabled={editingDisabled} onChange={event => setIncludeLayout(event.target.checked)}/>{t.includeLayout}</label>}
-  {props.postgres && selectedEntry?.configuration?.layout && <p>{t.hasLayout}</p>}
+  </div>{layout && <label className="check"><input type="checkbox" checked={includeLayout} disabled={editingDisabled} onChange={event => setIncludeLayout(event.target.checked)}/>{t.includeLayout}</label>}
+  {selectedEntry?.configuration?.layout && <p>{t.hasLayout}</p>}
   {confirmation&&<div className="filter-inputs">
     <p>{confirmation.kind==='apply' ? t.applyLayoutPrompt : confirmation.kind==='replace'?t.replaceConfirm:t.deleteConfirm}</p>
     <button onClick={()=>setConfirmation(undefined)}>{t.cancelChange}</button>

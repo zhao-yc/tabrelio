@@ -18,6 +18,41 @@ const packet=(snapshot:TablePresetStoredSnapshot)=>({...target,source:snapshot.s
 async function fixture(){const dir=mkdtempSync(join(tmpdir(),'dbark-preset-'));dirs.push(dir);const file=join(dir,'local.sqlite'),store=await LocalStore.open(file,wasm,protector);store.saveConnection(profile);return {file,store};}
 afterEach(()=>{for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 describe('命名方案真实SQLite、CAS与原子持久化',()=>{
+ it.each(['mysql', 'mariadb'] as const)('%s 方案布局独立持久化，旧格式写入不会错配布局', async dialect => {
+  const { store, file } = await fixture();
+  store.saveConnection({ ...profile, dialect });
+  const layout = { version: 1 as const, columns: [{ name: 'nullable', hidden: true }, { name: 'payload', hidden: false, width: 310 }],
+    frozenThrough: 'payload', rowHeight: 56 as const };
+  const legacy = store.saveTablePreset({ ...packet(store.tablePresets(target)), name: '旧方案', configuration: config });
+  const saved = store.saveTablePreset({ ...packet(legacy), name: '组合', configuration: { ...config, layout } });
+  const id = saved.entries[1].id;
+  expect(store.selectedTablePreset({ ...packet(saved), id })).toEqual({ ...config, layout });
+  expect(() => validateTablePresetColumns({ ...config, layout: { ...layout, columns: [...layout.columns, { name: 'gone', hidden: false }] } },
+    ['payload', 'nullable'])).toThrow('布局中的字段');
+  mkdirSync(file + '.tmp');
+  try {
+   expect(() => store.saveTablePreset({ ...packet(saved), name: '组合', replaceId: id, configuration: config })).toThrow('未保存');
+   expect(store.tablePresets(target)).toEqual(saved);
+  } finally { rmSync(file + '.tmp', { recursive: true }); store.close(); }
+  const reopened = await LocalStore.open(file, wasm, protector);
+  expect(reopened.tablePresets(target).entries).toEqual(saved.entries);
+  reopened.close();
+  const SQL = await initSqlJs({ locateFile: () => wasm }), disk = new SQL.Database(readFileSync(file));
+  const plain = tablePresetDocumentSchema.parse(JSON.parse(String(disk.exec('SELECT data FROM table_presets')[0].values[0][0])));
+  expect(plain.entries.map(entry => entry.configuration)).toEqual([config, config]);
+  plain.revision++;
+  plain.entries[1].configuration.filterMode = 'all';
+  disk.run('UPDATE table_presets SET data=?', [JSON.stringify(plain)]);
+  writeFileSync(file, disk.export()); disk.close();
+  const after = await LocalStore.open(file, wasm, protector);
+  try {
+   const current = after.tablePresets(target);
+   expect(current.entries[1].configuration).toEqual(plain.entries[1].configuration);
+   after.deleteConnection(target.connectionId);
+   after.saveConnection({ ...profile, dialect });
+   expect(after.tablePresets(target).entries).toEqual([]);
+  } finally { after.close(); }
+ });
  it('PostgreSQL 方案布局与旧格式条件原子持久化，旧版本改条件不会错配布局', async () => {
   const { store, file } = await fixture();
   const pg = { connectionId: 'ram-layout', database: '库', table: '"schema"."表"' };

@@ -80,7 +80,7 @@ function parentPort(){
  const setters={setFilters:vi.fn(),setFilterMode:vi.fn(),setFilterGroup:vi.fn((value:FilterGroup|undefined)=>{publishedGroup=value;}),setSort:vi.fn(),setPageIndex:vi.fn()};
  const document={body:{},querySelector:()=>modal?{}:null},record={hasInput:()=>false,reset:vi.fn()},confirm=vi.fn(()=>true),cancel=vi.fn();
  // 本例没有批量窗口，但提取的真实setter仍须能读取原可空意图引用；不改变原方案/ABA期待。
- const context:any=createContext({ tableEdits: new TableEditWorkspace(), workspaceText, connection: {}, workspaceSkipLoad: { current: undefined }, selectedRowsRef: { current: new Set() }, applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh, filteredDeleteIntent: { current: null }, filteredUpdateIntent: { current: null }, selectedFilterRef: { current: null },filteredExportDialog:null,filteredExportIntent:{current:null},tableValueOptionsDialog:null,tableValueOptionsIntent:{current:null},...setters,batchFillIntent:{current:null},recordBatchIntent:{current:null},document,record,window:{confirm},recordPages:{cancel},collectChanges:()=>[],recordViewZh:{discardPage:'RAM确认'},presetUiEpoch:{current:0},createPresetDialogGuard:(value:any)=>createPresetDialogGuard(value,Observer as any),validateTablePresetColumns:(value:TablePresetConfiguration,columns:readonly string[])=>{const next=validateTablePresetColumns(value,columns);validated.push(next);return next;},mounted:{current:true},base:target,connectionVersion:1,refreshVersion:0,info:{columns:[{name:'payload'}]},rowsRef:{current:[]},loadGeneration:{current:2},externalStale:false,activeGridEditor:{current:null},presetApplyScope:{current:null},blockedRef:{current:false},showPreferences:false,referenceCount:{current:0},referenceDialog:null});
+ const context:any=createContext({ tableEdits: new TableEditWorkspace(), workspaceText, connection: {}, workspaceSkipLoad: { current: undefined }, selectedRowsRef: { current: new Set() }, applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh, filteredDeleteIntent: { current: null }, filteredUpdateIntent: { current: null }, selectedFilterRef: { current: null },filteredExportDialog:null,filteredExportIntent:{current:null},tableValueOptionsDialog:null,tableValueOptionsIntent:{current:null},...setters,batchFillIntent:{current:null},recordBatchIntent:{current:null},document,record,window:{confirm},recordPages:{cancel},collectChanges:()=>[],recordViewZh:{discardPage:'RAM确认'},presetUiEpoch:{current:0},layoutRevision:{current:0},createPresetDialogGuard:(value:any)=>createPresetDialogGuard(value,Observer as any),validateTablePresetColumns:(value:TablePresetConfiguration,columns:readonly string[])=>{const next=validateTablePresetColumns(value,columns);validated.push(next);return next;},mounted:{current:true},base:target,connectionVersion:1,refreshVersion:0,info:{columns:[{name:'payload'}]},rowsRef:{current:[]},loadGeneration:{current:2},externalStale:false,activeGridEditor:{current:null},presetApplyScope:{current:null},blockedRef:{current:false},showPreferences:false,referenceCount:{current:0},referenceDialog:null});
  // 本组未打开勾选转入用途，原reloadBlocked仍读取真实可空来源引用。
  context.rowTransferSource={current:null};
  context.setShowPreferencesState=(value:boolean)=>{context.showPreferences=value;};context.setReferenceDialogState=(value:any)=>{context.referenceDialog=value;};
@@ -92,6 +92,15 @@ it.each(['dialog','preferences','reference','activity'] as const)('晚%s上下�
  if(mode==='dialog')f.modal(true);if(mode==='preferences')f.context.preferences(true);if(mode==='reference')f.context.reference({newContext:true});if(mode==='activity')f.context.referenceCount.current=1;
  expect(f.context.apply(configuration)).toBe(false);expect(f.setters.setFilters).not.toHaveBeenCalled();expect(f.setters.setFilterGroup).not.toHaveBeenCalled();expect(f.record.reset).toHaveBeenCalledTimes(resets);expect(f.cancel).toHaveBeenCalledTimes(cancels);expect(f.confirm).not.toHaveBeenCalled();
  if(mode==='preferences')expect(f.context.showPreferences).toBe(true);if(mode==='reference')expect(f.context.referenceDialog).toEqual({newContext:true});
+});
+it('读取方案期间列布局修订变化，旧组合方案不能发布筛选或排序', () => {
+ const f = parentPort();
+ expect(f.context.prepare()).toBe(true);
+ f.context.layoutRevision.current++;
+ const layout = { version: 1 as const, columns: [{ name: 'payload', hidden: false, width: 240 }] };
+ expect(f.context.apply({ ...configuration, layout })).toBe(false);
+ expect(f.setters.setFilters).not.toHaveBeenCalled();
+ expect(f.setters.setSort).not.toHaveBeenCalled();
 });
 it.each(['dialog','role','preferences','reference'] as const)('%s ABA即使恢复原值也永久拒绝',mode=>{
  const f=parentPort();expect(f.context.prepare()).toBe(true);
