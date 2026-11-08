@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fixture } from '../helpers/copyInsertPage';
-import { prepareCopyPrimaryKeyQuery } from '../../src/renderer/copyInsertSql';
+import { prepareCopyPrimaryKeyQuery, prepareCopyUpdateSql } from '../../src/renderer/copyInsertSql';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 
 describe('仅复制明确表页中已加载的未修改行', () => {
@@ -74,5 +74,21 @@ describe('MySQL 和 MariaDB 原主键查询复制', () => {
     f.info.columns[0].type = 'double';
     f.page.copyMetadataKey = tableCopyMetadataKey(f.info);
     expect(() => f.copy(new Set(['行0']))).toThrow('无法保真');
+  });
+
+  it('UPDATE 沿用时刻及复合主键谓词，按本页顺序只写普通非键字段', () => {
+    const f = source();
+    // 完整原页的引擎回包没有补读租约，UPDATE 逐列核对原值即可。
+    delete f.page.copySource;
+    f.info.columns.push({ ...f.info.columns[1], name: 'note' }, { ...f.info.columns[0], name: 'generated', generated: true });
+    f.page.copyMetadataKey = tableCopyMetadataKey(f.info);
+    f.page.rows = f.page.rows.map((row, index) => ({ ...row, note: index === 0 ? "a'\\b" : '', generated: '100' }));
+    f.rows.forEach((row, index) => { row.original = structuredClone(f.page.rows[index]); row.data = structuredClone(f.page.rows[index]); });
+    const copy = () => prepareCopyUpdateSql(f.context, f.binding, f.page, f.rows, new Set(['行1', '行0']));
+    const sql = copy();
+    expect(sql.match(/^SET .*$/gm)).toEqual(["SET `note` = _utf8mb4 X'61275c62'", "SET `note` = _utf8mb4 X''"]);
+    expect(sql.match(/^WHERE .*;$/gm)).toEqual(f.copy().match(/\([^\n]+\)/g)?.map(line => 'WHERE ' + line + ';'));
+    f.rows[0].data.note = '本地修改';
+    expect(copy).toThrow('草稿');
   });
 });

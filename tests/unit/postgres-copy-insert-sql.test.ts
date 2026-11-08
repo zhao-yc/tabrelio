@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTablePage } from '../../src/shared/postgresTable';
-import { postgresCopyInsertSql, postgresCopyPrimaryKeyQuery } from '../../src/renderer/postgresCopyInsertSql';
+import { postgresCopyInsertSql, postgresCopyPrimaryKeyQuery, postgresCopyUpdateSql } from '../../src/renderer/postgresCopyInsertSql';
 
 const page: PostgresTablePage = {
   exportToken: '原页', truncated: false, hasNext: true, order: 'primary', relationKind: 'r',
@@ -16,6 +16,22 @@ const page: PostgresTablePage = {
   rowKeys: ['一', '二'],
 };
 const table = '"带点.schema"."表""名"';
+
+it('PostgreSQL UPDATE 保持 ONLY 及原键，排除标识和生成列，拒绝任一选中草稿', () => {
+  const source = { ...page, primaryKey: ['id'] };
+  const sql = postgresCopyUpdateSql(table, source, new Set([1, 0]), []);
+  expect(sql.split('\n')).toEqual([
+    'UPDATE ONLY "带点.schema"."表""名"',
+    String.raw`SET "a""b" = E'引号''\\', "raw" = E'\\x00ff'`,
+    'WHERE ("id" = E\'9007199254740993\');',
+    'UPDATE ONLY "带点.schema"."表""名"',
+    'SET "a""b" = E\'\', "raw" = NULL',
+    'WHERE ("id" = E\'9007199254740995\');',
+  ]);
+  const draft = { rowKey: '二', offset: 0, change: { kind: 'delete' as const, row: 1, pageToken: '旧页' } };
+  expect(() => postgresCopyUpdateSql(table, source, new Set([0, 1]), [draft])).toThrow('草稿');
+  expect(postgresCopyUpdateSql(table, { ...source, relationKind: 'p' }, new Set([1]), [])).toMatch(/^UPDATE "带点/);
+});
 
 describe('PostgreSQL 表页 INSERT 复制', () => {
   it('按原页顺序保留精确文本、空串、NULL 和字节，引用名称并保留标识列', () => {

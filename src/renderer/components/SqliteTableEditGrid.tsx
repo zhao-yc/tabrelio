@@ -18,7 +18,8 @@ import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboar
 import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
 import { primaryKeyCopyZh as keyCopyText } from '../locales/primaryKeyCopy.zh-CN';
-import { sqliteCopyInsertDraftRows, sqliteCopyPrimaryKeyDraftRows } from '../sqliteCopyInsertSql';
+import { sqliteCopyInsertDraftRows, sqliteCopyPrimaryKeyDraftRows, sqliteCopyUpdateDraftRows } from '../sqliteCopyInsertSql';
+import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { useWorkspace } from '../store';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
@@ -250,6 +251,9 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
     {!!page.primaryKey?.length && <button type="button" title={keyCopyText.hint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(sqliteCopyPrimaryKeyDraftRows, selectedRows.size > 0, keyCopyText.copied)}>{keyCopyText.action}</button>}
+    {!!page.primaryKey?.length && <button type="button" title={updateSqlCopyZh.hint}
+      disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
+      onClick={() => handleTableSql(sqliteCopyUpdateDraftRows, selectedRows.size > 0, updateSqlCopyZh.copied)}>{updateSqlCopyZh.action}</button>}
     {!!page.primaryKey?.length && onOpenPrimaryKeyQuery && <button type="button" title={keyCopyText.openHint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(sqliteCopyPrimaryKeyDraftRows, selectedRows.size > 0, onOpenPrimaryKeyQuery)}>{keyCopyText.open}</button>}

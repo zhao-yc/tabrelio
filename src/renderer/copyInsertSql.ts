@@ -4,6 +4,7 @@ import { copyInsertSqlZh as text } from '../shared/copyInsertSql.zh-CN';
 import { tableReadIdentifier, tableReadTextLiteral } from '../shared/tableReadSql';
 import { decodeBinaryCell } from './binaryCell';
 import { primaryKeyCopyZh as keyText } from './locales/primaryKeyCopy.zh-CN';
+import { updateSqlCopyZh as updateText } from './locales/updateSqlCopy.zh-CN';
 import { ownCell } from './lib';
 import type { DraftRow } from './dataChanges';
 import { recordCopyMetadataReason, type RecordCopyPage } from './recordCopySource';
@@ -19,21 +20,31 @@ function sameRow(left: DataRow | undefined, right: DataRow): boolean {
 }
 /** 仅从当前表页选取原始行，不补取缺失值，不推断查询结果目标，也不包含任何行草稿。 */
 export function prepareCopyInsertSql(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null, rows: DraftRow[], ids: ReadonlySet<string>): CopyInsertSqlInput {
+  const selected = copyOriginalRows(context, binding, page, rows, ids, true);
+  const info = context.info!;
+  const input: CopyInsertSqlInput = {
+    database: info.database, table: info.name,
+    columns: info.columns.map(({ name, type, nullable, generated, extra }) => ({ name, type, nullable, generated, extra })),
+    rows: selected
+  };
+  assertCopyInsertSqlInput(input);
+  return structuredClone(input);
+}
+
+/** SQL 数据复制以当前无草稿的原行作值来源，缺列或归属变化时整组拒绝。 */
+function copyOriginalRows(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
+  rows: readonly DraftRow[], ids: ReadonlySet<string>, requireCopySource = false): DataRow[] {
   const info = context.info;
   if (context.busy || context.stale || !context.loaded) throw new Error(text.busy);
-  if (!info || info.objectKind !== 'table' || info.database !== context.target.database || info.name !== context.target.table || !page || binding?.page !== page || recordCopyMetadataReason(context, binding) || !page.copySource || page.copySource.missingColumns.length) throw new Error(text.target);
+  if (!info || info.objectKind !== 'table' || info.database !== context.target.database || info.name !== context.target.table ||
+      !page || binding?.page !== page || recordCopyMetadataReason(context, binding) ||
+      requireCopySource && !page.copySource || page.copySource?.missingColumns.length) throw new Error(text.target);
   if (!ids.size || rows.filter(row => ids.has(row.id)).length !== ids.size) throw new Error(text.selection);
   const originals = rows.filter(row => !row.inserted);
   if (originals.length !== page.rows.length || originals.some((row, index) => !sameRow(row.original, page.rows[index]))) throw new Error(text.target);
   const selected = rows.filter(row => ids.has(row.id));
   if (selected.some(row => row.inserted || row.deleted || !sameRow(row.original, row.data))) throw new Error(text.draft);
-  const input: CopyInsertSqlInput = {
-    database: info.database, table: info.name,
-    columns: info.columns.map(({ name, type, nullable, generated, extra }) => ({ name, type, nullable, generated, extra })),
-    rows: selected.map(row => row.original!)
-  };
-  assertCopyInsertSqlInput(input);
-  return structuredClone(input);
+  return selected.map(row => row.original!);
 }
 
 const utf8 = new TextEncoder();
@@ -46,15 +57,7 @@ function primaryKeyTerm(column: ColumnInfo, value: CellValue, epoch: string | un
   try { kind = copyInsertColumnKind(metadata); } catch { throw Error(keyText.type); }
   if (kind === 'float') throw Error(keyText.type);
   if (kind === 'binary') {
-    if (!value || typeof value !== 'object') throw Error(keyText.type);
-    const bytes = decodeBinaryCell(value)!;
-    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-    const bit = /^BIT(?:\((\d+)\))?$/i.exec(column.type);
-    if (!bit) return identifier + " = X'" + hex + "'";
-    const width = Number(bit[1] ?? 1), numeric = hex ? BigInt('0x' + hex) : -1n;
-    if (width < 1 || width > 64 || bytes.length > Math.ceil(width / 8) || numeric < 0n || numeric >= (1n << BigInt(width)))
-      throw Error(keyText.type);
-    return identifier + ' = CAST(CAST(' + numeric + ' AS DECIMAL(20,0)) AS UNSIGNED)';
+    return identifier + ' = ' + mysqlCopyBinaryLiteral(column.type, value);
   }
   if (kind === 'text') {
     if (typeof value !== 'string') throw Error(keyText.type);
@@ -76,9 +79,59 @@ function primaryKeyTerm(column: ColumnInfo, value: CellValue, epoch: string | un
   return identifier + ' = ' + numeric;
 }
 
+/** BIT 需要定型到无符号整数，避免高位比较和赋值落入浮点转换。 */
+function mysqlCopyBinaryLiteral(type: string, value: CellValue): string {
+  if (!value || typeof value !== 'object') throw Error(keyText.type);
+  const bytes = decodeBinaryCell(value)!;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  const bit = /^BIT(?:\((\d+)\))?$/i.exec(type);
+  if (!bit) return "X'" + hex + "'";
+  const width = Number(bit[1] ?? 1), numeric = hex ? BigInt('0x' + hex) : -1n;
+  if (width < 1 || width > 64 || bytes.length > Math.ceil(width / 8) || numeric < 0n || numeric >= (1n << BigInt(width)))
+    throw Error(keyText.type);
+  return 'CAST(CAST(' + numeric + ' AS DECIMAL(20,0)) AS UNSIGNED)';
+}
+
 /** 仅从已核验目录的原页按勾选顺序范围复制，不将本地修改或临时新增作为数据库主键。 */
 export function prepareCopyPrimaryKeyQuery(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
   rows: readonly DraftRow[], ids: ReadonlySet<string>): string {
+  const info = context.info;
+  if (!info) throw Error(keyText.target);
+  const prefix = 'SELECT * FROM ' + tableReadIdentifier(info.database) + '.' + tableReadIdentifier(info.name) + '\nWHERE ';
+  const separator = '\n   OR ';
+  return prefix + copyPrimaryKeyRows(context, binding, page, rows, ids, condition => condition,
+    separator, utf8.encode(prefix).length + 1) + ';';
+}
+
+/** SET 仅取原页普通字段；WHERE 与原主键查询共用同一精度和时区证明。 */
+export function prepareCopyUpdateSql(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
+  rows: readonly DraftRow[], ids: ReadonlySet<string>): string {
+  const originals = copyOriginalRows(context, binding, page, rows, ids);
+  const info = context.info!;
+  const keys = new Set(info.primaryKey);
+  const columns = info.columns.filter(column => !keys.has(column.name) && !column.generated && !/\b(?:auto_increment|invisible)\b/i.test(column.extra))
+    .map(({ name, type, nullable, generated, extra }) => ({ name, type, nullable, generated, extra }));
+  if (!keys.size || !columns.length || ids.size * (columns.length + keys.size) > limits.cells) throw Error(updateText.target);
+  const input = { database: info.database, table: info.name, columns,
+    rows: originals.map(row => Object.fromEntries(columns.map(column => [column.name, ownCell(row, column.name)]))) };
+  assertCopyInsertSqlInput(input);
+  const table = tableReadIdentifier(info.database) + '.' + tableReadIdentifier(info.name);
+  return copyPrimaryKeyRows(context, binding, page, rows, ids, (condition, index) => {
+    const row = input.rows[index];
+    const assignments = columns.map(column => {
+      const value = row[column.name];
+      const literal = value === null ? 'NULL' : typeof value === 'object' ? mysqlCopyBinaryLiteral(column.type, value)
+        : copyInsertNumericLiteral(column, value) ?? tableReadTextLiteral(String(value));
+      return tableReadIdentifier(column.name) + ' = ' + literal;
+    });
+    return 'UPDATE ' + table + '\nSET ' + assignments.join(', ') + '\nWHERE ' + condition + ';';
+  }, '\n');
+}
+
+/** 所有去向共用完整主键、逐行原始身份和最终字节预算。 */
+function copyPrimaryKeyRows(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
+  rows: readonly DraftRow[], ids: ReadonlySet<string>, render: (condition: string, index: number) => string,
+  separator: string, sqlBytes = 0): string {
   const info = context.info;
   if (context.busy || context.stale || !context.loaded || !info || info.objectKind !== 'table' ||
       info.database !== context.target.database || info.name !== context.target.table || !page || binding?.page !== page ||
@@ -93,9 +146,8 @@ export function prepareCopyPrimaryKeyQuery(context: RecordContext, binding: Reco
   });
   const originals = rows.filter(row => !row.inserted);
   if (originals.length !== page.rows.length) throw Error(keyText.target);
-  const prefix = 'SELECT * FROM ' + tableReadIdentifier(info.database) + '.' + tableReadIdentifier(info.name) + '\nWHERE ';
-  const separator = '\n   OR ', separatorBytes = utf8.encode(separator).length;
-  let inputBytes = 0, sqlBytes = utf8.encode(prefix).length + 1;
+  const separatorBytes = utf8.encode(separator).length;
+  let inputBytes = 0;
   const conditions: string[] = [];
   for (const [index, row] of originals.entries()) {
     if (!ids.has(row.id)) continue;
@@ -112,11 +164,11 @@ export function prepareCopyPrimaryKeyQuery(context: RecordContext, binding: Reco
       const epochs = page.primaryKeyEpochs?.[index];
       return primaryKeyTerm(column, value, epochs && Object.hasOwn(epochs, column.name) ? epochs[column.name] : undefined);
     });
-    const condition = '(' + terms.join(' AND ') + ')';
+    const condition = render('(' + terms.join(' AND ') + ')', conditions.length);
     sqlBytes += utf8.encode(condition).length + (conditions.length ? separatorBytes : 0);
     if (sqlBytes > limits.sqlBytes) throw Error(keyText.limit);
     conditions.push(condition);
   }
   if (conditions.length !== ids.size) throw Error(keyText.selection);
-  return prefix + conditions.join(separator) + ';';
+  return conditions.join(separator);
 }

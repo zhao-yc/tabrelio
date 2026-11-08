@@ -2,9 +2,10 @@ import { copyInsertSqlLimits as limits } from '../shared/copyInsertSql';
 import { copyInsertSqlZh as text } from '../shared/copyInsertSql.zh-CN';
 import { postgresDdlLiteral, postgresNewIdentifier } from '../shared/postgresCreateTable';
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
-import { isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTablePage } from '../shared/postgresTable';
+import { isPostgresFilteredUpdateColumn, isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTablePage } from '../shared/postgresTable';
 import type { PostgresDraftEntry } from '../shared/postgresTableDraft';
 import { primaryKeyCopyZh as keyText } from './locales/primaryKeyCopy.zh-CN';
+import { updateSqlCopyZh as updateText } from './locales/updateSqlCopy.zh-CN';
 import { cellText, ownCell } from './lib';
 
 const utf8 = new TextEncoder();
@@ -30,6 +31,15 @@ export function postgresCopyInsertSql(table: string, page: PostgresTablePage, in
 
 /** 沿实际主键顺序构造每行条件，普通表保留 ONLY，分区表读取全部分区。 */
 export function postgresCopyPrimaryKeyQuery(table: string, page: PostgresTablePage, indices: ReadonlySet<number>): string {
+  const { target, columns } = primaryKeyTarget(table, page);
+  const prefix = 'SELECT * FROM ' + target + '\nWHERE ';
+  const predicates = copyRows(page, indices, columns, keyText, values => primaryKeyCondition(columns, values),
+    '\n   OR ', utf8.encode(prefix).length + 1);
+  return prefix + predicates + ';';
+}
+
+/** 普通表使用 ONLY 避免同主键继承子表被更新，分区表仍由服务器路由。 */
+function primaryKeyTarget(table: string, page: PostgresTablePage) {
   const keys = page.primaryKey;
   if (!page.exportToken || page.truncated || !isPostgresSqlExportRelation(page.relationKind) || !keys?.length) throw Error(keyText.target);
   const { schema, name } = postgresRelationName(table);
@@ -39,13 +49,30 @@ export function postgresCopyPrimaryKeyQuery(table: string, page: PostgresTablePa
       ![schema, name, ...keys].every(value => postgresNewIdentifier.safeParse(value).success) ||
       keys.some(key => !byName.has(key))) throw Error(keyText.target);
   const columns = keys.map(key => byName.get(key)!);
-  const prefix = 'SELECT * FROM ' + (page.relationKind === 'r' ? 'ONLY ' : '') +
-    postgresIdentifier(schema) + '.' + postgresIdentifier(name) + '\nWHERE ';
-  const predicates = copyRows(page, indices, columns, keyText, values => {
-    if (values.includes('NULL')) throw Error(keyText.incomplete);
-    return '(' + keys.map((key, index) => postgresIdentifier(key) + ' = ' + values[index]).join(' AND ') + ')';
-  }, '\n   OR ', utf8.encode(prefix).length + 1);
-  return prefix + predicates + ';';
+  const target = (page.relationKind === 'r' ? 'ONLY ' : '') + postgresIdentifier(schema) + '.' + postgresIdentifier(name);
+  return { target, columns };
+}
+
+function primaryKeyCondition(columns: readonly { name: string }[], values: readonly string[]): string {
+  if (values.includes('NULL')) throw Error(keyText.incomplete);
+  return '(' + columns.map(({ name }, index) => postgresIdentifier(name) + ' = ' + values[index]).join(' AND ') + ')';
+}
+
+/** 使用完整原主键，省略主键、生成字段和标识字段；任何选中草稿使整批复制失败。 */
+export function postgresCopyUpdateSql(table: string, page: PostgresTablePage, indices: ReadonlySet<number>,
+  draft: readonly PostgresDraftEntry[]): string {
+  const { target, columns: keys } = primaryKeyTarget(table, page);
+  const columns = page.columns.filter(column => isPostgresFilteredUpdateColumn(column) && !column.identityAlways && !column.sequenceDefault);
+  if (!columns.length || columns.some(column => !postgresNewIdentifier.safeParse(column.name).success) ||
+      new Set(page.columns.map(column => column.name)).size !== page.columns.length ||
+      new Set(page.columns.map(column => column.key)).size !== page.columns.length) throw Error(updateText.target);
+  const changed = new Set(draft.map(entry => entry.rowKey));
+  return copyRows(page, indices, [...keys, ...columns], text, (values, index) => {
+    const key = page.rowKeys?.[index];
+    if (key !== undefined && changed.has(key)) throw Error(text.draft);
+    const set = columns.map(({ name }, index) => postgresIdentifier(name) + ' = ' + values[keys.length + index]);
+    return 'UPDATE ' + target + '\nSET ' + set.join(', ') + '\nWHERE ' + primaryKeyCondition(keys, values.slice(0, keys.length)) + ';';
+  }, '\n');
 }
 
 /** 两个复制入口沿相同的值校验与字节预算，整组生成后才交给剪贴板。 */

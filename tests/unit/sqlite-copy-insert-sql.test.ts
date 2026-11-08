@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
-import { sqliteCopyInsertDraftRows, sqliteCopyInsertSql, sqliteCopyPrimaryKeyDraftRows, sqliteCopyPrimaryKeyQuery } from '../../src/renderer/sqliteCopyInsertSql';
+import { sqliteCopyInsertDraftRows, sqliteCopyInsertSql, sqliteCopyPrimaryKeyDraftRows, sqliteCopyPrimaryKeyQuery, sqliteCopyUpdateSql } from '../../src/renderer/sqliteCopyInsertSql';
 
 const columns = ['id', 'v"a', 'raw', 'g'].map((name, index) => ({ name, declaredType: '', ...(index === 3 ? { generated: true } : {}) }));
 const page: SqliteTablePage = {
@@ -61,6 +61,22 @@ it('不复制可空主键上的 NULL，也拒绝无主键或不受支持的排�
   expect(() => sqliteCopyPrimaryKeyQuery(page, new Set([0]))).toThrow('主键目录');
   expect(() => sqliteCopyPrimaryKeyQuery({ ...page, primaryKey: [{ name: 'unknown', collation: 'BINARY' }] }, new Set([0])))
     .toThrow('主键目录');
+});
+
+it('SQLite UPDATE 回放只更新索引规则下匹配的一行，保留精确类型并由表重算生成列', () => {
+  const source: SqliteTablePage = { ...page, primaryKey: [{ name: 'v"a', collation: 'BINARY' }, { name: 'id', collation: 'BINARY' }],
+    storageTypes: ['itbi', 'itni'], result: { ...page.result, rows: [{ ...page.result.rows[0], c1: 'Key' }, page.result.rows[1]] } };
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE "表""名"(id INTEGER, "v""a" TEXT COLLATE NOCASE, raw BLOB, g INTEGER AS (length(raw)) STORED, PRIMARY KEY("v""a" COLLATE BINARY,id));' +
+      'INSERT INTO "表""名"(id,"v""a",raw) VALUES (9223372036854775807,\'Key\',NULL),(9223372036854775807,\'key\',X\'01\');');
+    const sql = sqliteCopyUpdateSql(source, new Set([0]));
+    expect(sql).toContain('SET "raw" = X\'00ff\'');
+    expect(sql).toContain('"v""a" COLLATE BINARY = \'Key\' AND "id" COLLATE BINARY = 9223372036854775807');
+    db.exec(sql);
+    expect(db.prepare('SELECT hex(raw) AS raw, g FROM "表""名" ORDER BY "v""a" COLLATE BINARY').all())
+      .toEqual([{ raw: '00FF', g: 2 }, { raw: '01', g: 1 }]);
+  } finally { db.close(); }
 });
 
 it('勾满 1000 行的原主键查询可在 SQLite 默认表达式深度内执行', () => {
