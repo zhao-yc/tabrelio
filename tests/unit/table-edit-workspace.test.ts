@@ -143,3 +143,58 @@ it('跨页填充遇到重叠定位、合计字节超限或勾选变动时不发�
     expect(changed).not.toHaveBeenCalled();
   }
 });
+
+
+it('跨页复制保留原行和勾选，新行及键保护按来源页登记并逐页撤销', () => {
+  const { edits, first, add, change, info, scope } = fixture(true);
+  info.columns[0].extra = 'auto_increment';
+  // 按更新后的目录重新登记原始首页。
+  edits.clear();
+  const left = add(1);
+  const before = change('已暂存的原字段');
+  edits.remember(before, new Set(['页1']), undefined, new Set());
+  const right = add(2), checks = new Set(['页2']);
+  let nextId = 0;
+  const plan = edits.planCheckedDuplication(right.rows, checks, fillContext(info), () => '复制' + ++nextId);
+  expect(plan.pages).toEqual([{ index: 1, count: 1 }, { index: 2, count: 1 }]);
+  expect(left.rows).toBe(before);
+  expect(first.copied.size).toBe(0);
+  expect(plan.stage()).toBe(right.rows);
+  expect(left.rows[0]).toBe(before[0]);
+  expect(left.rows[1]).toEqual({ id: '复制1', data: { value: '已暂存的原字段' }, inserted: true, deleted: false });
+  expect(right.rows[1].data).toEqual({ value: right.rows[0].data.value });
+  expect(left.selected).toEqual(new Set(['页1']));
+  expect(left.copied).toEqual(new Set(['复制1']));
+  expect(right.copied).toEqual(new Set(['复制2']));
+  expect(() => plan.stage()).toThrow();
+  edits.select(edits.navigate(1, scope), left);
+  edits.update(left.rows, edits.history.move(left.rows, 'undo')!);
+  expect(left.rows).toEqual(before);
+  expect(right.rows[1].inserted).toBe(true);
+});
+
+it('跨页复制拒绝重叠原键、全组预算超限和勾选变动', () => {
+  for (const failure of ['overlap', 'budget', 'selection']) {
+    const { edits, first, add, change, info } = fixture(true);
+    const checks = new Set(['页1']);
+    if (failure === 'budget') change('a'.repeat(230000));
+    edits.remember(first.rows, checks, undefined, new Set());
+    const last = failure === 'budget' ? 5 : 2;
+    for (let index = 2; index <= last; index++) {
+      const page = add(index, failure === 'overlap' ? 1 : index);
+      if (failure === 'budget') change('a'.repeat(230000));
+      edits.remember(page.rows, new Set(['页' + index]), undefined, new Set());
+    }
+    const current = edits.selected!.rows, left = first.rows, selected = new Set(['页' + last]);
+    let nextId = 0;
+    const prepare = () => edits.planCheckedDuplication(current, selected, fillContext(info), () => '复制' + ++nextId);
+    if (failure === 'selection') {
+      const plan = prepare();
+      checks.clear();
+      expect(() => plan.stage()).toThrow();
+    } else expect(prepare).toThrow(failure === 'overlap' ? /同一条原记录/ : /上限/);
+    expect(first.rows).toBe(left);
+    expect(edits.selected!.rows).toBe(current);
+    expect(edits.pages.every(page => page.copied.size === 0)).toBe(true);
+  }
+});

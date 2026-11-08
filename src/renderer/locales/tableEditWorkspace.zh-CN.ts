@@ -18,6 +18,13 @@ export const tableEditWorkspaceZh = {
   fillNotice: '暂存以下保留页的勾选记录。可回到各页撤销，预览 SQL 并明确提交后才会修改数据库。',
   fillGroup: (index: number, count: number) => `第 ${index} 页 · ${count} 条`,
   filled: '已暂存 {0} 条跨页填充记录，可回到各页独立撤销。',
+  duplicateChecked: '复制保留页勾选记录为新增草稿',
+  duplicateNone: '请先在其它保留页勾选已有记录。',
+  duplicateOverlap: '不同保留页包含同一条原记录，请调整勾选范围后再复制。',
+  duplicateConfirm: (groups: readonly { index: number; count: number }[]) =>
+    '将以下勾选记录复制为新增草稿？\n' + groups.map(({ index, count }) => `第 ${index} 页 · ${count} 条`).join('\n') +
+    '\n自增列和生成列会省略。请核对其它主键及唯一键，再预览并提交。',
+  duplicated: '已复制 {0} 条记录为新增草稿，可回到各页独立撤销。',
   deleteChecked: '删除保留页勾选记录',
   deleteNone: '请先在其它保留页勾选记录。',
   deleteHistoryLimit: '至少一页的勾选超过可撤销预算，请减少该页勾选。',

@@ -72,8 +72,10 @@ function cellBytes(value: unknown): number {
   return base64.length + 29;
 }
 
+interface DuplicateBatchBudget { rows: number; cells: number; bytes: number }
+
 /** 先整批校验来源、类型和既有预算，最后才分配身份与深复制；调用方只发布一次结果。 */
-export function duplicateSelectedRecordDrafts(rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null, newId: () => string, now = Date.now()): { rows: DraftRow[]; ids: string[] } {
+export function duplicateSelectedRecordDrafts(rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null, newId: () => string, now = Date.now(), sharedBudget?: DuplicateBatchBudget): { rows: DraftRow[]; ids: string[] } {
   if (!ids.size) throw Error(text.batchSelection);
   if (ids.size > limits.rows) throw Error(text.batchLimit);
   const source = page?.copySource;
@@ -99,19 +101,23 @@ export function duplicateSelectedRecordDrafts(rows: DraftRow[], ids: ReadonlySet
     for (const key of context.info!.editableKey) cellBytes(row.original![key]);
   }
   const columns = context.info!.columns.filter(column => !column.generated && !/\bauto_increment\b/i.test(column.extra));
-  if (context.info!.columns.length > limits.columns || selected.length * columns.length > limits.cells) throw Error(text.batchLimit);
+  const budget = sharedBudget ?? { rows: 0, cells: 0, bytes: 2 };
+  budget.rows += selected.length;
+  budget.cells += selected.length * columns.length;
+  if (context.info!.columns.length > limits.columns || budget.rows > limits.rows || budget.cells > limits.cells) throw Error(text.batchLimit);
   // JSON字节预算包含字段名、容器和逗号；不构造SQL或JSON序列化整批值。
   const names = new Set<string>(); let rowOverhead = 2;
   for (const column of columns) {
     if (!column.name || column.name.length > 64 || names.has(column.name)) throw Error(text.batchValue);
     names.add(column.name); rowOverhead += stringBytes(column.name).json + 2;
   }
-  let bytes = 2, historyBytes = 128;
+  let historyBytes = 128;
   for (const row of selected) {
-    bytes += rowOverhead + 1;
+    budget.bytes += rowOverhead + 1;
+    if (budget.bytes > limits.inputBytes) throw Error(text.batchLimit);
     const entries = columns.map(column => {
       const value = row.data[column.name]; cellBytes(row.original![column.name]);
-      bytes += cellBytes(value); if (bytes > limits.inputBytes) throw Error(text.batchLimit);
+      budget.bytes += cellBytes(value); if (budget.bytes > limits.inputBytes) throw Error(text.batchLimit);
       return [column.name, value] as [string, CellValue];
     });
     // 使用既有历史成本和身份最大长度作保守预检，确保整批发布仍可一步撤销。

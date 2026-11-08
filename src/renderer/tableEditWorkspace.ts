@@ -2,12 +2,13 @@ import type { TableInfo, TablePage } from '../shared/contracts';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import { collectChanges, type DraftRow } from './dataChanges';
 import { changedDraftHistoryBytes, DraftHistory, draftHistoryLimits } from './draftHistory';
-import { recordBatchCellBytes, assertRecordBatchFields } from './recordDuplicateBatch';
+import { recordBatchCellBytes, assertRecordBatchFields, duplicateSelectedRecordDrafts } from './recordDuplicateBatch';
 import { tableEditWorkspaceZh as text } from './locales/tableEditWorkspace.zh-CN';
 import { parseTableDraftDocument, type TableDraftDocument, type TableDraftWorkspace } from '../shared/tableDraft';
 import { restoreTableDraftRows } from './tableDraft';
 import { assertCopiedRecordKeys } from './recordDuplicate';
 import { BatchFillIntent, prepareBatchFill, type BatchFillAssignment } from './recordBatchFill';
+import { recordDuplicateZh } from './locales/recordDuplicate.zh-CN';
 import { recordReadonlyReason, recordTargetKey, type RecordContext } from './recordViews';
 
 export const tableEditWorkspaceLimits = { pages: 16, bytes: 64 * 1024 * 1024, cells: 100000, changes: 5000, changedCells: 50000, inputBytes: 1024 * 1024 } as const;
@@ -17,7 +18,7 @@ export interface TableEditPage {
 }
 export interface TableEditNavigation { readonly epoch: object; readonly from: TableEditPage; readonly target: number | 'last'; readonly scope: string; }
 export interface TableEditBatch { readonly rows: DraftRow[]; readonly pages: number; current(): boolean; }
-export interface TableCheckedDeletion {
+export interface TableCheckedStage {
   readonly pages: readonly { index: number; count: number }[];
   current(): boolean;
   stage(): DraftRow[];
@@ -26,7 +27,7 @@ export interface TableCheckedDeletion {
 export interface TableCheckedFill {
   readonly context: RecordContext;
   readonly count: number;
-  readonly groups: TableCheckedDeletion['pages'];
+  readonly groups: TableCheckedStage['pages'];
   readonly invalidated: boolean;
   invalidate(): void;
   reason(rows: DraftRow[], selected: ReadonlySet<string>, context: RecordContext): string;
@@ -191,7 +192,7 @@ export class TableEditWorkspace {
     return { active, source, groups, isCurrent, counts: groups.map(item => ({ index: item.page.index, count: item.selectedRows.length })) };
   }
   /** 先校验全部修改和各页撤销预算，再一次发布；同一原定位不能跨页重复暂存。 */
-  planCheckedDeletion(current: DraftRow[], activeSelected: ReadonlySet<string>): TableCheckedDeletion {
+  planCheckedDeletion(current: DraftRow[], activeSelected: ReadonlySet<string>): TableCheckedStage {
     const { active, source, groups, isCurrent, counts } = this.captureChecked(current, activeSelected);
     if (!groups.some(item => item.page !== active)) throw Error(text.deleteNone);
     const plans = groups.map(item => {
@@ -275,6 +276,53 @@ export class TableEditWorkspace {
       },
     };
   }
+  /** 复用本页复制规则，先校验合计草稿和原记录定位，再一次登记各页的新增与撤销。 */
+  planCheckedDuplication(current: DraftRow[], activeSelected: ReadonlySet<string>, context: RecordContext, newId: () => string): TableCheckedStage {
+    const { active, source, groups, isCurrent, counts } = this.captureChecked(current, activeSelected);
+    if (!groups.some(item => item.page !== active)) throw Error(text.duplicateNone);
+    if (source.some(item => item.selected.size !== item.selectedRows.length)) throw Error(recordDuplicateZh.batchSelection);
+    if (context.info !== active.info) throw Error(text.stale);
+    const target = recordTargetKey(context.target), budget = { rows: 0, cells: 0, bytes: 2 }, now = Date.now();
+    const originalKeys = new Set<string>(), ids = new Set(source.flatMap(item => item.rows.map(row => row.id)));
+    const plans = groups.map(item => {
+      const page = item.page.page;
+      const result = duplicateSelectedRecordDrafts(item.rows, item.selected, { ...context, info: item.page.info },
+        { page, target, connectionVersion: context.connectionVersion, generation: context.generation }, page, () => {
+          const id = newId();
+          if (ids.has(id)) throw Error(text.stale);
+          ids.add(id);
+          return id;
+        }, now, budget);
+      for (const row of item.selectedRows) {
+        const key = this.changeIdentity(row.original!, active.info.editableKey);
+        if (originalKeys.has(key)) throw Error(text.duplicateOverlap);
+        originalKeys.add(key);
+      }
+      return { ...item, result, copySource: page.copySource };
+    });
+    const byPage = new Map(plans.map(item => [item.page, item.result.rows]));
+    const updated = source.map(item => ({ rows: byPage.get(item.page) ?? item.rows }));
+    this.validateChanges(updated.flatMap(item => item.rows), active.info.editableKey);
+    this.budget(updated);
+    let consumed = false;
+    const stillCurrent = () => !consumed && isCurrent() && plans.every(({ page, copySource }) => page.page.copySource === copySource &&
+      (!copySource || copySource.status === 'ready' && copySource.expiresAt > Date.now()));
+    return {
+      pages: counts,
+      current: stillCurrent,
+      stage: () => {
+        if (!stillCurrent()) throw Error(text.stale);
+        consumed = true;
+        for (const { page, rows, result } of plans) {
+          page.history.record(rows, result.rows);
+          page.rows = result.rows;
+          for (const id of result.ids) page.copied.add(id);
+        }
+        this.publish();
+        return active.rows;
+      },
+    };
+  }
   /** 多页只聚合变化，原始行仍属于各自缓存；同一原定位出现两次必须拒绝。 */
   batch(current:DraftRow[]):TableEditBatch|undefined{
     if(this.dead)throw Error(text.stale);
@@ -284,13 +332,21 @@ export class TableEditWorkspace {
     const rows=entries.flatMap(page=>page.rows);if(!this.validateChanges(rows,this.active.info.editableKey))return;
     return{rows,pages:entries.filter(page=>collectChanges(page.rows).length).length,current:()=>!this.dead&&!this.pending&&this.epoch===epoch&&this.active===active&&this.entries.size===captured.length&&captured.every(item=>this.entries.get(item.page.index)===item.page&&item.page.rows===item.rows&&item.page.history.generation===item.history&&this.signature(item.page)===item.signature)};
   }
+  /** 用原可靠键值比较跨页定位，不按显示行号合并。 */
+  private changeIdentity(values: NonNullable<DraftRow['original']>, editableKey: readonly string[]): string {
+    return JSON.stringify(editableKey.map(name => {
+      const value = values[name];
+      if (value === undefined || value === null) throw Error(text.stale);
+      return value;
+    }));
+  }
   private validateChanges(rows: DraftRow[], editableKey: readonly string[]): number {
     const changes = collectChanges(rows);
     if(changes.length>tableEditWorkspaceLimits.changes)throw Error(text.limit);
     let cells=0,bytes=2;const identities=new Set<string>();
     for(const change of changes){
       if(change.kind!=='insert'){
-        const key=JSON.stringify(editableKey.map(name=>{const value=change.before[name];if(value===undefined||value===null)throw Error(text.stale);return value;}));
+        const key=this.changeIdentity(change.before, editableKey);
         if(identities.has(key))throw Error(text.overlap);identities.add(key);
       }
       if(change.kind!=='delete'){assertRecordBatchFields(change.values);for(const[key,value]of Object.entries(change.values)){if(++cells>tableEditWorkspaceLimits.changedCells)throw Error(text.limit);bytes+=recordBatchCellBytes(key)+recordBatchCellBytes(value)+4;if(bytes>tableEditWorkspaceLimits.inputBytes)throw Error(text.limit);}}
