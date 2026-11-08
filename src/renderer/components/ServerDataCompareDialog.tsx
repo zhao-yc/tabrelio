@@ -6,6 +6,9 @@ import {
   type PostgresDataCompareEndpoint as Endpoint, type PostgresDataCompareKind, type PostgresDataCompareOutput, type PostgresDataCompareRow,
 } from '../../shared/postgresDataCompare';
 import { mysqlDataCompareSchema, mysqlDataCompareZh, mysqlDataSyncZh } from '../../shared/mysqlDataCompare';
+import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '../../shared/dataCompareProfiles';
+import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
+import { DataCompareProfiles } from './DataCompareProfiles';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteDataCompare.css';
@@ -26,6 +29,7 @@ function CompareEndpoint({ label, connections, disabled, value, change, dialect 
   const [databaseError, setDatabaseError] = useState(''), [tableError, setTableError] = useState('');
   // 目录请求不接管导航。换连接或数据库后，迟到的目录不能覆盖当前选择。
   useEffect(() => {
+    setDatabaseError('');
     if (!connectionId) return;
     let current = true;
     void invoke(command, { connectionId }).then(items => {
@@ -34,6 +38,7 @@ function CompareEndpoint({ label, connections, disabled, value, change, dialect 
     return () => { current = false; };
   }, [connectionId, command]);
   useEffect(() => {
+    setTableError('');
     if (!connectionId || !database) return;
     let current = true;
     void invoke(command, { connectionId, database }).then(items => {
@@ -53,9 +58,9 @@ function CompareEndpoint({ label, connections, disabled, value, change, dialect 
     <Field label={text.database}><select aria-label={label + text.database} value={database} disabled={!databaseItems.length} onChange={event => {
       if (event.target.value === database) return;
       setTables(undefined); setTableError(''); change({ ...value, database: event.target.value, table: '' });
-    }}><option value="">—</option>{databaseItems.map(name => <option key={name}>{name}</option>)}</select></Field>
+    }}><option value="">—</option>{database && !databaseItems.includes(database) && <option>{database}</option>}{databaseItems.map(name => <option key={name}>{name}</option>)}</select></Field>
     <Field label={text.table}><select aria-label={label + text.table} value={table} disabled={!tableItems.length} onChange={event => change({ ...value, table: event.target.value })}>
-      <option value="">—</option>{tableItems.map(name => <option key={name}>{name}</option>)}
+      <option value="">—</option>{table && !tableItems.includes(table) && <option>{table}</option>}{tableItems.map(name => <option key={name}>{name}</option>)}
     </select></Field>
     {databaseError && <ErrorBox message={databaseError}/>}
     {tableError && <ErrorBox message={tableError}/>}
@@ -91,7 +96,15 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
   useEffect(() => { if (selected) detail.current?.scrollIntoView({ block: 'nearest' }); }, [selected]);
   // 用户可能从长列表底部打开预览，先让操作清单和准确目标进入可视区。
   useEffect(() => { if (preview) review.current?.scrollIntoView({ block: 'center' }); }, [preview]);
+  const configurationVersion = useRef(0);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const version = configurationVersion.current;
   const clear = () => {
+    configurationVersion.current++;
     setReport(undefined); setError(''); setKind('all'); setPage(0); setSelected(undefined);
     setMarked(new Set()); setPreview(undefined); setConfirmation(''); setSyncStatus('');
   };
@@ -99,8 +112,26 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
     (source.connectionId !== target.connectionId || source.database !== target.database || source.table !== target.table) &&
     (!filter.text || !!filter.column);
   const rows = report?.differences.filter(row => kind === 'all' || row.kind === kind) ?? [];
+  const family = postgres ? 'postgresql' : 'mysql';
+  const configuration = dataCompareConfigurationSchema.safeParse({ family, source, target, ...(filter.text ? { filter } : {}) });
+  const canConfigure = () => !task.current && !syncing.current && !preview && version === configurationVersion.current;
+
+  /** 载入期间若用户已更改比较范围或开始同步预览，保留新的现场。 */
+  function applyConfiguration(next: DataCompareConfiguration) {
+    if (!mounted.current || !canConfigure() || next.family !== family) return false;
+    setSource(next.source); setTarget(next.target);
+    setFilter(next.filter ?? { column: '', text: '' });
+    clear();
+    return true;
+  }
+
+  function swap() {
+    if (!canConfigure() || !ready) return;
+    setSource(target); setTarget(source); clear();
+  }
+
   async function compare() {
-    if (!ready || task.current || syncing.current) return;
+    if (!ready || !canConfigure()) return;
     const parsed = (postgres ? postgresDataCompareSchema : mysqlDataCompareSchema).safeParse({ source, target, taskId: uid(), ...(filter.text ? { filter } : {}) });
     if (!parsed.success) { setError(errorMessage(parsed.error)); return; }
     const active = { id: parsed.data.taskId, cancelled: false };
@@ -120,7 +151,8 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
     });
   }
   async function previewSync() {
-    if (!report?.syncSnapshotId || !marked.size || task.current || syncing.current) return;
+    if (!report?.syncSnapshotId || !marked.size || !canConfigure()) return;
+    configurationVersion.current++;
     const selected = report.differences.flatMap((row, index) => marked.has(row) ? [index] : []);
     syncing.current = true; setSyncBusy(true); setError(''); setConfirmation('');
     try { setPreview(await invoke(postgres ? 'postgres.compareData.syncPreview' : 'mysql.compareData.syncPreview', { snapshotId: report.syncSnapshotId, selected })); }
@@ -153,6 +185,8 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
         <Field label={text.filterColumn}><input aria-label={text.filterColumn} value={filter.column} maxLength={512} onChange={event => { setFilter({ ...filter, column: event.target.value }); clear(); }}/></Field>
         <Field label={text.filterValue}><input aria-label={text.filterValue} value={filter.text} maxLength={4096} onChange={event => { setFilter({ ...filter, text: event.target.value }); clear(); }}/></Field>
       </fieldset>
+      <DataCompareProfiles family={family} options={ready && configuration.success ? configuration.data : undefined}
+        disabled={locked} onApply={applyConfiguration}/>
       <ErrorBox message={error}/>
       {busy && <p role="status">{text.running}</p>}
       {syncBusy && <p role="status">{sync.working}</p>}
@@ -209,7 +243,8 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
         <button disabled={syncBusy} onClick={() => { setPreview(undefined); setConfirmation(''); }}>{sync.back}</button>
         <button className="danger" disabled={syncBusy || confirmation !== preview.confirmation} onClick={() => void applySync()}>{sync.apply}</button>
       </> : report?.syncSnapshotId && <button disabled={locked || !marked.size} onClick={() => void previewSync()}>{sync.preview}</button>}
-      <span className="grow"/><button disabled={busy || syncBusy} onClick={close}>{text.close}</button>
+      <span className="grow"/>
+      <button disabled={!ready || locked} onClick={swap}>{profileText.swap}</button><button disabled={busy || syncBusy} onClick={close}>{text.close}</button>
     </footer>
   </Modal>;
 }

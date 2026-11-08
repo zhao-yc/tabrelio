@@ -17,6 +17,7 @@ import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgre
 import { postgresQueryExportSchema } from './postgresQueryExport';
 import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './fullQueryExportProfiles';
+import { dataCompareProfileMutationSchema, dataCompareProfileReadSchema, dataCompareProfileScope } from './dataCompareProfiles';
 import { postgresTransactionReadSchema, postgresTransactionApplySchema } from './postgresTransactionSettings';
 import { postgresSearchPathReadSchema, postgresSearchPathApplySchema } from './postgresSearchPath';
 import { postgresQueryTimeoutRead, postgresQueryTimeoutApply } from './postgresQueryTimeouts';
@@ -469,6 +470,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.copyInsertSql': copyInsertSqlInputSchema,
   'workbench.get': empty, 'workbench.save': workbenchSaveSchema, 'workbench.resolve': workbenchTargetSchema, 'workbench.copyUri': workbenchTargetSchema,
   'queryExportProfiles.list': fullQueryExportProfileScope, 'queryExportProfiles.mutate': fullQueryExportProfileMutation,
+  'dataCompareProfiles.list': dataCompareProfileScope, 'dataCompareProfiles.read': dataCompareProfileReadSchema,
+  'dataCompareProfiles.mutate': dataCompareProfileMutationSchema,
   'workbench.protocolReady': externalObjectUriEmptySchema, 'workbench.protocolTake': externalObjectUriEmptySchema,
   'workbench.protocolResolve': externalObjectUriIdSchema, 'workbench.protocolCommit': externalObjectUriIdSchema, 'workbench.protocolFinish': externalObjectUriIdSchema,
   'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,

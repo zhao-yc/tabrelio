@@ -1,3 +1,4 @@
+import { dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import { Client } from 'pg';
 import { confirmOwnedDesktopExit, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -110,6 +111,21 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
 
     await side(text.target, text.connection).selectOption({ label: secondProfile });
     await choose(text.target, targetDatabase, '明细');
+    await modal.getByText(profiles.title, { exact: true }).click();
+    await modal.getByLabel(profiles.name, { exact: true }).fill('跨数据库');
+    await modal.getByRole('button', { name: profiles.add, exact: true }).click();
+    await expect(modal.getByText(profiles.saved, { exact: true })).toBeVisible();
+    const swap = modal.getByRole('button', { name: profiles.swap, exact: true });
+    await swap.click();
+    await expect(details).toHaveCount(0);
+    await expect(summary).toHaveCount(0);
+    await expect(side(text.source, text.database)).toHaveValue(targetDatabase);
+    await expect(side(text.target, text.database)).toHaveValue(database);
+    await modal.getByRole('button', { name: profiles.apply, exact: true }).click();
+    await expect(modal.getByText(profiles.applied, { exact: true })).toBeVisible();
+    await expect(side(text.source, text.database)).toHaveValue(database);
+    await expect(side(text.target, text.database)).toHaveValue(targetDatabase);
+    await page.screenshot({ path: info.outputPath('PostgreSQL比较方案.png') });
     await run.click();
     await expect(modal.getByText(text.split, { exact: true })).toBeVisible();
     await expect(summary).toContainText('仅左侧 1 · 仅右侧 1 · 字段值不同 27');

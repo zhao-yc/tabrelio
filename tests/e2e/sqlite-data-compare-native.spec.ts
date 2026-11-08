@@ -1,3 +1,4 @@
+import { dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import { mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -84,6 +85,32 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     await modal.getByLabel(text.filterColumn, { exact: true }).fill('id');
     await modal.getByLabel(text.filterType, { exact: true }).selectOption('integer');
     await modal.getByLabel(text.filterValue, { exact: true }).fill('9223372036854775807');
+    await modal.getByText(profiles.title, { exact: true }).click();
+    await modal.getByLabel(profiles.name, { exact: true }).fill('精确整数');
+    await modal.getByRole('button', { name: profiles.add, exact: true }).click();
+    await expect(modal.getByText(profiles.saved, { exact: true })).toBeVisible();
+    await modal.getByRole('button', { name: text.close, exact: true }).click();
+    await expect(modal).toBeHidden();
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: text.title, exact: true }, own)).click();
+    await modal.getByText(profiles.title, { exact: true }).click();
+    await modal.getByLabel(profiles.select, { exact: true }).selectOption('精确整数');
+    await modal.getByRole('button', { name: profiles.apply, exact: true }).click();
+    await expect(modal.getByText(profiles.applied, { exact: true })).toBeVisible();
+    await expect(modal.getByLabel(text.filterValue, { exact: true })).toHaveValue('9223372036854775807');
+    await expect(modal.getByLabel(text.filterType, { exact: true })).toHaveValue('integer');
+    await expect(modal.getByRole('status')).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('SQLite比较方案.png') });
+    const swap = modal.getByRole('button', { name: profiles.swap, exact: true });
+    await run.click();
+    await expect(modal.getByRole('status')).toContainText('字段值不同 1');
+    await swap.click();
+    await expect(modal.getByRole('status')).toHaveCount(0);
+    await run.click();
+    await modal.getByRole('button', { name: text.detail, exact: true }).click();
+    const reversed = modal.getByRole('table', { name: text.detail, exact: true }).getByRole('row').filter({ hasText: 'BLOB' });
+    await expect(reversed.getByRole('cell').first()).toHaveText('BLOB Base64 AP+B');
+    await expect(reversed.getByRole('cell').last()).toHaveText('BLOB Base64 AP+A');
+    await swap.click();
     await run.click();
     await expect(modal.getByRole('status')).toContainText('左侧行数 1 · 右侧行数 1 · 相同 0 · 仅左侧 0 · 仅右侧 0 · 字段值不同 1');
     for (const [path, expected] of [[left, '00FF80'], [right, '00FF81']]) {

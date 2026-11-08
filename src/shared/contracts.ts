@@ -176,6 +176,9 @@ export interface CommandMap {
   'workbench.get': { input: Record<string, never>; output: WorkbenchSnapshot };
   'queryExportProfiles.list': { input: import('./fullQueryExportProfiles').FullQueryExportProfileScope; output: import('./fullQueryExportProfiles').FullQueryExportProfile[] };
   'queryExportProfiles.mutate': { input: import('./fullQueryExportProfiles').FullQueryExportProfileMutation; output: import('./fullQueryExportProfiles').FullQueryExportProfile[] };
+  'dataCompareProfiles.list': { input: { family: import('./dataCompareProfiles').DataCompareProfileFamily }; output: import('./dataCompareProfiles').DataCompareProfileSummary[] };
+  'dataCompareProfiles.read': { input: { family: import('./dataCompareProfiles').DataCompareProfileFamily; selected: import('./dataCompareProfiles').DataCompareProfileSummary }; output: import('./dataCompareProfiles').DataCompareConfiguration };
+  'dataCompareProfiles.mutate': { input: import('./dataCompareProfiles').DataCompareProfileMutation; output: import('./dataCompareProfiles').DataCompareProfileSummary[] };
   'workbench.save': { input: WorkbenchSnapshot; output: WorkbenchSnapshot };
   'workbench.resolve': { input: WorkbenchTarget; output: WorkbenchTarget };
   'workbench.protocolReady': { input: Record<string, never>; output: import('./externalObjectUris').ExternalObjectUriState };

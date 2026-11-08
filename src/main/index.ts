@@ -2259,6 +2259,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'workbench.get': return store.workbench();
     case 'queryExportProfiles.list': return store.fullQueryExportProfiles(input);
     case 'queryExportProfiles.mutate': return store.mutateFullQueryExportProfiles(input);
+    case 'dataCompareProfiles.list': return store.listDataCompareProfiles(input);
+    case 'dataCompareProfiles.read': return store.readDataCompareProfile(input);
+    case 'dataCompareProfiles.mutate': return store.mutateDataCompareProfiles(input);
     case 'workbench.protocolReady': return externalObjectUris.ready(columns!);
     case 'workbench.protocolTake': return shuttingDown ? null : externalObjectUris.take(columns!);
     case 'workbench.protocolResolve': return externalObjectUris.resolve(columns!, input.id);

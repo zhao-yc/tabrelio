@@ -171,6 +171,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.tableTruncate.get': true, 'schema.tableTruncate.preview': true, 'schema.tableTruncate.apply': true, 'schema.tableTruncate.release': true,
   'workbench.get': true, 'workbench.save': true, 'workbench.resolve': true, 'workbench.copyUri': true,
   'queryExportProfiles.list': true, 'queryExportProfiles.mutate': true,
+  'dataCompareProfiles.list': true, 'dataCompareProfiles.read': true, 'dataCompareProfiles.mutate': true,
   'workbench.protocolReady': true, 'workbench.protocolTake': true, 'workbench.protocolResolve': true, 'workbench.protocolCommit': true, 'workbench.protocolFinish': true,
   'queries.create': true, 'queries.updateSource': true,
   'queries.organizationGet': true, 'queries.organizationApply': true,

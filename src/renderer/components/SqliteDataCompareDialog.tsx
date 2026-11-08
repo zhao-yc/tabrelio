@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { SqliteValue } from '../../engine/sqlite/protocol';
 import { sqliteDataCompareLimits as limits, sqliteDataCompareZh as text, sqliteDataSyncLimits, sqliteDataSyncZh as syncText, type SqliteDataSyncPreview, type SqliteDataCompareKind, type SqliteDataCompareOutput, type SqliteDataCompareRow } from '../../shared/sqliteDataCompare';
 import type { SqliteTableFilter } from '../../shared/sqliteTableBrowse';
+import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '../../shared/dataCompareProfiles';
+import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
+import { DataCompareProfiles } from './DataCompareProfiles';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteDataCompare.css';
@@ -12,20 +15,22 @@ type Selection = { connectionId: string; table: string };
 type Connection = { id: string; name: string };
 
 /** 两侧共用真实对象目录。连接切换时撤销之前的异步列表及表名。 */
-function CompareEndpoint({ label, connections, disabled, selection, change, onError }: {
-  label: string; connections: readonly Connection[]; disabled: boolean; selection: Selection; change(next: Selection): void; onError(message: string): void;
+function CompareEndpoint({ label, connections, disabled, selection, change }: {
+  label: string; connections: readonly Connection[]; disabled: boolean; selection: Selection; change(next: Selection): void;
 }) {
   const [objects, setObjects] = useState<{ connectionId: string; names: string[] }>(), [loading, setLoading] = useState(false);
+  const [catalogueError, setCatalogueError] = useState('');
   useEffect(() => {
-    if (!selection.connectionId) return;
+    setCatalogueError('');
+    if (!selection.connectionId) { setLoading(false); return; }
     let current = true;
     setLoading(true);
     const id = selection.connectionId;
     void invoke('metadata.objects', { connectionId: id, database: 'main' }).then(result => {
       if (current) setObjects({ connectionId: id, names: result.filter(item => item.kind === 'table').map(item => item.name) });
-    }).catch(reason => { if (current) onError(errorMessage(reason)); }).finally(() => { if (current) setLoading(false); });
+    }).catch(reason => { if (current) setCatalogueError(errorMessage(reason)); }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [selection.connectionId, onError]);
+  }, [selection.connectionId]);
   const names = objects?.connectionId === selection.connectionId ? objects.names : [];
   return <fieldset disabled={disabled} className="sqlite-data-compare-endpoint">
     <legend>{label}</legend>
@@ -33,7 +38,8 @@ function CompareEndpoint({ label, connections, disabled, selection, change, onEr
       setObjects(undefined); change({ connectionId: event.target.value, table: '' });
     }}><option value="">—</option>{connections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
     <Field label={text.table}><select aria-label={label + text.table} disabled={!selection.connectionId || loading} value={selection.table}
-      onChange={event => change({ ...selection, table: event.target.value })}><option value="">—</option>{names.map(name => <option key={name}>{name}</option>)}</select></Field>
+      onChange={event => change({ ...selection, table: event.target.value })}><option value="">—</option>{selection.table && !names.includes(selection.table) && <option>{selection.table}</option>}{names.map(name => <option key={name}>{name}</option>)}</select></Field>
+    <ErrorBox message={catalogueError}/>
   </fieldset>;
 }
 
@@ -66,17 +72,46 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
   const detail = useRef<HTMLDivElement>(null);
   // 展开原值时将详情滚入当前对话框，避免按钮有回执却被长列表挡住。
   useEffect(() => { if (selected) detail.current?.scrollIntoView({ block: 'nearest' }); }, [selected]);
+  const configurationVersion = useRef(0);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const version = configurationVersion.current;
   const clear = () => {
-    setOutput(undefined); setError(''); setPage(0); setSelected(undefined);
+    configurationVersion.current++;
+    setOutput(undefined); setError(''); setKind('all'); setPage(0); setSelected(undefined);
     setMarked(new Set()); setPreview(undefined); setConfirmation(''); setSyncStatus('');
   };
   const available = (side: Selection) => !!side.table && connections.some(profile => profile.id === side.connectionId);
   const ready = available(source) && available(target) && (source.connectionId !== target.connectionId || source.table !== target.table);
+  const family = 'sqlite';
+  const configuration = dataCompareConfigurationSchema.safeParse({
+    family, source: { ...source, database: 'main' }, target: { ...target, database: 'main' },
+    ...(filter.column ? { filter: { column: filter.column, value: { kind: filter.kind, value: filter.value } } } : {}),
+  });
+  const canConfigure = () => !running.current && !syncRunning.current && !preview && version === configurationVersion.current;
+
+  /** 载入期间若用户已更改比较范围或开始同步预览，保留新的现场。 */
+  function applyConfiguration(next: DataCompareConfiguration) {
+    if (!mounted.current || !canConfigure() || next.family !== family) return false;
+    setSource(next.source); setTarget(next.target);
+    setFilter(next.filter ? { column: next.filter.column, ...next.filter.value } : { column: '', kind: 'text', value: '' });
+    clear();
+    return true;
+  }
+
+  function swap() {
+    if (!canConfigure() || !ready) return;
+    setSource(target); setTarget(source); clear();
+  }
+
   async function compare() {
-    if (running.current || syncRunning.current || !ready) return;
+    if (!ready || !canConfigure()) return;
     const taskId = uid();
     const filters: SqliteTableFilter[] = filter.column ? [{ column: filter.column, operator: 'eq', value: { kind: filter.kind, value: filter.value } }] : [];
-    running.current = taskId; setBusy(true); clear(); setKind('all');
+    running.current = taskId; setBusy(true); clear();
     try { setOutput(await invoke('sqlite.compareData', { source: { ...source, database: 'main' }, target: { ...target, database: 'main' }, taskId, mode: 'and', filters })); }
     catch (reason) { setError(errorMessage(reason)); }
     finally { running.current = undefined; setBusy(false); }
@@ -84,7 +119,8 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
   const visible = output?.differences.filter(row => kind === 'all' || row.kind === kind) ?? [];
   const close = () => { if (!running.current && !syncRunning.current) onClose(); };
   async function previewSync() {
-    if (!output?.syncSnapshotId || !marked.size || running.current || syncRunning.current) return;
+    if (!output?.syncSnapshotId || !marked.size || !canConfigure()) return;
+    configurationVersion.current++;
     const selected = output.differences.flatMap((row, index) => marked.has(row) ? [index] : []);
     syncRunning.current = true; setSyncBusy(true); setError(''); setConfirmation('');
     try { setPreview(await invoke('sqlite.compareSync.preview', { snapshotId: output.syncSnapshotId, selected })); }
@@ -106,8 +142,8 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
       <div className="sqlite-data-compare-pair">
-        <CompareEndpoint label={text.source} connections={connections} disabled={locked} selection={source} onError={setError} change={next => { setSource(next); clear(); }}/>
-        <CompareEndpoint label={text.target} connections={connections} disabled={locked} selection={target} onError={setError} change={next => { setTarget(next); clear(); }}/>
+        <CompareEndpoint label={text.source} connections={connections} disabled={locked} selection={source} change={next => { setSource(next); clear(); }}/>
+        <CompareEndpoint label={text.target} connections={connections} disabled={locked} selection={target} change={next => { setTarget(next); clear(); }}/>
       </div>
       <fieldset disabled={locked} className="sqlite-data-compare-filter">
         <legend>{text.filter}</legend>
@@ -116,6 +152,8 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
           {Object.entries(text.types).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
         <Field label={text.filterValue}><input aria-label={text.filterValue} value={filter.value} disabled={!filter.column} maxLength={65536} onChange={event => { setFilter({ ...filter, value: event.target.value }); clear(); }}/></Field>
       </fieldset>
+      <DataCompareProfiles family={family} options={ready && configuration.success ? configuration.data : undefined}
+        disabled={locked} onApply={applyConfiguration}/>
       <ErrorBox message={error}/>
       {busy && <p role="status">{text.running}</p>}
       {syncBusy && <p role="status">{syncText.working}</p>}
@@ -162,6 +200,7 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
         <button disabled={syncBusy} onClick={() => { setPreview(undefined); setConfirmation(''); }}>{syncText.back}</button>
         <button className="danger" disabled={syncBusy || confirmation !== preview.confirmation} onClick={() => void applySync()}>{syncText.apply}</button>
       </> : output?.syncSnapshotId && <button disabled={locked || !marked.size} onClick={() => void previewSync()}>{syncText.preview}</button>}
-      <span className="grow"/><button disabled={busy || syncBusy} onClick={close}>{text.close}</button></footer>
+      <span className="grow"/>
+      <button disabled={!ready || locked} onClick={swap}>{profileText.swap}</button><button disabled={busy || syncBusy} onClick={close}>{text.close}</button></footer>
   </Modal>;
 }
