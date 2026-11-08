@@ -149,6 +149,8 @@ export function PostgresTableFindPanel(props: Props) {
 
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (!enabled || !isCurrent() || composing || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    // 跳行表单有自己的取消和提交，不让查找面板提前消费按键。
+    if (event.target instanceof Element && event.target.closest('.grid-row-jump')) return;
     const key = event.key.toLowerCase(), modifier = event.ctrlKey || event.metaKey;
     const findShortcut = key === 'f' && modifier && !event.altKey;
     const replaceShortcut = writable && (key === 'h' && event.ctrlKey && !event.metaKey && !event.altKey ||

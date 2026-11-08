@@ -36,6 +36,7 @@ import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTabl
 import { postgresFindPlan, postgresFindRows, type PostgresFindPlan } from '../postgresTableFind';
 import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh-CN';
 import { useUiCommandScope } from '../uiCommands';
+import { openFocusedGridRowJump } from './GridRowJump';
 import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
@@ -689,7 +690,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const findRows = useMemo(() => page && findRequest
     ? postgresFindRows(page, key => draft.find(entry => entry.rowKey === key)?.change) : [], [page, draft, !!findRequest]);
 
-  /** 查找和替换只接纳活动标签的当前页；草稿、筛选或列位置变化都换代。 */
+  /** 查找、替换和跳行只接纳活动标签的当前页；草稿、筛选或列位置变化都换代。 */
   function findIsCurrent() {
     return canFind && !!lifetime.current && latestFindScope.current === findScope && draftRef.current === draft &&
       issued.current === page?.exportToken && layoutScope.current.current() && !lease.current && !inlineOwner.current && !pasteOwner.current &&
@@ -703,6 +704,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   useUiCommandScope('tab:' + tab.id, {
     find: { enabled: canFind, run: () => openFind(false) },
     replace: { enabled: canEditGrid, run: () => openFind(true) },
+    'sql-goto-line': { enabled: canFind && !!page?.rows.length && !!gridLayout.columns.length,
+      run: () => { if (findIsCurrent()) openFocusedGridRowJump(); } },
   }, { active, contextKey: page?.exportToken });
 
   function stageFind(scope: object, plan: PostgresFindPlan) {
@@ -1250,10 +1253,12 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           return postgresFindPlan(page, findRows, gridLayout.columns, patches,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
-        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump
+        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows}
+        rowJump={canFind} rowJumpCurrent={findIsCurrent}
         presentCell={draftGrid?.cell}
-        renderRowSelectionAction={(selected, current) =>
+        renderRowSelectionAction={(selected, current, jump) =>
           <div className="pg-table-controls pg-batch-actions">
+            {jump}
             {!!fillColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('fill', selected)}
               onClick={() => openBatch('fill', selected, current)}>{fillText.action}</button>}
             {!!editColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('edit', selected)}

@@ -4,7 +4,7 @@ import type { DataGridHandle } from 'react-data-grid';
 import { gridRowJumpZh as text } from '../locales/gridRowJump.zh-CN';
 import '../gridRowJump.css';
 
-const focusedJump = new WeakMap<Element, () => void>();
+const focusedJump = new WeakMap<Element, () => boolean>();
 
 /** 命令只分发给当前焦点所在的网格；编辑中的输入格不会被换焦点。 */
 export function openFocusedGridRowJump(): boolean {
@@ -12,7 +12,7 @@ export function openFocusedGridRowJump(): boolean {
   if (!focus || document.querySelector(appModalSelector)) return false;
   for (let node: Element | null = focus; node; node = node.parentElement) {
     const open = focusedJump.get(node);
-    if (open) { open(); return true; }
+    if (open) return open();
   }
   return false;
 }
@@ -25,7 +25,10 @@ export function gridRowIndex(value: string, count: number): number | undefined {
 }
 
 /** 行号草稿跟随一份已载入视图，切换、排序或禁用后丢弃旧输入。 */
-export function GridRowJump({ scope, count, disabled, grid, onJump }: { scope: object | number; count: number; disabled?: boolean; grid: RefObject<DataGridHandle | null>; onJump(index: number): boolean }) {
+export function GridRowJump({ scope, count, disabled, grid, isCurrent, onJump }: {
+  scope: object | number; count: number; disabled?: boolean; grid: RefObject<DataGridHandle | null>;
+  isCurrent?(): boolean; onJump(index: number): boolean;
+}) {
   const [draft, setDraft] = useState<{ scope: object | number; value: string }>();
   const button = useRef<HTMLButtonElement>(null), input = useRef<HTMLInputElement>(null), restore = useRef(false);
   const form = useRef<HTMLFormElement>(null);
@@ -36,11 +39,12 @@ export function GridRowJump({ scope, count, disabled, grid, onJump }: { scope: o
     const element = grid.current?.element, control = opened ? form.current : button.current;
     if (!element || !control) return;
     const open = () => {
-      if (!available || grid.current?.element !== element) return;
+      if (!available || grid.current?.element !== element || isCurrent?.() === false) return false;
       const active = document.activeElement;
-      if (active && element.contains(active) && active.closest('input:not([type="checkbox"]), textarea, select, [contenteditable="true"]')) return;
+      if (active && element.contains(active) && active.closest('input:not([type="checkbox"]), textarea, select, [contenteditable="true"]')) return false;
       if (opened) input.current?.focus();
       else setDraft({ scope, value: '' });
+      return true;
     };
     focusedJump.set(element, open); focusedJump.set(control, open);
     return () => {
@@ -57,12 +61,13 @@ export function GridRowJump({ scope, count, disabled, grid, onJump }: { scope: o
   function close() { restore.current = true; setDraft(undefined); }
   return opened ? <form ref={form} className="grid-row-jump" onSubmit={event => {
     event.preventDefault();
-    if (index !== undefined && onJump(index)) setDraft(undefined);
+    if (index !== undefined && isCurrent?.() !== false && onJump(index)) setDraft(undefined);
   }} onKeyDown={event => {
     if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.stopPropagation(); close(); }
   }}>
     <input ref={input} aria-label={text.row} aria-invalid={!!draft.value && index === undefined} title={text.range(count)} placeholder={`1–${count}`} inputMode="numeric" value={draft.value} onChange={event => setDraft({ scope, value: event.target.value })}/>
     <button type="submit" disabled={index === undefined}>{text.go}</button>
     <button type="button" aria-label={text.close} onClick={close}>×</button>
-  </form> : <button ref={button} type="button" title={text.shortcut} disabled={!available} onClick={() => setDraft({ scope, value: '' })}>{text.open}</button>;
+  </form> : <button ref={button} type="button" title={text.shortcut} disabled={!available}
+    onClick={() => { if (isCurrent?.() !== false) setDraft({ scope, value: '' }); }}>{text.open}</button>;
 }
