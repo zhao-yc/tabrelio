@@ -1,6 +1,7 @@
 import{readFile,writeFile}from'node:fs/promises';
 import{basename,join}from'node:path';
 import iconv from 'iconv-lite';
+import JSZip from 'jszip';
 import{createRequire}from'node:module';
 import type{Database}from'sql.js';
 import type{HistoryEntry}from'../../src/shared/contracts';
@@ -167,6 +168,88 @@ test('从历史离线保存完整查询，保留执行上下文或解除绑定',
  expect(unbound?.connectionId).toBeUndefined();
  expect(unbound?.database).toBeUndefined();
  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(2);
+});
+
+test('跨批次导出历史 ZIP，保留原文和已有目标文件', async () => {
+ const sql = (id: number) => `SELECT ${id};\r\n-- ${'中'.repeat(600)}😀`;
+ await seed(store => {
+  for (let id = 0; id < 26; id++) store.addHistory(entry({ id: `history-${String(id).padStart(2, '0')}`, connectionId: 'deleted', sql: sql(id) }));
+ });
+ await desktop.evaluate(({ ipcMain, dialog, BrowserWindow }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args:any[]) => unknown> })._invokeHandlers;
+  const previous = handlers.get('dbark:request'); if (!previous) throw Error('缺少原历史 IPC 入口');
+  const state = { pick: undefined as { path: string | null; remove: boolean } | undefined, encodings: [] as string[], denied: 0 };
+  Object.assign(globalThis, { __historyArchiveFixture: state });
+  handlers.set('dbark:request', async (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+    state.denied++;
+    throw Error('历史 ZIP 禁止数据库请求');
+   }
+   if (command !== 'history.exportSqlArchive') return previous(event, payload);
+   const pick = state.pick; state.pick = undefined;
+   const { items, encoding } = payload.input;
+   if (!pick || items.length !== 2 || items[0].id !== 'history-25' || items[1].id !== 'history-00' ||
+       items.some((item: { digest: string }) => !/^[a-f0-9]{64}$/.test(item.digest))) throw Error('历史勾选范围不准确');
+   state.encodings.push(encoding);
+   const original = dialog.showSaveDialog;
+   dialog.showSaveDialog = (async (...args: unknown[]) => {
+    const options = args[1] as Electron.SaveDialogOptions;
+    if (args[0] !== BrowserWindow.getAllWindows()[0] || options.defaultPath !== '执行历史.zip' || !options.filters?.[0]?.extensions.includes('zip'))
+     throw Error('缺少原生历史 ZIP 保存选项');
+    if (pick.remove) {
+     const preview = await previous(event, { command: 'history.deletePreview', input: { taskId: crypto.randomUUID(), scope: { kind: 'selected', records: [items[1]] } } }) as { ok: boolean; result?: { previewToken: string } };
+     if (!preview.ok || !preview.result) throw Error('历史移除预览失败');
+     const result = await previous(event, { command: 'history.deleteApply', input: { previewToken: preview.result.previewToken } }) as { ok: boolean; result?: { deleted: number } };
+     if (!result.ok || result.result?.deleted !== 1) throw Error('历史移除失败');
+    }
+    return pick.path ? { canceled: false, filePath: pick.path } : { canceled: true };
+   }) as typeof dialog.showSaveDialog;
+   try { return await previous(event, payload); } finally { dialog.showSaveDialog = original; }
+  });
+ });
+ await open();
+ const button = dialog().getByRole('button', { name: text.sqlArchive, exact: true });
+ const card = (id: string) => dialog().locator(`[data-history-id="history-${id}"]`);
+ await expect(button).toBeDisabled();
+ await card('25').getByRole('checkbox').check();
+ await dialog().getByRole('button', { name: text.next, exact: true }).click();
+ await expect(card('25')).toHaveCount(0);
+ await card('00').getByRole('checkbox').check();
+ async function pick(path: string | null, remove = false) {
+  await desktop.evaluate((_electron, value) => {
+   const state = (globalThis as typeof globalThis & { __historyArchiveFixture: { pick: typeof value | undefined } }).__historyArchiveFixture;
+   if (state.pick) throw Error('上一轮历史 ZIP 尚未完成');
+   state.pick = value;
+  }, { path, remove });
+  await button.click();
+  await expect(button).toBeEnabled();
+ }
+ await pick(null);
+ await expect(dialog().getByText(/已导出 2 条历史/)).toHaveCount(0);
+ const outputs = {
+  utf8: (value: string) => Buffer.from(value),
+  utf16le: (value: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(value, 'utf16le')]),
+  gb18030: (value: string) => iconv.encode(value, 'gb18030'),
+ };
+ for (const [encoding, encode] of Object.entries(outputs)) {
+  await dialog().getByLabel(text.sqlExportEncoding, { exact: true }).selectOption(encoding);
+  const target = join(dataDir, encoding + '-history.zip');
+  await pick(target);
+  await expect(dialog().getByText(text.sqlArchiveSaved(basename(target), 2), { exact: true })).toBeVisible();
+  const zip = await JSZip.loadAsync(await readFile(target), { checkCRC32: true });
+  expect(Object.keys(zip.files)).toEqual(['001-2026-10-15T00-00-00Z.sql', '002-2026-10-15T00-00-00Z.sql']);
+  expect(await Promise.all(Object.values(zip.files).map(file => file.async('nodebuffer')))).toEqual([encode(sql(25)), encode(sql(0))]);
+ }
+ const stale = join(dataDir, 'stale.zip');
+ await writeFile(stale, '原文件');
+ await pick(stale, true);
+ await expect(dialog().getByRole('alert')).toContainText('执行历史已移除，请刷新列表');
+ expect(await readFile(stale, 'utf8')).toBe('原文件');
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __historyArchiveFixture: unknown }).__historyArchiveFixture))
+  .toEqual({ pick: undefined, encodings: ['utf8', 'utf8', 'utf16le', 'gb18030', 'gb18030'], denied: 0 });
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
 });
 
 test('来源已删除仍可分段查看和另存完整历史 SQL', async () => {

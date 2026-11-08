@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { writeSavedQueryArchive } from '../../src/main/savedQueryArchive';
+import { writeQuerySqlArchive } from '../../src/main/querySqlArchive';
 import { validateCommand } from '../../src/shared/validation';
 import { savedQueryArchiveLimits } from '../../src/shared/savedQuerySearch';
 
@@ -31,7 +31,7 @@ describe('保存查询批量 ZIP', () => {
 
   it('同名和路径段字符生成可移植的独立文件，逐字节保留 SQL', async () => {
     const { target } = await fixture();
-    await writeSavedQueryArchive(target, refs, item => record(item.id, refs.indexOf(item)), () => {});
+    await writeQuerySqlArchive(target, refs, item => record(item.id, refs.indexOf(item)), () => {});
     const zip = await JSZip.loadAsync(await readFile(target), { checkCRC32: true });
     expect(Object.keys(zip.files)).toEqual(['001-_COM1_.sql', '002-_COM1_.sql']);
     for (const [index, entry] of Object.values(zip.files).entries()) expect(await entry.async('nodebuffer')).toEqual(Buffer.from(sql[index]));
@@ -40,7 +40,7 @@ describe('保存查询批量 ZIP', () => {
   it('后一个记录过期、正文不可编码或超预算时保留原文件且无临时文件', async () => {
     const { root, target } = await fixture();
     await writeFile(target, '原文件');
-    const exportWith = (read: Parameters<typeof writeSavedQueryArchive>[2]) => writeSavedQueryArchive(target, refs, read, () => {});
+    const exportWith = (read: Parameters<typeof writeQuerySqlArchive>[2]) => writeQuerySqlArchive(target, refs, read, () => {});
     await expect(exportWith(item => { if (item === refs[1]) throw Error('已修改'); return record(item.id, 0); })).rejects.toThrow('已修改');
     await expect(exportWith(item => ({ ...record(item.id, 0), sql: item === refs[0] ? sql[0] : '\0' }))).rejects.toThrow('NUL');
     const bigSql = 'x'.repeat(17 * 1024 * 1024);
@@ -53,7 +53,23 @@ describe('保存查询批量 ZIP', () => {
     const { root, target } = await fixture();
     await writeFile(target, '原文件');
     const check = vi.fn(() => { if (check.mock.calls.length === 5) throw Error('原文档失效'); });
-    await expect(writeSavedQueryArchive(target, refs, item => record(item.id, 0), check)).rejects.toThrow('原文档失效');
+    await expect(writeQuerySqlArchive(target, refs, item => record(item.id, 0), check)).rejects.toThrow('原文档失效');
+    expect(await readFile(target, 'utf8')).toBe('原文件');
+    expect(await readdir(root)).toEqual(['查询.zip']);
+  });
+
+  it('历史 ZIP 验证编码和准确的记录摘要，预算包含 UTF-16LE BOM 和编码扩张', async () => {
+    const parse = (value: unknown) => validateCommand('history.exportSqlArchive', value);
+    const input = { items: refs, encoding: 'utf16le' };
+    expect(parse(input)).toEqual(input);
+    for (const patch of [{ items: [refs[0], refs[0]] }, { items: [] }, { encoding: 'ascii' }, { path: '任意.zip' },
+      { items: [{ ...refs[0], digest: 'bad' }] }, { items: [{ ...refs[0], sql: '伪造 SQL' }] },
+      { items: Array.from({ length: 101 }, (_, index) => ({ ...refs[0], id: String(index) })) }])
+      expect(() => parse({ ...input, ...patch })).toThrow();
+    const { root, target } = await fixture();
+    await writeFile(target, '原文件');
+    const bigSql = 'x'.repeat(8 * 1024 * 1024);
+    await expect(writeQuerySqlArchive(target, refs, () => ({ name: '历史', sql: bigSql }), () => {}, 'utf16le')).rejects.toThrow('32 MiB');
     expect(await readFile(target, 'utf8')).toBe('原文件');
     expect(await readdir(root)).toEqual(['查询.zip']);
   });

@@ -2,7 +2,7 @@ import{z}from'zod';
 import { canonicalHistoryInstant } from './historyTimeRange';
 import { historyDurationRangeSchema } from './historyDurationRange';
 import type{QueryDatabaseContext}from'./queryContext';
-import{savedQueryContextSchema,savedQuerySearchLimits}from'./savedQuerySearch';
+import{savedQueryArchiveLimits,savedQueryContextSchema,savedQuerySearchLimits}from'./savedQuerySearch';
 import{localSqlPageLimits,type LocalSqlPage}from'./localSqlPages';
 
 /** 沿用最近1000条存储保留；分页限制传输，不扩大或截断旧记录正文。 */
@@ -14,7 +14,14 @@ export const historyTimeRangeSchema=z.object({from:z.string().length(24).refine(
 export const historyPageInputSchema=z.object({taskId:z.string().uuid(),search:z.string().max(512),fields:z.array(z.enum(['sql','error'])).min(1).max(2).refine(value=>new Set(value).size===value.length,'历史搜索字段不能重复'),scope:z.discriminatedUnion('kind',[z.object({kind:z.literal('all')}).strict(),z.object({kind:z.literal('connection'),connectionId:id}).strict(),z.object({kind:z.literal('unbound')}).strict()]),status:z.enum(['all','success','failed']),timeRange:historyTimeRangeSchema.optional(),durationRange:historyDurationRangeSchema.optional(),onError:z.enum(['stop','continue'])}).strict();
 export const historyReadSchema=z.object({id,digest,connectionId:id}).strict();
 export const historyRecordReferenceSchema=z.object({id,digest}).strict();
-export const historyExportSqlSchema = historyRecordReferenceSchema.extend({ encoding: z.enum(['utf8', 'utf16le', 'gb18030']) }).strict();
+const historySqlEncodingSchema = z.enum(['utf8', 'utf16le', 'gb18030']);
+export const historyExportSqlSchema = historyRecordReferenceSchema.extend({ encoding: historySqlEncodingSchema }).strict();
+export const historyExportSqlArchiveSchema = z.object({
+  items: z.array(historyRecordReferenceSchema).min(1).max(savedQueryArchiveLimits.files)
+    .refine(items => new Set(items.map(item => item.id)).size === items.length, '所选历史不能重复'),
+  encoding: historySqlEncodingSchema,
+}).strict();
+export type HistoryExportSqlArchiveInput = z.infer<typeof historyExportSqlArchiveSchema>;
 export type HistoryExportSqlInput = z.infer<typeof historyExportSqlSchema>;
 export type HistoryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
 export const historySaveQuerySchema = historyRecordReferenceSchema.extend({ name: name.trim().min(1), keepSource: z.boolean() }).strict();

@@ -24,6 +24,13 @@ export class HistoryPages extends LocalSqlPages<HistoryPageInput,HistoryPageEntr
   const { id, digest } = historyRecordReferenceSchema.parse(raw);
   return { sql: this.current(id, digest).sql };
  }
+ /** 文件名只使用记录中的标准 UTC 时间。旧格式使用通用名称，由归档序号区分。 */
+ readArchiveItem(raw: unknown): { name: string; sql: string } {
+  const { id, digest } = historyRecordReferenceSchema.parse(raw);
+  const { startedAt, sql } = this.current(id, digest);
+  const utc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(startedAt);
+  return { name: utc ? startedAt.replace(/:/g, '-') : '执行历史', sql };
+ }
  /** 保存来源只能取自原历史。未绑定时清除库上下文，随后打开须明确选库。 */
  querySaveContent(raw: unknown): QuerySaveContent {
   const { id, digest, name, keepSource } = historySaveQuerySchema.parse(raw);
