@@ -79,7 +79,7 @@ import { closeSqliteDatabaseCreates, createSqliteDatabaseFile } from './sqliteDa
 import { assertSqliteExportDestination } from './sqliteExportDestination';
 import { DatabaseBackupArchiveFiles } from './databaseBackupArchiveFiles';
 import { ServerMonitorSignals } from './serverMonitorSignals';
-import { databaseBackupArchiveZh } from '../shared/databaseBackupArchiveFiles';
+import { databaseBackupArchiveZh, databaseBackupTargetManifest } from '../shared/databaseBackupArchiveFiles';
 import { sqliteBackupFileIdentity } from '../engine/sqlite/backup';
 import { closeSqliteDatabaseCopies, publishSqliteDatabaseCopy } from './sqliteDatabaseBackup';
 import { sqliteDatabaseCopyZh, type SqliteDatabaseCopyInput } from '../shared/sqliteDatabaseBackup';
@@ -2597,8 +2597,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         async (source, registerStop) => broker.request(command, { ...start(registerStop), source, acknowledgeScript: input.acknowledgeScript })));
       const result = await queryFileOperation(() => backupArchiveFiles.auditTarget(columns!, operationId, token,
         async (manifest, registerStop) =>
-          broker.request(command, { ...start(registerStop), manifest: { family: manifest.family, serverVersion: manifest.serverVersion,
-            database: manifest.database, ...(manifest.schemaVersion === 3 ? { tableScope: manifest.tableScope } : {}) } }), targetKey));
+          broker.request(command, { ...start(registerStop), manifest: databaseBackupTargetManifest(manifest) }), targetKey));
       assertConnection();
       return result;
     }

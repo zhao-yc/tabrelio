@@ -4,7 +4,7 @@ import { recordImportFormats, validXmlImport, xmlImportZh } from '../shared/xmlI
 import { createMysqlDatabaseBackup, readMysqlBackupTables } from './mysqlDatabaseBackup';
 import { readMysqlSqlFile, type MysqlSqlFileSource } from './mysqlSqlFile';
 import { withVerifiedMysqlArchiveDump } from './mysqlBackupArchiveRestore';
-import { canRestoreBackupArchive, databaseBackupArchiveZh } from '../shared/databaseBackupArchiveFiles';
+import { canRestoreBackupArchive, databaseBackupArchiveZh, databaseBackupTargetManifest } from '../shared/databaseBackupArchiveFiles';
 import { PostgresEngine } from './postgres/engine';
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { verifyTableDraft } from './tableDraftVerify';
@@ -409,7 +409,7 @@ export class Engine {
                   task.inFlight = true; task.generation++;
                   return () => { task.inFlight = false; };
                 }
-              }, manifest, input.targetDatabase, true);
+              }, databaseBackupTargetManifest(manifest), input.targetDatabase, true);
               if (!canRestoreBackupArchive(audit))
                 throw Error([databaseBackupArchiveZh.restoreRejected + '。', ...audit.blockers.map(blocker => blocker.message)].join(' '));
               checkCancelled();

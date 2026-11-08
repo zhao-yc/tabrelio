@@ -34,6 +34,10 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
   let desktopClosed = false;
   try {
     for (const db of [database, full, split, zipFull, zipSplit]) await control.query('CREATE DATABASE ?? CHARACTER SET utf8mb4', [db]);
+    for (const db of [zipFull, zipSplit]) {
+      await control.query('CREATE TABLE ??.reserved(id INT PRIMARY KEY) ENGINE=InnoDB', [db]);
+      await control.query('INSERT INTO ??.reserved VALUES (71)', [db]);
+    }
     await control.query('USE ??', [database]);
     await control.query('CREATE TABLE ?? (id BIGINT UNSIGNED PRIMARY KEY, note VARCHAR(32), raw BLOB) ENGINE=InnoDB', [first]);
     await control.query('CREATE TABLE ?? (label VARCHAR(32)) ENGINE=InnoDB', [second]);
@@ -135,18 +139,37 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
     await expect(archiveButton(archiveText.restore)).toHaveCount(0);
     for (const [content, db] of [['all', zipFull], ['schema', zipSplit], ['data', zipSplit]] as const) {
       await selectArchive(content, db);
-      await expect(audit).toContainText(archiveText.targetState[content === 'data' ? 'tables-present' : 'empty']);
+      await expect(audit).toContainText(archiveText.targetState[content === 'data' ? 'tables-present' : 'tables-clear']);
       if (content === 'all') {
-        // 另一个会话在确认后占用目标库，执行连接必须重新读取目录。
-        await control.query('CREATE TABLE ??.reserved(id int) ENGINE=InnoDB', [db]);
+        const recheck = () => archiveButton(archiveText.audit).click();
+        await control.query('CREATE VIEW ??.?? AS SELECT id FROM ??.reserved', [db, first, db]);
+        await recheck();
+        await expect(audit).toContainText('目标库已有同名表、视图或其他关系：' + first);
+        await expect(archiveButton(archiveText.restore)).toHaveCount(0);
+        await audit.screenshot({ path: info.outputPath(dialect + ' 同名视图拦截.png') });
+        await control.query('DROP VIEW ??.??', [db, first]);
+
+        await control.query('CREATE TRIGGER ??.selected_trigger BEFORE INSERT ON ??.reserved FOR EACH ROW SET @scope_existing=NEW.id', [db, db]);
+        await recheck();
+        await expect(audit).toContainText('目标库已有同名触发器：selected_trigger');
+        await expect(archiveButton(archiveText.restore)).toHaveCount(0);
+        await control.query('DROP TRIGGER ??.selected_trigger', [db]);
+
+        await recheck();
+        await expect(audit).toContainText(archiveText.targetState['tables-clear']);
+        await audit.screenshot({ path: info.outputPath(dialect + ' 已有库可恢复缺失表.png') });
+        // 在确认后由另一个会话创建同名表，执行复查必须在写入前拒绝。
+        await control.query('CREATE TABLE ??.?? (id INT PRIMARY KEY) ENGINE=InnoDB', [db, first]);
+        await control.query('INSERT INTO ??.?? VALUES (59)', [db, first]);
         await archive.getByRole('checkbox', { name: archiveText.restoreAcknowledgement, exact: true }).check();
         await archiveButton(archiveText.restore).click();
         await expect(archive.getByRole('alert')).toContainText(archiveText.restoreRejected);
-        expect((await control.query('SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA=BINARY ?', [db]))[0])
-          .toEqual([{ name: 'reserved' }]);
-        await control.query('DROP TABLE ??.reserved', [db]);
-        await archiveButton(archiveText.audit).click();
-        await expect(audit).toContainText(archiveText.targetState.empty);
+        expect((await control.query('SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA=BINARY ? ORDER BY BINARY TABLE_NAME', [db]))[0])
+          .toEqual([{ name: first }, { name: 'reserved' }]);
+        expect((await control.query('SELECT id FROM ??.??', [db, first]))[0]).toEqual([{ id: 59 }]);
+        await control.query('DROP TABLE ??.??', [db, first]);
+        await recheck();
+        await expect(audit).toContainText(archiveText.targetState['tables-clear']);
       }
       if (content === 'data') {
         await archiveButton(archiveText.inspectSql).click();
@@ -167,7 +190,9 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
       const [notes] = await control.query('SELECT label FROM ??.?? ORDER BY label', [db, second]);
       expect(notes).toEqual([{ label: null }, { label: '原值' }]);
       const [relations] = await control.query('SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA=BINARY ? ORDER BY BINARY TABLE_NAME', [db]);
-      expect(relations).toEqual([{ name: first }, { name: second }]);
+      const fromZip = db === zipFull || db === zipSplit;
+      expect(relations).toEqual((fromZip ? [first, 'reserved', second] : [first, second]).map(name => ({ name })));
+      if (fromZip) expect((await control.query('SELECT id FROM ??.reserved', [db]))[0]).toEqual([{ id: 71 }]);
       const [triggers] = await control.query('SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE BINARY TRIGGER_SCHEMA=BINARY ?', [db]);
       expect(triggers).toEqual([{ name: 'selected_trigger' }]);
       await control.beginTransaction();

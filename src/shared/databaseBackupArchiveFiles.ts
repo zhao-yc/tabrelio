@@ -14,7 +14,18 @@ export type DatabaseBackupTableManifest = Omit<DatabaseBackupSelectedToolManifes
   tableScope: MysqlBackupTableScope;
 };
 export type DatabaseBackupFileManifest = DatabaseBackupManifest | DatabaseBackupSelectedToolManifest | DatabaseBackupTableManifest;
-export type DatabaseBackupTargetManifest = Pick<DatabaseBackupManifest, 'family' | 'serverVersion' | 'database'> & { tableScope?: MysqlBackupTableScope };
+export type DatabaseBackupTargetManifest = Pick<DatabaseBackupManifest, 'family' | 'serverVersion' | 'database'> & (
+  { tableScope?: undefined } | { tableScope: MysqlBackupTableScope; triggerNames: string[] }
+);
+
+/** 预检与执行使用同一份目录投影，指定表归档同时检查表名与库内触发器名。 */
+export function databaseBackupTargetManifest(manifest: DatabaseBackupFileManifest): DatabaseBackupTargetManifest {
+  const { family, serverVersion, database } = manifest;
+  return manifest.schemaVersion === 3
+    ? { family, serverVersion, database, tableScope: manifest.tableScope,
+      triggerNames: manifest.objects.filter(object => object.kind === 'trigger').map(object => object.name) }
+    : { family, serverVersion, database };
+}
 
 export interface DatabaseBackupArchiveView {
   token: string;
@@ -49,14 +60,15 @@ export interface DatabaseBackupRestoreTargetAudit {
   versionMatches: boolean;
   database: string;
   actualDatabase: string | null;
-  state: 'absent' | 'empty' | 'occupied' | 'unknown' | 'tables-present';
+  state: 'absent' | 'empty' | 'occupied' | 'unknown' | 'tables-present' | 'tables-clear';
   visible: { relations: number; views: number; routines: number; triggers: number; events: number } | null;
   scheduler: 'enabled' | 'disabled' | 'unknown';
   blockers: DatabaseBackupBlocker[];
 }
 
 export function canRestoreBackupArchive(audit: DatabaseBackupRestoreTargetAudit): boolean {
-  return audit.blockers.length === 0 && (audit.state === 'absent' || audit.state === 'empty' || audit.state === 'tables-present');
+  return audit.blockers.length === 0 &&
+    (audit.state === 'absent' || audit.state === 'empty' || audit.state === 'tables-present' || audit.state === 'tables-clear');
 }
 
 export const databaseBackupArchiveZh = {
@@ -107,17 +119,18 @@ export const databaseBackupArchiveZh = {
   audit: '检查目标',
   restore: '直接恢复归档',
   restoring: '正在复核归档、检查目标并执行 SQL',
-  restoreNeedsAudit: '恢复前请重新检查当前连接和同名库',
+  restoreNeedsAudit: '恢复前请重新检查当前连接和目标库',
   restoreRejected: '目标复查未通过，未执行归档 SQL',
   restoreAcknowledgement: '我信任这份归档，确认用所选账号执行其中的 SQL。',
   restoreScope: '恢复时会复查同名库是否为空或不存在。SQL 可以使用所选账号的权限，检查无法隔离其他会话的并发修改。停止或失败后，已提交的语句和部分 DDL 可能保留。',
-  restoreTables: '从所选现有数据库开始回放。结构恢复需要空库，仅数据需要匹配的目标表，已有触发器会照常运行。SQL 以所选账号权限执行，停止或失败后可能保留已提交操作。',
+  restoreTables: '恢复结构前会检查目标库中的表名和触发器名是否冲突。仅恢复数据时需要匹配的目标表，已有触发器会照常运行。SQL 以所选账号权限执行，停止或失败后可能保留已提交操作。',
   auditing: '正在只读检查恢复目标',
   auditResult: '目标检查结果',
   targetServer: '实际服务器',
   targetDatabase: '目标同名库',
   targetVersion: { match: '与清单版本一致', mismatch: '与清单版本不同' },
-  targetState: { absent: '目标库未发现', empty: '目标库为空', occupied: '目标库已有对象', unknown: '目标库状态未知', 'tables-present': '所选 InnoDB 表均已找到' },
+  targetState: { absent: '目标库未发现', empty: '目标库为空', occupied: '目标库已有对象', unknown: '目标库状态未知',
+    'tables-present': '所选 InnoDB 表均已找到', 'tables-clear': '目标库已有对象，所选表和触发器的名称可用' },
   scheduler: '事件调度器',
   schedulerState: { enabled: '开启', disabled: '关闭', unknown: '未知' },
   visible: { relations: '表及其他关系', views: '视图', routines: '过程及函数', triggers: '触发器', events: '事件' },

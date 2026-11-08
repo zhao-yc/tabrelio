@@ -55,7 +55,26 @@ function count(value: unknown): number {
   throw Error('目标目录返回了无效对象数量');
 }
 
-/** 只发送固定元数据查询。归档库名始终走绑定参数，清单中的 SQL、对象名和权限声明均不参与执行。 */
+const asciiName = /^[\x20-\x7e]+$/;
+
+function describeCollisions(rows: Row[]): string {
+  return rows.slice(0, 20).map(row => String(row.name)).join('、') + (rows.length > 20 ? '等' : '');
+}
+
+/** 只读检查所有表类对象及库内触发器。名称作为值绑定，触发器按目录排序规则保守判冲突。 */
+async function scopedNameConflicts(context: Context, database: string, identifierCase: number,
+  tables: string[], triggers: string[]) {
+  const placeholders = tables.map(() => identifierCase === 0 ? 'BINARY ?' : 'BINARY LOWER(?)').join(',');
+  const tableMatch = identifierCase === 0 ? 'BINARY TABLE_NAME' : 'BINARY LOWER(TABLE_NAME)';
+  const existingTables = await read(context, 'SELECT TABLE_NAME AS name FROM information_schema.TABLES' +
+    ` WHERE BINARY TABLE_SCHEMA=BINARY ? AND ${tableMatch} IN (${placeholders}) ORDER BY BINARY TABLE_NAME LIMIT 21`, [database, ...tables]);
+  const existingTriggers = triggers.length ? await read(context, 'SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS' +
+    ` WHERE BINARY TRIGGER_SCHEMA=BINARY ? AND TRIGGER_NAME IN (${triggers.map(() => '?').join(',')}) ORDER BY BINARY TRIGGER_NAME LIMIT 21`,
+  [database, ...triggers]) : [];
+  return { existingTables, existingTriggers };
+}
+
+/** 仅查询目标目录和当前会话事实，归档名称始终作为绑定参数。 */
 export async function auditDatabaseBackupTarget(context: Context, manifest: Manifest, targetDatabase?: string,
   requireCurrent = false): Promise<DatabaseBackupRestoreTargetAudit> {
   const { tableScope } = manifest;
@@ -94,15 +113,25 @@ export async function auditDatabaseBackupTarget(context: Context, manifest: Mani
     const found = new Set(matches.map(row => row.name));
     missingTables = names.filter(name => !found.has(name));
   }
+  const occupied = visible !== null && Object.values(visible).some(value => value > 0);
+  const restoresStructure = !!tableScope && tableScope.content !== 'data';
+  const ambiguousNames = !!tableScope && identifierCase !== 0 && tableScope.tables.some(name => !asciiName.test(name));
+  const foldedDuplicates = !!tableScope && identifierCase !== 0 &&
+    new Set(tableScope.tables.map(name => name.toLowerCase())).size !== tableScope.tables.length;
+  const conflicts = restoresStructure && actualDatabase === database && before.objects && !(occupied && ambiguousNames)
+    ? await scopedNameConflicts(context, database, identifierCase, tableScope.tables, manifest.triggerNames) : undefined;
   const after = before.schemas ? await visibility(context, family, version) : before;
   const [last] = await read(context, factsSql);
   const sameSession = last && ['version', 'versionComment', 'identifierCase']
     .every(key => facts[key] === last[key]);
   if (!sameSession) throw Error('检查期间目标服务器或会话条件已变化，请重新检查');
   // 大小写折叠规则跨版本存在差异，非 ASCII 库名在折叠模式下的零行不据此认定为缺失。
-  const absenceProven = before.schemas && after.schemas && (identifierCase === 0 || /^[\x20-\x7e]+$/.test(database));
-  const state = missingTables?.length === 0 ? 'tables-present' : visible && Object.values(visible).some(value => value > 0) ? 'occupied'
-    : visible && before.objects && after.objects ? 'empty'
+  const absenceProven = before.schemas && after.schemas && (identifierCase === 0 || asciiName.test(database));
+  const objectsProven = before.objects && after.objects;
+  const namesClear = conflicts && !conflicts.existingTables.length && !conflicts.existingTriggers.length;
+  const state = missingTables?.length === 0 ? 'tables-present'
+    : occupied ? objectsProven && namesClear && !foldedDuplicates ? 'tables-clear' : 'occupied'
+      : visible && objectsProven ? 'empty'
       : schemas.length === 0 && absenceProven ? 'absent' : 'unknown';
   const scheduler = facts.scheduler !== last.scheduler ? 'unknown' : last.scheduler === 'ON' ? 'enabled'
     : last.scheduler === 'OFF' || last.scheduler === 'DISABLED' ? 'disabled' : 'unknown';
@@ -113,7 +142,16 @@ export async function auditDatabaseBackupTarget(context: Context, manifest: Mani
     blockers.push({ code: 'target-changed', message: '执行连接的当前数据库与所选目标不同。' });
   if (tableScope && state === 'absent') blockers.push({ code: 'missing-database', message: '指定表归档需要已存在的目标数据库。' });
   if (missingTables?.length) blockers.push({ code: 'missing-tables', message: '目标库中缺少可见的同名 InnoDB 表：' + missingTables.join('、') });
-  if (state === 'occupied' && tableScope?.content !== 'data') blockers.push({ code: 'occupied', message: '目标库已有对象，恢复结构需要空库。' });
+  if (!tableScope && state === 'occupied') blockers.push({ code: 'occupied', message: '目标库已有对象，恢复整库结构需要空库。' });
+  if (restoresStructure) {
+    if (foldedDuplicates) blockers.push({ code: 'table-case-collision', message: '归档表名在目标服务器的大小写规则下重复。' });
+    if (conflicts?.existingTables.length) blockers.push({ code: 'table-collision',
+      message: '目标库已有同名表、视图或其他关系：' + describeCollisions(conflicts.existingTables) });
+    if (conflicts?.existingTriggers.length) blockers.push({ code: 'trigger-collision',
+      message: '目标库已有同名触发器：' + describeCollisions(conflicts.existingTriggers) });
+    if (occupied && ambiguousNames) blockers.push({ code: 'table-case-unknown', message: '目标服务器折叠表名大小写，无法证明这些非 ASCII 表名在已有对象的库中可用。' });
+    if (occupied && !objectsProven) blockers.push({ code: 'visibility', message: '现有权限无法证明所选表和触发器的名称可用。' });
+  }
   if (state === 'unknown') blockers.push({ code: 'visibility', message: '现有权限或库名匹配结果无法证明同名库不存在或为空。' });
   if (scheduler !== 'disabled') blockers.push({ code: 'event-scheduler', message: '事件调度器未确认关闭。' });
   return { family, version, versionMatches, database, actualDatabase, state, visible, scheduler, blockers };
