@@ -23,7 +23,7 @@ import {databaseSearchZh} from '../locales/databaseSearch.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { completionIdentifier } from '../../shared/completionLexical';
-import { exportMysqlViewFileQuery, mysqlViewSampleRows, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../shared/mysqlViewFile';
+import { exportMysqlViewFileQuery, mysqlViewSampleRows, mysqlNewViewHeader, mysqlViewFileQuery, renameMysqlViewDraft, replaceMysqlViewFileQuery } from '../../shared/mysqlViewFile';
 import type { TableCreateApplyOutput } from '../../shared/tableCreate';
 import { TableCreateConfirmation } from './TableCreateConfirmation';
 import { tableCreateZh } from '../locales/tableCreate.zh-CN';
@@ -37,6 +37,7 @@ import type { DefinitionSearchOpen } from '../../shared/definitionNavigation';
 import { DatabaseCreateDialog } from './DatabaseCreateDialog';
 import { DefinitionViewer } from './DefinitionViewer';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { MysqlViewAttributes } from './MysqlViewAttributes';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
@@ -278,7 +279,7 @@ function SchemaDialogContent({ connectionId, database, table, initialDesign, isP
 /** 根据对象种类生成可编辑的 SQL；涉及重建的对象在执行前明确展示全部语句。 */
 function template(kind: string, database: string, name: string) {
   const target = qualifiedName(database, name || zh.schema.text050);
-  if (kind === 'view') return `CREATE OR REPLACE VIEW ${target} AS\nSELECT 1 AS example;`;
+  if (kind === 'view') return mysqlNewViewHeader(database, name || zh.schema.text050) + 'SELECT 1 AS example;';
   if (kind === 'procedure') return `DELIMITER $$\nCREATE PROCEDURE ${target}()\nBEGIN\n  SELECT 1;\nEND$$\nDELIMITER ;`;
   if (kind === 'function') return `DELIMITER $$\nCREATE FUNCTION ${target}(input_value INT)\nRETURNS INT DETERMINISTIC\nBEGIN\n  RETURN input_value;\nEND$$\nDELIMITER ;`;
   if (kind === 'trigger') return formatText(zh.schema.text051, target, qualifiedName(database, zh.schema.text052));
@@ -321,21 +322,22 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
     return () => { active = false; };
   }, [connectionId, database, object, readOnly]);
   const fileView = !!database && !readOnly && kind === 'view' && (profile?.dialect === 'mysql' || profile?.dialect === 'mariadb');
-  const newHeader = (value: string) => 'CREATE VIEW ' + qualifiedName(database!, value || zh.schema.text050) + ' AS\n';
   const viewReadDisabled = busy || !completionIdentifier(name) || !!object && !viewLoaded;
-  const importedNew = fileView && !object && sql.startsWith(newHeader(name));
-  const missingName = importedNew && !completionIdentifier(name);
+  const missingName = fileView && !object && !completionIdentifier(name);
   const statement = database ? sql : name ? `CREATE DATABASE ${identifier(name)} CHARACTER SET utf8mb4;` : '';
 
-  /** 修改新视图名称时保留已载入查询，目标仍由表单重新生成。 */
+  /** 改名不重建已有视图草稿。若手写 DDL 与原名称不符，先保留原文供用户修正。 */
   function changeName(value: string) {
+    if (fileView) {
+      try { setSql(renameMysqlViewDraft(sql, database, name || zh.schema.text050, value || zh.schema.text050)); }
+      catch (reason) { setError(errorMessage(reason)); return; }
+    } else if (database) setSql(template(kind, database, value));
     setName(value);
-    if (database) setSql(importedNew ? newHeader(value) + sql.slice(newHeader(name).length) : template(kind, database, value));
+    setError('');
   }
 
   function prepareViewFile(source: string): string {
-    const query = mysqlViewFileQuery(source);
-    return object ? replaceMysqlViewFileQuery(sql, database!, name, query) : mysqlNewViewHeader(database!, name) + query + '\n;';
+    return replaceMysqlViewFileQuery(sql, database!, name, mysqlViewFileQuery(source));
   }
 
   function fileCurrent(): boolean {
@@ -355,6 +357,8 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
   return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} name={name} value={sql} disabled={viewReadDisabled}
       hint={viewSqlFileZh.mysqlHint} current={fileCurrent} prepare={prepareViewFile}
       prepareSave={value => exportMysqlViewFileQuery(value, database, name)} apply={setSql}/>}
+    {fileView && <MysqlViewAttributes database={database} view={name} sql={sql} disabled={viewReadDisabled}
+      current={fileCurrent} change={value => { setSql(value); setError(''); }}/>}
     <SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/>
     {fileView && <ViewQueryInspect owner={fileOwner} hint={viewQueryInspectZh.mysqlHint(mysqlViewSampleRows)} current={fileCurrent}
       disabled={viewReadDisabled} read={mode => invoke('mysql.view.inspectQuery', { connectionId, database, name, sql, mode })}/>}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exportMysqlViewFileQuery, mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
+import { changeMysqlViewDraftAttribute, exportMysqlViewFileQuery, mysqlViewDraftAttributes, renameMysqlViewDraft, mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
 
 describe('MySQL 和 MariaDB 视图文件草稿', () => {
   it('在单条 CTE 中保留注释、字符串和原始换行，名称独立引用', () => {
@@ -74,5 +74,51 @@ describe('MySQL 和 MariaDB 视图查询提取', () => {
     'CREATE VIEW `视图` AS WITH c AS (SELECT 1) DELETE FROM t WHERE id IN (SELECT * FROM c)',
   ])('拒绝目标不符或非只读定义 %s', sql => {
     expect(() => mysqlViewDraftQuery({ ...input, sql }, false, false)).toThrow(/无法确认|视图预览需要/);
+  });
+});
+
+describe('MySQL 和 MariaDB 视图属性草稿', () => {
+  const read = (sql: string) => mysqlViewDraftAttributes(sql, '库', '视图');
+  const change = (sql: string, attribute: Parameters<typeof changeMysqlViewDraftAttribute>[3]) =>
+    changeMysqlViewDraftAttribute(sql, '库', '视图', attribute);
+
+  it('在缺省子句中按语法位置加入属性，尾注释之后的检查仍有效', () => {
+    const source = 'CREATE /* 头 */ VIEW `库`.`视图` AS SELECT * FROM t -- 尾';
+    expect(read(source)).toEqual({ algorithm: 'UNDEFINED', security: 'DEFINER', check: 'NONE' });
+    let changed = change(source, { key: 'algorithm', value: 'MERGE' });
+    changed = change(changed, { key: 'security', value: 'INVOKER' });
+    changed = change(changed, { key: 'check', value: 'LOCAL' });
+    expect(changed).toBe('CREATE /* 头 */ ALGORITHM=MERGE SQL SECURITY INVOKER VIEW `库`.`视图` AS SELECT * FROM t -- 尾\nWITH LOCAL CHECK OPTION\n');
+    expect(read(changed)).toEqual({ algorithm: 'MERGE', security: 'INVOKER', check: 'LOCAL' });
+  });
+
+  it('仅替换所选词法片段，保留带引号的定义者、列清单和所有注释', () => {
+    const head = 'ALTER ALGORITHM /*a*/ = MERGE DEFINER=`one@two`@`%` SQL SECURITY /*b*/ INVOKER VIEW `库`.`视图` (`c`) AS';
+    const body = ' SELECT n FROM t /*c*/';
+    const source = head + body + ' WITH /*d*/ CHECK OPTION /*e*/;';
+    expect(read(source).check).toBe('CASCADED');
+    expect(change(source, { key: 'check', value: 'CASCADED' })).toBe(source);
+    expect(change(source, { key: 'check', value: 'LOCAL' })).toBe(head + body + ' WITH LOCAL /*d*/ CHECK OPTION /*e*/;');
+    expect(change(source, { key: 'check', value: 'NONE' })).toBe(head + body + '  /*d*/   /*e*/;');
+    expect(change(source, { key: 'algorithm', value: 'TEMPTABLE' })).toBe(source.replace('MERGE', 'TEMPTABLE'));
+    expect(change(source, { key: 'security', value: 'DEFINER' })).toBe(source.replace('/*b*/ INVOKER', '/*b*/ DEFINER'));
+  });
+
+  it('读写 MariaDB IF NOT EXISTS 和角色定义者，重命名后仍保留查询及选项', () => {
+    const source = 'CREATE DEFINER=CURRENT_ROLE VIEW IF NOT EXISTS `库`.`视图` AS SELECT n FROM t WITH LOCAL CHECK OPTION;';
+    const renamed = renameMysqlViewDraft(source, '库', '视图', '新`名称');
+    expect(renamed).toBe(source.replace('`视图`', '`新``名称`'));
+    expect(mysqlViewDraftAttributes(renamed, '库', '新`名称').check).toBe('LOCAL');
+    expect(replaceMysqlViewFileQuery(renamed, '库', '新`名称', 'SELECT m FROM t')).toContain('WITH LOCAL CHECK OPTION');
+  });
+
+  it.each([
+    'CREATE VIEW `别库`.`视图` AS SELECT 1',
+    'CREATE VIEW `视图` AS SELECT 1; DROP VIEW `视图`',
+    'CREATE VIEW `视图` AS SELECT 1 /*!50000 WITH CHECK OPTION */',
+    'CREATE VIEW "视图" AS SELECT 1',
+  ])('目标或语句边界不明时禁止生成属性 SQL %s', sql => {
+    expect(() => change(sql, { key: 'check', value: 'LOCAL' })).toThrow(/无法确认/);
+    expect(() => renameMysqlViewDraft(sql, '库', '视图', '新名称')).toThrow(/无法确认/);
   });
 });
