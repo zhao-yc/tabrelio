@@ -5,5 +5,9 @@
 .pg-create-field legend { padding: 0 5px; }
 .pg-create-field > label:not(.field) { display: flex; gap: 5px; align-items: center; margin-bottom: 8px; }
 .pg-create-field .field input[type="number"] { width: 85px; }
+.pg-create-partition { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.pg-partition-bound { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; flex-basis: 100%; }
+.pg-partition-list-value { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.pg-partition-list-value > label:not(.field) { align-self: center; display: flex; align-items: center; gap: 4px; }
 .pg-create-sql { max-height: min(50vh, 520px); overflow: auto; padding: 12px; background: var(--editor); border: 1px solid var(--line); }
 .pg-create-view-definition { font-family: var(--font-mono, monospace); min-height: 140px; }

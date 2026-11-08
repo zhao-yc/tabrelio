@@ -10,6 +10,7 @@ import type { PostgresImportDesign } from '../importNewTableUi';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { PostgresColumnDefaultFields } from './PostgresColumnDefaultFields';
 import { PostgresColumnGenerationFields } from './PostgresColumnGenerationFields';
+import { compilePostgresPartition, PostgresPartitionFields, type PostgresPartitionDraft } from './PostgresPartitionFields';
 import './PostgresCreateTableDialog.css';
 
 type FieldDraft = PostgresCreateColumn & { id: string };
@@ -33,6 +34,7 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
   const [table, setTable] = useState(initialDesign?.table ?? '');
   const [comment, setComment] = useState('');
   const [fields, setFields] = useState(() => initialDesign?.columns.map(field => ({ ...field, id: uid() })) ?? [newField()]);
+  const [partition, setPartition] = useState<PostgresPartitionDraft>({ strategy: '', keyIds: [], children: [] });
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -95,7 +97,8 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
   /** 主进程收到的预览只有结构字段，原文 SQL 由数据库引擎生成。 */
   async function prepare() {
     if (operation.current || loading || unknown || isParentCurrent?.() === false) return;
-    const input = postgresCreateTablePreviewSchema.safeParse({ ...target, schema, table, comment, columns: fields.map(({ id: _id, ...field }) => field) });
+    const input = postgresCreateTablePreviewSchema.safeParse({ ...target, schema, table, comment,
+      columns: fields.map(({ id: _id, ...field }) => field), partition: compilePostgresPartition(partition, fields) });
     if (!input.success) { setError(input.error.issues[0]?.message ?? text.changed); return; }
     const owner = lifecycle.current;
     operation.current = true;
@@ -187,6 +190,7 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
           <button disabled={fields.length === 1} onClick={() => edit(() => setFields(previous => previous.filter(item => item.id !== field.id)))}>{text.remove}</button>
         </fieldset>)}
         <button disabled={fields.length >= 128} onClick={() => edit(() => setFields(previous => [...previous, newField()]))}>{text.add}</button>
+        {!initialDesign && <PostgresPartitionFields draft={partition} fields={fields} onChange={value => edit(() => setPartition(value))}/>}
       </fieldset>}
     </div>
     <footer className="modal-footer">

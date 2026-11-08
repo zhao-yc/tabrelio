@@ -14,6 +14,33 @@ const draft: PostgresCreateTableInput = {
 };
 
 describe('PostgreSQL 建表计划', () => {
+  it('分区边界按数据转义，默认分区在显式分区之后创建', () => {
+    const key = draft.columns[0].name;
+    const planned = postgresCreateTablePlan({ ...draft, partition: { strategy: 'list', keys: [key],
+      children: [{ kind: 'default', name: '其他' }, { kind: 'list', name: '子"表', values: [null, "值'\\'; DROP TABLE x; --", ''] }] } });
+    expect(planned.statements[0]).toContain('PARTITION BY LIST ("原""列")');
+    expect(planned.statements[1]).toContain('CREATE TABLE "业务""区"."子""表" PARTITION OF "业务""区"."新""表" FOR VALUES IN (NULL, E');
+    expect(planned.statements[2]).toContain('PARTITION OF "业务""区"."新""表" DEFAULT');
+    expect(splitPostgresSql(planned.statements.join(';\n'), true)).toHaveLength(5);
+  });
+
+  it('拒绝分区约束、名称、边界或策略不一致的计划', () => {
+    const first = draft.columns[0], second = { ...first, name: '另一字段', primary: false };
+    const list = { strategy: 'list', keys: [first.name], children: [{ kind: 'list', name: '子表', values: ['a'] }] };
+    const ranged = { strategy: 'range', keys: [first.name, second.name], children: [{ kind: 'range', name: '范围',
+      from: [{ kind: 'min' }, { kind: 'value', value: '1' }], to: [{ kind: 'max' }, { kind: 'max' }] }] };
+    for (const invalid of [
+      { ...draft, partition: { ...list, keys: ['不存在'] } },
+      { ...draft, partition: { ...list, children: [...list.children, { kind: 'default', name: draft.table }] } },
+      { ...draft, partition: { ...list, children: [{ ...list.children[0], values: [null, null] }] } },
+      { ...draft, columns: [first, second], partition: ranged },
+      { ...draft, columns: [first, { ...second, primary: true }], partition: ranged },
+      { ...draft, partition: { strategy: 'hash', keys: [first.name], children: [{ kind: 'hash', name: '错误哈希', modulus: 2, remainder: 2 }] } },
+      { ...draft, partition: { strategy: 'hash', keys: [first.name], children: [{ kind: 'default', name: '错误默认' }] } },
+      { ...draft, partition: { ...list, children: [{ ...list.children[0], sql: 'DROP TABLE x' }] } },
+    ]) expect(postgresCreateTablePreviewSchema.safeParse(invalid).success).toBe(false);
+  });
+
   it('标识符、带反斜杠的默认值及注释不能逸出各自语法边界', () => {
     const result = postgresCreateTablePlan(draft);
     expect(result.table).toBe('"业务""区"."新""表"');

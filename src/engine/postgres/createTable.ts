@@ -95,21 +95,23 @@ export async function startPostgresDdl(connection: PostgresConnection, readOnly:
 
 /** 通过服务器真实目录验证 schema、权限及名称，保留 OID 识别同名替换。 */
 async function preflight(connection: PostgresConnection, input: PostgresCreateTableTarget & { schema: string }, name: string,
-  fields: string[], label: string): Promise<string> {
+  fields: string[], label: string, children: string[] = []): Promise<string> {
   if (connection.database !== input.database) throw Error('PostgreSQL 原数据库已变化');
   const result = await connection.query(`
     SELECT n.oid,
-      EXISTS (SELECT FROM pg_catalog.pg_class c WHERE c.relnamespace = n.oid AND c.relname::text = $2),
+      (SELECT c.relname::text FROM pg_catalog.pg_class c WHERE c.relnamespace = n.oid
+        AND c.relname::text COLLATE pg_catalog."C" = ANY($2::text[]) LIMIT 1),
       pg_catalog.current_setting('max_identifier_length')::int
     FROM pg_catalog.pg_namespace n
     WHERE n.nspname::text = $1 AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
       AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND pg_catalog.has_schema_privilege(n.oid, 'CREATE')
-  `, [input.schema, name], budget());
+  `, [input.schema, [name, ...children]], budget());
   const schema = result.rows[0];
   if (typeof schema?.c0 !== 'string') throw Error('PostgreSQL schema 不存在或缺少建' + label + '权限');
-  if (schema.c1 === 't') throw Error('目标 schema 已存在同名关系');
+  if (schema.c1 !== null) throw Error('目标 schema 已存在同名关系' +
+    (children.length && typeof schema.c1 === 'string' ? ' ' + postgresIdentifier(schema.c1) : ''));
   const max = Number(schema.c2);
-  if (!Number.isInteger(max) || [name, ...fields].some(identifier => Buffer.byteLength(identifier) > max)) {
+  if (!Number.isInteger(max) || [name, ...fields, ...children].some(identifier => Buffer.byteLength(identifier) > max)) {
     throw Error(label + '名或字段名超过目标服务器标识符长度');
   }
   return schema.c0;
@@ -164,9 +166,9 @@ async function verify(connection: PostgresConnection, input: PostgresCreateTable
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3 AND c.relkind = 'r'
+    WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3 AND c.relkind = $4::pg_catalog."char"
       AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
-  `, [schemaOid, input.schema, input.table], { rows: input.columns.length + 1, bytes: 128 * 1024 });
+  `, [schemaOid, input.schema, input.table, input.partition ? 'p' : 'r'], { rows: input.columns.length + 1, bytes: 128 * 1024 });
   if (result.truncated || result.rows.length !== input.columns.length ||
       result.rows.some((row, i) => row.c0 !== input.columns[i].name)) {
     throw Error('新表的实际 schema 或字段与预览不同，未提交');
@@ -177,6 +179,34 @@ async function verify(connection: PostgresConnection, input: PostgresCreateTable
   if (generated && input.columns.some((field, index) => field.generation &&
     (result.rows[index].c2 !== (field.generation.mode === 'stored' ? 's' : 'v') || !result.rows[index].c1)))
     throw Error('新表的实际生成列与预览不同，未提交');
+  if (input.partition) await verifyPartitions(connection, input.partition, schemaOid, input.table);
+}
+
+/** 通过键列序号、父子 OID 关联和默认分区标志核对服务器创建的实际分区拓扑。 */
+async function verifyPartitions(connection: PostgresConnection, partition: NonNullable<PostgresCreateTableInput['partition']>,
+  schemaOid: string, table: string) {
+  const result = await connection.query(`
+    SELECT p.partstrat::text,
+      (SELECT pg_catalog.jsonb_agg(a.attname::text ORDER BY k.ordinality)::text
+       FROM pg_catalog.unnest(p.partattrs) WITH ORDINALITY AS k(attnum, ordinality)
+       JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum),
+      COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(ch.relname,
+        COALESCE((pg_catalog.to_jsonb(p)->>'partdefid')::oid, 0::oid) = ch.oid))::text
+       FROM pg_catalog.pg_inherits i JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
+       WHERE i.inhparent = c.oid AND ch.relispartition AND ch.relkind = 'r' AND ch.relnamespace = c.relnamespace
+         AND ch.relpartbound IS NOT NULL), '[]')
+    FROM pg_catalog.pg_partitioned_table p JOIN pg_catalog.pg_class c ON c.oid = p.partrelid
+    WHERE c.relnamespace = $1::oid AND c.relname::text COLLATE pg_catalog."C" = $2
+  `, [schemaOid, table], budget());
+  const row = result.rows[0];
+  if (result.truncated || result.rows.length !== 1 || row.c0 !== partition.strategy[0] ||
+      typeof row.c1 !== 'string' || typeof row.c2 !== 'string' ||
+      JSON.stringify(JSON.parse(row.c1)) !== JSON.stringify(partition.keys))
+    throw Error('新表的实际分区策略或分区键与预览不同，未提交');
+  const children = new Map<string, boolean>(JSON.parse(row.c2));
+  if (children.size !== partition.children.length ||
+    partition.children.some(child => children.get(child.name) !== (child.kind === 'default')))
+    throw Error('新表的实际子分区与预览不同，未提交');
 }
 
 /** 先确认表达式使用的字符串模式，再用服务器 Parse 检查完整 DDL，预览不执行表达式。 */
@@ -199,19 +229,28 @@ export class PostgresCreateTableWorkspace {
   async prepare(input: Scoped<PostgresCreateTableInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'table', connect, () => {
       const draft = { connectionId: input.connectionId, database: input.database, schema: input.schema,
-        table: input.table, columns: input.columns, comment: input.comment };
+        table: input.table, columns: input.columns, comment: input.comment, partition: input.partition };
       const plan = postgresCreateTablePlan(draft);
       const presets = draft.columns.flatMap(({ default: { mode } }) => mode === 'none' || mode === 'literal' ? [] : [mode]);
       const minimum = Math.max(0, ...draft.columns.map(field => field.generation ? postgresGenerationMinimum(field.generation.mode) : 0));
+      const partition = draft.partition;
+      const partitionMinimum = !partition ? 0 : draft.columns.some(field => field.identity !== 'none') ? 170000 :
+        partition.strategy === 'hash' || partition.children.some(child => child.kind === 'default') ||
+        draft.columns.some(field => field.primary || field.unique) ? 110000 : 100000;
+      const extended = minimum > 0 || !!partition;
       return { ...plan, success: 'PostgreSQL 新表已确认创建',
-        protocol: minimum ? 'extended' : undefined,
+        protocol: extended ? 'extended' : undefined,
         async preflight(connection) {
-          const oid = await preflight(connection, draft, draft.table, draft.columns.map(column => column.name), '表');
+          const oid = await preflight(connection, draft, draft.table, draft.columns.map(column => column.name), '表',
+            partition?.children.map(child => child.name));
           await validatePostgresDefaultPresets(connection, presets);
-          if (minimum) {
-            const version = await connection.query("SELECT pg_catalog.current_setting('server_version_num')", undefined, budget());
-            if (!(Number(version.rows[0]?.c0) >= minimum))
+          if (minimum || partitionMinimum) {
+            const server = await connection.query("SELECT pg_catalog.current_setting('server_version_num')", undefined, budget());
+            const version = Number(server.rows[0]?.c0);
+            if (minimum && !(version >= minimum))
               throw Error('当前生成列模式需要 PostgreSQL ' + minimum / 10000 + ' 或更新版本');
+            if (partitionMinimum && !(version >= partitionMinimum))
+              throw Error('当前分区设计需要 PostgreSQL ' + partitionMinimum / 10000 + ' 或更新版本');
           }
           return oid;
         },
@@ -219,7 +258,7 @@ export class PostgresCreateTableWorkspace {
           await validatePostgresDefaults(connection, plan.checks.map(check => ({
             ...check, length: draft.columns.find(column => column.name === check.name)?.length,
           })));
-          if (minimum) await parsePostgresColumnStatements(connection, plan.statements);
+          if (extended) await parsePostgresColumnStatements(connection, plan.statements);
         },
         verify: (connection, oid) => verify(connection, draft, oid),
       };
