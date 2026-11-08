@@ -4,7 +4,7 @@ import { postgresQuickTableFilterSchema, postgresTableTargetSchema } from './pos
 
 const endpoint = postgresTableTargetSchema.omit({ tabId: true });
 export const tableDataCompareRequestSchema = z.object({
-  source: endpoint, target: endpoint, taskId: z.uuid(), filter: postgresQuickTableFilterSchema.optional(),
+  source: endpoint, target: endpoint, taskId: z.uuid(), summaryOnly: z.literal(true).optional(), filter: postgresQuickTableFilterSchema.optional(),
 }).strict();
 export const postgresDataCompareSchema = tableDataCompareRequestSchema.refine(({ source, target }) =>
   source.connectionId !== target.connectionId || source.database !== target.database || source.table !== target.table,

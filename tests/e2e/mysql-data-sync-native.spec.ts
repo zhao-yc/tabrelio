@@ -1,3 +1,4 @@
+import { dataCompareBatchZh as batch } from '../../src/renderer/locales/dataCompareBatch.zh-CN';
 import { dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import mysql, { type RowDataPacket } from 'mysql2/promise';
 import { confirmOwnedDesktopExit, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
@@ -61,6 +62,14 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
     await choose(text.source, 'mysql', database, 'ledger');
     await choose(text.target, 'mariadb', database, 'ledger');
     const original = await values(right, database, 'ledger'), mysqlOriginal = await values(left, database, 'ledger');
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    const overview = page.getByRole('dialog', { name: batch.title, exact: true });
+    await overview.getByRole('button', { name: batch.run, exact: true }).click();
+    await expect(overview.getByRole('row').filter({ hasText: 'ledger' })).toContainText('仅左侧 1 · 仅右侧 1 · 字段值不同 27');
+    await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表比较.png') });
+    expect(await values(left, database, 'ledger')).toEqual(mysqlOriginal);
+    expect(await values(right, database, 'ledger')).toEqual(original);
+    await overview.getByRole('button', { name: batch.return, exact: true }).click();
     await compare();
     await modal.getByText(profiles.title, { exact: true }).click();
     await modal.getByLabel(profiles.name, { exact: true }).fill('双向检查');

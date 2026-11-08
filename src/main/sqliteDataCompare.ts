@@ -92,5 +92,5 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
     if (!version[0]?.[0] || typeof version[0][0] !== 'object' || version[0][0].type !== 'integer') throw Error('SQLite 同步目录版本无效');
     capture!({ target: input.target, identity, catalogue: target, schemaVersion: version[0][0].value, columns, keyColumns: source.key, rows: syncRows });
   }
-  return { snapshot: oneFile ? 'one-file' : 'two-files', columns, keyColumns: source.key, sourceRows: a.size, targetRows: b.size, equal, counts, differences };
+  return { snapshot: oneFile ? 'one-file' : 'two-files', columns, keyColumns: source.key, sourceRows: a.size, targetRows: b.size, equal, counts, differences: input.summaryOnly ? [] : differences };
 }

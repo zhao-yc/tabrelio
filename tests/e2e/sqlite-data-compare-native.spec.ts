@@ -1,3 +1,4 @@
+import { dataCompareBatchZh as batch } from '../../src/renderer/locales/dataCompareBatch.zh-CN';
 import { dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import { mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -25,8 +26,8 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     const db = new DatabaseSync(path);
     try { db.exec(sql); } finally { db.close(); }
   }
-  seed(left, create + insert('来源') + "INSERT INTO ledger VALUES(9223372036854775807,X'00FF80',NULL),(101,NULL,'仅左'); CREATE TABLE mirror(id INTEGER PRIMARY KEY, value, note TEXT); INSERT INTO mirror SELECT * FROM ledger;");
-  seed(right, create + insert('目标') + "INSERT INTO ledger VALUES(9223372036854775807,X'00FF81',NULL),(102,NULL,'仅右');");
+  seed(left, create + insert('来源') + "INSERT INTO ledger VALUES(9223372036854775807,X'00FF80',NULL),(101,NULL,'仅左'); CREATE TABLE mirror(id INTEGER PRIMARY KEY, value, note TEXT); INSERT INTO mirror SELECT * FROM ledger; CREATE TABLE without_key(id);");
+  seed(right, create + insert('目标') + "INSERT INTO ledger VALUES(9223372036854775807,X'00FF81',NULL),(102,NULL,'仅右'); CREATE TABLE without_key(id); CREATE TABLE renamed(id INTEGER PRIMARY KEY, value, note TEXT);");
   try {
     // 仅代填系统文件选择，两条保存连接及比较操作经过真实 IPC 和 SQLite utility。
     await application.evaluate(({ dialog }, files) => {
@@ -67,6 +68,29 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     await expect(modal.getByRole('status')).toContainText('相同 28');
 
     await choose(text.target, '比较右库', 'ledger');
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    const overview = page.getByRole('dialog', { name: batch.title, exact: true });
+    const result = overview.getByRole('table', { name: batch.result, exact: true });
+    const pairRow = (name: string) => result.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
+    await overview.getByRole('button', { name: batch.match, exact: true }).click();
+    await overview.getByLabel(batch.source, { exact: true }).selectOption('mirror');
+    await overview.getByLabel(batch.target, { exact: true }).selectOption('renamed');
+    await overview.getByRole('button', { name: batch.add, exact: true }).click();
+    await overview.getByRole('button', { name: batch.run, exact: true }).click();
+    await expect(pairRow('ledger')).toContainText('仅左侧 1 · 仅右侧 1 · 字段值不同 27');
+    await expect(pairRow('without_key')).toContainText('显式主键');
+    await expect(pairRow('mirror')).toContainText('仅左侧 28 · 仅右侧 0 · 字段值不同 0');
+    await page.screenshot({ path: info.outputPath('SQLite多表比较.png') });
+    await pairRow('ledger').getByRole('button', { name: batch.review, exact: true }).click();
+    await expect(modal.getByLabel(text.source + text.table, { exact: true })).toHaveValue('ledger');
+    await expect(modal.getByLabel(text.target + text.table, { exact: true })).toHaveValue('ledger');
+    await expect(modal.getByRole('status')).toHaveCount(0);
+    await run.click();
+    await expect(modal.getByRole('status')).toContainText('字段值不同 27');
+    await modal.getByRole('button', { name: text.close, exact: true }).click();
+    await expect(pairRow('ledger')).toContainText(batch.pending);
+    await expect(pairRow('mirror')).toContainText('仅左侧 28');
+    await overview.getByRole('button', { name: batch.return, exact: true }).click();
     await run.click();
     await expect(modal.getByText(text.splitSnapshot, { exact: true })).toBeVisible();
     await expect(modal.getByRole('status')).toContainText('仅左侧 1 · 仅右侧 1 · 字段值不同 27');

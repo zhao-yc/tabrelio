@@ -7,7 +7,7 @@ export const dataCompareProfileLimits = { count: 32, name: 80, bytes: 2 * 1024 *
 const family = z.enum(['mysql', 'postgresql', 'sqlite']);
 export const dataCompareProfileScope = z.object({ family }).strict();
 export type DataCompareProfileFamily = z.infer<typeof family>;
-const network = tableDataCompareRequestSchema.omit({ taskId: true });
+const network = tableDataCompareRequestSchema.omit({ taskId: true, summaryOnly: true });
 const sqlite = sqliteDataCompareSchema.shape;
 const networkFilter = network.shape.filter.unwrap().refine(value => value.text.length > 0, '请填写要保存的筛选文本');
 

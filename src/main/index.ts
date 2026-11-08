@@ -1148,7 +1148,7 @@ async function compareSqliteData(input: SqliteDataCompareInput, owner: MainInvoc
   try {
     const profile = store.connections().find(value => value.id === input.target.connectionId);
     let evidence: SqliteSyncEvidence | undefined;
-    const capture = profile?.dialect === 'sqlite' && !profile.sqlite.readOnly ? (value: SqliteSyncEvidence) => { evidence = value; } : undefined;
+    const capture = !input.summaryOnly && profile?.dialect === 'sqlite' && !profile.sqlite.readOnly ? (value: SqliteSyncEvidence) => { evidence = value; } : undefined;
     const output = await broker.request('sqlite.compareData', { source: input, signal: controller.signal, assertOwner, capture });
     assertOwner();
     if (!evidence) return output;

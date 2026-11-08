@@ -1,3 +1,4 @@
+import { dataCompareBatchZh as batch } from '../../src/renderer/locales/dataCompareBatch.zh-CN';
 import { dataCompareProfilesZh as profiles } from '../../src/renderer/locales/dataCompareProfiles.zh-CN';
 import { Client } from 'pg';
 import { confirmOwnedDesktopExit, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
@@ -126,6 +127,13 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await expect(side(text.source, text.database)).toHaveValue(database);
     await expect(side(text.target, text.database)).toHaveValue(targetDatabase);
     await page.screenshot({ path: info.outputPath('PostgreSQL比较方案.png') });
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    const overview = page.getByRole('dialog', { name: batch.title, exact: true });
+    const batchRun = overview.getByRole('button', { name: batch.run, exact: true });
+    await batchRun.click();
+    await expect(overview.getByRole('row').filter({ hasText: '"对照"."明细"' })).toContainText('仅左侧 1 · 仅右侧 1 · 字段值不同 27');
+    await page.screenshot({ path: info.outputPath('PostgreSQL多表比较.png') });
+    await overview.getByRole('button', { name: batch.return, exact: true }).click();
     await run.click();
     await expect(modal.getByText(text.split, { exact: true })).toBeVisible();
     await expect(summary).toContainText('仅左侧 1 · 仅右侧 1 · 字段值不同 27');
@@ -156,6 +164,17 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await left.query('BEGIN; LOCK TABLE "对照"."副本" IN ACCESS EXCLUSIVE MODE');
     const waiting = async () => Number((await reader.query(`SELECT count(*) FROM pg_catalog.pg_stat_activity
       WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%"对照"."副本"%'`)).rows[0].count);
+    await modal.getByRole('button', { name: batch.open, exact: true }).click();
+    await overview.getByLabel(batch.source, { exact: true }).selectOption('"对照"."分区"');
+    await overview.getByLabel(batch.target, { exact: true }).selectOption('"对照"."超限"');
+    await overview.getByRole('button', { name: batch.add, exact: true }).click();
+    await batchRun.click();
+    await expect.poll(waiting).toBe(1);
+    await overview.getByRole('button', { name: batch.cancel, exact: true }).click();
+    await expect(overview.getByRole('status')).toHaveText(batch.cancelled);
+    await expect.poll(waiting).toBe(0);
+    await expect(overview.getByText(batch.pending, { exact: true })).toHaveCount(2);
+    await overview.getByRole('button', { name: batch.return, exact: true }).click();
     await run.click();
     await expect.poll(waiting).toBe(1);
     await modal.getByRole('button', { name: text.cancel, exact: true }).click();

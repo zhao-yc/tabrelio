@@ -6,6 +6,8 @@
 
 在 SQLite、PostgreSQL 或 MySQL／MariaDB 数据比较窗口展开「比较方案」，可以为当前左右表与筛选条件命名保存，之后从列表载入。点「交换左侧与右侧」可反转比较方向，原有差异和勾选会清空。需要同步时，请重新比较、勾选差异并确认新的右侧目标。[数据比较方案](development/data-compare-profiles-20261108.md)
 
+需要核对多张表时，先选左右连接与数据库，再点「多表比较」。可以匹配同名表，也可以手动添加异名表。批次显示每对表的相同、仅左、仅右及字段值不同计数。点「打开表对」可重新比较、审阅逐行差异并按单表流程同步。[多表数据比较](development/data-compare-batch-20261108.md)
+
 对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)
 
 从「工具」选择「比较 MySQL／MariaDB 表数据」，可按主键核对同连接或跨连接的 InnoDB 表，查看分类型的差异及逐列原值。[MySQL／MariaDB 表数据比较](development/mysql-data-compare-20261107.md)

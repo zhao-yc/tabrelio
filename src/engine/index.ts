@@ -319,7 +319,9 @@ export class Engine {
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
       });
       case 'mysql.compareData': {
-        const request = mysqlDataCompareSchema.parse({ source: input.source, target: input.target, taskId: input.taskId, filter: input.filter });
+        const request = mysqlDataCompareSchema.parse({
+          source: input.source, target: input.target, taskId: input.taskId, filter: input.filter, summaryOnly: input.summaryOnly,
+        });
         if (this.taskIdInUse(request.taskId)) throw Error('任务编号已使用');
         for (const [profile, target] of [[input.sourceProfile, request.source], [input.targetProfile, request.target]]) {
           if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== target.connectionId)

@@ -1,0 +1,39 @@
+import { describe, expect, it } from 'vitest';
+import { suggestComparePairs } from '../../src/renderer/dataCompareBatch';
+import { validateCommand } from '../../src/shared/validation';
+
+describe('多表数据比较', () => {
+  it('严格匹配同名对象，跳过相同连接同库的自比较', () => {
+    expect(suggestComparePairs(['a', 'B', 'c'], ['b', 'c', 'a'], false, false))
+      .toEqual([{ source: 'a', target: 'a' }, { source: 'c', target: 'c' }]);
+    expect(suggestComparePairs(['a'], ['a'], false, true)).toEqual([]);
+  });
+
+  it('PostgreSQL 只为两侧唯一的短名建议跨 Schema 映射，保留准确全名优先级', () => {
+    expect(suggestComparePairs(
+      ['"a"."dup"', '"b"."dup"', '"a"."quoted""name"', '"a"."exact"'],
+      ['"b"."dup"', '"c"."dup"', '"b"."quoted""name"', '"a"."exact"'], true, false,
+    )).toEqual([
+      { source: '"b"."dup"', target: '"b"."dup"' }, { source: '"a"."exact"', target: '"a"."exact"' },
+      { source: '"a"."quoted""name"', target: '"b"."quoted""name"' },
+    ]);
+  });
+
+  it('只接受显式摘要模式，已有逐行请求仍有效，模式不能进入已保存方案', () => {
+    const source = { connectionId: 'left', database: 'main', table: 'ledger' };
+    const target = { ...source, connectionId: 'right' };
+    const taskId = '31f0759b-9e09-4eb3-ac92-a1b50f6000d3';
+    for (const [command, request] of [
+      ['mysql.compareData', { source, target, taskId }],
+      ['postgres.compareData', { source, target, taskId }],
+      ['sqlite.compareData', { source, target, taskId, filters: [], mode: 'and' }],
+    ] as const) {
+      expect(() => validateCommand(command, request)).not.toThrow();
+      expect(() => validateCommand(command, { ...request, summaryOnly: true })).not.toThrow();
+      expect(() => validateCommand(command, { ...request, summaryOnly: false })).toThrow();
+    }
+    expect(() => validateCommand('dataCompareProfiles.mutate', { family: 'mysql', kind: 'add',
+      profile: { name: '库存', configuration: { family: 'mysql', source, target, summaryOnly: true } },
+    })).toThrow();
+  });
+});

@@ -5,6 +5,8 @@ import type { SqliteTableFilter } from '../../shared/sqliteTableBrowse';
 import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '../../shared/dataCompareProfiles';
 import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
 import { DataCompareProfiles } from './DataCompareProfiles';
+import { DataCompareBatchDialog } from './DataCompareBatchDialog';
+import { dataCompareBatchZh as batchText } from '../locales/dataCompareBatch.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteDataCompare.css';
@@ -57,9 +59,10 @@ function keyLabel(row: SqliteDataCompareRow): string {
   return value.length <= 200 ? value : value.slice(0, 200) + '…';
 }
 
-export function SqliteDataCompareDialog({ connections, onClose }: { connections: readonly Connection[]; onClose(): void }) {
+export function SqliteDataCompareDialog({ connections, onClose, initialPair }: { connections: readonly Connection[]; onClose(): void; initialPair?: { source: Selection; target: Selection } }) {
   const initial = { connectionId: connections.length === 1 ? connections[0].id : '', table: '' };
-  const [source, setSource] = useState<Selection>(initial), [target, setTarget] = useState<Selection>(initial);
+  const [source, setSource] = useState<Selection>(initialPair?.source ?? initial), [target, setTarget] = useState<Selection>(initialPair?.target ?? initial);
+  const [batch, setBatch] = useState(false);
   const [filter, setFilter] = useState({ column: '', kind: 'text' as keyof typeof text.types, value: '' });
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [output, setOutput] = useState<SqliteDataCompareOutput>(), [kind, setKind] = useState<SqliteDataCompareKind | 'all'>('all');
@@ -138,6 +141,12 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
     finally { syncRunning.current = false; setSyncBusy(false); }
   }
   const locked = busy || syncBusy || !!preview;
+  const hasScope = [source, target].every(side => connections.some(item => item.id === side.connectionId));
+  const scopeLabel = (side: Selection) => connections.find(item => item.id === side.connectionId)?.name ?? '';
+  if (batch) return <DataCompareBatchDialog family={family} source={{ ...source, database: 'main' }} target={{ ...target, database: 'main' }}
+    initial={{ source: source.table, target: target.table }} labels={[scopeLabel(source), scopeLabel(target)]} onClose={() => setBatch(false)}
+    renderPair={(pair, back) => <SqliteDataCompareDialog connections={connections} onClose={back}
+      initialPair={{ source: { ...source, table: pair.source }, target: { ...target, table: pair.target } }}/>}/>;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
@@ -201,6 +210,9 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
         <button className="danger" disabled={syncBusy || confirmation !== preview.confirmation} onClick={() => void applySync()}>{syncText.apply}</button>
       </> : output?.syncSnapshotId && <button disabled={locked || !marked.size} onClick={() => void previewSync()}>{syncText.preview}</button>}
       <span className="grow"/>
+      {!initialPair && <button disabled={!hasScope || locked} onClick={() => {
+        if (canConfigure()) { clear(); setBatch(true); }
+      }}>{batchText.open}</button>}
       <button disabled={!ready || locked} onClick={swap}>{profileText.swap}</button><button disabled={busy || syncBusy} onClick={close}>{text.close}</button></footer>
   </Modal>;
 }

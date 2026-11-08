@@ -9,6 +9,8 @@ import { mysqlDataCompareSchema, mysqlDataCompareZh, mysqlDataSyncZh } from '../
 import { dataCompareConfigurationSchema, type DataCompareConfiguration } from '../../shared/dataCompareProfiles';
 import { dataCompareProfilesZh as profileText } from '../locales/dataCompareProfiles.zh-CN';
 import { DataCompareProfiles } from './DataCompareProfiles';
+import { DataCompareBatchDialog } from './DataCompareBatchDialog';
+import { dataCompareBatchZh as batchText } from '../locales/dataCompareBatch.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteDataCompare.css';
@@ -78,10 +80,11 @@ function keyLabel(row: PostgresDataCompareRow, dialect: Dialect) {
   return label.length <= 200 ? label : label.slice(0, 200) + '…';
 }
 
-export function ServerDataCompareDialog({ connections, onClose, dialect }: { connections: readonly Connection[]; onClose(): void; dialect: Dialect }) {
+export function ServerDataCompareDialog({ connections, onClose, initialPair, dialect }: { connections: readonly Connection[]; onClose(): void; dialect: Dialect; initialPair?: { source: Endpoint; target: Endpoint } }) {
   const text = compareLabels[dialect], postgres = dialect === 'postgres';
   const initial = { connectionId: connections.length === 1 ? connections[0].id : '', database: '', table: '' };
-  const [source, setSource] = useState<Endpoint>(initial), [target, setTarget] = useState<Endpoint>(initial);
+  const [source, setSource] = useState<Endpoint>(initialPair?.source ?? initial), [target, setTarget] = useState<Endpoint>(initialPair?.target ?? initial);
+  const [batch, setBatch] = useState(false);
   const [filter, setFilter] = useState({ column: '', text: '' });
   const [report, setReport] = useState<PostgresDataCompareOutput>(), [error, setError] = useState('');
   const [kind, setKind] = useState<PostgresDataCompareKind | 'all'>('all'), [page, setPage] = useState(0);
@@ -173,6 +176,12 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
   }
   const locked = busy || syncBusy || !!preview;
   const close = () => { if (!task.current && !syncing.current) onClose(); };
+  const hasScope = [source, target].every(side => side.database && connections.some(item => item.id === side.connectionId));
+  const scopeLabel = (side: Endpoint) => (connections.find(item => item.id === side.connectionId)?.name ?? '') + ' / ' + side.database;
+  if (batch) return <DataCompareBatchDialog family={family} source={source} target={target}
+    initial={{ source: source.table, target: target.table }} labels={[scopeLabel(source), scopeLabel(target)]} onClose={() => setBatch(false)}
+    renderPair={(pair, back) => <ServerDataCompareDialog dialect={dialect} connections={connections} onClose={back}
+      initialPair={{ source: { ...source, table: pair.source }, target: { ...target, table: pair.target } }}/>}/>;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
@@ -244,6 +253,9 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
         <button className="danger" disabled={syncBusy || confirmation !== preview.confirmation} onClick={() => void applySync()}>{sync.apply}</button>
       </> : report?.syncSnapshotId && <button disabled={locked || !marked.size} onClick={() => void previewSync()}>{sync.preview}</button>}
       <span className="grow"/>
+      {!initialPair && <button disabled={!hasScope || locked} onClick={() => {
+        if (canConfigure()) { clear(); setBatch(true); }
+      }}>{batchText.open}</button>}
       <button disabled={!ready || locked} onClick={swap}>{profileText.swap}</button><button disabled={busy || syncBusy} onClick={close}>{text.close}</button>
     </footer>
   </Modal>;

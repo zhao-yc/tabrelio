@@ -129,7 +129,7 @@ export class MysqlDataCompareTasks {
             check();
             const snapshot = await readTable(context, target, input.filter);
             snapshots.push(snapshot);
-            if (scope && target === input.target && !input.filter?.text) {
+            if (scope && target === input.target && !input.filter?.text && !input.summaryOnly) {
               // 无法证明写入权限或结构时仍保留只读比较。取消不得从这个分支降级成成功。
               try {
                 const candidate = await readMysqlSyncTarget(context, target);
@@ -156,6 +156,8 @@ export class MysqlDataCompareTasks {
       const rows: MysqlSyncRow[] = [];
       const result = compareTableData(left, right, shared, 'MySQL／MariaDB',
         metadata ? (after, before) => { rows.push({ before, after }); } : undefined);
+      // 批次只交付计数，不保留逐行值和同步能力。
+      if (input.summaryOnly) return { ...result, differences: [] };
       if (!scope || !metadata || !rows.length) return result;
       const id = randomUUID();
       this.sync = { ...scope, id, expires: Date.now() + syncLimits.lifetimeMs, source: input.source, target: input.target,

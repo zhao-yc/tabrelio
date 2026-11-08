@@ -577,8 +577,8 @@ export class PostgresEngine {
 
   /** 同库共用一次只读事务。跨库逐侧读取并释放各自租约，取消只触及本轮独占连接。 */
   private async compareData(raw: Input) {
-    const { source, target, taskId, filter } = postgresDataCompareSchema.parse({
-      source: raw.source, target: raw.target, taskId: raw.taskId, filter: raw.filter,
+    const { source, target, taskId, filter, summaryOnly } = postgresDataCompareSchema.parse({
+      source: raw.source, target: raw.target, taskId: raw.taskId, filter: raw.filter, summaryOnly: raw.summaryOnly,
     });
     const left = raw.sourceProfile as PostgresConnectionProfile, right = raw.targetProfile as PostgresConnectionProfile;
     if (left?.dialect !== 'postgresql' || right?.dialect !== 'postgresql' || left.id !== source.connectionId || right.id !== target.connectionId)
@@ -586,7 +586,7 @@ export class PostgresEngine {
     if (this.stopping || this.closing.has(left.id) || this.closing.has(right.id) || this.ownsTask(taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 比较任务已存在、连接关闭中或已达并发上限');
     this.syncSnapshot = undefined;
-    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text;
+    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text && !summaryOnly;
     const task: TransferTask = { connectionId: left.id, otherConnectionId: right.id, cancelled: false, publishing: false };
     const shared = left.id === right.id && source.database === target.database;
     let timedOut = false;
@@ -625,6 +625,8 @@ export class PostgresEngine {
       check();
       let evidence: PostgresSyncEvidence | undefined;
       const report = comparePostgresSnapshots(a, b, shared, capture ? value => { evidence = value; } : undefined);
+      // 批次只交付计数，不保留逐行值和同步能力。
+      if (summaryOnly) return { ...report, differences: [] };
       if (!evidence) return report;
       const id = randomUUID(), expires = Date.now() + postgresDataSyncLimits.lifetimeMs;
       this.syncSnapshot = { id, owner: raw.owner, revision: raw.connectionRevision, source, target, evidence, expires };
