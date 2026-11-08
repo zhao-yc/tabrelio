@@ -98,7 +98,6 @@ test('PostgreSQL 网格正则替换保留原值、捕获组与零宽位置', asy
     await expect(review).toContainText(find.reviewCount(2, 2));
     await expect(review).not.toContainText('Shadow99');
     await panel.screenshot({ path: info.outputPath('PostgreSQL 网格正则查找面板.png') });
-    await stageButton.scrollIntoViewIfNeeded();
     await expect(stageButton).toBeInViewport();
     await review.screenshot({ path: info.outputPath('PostgreSQL 网格正则替换完整预览.png') });
     await stage();

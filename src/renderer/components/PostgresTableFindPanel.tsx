@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { PostgresTableColumn } from '../../shared/postgresTable';
 import type { DraftRow } from '../dataChanges';
 import { cellPreview, errorMessage } from '../lib';
@@ -31,6 +31,7 @@ export function PostgresTableFindPanel(props: Props) {
   const [composing, setComposing] = useState(false);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null);
   const modeInput = useRef<HTMLSelectElement>(null);
+  const stageButton = useRef<HTMLButtonElement>(null);
   const client = useRef<PageFindWorkerClient>(undefined);
   const resume = useRef<{ request: PostgresFindRequest; pageKey?: string; query: string; hit: PageOccurrence; end: number }>(undefined);
   const snapshot = useMemo(() => ({ request, scope, enabled, rows, columns, mode, column, query, sensitive, whole, regex, composing }),
@@ -57,6 +58,10 @@ export function PostgresTableFindPanel(props: Props) {
     if (!request || !enabled) return;
     (request.replace ? replacementInput.current ?? queryInput.current : queryInput.current ?? modeInput.current)?.focus();
   }, [request]);
+  // 预览在工作线程返回后展开。窄窗工具栏换行时，把暂存操作滚入面板可视区。
+  useLayoutEffect(() => {
+    if (review) stageButton.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [review]);
   useEffect(() => { if (column && !columns.some(item => item.key === column)) setColumn(''); }, [columns, column]);
   useEffect(() => () => { void client.current?.dispose(); client.current = undefined; }, []);
   useEffect(() => {
@@ -207,7 +212,7 @@ export function PostgresTableFindPanel(props: Props) {
         </div>)}</dl>
         {review.plan.patches.length > 12 && <p>{text.more(review.plan.patches.length - 12)}</p>}
         <button type="button" onClick={() => setPreview(undefined)}>{text.cancel}</button>
-        <button type="button" className="primary" disabled={!canReplace} onClick={() => {
+        <button ref={stageButton} type="button" className="primary" disabled={!canReplace} onClick={() => {
           if (latest.current !== snapshot || !isCurrent()) return;
           try {
             onStage(scope, review.plan);

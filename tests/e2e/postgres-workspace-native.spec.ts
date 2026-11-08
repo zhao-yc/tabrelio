@@ -24,6 +24,7 @@ import { postgresKeyEditZh as keyText } from '../../src/renderer/locales/postgre
 import { postgresForeignEditZh as fkText } from '../../src/renderer/locales/postgresForeignEdit.zh-CN';
 import { postgresCheckEditZh as checkText } from '../../src/renderer/locales/postgresCheckEdit.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { draftHistoryZh } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { postgresTableLayoutZh as tableLayoutText } from '../../src/renderer/locales/postgresTableLayout.zh-CN';
 import { tableGridZh as tableGridText } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableSortZh as tableSortText } from '../../src/renderer/locales/tableSort.zh-CN';
@@ -210,6 +211,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     const inlineValue = (column: string) => inline(column).getByLabel(postgresTableZh.value, { exact: true });
     const inlineMode = (column: string) => inline(column).getByLabel(postgresTableZh.valueMode, { exact: true });
     const addInline = (column: string) => inline(column).getByRole('button', { name: postgresTableZh.stage, exact: true });
+    const stagedCell = (value: string) => inlineCell(value).filter({ has: page.locator('.pg-grid-staged') });
     const recordDraft = gridTab.getByLabel(postgresTableZh.draft, { exact: true });
     const exactId = '9007199254740993';
     const exactNote = "就地编辑 O'Brien\n第二行";
@@ -247,12 +249,12 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await inlineMode('note').selectOption('null');
     await addInline('note').click();
     await expect(recordDraft).toContainText('note=NULL');
-    await inlineCell('原值').press('F2');
+    await stagedCell('NULL').press('F2');
     await expect(inlineMode('note')).toHaveValue('null');
     await inlineMode('note').selectOption('default');
     await addInline('note').click();
     await expect(recordDraft).toContainText('note=DEFAULT');
-    await inlineCell('原值').press('F2');
+    await stagedCell(postgresTableZh.gridDraftDefault).press('F2');
     await expect(inlineMode('note')).toHaveValue('default');
     await inlineMode('note').selectOption('text');
     await inlineValue('note').fill(exactNote);
@@ -264,7 +266,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await addInline('id').click();
     await expect(recordDraft).toContainText(postgresTableZh.changes(1));
     await expect(recordDraft).toContainText('id=' + exactId);
-    await expect(grid).toContainText('原值');
+    await expect(stagedCell(exactId)).toBeVisible();
+    await expect(grid.locator('.pg-grid-staged').filter({ hasText: '第二行' })).toHaveCount(1);
+    await expect(inlineCell('原值')).toHaveCount(0);
 
     const independent = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
     try {
@@ -372,6 +376,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(findReview).not.toContainText('$&替换乙');
     await stageReplacement.click();
     await expect(recordDraft).toContainText('note=$&替换甲');
+    await expect(stagedCell('$&替换甲')).toBeVisible();
     await expect(findPanel.getByRole('status')).toContainText('共 1 处');
     await tableButton(postgresTableZh.discard).click();
     await expect(gridTab.getByText(tableFindText.staged(1), { exact: true })).toHaveCount(0);
@@ -385,7 +390,8 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await findButton(tableFindText.all).click();
     await stageReplacement.click();
     await expect(recordDraft).toContainText(postgresTableZh.changes(2));
-    await expect(grid).toContainText('新增甲');
+    await expect(stagedCell('$&替换甲')).toBeVisible();
+    await expect(stagedCell('$&替换乙')).toBeVisible();
     await findButton(tableFindText.close).click();
     const findReadback = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
     try {
@@ -416,10 +422,18 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await page.screenshot({ path: info.outputPath('PostgreSQL批量填充.png') });
     await fillDialog.getByRole('button', { name: '暂存整批填充', exact: true }).click();
     await expect(recordDraft.getByText('note=统一填充', { exact: true })).toHaveCount(2);
-    await recordDraft.getByRole('button', { name: '撤销整批填充', exact: true }).click();
+    const draftHistory = gridTab.getByRole('group', { name: draftHistoryZh.postgresTitle, exact: true });
+    const undoDraft = draftHistory.getByRole('button', { name: draftHistoryZh.undo, exact: true });
+    const redoDraft = draftHistory.getByRole('button', { name: draftHistoryZh.redo, exact: true });
+    await expect(stagedCell('统一填充')).toHaveCount(2);
+    await undoDraft.click();
     await expect(recordDraft).toHaveCount(0);
     await expect(tableCell('新增甲')).toBeVisible();
     await expect(tableCell('新增乙')).toBeVisible();
+    await redoDraft.click();
+    await expect(stagedCell('统一填充')).toHaveCount(2);
+    await undoDraft.click();
+    await expect(recordDraft).toHaveCount(0);
     await mark('PostgreSQL 网格勾选批量填充原记录，整批暂存及撤销保持服务器原值');
     const deleteChecked = tableButton('删除勾选记录');
     await editRecord('新增甲', '待恢复草稿');
@@ -435,8 +449,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await deleteReview.getByRole('button', { name: '暂存整批删除', exact: true }).click();
     await expect(recordDraft.getByText(/^删除 ·/)).toHaveCount(2);
     await expect(recordDraft).not.toContainText('待恢复草稿');
-    await recordDraft.getByRole('button', { name: '撤销整批删除', exact: true }).click();
+    await undoDraft.click();
     await expect(recordDraft).toContainText('note=待恢复草稿');
+    await expect(stagedCell('待恢复草稿')).toBeVisible();
     await tableButton(postgresTableZh.discard).click();
     await mark('PostgreSQL 删除勾选记录核对原主键，取消及撤销恢复原更新草稿');
 
@@ -801,9 +816,10 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(schemeTab).toHaveCount(1);
     await schemeTab.locator('.tab-close').click();
     await expect(ordinaryTab).toHaveAttribute('data-active-workspace-tab', 'true');
-    await expect(grid).toContainText('新增乙');
+    await expect(stagedCell('从对象树打开前的草稿')).toBeVisible();
     await tableButton(postgresTableZh.discard).click();
     await expect(gridTab.getByLabel(postgresTableZh.draft, { exact: true })).toHaveCount(0);
+    await expect(tableCell('新增乙')).toBeVisible();
     await tableButton(tableLayoutText.entry).click();
     await expect(layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true })).toHaveValue('300');
     await layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true }).fill('310');
@@ -1009,10 +1025,16 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     }
     await expect(grid).toContainText('首行;无表头');
     await tableButton(postgresTableZh.first).click();
-    await expect(grid).toContainText('原值');
-    await editRecord('原值', '原生整批更新');
+    await expect(stagedCell('原生整批更新')).toBeVisible();
+    await editRecord('原生整批更新', '原生整批更新');
     await expect(gridTab.getByLabel(postgresTableZh.draft, { exact: true })).toContainText(postgresTableZh.changes(5));
-    await expect(grid).not.toContainText('原生整批更新');
+    await expect(stagedCell('原生整批更新')).toBeVisible();
+    const beforeBatch = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
+    try {
+      await beforeBatch.connect();
+      const readBatch = () => beforeBatch.query('SELECT note FROM "回归"."带""引号" ORDER BY id');
+      expect((await readBatch()).rows.map(item => item.note)).toEqual(['原值', '新增甲', '新增乙', '窗口;CSV', '首行;无表头']);
+    } finally { await beforeBatch.end(); }
     await page.screenshot({ path: info.outputPath('PostgreSQL跨页草稿.png') });
     await page.screenshot({ path: info.outputPath('PostgreSQL表记录草稿.png') });
     await commit();
