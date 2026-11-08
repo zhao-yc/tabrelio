@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { inspectPostgresNativeTool } from '../../src/engine/postgres/nativeTool';
-import { postgresDatabaseBackupExecuteSchema, postgresDatabaseBackupToolSchema } from '../../src/shared/postgresDatabaseBackup';
+import { postgresDatabaseBackupChooseSchema, postgresDatabaseBackupExecuteSchema, postgresDatabaseBackupToolSchema, postgresDumpSelection } from '../../src/shared/postgresDatabaseBackup';
 
 it('备份 IPC 只接受来源和能力令牌，拒绝命令行、工具路径和凭据注入', () => {
   const fileToken = 'e2e2662b-9a3b-4606-a3e5-e18f53310020', toolToken = '7674d54f-8ab7-4718-a3d1-df39314bdfbb';
@@ -12,6 +12,18 @@ it('备份 IPC 只接受来源和能力令牌，拒绝命令行、工具路径�
   expect(postgresDatabaseBackupToolSchema.safeParse({ path: '/tmp/pg_dump' }).success).toBe(false);
   for (const extra of [{ filePath: '/tmp/output.sql' }, { tool: { path: '/tmp/pg_dump' } }, { args: ['--file=output'] }, { password: '凭据' }])
     expect(postgresDatabaseBackupExecuteSchema.safeParse({ ...request, ...extra }).success).toBe(false);
+});
+
+it('指定 Schema 必须非空且唯一，并逐字转义 pg_dump 模式', () => {
+  const selected = { name: '范围.*"区', stamp: 'a'.repeat(64) };
+  const input = { connectionId: '连接', database: '库', portable: false, content: 'schema',
+    toolToken: '7674d54f-8ab7-4718-a3d1-df39314bdfbb', schemas: [selected] };
+  expect(postgresDumpSelection(postgresDatabaseBackupChooseSchema.parse(input)))
+    .toEqual(['--schema-only', '--strict-names', '--schema="范围.*""区"']);
+  expect(postgresDumpSelection({ content: 'data' })).toEqual(['--data-only']);
+  expect(postgresDumpSelection({})).toEqual([]);
+  for (const schemas of [[], [selected, selected], [{ ...selected, stamp: 'bad' }], [{ ...selected, sql: 'SELECT 1' }]])
+    expect(postgresDatabaseBackupChooseSchema.safeParse({ ...input, schemas }).success).toBe(false);
 });
 
 it('只选择对应系统的 pg_dump 普通文件，并观察工具文件修改代次', async () => {

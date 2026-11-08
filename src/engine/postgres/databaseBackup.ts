@@ -4,11 +4,12 @@ import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { getCACertificates } from 'node:tls';
-import { isPostgresCustomArchiveDestination, type PostgresDatabaseBackupInput, type PostgresDatabaseBackupResult } from '../../shared/postgresDatabaseBackup';
+import { isPostgresCustomArchiveDestination, postgresDumpSelection, type PostgresDatabaseBackupInput, type PostgresDatabaseBackupResult } from '../../shared/postgresDatabaseBackup';
 import { postgresSqlFileLimits } from '../../shared/postgresSqlFile';
 import { AtomicFile, privateAtomicFileIO } from '../atomicFile';
 import { openNativeBackupTunnel } from '../nativeBackupTunnel';
 import type { PostgresConnection } from './connection';
+import { postgresSchemaCatalog } from './schemaManage';
 import { postgresToolEnvironment, readPostgresToolVersion, runPostgresNativeTool, type PostgresNativeTool } from './nativeTool';
 
 export type PostgresDatabaseBackupRequest = PostgresDatabaseBackupInput & { filePath: string; tool: PostgresNativeTool<'pg_dump'> };
@@ -69,7 +70,7 @@ async function stopDumpBackend(connection: PostgresConnection, applicationName: 
   if (!current.length) return;
   const { c0: pid, c1: started } = current[0];
   if (current.length !== 1 || typeof pid !== 'string' || typeof started !== 'string')
-    throw Error('PostgreSQL 整库备份的原后端身份未确认');
+    throw Error('PostgreSQL 数据库备份的原后端身份未确认');
   const exact = scope + ' AND pid=$2::int AND extract(epoch FROM backend_start)::text=$3';
   const values = [applicationName, pid, started];
   await connection.query('SELECT pg_catalog.pg_terminate_backend(pid)' + exact, values, queryBudget());
@@ -78,7 +79,7 @@ async function stopDumpBackend(connection: PostgresConnection, applicationName: 
     if (!(await connection.query('SELECT pid' + exact, values, queryBudget())).rows.length) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw Error('PostgreSQL 整库备份的原后端退出尚未确认');
+  throw Error('PostgreSQL 数据库备份的原后端退出尚未确认');
 }
 
 /** 原会话导出只读快照，pg_dump 必须从同一数据库导入；子进程和原会话结束后才发布完整备份。 */
@@ -87,7 +88,7 @@ export async function exportPostgresDatabaseBackup(input: PostgresDatabaseBackup
   const custom = input.format === 'custom';
   if (!isAbsolute(input.filePath) || !(custom ? isPostgresCustomArchiveDestination(input.filePath) : /\.sql$/i.test(input.filePath)))
     throw Error('请选择与备份格式匹配的文件路径');
-  if (input.tool.kind !== 'pg_dump' || custom && input.portable) throw Error('PostgreSQL 整库备份参数不匹配');
+  if (input.tool.kind !== 'pg_dump' || custom && input.portable) throw Error('PostgreSQL 数据库备份参数不匹配');
   let file: AtomicFile | undefined;
   const check = () => signal.throwIfAborted();
   try {
@@ -95,9 +96,16 @@ export async function exportPostgresDatabaseBackup(input: PostgresDatabaseBackup
     const warning = await connect(async connection => {
       check();
       if ((await connection.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', undefined, queryBudget())).postgresCommand !== 'BEGIN')
-        throw Error('PostgreSQL 整库备份的只读事务未建立');
+        throw Error('PostgreSQL 数据库备份的只读事务未建立');
       const snapshot = (await connection.query('SELECT pg_catalog.pg_export_snapshot()', undefined, queryBudget())).rows[0]?.c0;
       if (typeof snapshot !== 'string' || !/^[0-9a-f]+-[0-9a-f]+-\d+$/i.test(snapshot)) throw Error('PostgreSQL 备份快照未确认');
+      if (input.schemas) {
+        // 与 pg_dump 使用同一个快照，避免同名替换后导出另一份 Schema。
+        const catalog = await postgresSchemaCatalog(connection, input.database);
+        if (input.schemas.some(selected => !catalog.schemas.some(item =>
+          item.usage && item.name === selected.name && item.stamp === selected.stamp)))
+          throw Error('备份 Schema 的身份或访问权限已变化，请重新读取并选择');
+      }
       check();
       let tunnel: Awaited<ReturnType<typeof dumpTunnel>>;
       let detail: string;
@@ -114,6 +122,7 @@ export async function exportPostgresDatabaseBackup(input: PostgresDatabaseBackup
             custom ? '--format=custom' : '--format=plain', '--encoding=UTF8', '--no-password', '--snapshot=' + snapshot,
             '--dbname=dbname=' + quoteConnectionValue(input.database),
             ...(input.portable ? ['--no-owner', '--no-privileges'] : []),
+            ...postgresDumpSelection(input),
           ], env, signal, chunk => {
             if (custom && magic.length < 5) magic += chunk.toString('latin1', 0, 5 - magic.length);
             return staged.writeBytes(chunk);

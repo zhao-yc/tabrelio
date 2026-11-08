@@ -726,22 +726,22 @@ export class PostgresEngine {
   /** 子进程、快照会话和暂存文件属于同一任务，文件替换开始后不再取消。 */
   private async exportDatabase(input: PostgresDatabaseBackupRequest, profile: PostgresConnectionProfile) {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
-      throw Error('PostgreSQL 整库备份任务已存在、连接关闭中或已达并发上限');
+      throw Error('PostgreSQL 数据库备份任务已存在、连接关闭中或已达并发上限');
     const abort = new AbortController();
     const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true,
-      processAbort: () => abort.abort(Error('PostgreSQL 整库备份已取消')) };
+      processAbort: () => abort.abort(Error('PostgreSQL 数据库备份已取消')) };
     this.transfers.set(input.taskId, task);
     const connect = <T>(action: (connection: PostgresConnection) => Promise<T>) =>
       this.use(profile, input.database, action, false, false, true);
     const done = task.done = exportPostgresDatabaseBackup(input, connect, abort.signal, () => { task.publishing = true; });
     try {
       const result = await done;
-      this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 整库备份文件已保存' });
+      this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 数据库备份文件已保存' });
       return result;
     } catch (reason) {
       const cancelled = task.cancelled && reason instanceof Error && reason.message === abort.signal.reason?.message;
       this.emit({ taskId: input.taskId, status: cancelled ? 'cancelled' : 'failed', progress: 0,
-        message: cancelled ? 'PostgreSQL 整库备份已取消' : 'PostgreSQL 整库备份未完成，请核对所选文件' });
+        message: cancelled ? 'PostgreSQL 数据库备份已取消' : 'PostgreSQL 数据库备份未完成，请核对所选文件' });
       throw reason;
     } finally {
       this.transfers.delete(input.taskId);
@@ -1384,7 +1384,7 @@ export class PostgresEngine {
       case 'postgres.backup.database': {
         const profile = input.profile as PostgresConnectionProfile;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.tool)
-          throw Error('缺少可信的 PostgreSQL 整库备份连接及原生工具');
+          throw Error('缺少可信的 PostgreSQL 数据库备份连接及原生工具');
         return this.exportDatabase(input as PostgresDatabaseBackupRequest, profile);
       }
       case 'postgres.sqlFile.execute': {

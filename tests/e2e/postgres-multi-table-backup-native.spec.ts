@@ -134,7 +134,7 @@ test('工具菜单备份跨 schema 双向外键与无主键表，在另一数据
     const commit = result.getByRole('option').filter({ hasText: 'COMMIT' });
     await expect(commit).toHaveCount(1);
     await result.selectOption(await commit.getAttribute('value') ?? '');
-    await expect(query.locator('.postgres-results')).toContainText(/服务器回执[：:]\s*COMMIT/);
+    await expect(query.locator('.postgres-results')).toContainText(/服务器回执\s+COMMIT\b/);
     await page.screenshot({ path: info.outputPath('PostgreSQL多表恢复.png') });
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

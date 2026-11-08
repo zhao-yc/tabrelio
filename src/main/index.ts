@@ -1360,18 +1360,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         }
         const target: PostgresDatabaseBackupChooseInput = input;
         const tool = postgresDumpTools.get(document);
-        if (!tool || tool.token !== target.toolToken) throw Error('请选择本次整库备份使用的 pg_dump');
+        if (!tool || tool.token !== target.toolToken) throw Error('请选择本次数据库备份使用的 pg_dump');
         connectionConfig.assertAvailable(target.connectionId);
-        if (store.resolveConnection(target.connectionId).dialect !== 'postgresql') throw Error('整库备份需要已保存的 PostgreSQL 连接');
+        if (store.resolveConnection(target.connectionId).dialect !== 'postgresql') throw Error('数据库备份需要已保存的 PostgreSQL 连接');
         const name = target.database.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 120);
         const custom = target.format === 'custom';
+        const suffix = (target.schemas ? '-Schema备份' : '-整库备份') +
+          (target.content === 'schema' ? '-仅结构' : target.content === 'data' ? '-仅数据' : '');
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: postgresDatabaseBackupTitle,
-          defaultPath: name + (custom ? '-整库备份.dump' : '-整库备份.sql'),
+          defaultPath: name + suffix + (custom ? '.dump' : '.sql'),
           filters: custom ? [{ name: 'PostgreSQL 自定义归档', extensions: [...postgresCustomArchiveExtensions] }] : [{ name: 'SQL', extensions: ['sql'] }] });
         check();
         connectionConfig.assertAvailable(target.connectionId);
         if (revision !== store.connectionRevision() || postgresDumpTools.get(document) !== tool)
-          throw Error('PostgreSQL 整库备份目标已变化');
+          throw Error('PostgreSQL 数据库备份目标已变化');
         if (chosen.canceled || !chosen.filePath) return null;
         if (!(custom ? isPostgresCustomArchiveDestination(chosen.filePath) : /\.sql$/i.test(chosen.filePath)))
           throw Error('请选择与备份格式匹配的文件');
@@ -2672,10 +2674,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (shuttingDown || !selected || !tool || tool.token !== input.toolToken || selected.token !== input.fileToken ||
           selected.toolToken !== input.toolToken || selected.connectionId !== input.connectionId || selected.database !== input.database ||
           selected.portable !== input.portable || selected.format !== input.format ||
+          selected.content !== input.content || JSON.stringify(selected.schemas ?? null) !== JSON.stringify(input.schemas ?? null) ||
           selected.revision !== store.connectionRevision() || selected.expires <= Date.now())
-        throw Error('PostgreSQL 整库备份的文件、工具或目标已变化，请重新选择');
+        throw Error('PostgreSQL 数据库备份的文件、工具或目标已变化，请重新选择');
       const profile = store.resolveConnection(input.connectionId);
-      if (profile.dialect !== 'postgresql') throw Error('整库备份需要已保存的 PostgreSQL 连接');
+      if (profile.dialect !== 'postgresql') throw Error('数据库备份需要已保存的 PostgreSQL 连接');
       postgresDatabaseBackupFiles.delete(document);
       input = { ...input, profile, tool: tool.tool, filePath: selected.path, connectionRevision: selected.revision };
       break;

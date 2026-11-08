@@ -148,7 +148,7 @@ test('整表 SQL 备份从真实窗口回放到另一 PostgreSQL 数据库', asy
     const committed = result.getByRole('option').filter({ hasText: 'COMMIT' });
     await expect(committed).toHaveCount(1);
     await result.selectOption(await committed.getAttribute('value') ?? '');
-    await expect(query.locator('.postgres-results')).toContainText(/服务器回执[：:]\s*COMMIT/);
+    await expect(query.locator('.postgres-results')).toContainText(/服务器回执\s+COMMIT\b/);
     await page.screenshot({ path: info.outputPath('PostgreSQL整表恢复.png') });
     await expect(restored.query(script)).rejects.toThrow(/already exists/);
     await restored.query('ROLLBACK');
