@@ -284,6 +284,15 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
       const importModal = page.getByRole('dialog', { name: restore.title, exact: true });
       await importModal.getByRole('combobox', { name: restore.connection }).selectOption({ label: target.label });
       await importModal.getByRole('button', { name: restore.choose, exact: true }).click();
+      await importModal.getByLabel(restore.version).fill(target.dialect === 'mysql' ? '8.4.11' : '11.4.13');
+      await importModal.getByRole('button', { name: restore.inspect, exact: true }).click();
+      const inspection = importModal.getByRole('region', { name: restore.inspectTitle });
+      await expect(inspection).toContainText(restore.inspectionDone);
+      await expect(inspection).toContainText(restore.action.create + ' · ' + db);
+      await expect(inspection).toContainText(restore.action.use + ' · ' + db);
+      const observer = await mysql.createConnection({ host: '127.0.0.1', port: target.port, user, password, ssl: tls });
+      try { expect((await observer.query('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [db]))[0]).toEqual([]); }
+      finally { await observer.end(); }
       await importModal.getByRole('checkbox', { name: restore.trust }).check();
       await importModal.getByRole('button', { name: restore.run, exact: true }).click();
       await expect(importModal.getByRole('status', { name: receipt.title })).toContainText(receipt.completed, { timeout: 20000 });

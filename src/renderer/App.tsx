@@ -1131,7 +1131,7 @@ function WorkspaceApp() {
     'mysql-sql-file': handler(() => {
       if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setMysqlSqlFile(true);
-    }, networkConnections.some(profile => !profile.pendingFiles?.length)),
+    }),
     'postgres-sql-file': handler(() => {
       if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setPostgresSqlFile(true);

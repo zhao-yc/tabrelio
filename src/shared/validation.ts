@@ -21,7 +21,7 @@ import { postgresTransactionReadSchema, postgresTransactionApplySchema } from '.
 import { postgresSearchPathReadSchema, postgresSearchPathApplySchema } from './postgresSearchPath';
 import { postgresQueryTimeoutRead, postgresQueryTimeoutApply } from './postgresQueryTimeouts';
 import { mysqlBackupTablesSchema, mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
-import { mysqlSqlFileChooseSchema, mysqlSqlFileExecuteSchema } from './mysqlSqlFile';
+import { mysqlSqlFileCancelInspectionSchema, mysqlSqlFileExecuteSchema, mysqlSqlFileInspectionSchema, mysqlSqlFilePickSchema } from './mysqlSqlFile';
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
 import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema, postgresSqlFileInspectionCancelSchema, postgresSqlFileInspectionSchema, postgresSqlFilePickSchema } from './postgresSqlFile';
 import { postgresDatabaseBackupChooseSchema, postgresDatabaseBackupExecuteSchema, postgresDatabaseBackupToolSchema } from './postgresDatabaseBackup';
@@ -367,7 +367,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'mysql.backup.chooseTool': z.object({}).strict(), 'mysql.backup.chooseFile': mysqlDatabaseBackupChooseSchema,
   'mysql.backup.database': mysqlDatabaseBackupExecuteSchema,
   'mysql.backup.tables': mysqlBackupTablesSchema,
-  'mysql.sqlFile.choose': mysqlSqlFileChooseSchema, 'mysql.sqlFile.execute': mysqlSqlFileExecuteSchema,
+  'mysql.sqlFile.choose': mysqlSqlFilePickSchema, 'mysql.sqlFile.execute': mysqlSqlFileExecuteSchema,
+  'mysql.sqlFile.inspect': mysqlSqlFileInspectionSchema, 'mysql.sqlFile.cancelInspection': mysqlSqlFileCancelInspectionSchema,
   'postgres.sqlFile.choose': postgresSqlFilePickSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
   'postgres.sqlFile.target': postgresSqlFileChooseSchema,
   'postgres.sqlFile.inspect': postgresSqlFileInspectionSchema, 'postgres.sqlFile.cancelInspection': postgresSqlFileInspectionCancelSchema,

@@ -69,6 +69,7 @@ export const publicCommands: Record<Command, true> = {
   'mysql.backup.chooseTool': true, 'mysql.backup.chooseFile': true, 'mysql.backup.database': true,
   'mysql.backup.tables': true,
   'mysql.sqlFile.choose': true, 'mysql.sqlFile.execute': true,
+  'mysql.sqlFile.inspect': true, 'mysql.sqlFile.cancelInspection': true,
   'postgres.sqlFile.choose': true, 'postgres.sqlFile.execute': true, 'postgres.sqlFile.target': true,
   'postgres.sqlFile.inspect': true, 'postgres.sqlFile.cancelInspection': true,
   'postgres.table.importChoose': true, 'postgres.table.import': true,

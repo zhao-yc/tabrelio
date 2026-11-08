@@ -77,6 +77,9 @@ function assignmentTarget(tokens: Token[]) {
   return session?.[1];
 }
 
+export { assignmentTarget as mysqlDumpAssignmentTarget, name as mysqlDumpObjectName, statementTokens as mysqlDumpStatementTokens,
+  versionNumber as mysqlDumpVersionNumber, word as mysqlDumpWord };
+
 /** 归档清单不是语义证据。独立流式读取 SQL，只对显式对象名做清点，不解释程序体或执行 SQL。 */
 export class DatabaseBackupSqlInventoryReader implements DatabaseBackupArchiveSink {
   private readonly decoder = new TextDecoder('utf-8', { fatal: true });

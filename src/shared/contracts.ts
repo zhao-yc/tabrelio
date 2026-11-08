@@ -384,8 +384,10 @@ export interface CommandMap {
   'mysql.backup.tables': { input: Pick<import('./mysqlDatabaseBackup').MysqlDatabaseBackupChooseInput, 'connectionId' | 'database'>; output: string[] };
   'mysql.backup.chooseFile': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupChooseInput; output: FileChoice | null };
   'mysql.backup.database': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupInput; output: import('./mysqlDatabaseBackup').MysqlDatabaseBackupResult };
-  'mysql.sqlFile.choose': { input: import('./mysqlSqlFile').MysqlSqlFileChooseInput; output: import('./mysqlSqlFile').MysqlSqlFileChoice | null };
+  'mysql.sqlFile.choose': { input: import('./mysqlSqlFile').MysqlSqlFilePickInput; output: import('./mysqlSqlFile').MysqlSqlFileChoice | null };
   'mysql.sqlFile.execute': { input: import('./mysqlSqlFile').MysqlSqlFileExecuteInput; output: import('./sqlFileImport').FileImportResult };
+  'mysql.sqlFile.inspect': { input: import('./mysqlSqlFile').MysqlSqlFileInspectionInput; output: import('./mysqlSqlFile').MysqlSqlFileInspection };
+  'mysql.sqlFile.cancelInspection': { input: { operationId: string }; output: void };
   'postgres.sqlFile.choose': { input: import('./postgresSqlFile').PostgresSqlFilePickInput; output: import('./postgresSqlFile').PostgresSqlFileChoice | null };
   'postgres.sqlFile.target': { input: import('./postgresSqlFile').PostgresSqlFileChooseInput; output: import('./postgresSqlFile').PostgresRestoreTargetPreview };
   'postgres.sqlFile.inspect': { input: { operationId: string; fileToken: string }; output: import('./postgresSqlFile').PostgresSqlFileInspection };

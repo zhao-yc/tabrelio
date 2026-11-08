@@ -6,6 +6,7 @@ import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlDumpTool
 import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpTool';
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
 import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSqlFile';
+import { inspectMysqlRestoreSql } from '../engine/mysqlSqlFileInspection';
 import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
@@ -1012,10 +1013,11 @@ const monitorSignals = new ServerMonitorSignals(id => {
   return epoch;
 });
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
-const mysqlSqlFileSources = new WeakMap<object, MysqlSqlFileChooseInput & { token: string; revision: number; source: MysqlSqlFileSource; expires: number }>();
+const mysqlSqlFileSources = new WeakMap<object, Partial<Pick<MysqlSqlFileChooseInput, 'connectionId' | 'database'>> &
+  Pick<MysqlSqlFileChooseInput, 'encoding'> & { token: string; revision: number; source: MysqlSqlFileSource; expires: number }>();
 const postgresSqlFileSources = new WeakMap<object, Partial<PostgresSqlFileChooseInput> & {
   token: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
-const postgresSqlFileInspections = new Map<object, { id: string; controller: AbortController }>();
+const sqlFileInspections = new Map<object, { id: string; controller: AbortController }>();
 const postgresRestoreTargets = new WeakMap<object, PostgresSqlFileChooseInput & { revision: number;
   verified?: Pick<PostgresRestoreTargetFacts, 'stamp' | 'serverStamp'> & { token: string; expires: number } }>();
 const sqlFileChoosing = new WeakSet<object>();
@@ -1391,16 +1393,18 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'mysql.sqlFile.choose') {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document, revision = store.connectionRevision();
-    const target: MysqlSqlFileChooseInput = input;
+    const target: Pick<MysqlSqlFileChooseInput, 'encoding'> & Partial<MysqlSqlFileChooseInput> = input;
     const check = () => {
       columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown) throw Error('客户端正在退出，不能选择 SQL 文件');
+      if (!target.connectionId) return;
       connectionConfig.assertAvailable(target.connectionId);
       const { dialect } = store.resolveConnection(target.connectionId);
-      if (shuttingDown || revision !== store.connectionRevision() || dialect !== 'mysql' && dialect !== 'mariadb')
+      if (revision !== store.connectionRevision() || dialect !== 'mysql' && dialect !== 'mariadb')
         throw Error('SQL 文件执行的目标连接已变化');
     };
     check();
-    if (sqlFileChoosing.has(document)) throw Error('原窗口仍在选择 SQL 文件');
+    if (sqlFileChoosing.has(document) || sqlFileInspections.has(document)) throw Error('原窗口仍在选择或检查 SQL 文件');
     sqlFileChoosing.add(document);
     mysqlSqlFileSources.delete(document);
     return queryFileOperation(async () => {
@@ -1428,7 +1432,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         throw Error('PostgreSQL 文件执行的目标连接已变化');
     };
     check();
-    if (sqlFileChoosing.has(document) || postgresSqlFileInspections.has(document)) throw Error('原窗口仍在选择或检查 SQL 文件');
+    if (sqlFileChoosing.has(document) || sqlFileInspections.has(document)) throw Error('原窗口仍在选择或检查 SQL 文件');
     sqlFileChoosing.add(document);
     postgresSqlFileSources.delete(document);
     return queryFileOperation(async () => {
@@ -2697,7 +2701,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'mysql.sqlFile.execute': {
       columnsMain.assertCapturedOwner(columns);
       const document = columns!.owner.document, file = mysqlSqlFileSources.get(document);
-      if (shuttingDown || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
+      if (shuttingDown || sqlFileInspections.has(document) || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
         file.revision !== store.connectionRevision() || file.connectionId !== input.connectionId ||
         file.database !== input.database || file.encoding !== input.encoding)
         throw Error('SQL 文件、编码或目标已变化，请重新选择文件');
@@ -2707,22 +2711,28 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = { ...input, profile, source: file.source, connectionRevision: file.revision };
       break;
     }
+    case 'mysql.sqlFile.inspect':
     case 'postgres.sqlFile.inspect': {
       columnsMain.assertCapturedOwner(columns);
-      const document = columns!.owner.document, file = postgresSqlFileSources.get(document);
-      if (!file || file.token !== input.fileToken || file.expires <= Date.now()) throw Error('PostgreSQL SQL 文件选择已失效');
-      if (postgresSqlFileInspections.has(document)) throw Error('原窗口仍在检查 PostgreSQL SQL 文件');
+      const document = columns!.owner.document;
+      const mysqlFile = command === 'mysql.sqlFile.inspect' ? mysqlSqlFileSources.get(document) : undefined;
+      const file = command === 'mysql.sqlFile.inspect' ? mysqlFile : postgresSqlFileSources.get(document);
+      if (!file || file.token !== input.fileToken || file.expires <= Date.now()) throw Error('SQL 文件选择已失效');
+      if (sqlFileInspections.has(document)) throw Error('原窗口仍在检查 SQL 文件');
       return queryFileOperation(async () => {
         const job = { id: input.operationId, controller: new AbortController() };
-        postgresSqlFileInspections.set(document, job);
+        sqlFileInspections.set(document, job);
         const check = () => { job.controller.signal.throwIfAborted(); columnsMain.assertCapturedOwner(columns); };
-        try { return await inspectPostgresRestoreSql(file.source, job.controller.signal, check); }
-        finally { postgresSqlFileInspections.delete(document); }
+        try {
+          return mysqlFile ? await inspectMysqlRestoreSql(mysqlFile.source, mysqlFile.encoding, input, job.controller.signal, check) :
+            await inspectPostgresRestoreSql(file.source, job.controller.signal, check);
+        } finally { sqlFileInspections.delete(document); }
       });
     }
+    case 'mysql.sqlFile.cancelInspection':
     case 'postgres.sqlFile.cancelInspection': {
       columnsMain.assertCapturedOwner(columns);
-      const job = postgresSqlFileInspections.get(columns!.owner.document);
+      const job = sqlFileInspections.get(columns!.owner.document);
       if (job && job.id === input.operationId) job.controller.abort();
       return;
     }
@@ -2762,7 +2772,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         break;
       }
       const file = postgresSqlFileSources.get(document);
-      if (shuttingDown || postgresSqlFileInspections.has(document) || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
+      if (shuttingDown || sqlFileInspections.has(document) || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
         file.revision !== store.connectionRevision() || file.connectionId !== input.connectionId ||
         file.database !== input.database || file.newDatabase !== input.newDatabase)
         throw Error('PostgreSQL SQL 文件或目标已变化，请重新选择文件');
@@ -3115,7 +3125,7 @@ app.on('before-quit', event => {
     await cancelFileImportPreflights();
     sqliteCopyTask?.abort.abort();
     postgresArchiveFiles.cancelAll();
-    for (const job of postgresSqlFileInspections.values()) job.controller.abort();
+    for (const job of sqlFileInspections.values()) job.controller.abort();
     await Promise.allSettled([...queryFileOperations]);
     await closeSqliteDatabaseCopies();
     await closeSqliteDatabaseCreates();
@@ -3145,7 +3155,7 @@ app.on('before-quit', event => {
       await cancelFileImportPreflights();
       sqliteCopyTask?.abort.abort();
       postgresArchiveFiles.cancelAll();
-      for (const job of postgresSqlFileInspections.values()) job.controller.abort();
+      for (const job of sqlFileInspections.values()) job.controller.abort();
       await Promise.allSettled([...queryFileOperations]);
       try { await closeSqliteDatabaseCopies(); await closeSqliteDatabaseCreates(); }
       catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : 'SQLite新建文件资源尚未确认释放'); return; }

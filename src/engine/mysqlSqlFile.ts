@@ -4,6 +4,7 @@ import { isAbsolute } from 'node:path';
 import { mysqlSqlFileMaxBytes, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
 
 export interface MysqlSqlFileSource { path: string; version: string; bytes: number }
+export class MysqlSqlEncodingError extends Error {}
 
 function version(stat: BigIntStats) {
   if (!stat.isFile() || stat.ino <= 0n || stat.size < 1n || stat.size > BigInt(mysqlSqlFileMaxBytes))
@@ -53,8 +54,12 @@ export async function* decodeMysqlSql(bytes: AsyncIterable<Uint8Array>, encoding
   const sandbox = '/*M!999999\\- enable the sandbox mode */';
   let prefix = '', first = family === 'mariadb';
   const decoder = new TextDecoder({ utf8: 'utf-8', utf16le: 'utf-16le', gb18030: 'gb18030' }[encoding], { fatal: true });
+  const decode = (chunk?: Uint8Array) => {
+    try { return decoder.decode(chunk, { stream: !!chunk }); }
+    catch (reason) { throw new MysqlSqlEncodingError(reason instanceof Error ? reason.message : String(reason)); }
+  };
   for await (const block of bytes) {
-    const chunk = decoder.decode(block, { stream: true });
+    const chunk = decode(block);
     if (!first) { yield chunk; continue; }
     prefix += chunk;
     if (sandbox.startsWith(prefix) || prefix === sandbox + '\r') continue;
@@ -63,6 +68,6 @@ export async function* decodeMysqlSql(bytes: AsyncIterable<Uint8Array>, encoding
       ? ' '.repeat(sandbox.length) + prefix.slice(sandbox.length) : prefix;
     prefix = '';
   }
-  const tail = decoder.decode();
+  const tail = decode();
   if (prefix || tail) yield prefix === sandbox ? ' '.repeat(sandbox.length) + tail : prefix + tail;
 }
