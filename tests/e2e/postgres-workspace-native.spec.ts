@@ -95,11 +95,44 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await page.keyboard.insertText(sql);
     check();
   };
+  /** 用真实 Monaco 模型布置光标或选区，仍通过后续原生按键和按钮验证产品。 */
+  const positionSql = async (source: string, start: number, end = start) => {
+    check();
+    const selection = await page.evaluate(({ source, start, end }) => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const editors = api?.editor.getEditors().filter(editor => {
+        const node = editor.getContainerDomNode();
+        return node.isConnected && node.closest('.postgres-query .sql-editor-wrap') && node.getClientRects().length > 0;
+      });
+      if (editors?.length !== 1) throw Error('当前 PostgreSQL 编辑器不唯一');
+      const editor = editors[0], model = editor.getModel();
+      if (!model || model.getValue().replaceAll('\r\n', '\n') !== source)
+        throw Error('当前编辑器正文与本例预期不同');
+      const offset = (index: number) => source.slice(0, index).split('\n').join(model.getEOL()).length;
+      const from = model.getPositionAt(offset(start)), to = model.getPositionAt(offset(end));
+      editor.setSelection({ startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column });
+      editor.focus();
+      const actual = editor.getSelection();
+      if (!actual) throw Error('未取得真实编辑器选区');
+      return {
+        start: model.getOffsetAt(actual.getStartPosition()), end: model.getOffsetAt(actual.getEndPosition()),
+        expectedStart: offset(start), expectedEnd: offset(end), text: model.getValueInRange(actual).replaceAll('\r\n', '\n'),
+      };
+    }, { source, start, end });
+    expect(selection.start).toBe(selection.expectedStart);
+    expect(selection.end).toBe(selection.expectedEnd);
+    expect(selection.text).toBe(source.slice(start, end));
+    check();
+  };
   try {
     check();
     if (!['darwin', 'win32'].includes(process.platform) || process.env.DBARK_INTEGRATION_ENABLED !== '1' ||
       !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) || user !== database || !/^[a-f0-9]{64}$/.test(password) ||
       !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('只允许本轮专用角色及SSH回环实库');
+    // 只在独立测试文档启用 Monaco 公开 API，产品构建和编辑器实例不做替换。
+    await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
+    await page.reload();
+    check();
     await mark('已捕获独占窗口归属');
     const referenceFixture = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
     await referenceFixture.connect();
@@ -1144,8 +1177,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await expect(button(postgresZh.execute)).toBeEnabled();
     };
     const planTail = '\nDELETE FROM "回归"."带""引号";';
-    await edit('UPDATE "回归"."带""引号" SET note = \'仅估算\';\nSELECT * FROM "回归"."带""引号" LIMIT 1;' + planTail);
-    for (let index = 0; index <= planTail.length; index++) await page.keyboard.press('ArrowLeft');
+    const planSource = 'UPDATE "回归"."带""引号" SET note = \'仅估算\';\nSELECT * FROM "回归"."带""引号" LIMIT 1;' + planTail;
+    await edit(planSource);
+    await positionSql(planSource, planSource.length - planTail.length - 1);
     await button(postgresZh.explain).click();
     const plan = tab().getByRole('region', { name: '可视化执行计划' });
     await expect(plan.getByRole('treeitem').first()).toContainText('Limit');
@@ -1160,8 +1194,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(plan.getByLabel('原始输出', { exact: true })).not.toContainText('Actual Rows');
     await savePlan(plan, 0);
     const selectedPlan = 'UPDATE "回归"."带""引号" SET note = \'只预览选区\';';
-    await edit('SELECT 77;\n' + selectedPlan);
-    for (let index = 0; index < selectedPlan.length; index++) await page.keyboard.press('Shift+ArrowLeft');
+    const selectedPlanSource = 'SELECT 77;\n' + selectedPlan;
+    await edit(selectedPlanSource);
+    await positionSql(selectedPlanSource, selectedPlanSource.length - selectedPlan.length, selectedPlanSource.length);
     await button(postgresZh.explain).click();
     await expect(plan.getByRole('treeitem').first()).toContainText('ModifyTable');
     await savePlan(plan, 1);
@@ -1220,7 +1255,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(tab().locator('.monaco-editor .view-lines')).toContainText('FROM "回归"."带""引号"');
     const suffix = ' FROM "回归"."带""引号" AS r';
     await edit('SELECT r.no' + suffix);
-    for (let index = 0; index < suffix.length; index++) await page.keyboard.press('ArrowLeft');
+    await positionSql('SELECT r.no' + suffix, 'SELECT r.no'.length);
     await page.keyboard.press('Control+Space');
     await expect(widget.locator('.monaco-list-row.focused')).toContainText('note');
     await page.screenshot({ path: info.outputPath('PostgreSQL实际别名字段补全.png') });
@@ -1236,7 +1271,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     ];
     for (const item of cases) {
       await edit(item.prefix + item.tail);
-      for (let index = 0; index < item.tail.length; index++) await page.keyboard.press('ArrowLeft');
+      await positionSql(item.prefix + item.tail, item.prefix.length);
       await page.keyboard.press('Control+Space');
       await expect(widget.locator('.monaco-list-row.focused')).toContainText(item.label);
       if (item.screenshot) await page.screenshot({ path: info.outputPath(item.screenshot) });
@@ -1308,7 +1343,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(tab().locator('.monaco-editor .view-lines')).toContainText('FROM "pg_temp"."temp_scope_native"');
     const localSuffix = ' FROM "带""引号" r';
     await edit('SELECT r.no' + localSuffix);
-    for (let index = 0; index < localSuffix.length; index++) await page.keyboard.press('ArrowLeft');
+    await positionSql('SELECT r.no' + localSuffix, 'SELECT r.no'.length);
     await page.keyboard.press('Control+Space');
     await expect(widget.locator('.monaco-list-row.focused')).toContainText('note');
     await page.keyboard.press('Enter');
@@ -1915,10 +1950,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await mark('查询结果的勾选 JSON、已返回 CSV 和 Excel 实际落盘，导出未推进原序列或改变事务');
 
     const parameterSql = 'SELECT $1::text AS bound';
-    await edit('SELECT 10;\n' + parameterSql);
-    const textbox = tab().locator('.monaco-editor').getByRole('textbox');
-    await textbox.focus();
-    for (let index = 0; index < parameterSql.length; index++) await page.keyboard.press('Shift+ArrowLeft');
+    const parameterSource = 'SELECT 10;\n' + parameterSql;
+    await edit(parameterSource);
+    await positionSql(parameterSource, parameterSource.length - parameterSql.length, parameterSource.length);
     await button(postgresZh.parameters).click();
     const parameters = page.getByRole('dialog', { name: parameterZh.title, exact: true });
     const parameter = '参数原文 ; -- 😀';
