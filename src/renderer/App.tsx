@@ -933,6 +933,18 @@ function WorkspaceApp() {
       return relation.schema === original.schema && relation.name === original.name;
     });
   }
+  /** 分区拓扑变更刷新目录及父子表页，保留原标签、收藏及新出现的草稿。 */
+  function finishPostgresPartitionManage(target: TableColumnPatchTarget, child: string, message: string, unknown: boolean, version: number) {
+    const workspace = useWorkspace.getState();
+    workspace.notify(message, unknown);
+    if ((workspace.connectionVersions[target.connectionId] ?? 0) !== version) return;
+    refreshRenameDatabase(target);
+    for (const table of [target.table, child]) {
+      for (const tab of postgresManagedTabs(workspace, { ...target, table })) {
+        if (!postgresManageTabBusy(workspace, tab.id)) markStructureTarget({ ...target, table: tab.table! }, !unknown);
+      }
+    }
+  }
   function postgresManageTabBusy(workspace: ReturnType<typeof useWorkspace.getState>, id: string) {
     return workspace.dirtyTabs[id] || workspace.activeJobs[id] || workspace.tableLayoutDrafts[id];
   }
@@ -1294,7 +1306,7 @@ function WorkspaceApp() {
         if (action === 'rename') setDdl({ ...ddl, object: { kind: 'sequence', name } });
         if (action === 'drop' || action === 'owner') setDdl(null);
       }}
-      onClose={() => setDdl(null)}/> : <PostgresStructureDialog key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])} target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }} readOnly={ddl.readOnly} searchFocus={ddl.structureSearchFocus} onDirtyChange={setColumnEdits} onEdited={finishPostgresColumnEdit} beforeTableManage={beforePostgresTableManage} onManaged={finishPostgresRelationManage} onClose={() => setDdl(null)}/> : <DdlDialog {...ddl} onDirtyChange={setDatabaseCreateEdits} onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {transfer && <TransferDialog {...transfer} onClose={() => setTransfer(null)}/>}{importNewTable && <ImportNewTableDialog {...importNewTable} onSqliteCreated={finishSqliteImportNewTableCreate} onPostgresCreated={(table, version, message) => finishPostgresTableCreate(importNewTable, table, version, message, false)} onCreated={finishTableCreate} onDirtyChange={setImportNewTableEdits} onClose={() => { setImportNewTable(null); setImportNewTableEdits(false); }}/>}
+      onClose={() => setDdl(null)}/> : <PostgresStructureDialog key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])} target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }} readOnly={ddl.readOnly} searchFocus={ddl.structureSearchFocus} onDirtyChange={setColumnEdits} onEdited={finishPostgresColumnEdit} beforeTableManage={beforePostgresTableManage} onPartitionChanged={finishPostgresPartitionManage} onManaged={finishPostgresRelationManage} onClose={() => setDdl(null)}/> : <DdlDialog {...ddl} onDirtyChange={setDatabaseCreateEdits} onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {transfer && <TransferDialog {...transfer} onClose={() => setTransfer(null)}/>}{importNewTable && <ImportNewTableDialog {...importNewTable} onSqliteCreated={finishSqliteImportNewTableCreate} onPostgresCreated={(table, version, message) => finishPostgresTableCreate(importNewTable, table, version, message, false)} onCreated={finishTableCreate} onDirtyChange={setImportNewTableEdits} onClose={() => { setImportNewTable(null); setImportNewTableEdits(false); }}/>}
     {objectPicker && <ObjectDatabasePicker connections={connections} preferredConnectionId={state.selection?.connectionId} onClose={() => setObjectPicker(null)} onOpen={(connectionId, database) => openObjectBrowser(objectPicker, { connectionId, database })}/>}
     {editorIndentPreferences && <EditorIndentPreferencesDialog onClose={() => { workbenchNavigation.invalidate(); setEditorIndentPreferences(false); }}/>}
     {navigationHelp && <Modal title={navigationHelp === 'usage' ? navigationZh.helpTitle : navigationZh.shortcutsTitle} onClose={() => setNavigationHelp(null)}><div className="modal-content">{navigationHelp === 'usage' ? navigationZh.help.map(line => <p key={line}>{line}</p>) : <table><tbody>{navigationZh.shortcuts.map(([label, keys]) => <tr key={label}><td>{label}</td><td><kbd>{keys}</kbd></td></tr>)}</tbody></table>}</div></Modal>}

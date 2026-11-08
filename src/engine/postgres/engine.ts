@@ -28,6 +28,7 @@ import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
 import { postgresSchemaCatalog } from './schemaManage';
+import { postgresPartitionCatalog } from './partitionManage';
 import { postgresExtensionCatalog } from './extensionManage';
 import { postgresDatabaseCatalog } from './databaseManage';
 import { readPostgresCompletion } from './completion';
@@ -1159,6 +1160,9 @@ export class PostgresEngine {
           else this.completionReads.delete(profile.id);
         }
       }
+      case 'postgres.partitionManage.read':
+      case 'postgres.partitionManage.preview':
+      case 'postgres.partitionManage.apply':
       case 'postgres.extensionManage.read':
       case 'postgres.extensionManage.preview':
       case 'postgres.extensionManage.apply':
@@ -1196,6 +1200,18 @@ export class PostgresEngine {
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 建表连接和原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.partitionManage.read') return connect(async connection => {
+          await preparePostgresSearchConnection(connection, input.database);
+          return postgresPartitionCatalog(connection, { connectionId: input.connectionId, database: input.database, table: input.table });
+        });
+        if (command === 'postgres.partitionManage.preview') {
+          const { profile: _profile, ...draft } = input;
+          return this.creations.preparePartition(draft as Parameters<PostgresCreateTableWorkspace['preparePartition']>[0], connect);
+        }
+        if (command === 'postgres.partitionManage.apply') {
+          if (input.confirmed !== true) throw Error('请明确确认 PostgreSQL 分区操作');
+          return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect, 'partitionManage');
+        }
         if (command === 'postgres.extensionManage.read') return connect(connection => postgresExtensionCatalog(connection, input.database));
         if (command === 'postgres.extensionManage.preview') {
           const { profile: _profile, ...draft } = input;

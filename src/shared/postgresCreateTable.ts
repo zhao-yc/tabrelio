@@ -87,22 +87,58 @@ const partitionValue = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('min') }).strict(),
   z.object({ kind: z.literal('max') }).strict(),
 ]);
-const partitionName = z.object({ name: postgresNewIdentifier });
-const partitionChild = z.discriminatedUnion('kind', [
-  partitionName.extend({ kind: z.literal('default') }).strict(),
-  partitionName.extend({ kind: z.literal('range'), from: z.array(partitionValue).min(1).max(32),
+const bounds = {
+  default: z.object({ kind: z.literal('default') }).strict(),
+  range: z.object({ kind: z.literal('range'), from: z.array(partitionValue).min(1).max(32),
     to: z.array(partitionValue).min(1).max(32) }).strict(),
-  partitionName.extend({ kind: z.literal('list'), values: z.array(postgresDdlText.nullable()).min(1).max(128) }).strict(),
-  partitionName.extend({ kind: z.literal('hash'), modulus: z.number().int().min(1).max(2147483647),
+  list: z.object({ kind: z.literal('list'), values: z.array(postgresDdlText.nullable()).min(1).max(128) }).strict(),
+  hash: z.object({ kind: z.literal('hash'), modulus: z.number().int().min(1).max(2147483647),
     remainder: z.number().int().min(0).max(2147483646) }).strict(),
+};
+const childName = { name: postgresNewIdentifier };
+export const postgresPartitionBoundSchema = z.discriminatedUnion('kind', [bounds.default, bounds.range, bounds.list, bounds.hash]);
+export const postgresPartitionChildSchema = z.discriminatedUnion('kind', [
+  bounds.default.extend(childName), bounds.range.extend(childName), bounds.list.extend(childName), bounds.hash.extend(childName),
 ]);
+export type PostgresPartitionBound = z.infer<typeof postgresPartitionBoundSchema>;
 const partitionSchema = z.object({
   strategy: z.enum(postgresPartitionStrategies),
   keys: z.array(postgresNewIdentifier).min(1).max(32),
-  children: z.array(partitionChild).max(32),
+  children: z.array(postgresPartitionChildSchema).max(32),
 }).strict();
 export type PostgresPartitionDesign = z.infer<typeof partitionSchema>;
 export type PostgresPartitionValue = z.infer<typeof partitionValue>;
+
+/** 复用建表和维护的边界规则，返回需要计入请求预算的文字字节数。 */
+export function validatePostgresPartitionBound(child: PostgresPartitionBound, strategy: PostgresPartitionDesign['strategy'],
+  keyCount: number, issue: (message: string) => void): number {
+  if (child.kind !== strategy && (child.kind !== 'default' || strategy === 'hash'))
+    issue('子分区类型必须与分区策略匹配，HASH 不支持默认分区');
+  let bytes = 0;
+  if (child.kind === 'range') {
+    for (const tuple of [child.from, child.to]) {
+      if (tuple.length !== keyCount) issue('RANGE 上下界的值数必须与分区键一致');
+      const unbounded = tuple.findIndex(value => value.kind !== 'value');
+      if (unbounded >= 0 && tuple.slice(unbounded).some(value => value.kind !== tuple[unbounded].kind))
+        issue('MINVALUE 或 MAXVALUE 后的分区键必须使用相同边界');
+      for (const value of tuple) if (value.kind === 'value') bytes += utf8.encode(value.value).byteLength;
+    }
+  } else if (child.kind === 'list') {
+    if (new Set(child.values).size !== child.values.length) issue('同一 LIST 子分区的值不能重复');
+    for (const value of child.values) if (value !== null) bytes += utf8.encode(value).byteLength;
+  } else if (child.kind === 'hash' && child.remainder >= child.modulus) issue('HASH 余数必须小于模数');
+  return bytes;
+}
+
+/** 只有预定义语法和转义后的数据进入服务器边界表达式。 */
+export function postgresPartitionBoundSql(child: PostgresPartitionBound): string {
+  const tuple = (values: PostgresPartitionValue[]) => '(' + values.map(value =>
+    value.kind === 'value' ? postgresDdlLiteral(value.value) : value.kind === 'min' ? 'MINVALUE' : 'MAXVALUE').join(', ') + ')';
+  if (child.kind === 'default') return 'DEFAULT';
+  if (child.kind === 'range') return 'FOR VALUES FROM ' + tuple(child.from) + ' TO ' + tuple(child.to);
+  if (child.kind === 'list') return 'FOR VALUES IN (' + child.values.map(value => value === null ? 'NULL' : postgresDdlLiteral(value)).join(', ') + ')';
+  return 'FOR VALUES WITH (MODULUS ' + child.modulus + ', REMAINDER ' + child.remainder + ')';
+}
 
 /** 表单只提交结构化字段；分区边界作为数据传入，不能成为 SQL 片段。 */
 export const postgresCreateTablePreviewSchema = target.extend({
@@ -128,23 +164,8 @@ export const postgresCreateTablePreviewSchema = target.extend({
       issue('单字段唯一约束必须包含全部分区键');
     if (new Set([input.table, ...children.map(child => child.name)]).size !== children.length + 1)
       issue('父表和子分区的名称不能重复');
-    if (children.filter(child => child.kind === 'default').length > 1 ||
-      children.some(child => child.kind !== strategy && (child.kind !== 'default' || strategy === 'hash')))
-      issue('子分区类型必须与分区策略匹配，同一父表只能有一个默认分区，HASH 不支持默认分区');
-    for (const child of children) {
-      if (child.kind === 'range') {
-        for (const tuple of [child.from, child.to]) {
-          if (tuple.length !== keys.length) issue('RANGE 上下界的值数必须与分区键一致');
-          const unbounded = tuple.findIndex(value => value.kind !== 'value');
-          if (unbounded >= 0 && tuple.slice(unbounded).some(value => value.kind !== tuple[unbounded].kind))
-            issue('MINVALUE 或 MAXVALUE 后的分区键必须使用相同边界');
-          for (const value of tuple) if (value.kind === 'value') textSize += utf8.encode(value.value).byteLength;
-        }
-      } else if (child.kind === 'list') {
-        if (new Set(child.values).size !== child.values.length) issue('同一 LIST 子分区的值不能重复');
-        for (const value of child.values) if (value !== null) textSize += utf8.encode(value).byteLength;
-      } else if (child.kind === 'hash' && child.remainder >= child.modulus) issue('HASH 余数必须小于模数');
-    }
+    if (children.filter(child => child.kind === 'default').length > 1) issue('同一父表只能有一个默认分区');
+    for (const child of children) textSize += validatePostgresPartitionBound(child, strategy, keys.length, issue);
   }
   if (textSize > 128 * 1024) context.addIssue({ code: 'custom', message: '默认值、生成表达式、注释与分区边界超过建表预算' });
 });
@@ -213,18 +234,10 @@ export function postgresCreateTablePlan(raw: PostgresCreateTableInput): {
     ' (' + partition.keys.map(postgresIdentifier).join(', ') + ')' : '';
   const statements = ['CREATE TABLE ' + table + ' (\n' + fields.join(',\n') + '\n)' + partitionBy];
   if (partition) {
-    const tuple = (values: PostgresPartitionValue[]) => '(' + values.map(value =>
-      value.kind === 'value' ? postgresDdlLiteral(value.value) : value.kind === 'min' ? 'MINVALUE' : 'MAXVALUE').join(', ') + ')';
     // 默认分区最后建立，避免添加每个显式分区时重复验证默认分区。
     const children = [...partition.children.filter(child => child.kind !== 'default'), ...partition.children.filter(child => child.kind === 'default')];
-    for (const child of children) {
-      const bound = child.kind === 'default' ? 'DEFAULT' :
-        child.kind === 'range' ? 'FOR VALUES FROM ' + tuple(child.from) + ' TO ' + tuple(child.to) :
-        child.kind === 'list' ? 'FOR VALUES IN (' + child.values.map(value => value === null ? 'NULL' : postgresDdlLiteral(value)).join(', ') + ')' :
-        'FOR VALUES WITH (MODULUS ' + child.modulus + ', REMAINDER ' + child.remainder + ')';
-      statements.push('CREATE TABLE ' + postgresIdentifier(input.schema) + '.' + postgresIdentifier(child.name) +
-        ' PARTITION OF ' + table + ' ' + bound);
-    }
+    for (const child of children) statements.push('CREATE TABLE ' + postgresIdentifier(input.schema) + '.' + postgresIdentifier(child.name) +
+      ' PARTITION OF ' + table + ' ' + postgresPartitionBoundSql(child));
   }
   if (input.comment) statements.push('COMMENT ON TABLE ' + table + ' IS ' + postgresDdlLiteral(input.comment));
   for (const field of input.columns) if (field.comment) {

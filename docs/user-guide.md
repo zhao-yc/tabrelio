@@ -314,7 +314,7 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。
 
-在 PostgreSQL 的「新建表」中，可选择 RANGE、LIST 或 HASH 分区策略，并在同一次提交中建立父表和初始子分区。[PostgreSQL 分区建表](development/postgres-partition-table-design-20261108.md)
+在 PostgreSQL 的「新建表」中，可选择 RANGE、LIST 或 HASH 分区策略，并在同一次提交中建立父表和初始子分区。[PostgreSQL 分区建表](development/postgres-partition-table-design-20261108.md) 分区父表的「查看结构」中还可查看直接子分区、新建、挂接已有表或分离为独立表。[PostgreSQL 子分区维护](development/postgres-partition-management-20261108.md)
 
 右键 PostgreSQL 连接选择「管理 PostgreSQL 数据库」，可选择模板建库，编辑注释、所有者和连接设置，或从另一个维护库执行改名。[PostgreSQL 数据库管理](development/postgres-database-management-20261108.md)
 

@@ -292,6 +292,9 @@ export interface CommandMap {
   'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetQuery };
   'postgres.completion': { input: import('./postgresCompletion').PostgresCompletionInput; output: import('./postgresCompletion').PostgresCompletionResult };
+  'postgres.partitionManage.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresPartitionManage').PostgresPartitionCatalog };
+  'postgres.partitionManage.preview': { input: import('./postgresPartitionManage').PostgresPartitionManagePreview; output: import('./postgresCreateTable').PostgresCreateTablePreview };
+  'postgres.partitionManage.apply': { input: import('./postgresPartitionManage').PostgresPartitionManageApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.extensionManage.read': { input: import('./postgresCreateTable').PostgresCreateTableTarget; output: import('./postgresExtensionManage').PostgresExtensionCatalog };
   'postgres.extensionManage.preview': { input: import('./postgresExtensionManage').PostgresExtensionPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.extensionManage.apply': { input: import('./postgresExtensionManage').PostgresExtensionApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

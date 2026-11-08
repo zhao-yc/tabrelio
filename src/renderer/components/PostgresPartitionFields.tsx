@@ -1,4 +1,4 @@
-import { postgresPartitionStrategies, type PostgresCreateColumn, type PostgresPartitionDesign, type PostgresPartitionValue } from '../../shared/postgresCreateTable';
+import { postgresPartitionStrategies, type PostgresCreateColumn, type PostgresPartitionBound, type PostgresPartitionDesign, type PostgresPartitionValue } from '../../shared/postgresCreateTable';
 import { uid } from '../lib';
 import { postgresCreateTableZh } from '../locales/postgresCreateTable.zh-CN';
 import { Field } from './ui';
@@ -7,17 +7,33 @@ type KeyField = Pick<PostgresCreateColumn, 'name' | 'generation'> & { id: string
 type Strategy = PostgresPartitionDesign['strategy'];
 const text = postgresCreateTableZh.partition;
 type ListValue = { id: string; value: string | null };
-type ChildDraft = {
-  id: string; name: string; useDefault: boolean;
+export type PostgresPartitionBoundDraft = {
+  useDefault: boolean;
   from: Record<string, PostgresPartitionValue>; to: Record<string, PostgresPartitionValue>;
   values: ListValue[]; modulus: string; remainder: string;
 };
+type ChildDraft = PostgresPartitionBoundDraft & { id: string; name: string };
 export interface PostgresPartitionDraft {
   strategy: Strategy | ''; keyIds: string[]; children: ChildDraft[];
 }
 
 const emptyValue: PostgresPartitionValue = { kind: 'value', value: '' };
 const listValue = (): ListValue => ({ id: uid(), value: '' });
+
+export function newPostgresPartitionBound(): PostgresPartitionBoundDraft {
+  return { useDefault: false, from: {}, to: {}, values: [listValue()], modulus: '', remainder: '' };
+}
+
+export function compilePostgresPartitionBound(strategy: Strategy, child: PostgresPartitionBoundDraft,
+  keys: readonly { id: string }[]): PostgresPartitionBound {
+  if (strategy !== 'hash' && child.useDefault) return { kind: 'default' };
+  if (strategy === 'list') return { kind: strategy, values: child.values.map(item => item.value) };
+  if (strategy === 'hash') return { kind: strategy,
+    modulus: child.modulus.trim() ? Number(child.modulus) : Number.NaN,
+    remainder: child.remainder.trim() ? Number(child.remainder) : Number.NaN };
+  return { kind: strategy, from: keys.map(field => child.from[field.id] ?? emptyValue),
+    to: keys.map(field => child.to[field.id] ?? emptyValue) };
+}
 
 function keyFields(draft: PostgresPartitionDraft, fields: KeyField[]) {
   return draft.keyIds.flatMap(id => {
@@ -33,16 +49,7 @@ export function compilePostgresPartition(draft: PostgresPartitionDraft, fields: 
   const keys = keyFields(draft, fields);
   return {
     strategy, keys: keys.map(field => field.name),
-    children: draft.children.map(child => {
-      const { name } = child;
-      if (strategy !== 'hash' && child.useDefault) return { name, kind: 'default' };
-      if (strategy === 'list') return { name, kind: strategy, values: child.values.map(item => item.value) };
-      if (strategy === 'hash') return { name, kind: strategy,
-        modulus: child.modulus.trim() ? Number(child.modulus) : Number.NaN,
-        remainder: child.remainder.trim() ? Number(child.remainder) : Number.NaN };
-      return { name, kind: strategy, from: keys.map(field => child.from[field.id] ?? emptyValue),
-        to: keys.map(field => child.to[field.id] ?? emptyValue) };
-    }),
+    children: draft.children.map(child => ({ ...compilePostgresPartitionBound(strategy, child, keys), name: child.name })),
   };
 }
 
@@ -59,6 +66,44 @@ function RangeValueField({ label, value, onChange }: {
     </select></Field>
     {value.kind === 'value' && <Field label={label}><input maxLength={4096} value={value.value}
       onChange={event => onChange({ kind: 'value', value: event.target.value })}/></Field>}
+  </>;
+}
+
+/** 已有父表和初始建表共用边界控件，不允许用户输入原文 SQL。 */
+export function PostgresPartitionBoundFields({ strategy, child, keys, defaultUnavailable, patch }: {
+  strategy: Strategy; child: PostgresPartitionBoundDraft; keys: readonly { id: string; name: string }[];
+  defaultUnavailable?: boolean; patch(value: Partial<PostgresPartitionBoundDraft>): void;
+}) {
+  return <>
+    {strategy !== 'hash' && !defaultUnavailable && <label><input type="checkbox" checked={child.useDefault}
+      onChange={event => patch({ useDefault: event.target.checked })}/>{text.default}</label>}
+    {strategy === 'range' && !child.useDefault && keys.map(field => <div className="pg-partition-bound" key={field.id}>
+      <RangeValueField label={field.name + text.from} value={child.from[field.id] ?? emptyValue}
+        onChange={value => patch({ from: { ...child.from, [field.id]: value } })}/>
+      <RangeValueField label={field.name + text.to} value={child.to[field.id] ?? emptyValue}
+        onChange={value => patch({ to: { ...child.to, [field.id]: value } })}/>
+    </div>)}
+    {strategy === 'list' && !child.useDefault && <div className="pg-partition-bound">
+      {child.values.map((entry, valueIndex) => <div className="pg-partition-list-value" key={entry.id}>
+        <Field label={text.listValue(valueIndex + 1)}><input maxLength={4096} value={entry.value ?? ''} disabled={entry.value === null}
+          onChange={event => patch({ values: child.values.map(item => item.id === entry.id
+            ? { ...item, value: event.target.value } : item) })}/></Field>
+        <label><input type="checkbox" checked={entry.value === null} onChange={event => patch({
+          values: child.values.map(item => item.id === entry.id ? { ...item, value: event.target.checked ? null : '' } : item),
+        })}/>NULL</label>
+        <button disabled={child.values.length === 1} onClick={() => patch({
+          values: child.values.filter(item => item.id !== entry.id),
+        })}>{text.removeValue}</button>
+      </div>)}
+      <button disabled={child.values.length >= 128}
+        onClick={() => patch({ values: [...child.values, listValue()] })}>{text.addValue}</button>
+    </div>}
+    {strategy === 'hash' && <>
+      <Field label={text.modulus}><input type="number" min={1} max={2147483647} value={child.modulus}
+        onChange={event => patch({ modulus: event.target.value })}/></Field>
+      <Field label={text.remainder}><input type="number" min={0} max={2147483646} value={child.remainder}
+        onChange={event => patch({ remainder: event.target.value })}/></Field>
+    </>}
   </>;
 }
 
@@ -96,39 +141,11 @@ export function PostgresPartitionFields({ draft, fields, onChange }: {
       {children.map((child, index) => <fieldset key={child.id} className="pg-create-field">
         <legend>{text.child(index + 1)}</legend>
         <Field label={text.name}><input value={child.name} onChange={event => patch(child, { name: event.target.value })}/></Field>
-        {strategy !== 'hash' && <label><input type="checkbox" checked={child.useDefault}
-          onChange={event => patch(child, { useDefault: event.target.checked })}/>{text.default}</label>}
-        {strategy === 'range' && !child.useDefault && keys.map(field => <div className="pg-partition-bound" key={field.id}>
-          <RangeValueField label={field.name + text.from} value={child.from[field.id] ?? emptyValue}
-            onChange={value => patch(child, { from: { ...child.from, [field.id]: value } })}/>
-          <RangeValueField label={field.name + text.to} value={child.to[field.id] ?? emptyValue}
-            onChange={value => patch(child, { to: { ...child.to, [field.id]: value } })}/>
-        </div>)}
-        {strategy === 'list' && !child.useDefault && <div className="pg-partition-bound">
-          {child.values.map((entry, valueIndex) => <div className="pg-partition-list-value" key={entry.id}>
-            <Field label={text.listValue(valueIndex + 1)}><input maxLength={4096} value={entry.value ?? ''} disabled={entry.value === null}
-              onChange={event => patch(child, { values: child.values.map(item => item.id === entry.id
-                ? { ...item, value: event.target.value } : item) })}/></Field>
-            <label><input type="checkbox" checked={entry.value === null} onChange={event => patch(child, {
-              values: child.values.map(item => item.id === entry.id ? { ...item, value: event.target.checked ? null : '' } : item),
-            })}/>NULL</label>
-            <button disabled={child.values.length === 1} onClick={() => patch(child, {
-              values: child.values.filter(item => item.id !== entry.id),
-            })}>{text.removeValue}</button>
-          </div>)}
-          <button disabled={child.values.length >= 128}
-            onClick={() => patch(child, { values: [...child.values, listValue()] })}>{text.addValue}</button>
-        </div>}
-        {strategy === 'hash' && <>
-          <Field label={text.modulus}><input type="number" min={1} max={2147483647} value={child.modulus}
-            onChange={event => patch(child, { modulus: event.target.value })}/></Field>
-          <Field label={text.remainder}><input type="number" min={0} max={2147483646} value={child.remainder}
-            onChange={event => patch(child, { remainder: event.target.value })}/></Field>
-        </>}
+        <PostgresPartitionBoundFields strategy={strategy} keys={keys} child={child} patch={value => patch(child, value)}/>
         <button onClick={() => onChange({ ...draft, children: children.filter(item => item.id !== child.id) })}>{text.remove}</button>
       </fieldset>)}
       <button disabled={children.length >= 32} onClick={() => onChange({ ...draft, children: [...children, {
-        id: uid(), name: '', useDefault: false, from: {}, to: {}, values: [listValue()], modulus: '', remainder: '',
+        id: uid(), name: '', ...newPostgresPartitionBound(),
       }] })}>{text.add}</button>
     </>}
   </section>;

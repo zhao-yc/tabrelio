@@ -1,0 +1,16 @@
+export const postgresPartitionManageZh = {
+  title: '管理 PostgreSQL 子分区', back: '返回结构', edit: '返回修改',
+  operation: '分区操作', schema: '子分区 Schema', name: '子分区表名', existing: '已有表名', child: '直接子分区',
+  bound: '分区边界', kind: '关系类型', state: '状态', pending: '待完成分离', attached: '已挂接',
+  expressionKey: (position: number) => '表达式键 ' + position,
+  kinds: { r: '普通表', p: '分区父表', f: '外部表' },
+  actions: { create: '新建子分区', attach: '挂接已有表', detach: '分离为独立表' },
+  empty: '该父表暂无子分区。', choose: '请选择子分区',
+  attach: '挂接会检查已有行是否符合分区边界，并可能扫描目标表和默认分区。',
+  detach: '分离后子表保留原名及数据，父表查询将不再包含该子表的记录。',
+  lock: '提交会锁定父表及已有目标表，请在适当的时间执行。',
+  readonly: '当前角色或入口仅可查看目录。', pendingHint: '存在待完成的并发分离，请处理后刷新。',
+  refresh: '刷新子分区', preview: '预览子分区 SQL', apply: '确认提交分区操作', sql: '实际提交 SQL',
+  discard: '放弃未提交的分区预览？', changed: '原连接已变化，请重新打开子分区管理。',
+  unknown: '提交结果待核对。请返回结构后重新读取子分区目录。',
+} as const;

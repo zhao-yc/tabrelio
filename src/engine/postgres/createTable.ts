@@ -30,6 +30,8 @@ import { postgresTableTriggerPlan } from './tableTriggers';
 import { postgresTablePolicyPlan } from './tablePolicies';
 import { postgresSchemaPlan } from './schemaManage';
 import { postgresSchemaPreviewSchema, type PostgresSchemaPreviewInput } from '../../shared/postgresSchemaManage';
+import { postgresPartitionManagePlan } from './partitionManage';
+import { postgresPartitionManagePreviewSchema, type PostgresPartitionManagePreview } from '../../shared/postgresPartitionManage';
 import { postgresExtensionPlan } from './extensionManage';
 import { postgresExtensionPreviewSchema, type PostgresExtensionPreviewInput } from '../../shared/postgresExtensionManage';
 import { postgresDatabasePlan } from './databaseManage';
@@ -37,7 +39,7 @@ import { postgresDatabaseManagePreviewSchema, type PostgresDatabaseManageInput }
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'extensionManage' | 'databaseManage' | 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
+type RelationKind = 'partitionManage' | 'extensionManage' | 'databaseManage' | 'schemaManage' | 'table' | 'tableCopy' | 'tableManage' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
@@ -270,6 +272,13 @@ export class PostgresCreateTableWorkspace {
     const { owner: _owner, connectionRevision: _revision, ...raw } = input;
     const draft = postgresSchemaPreviewSchema.parse(raw);
     return this.prepareRelation(input, 'schemaManage', connect, () => connection => postgresSchemaPlan(connection, draft));
+  }
+
+  /** 分区维护复用按文档绑定的事务和一次性预览。 */
+  async preparePartition(input: Scoped<PostgresPartitionManagePreview>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+    const draft = postgresPartitionManagePreviewSchema.parse(raw);
+    return this.prepareRelation(input, 'partitionManage', connect, () => connection => postgresPartitionManagePlan(connection, draft));
   }
 
   /** 扩展目录和安装、升级、迁移、卸载计划绑定原文档和数据库。 */

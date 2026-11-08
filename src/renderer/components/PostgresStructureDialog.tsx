@@ -8,6 +8,8 @@ import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { PostgresMaterializedRefreshPanel } from './PostgresMaterializedRefreshPanel';
 import { postgresMaterializedRefreshZh as refreshText } from '../locales/postgresMaterializedRefresh.zh-CN';
+import { PostgresPartitionManageDialog } from './PostgresPartitionManageDialog';
+import { postgresPartitionManageZh } from '../locales/postgresPartitionManage.zh-CN';
 import { PostgresRelationManagePanel } from './PostgresRelationManagePanel';
 import { postgresTableManageZh } from '../locales/postgresTableManage.zh-CN';
 import { postgresViewManageZh } from '../locales/postgresViewManage.zh-CN';
@@ -62,10 +64,11 @@ function CatalogTable({ headers, children, empty }: { headers: readonly string[]
 }
 
 /** 在原窗口、连接修订和关系目标下读取结构，刷新、关闭及切换来源废弃迟到回包。 */
-export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged, beforeTableManage }: {
+export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged, beforeTableManage, onPartitionChanged }: {
   target: PostgresStructureInput; readOnly?: boolean; searchFocus?: PostgresStructureSearchFocus; onClose(): void; onDirtyChange(value: boolean): void;
   beforeTableManage(target: PostgresStructureInput, destination?: string, truncateTables?: readonly string[]): void;
   onManaged(target: PostgresStructureInput, message: string, unknown: boolean, version: number, kind: 'table' | 'view', destination?: string, identity?: string, truncateTables?: readonly string[]): void;
+  onPartitionChanged(target: PostgresStructureInput, child: string, message: string, unknown: boolean, version: number): void;
   onEdited(target: PostgresStructureInput, message: string, unknown: boolean, version: number): void;
 }) {
   const version = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
@@ -74,6 +77,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const [attempt, setAttempt] = useState(0);
   const [editing, setEditing] = useState<keyof typeof editors>();
   const [dependencies, setDependencies] = useState(false);
+  const [partitions, setPartitions] = useState(false);
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
   const matched = useRef<HTMLTableRowElement>(null);
@@ -127,6 +131,10 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
     editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp :
       editing === 'comments' ? output?.commentStamp : editing === 'identity' ? output?.identityStamp :
         editing === 'policies' ? output?.policyStamp : output?.editStamp;
+  if (partitions) return <PostgresPartitionManageDialog target={target} readOnly={readOnly} onDirtyChange={onDirtyChange}
+    beforeApply={child => beforeTableManage(target, child)}
+    onResult={(child, message, unknown, appliedVersion) => onPartitionChanged(target, child, message, unknown, appliedVersion)}
+    onBack={() => { setPartitions(false); setAttempt(value => value + 1); }}/>;
   if (dependencies) return <PostgresDependenciesDialog target={target} onBack={() => setDependencies(false)}/>;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
@@ -220,6 +228,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
       {!readOnly && output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
+      {output?.kind === 'p' && !editing && <button onClick={() => setPartitions(true)}>{postgresPartitionManageZh.title}</button>}
       {!readOnly && manageStamp && !editing && <button onClick={() => setEditing('manage')}>{output?.tableManage ? postgresTableManageZh.title : postgresViewManageZh.title}</button>}
       {!readOnly && output?.commentStamp && !editing && <button onClick={() => setEditing('comments')}>{editors.comments.label}</button>}
       {!readOnly && output?.identityStamp && !editing && postgresIdentityColumns(output).length > 0 &&
