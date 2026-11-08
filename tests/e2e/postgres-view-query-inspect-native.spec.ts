@@ -1,9 +1,11 @@
+import { Client } from 'pg';
 import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 import { postgresCreateViewZh as create } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { postgresViewEditZh as edit } from '../../src/renderer/locales/postgresViewEdit.zh-CN';
 import { postgresStructureZh as structure } from '../../src/renderer/locales/postgresStructure.zh-CN';
+import { viewOutputColumnsZh as columnsText } from '../../src/renderer/locales/viewOutputColumns.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 
@@ -11,7 +13,7 @@ const enabled = process.env.DBARK_VIEW_INSPECT_ENABLED === '1';
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(!enabled, '需显式启用 PostgreSQL 视图预览专项');
 
-test('视图定义数据预览和估算计划使用原数据库，只读且不创建视图', async ({}, info) => {
+test('在原数据库预览视图并编辑列名，确认前无写入且依赖得到保留', async ({}, info) => {
   const database = process.env.DBARK_VIEW_INSPECT_DATABASE ?? '', password = process.env.DBARK_VIEW_INSPECT_PASSWORD ?? '';
   const port = Number(process.env.DBARK_VIEW_INSPECT_PORT);
   if (process.env.DBARK_DEV_URL || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_INTEGRATION_ENABLED !== '1' ||
@@ -20,7 +22,11 @@ test('视图定义数据预览和估算计划使用原数据库，只读且不�
   const profile: PostgresConnectionProfile = { id: '', dialect: 'postgresql', name: '视图预览',
     group: '', color: '#123456', host: '127.0.0.1', port, database, user: database, password, rememberPassword: false };
 
+  const observer = new Client({ host: profile.host, port, database, user: database, password });
+  const oid = async () => (await observer.query("SELECT 'public.view_inspect_subject'::regclass::oid::text AS oid")).rows[0].oid;
+  const names = async () => (await observer.query('SELECT * FROM public.view_inspect_subject LIMIT 0')).fields.map(field => field.name);
   try {
+    await observer.connect();
     const connectionId = await page.evaluate(async profile => (await window.dbark.invoke('connections.save', profile)).id, profile);
     await page.reload();
     const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: profile.name, exact: true }) });
@@ -46,6 +52,15 @@ test('视图定义数据预览和估算计划使用原数据库，只读且不�
       return modal;
     };
     const definition = (modal: Locator) => modal.getByRole('textbox', { name: create.definition, exact: true });
+    const columns = (scope: Locator) => scope.getByRole('group', { name: columnsText.title, exact: true });
+    const column = (scope: Locator, index: number) => columns(scope).getByRole('textbox', { name: columnsText.column(index), exact: true });
+    const columnButton = (scope: Locator, label: string) => columns(scope).getByRole('button', { name: label, exact: true });
+    async function stageNames(scope: Locator, names: string[]) {
+      await columnButton(scope, columnsText.fromPreview).click();
+      for (const [index, name] of names.entries()) await column(scope, index + 1).fill(name);
+      await columnButton(scope, columnsText.apply).click();
+    }
+
 
     const modal = await open('view_inspect_subject');
     await expect(panel(modal).getByRole('button', { name: inspect.rows, exact: true })).toBeDisabled();
@@ -71,36 +86,77 @@ test('视图定义数据预览和估算计划使用原数据库，只读且不�
     await sample(modal);
     await expect(cell(modal, '序列原样')).toBeVisible();
 
-    await definition(modal).fill("SELECT '普通视图样本'::text AS marker;");
+    await definition(modal).fill("SELECT '普通视图样本'::text AS marker, '辅助样本'::text AS other;");
     await sample(modal);
     await expect(cell(modal, '普通视图样本')).toBeVisible();
+    await stageNames(modal, ['正文', '第二输出']);
+    await sample(modal);
+    await expect(panel(modal).getByRole('columnheader', { name: /正文/ })).toBeVisible();
     await modal.getByRole('button', { name: create.preview, exact: true }).click();
-    await expect(modal.locator('.pg-create-sql')).toContainText('CREATE VIEW');
+    await expect(modal.locator('.pg-create-sql')).toContainText('CREATE VIEW "public"."view_inspect_subject" ("正文", "第二输出")');
     expect(await viewNames()).toEqual(beforeViews);
     await modal.getByRole('button', { name: create.apply, exact: true }).click();
     await expect(modal).toBeHidden();
     await expect(table.getByRole('gridcell', { name: '普通视图样本', exact: true })).toBeVisible();
+    expect(await names()).toEqual(['正文', '第二输出']);
+    const originalOid = await oid();
+    await observer.query('CREATE VIEW public.view_inspect_depend AS SELECT "正文" FROM public.view_inspect_subject');
+    const target = { connectionId, database, table: '"public"."view_inspect_subject"' };
+    const rolledBack = await page.evaluate(async target => {
+      const original = await window.dbark.invoke('postgres.structure.read', target);
+      const preview = await window.dbark.invoke('postgres.editView.preview', { ...target,
+        stamp: original.viewEditStamp!, definition: "SELECT 9::integer AS marker, 'x'::text AS other;",
+        columnNames: ['第二输出', '正文'] });
+      return window.dbark.invoke('postgres.editView.apply', { connectionId: target.connectionId, database: target.database, token: preview.token });
+    }, target);
+    expect(rolledBack.outcome).toBe('rolledBack');
+    expect(await names()).toEqual(['正文', '第二输出']);
+
 
     await page.locator('.postgres-table-tab:visible').getByRole('button', { name: structure.open, exact: true }).click();
     const infoDialog = page.getByRole('dialog', { name: structure.title, exact: true });
     await infoDialog.getByRole('button', { name: structure.sections.definition, exact: true }).click();
     await infoDialog.getByRole('button', { name: edit.title, exact: true }).click();
     const editPanel = infoDialog.getByRole('region', { name: edit.title, exact: true });
-    await editPanel.getByRole('textbox', { name: edit.definition, exact: true }).fill("SELECT '更新前可预览'::text AS marker;");
+    await editPanel.getByRole('textbox', { name: edit.definition, exact: true }).fill("SELECT '更新前可预览'::text AS marker, '更新辅助'::text AS other;");
     await sample(editPanel);
     await expect(cell(editPanel, '更新前可预览')).toBeVisible();
+    await stageNames(editPanel, ['第二输出', '正文']);
     await expect(table.getByRole('gridcell', { name: '普通视图样本', exact: true })).toBeVisible();
     await editPanel.getByRole('button', { name: edit.preview, exact: true }).click();
+    await expect(editPanel.getByLabel(edit.sql)).toContainText('RENAME COLUMN');
+    expect(await names()).toEqual(['正文', '第二输出']);
     await editPanel.getByRole('button', { name: edit.apply, exact: true }).click();
     await expect(editPanel).toBeHidden();
     await infoDialog.locator('.modal-footer').getByRole('button', { name: structure.close, exact: true }).click();
     await expect(table.getByRole('gridcell', { name: '更新前可预览', exact: true })).toBeVisible();
+    expect(await oid()).toBe(originalOid);
+    expect(await names()).toEqual(['第二输出', '正文']);
+    expect((await observer.query('SELECT "正文" FROM public.view_inspect_depend')).rows).toEqual([{ 正文: '更新前可预览' }]);
+
+    const renameOnly = await page.evaluate(async target => {
+      const original = await window.dbark.invoke('postgres.structure.read', target);
+      const preview = await window.dbark.invoke('postgres.editView.preview', { ...target,
+        stamp: original.viewEditStamp!, definition: original.viewDefinition!, columnNames: ['原位置的新列名'] });
+      const result = await window.dbark.invoke('postgres.editView.apply', { connectionId: target.connectionId, database: target.database, token: preview.token });
+      return { statements: preview.statements, outcome: result.outcome };
+    }, target);
+    expect(renameOnly.outcome).toBe('committed');
+    expect(renameOnly.statements).toHaveLength(3);
+    expect(renameOnly.statements[0]).toContain('SET SCHEMA');
+    expect(renameOnly.statements.slice(1).every(sql => /^ALTER VIEW .* RENAME COLUMN /.test(sql))).toBe(true);
+    expect(await oid()).toBe(originalOid);
+    expect(await names()).toEqual(['原位置的新列名', '正文']);
+    expect((await observer.query('SELECT "正文" FROM public.view_inspect_depend')).rows).toEqual([{ 正文: '更新前可预览' }]);
 
     const materialized = await open('view_inspect_mv', true);
     await materialized.getByLabel(create.populate).uncheck();
-    await definition(materialized).fill("SELECT '物化视图样本'::text AS marker;");
+    await definition(materialized).fill("SELECT '物化视图样本'::text AS marker, 2 AS suffix;");
     await sample(materialized);
     await expect(cell(materialized, '物化视图样本')).toBeVisible();
+    await columnButton(materialized, columnsText.add).click();
+    await column(materialized, 1).fill('快照');
+    await columnButton(materialized, columnsText.apply).click();
     expect((await viewNames()).some(name => name.includes('view_inspect_mv'))).toBe(false);
     await materialized.getByRole('button', { name: create.preview, exact: true }).click();
     await materialized.getByRole('button', { name: create.materializedApply, exact: true }).click();
@@ -108,11 +164,14 @@ test('视图定义数据预览和估算计划使用原数据库，只读且不�
     const saved = await page.evaluate(target => window.dbark.invoke('postgres.structure.read', target),
       { connectionId, database, table: '"public"."view_inspect_mv"' });
     expect(saved).toMatchObject({ kind: 'm', materialized: { populated: false } });
+    expect(saved.columns.map(column => column.name)).toEqual(['快照', 'suffix']);
     expect(await history()).toEqual(beforeHistory);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
     retainOwnedDesktopResources(info);
     throw reason;
+  } finally {
+    await observer.end();
   }
 });

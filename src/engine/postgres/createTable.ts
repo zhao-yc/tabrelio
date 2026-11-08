@@ -8,12 +8,12 @@ import {
   type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget, type PostgresTruncateScope, type PostgresTableMoveScope,
 } from '../../shared/postgresCreateTable';
 import type { PostgresConnection } from './connection';
-import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery,
+import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery, postgresViewColumnsSql,
   type PostgresCreateViewInput, type PostgresEditViewInput, type PostgresViewManageInput } from '../../shared/postgresCreateView';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import { postgresMaterializedRefreshSchema, type PostgresMaterializedRefreshInput } from '../../shared/postgresMaterializedView';
 import { readPostgresMaterializedFacts } from './materializedView';
-import { postgresViewOptionsSql, readPostgresViewFacts } from './viewDefinition';
+import { postgresViewOptionsSql, readPostgresViewFacts, postgresViewColumnRenames } from './viewDefinition';
 import { compilePostgresRoutine } from './createRoutine';
 import { postgresRoutineCreateSchema, postgresRoutineManageSchema, type PostgresRoutineCreateInput,
   type PostgresRoutineManageInput } from '../../shared/postgresRoutine';
@@ -479,17 +479,17 @@ export class PostgresCreateTableWorkspace {
   /** 预览仅读取目标目录；视图定义由服务器在确认后的扩展协议 DDL 中校验。 */
   async prepareView(input: Scoped<PostgresCreateViewInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'view', connect, () => {
-      const { connectionId, database, schema, view, definition, comment, materialized } = input;
-      const draft = { connectionId, database, schema, view, definition, comment, materialized };
+      const { connectionId, database, schema, view, definition, comment, materialized, columnNames } = input;
+      const draft = { connectionId, database, schema, view, definition, comment, materialized, columnNames };
       const plan = postgresCreateViewPlan(draft);
       const label = materialized ? '物化视图' : '视图';
       return { ...plan, success: 'PostgreSQL 新' + label + '已确认创建', protocol: 'extended',
         // 立即填充的原生命令回执为 SELECT 行数，仍须回读新建对象后才能提交。
         ...(materialized?.populate ? { statementTimeout: '120s' as const, firstCommand: 'SELECT' as const } : {}),
-        preflight: connection => preflight(connection, draft, view, [], label),
+        preflight: connection => preflight(connection, draft, view, columnNames ?? [], label),
         async verify(connection, oid) {
           const result = await connection.query(`
-            SELECT pg_catalog.obj_description(c.oid, 'pg_class'), c.relispopulated
+            SELECT pg_catalog.obj_description(c.oid, 'pg_class'), c.relispopulated, c.oid::text
             FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
             WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3
               AND c.relkind = $4::pg_catalog."char" AND c.relpersistence = 'p'
@@ -498,6 +498,15 @@ export class PostgresCreateTableWorkspace {
           if (result.truncated || result.rows.length !== 1 || row.c0 !== (comment || null) ||
               materialized && row.c1 !== (materialized.populate ? 't' : 'f'))
             throw Error('新视图的实际 schema、类别、注释或填充状态与预览不同，未提交');
+          if (columnNames?.length) {
+            const actual = await connection.query(`
+              SELECT a.attname::text FROM pg_catalog.pg_attribute a WHERE a.attrelid = $1::oid
+                AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum LIMIT $2::integer
+            `, [String(row.c2), String(columnNames.length)], { rows: columnNames.length, bytes: 512 * 1024 });
+            if (actual.truncated || actual.rows.length !== columnNames.length ||
+                actual.rows.some((column, index) => column.c0 !== columnNames[index]))
+              throw Error('新视图的实际列名与预览不同，未提交');
+          }
         },
       };
     });
@@ -506,21 +515,29 @@ export class PostgresCreateTableWorkspace {
   /** 将定义和原选项编成同一预览，提交前锁住原视图并再次核对目录。 */
   async prepareViewEdit(input: Scoped<PostgresEditViewInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'viewEdit', connect, () => {
-      const { connectionId, database, table, definition, stamp } = input;
-      const draft = postgresEditViewPreviewSchema.parse({ connectionId, database, table, definition, stamp });
+      const { connectionId, database, table, definition, stamp, columnNames } = input;
+      const draft = postgresEditViewPreviewSchema.parse({ connectionId, database, table, definition, stamp, columnNames });
       const { schema, name } = postgresRelationName(draft.table);
       const qualified = postgresIdentifier(schema) + '.' + postgresIdentifier(name);
       const query = postgresViewQuery(draft.definition);
       return async connection => {
         const original = await readPostgresViewFacts(connection, schema, name);
         if (original.stamp !== draft.stamp) throw Error('原视图已变化，请刷新结构后编辑');
+        const names = draft.columnNames ?? [];
+        const renames = postgresViewColumnRenames(qualified, original.columns, names);
+        const replacement = 'CREATE OR REPLACE VIEW ' + qualified + postgresViewColumnsSql(names) +
+          postgresViewOptionsSql(original.options) + ' AS\n' + query;
+        const renameOnly = renames.length && names.length <= original.columns.length && definition.trim() === original.definition.trim();
+        const statements = renameOnly ? renames : [...renames, replacement];
         return {
           ...viewGuard(schema, name, qualified, original.stamp),
           table: qualified, success: 'PostgreSQL 视图定义已确认更新',
-          statements: ['CREATE OR REPLACE VIEW ' + qualified + postgresViewOptionsSql(original.options) + ' AS\n' + query],
+          statements,
           async verify(current) {
             const actual = await readPostgresViewFacts(current, schema, name);
             if (actual.preserved !== original.preserved) throw Error('视图身份、所有者、授权、注释或选项已变化，未提交');
+            if (names.some((column, index) => actual.columns[index] !== column))
+              throw Error('视图输出列名与预览不同，未提交');
           },
         };
       };

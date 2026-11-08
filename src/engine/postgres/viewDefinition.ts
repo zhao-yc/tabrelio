@@ -9,6 +9,8 @@ export const postgresViewFactsSql = `pg_catalog.jsonb_build_object(
   'oid', c.oid::text, 'namespace', c.relnamespace::text, 'owner', c.relowner::text,
   'acl', c.relacl::text, 'comment', pg_catalog.obj_description(c.oid, 'pg_class'),
   'options', COALESCE(c.reloptions, ARRAY[]::text[]),
+  'columns', ARRAY(SELECT a.attname::text FROM pg_catalog.pg_attribute a
+    WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum),
   'definition', pg_catalog.pg_get_viewdef(c.oid, false),
   'revision', (SELECT r.xmin::text FROM pg_catalog.pg_rewrite r WHERE r.ev_class = c.oid AND r.rulename = '_RETURN'),
   'catalogRevision', CASE WHEN c.relkind = 'm' THEN c.xmin::text END,
@@ -28,7 +30,7 @@ const oid = z.string().regex(/^\d+$/);
 const factsSchema = z.object({
   oid, namespace: oid, owner: oid, acl: z.string().nullable(), comment: z.string().nullable(),
   options: z.array(z.string().regex(/^[a-z_][a-z_0-9]*=.+$/)).max(32), definition: z.string().min(1), revision: oid,
-  catalogRevision: oid.nullable(),
+  catalogRevision: oid.nullable(), columns: z.array(z.string().min(1)).max(1600),
   materialized: z.tuple([z.boolean(), oid, oid, oid, z.array(z.tuple([oid, z.string().min(1), oid])).max(2000)]).nullable(),
 }).strict();
 
@@ -48,8 +50,8 @@ export async function readPostgresViewFacts(connection: PostgresConnection, sche
   const raw = result.rows[0]?.c0;
   if (result.truncated || result.rows.length !== 1 || typeof raw !== 'string')
     throw Error('视图不存在、权限已变化或目录超出预算');
-  const { definition, revision, options, catalogRevision, ...identity } = factsSchema.parse(JSON.parse(raw));
-  return { oid: identity.oid, namespace: identity.namespace, revision, stamp: postgresViewStamp(raw), preserved: JSON.stringify({ ...identity, options: [...options].sort() }), options };
+  const { definition, revision, options, catalogRevision, columns, ...identity } = factsSchema.parse(JSON.parse(raw));
+  return { oid: identity.oid, namespace: identity.namespace, revision, definition, columns, stamp: postgresViewStamp(raw), preserved: JSON.stringify({ ...identity, options: [...options].sort() }), options };
 }
 
 /** 把原服务器选项逐项转义，避免替换定义时 PostgreSQL 重置选项。 */
@@ -59,4 +61,22 @@ export function postgresViewOptionsSql(options: string[]): string {
     const delimiter = option.indexOf('=');
     return postgresIdentifier(option.slice(0, delimiter)) + ' = ' + postgresDdlLiteral(option.slice(delimiter + 1));
   }).join(', ') + ')';
+}
+
+/** 先释放冲突名称，再分配最终名称，交换列名也不会改变列号或依赖。 */
+export function postgresViewColumnRenames(table: string, original: readonly string[], names: readonly string[]): string[] {
+  const final = original.map((name, index) => names[index] ?? name);
+  if (new Set(final).size !== final.length) throw Error('输出列名与现有列重复，请检查未覆盖的列名');
+  const reserved = new Set([...original, ...names]);
+  const release: string[] = [], assign: string[] = [];
+  let serial = 0;
+  const rename = (from: string, to: string) => 'ALTER VIEW ' + table + ' RENAME COLUMN ' + postgresIdentifier(from) + ' TO ' + postgresIdentifier(to);
+  for (const [index, name] of original.entries()) {
+    if (name === final[index]) continue;
+    let temporary: string;
+    do { temporary = '_tabrelio_' + ++serial; } while (reserved.has(temporary));
+    release.push(rename(name, temporary));
+    assign.push(rename(temporary, final[index]));
+  }
+  return [...release, ...assign];
 }

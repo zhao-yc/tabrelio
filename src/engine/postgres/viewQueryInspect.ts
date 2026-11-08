@@ -18,6 +18,9 @@ export async function inspectPostgresViewQuery(connection: PostgresConnection, r
       const result = await connection.query('FETCH FORWARD ' + (postgresViewQuerySampleRows + 1) + ' FROM tabrelio_view_sample',
         undefined, { rows: postgresViewQuerySampleRows, bytes: 512 * 1024 }, undefined, 'extended');
       if (result.postgresCommand !== 'FETCH') throw Error('PostgreSQL 未确认视图数据预览');
+      const names = input.columnNames ?? [];
+      if (names.length > result.columns.length) throw Error('显式列名数量超过查询输出列数');
+      result.columns = result.columns.map((column, index) => ({ ...column, name: names[index] ?? column.name }));
       return { results: [result], elapsedMs: result.elapsedMs };
     }
     const result = await connection.query('EXPLAIN (ANALYZE FALSE, VERBOSE TRUE, FORMAT JSON)\n' + query,

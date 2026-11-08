@@ -1,3 +1,5 @@
+import { postgresCreateViewPlan, postgresViewColumnsSchema } from '../../src/shared/postgresCreateView';
+import { postgresViewColumnRenames } from '../../src/engine/postgres/viewDefinition';
 import { describe, expect, it } from 'vitest';
 import { postgresCreateTablePlan, postgresCreateTablePreviewSchema, type PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
 import { movePostgresCreateKey } from '../../src/renderer/components/PostgresCreateKeyOrder';
@@ -250,4 +252,33 @@ it('PostgreSQL 建库与维护仅接受固定模板、连接上限和明确确�
     { ...create, sql: 'CREATE DATABASE another' }])
     expect(postgresDatabaseManagePreviewSchema.safeParse(input).success).toBe(false);
   expect(postgresDatabaseManageApplySchema.safeParse({ ...target, token: '0550f54a-5fc9-4447-a835-fd56f9e9a17f', confirmed: false }).success).toBe(false);
+});
+
+
+describe('PostgreSQL 视图输出列名', () => {
+  const table = '"public"."v"';
+  it('普通和物化视图按顺序引用显式名称，支持只覆盖前缀', () => {
+    const draft = { connectionId: 'pg', database: 'db', schema: 'public', view: 'v', definition: 'SELECT 1, 2;', comment: '', columnNames: ['自"定义'] };
+    expect(postgresCreateViewPlan(draft).statements).toEqual(['CREATE VIEW ' + table + ' ("自""定义") AS\nSELECT 1, 2\n']);
+    expect(postgresCreateViewPlan({ ...draft, materialized: { populate: false } }).statements).toEqual([
+      'CREATE MATERIALIZED VIEW ' + table + ' ("自""定义") AS\nSELECT 1, 2\nWITH NO DATA',
+    ]);
+  });
+
+  it('交换列名前释放两列名称，跳过已占用的临时名且保留未指定列', () => {
+    expect(postgresViewColumnRenames(table, ['a', 'b', '_tabrelio_1'], ['b', 'a'])).toEqual([
+      'ALTER VIEW ' + table + ' RENAME COLUMN "a" TO "_tabrelio_2"',
+      'ALTER VIEW ' + table + ' RENAME COLUMN "b" TO "_tabrelio_3"',
+      'ALTER VIEW ' + table + ' RENAME COLUMN "_tabrelio_2" TO "b"',
+      'ALTER VIEW ' + table + ' RENAME COLUMN "_tabrelio_3" TO "a"',
+    ]);
+    expect(() => postgresViewColumnRenames(table, ['a', 'b'], ['b'])).toThrow('与现有列重复');
+    expect(postgresViewColumnRenames(table, ['a'], ['a', 'new'])).toEqual([]);
+  });
+
+  it('按 UTF-8 字节限制并区分双引号标识符的大小写', () => {
+    expect(postgresViewColumnsSchema.parse(['A', 'a', '😀'])).toEqual(['A', 'a', '😀']);
+    expect(() => postgresViewColumnsSchema.parse(['名'.repeat(22)])).toThrow();
+    expect(() => postgresViewColumnsSchema.parse(['a', 'a'])).toThrow('重复');
+  });
 });

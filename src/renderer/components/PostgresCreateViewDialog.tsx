@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview, PostgresCreateTableTarget } from '../../shared/postgresCreateTable';
-import { postgresCreateViewPreviewSchema, preparePostgresViewDefinition, postgresViewQuerySampleRows, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
+import { postgresCreateViewPreviewSchema, postgresViewColumnsSchema, preparePostgresViewDefinition, postgresViewQuerySampleRows, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
 import { errorMessage, invoke } from '../lib';
 import { postgresCreateViewZh as text } from '../locales/postgresCreateView.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { ViewOutputColumns } from './ViewOutputColumns';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
@@ -26,7 +27,8 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
   const dialect = profile?.dialect;
   const [schemas, setSchemas] = useState<string[]>([]);
-  const [draft, setDraft] = useState({ schema: '', view: '', definition: '', comment: '', populate: true });
+  const [draft, setDraft] = useState({ schema: '', view: '', definition: '', comment: '', populate: true, columnNames: [] as string[] });
+  const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
   const [preview, setPreview] = useState<(PostgresCreateTablePreview & { version: number })>();
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false), [unknown, setUnknown] = useState(false), [error, setError] = useState('');
@@ -144,7 +146,13 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
             onChange={event => edit('populate', event.target.checked)} /> {text.populate}</label>}
           <ViewQueryInspect owner={draft} hint={viewQueryInspectZh.postgresHint(postgresViewQuerySampleRows)}
             disabled={busy || loading || unknown || !schemas.length || !draft.definition.trim()} current={importCurrent}
-            read={mode => invoke('postgres.createView.inspectQuery', { connectionId, database, definition: draft.definition, mode })}/>
+            read={mode => {
+              if (mode === 'rows') setPreviewColumns(undefined);
+              return invoke('postgres.createView.inspectQuery', { connectionId, database, definition: draft.definition, columnNames: draft.columnNames, mode });
+            }} onRows={columns => setPreviewColumns({ owner: draft, names: columns.map(column => column.name) })}/>
+          <ViewOutputColumns owner={draft} original={draft.columnNames} partial disabled={busy || loading || unknown || !schemas.length}
+            current={importCurrent} previewColumns={previewColumns?.owner === draft ? previewColumns.names : undefined}
+            applyNames={names => edit('columnNames', postgresViewColumnsSchema.parse(names))}/>
         </fieldset>}
     </div>
     <footer className="modal-footer">

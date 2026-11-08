@@ -5,7 +5,7 @@ import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { saveViewSql } from './view-sql-file-save';
 import { clickSidebarAction } from './sidebar-menu';
-import { mysqlViewColumnsZh as columnsText } from '../../src/renderer/locales/mysqlViewColumns.zh-CN';
+import { viewOutputColumnsZh as columnsText } from '../../src/renderer/locales/viewOutputColumns.zh-CN';
 import { mysqlViewAttributesZh as properties } from '../../src/renderer/locales/mysqlViewAttributes.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh as text } from '../../src/renderer/locales/viewSqlFile.zh-CN';

@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { postgresEditViewPreviewSchema, preparePostgresViewDefinition, postgresViewQuerySampleRows } from '../../shared/postgresCreateView';
+import { postgresEditViewPreviewSchema, postgresViewColumnsSchema, preparePostgresViewDefinition, postgresViewQuerySampleRows } from '../../shared/postgresCreateView';
 import { invoke } from '../lib';
 import { postgresViewEditZh as text } from '../locales/postgresViewEdit.zh-CN';
 import { ErrorBox } from './ui';
 import { usePostgresStructureEdit, type PostgresStructureEditProps } from './usePostgresStructureEdit';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { ViewOutputColumns } from './ViewOutputColumns';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
@@ -14,13 +15,15 @@ import { useWorkspace } from '../store';
 export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
   const { target, original, onClose } = props;
   const [definition, setDefinition] = useState(original.viewDefinition ?? '');
+  const [columnNames, setColumnNames] = useState<string[]>([]);
+  const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
   const profile = useWorkspace(state => state.connections.find(item => item.id === target.connectionId));
-  const importOwner = useMemo(() => ({}), [definition, original, profile, props.version, target.connectionId, target.database, target.table]);
-  const dirty = definition !== original.viewDefinition;
+  const importOwner = useMemo(() => ({}), [definition, columnNames, original, profile, props.version, target.connectionId, target.database, target.table]);
+  const dirty = definition !== original.viewDefinition || columnNames.length > 0;
   const { preview, setPreview, busy, unknown, error, setError, operation, submit } =
     usePostgresStructureEdit(props, dirty, false,
       async () => invoke('postgres.editView.preview', postgresEditViewPreviewSchema.parse({
-        ...target, definition, stamp: original.viewEditStamp,
+        ...target, definition, columnNames, stamp: original.viewEditStamp,
       })),
       token => invoke('postgres.editView.apply', { connectionId: target.connectionId, database: target.database, token }));
 
@@ -55,7 +58,13 @@ export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
         hint={viewSqlFileZh.postgresHint} current={importCurrent} prepare={preparePostgresViewDefinition} apply={changeDefinition}/>
       <ViewQueryInspect owner={importOwner} hint={viewQueryInspectZh.postgresHint(postgresViewQuerySampleRows)}
         disabled={busy || unknown || !definition.trim()} current={importCurrent}
-        read={mode => invoke('postgres.createView.inspectQuery', { connectionId: target.connectionId, database: target.database, definition, mode })}/>
+        read={mode => {
+          if (mode === 'rows') setPreviewColumns(undefined);
+          return invoke('postgres.createView.inspectQuery', { connectionId: target.connectionId, database: target.database, definition, columnNames, mode });
+        }} onRows={columns => setPreviewColumns({ owner: importOwner, names: columns.map(column => column.name) })}/>
+      <ViewOutputColumns owner={importOwner} original={columnNames} partial disabled={busy || unknown} current={importCurrent}
+        previewColumns={previewColumns?.owner === importOwner ? previewColumns.names : undefined}
+        applyNames={names => { setColumnNames(postgresViewColumnsSchema.parse(names)); setError(''); }}/>
     </>}
     <div className="pg-column-edit-actions">
       {preview ? <>

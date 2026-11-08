@@ -1,6 +1,8 @@
-export const mysqlViewColumnsZh = {
+export const viewOutputColumnsZh = {
   title: '视图输出列名',
   hint: '列名按查询输出顺序对应。清空显式列名后沿用查询的列名。',
+  partialHint: '列名从第一列起按查询输出顺序覆盖。未覆盖的列沿用查询列名。',
+  tooMany: (count: number) => `当前预览有 ${count} 列，显式列名不能超过这个数量。`,
   unavailable: '请填写视图名称，并核对当前同名视图的完整 SQL 草稿。',
   add: '添加列名',
   fromPreview: '填入预览列名',
