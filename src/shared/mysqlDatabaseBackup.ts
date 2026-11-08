@@ -2,21 +2,40 @@ import type { NetworkConnectionProfile } from './contracts';
 import { z } from 'zod';
 
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
-export const mysqlDatabaseBackupTitle = 'MySQL／MariaDB 整库备份';
+export const mysqlDatabaseBackupTitle = 'MySQL／MariaDB 数据库备份';
 export const mysqlDumpToolTitle = '选择 mysqldump 或 mariadb-dump';
 export const mysqlBackupDatabase = z.string().min(1).refine(value => [...value].length <= 64 &&
   !/^[\-]|[\x00-\x1f\x7f/\\.]| $/u.test(value) && !/^(mysql|information_schema|performance_schema|sys|ndbinfo)$/i.test(value));
 export const mysqlDatabaseBackupFormats = ['sql', 'archive'] as const;
 export type MysqlDatabaseBackupFormat = typeof mysqlDatabaseBackupFormats[number];
-export const mysqlDatabaseBackupChooseSchema = z.object({
-  connectionId: identity, database: mysqlBackupDatabase, toolToken: z.uuid(), format: z.enum(mysqlDatabaseBackupFormats).optional(),
+export const mysqlBackupTableName = z.string().min(1).refine(value => [...value].length <= 64 && !/[\x00-\x1f\x7f/\\.]| $/u.test(value));
+export const mysqlBackupTableLimit = 64;
+const tableScope = z.object({
+  tables: z.array(mysqlBackupTableName).min(1).max(mysqlBackupTableLimit).refine(names => new Set(names).size === names.length),
+  content: z.enum(['all', 'schema', 'data']),
 }).strict();
-export const mysqlDatabaseBackupExecuteSchema = mysqlDatabaseBackupChooseSchema.extend({
+export type MysqlBackupTableScope = z.infer<typeof tableScope>;
+export const mysqlBackupTablesSchema = z.object({ connectionId: identity, database: mysqlBackupDatabase }).strict();
+const backup = mysqlBackupTablesSchema.extend({
+  toolToken: z.uuid(), format: z.enum(mysqlDatabaseBackupFormats).optional(), tableScope: tableScope.optional(),
+}).strict();
+const supportsScope = (input: z.infer<typeof backup>) => !input.tableScope || input.format !== 'archive';
+export const mysqlDatabaseBackupChooseSchema = backup.refine(supportsScope, '指定表备份请选择 SQL 脚本');
+export const mysqlDatabaseBackupExecuteSchema = backup.extend({
   fileToken: z.uuid(), taskId: identity, acknowledgeSnapshot: z.literal(true),
-});
+}).refine(supportsScope, '指定表备份请选择 SQL 脚本');
 export type MysqlDatabaseBackupChooseInput = z.infer<typeof mysqlDatabaseBackupChooseSchema>;
 export type MysqlDatabaseBackupInput = z.infer<typeof mysqlDatabaseBackupExecuteSchema>;
 export interface MysqlDatabaseBackupResult { bytes: number; toolVersion: string; serverVersion: string; archiveSha256?: string }
+
+/** 位置参数使用显式终止符。选表模式生成由恢复窗口选择目标库的 SQL。 */
+export function mysqlBackupDumpArguments(database: string, scope?: MysqlBackupTableScope) {
+  if (!scope) return ['--routines', '--events', '--triggers', '--databases', '--', database];
+  return ['--skip-routines', '--skip-events', scope.content === 'data' ? '--skip-triggers' : '--triggers',
+    '--skip-add-drop-table', '--skip-add-drop-trigger', '--skip-disable-keys', '--complete-insert',
+    ...(scope.content === 'data' ? ['--no-create-info'] : scope.content === 'schema' ? ['--no-data'] : []),
+    '--', database, ...scope.tables];
+}
 
 export function mysqlDatabaseBackupPathMatches(path: string, format: MysqlDatabaseBackupFormat = 'sql') {
   return (format === 'archive' ? /\.zip$/i : /\.sql$/i).test(path);

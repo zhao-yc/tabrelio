@@ -20,7 +20,7 @@ import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './f
 import { postgresTransactionReadSchema, postgresTransactionApplySchema } from './postgresTransactionSettings';
 import { postgresSearchPathReadSchema, postgresSearchPathApplySchema } from './postgresSearchPath';
 import { postgresQueryTimeoutRead, postgresQueryTimeoutApply } from './postgresQueryTimeouts';
-import { mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
+import { mysqlBackupTablesSchema, mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
 import { mysqlSqlFileChooseSchema, mysqlSqlFileExecuteSchema } from './mysqlSqlFile';
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
 import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema } from './postgresSqlFile';
@@ -366,6 +366,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.backup.database': postgresDatabaseBackupExecuteSchema,
   'mysql.backup.chooseTool': z.object({}).strict(), 'mysql.backup.chooseFile': mysqlDatabaseBackupChooseSchema,
   'mysql.backup.database': mysqlDatabaseBackupExecuteSchema,
+  'mysql.backup.tables': mysqlBackupTablesSchema,
   'mysql.sqlFile.choose': mysqlSqlFileChooseSchema, 'mysql.sqlFile.execute': mysqlSqlFileExecuteSchema,
   'postgres.sqlFile.choose': postgresSqlFileChooseSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,

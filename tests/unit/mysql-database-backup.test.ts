@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mysqlDumpOptionFile } from '../../src/engine/databaseBackupNativeOptions';
 import { databaseBackupGlobalGrants } from '../../src/engine/databaseBackupSource';
 import { parseMysqlDumpVersion } from '../../src/engine/mysqlDumpTool';
-import { mysqlDatabaseBackupExecuteSchema } from '../../src/shared/mysqlDatabaseBackup';
+import { mysqlBackupDumpArguments, mysqlDatabaseBackupExecuteSchema } from '../../src/shared/mysqlDatabaseBackup';
 
 describe('MySQL／MariaDB 原生整库备份参数', () => {
   it('识别不同工具的实际版本格式，拒绝用错系列', () => {
@@ -47,5 +47,21 @@ describe('MySQL／MariaDB 原生整库备份参数', () => {
       expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, database }).success).toBe(false);
     expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, filePath: '/tmp/bad.sql' }).success).toBe(false);
     expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, acknowledgeSnapshot: false }).success).toBe(false);
+  });
+
+  it('指定表只接收唯一名称及内容范围，并将库表放在原生命令位置参数中', () => {
+    const token = '26bc6b95-1c96-420f-a765-be66b44b74f0';
+    const scope = { tables: ['--账目', '有`引号'], content: 'data' as const };
+    const input = { connectionId: 'connection', taskId: 'task', database: '迁移测试', toolToken: token,
+      fileToken: token, acknowledgeSnapshot: true, tableScope: scope };
+    expect(mysqlDatabaseBackupExecuteSchema.parse(input)).toEqual(input);
+    for (const tables of [[], ['重复', '重复'], ['跨.库'], ['坏\0名称']])
+      expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, tableScope: { ...scope, tables } }).success).toBe(false);
+    expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, format: 'archive' }).success).toBe(false);
+    expect(mysqlBackupDumpArguments('迁移测试', scope)).toEqual(['--skip-routines', '--skip-events', '--skip-triggers',
+      '--skip-add-drop-table', '--skip-add-drop-trigger', '--skip-disable-keys', '--complete-insert', '--no-create-info',
+      '--', '迁移测试', '--账目', '有`引号']);
+    expect(mysqlBackupDumpArguments('迁移测试', { ...scope, content: 'schema' })).toContain('--no-data');
+    expect(mysqlBackupDumpArguments('迁移测试')).toEqual(['--routines', '--events', '--triggers', '--databases', '--', '迁移测试']);
   });
 });

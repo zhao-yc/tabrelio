@@ -67,6 +67,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.backup.nativeCatalogue': true,
   'postgres.backup.chooseDumpTool': true, 'postgres.backup.chooseDatabaseFile': true, 'postgres.backup.database': true,
   'mysql.backup.chooseTool': true, 'mysql.backup.chooseFile': true, 'mysql.backup.database': true,
+  'mysql.backup.tables': true,
   'mysql.sqlFile.choose': true, 'mysql.sqlFile.execute': true,
   'postgres.sqlFile.choose': true, 'postgres.sqlFile.execute': true,
   'postgres.table.importChoose': true, 'postgres.table.import': true,

@@ -1,7 +1,7 @@
 import { excelImportZh, validExcelImport } from '../shared/excelTransfer';
 import { txtImportZh, validTxtImport } from '../shared/txtImport';
 import { recordImportFormats, validXmlImport, xmlImportZh } from '../shared/xmlImport';
-import { createMysqlDatabaseBackup } from './mysqlDatabaseBackup';
+import { createMysqlDatabaseBackup, readMysqlBackupTables } from './mysqlDatabaseBackup';
 import { readMysqlSqlFile, type MysqlSqlFileSource } from './mysqlSqlFile';
 import { withVerifiedMysqlArchiveDump } from './mysqlBackupArchiveRestore';
 import { canRestoreBackupArchive, databaseBackupArchiveZh } from '../shared/databaseBackupArchiveFiles';
@@ -351,14 +351,23 @@ export class Engine {
         return this.withCopySourceTask(input.connectionId, randomUUID(),
           context => mysqlCompareCatalogue(context, input.database), '读取比较目录', 'no-default-database');
       }
+      case 'mysql.backup.tables': {
+        const profile = input.profile;
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId)
+          throw Error('缺少可信的 MySQL／MariaDB 备份连接');
+        this.copySourceProfile(input);
+        return this.withCopySourceTask(input.connectionId, randomUUID(),
+          context => readMysqlBackupTables(context, input.database), '读取备份目录', 'no-default-database');
+      }
       case 'mysql.backup.database': {
         const profile = input.profile;
         if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId ||
-          input.acknowledgeSnapshot !== true || !input.tool) throw Error('缺少可信的整库备份来源或工具');
+          input.acknowledgeSnapshot !== true || !input.tool) throw Error('缺少可信的数据库备份来源或工具');
         this.copySourceProfile(input);
-        const job = createMysqlDatabaseBackup({ database: input.database, filePath: input.filePath, tool: input.tool, format: input.format });
+        const job = createMysqlDatabaseBackup({ database: input.database, filePath: input.filePath, tool: input.tool,
+          format: input.format, tableScope: input.tableScope });
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => job.stage({ managed, ...control }),
-          undefined, '备份整库 SQL', 'no-default-database', undefined, false, job);
+          undefined, '生成数据库备份', 'no-default-database', undefined, false, job);
       }
       case 'mysql.sqlFile.execute': {
         const profile = input.profile;

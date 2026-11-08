@@ -1,6 +1,6 @@
 # MySQL／MariaDB 备份的 SSH 严格 TLS
 
-在连接设置填入 SSH 跳板可访问的数据库域名或 IP，开启 TLS 并保留证书身份校验。使用私有 CA 时选择对应证书。服务端要求双向 TLS 时，沿用连接里的客户端证书、私钥和口令。设置完成后，可在「工具 → MySQL／MariaDB 整库备份」选择该连接，生成 SQL 或 tabrelio ZIP。
+在连接设置填入 SSH 跳板可访问的数据库域名或 IP，开启 TLS 并保留证书身份校验。使用私有 CA 时选择对应证书。服务端要求双向 TLS 时，沿用连接里的客户端证书、私钥和口令。设置完成后，可在「工具 → MySQL／MariaDB 数据库备份」选择该连接，生成 SQL 或 tabrelio ZIP。
 
 原生工具会用本机回环地址校验证书。遇到非回环数据库地址时，引擎为本次任务生成只供原生工具使用的短期回环证书，私钥保留在进程内存。引擎在原 SSH 通道内用配置的数据库地址和信任链建立独立上游 TLS 会话。两段握手均完成才转发数据库认证字节。回环证书与上游信任链分开，客户端证书和私钥只提供给实际数据库。身份不符或握手失败时，备份文件不会发布。[MySQL 连接 TLS 选项](https://dev.mysql.com/doc/refman/8.0/en/connection-options.html) · [MariaDB 证书验证](https://mariadb.com/docs/server/security/encryption/data-in-transit-encryption/secure-connections-overview)
 

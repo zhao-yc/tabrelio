@@ -1,14 +1,23 @@
-import { mysqlDatabaseBackupTitle, mysqlDumpToolTitle } from '../../shared/mysqlDatabaseBackup';
+import { mysqlBackupTableLimit, mysqlDatabaseBackupTitle, mysqlDumpToolTitle } from '../../shared/mysqlDatabaseBackup';
 
 export const mysqlDatabaseBackupZh = {
   title: mysqlDatabaseBackupTitle,
   tool: mysqlDumpToolTitle,
   connection: '来源连接',
   database: '备份数据库',
-  scope: '通过直连或 SSH 从 MySQL 或 MariaDB 导出带建库语句的 UTF-8 SQL。请选择与服务器系列和主版本匹配的官方客户端工具。',
+  scope: '通过直连或 SSH 从 MySQL 或 MariaDB 导出备份。请选择与服务器系列和主版本匹配的官方客户端工具。',
   snapshot: 'InnoDB 数据来自一致性快照。备份期间请避免建表、改表、删除或修改例程等结构操作。',
   confirm: '我已核对来源，并确认备份期间会避免修改数据库结构',
   format: '备份格式',
+  selection: '备份范围', whole: '整个数据库', selected: '指定 InnoDB 表',
+  content: '备份内容', contents: { all: '结构及数据', schema: '仅结构', data: '仅数据' },
+  tableHint: '选择同库的表。请先准备目标库及未选中的依赖。仅数据需要目标库已有相应表结构。',
+  dataHint: '仅数据脚本执行 INSERT，目标表已有的触发器会照常运行。',
+  wholeHint: '整库备份包含建库语句。',
+  tableList: '选择备份表', tableSearch: '筛选表名称', refreshTables: '刷新备份目录', loadingTables: '正在读取 InnoDB 表',
+  noTables: '当前连接没有可选的 InnoDB 表。', noMatches: '没有匹配的表。',
+  tableCount: (count: number) => '已选择 ' + count + ' 张表（最多 ' + mysqlBackupTableLimit + ' 张）',
+  previous: '上一页', next: '下一页', page: (page: number, pages: number) => '第 ' + page + ' / ' + pages + ' 页',
   sql: 'SQL 脚本',
   archive: 'tabrelio ZIP 归档',
   archiveScope: 'ZIP 归档保存原始 SQL 和可见对象清单，可在归档窗口校验及导出 SQL。',
@@ -19,5 +28,6 @@ export const mysqlDatabaseBackupZh = {
   cancelling: '正在等待原备份任务结束',
   cancel: '取消备份',
   close: '关闭',
-  saved: (bytes: number, version: string, archive: boolean) => `已保存${archive ? '整库 ZIP 归档' : '整库 SQL'} · ${bytes.toLocaleString()} 字节 · 工具 ${version}`,
+  saved: (bytes: number, version: string, archive: boolean, scoped = false) =>
+    `已保存${archive ? '整库 ZIP 归档' : scoped ? '指定表 SQL' : '整库 SQL'} · ${bytes.toLocaleString()} 字节 · 工具 ${version}`,
 } as const;

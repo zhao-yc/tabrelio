@@ -1293,7 +1293,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     const document = columns!.owner.document, revision = store.connectionRevision();
     const check = () => {
       columnsMain.assertCapturedOwner(columns);
-      if (shuttingDown || revision !== store.connectionRevision()) throw Error('整库备份的窗口或连接配置已变化');
+      if (shuttingDown || revision !== store.connectionRevision()) throw Error('数据库备份的窗口或连接配置已变化');
     };
     check();
     if (databaseBackupChoosing.has(document)) throw Error('原窗口仍在选择备份文件');
@@ -1321,7 +1321,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const name = target.database.replace(/[<>:"/\\|?*]/g, '_');
         const archive = target.format === 'archive';
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: mysqlDatabaseBackupTitle,
-          defaultPath: name + (archive ? '-整库备份.dbark-backup.zip' : '-整库备份.sql'),
+          defaultPath: name + (archive ? '-整库备份.dbark-backup.zip' : target.tableScope ? '-指定表备份.sql' : '-整库备份.sql'),
           filters: archive ? [{ name: 'tabrelio 数据库备份归档', extensions: ['zip'] }] : [{ name: 'SQL', extensions: ['sql'] }] });
         check();
         connectionConfig.assertAvailable(target.connectionId);
@@ -2539,15 +2539,16 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'mysql.compareData.cancel':
     case 'postgres.compareData.cancel': return cancelNetworkCompare(input.taskId, columns);
     case 'mysql.compareData.catalogue':
+    case 'mysql.backup.tables':
     case 'postgres.backup.catalogue':
     case 'postgres.backup.nativeCatalogue':
     case 'postgres.compareData.catalogue': {
       columnsMain.assertCapturedOwner(columns);
       connectionConfig.assertAvailable(input.connectionId);
       const revision = store.connectionRevision(), profile = store.resolveConnection(input.connectionId);
-      const accepts = command === 'mysql.compareData.catalogue' ? profile.dialect === 'mysql' || profile.dialect === 'mariadb' : profile.dialect === 'postgresql';
-      const backup = command.startsWith('postgres.backup.');
-      if (!accepts || shuttingDown) throw Error(backup ? '备份目录需要已保存的 PostgreSQL 连接' : '比较目录需要此工具支持的已保存连接');
+      const accepts = command.startsWith('mysql.') ? profile.dialect === 'mysql' || profile.dialect === 'mariadb' : profile.dialect === 'postgresql';
+      const backup = command === 'mysql.backup.tables' || command.startsWith('postgres.backup.');
+      if (!accepts || shuttingDown) throw Error(backup ? '备份目录需要匹配的已保存连接' : '比较目录需要此工具支持的已保存连接');
       const result = await broker.request(command, { ...input, profile });
       columnsMain.assertCapturedOwner(columns);
       if (shuttingDown || revision !== store.connectionRevision()) throw Error(backup ? '备份目录的连接已变化' : '表数据比较的连接已变化');
@@ -2660,6 +2661,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (shuttingDown || !file || !tool || file.token !== input.fileToken || tool.token !== input.toolToken ||
         file.toolToken !== input.toolToken || file.connectionId !== input.connectionId || file.database !== input.database ||
         (file.format ?? 'sql') !== (input.format ?? 'sql') ||
+        JSON.stringify(file.tableScope ?? null) !== JSON.stringify(input.tableScope ?? null) ||
         file.revision !== store.connectionRevision() || file.expires <= Date.now())
         throw Error('备份目标、来源或转储工具已变化，请重新选择');
       const profile = store.resolveConnection(input.connectionId);

@@ -1,6 +1,6 @@
 # MySQL／MariaDB 通过 SSH 备份整库
 
-在「工具 → MySQL／MariaDB 整库备份」选择已保存的 SSH 连接和数据库，指定对应的 `mysqldump` 或 `mariadb-dump` 后，按原流程保存 SQL。可以通过「执行 MySQL／MariaDB SQL 文件」恢复。
+在「工具 → MySQL／MariaDB 数据库备份」选择已保存的 SSH 连接和数据库，指定对应的 `mysqldump` 或 `mariadb-dump` 后，按原流程保存 SQL。可以通过「执行 MySQL／MariaDB SQL 文件」恢复。
 
 客户端先用已保存的指纹核对跳板身份，再在同一个 SSH 会话中开一条额外的转发通道。通道目标固定为连接里从跳板访问的数据库地址。原生工具使用仅接收一次连接的本机回环端口。客户端先核对原库版本和握手声明的 TLS 能力，再交付握手。备份后核对目录与文件终态，最后关闭临时转发和 SSH 会话。[MySQL 原生 TLS 选项](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html) · [MariaDB 原生 TLS 选项](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump)
 

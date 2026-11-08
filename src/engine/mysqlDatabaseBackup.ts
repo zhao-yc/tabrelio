@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { getCACertificates, type SecureContextOptions } from 'node:tls';
 import { promisify } from 'node:util';
-import { mysqlBackupDatabase, mysqlBackupTunnelRoute, mysqlDatabaseBackupPathMatches, type MysqlDatabaseBackupFormat, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
+import { mysqlBackupDatabase, mysqlBackupDumpArguments, mysqlBackupTableName, mysqlBackupTunnelRoute, mysqlDatabaseBackupPathMatches,
+  type MysqlBackupTableScope, type MysqlDatabaseBackupFormat, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
 import type { DatabaseBackupObject } from '../shared/databaseBackup';
 import type { DatabaseBackupSelectedToolManifest } from '../shared/databaseBackupArchiveFiles';
 import { DatabaseBackupArchiveWriter, databaseBackupArchiveLimits } from './databaseBackupArchive';
@@ -88,18 +89,37 @@ async function upstreamTls(profile: Profile, signal: AbortSignal): Promise<Secur
   return { ca, cert, key, passphrase: tls.passphrase };
 }
 
-async function catalogue(context: Context, database: string) {
-  const { managed } = context, family = managed.status.dialect;
-  if (family !== 'mysql' && family !== 'mariadb') throw Error('整库备份需要 MySQL 或 MariaDB');
-  async function read(sql: string, params: string[] = []) {
+function catalogueReader(context: Context) {
+  return async (sql: string, params: string[] = []) => {
     const end = context.commandStarted();
     try {
-      const { rows } = await execute<Row[]>(managed, sql, params);
+      const { rows } = await execute<Row[]>(context.managed, sql, params);
       context.checkCancelled();
-      if (rows.length > 10_000) throw Error('整库备份对象目录超过预算');
+      if (rows.length > 10_000) throw Error('备份对象目录超过预算');
       return rows;
     } finally { end(); }
-  }
+  };
+}
+
+function exactTableFilter(column: 'TABLE_NAME' | 'EVENT_OBJECT_TABLE', names: readonly string[]) {
+  return ' AND BINARY ' + column + ' IN (' + names.map(() => 'BINARY ?').join(',') + ')';
+}
+
+function readBackupTables(read: ReturnType<typeof catalogueReader>, database: string, names?: readonly string[]) {
+  return read('SELECT TABLE_NAME AS name, ENGINE AS engine, CAST(CREATE_TIME AS CHAR) AS created, TABLE_COLLATION AS collation ' +
+    "FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA = BINARY ? AND TABLE_TYPE = 'BASE TABLE' AND ENGINE = 'InnoDB'" +
+    (names ? exactTableFilter('TABLE_NAME', names) : '') + ' ORDER BY BINARY TABLE_NAME LIMIT 10001', [database, ...(names ?? [])]);
+}
+
+export async function readMysqlBackupTables(context: Context, database: string) {
+  const rows = await readBackupTables(catalogueReader(context), database);
+  return rows.flatMap(row => typeof row.name === 'string' && mysqlBackupTableName.safeParse(row.name).success ? [row.name] : []);
+}
+
+async function catalogue(context: Context, database: string, tableScope?: MysqlBackupTableScope) {
+  const { managed } = context, family = managed.status.dialect;
+  if (family !== 'mysql' && family !== 'mariadb') throw Error('备份需要 MySQL 或 MariaDB');
+  const read = catalogueReader(context);
   const [facts] = await read(sourceSql.facts);
   if (typeof facts?.currentUser !== 'string' || facts.currentRole !== null && facts.currentRole !== 'NONE' ||
     typeof facts.sqlMode !== 'string' || !/^[a-z0-9_,]*$/i.test(facts.sqlMode)) throw Error('无法确认备份账号的直接授权');
@@ -107,10 +127,23 @@ async function catalogue(context: Context, database: string) {
   const proof = databaseBackupGlobalGrants(await read(sourceSql.grants), facts.currentUser, family, {
     dialect: family, mode: { ansiQuotes: modes.includes('ANSI_QUOTES'), noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES') },
   }, true, true);
-  const required = ['SELECT', 'SHOW VIEW', 'TRIGGER', 'EVENT', ...(family === 'mariadb' ? ['SHOW CREATE ROUTINE'] : [])];
-  if (!proof.known || required.some(grant => !proof.privileges.has(grant))) throw Error('整库备份需要直接全局授权以证明对象目录完整：' + required.join('、'));
+  const required = tableScope ? (tableScope.content === 'data' ? ['SELECT'] : ['SELECT', 'TRIGGER']) :
+    ['SELECT', 'SHOW VIEW', 'TRIGGER', 'EVENT', ...(family === 'mariadb' ? ['SHOW CREATE ROUTINE'] : [])];
+  if (!proof.known || required.some(grant => !proof.privileges.has(grant)))
+    throw Error((tableScope ? '指定表备份' : '整库备份') + '需要直接全局授权以证明对象目录完整：' + required.join('、'));
   const schemas = await read(sourceSql.schemas, [database]);
   if (schemas.length !== 1 || schemas[0].name !== database) throw Error('未找到所选数据库的准确名称');
+  if (tableScope) {
+    const names = tableScope.tables;
+    const tables = await readBackupTables(read, database, names);
+    if (tables.length !== names.length || names.some(name => !tables.some(table => table.name === name)))
+      throw Error('所选 InnoDB 表已变化或不可读取，请刷新备份目录');
+    const triggers = tableScope.content === 'data' ? [] : await read(
+      'SELECT TRIGGER_NAME AS name, EVENT_OBJECT_TABLE AS tableName, DEFINER AS definer ' +
+      'FROM information_schema.TRIGGERS WHERE BINARY TRIGGER_SCHEMA = BINARY ?' + exactTableFilter('EVENT_OBJECT_TABLE', names) +
+      ' ORDER BY BINARY TRIGGER_NAME LIMIT 10001', [database, ...names]);
+    return { schemas, tables, routines: [], triggers, events: [], account: facts.currentUser };
+  }
   const tables = await read(sourceSql.tables, [database]);
   if (tables.some(table => table.objectType !== 'VIEW' && (table.objectType !== 'BASE TABLE' || table.engine !== 'InnoDB')))
     throw Error('当前库含非 InnoDB 表或其它关系对象，无法使用一致性快照备份');
@@ -156,7 +189,8 @@ async function settleMysqlDumpBackend(managed: Context['managed'], lock: string)
   throw Error('原生转储线程退出尚未确认');
 }
 
-export function createMysqlDatabaseBackup(input: { database: string; filePath: string; tool: MysqlDumpTool; format?: MysqlDatabaseBackupFormat }) {
+export function createMysqlDatabaseBackup(input: { database: string; filePath: string; tool: MysqlDumpTool;
+  format?: MysqlDatabaseBackupFormat; tableScope?: MysqlBackupTableScope }) {
   const controller = new AbortController();
   const signal = controller.signal;
   let output: AtomicFile | undefined, result: MysqlDatabaseBackupResult | undefined;
@@ -164,9 +198,9 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
   let archive: DatabaseBackupArchiveWriter | undefined;
   let manifest: Omit<DatabaseBackupSelectedToolManifest, 'dump'> | undefined;
   return {
-    abort() { controller.abort(Error('整库备份已取消')); },
+    abort() { controller.abort(Error((input.tableScope ? '指定表备份' : '整库备份') + '已取消')); },
     async stage(context: Context) {
-      const { tool, database, filePath, format } = input;
+      const { tool, database, filePath, format, tableScope } = input;
       const { managed } = context, profile = managed.profile, family = managed.status.dialect;
       if (!mysqlBackupDatabase.safeParse(database).success || !isAbsolute(filePath) || !mysqlDatabaseBackupPathMatches(filePath, format)) throw Error('备份库名或目标文件格式无效');
       if (family !== tool.family || profile.dialect !== family) throw Error('工具需与实际服务器系列匹配');
@@ -175,7 +209,8 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
       const serverVersion = managed.status.version;
       if (toolVersion.split('.')[0] !== serverVersion.replace(/^5\.5\.5-/, '').split('.')[0])
         throw Error('请选择与服务器主版本相同的原生转储工具');
-      const before = await catalogue(context, database);
+      if (tableScope && format === 'archive') throw Error('指定表备份请选择 SQL 脚本');
+      const before = await catalogue(context, database, tableScope);
       const archiveVersion = format === 'archive' ? /^\d{1,2}\.\d{1,2}\.\d{1,2}(?!\d)/.exec(serverVersion.replace(/^5\.5\.5-/, ''))?.[0] : undefined;
       if (format === 'archive' && !archiveVersion) throw Error('无法确认归档所需的数据库版本');
       const archiveToolHash = archiveVersion ? await hashMysqlDumpTool(tool, signal) : undefined;
@@ -224,10 +259,10 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
           '--defaults-file=' + defaults, ...(mysql ? ['--no-login-paths'] : []),
           '--protocol=TCP', '--host=' + (tunnel?.host ?? profile.host), '--port=' + (tunnel?.port ?? profile.port), ...tls,
           '--default-character-set=utf8mb4', '--single-transaction', '--quick', '--hex-blob',
-          '--routines', '--events', '--triggers', '--skip-lock-tables', '--skip-add-locks',
+          '--skip-lock-tables', '--skip-add-locks',
           ...(lock ? ['--set-gtid-purged=OFF', '--column-statistics=0', '--no-tablespaces',
             `--init-command=DO IF(@@server_uuid='${uuid}', GET_LOCK('${lock}',0), JSON_EXTRACT('invalid endpoint','$'))`] : []),
-          '--databases', '--', database,
+          ...mysqlBackupDumpArguments(database, tableScope),
         ];
         let header = '', tail = '';
         const staged = output;
@@ -250,7 +285,7 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
         if (tunnel && !tunnel.forwardingStarted || version !== serverVersion || !/^-- Dump completed on [^\r\n]+\r?$/m.test(tail))
           throw Error('未确认完整的原生转储头尾或实际服务器版本');
       } finally { await rm(directory, { recursive: true, force: true }); }
-      if (JSON.stringify(before) !== JSON.stringify(await catalogue(context, database))) throw Error('备份期间数据库对象目录发生变化，未保存备份');
+      if (JSON.stringify(before) !== JSON.stringify(await catalogue(context, database, tableScope))) throw Error('备份期间数据库对象目录发生变化，未保存备份');
       if (archiveVersion && archiveToolHash && objects) {
         manifest = { format: 'dbark-backup-zip-store-v1', schemaVersion: 2, family, database, serverVersion: archiveVersion,
           toolVersion, toolExecutableSha256: archiveToolHash, objects, resourcesConfirmed: true, restoreVerified: false,
