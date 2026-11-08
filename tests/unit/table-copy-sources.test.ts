@@ -91,6 +91,32 @@ describe('末页在独立只读事务中计数并读取', () => {
 
 describe('页租约签发与普通查看兼容', () => {
   it('显式复制的完整普通页在同MDL复核目录，保留原值且不核物理身份或签发行租约', async () => { const f = fixture(); f.state.info.columns.find(column => column.name === 'hidden')!.extra = ''; const page = await f.issue(); expect(page.copySource).toBeUndefined(); expect(page.copyMetadataKey).toBe(tableCopyMetadataKey(f.state.info)); expect(f.log[2]).toBe('SELECT 1 FROM `db`.`records` LIMIT 0'); expect(f.log.at(-1)).toBe('ROLLBACK'); expect(f.identity).not.toHaveBeenCalled(); });
+  it('普通页保留同一读页的 TIMESTAMP 主键原时刻，内部别名不进入网格也不签发租约', async () => {
+    const f = fixture();
+    f.state.info.columns[0].type = 'timestamp(6)';
+    f.state.info.columns[2].extra = '';
+    f.state.raw.id = '2026-10-15 12:34:56.123456';
+    const page = await f.issue();
+    expect(page.primaryKeyEpochs).toEqual([{ id: '1792067696.123456' }]);
+    expect(page.rows).toEqual([f.state.raw]);
+    expect(page.columns.map(column => column.name)).toEqual(['id', 'note', 'hidden']);
+    expect(page.copySource).toBeUndefined();
+    expect(f.identity).not.toHaveBeenCalled();
+    expect(f.log.some(sql => sql.startsWith('SELECT @@SESSION.time_zone'))).toBe(false);
+    expect(f.log.at(-1)).toBe('ROLLBACK');
+  });
+  it('附带的主键时刻超过表页总预算时保留普通浏览，并让复制缺少时刻的行失败', async () => {
+    const f = fixture();
+    f.state.info.columns[0].type = 'timestamp(6)';
+    f.state.info.columns[2].extra = '';
+    f.readPage.mockRejectedValueOnce(new Error('当前页数据超过 16 MiB，未返回可编辑数据'));
+    const page = await f.issue();
+    expect(f.readPage).toHaveBeenCalledTimes(2);
+    expect(page.rows).toEqual([f.state.raw]);
+    expect(page.primaryKeyEpochs).toEqual([{}]);
+    expect(page.copyMetadataKey).toBe(tableCopyMetadataKey(f.state.info));
+    expect(f.identity).not.toHaveBeenCalled();
+  });
   it('初读旧目录没有INVISIBLE，MDL内新目录新增该列时仍签发新结构而非本地完整标记', async () => { const f = fixture(), old = structuredClone(f.state.info); old.columns = old.columns.filter(column => column.name !== 'hidden'); f.readInfo.mockResolvedValueOnce(old); const { page, source } = await f.ready(); expect(source.missingColumns).toEqual(['hidden']); expect(page.copyMetadataKey).toBe(source.metadataKey); expect(page.copyMetadataKey).not.toBe(tableCopyMetadataKey(old)); });
   it('同事务MDL内核目录、身份、读页并签发，rollback之后才交付', async () => {
     const f = fixture(), { source } = await f.ready(); expect(source.missingColumns).toEqual(['hidden']); expect(source.rowRefs).toHaveLength(1); expect(source.expiresAt).toBe(f.state.now + limits.retentionMs);

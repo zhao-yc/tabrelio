@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fixture } from '../helpers/copyInsertPage';
+import { prepareCopyPrimaryKeyQuery } from '../../src/renderer/copyInsertSql';
+import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 
 describe('仅复制明确表页中已加载的未修改行', () => {
   it('无键表和只读引擎也能本地复制，按页顺序复制当前/选中行，不扩展整表', () => {
@@ -29,5 +31,48 @@ describe('仅复制明确表页中已加载的未修改行', () => {
   it('空选择、失效 UUID、缺失目录字段和未知结果列不能推断为完整 INSERT', () => {
     const f = fixture(); expect(() => f.prepare(new Set())).toThrow(); expect(() => f.prepare(new Set(['其他UUID']))).toThrow();
     delete f.page.rows[0].值; delete f.rows[0].original!.值; delete f.rows[0].data.值; expect(() => f.prepare()).toThrow('缺少字段');
+  });
+});
+
+describe('MySQL 和 MariaDB 原主键查询复制', () => {
+  function source() {
+    const f = fixture();
+    f.info.primaryKey = ['值', 'id', 'stamp', 'bit'];
+    f.info.columns[0].type = 'bigint unsigned';
+    f.info.columns[1].type = 'varchar(32)';
+    f.info.columns.push({ ...f.info.columns[0], name: 'stamp', type: 'timestamp(6)' },
+      { ...f.info.columns[0], name: 'bit', type: 'bit(64)' });
+    f.page.copyMetadataKey = tableCopyMetadataKey(f.info);
+    f.page.rows = [
+      { id: '18446744073709551615', 值: "É'\\", stamp: '2024-06-02 12:34:56.123456', bit: { type: 'binary', base64: '//////////8=' } },
+      { id: '18446744073709551614', 值: '', stamp: '2024-06-02 12:34:57.123456', bit: { type: 'binary', base64: 'AAAAAAAAAAA=' } },
+    ];
+    f.page.primaryKeyEpochs = [{ stamp: '1717331696.123456' }, { stamp: '1717331697.123456' }];
+    f.rows.forEach((row, index) => { row.original = structuredClone(f.page.rows[index]); row.data = structuredClone(f.page.rows[index]); });
+    const copy = (ids = new Set(['行0', '行1'])) => prepareCopyPrimaryKeyQuery(f.context, f.binding, f.page, f.rows, ids);
+    return { ...f, copy };
+  }
+
+  it('按目录主键顺序生成复合条件，使用原键而不使用已编辑值', () => {
+    const f = source();
+    f.rows[0].data.id = '7';
+    const sql = f.copy(new Set(['行1', '行0']));
+    expect(sql).toContain("WHERE (`值` = _utf8mb4 X'c389275c' AND `id` = CAST(CAST(18446744073709551615 AS DECIMAL(20,0)) AS UNSIGNED)");
+    expect(sql).toContain("UNIX_TIMESTAMP(`stamp`) = CAST(1717331696.123456 AS DECIMAL(20,6))");
+    expect(sql).toContain("`bit` = CAST(CAST(18446744073709551615 AS DECIMAL(20,0)) AS UNSIGNED)");
+    expect(sql).toContain("\n   OR (`值` = _utf8mb4 X''");
+  });
+
+  it('拒绝缺失时刻、修改的原快照、未知行与不可靠浮点键', () => {
+    const f = source();
+    delete f.page.primaryKeyEpochs![1].stamp;
+    expect(() => f.copy()).toThrow('缺少原主键值');
+    expect(() => f.copy(new Set(['行0', '后来行']))).toThrow('有效行');
+    f.rows[0].original!.id = '1';
+    expect(() => f.copy(new Set(['行0']))).toThrow('主键目录');
+    f.rows[0].original = structuredClone(f.page.rows[0]);
+    f.info.columns[0].type = 'double';
+    f.page.copyMetadataKey = tableCopyMetadataKey(f.info);
+    expect(() => f.copy(new Set(['行0']))).toThrow('无法保真');
   });
 });

@@ -869,6 +869,8 @@ PostgreSQL 普通表和只读视图的网格上方也有「复制（含列名）
 
 在有主键的 PostgreSQL 表页，点击「复制原主键查询 SQL」可取得完整的 `SELECT`。有勾选时使用本页勾选行，否则使用当前数据格所在行。SQL 使用已载入的原主键，可粘贴到查询编辑器核对。[PostgreSQL 原主键查询复制](development/postgres-primary-key-query-20261108.md)
 
+在有主键的 MySQL 或 MariaDB 表页，打开「更多 → 生成查询 → 复制原主键查询 SQL」。有勾选时使用本页勾选行，否则使用当前数据格所在行。复合键按记录生成条件，TIMESTAMP 键沿用读取时取得的原时刻。[MySQL 和 MariaDB 原主键查询复制](development/mysql-primary-key-query-20261108.md)
+
 SQLite 普通表也提供这两个入口，包括通过只读连接打开的表。复制按原页的实际存储类型生成 SQL，整数、实数、文本、BLOB 和 NULL 分别保留。含草稿的所选行须先提交或撤销。[SQLite 表页复制 INSERT](development/sqlite-copy-insert-sql-20261108.md)
 
 在有主键的 SQLite 普通表中，点击「复制原主键查询 SQL」可按当前行或本页勾选行生成完整的 `SELECT`。它沿用主键索引的排序规则，并取已载入的原主键。任一所选记录的主键含 NULL 时，整次拒绝复制。[SQLite 原主键查询复制](development/sqlite-primary-key-query-20261108.md)

@@ -1,6 +1,10 @@
-import type { DataRow, TablePage } from '../shared/contracts';
-import { assertCopyInsertSqlInput, type CopyInsertSqlInput } from '../shared/copyInsertSql';
+import type { CellValue, ColumnInfo, DataRow, TablePage } from '../shared/contracts';
+import { assertCopyInsertSqlInput, copyInsertColumnKind, copyInsertNumericLiteral, copyInsertSqlLimits as limits, type CopyInsertSqlInput } from '../shared/copyInsertSql';
 import { copyInsertSqlZh as text } from '../shared/copyInsertSql.zh-CN';
+import { tableReadIdentifier, tableReadTextLiteral } from '../shared/tableReadSql';
+import { decodeBinaryCell } from './binaryCell';
+import { primaryKeyCopyZh as keyText } from './locales/primaryKeyCopy.zh-CN';
+import { ownCell } from './lib';
 import type { DraftRow } from './dataChanges';
 import { recordCopyMetadataReason, type RecordCopyPage } from './recordCopySource';
 import type { RecordContext } from './recordViews';
@@ -30,4 +34,89 @@ export function prepareCopyInsertSql(context: RecordContext, binding: RecordCopy
   };
   assertCopyInsertSqlInput(input);
   return structuredClone(input);
+}
+
+const utf8 = new TextEncoder();
+
+/** 生成可独立执行的精确条件。浮点型主键缺少可核对的原始位值，拒绝猜测相等。 */
+function primaryKeyTerm(column: ColumnInfo, value: CellValue, epoch: string | undefined): string {
+  const identifier = tableReadIdentifier(column.name);
+  const metadata = { ...column, generated: false, extra: '' };
+  let kind: ReturnType<typeof copyInsertColumnKind>;
+  try { kind = copyInsertColumnKind(metadata); } catch { throw Error(keyText.type); }
+  if (kind === 'float') throw Error(keyText.type);
+  if (kind === 'binary') {
+    if (!value || typeof value !== 'object') throw Error(keyText.type);
+    const bytes = decodeBinaryCell(value)!;
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    const bit = /^BIT(?:\((\d+)\))?$/i.exec(column.type);
+    if (!bit) return identifier + " = X'" + hex + "'";
+    const width = Number(bit[1] ?? 1), numeric = hex ? BigInt('0x' + hex) : -1n;
+    if (width < 1 || width > 64 || bytes.length > Math.ceil(width / 8) || numeric < 0n || numeric >= (1n << BigInt(width)))
+      throw Error(keyText.type);
+    return identifier + ' = CAST(CAST(' + numeric + ' AS DECIMAL(20,0)) AS UNSIGNED)';
+  }
+  if (kind === 'text') {
+    if (typeof value !== 'string') throw Error(keyText.type);
+    if (/^TIMESTAMP\b/i.test(column.type)) {
+      if (epoch === undefined || !/^\d{1,12}(?:\.\d{1,6})?$/.test(epoch)) throw Error(keyText.incomplete);
+      if (!/^0(?:\.0+)?$/.test(epoch)) return 'UNIX_TIMESTAMP(' + identifier + ') = CAST(' + epoch + ' AS DECIMAL(20,6))';
+    }
+    // 转为原显示文本后比较可覆盖旧数据中的零日期，避免不同 SQL mode 将其隐式解释为非法值。
+    const left = /^(?:DATE|DATETIME|TIMESTAMP|TIME)\b/i.test(column.type) ? 'CAST(' + identifier + ' AS CHAR CHARACTER SET utf8mb4)' : identifier;
+    return left + ' = ' + tableReadTextLiteral(value);
+  }
+  let numeric: string | undefined;
+  try { numeric = copyInsertNumericLiteral(metadata, value); } catch { throw Error(keyText.type); }
+  if (!numeric) throw Error(keyText.type);
+  if (kind === 'integer' && /\bunsigned\b/i.test(column.type)) {
+    if (BigInt(numeric) > 18446744073709551615n) throw Error(keyText.type);
+    return identifier + ' = CAST(CAST(' + numeric + ' AS DECIMAL(20,0)) AS UNSIGNED)';
+  }
+  return identifier + ' = ' + numeric;
+}
+
+/** 仅从已核验目录的原页按勾选顺序范围复制，不将本地修改或临时新增作为数据库主键。 */
+export function prepareCopyPrimaryKeyQuery(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
+  rows: readonly DraftRow[], ids: ReadonlySet<string>): string {
+  const info = context.info;
+  if (context.busy || context.stale || !context.loaded || !info || info.objectKind !== 'table' ||
+      info.database !== context.target.database || info.name !== context.target.table || !page || binding?.page !== page ||
+      recordCopyMetadataReason(context, binding) || !info.primaryKey.length ||
+      new Set(info.primaryKey).size !== info.primaryKey.length) throw Error(keyText.target);
+  if (!ids.size) throw Error(keyText.selection);
+  if (ids.size > limits.rows || ids.size * info.primaryKey.length > limits.cells) throw Error(keyText.limit);
+  const columns = info.primaryKey.map(name => {
+    const column = info.columns.find(item => item.name === name);
+    if (!column) throw Error(keyText.target);
+    return column;
+  });
+  const originals = rows.filter(row => !row.inserted);
+  if (originals.length !== page.rows.length) throw Error(keyText.target);
+  const prefix = 'SELECT * FROM ' + tableReadIdentifier(info.database) + '.' + tableReadIdentifier(info.name) + '\nWHERE ';
+  const separator = '\n   OR ', separatorBytes = utf8.encode(separator).length;
+  let inputBytes = 0, sqlBytes = utf8.encode(prefix).length + 1;
+  const conditions: string[] = [];
+  for (const [index, row] of originals.entries()) {
+    if (!ids.has(row.id)) continue;
+    const original = page.rows[index];
+    if (!sameRow(row.original, original)) throw Error(keyText.target);
+    const terms = columns.map(column => {
+      const value = ownCell(original, column.name);
+      if (value === undefined || value === null) throw Error(keyText.incomplete);
+      const payload = typeof value === 'string' ? value : typeof value === 'object' ? value.base64 : String(value);
+      if (payload.length > limits.cellBytes) throw Error(keyText.limit);
+      const size = utf8.encode(payload).length;
+      inputBytes += size;
+      if (size > limits.cellBytes || inputBytes > limits.inputBytes) throw Error(keyText.limit);
+      const epochs = page.primaryKeyEpochs?.[index];
+      return primaryKeyTerm(column, value, epochs && Object.hasOwn(epochs, column.name) ? epochs[column.name] : undefined);
+    });
+    const condition = '(' + terms.join(' AND ') + ')';
+    sqlBytes += utf8.encode(condition).length + (conditions.length ? separatorBytes : 0);
+    if (sqlBytes > limits.sqlBytes) throw Error(keyText.limit);
+    conditions.push(condition);
+  }
+  if (conditions.length !== ids.size) throw Error(keyText.selection);
+  return prefix + conditions.join(separator) + ';';
 }

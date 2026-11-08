@@ -105,23 +105,34 @@ export class TableCopySources {
         const { rows } = await this.ports.query<{ matchingRows: string }[]>(context, inlineParameters(sql, params));
         last = tableLastPageBounds(rows.length === 1 ? rows[0].matchingRows : undefined, input.pageSize);
       }
-      // 即使初始目录没有INVISIBLE，也须在同一MDL内复核并读页，不能给本地快捷路径旧结构背书。
-      if (!fresh.columns.some(column => ordinary(column) && /\bINVISIBLE\b/i.test(column.extra))) return { ...await read(fresh), copyMetadataKey: metadataKey };
-      const prepared = await this.ports.identity(context, fresh);
-      const timeZone = (await this.ports.query<{ timeZone: string }[]>(context, 'SELECT @@SESSION.time_zone AS timeZone')).rows[0]?.timeZone;
-      const pageSql = statement(fresh), aliases = new Map<string, string>(), names = new Set(fresh.columns.map(column => column.name));
-      for (const key of fresh.editableKey) { const column = fresh.columns.find(column => column.name === key); if (!column || !/^TIMESTAMP\b/i.test(column.type) || /\bINVISIBLE\b/i.test(column.extra)) continue; let alias = '__dbark_copy_epoch_' + aliases.size; while (names.has(alias)) alias += '_'; names.add(alias); aliases.set(key, alias); }
+      // 即使没有 INVISIBLE，也在同一 MDL 内复核并读页。只有可能补取的页才读取物理租约身份。
+      const mayNeedSupplement = fresh.columns.some(column => ordinary(column) && /\bINVISIBLE\b/i.test(column.extra));
+      const aliases = new Map<string, string>(), names = new Set(fresh.columns.map(column => column.name));
+      const epochKeys = mayNeedSupplement ? new Set([...fresh.editableKey, ...fresh.primaryKey]) : fresh.primaryKey;
+      for (const key of epochKeys) { const column = fresh.columns.find(column => column.name === key); if (!column || !/^TIMESTAMP\b/i.test(column.type) || /\bINVISIBLE\b/i.test(column.extra)) continue; let alias = '__dbark_copy_epoch_' + aliases.size; while (names.has(alias)) alias += '_'; names.add(alias); aliases.set(key, alias); }
+      if (!mayNeedSupplement && !aliases.size) return { ...await read(fresh), copyMetadataKey: metadataKey };
+      const supplement = mayNeedSupplement ? {
+        prepared: await this.ports.identity(context, fresh),
+        timeZone: (await this.ports.query<{ timeZone: string }[]>(context, 'SELECT @@SESSION.time_zone AS timeZone')).rows[0]?.timeZone,
+      } : undefined;
+      const pageSql = statement(fresh);
       const projection = aliases.size ? pageSql.replace(/^SELECT \* FROM /, 'SELECT *,' + [...aliases].map(([key, alias]) => 'UNIX_TIMESTAMP(' + identifier(key) + ') AS ' + identifier(alias)).join(',') + ' FROM ') : pageSql;
       let raw: TablePage; try { raw = await read(fresh, projection); } catch (error) {
         // 内部精度投影不能使原本预算内的页面失败；退回普通页后该行因缺少epoch不能获租约。
-        if (!aliases.size || (!permission(error) && !(error instanceof Error && error.message.startsWith('当前页包含超过 256 KiB')))) throw error;
+        const overBudget = error instanceof Error && /^(?:当前页包含超过 256 KiB|当前页数据超过 16 MiB)/.test(error.message);
+        if (!aliases.size || (!permission(error) && !overBudget)) throw error;
         raw = await read(fresh);
       }
       const epochs = raw.rows.map(row => Object.fromEntries([...aliases].flatMap(([key, alias]) => { const value = own(row, alias); return value !== undefined && value !== null ? [[key, String(value)]] : []; })));
       const hidden = new Set(aliases.values());
-      const page: TablePage = { ...raw, copyMetadataKey: metadataKey, ...(aliases.size ? { columns: raw.columns.filter(column => !hidden.has(column.key)), rows: raw.rows.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => !hidden.has(key)))) } : {}) };
+      // 与原值同页捕获 TIMESTAMP 主键的内部时间，生成查询时无需猜测会话时区。
+      const primaryEpochKeys = fresh.primaryKey.filter(key => aliases.has(key));
+      const primaryKeyEpochs = primaryEpochKeys.length ? epochs.map(row =>
+        Object.fromEntries(primaryEpochKeys.flatMap(key => Object.hasOwn(row, key) ? [[key, row[key]]] : []))) : undefined;
+      const page: TablePage = { ...raw, copyMetadataKey: metadataKey, ...(primaryKeyEpochs ? { primaryKeyEpochs } : {}), ...(aliases.size ? { columns: raw.columns.filter(column => !hidden.has(column.key)), rows: raw.rows.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => !hidden.has(key)))) } : {}) };
       const loaded = page.columns.map(column => column.key), missing = fresh.columns.filter(column => ordinary(column) && (!loaded.includes(column.name) || page.rows.some(row => !Object.hasOwn(row, column.name)))).map(column => column.name);
-      if (!missing.length) return page;
+      if (!supplement || !missing.length) return page;
+      const { prepared, timeZone } = supplement;
       const unavailable = (reason: TableCopyUnavailable): TablePage => ({ ...page, copySource: { status: 'unavailable', reason, missingColumns: missing } });
       if ('reason' in prepared) return unavailable(prepared.reason);
       if (fresh.objectKind !== 'table' || fresh.engine.toUpperCase() !== 'INNODB') return unavailable('unsupported');
