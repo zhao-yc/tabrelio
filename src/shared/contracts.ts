@@ -292,6 +292,8 @@ export interface CommandMap {
   'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetQuery };
   'postgres.completion': { input: import('./postgresCompletion').PostgresCompletionInput; output: import('./postgresCompletion').PostgresCompletionResult };
+  'postgres.storage.read': { input: import('./postgresStorage').PostgresStorageRead; output: import('./postgresStorage').PostgresStorageReport };
+  'postgres.storage.detail': { input: import('./postgresStorage').PostgresStorageDetailInput; output: import('./postgresStorage').PostgresStorageDetail };
   'postgres.relationMaintenance.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresRelationMaintenance').PostgresRelationMaintenanceCatalog };
   'postgres.relationMaintenance.preview': { input: import('./postgresRelationMaintenance').PostgresRelationMaintenancePreview; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.relationMaintenance.apply': { input: import('./postgresRelationMaintenance').PostgresRelationMaintenanceApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

@@ -7,12 +7,24 @@ import { postgresPolicyChangeSchema, postgresPolicyRequiresReplacement } from '.
 import { postgresSchemaApplySchema, postgresSchemaPreviewSchema } from '../../src/shared/postgresSchemaManage';
 import { postgresDatabaseManageApplySchema, postgresDatabaseManagePreviewSchema } from '../../src/shared/postgresDatabaseManage';
 import { postgresRelationMaintenanceApplySchema, postgresRelationMaintenancePreviewSchema, postgresRelationMaintenanceSql } from '../../src/shared/postgresRelationMaintenance';
+import { formatPostgresStorageBytes, postgresStorageDetailSchema, postgresStorageReadSchema } from '../../src/shared/postgresStorage';
 
 const draft: PostgresCreateTableInput = {
   connectionId: '原连接', database: '原库', schema: '业务"区', table: '新"表', comment: "注释'；\\",
   columns: [{ name: '原"列', type: 'text', nullable: false, primary: true, unique: false, identity: 'none',
     default: { mode: 'literal', value: "a\\'; DROP TABLE 其他; --" }, comment: '多行\n注释' }],
 };
+
+it('PostgreSQL 空间报告限制排序和分页，字节显示保留 BigInt 精度', () => {
+  const input = { connectionId: '连接', database: '库', query: '%_中文', sort: 'total', direction: 'desc', page: 80 };
+  expect(postgresStorageReadSchema.parse(input)).toEqual(input);
+  for (const value of [{ ...input, sort: 'pg_sleep(5)' }, { ...input, page: 81 }, { ...input, kind: 'view' }])
+    expect(postgresStorageReadSchema.safeParse(value).success).toBe(false);
+  expect(postgresStorageDetailSchema.safeParse({ connectionId: '连接', database: '库', table: 'public.t', identity: 'bad' }).success).toBe(false);
+  expect(formatPostgresStorageBytes('0')).toBe('0 B');
+  expect(formatPostgresStorageBytes('1536')).toBe('1.5 KiB');
+  expect(formatPostgresStorageBytes('9223372036854775807')).toBe('8.0 EiB');
+});
 
 it('PostgreSQL 日常维护仅接受固定动作和原对象目录摘要', () => {
   const request = { connectionId: '连接', database: '库', table: '"区"."表"', action: 'vacuum', stamp: 'a'.repeat(64) };

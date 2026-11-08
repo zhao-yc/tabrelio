@@ -1,0 +1,17 @@
+export const postgresStorageZh = {
+  title: 'PostgreSQL 空间分析', schema: 'Schema', allSchemas: '全部 Schema', query: '关系名称包含',
+  kind: '关系类型', allKinds: '全部类型', sort: '排序字段', direction: '排序方向', asc: '升序', desc: '降序',
+  kinds: { table: '表', partition: '子分区', materialized: '物化视图' },
+  sorts: { total: '总空间', data: '表数据空间', indexes: '索引空间', live: '估算行数', name: '关系名称' },
+  report: '空间明细', schemaSummary: '按 Schema 汇总', filtered: '当前筛选范围', count: '关系数',
+  data: '表数据空间', indexes: '索引空间', total: '总空间', name: '关系名称', parent: '分区父表',
+  live: '存活行估算', dead: '失效行估算', scans: '累计顺序扫描',
+  indexName: '索引名称', indexScans: '累计索引扫描', indexValid: '索引状态', valid: '有效', invalid: '无效', bytes: '字节数',
+  detail: '查看明细', details: '关系空间明细', noIndexes: '当前关系没有独立索引。',
+  apply: '应用筛选', refresh: '刷新空间目录', close: '关闭', back: '返回报告',
+  prev: '上一页', next: '下一页', page: (page: number, total: number) => '第 ' + page + ' / ' + total + ' 页',
+  intro: '汇总包含当前可见的物理表、子分区和物化视图。表数据空间包含 TOAST，行数来自 PostgreSQL 统计估算。',
+  broad: '当前范围超过 4,000 个关系，请按 Schema、名称或类型缩小范围。',
+  empty: '当前筛选范围没有可见的物理关系。',
+  changed: '原连接已变化，请重新打开空间分析。',
+} as const;

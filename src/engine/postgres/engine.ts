@@ -28,6 +28,8 @@ import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
 import { postgresSchemaCatalog } from './schemaManage';
+import { readPostgresStorage, readPostgresStorageDetail } from './storage';
+import { postgresStorageDetailSchema, postgresStorageReadSchema } from '../../shared/postgresStorage';
 import { postgresRelationMaintenanceCatalog } from './relationMaintenance';
 import { postgresPartitionCatalog } from './partitionManage';
 import { postgresExtensionCatalog } from './extensionManage';
@@ -1291,9 +1293,20 @@ export class PostgresEngine {
       case 'postgres.routine.ownerTargets':
       case 'postgres.structure.dependencies':
       case 'postgres.structure.definition':
+      case 'postgres.storage.read':
+      case 'postgres.storage.detail':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');
+        if (command === 'postgres.storage.read' || command === 'postgres.storage.detail') {
+          const { profile: _, ...request } = input;
+          return this.use(profile, input.database, async connection => {
+            await preparePostgresSearchConnection(connection, input.database);
+            return command === 'postgres.storage.read'
+              ? readPostgresStorage(connection, postgresStorageReadSchema.parse(request))
+              : readPostgresStorageDetail(connection, postgresStorageDetailSchema.parse(request));
+          });
+        }
         if (command === 'postgres.structure.definition') {
           const { profile: _, ...request } = input;
           const target = postgresDefinitionTargetSchema.parse(request);

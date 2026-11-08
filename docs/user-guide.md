@@ -318,6 +318,8 @@ PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件�
 
 在 PostgreSQL 普通表或物化视图的「查看结构」中，可进入关系维护，更新统计、执行普通 VACUUM 或重建表索引。[PostgreSQL 日常关系维护](development/postgres-relation-maintenance-20261108.md)
 
+右键 PostgreSQL 数据库选择「PostgreSQL 空间分析」，可按 Schema 筛选和汇总关系的表数据空间、索引空间，并查看索引明细。[PostgreSQL 空间分析](development/postgres-storage-report-20261108.md)
+
 右键 PostgreSQL 连接选择「管理 PostgreSQL 数据库」，可选择模板建库，编辑注释、所有者和连接设置，或从另一个维护库执行改名。[PostgreSQL 数据库管理](development/postgres-database-management-20261108.md)
 
 右键 PostgreSQL 数据库选择「管理 PostgreSQL Schema」，可查看可见 Schema 的所有者和权限，并在有权限时创建、改名、编辑注释、转移所有者或受限删除。改名和删除前先关闭受影响的表页或视图页。[PostgreSQL Schema 管理](development/postgres-schema-management-20261108.md)
