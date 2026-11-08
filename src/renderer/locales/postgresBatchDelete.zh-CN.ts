@@ -14,7 +14,7 @@ export const postgresBatchDeleteZh = {
   collectedAction: '删除跨页收集记录',
   collectedTitle: '确认 PostgreSQL 跨页删除',
   collectedCount: (pages: number, count: number) => '已收集 ' + pages + ' 页、' + count + ' 条删除目标',
-  pagesLimit: '删除目标与已有草稿最多保留 16 个原页，请移除部分收集后继续。',
+  pagesLimit: '跨页收集目标与已有草稿最多保留 16 个原页，请移除部分收集后继续。',
   rowsLimit: '一次最多收集 100 条删除目标，请移除部分收集后继续。',
   pagesExpired: '部分删除目标的原页已失效，请移除或在当前页重新收集。',
   pagesOverlap: '不同原页包含同一主键，请调整收集范围。',

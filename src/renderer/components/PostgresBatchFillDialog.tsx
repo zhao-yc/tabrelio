@@ -8,8 +8,9 @@ import { PostgresRecordFields, type PostgresRecordValues } from './PostgresRecor
 import { ErrorBox, Field, Modal } from './ui';
 
 /** 编辑器只维护统一字段赋值，确认后一次交给原表页草稿。 */
-export function PostgresBatchFillDialog({ columns, count, filtered, onStage, onClose }: {
+export function PostgresBatchFillDialog({ columns, count, groups, filtered, onStage, onClose }: {
   columns: readonly PostgresTableColumn[]; count: number; onStage(fields: PostgresTableField[]): void; onClose(): void;
+  groups?: readonly { index: number; count: number }[];
   filtered?: { initial?: PostgresTableField[]; busy: boolean; error: string };
 }) {
   const initial = filtered?.initial;
@@ -31,9 +32,10 @@ export function PostgresBatchFillDialog({ columns, count, filtered, onStage, onC
     setError('');
   }
 
-  return <Modal title={filtered ? filteredText.title : text.title} onClose={onClose} wide>
+  return <Modal title={filtered ? filteredText.title : groups ? text.collectedTitle : text.title} onClose={onClose} wide>
     <div className="modal-content pg-record-form">
-      <p>{filtered ? filteredText.scope : `${text.notice} ${text.count(count)}`}</p>
+      <p>{filtered ? filteredText.scope : `${text.notice} ${groups ? text.collectedCount(groups.length, count) : text.count(count)}`}</p>
+      {groups && <ul>{groups.map(group => <li key={group.index}>{text.pageCount(group.index, group.count)}</li>)}</ul>}
       {chosen.map(column => <div key={column.key} className="pg-batch-fill-field">
         <PostgresRecordFields columns={[column]} fields={fields} editable disabled={filtered?.busy} batch onChange={change => {
           setFields(change); setError('');

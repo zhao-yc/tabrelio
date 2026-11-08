@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTableChange, PostgresTableColumn, PostgresTablePage } from '../../src/shared/postgresTable';
+import { capturePostgresCheckedFill, planPostgresCheckedFill } from '../../src/renderer/postgresCheckedFill';
+import { retainPostgresCheckedPages, postgresCheckedPagePins } from '../../src/renderer/postgresCheckedPages';
+import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
 import { postgresBatchFillChanges } from '../../src/renderer/postgresBatchFill';
 
 const column = (key: string, options: Partial<PostgresTableColumn> = {}): PostgresTableColumn => ({
@@ -34,5 +37,33 @@ describe('PostgreSQL 勾选记录批量填充', () => {
     expect(() => plan('c1', key => key === '二' ? { kind: 'delete', row: 1 } : undefined)).toThrow('已有记录');
     expect(() => postgresBatchFillChanges(page, columns, selected, [{ column: 'c2', value: { mode: 'binary', value: 'x' } }],
       () => undefined)).toThrow('填充值');
+  });
+});
+
+describe('PostgreSQL 跨页勾选填充', () => {
+  const expires = () => Date.now() + 60000;
+  const first = () => capturePostgresCheckedFill({ ...page, writeExpiresAt: expires() }, 0, columns, new Set([0]), []);
+  const second = () => capturePostgresCheckedFill({ ...page, pageToken: '第二页', writeExpiresAt: expires() }, 2, columns, new Set([1]), []);
+  const fields = [{ column: 'c1', value: { mode: 'text' as const, value: '甲' } }];
+
+  it('原页同值跳过，已有更新保留未填字段、首次定位和快照令牌', () => {
+    const previous: PostgresDraftEntry = { rowKey: '二', offset: 6, change: { kind: 'update', row: 7,
+      pageToken: '首次版本', fields: [{ column: 'c2', value: { mode: 'default' } }] } };
+    const draft = [previous];
+    const result = planPostgresCheckedFill([second(), first()], columns, fields, draft);
+    expect(result).toEqual({ count: 1, entries: [{ ...previous, change: { ...previous.change,
+      fields: [{ column: 'c2', value: { mode: 'default' } }, ...fields] } }] });
+    expect(planPostgresCheckedFill([first(), second()], columns, fields, result.entries).entries).toBe(result.entries);
+    expect(draft).toEqual([previous]);
+  });
+
+  it('不同页的原主键重复、来源被释放、字段未共同收集或预算不足时拒绝整批', () => {
+    const a = first(), b = second(), released = retainPostgresCheckedPages([a, b], new Set([a.token]));
+    expect(() => planPostgresCheckedFill([a, { ...a, token: '重叠', offset: 4 }], columns, fields, [])).toThrow(/同一主键/);
+    expect(() => planPostgresCheckedFill(released, columns, fields, [])).toThrow(/失效/);
+    expect(() => planPostgresCheckedFill([a, { ...b, columns: new Set(['c2']) }], columns, fields, [])).toThrow(/普通字段/);
+    expect(() => capturePostgresCheckedFill({ ...page, writeExpiresAt: expires() }, 0, columns, new Set([0]), [], 10)).toThrow(/4 MiB/);
+    expect(postgresCheckedPagePins({ retainPageTokens: ['已编辑'], retainHistoryPageTokens: ['旧历史'] }, [a, b, a]))
+      .toEqual({ retainPageTokens: ['已编辑'], retainHistoryPageTokens: [a.token, b.token, '旧历史'] });
   });
 });

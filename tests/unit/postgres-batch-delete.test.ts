@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTablePage } from '../../src/shared/postgresTable';
 import { postgresBatchDeletePlan } from '../../src/renderer/postgresBatchDelete';
-import { capturePostgresCheckedDelete, planPostgresCheckedDelete, postgresCheckedDeletePins } from '../../src/renderer/postgresCheckedDelete';
+import { capturePostgresCheckedDelete, planPostgresCheckedDelete } from '../../src/renderer/postgresCheckedDelete';
+import { postgresCheckedPagePins } from '../../src/renderer/postgresCheckedPages';
 import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
 
 const page: PostgresTablePage = {
@@ -63,7 +64,7 @@ describe('PostgreSQL 跨页勾选删除', () => {
   it('勾选保留令牌优先于普通撤销历史，且不会突破原页预算', () => {
     const retainPageTokens = Array.from({ length: 15 }, (_, index) => '草稿' + index);
     const pins = { retainPageTokens, retainHistoryPageTokens: ['其它历史', '原页'] };
-    expect(postgresCheckedDeletePins(pins, [first()])).toEqual({ retainPageTokens, retainHistoryPageTokens: ['原页'] });
-    expect(() => postgresCheckedDeletePins(pins, [first(), second()])).toThrow('16 个原页');
+    expect(postgresCheckedPagePins(pins, [first()])).toEqual({ retainPageTokens, retainHistoryPageTokens: ['原页'] });
+    expect(() => postgresCheckedPagePins(pins, [first(), second()])).toThrow('16 个原页');
   });
 });

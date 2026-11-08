@@ -1,13 +1,11 @@
-import { postgresTableLimits, type PostgresTablePage } from '../shared/postgresTable';
+import { type PostgresTablePage } from '../shared/postgresTable';
 import type { PostgresDraftEntry } from '../shared/postgresTableDraft';
 import { postgresBatchDeletePlan, type PostgresBatchDeletePlan } from './postgresBatchDelete';
 import { postgresBatchDeleteZh as text } from './locales/postgresBatchDelete.zh-CN';
 
-export interface PostgresCheckedDeletePage {
-  readonly offset: number;
-  readonly token: string;
-  readonly valid: boolean;
-  readonly expiresAt: number;
+import { postgresCheckedPageCurrent, type PostgresCheckedPage } from './postgresCheckedPages';
+
+export interface PostgresCheckedDeletePage extends PostgresCheckedPage {
   readonly targets: readonly { rowKey: string; row: number }[];
   readonly rows: PostgresBatchDeletePlan['rows'];
 }
@@ -23,24 +21,9 @@ export function capturePostgresCheckedDelete(page: PostgresTablePage, offset: nu
   };
 }
 
-export function postgresCheckedDeletePageCurrent(page: PostgresCheckedDeletePage): boolean {
-  return page.valid && page.expiresAt > Date.now();
-}
-
-/** 确保显式收集的原页有保留名额，再用剩余名额保留普通撤销历史。 */
-export function postgresCheckedDeletePins(pins: { retainPageTokens: string[]; retainHistoryPageTokens: string[] }, pages: readonly PostgresCheckedDeletePage[]) {
-  const retained = new Set(pins.retainPageTokens), requested = new Set(pages.filter(page => postgresCheckedDeletePageCurrent(page) && !retained.has(page.token)).map(page => page.token));
-  if (requested.size + retained.size > postgresTableLimits.draftPages) throw Error(text.pagesLimit);
-  for (const token of pins.retainHistoryPageTokens) {
-    if (requested.size + retained.size >= postgresTableLimits.draftPages) break;
-    if (!retained.has(token)) requested.add(token);
-  }
-  return { retainPageTokens: pins.retainPageTokens, retainHistoryPageTokens: [...requested] };
-}
-
 /** 使用首次原行版本覆盖更新草稿，拒绝不同页收集到同一主键。 */
 export function planPostgresCheckedDelete(pages: readonly PostgresCheckedDeletePage[], draft: readonly PostgresDraftEntry[]) {
-  if (!pages.length || pages.some(page => !postgresCheckedDeletePageCurrent(page))) throw Error(text.pagesExpired);
+  if (!pages.length || pages.some(page => !postgresCheckedPageCurrent(page))) throw Error(text.pagesExpired);
   const ordered = [...pages].sort((left, right) => left.offset - right.offset);
   const prior = new Map(draft.map(entry => [entry.rowKey, entry]));
   const keys = new Set<string>(), additions: PostgresDraftEntry[] = [];

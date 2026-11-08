@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。PostgreSQL 可逐页收集勾选填充目标，为多个字段设置统一值，保留各页首次记录版本并整批撤销和提交。D02、D04 和 R01 仍为部分覆盖。[PostgreSQL 跨页勾选填充](development/postgres-checked-fill-20261108.md)
+
 2026-11-08 源码增量。SQLite 可编辑表支持保留页勾选、跨页多字段填充、逐页撤销和统一事务提交。D02、D04 和 R02 仍为部分覆盖。[SQLite 跨页勾选填充](development/sqlite-workspace-checked-fill-20261108.md)
 
 2026-11-08 源码增量。MySQL 和 MariaDB 的可编辑表支持跨保留页勾选已有记录、为多个字段设置统一值、逐页撤销和集中事务提交。D02 和 D04 仍为部分覆盖。[跨页勾选填充](development/workspace-checked-fill-20261108.md)

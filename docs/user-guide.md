@@ -310,7 +310,7 @@ PostgreSQL 表页的「按当前筛选删除」会预览目标表中所有匹配
 
 在 PostgreSQL「字段概况」选数值字段及 5、10 或 20 个目标区间，再点「读取数值分布」。直方图覆盖当前筛选的全部匹配行，NULL、NaN 和无穷值单独显示。详见[PostgreSQL 数值直方图](development/postgres-table-histogram-20261106.md)。
 
-勾选 PostgreSQL 网格中的记录后，可[批量填充指定字段](development/postgres-batch-fill-20261106.md)，整批暂存、撤销，并通过原表页预览确认后提交。
+勾选 PostgreSQL 网格中的记录后，可[批量填充指定字段](development/postgres-batch-fill-20261106.md)，整批暂存、撤销，并通过原表页预览确认后提交。 在不同页点击「收集本页填充目标」后，可用「填充跨页收集记录」核对页号和数量，为多个字段填写统一值，再整批暂存、撤销和提交。[PostgreSQL 跨页勾选填充](development/postgres-checked-fill-20261108.md)
 
 「[删除勾选记录](development/postgres-batch-delete-20261106.md)」可按原行号和主键核对本页多条记录，暂存后可整批撤销，最后从表页预览确认提交。
 
