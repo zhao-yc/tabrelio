@@ -62,6 +62,28 @@ test('已保存视图显示可见的直接引用与被引用对象', async ({}, 
     await expect(dependants.getByRole('row').filter({ hasText: localView }).getByRole('cell', { name: database, exact: true })).toBeVisible();
     await expect(dependants.getByRole('row').filter({ hasText: crossView }).getByRole('cell', { name: linked, exact: true })).toBeVisible();
     await expect(dependants.getByText(indirect)).toHaveCount(0);
+    const definition = panel.getByRole('region', { name: text.definitionTitle, exact: true });
+    const ddl = definition.locator('.monaco-editor .view-lines');
+    const close = definition.getByRole('button', { name: text.closeDefinition, exact: true });
+    const openSource = references.getByRole('button', { name: text.openDefinition(linked, upstream), exact: true });
+    const openConsumer = dependants.getByRole('button', { name: text.openDefinition(linked, crossView), exact: true });
+    await openSource.click();
+    await expect(definition.getByText(linked + ' / ' + upstream, { exact: true })).toBeVisible();
+    await expect(ddl).toContainText('CREATE TABLE ' + quoted(upstream));
+    await expect(ddl).toContainText('PRIMARY KEY');
+    await close.click();
+    await openConsumer.click();
+    await expect(definition.getByText(linked + ' / ' + crossView, { exact: true })).toBeVisible();
+    // 服务端可在跨库视图的定义里保留库名限定。
+    await expect(ddl).toContainText(new RegExp('VIEW\\s+(?:' + quoted(linked) + '\\.)?' + quoted(crossView) + '\\s+AS\\b'));
+    await close.click();
+    await observer.query('DROP VIEW ' + target(linked, crossView));
+    await observer.query('CREATE TABLE ' + target(linked, crossView) + ' (id INT)');
+    await openConsumer.click();
+    await expect(definition.getByText(text.kindChanged, { exact: true })).toBeVisible();
+    await expect(ddl).toHaveCount(0);
+    await close.click();
+    await expect(dialog.locator('.monaco-editor .view-lines')).toContainText('draft_marker');
     expect(await original()).toBe(originalSql);
     expect(await history()).toEqual(beforeHistory);
     await dialog.getByRole('button', { name: zh.common.cancel, exact: true }).click();

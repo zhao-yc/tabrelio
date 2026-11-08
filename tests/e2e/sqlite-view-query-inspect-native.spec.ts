@@ -183,6 +183,17 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
     await expect(consumers.getByRole('cell', { name: 'direct_consumer', exact: true })).toBeVisible();
     await expect(consumers.locator('tbody tr')).toHaveCount(1);
     await expect(dependencyPanel.getByText(dependencies.skipped(1), { exact: true })).toBeVisible();
+    const definition = dependencyPanel.getByRole('region', { name: dependencies.definitionTitle, exact: true });
+    const ddl = definition.locator('.monaco-editor .view-lines');
+    const closeDefinition = definition.getByRole('button', { name: dependencies.closeDefinition, exact: true });
+    await sources.getByRole('button', { name: dependencies.openDefinition('main', 'sample_source'), exact: true }).click();
+    await expect(ddl).toContainText('CREATE TABLE sample_source');
+    await closeDefinition.click();
+    await consumers.getByRole('button', { name: dependencies.openDefinition('main', 'direct_consumer'), exact: true }).click();
+    await expect(ddl).toContainText('CREATE VIEW direct_consumer');
+    await expect(ddl).toContainText('later_cte');
+    await closeDefinition.click();
+    await expect(replacement.locator('.monaco-editor .view-lines')).toContainText('draft_only');
     expect(await readFile(database)).toEqual(beforeDependencies);
     await load(replacement, true);
     await action(replacement, inspect.rows);
