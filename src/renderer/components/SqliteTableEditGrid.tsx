@@ -14,6 +14,10 @@ import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
 import { writeTableClipboardEvent } from '../gridClipboard';
+import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
+import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
+import { sqliteCopyInsertDraftRows } from '../sqliteCopyInsertSql';
+import { useWorkspace } from '../store';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
@@ -172,6 +176,20 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
       setError('');
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : headerCopyText.unavailable); }
   }
+  /** 只从本次勾选或活动数据格取得原行，草稿失败不会进入原生复制事件。 */
+  function copyRowsAsInsert(checked: boolean) {
+    const allowed = () => !disabled && current() && noModal();
+    if (!allowed()) return;
+    try {
+      const cell = activeCell.current.position;
+      const records = checked ? rows.filter(row => selectedRows.has(row.id)) : cell ? [cell.row] : [];
+      if (checked && records.length !== selectedRows.size) throw Error(insertCopyText.selection);
+      const sql = sqliteCopyInsertDraftRows(page, records);
+      writeTableClipboardEvent(allowed, data => data.setData('text/plain', sql));
+      setError('');
+      useWorkspace.getState().notify(insertCopyText.copied);
+    } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : insertCopyText.invalid); }
+  }
   const hasActiveDataColumn = order.some(index => activeCell.current.position?.key === 'c' + index);
   /** 当前RDG无内联editor，onCellPaste不会派发；在原生capture接管一次，不伪造editable/onRowsChange。 */
   function paste(event: ClipboardEvent<HTMLDivElement>): void {
@@ -204,6 +222,8 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
   }
 
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+    {page.insertCopy && <CopyInsertSqlButtons disabled={disabled} current={hasActiveDataColumn}
+      selected={!!selectedRows.size} onCopy={copyRowsAsInsert}/>}
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={row => row.deleted ? undefined : row.id}
       isCurrent={() => baseCurrent() && selection.current.revision === selectionTicket && noModal()}

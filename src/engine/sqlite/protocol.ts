@@ -1,3 +1,5 @@
+import type { SqliteValue } from '../../shared/sqliteInsertLiteral';
+export type { SqliteValue } from '../../shared/sqliteInsertLiteral';
 import type { SqlSyntaxCheckResult } from '../../shared/sqlSyntaxCheck';
 import { queryParameterLimits } from '../../shared/queryParameters';
 import type { QueryFailureSourceRange } from '../../shared/queryFailure';
@@ -35,8 +37,6 @@ export function copySqliteCreateGuard(input: unknown): SqliteCreateGuard {
   return { kind: values.kind as SqliteCreateGuard['kind'], name: values.name, allowedRelations: copied };
 }
 
-/** INTEGER 不经过 Number；REAL 单独标记，保留负零和无穷，TEXT 不按声明亲和性转换。 */
-export type SqliteValue = null | string | { type: 'integer'; value: string } | { type: 'real'; value: string } | { type: 'binary'; base64: string };
 /** 先复制纯自有数据字段，避免IPC序列化触发getter或依赖原型；实际字节、数值和全文绑定由worker再核。 */
 export function copySqliteNamedParameters(input: unknown): Record<string, SqliteValue> {
   const invalid = () => Error('SQLite命名参数映射格式无效');

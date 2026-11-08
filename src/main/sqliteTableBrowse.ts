@@ -118,6 +118,11 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     control.check(); await driver.execute('BEGIN'); control.check();
     const catalogue = await readSqliteTableCatalogue(driver, requested.table, control), { kind, columns, schemaKey } = catalogue;
     await verifySqliteTableScope(driver, requested, control);
+    // sqlite_schema 把虚拟表与影子表也标作 table，复制资格须由同一快照的 table_list 确认。
+    const relationType = kind === 'table' && !/^sqlite_/i.test(requested.table)
+      ? await rows(driver, "SELECT type FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY LIMIT 2", [requested.table], 2, control)
+      : [];
+    const insertCopy = relationType.length === 1 && relationType[0].length === 1 && relationType[0][0] === 'table';
     const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control) : undefined;
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
@@ -147,7 +152,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     };
     // 每格一个协议类型码，不新增SQL；与去掉编辑定位列后的本页原值一一对应。
     const storageTypes = originalRows.map(row => row.slice(extra).map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join(''));
-    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }), ...(input.relation ? { relation: input.relation } : {}) };
+    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, ...(insertCopy ? { insertCopy: true } : {}), offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }), ...(input.relation ? { relation: input.relation } : {}) };
   } catch (reason) { failed = true; failure = reason; }
   // 即使边界取消也只回滚本次独立只读快照，绝不借用户查询标签的事务。
   control.beginCleanup();

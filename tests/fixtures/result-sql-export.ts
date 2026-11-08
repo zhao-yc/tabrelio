@@ -23,7 +23,7 @@ export function resultSqlMain(filePath: string, request: (command: string, input
     SavedQuerySearchCancelled: class extends Error {},
     columnsMain: { assertCapturedOwner(value: unknown) { if (value !== invocation || !state.current) throw Error('合成主文档已失效'); } },
     async chooseFile(input: any) { const token = randomUUID(); files.set(token, { path: filePath, purpose: input.purpose, format: input.format }); return { token, name: '结果.sql' }; },
-    tasks, preparingTasks: new Map(), completionTasks: new Set(), tablePresetReads: new Map(), structureTokens: new Map(), sessions: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(),
+    tasks, postgresImportChecks: new Map(), preparingTasks: new Map(), completionTasks: new Set(), tablePresetReads: new Map(), structureTokens: new Map(), sessions: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(),
     historyPages: undefined, savedQueryPages: undefined, savedQuerySearches: { has: () => false }, connectionConfig: { assertAvailable(id: unknown) { if (id !== undefined) throw Error('结果文件禁止访问数据库连接'); } },
     store: { saveTask() {} }, exportReservations: { acquire: reserve }, broker: { request },
     taskEvent(event: any) { const previous = tasks.get(event.taskId); if (previous) tasks.set(event.taskId, { ...previous, ...event }); },

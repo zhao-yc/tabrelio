@@ -108,6 +108,8 @@ export interface SqliteTablePage {
   relation?: SqliteTableRelation;
   /** 与原页行列一一对应：n=NULL、t=TEXT、i=INTEGER、r=REAL、b=BLOB；不由声明亲和性猜类型。 */
   storageTypes?: string[];
+  /** 目录确认当前来源是普通表，允许用已载入原值生成 INSERT 文本。 */
+  insertCopy?: true;
   /** 仅显式可编辑页请求签发，任意SQL结果和原只读页不获得写入能力。 */
   edit?: import('./sqliteTableEdit').SqliteTableEditPage;
   /** 原目录定义及完整列事实摘要，导出前须在准确只读快照重新核对。 */

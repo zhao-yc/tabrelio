@@ -40,6 +40,7 @@ export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTableP
   if (JSON.stringify(page.relation) !== JSON.stringify(input.relation)) throw Error(text.invalidPage);
   validateResultExportData(resultExportData(page.result));
   assertSqliteStorageTypes(page);
+  if (page.insertCopy !== undefined && (page.insertCopy !== true || page.target.kind !== 'table' || !page.storageTypes)) throw Error(text.invalidPage);
 }
 /** 请求串行持有准确 busy 租约；替换先取消旧 task 并等原 Promise 终态，绝不借取消响应猜读取已结束。 */
 export class SqliteTableBrowser {

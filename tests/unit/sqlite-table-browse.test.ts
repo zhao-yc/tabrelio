@@ -281,6 +281,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
       const fields = actual.columns.map(column => 'substr(typeof("' + column.name.replaceAll('"', '""') + '"),1,1)').join('||');
       const expected = observer.prepare('SELECT ' + fields + ' AS codes FROM "' + table + '" ORDER BY id').all().map(row => row.codes);
       expect(actual.storageTypes).toEqual(expected); expect(actual.storageTypes?.every(row => row.length === actual.columns.length)).toBe(true);
+      expect(actual.insertCopy).toBe(table === 'mix' ? true : undefined);
     } finally { observer.close(); }
     for (const record of processes) await closedRead(record);
   });
@@ -462,6 +463,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     const profile = fixture(); disk(profile, db => db.exec("CREATE VIRTUAL TABLE docs USING fts5(body); INSERT INTO docs(body) VALUES('可见正文')"));
     const { app } = runtime(profile), docs = await page(app, input(profile, '隐藏列', { table: 'docs', sort: [] }));
     expect(docs.columns).toEqual([{ name: 'body', declaredType: '' }]); expect(docs.result.rows).toEqual([{ c0: '可见正文' }]);
+    expect(docs.insertCopy).toBeUndefined();
     const baseline = processes.length;
     await expect(page(app, input(profile, '超页数', { limit: 1001 }))).rejects.toThrow();
     await expect(page(app, input(profile, '重复排序', { sort: [{ column: 'id', direction: 'asc' }, { column: 'id', direction: 'desc' }] }))).rejects.toThrow();

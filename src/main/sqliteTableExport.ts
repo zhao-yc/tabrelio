@@ -3,7 +3,7 @@ import { sqliteTableExportSchema, sqliteWorkbookExportSchema, type SqliteTableEx
 import type { SqliteTableColumn } from '../shared/sqliteTableBrowse';
 import { sqliteExportTextFunction } from '../engine/sqlite/protocol';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
-import { sqliteInsertLiteral } from '../engine/sqlite/insertLiteral';
+import { sqliteInsertLiteral } from '../shared/sqliteInsertLiteral';
 import { AtomicFile, AtomicFileTargetReservation, nativeAtomicFileIO, type AtomicFileIO, type WritableFile } from '../engine/atomicFile';
 import { startExcelExportRows } from '../engine/excelExportRows';
 import { exportExcelWorkbook, type ExcelExportSheet } from '../engine/excelFiles';

@@ -18,7 +18,7 @@ import { listExcelSheets, previewExcelSheet, readExcelRows } from '../../src/eng
 import { validateCommand } from '../../src/shared/validation';
 import { excelWorksheetNames } from '../../src/shared/excelTransfer';
 import type { SqliteTableExportRequest, SqliteWorkbookExportRequest } from '../../src/main/sqliteTableExport';
-import { sqliteInsertLiteral } from '../../src/engine/sqlite/insertLiteral';
+import { sqliteInsertLiteral } from '../../src/shared/sqliteInsertLiteral';
 import type { SqliteQueryExportRequest } from '../../src/main/sqliteQueryExport';
 import { assertSqliteExportDestination } from '../../src/main/sqliteExportDestination';
 

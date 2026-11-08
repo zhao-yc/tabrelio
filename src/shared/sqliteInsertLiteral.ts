@@ -1,5 +1,8 @@
-import type { SqliteValue } from './protocol';
-import { quoteSqliteIdentifier } from '../../shared/sqliteReadSql';
+import { quoteSqliteIdentifier } from './sqliteReadSql';
+
+/** INTEGER 保留精确原文，REAL 保留负零和无穷，TEXT 不按声明亲和性转换。 */
+export type SqliteValue = null | string | { type: 'integer'; value: string } | { type: 'real'; value: string } | { type: 'binary'; base64: string };
+const byteHex = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, '0'));
 
 /** NUL不能通过依赖目标数据库编码的BLOB转TEXT；平衡连接树保留Unicode且不随NUL数线性增加表达式深度。 */
 function sqliteTextLiteral(value: string): string {
@@ -15,7 +18,12 @@ function sqliteTextLiteral(value: string): string {
 export function sqliteInsertLiteral(value: SqliteValue): string {
   if (value === null) return 'NULL';
   if (typeof value === 'string') return sqliteTextLiteral(value);
-  if (value.type === 'binary') return "X'" + Buffer.from(value.base64, 'base64').toString('hex') + "'";
+  if (value.type === 'binary') {
+    const bytes = atob(value.base64);
+    let hex = '';
+    for (let index = 0; index < bytes.length; index++) hex += byteHex[bytes.charCodeAt(index)];
+    return "X'" + hex + "'";
+  }
   if (value.type === 'integer') return value.value;
   if (value.value === 'Infinity') return '9e999';
   if (value.value === '-Infinity') return '-9e999';

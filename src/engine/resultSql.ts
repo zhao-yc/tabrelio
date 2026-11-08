@@ -5,7 +5,7 @@ import { exportLiteral, identifier, qualified } from './sql';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { postgresDdlLiteral } from '../shared/postgresCreateTable';
 import type { SqliteResultStorage } from '../shared/sqliteResultStorage';
-import { sqliteInsertRowWriter } from './sqlite/insertLiteral';
+import { sqliteInsertRowWriter } from '../shared/sqliteInsertLiteral';
 
 /** 返回文本保持为未知类型字面量，由明确映射的目标列解释，不猜测结果别名或来源类型。 */
 function postgresResultLiteral(value: DataRow[string]): string {

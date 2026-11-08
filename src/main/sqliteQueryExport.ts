@@ -10,7 +10,7 @@ import { sqliteStatementRanges } from '../engine/sqlite/currentStatement';
 import { EXCEL_LIMITS } from '../shared/excelTransfer';
 import { sqliteLeadingKeyword } from '../shared/sqliteStatementScanner';
 import type { QueryParameterNames } from '../shared/queryParameters';
-import { sqliteInsertRowWriter } from '../engine/sqlite/insertLiteral';
+import { sqliteInsertRowWriter } from '../shared/sqliteInsertLiteral';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteExportDestination, SqliteTableExportFile } from './sqliteTableExport';
