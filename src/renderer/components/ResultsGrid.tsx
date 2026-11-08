@@ -12,6 +12,8 @@ import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
 import { cellClipboardType, copyGridColumnNames, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { saveGridCell } from '../gridCellFile';
+import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import type { ResultGridSelection } from '../resultExport';
@@ -168,6 +170,16 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     const presentation = presentCell?.(row, key);
     if (presentation?.copyError) throw Error(presentation.copyError);
     return presentation ? presentation.value : ownCell(row, key);
+  }
+
+  /** 另存使用当前格的原值或已暂存值，不从格式化后的 DOM 读取。 */
+  function saveActiveCell() {
+    const cell = activeCopyCell, key = cell?.column?.key;
+    if (!cell || key === undefined) return;
+    const current = () => actionCurrent() && copyRevisionRef.current === copyRevision && rows[cell.index] === cell.row &&
+      !skipRowInInversion?.(cell.row) && tableCopy?.enabled !== false && tableCopy?.isCurrent() !== false &&
+      !document.querySelector(appModalSelector);
+    void saveGridCell(() => copyValue(cell.row, key), current);
   }
 
   /** 旧按钮不能复制后来变更的行、列或草稿。 */
@@ -412,6 +424,8 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   const copyLabels = tableCopy ? tableCopyText : copyText;
   const copyEnabled = actionCurrent() && tableCopy?.enabled !== false;
   const copyTools = <>
+    <button type="button" title={gridCellFileZh.hint} disabled={!copyEnabled || !activeCopyCell?.column || !!skipRowInInversion?.(activeCopyCell.row)}
+      onClick={saveActiveCell}>{gridCellFileZh.action}</button>
     <button type="button" title={copyLabels.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
       onClick={() => copyResult('headers')}>{copyLabels.action}</button>
     <button type="button" title={tableCopyText.namesHint} disabled={!copyEnabled || !columns.length}

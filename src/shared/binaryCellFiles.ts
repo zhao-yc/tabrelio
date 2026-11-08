@@ -13,6 +13,20 @@ export type BinaryCellFileOpenInput = Record<string, never>;
 export type BinaryCellFileOpenOutput = { base64: string; bytes: number; name: string } | null;
 export interface BinaryCellFileSaveInput { base64: string; suggestedName?: string; }
 export type BinaryCellFileSaveOutput = { bytes: number; name: string } | null;
+export interface TextCellFileSaveInput { text: string; }
+export const textCellFileTitle = '另存单元格文本';
+
+/** 文字必须能逐字符往返 UTF-8，空串和 NUL 仍是有效原值。 */
+export function textCellFileBytes(value: unknown): number {
+  if (typeof value !== 'string') throw Error('单元格文本参数无效');
+  const maximum = binaryCellFileLimits.saveBytes;
+  if (value.length > maximum) throw Error('另存单元格文本不能超过 2 MiB');
+  if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value))
+    throw Error('单元格文本包含无效 Unicode');
+  const bytes = new TextEncoder().encode(value).byteLength;
+  if (bytes > maximum) throw Error('另存单元格文本不能超过 2 MiB');
+  return bytes;
+}
 
 /** 不解码、不分配字节数组就核完整Base64，包括padding零位；空串代表零字节而非NULL。 */
 export function binaryCellFileBytes(input: unknown, maximum: number = binaryCellFileLimits.saveBytes): number {
@@ -65,6 +79,10 @@ export const binaryCellFileOpenSchema = guarded((input): BinaryCellFileOpenInput
 export const binaryCellFileSaveSchema = guarded((input): BinaryCellFileSaveInput => {
   const source = record(input, ['base64', 'suggestedName'], ['base64']); binaryCellFileBytes(source.base64);
   return { base64: source.base64 as string, ...(Object.hasOwn(source, 'suggestedName') ? { suggestedName: name(source.suggestedName, true) } : {}) };
+});
+export const textCellFileSaveSchema = guarded((input): TextCellFileSaveInput => {
+  const source = record(input, ['text']); textCellFileBytes(source.text);
+  return { text: source.text as string };
 });
 export const binaryCellFileOpenOutputSchema = guarded((input): BinaryCellFileOpenOutput => {
   if (input === null) return null; const source = record(input, ['base64', 'bytes', 'name']);

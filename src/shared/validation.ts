@@ -80,7 +80,7 @@ import { sqliteTableEditPreviewSchema, sqliteTableEditApplySchema, sqliteTableEd
 import { tableCheckGetSchema, tableCheckPreviewSchema, tableCheckApplySchema, tableCheckReleaseSchema } from './tableChecks';
 import { uiMenuStateSchema, objectCategories, assertObjectBrowserTabs } from './uiCommands';
 import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from './tableFilteredDelete';
-import { binaryCellFileOpenSchema, binaryCellFileSaveSchema } from './binaryCellFiles';
+import { binaryCellFileOpenSchema, binaryCellFileSaveSchema, textCellFileSaveSchema } from './binaryCellFiles';
 import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from './tableFilteredUpdate';
 import { fileImportTransactionMode, fileImportTransactionModeSchema } from './fileImportTransaction';
 import { importFileInspectInputSchema, importFileSourceSchema, importSourceColumn } from './importNewTable';
@@ -735,6 +735,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.filteredUpdate.apply': tableFilteredUpdateApplyInputSchema,
   'table.filteredUpdate.release': tableFilteredUpdateReleaseInputSchema,
   'binaryCellFiles.save': binaryCellFileSaveSchema,
+  'cellFiles.saveText': textCellFileSaveSchema,
   'schema.databaseDrop.get': z.object({ connectionId: id, database: databaseDropName, taskId: id }).strict(),
   'schema.databaseDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),
   'schema.databaseDrop.apply': z.object({ previewToken: id, confirmation: databaseDropName, acknowledgements: z.array(z.enum(databaseDropAcknowledgements)).length(databaseDropAcknowledgements.length).refine(values => new Set(values).size === values.length), taskId: id }).strict(),

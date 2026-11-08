@@ -6,9 +6,10 @@ import { join } from 'node:path';
 import { runInContext } from 'node:vm';
 import ts from 'typescript';
 import { mainColumnsHarness, deferred } from './main-columns-owner-harness';
-import { readBinaryCellFile, writeBinaryCellFile } from '../../src/main/binaryCellFiles';
-import { binaryCellFileText } from '../../src/shared/binaryCellFiles';
+import { readBinaryCellFile, writeBinaryCellFile, writeTextCellFile } from '../../src/main/binaryCellFiles';
+import { binaryCellFileText, textCellFileTitle } from '../../src/shared/binaryCellFiles';
 import { ExportReservations } from '../../src/main/exportReservations';
+import { assertSqliteExportDestination } from '../../src/main/sqliteExportDestination';
 
 let main: ReturnType<typeof mainColumnsHarness>, directory: string;
 const bytes = Buffer.from('EFBBBF00FF22275C0D0AE4B8AD', 'hex');
@@ -20,7 +21,8 @@ beforeEach(async () => {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
   const declaration = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'queryFileOperation');
   if (!declaration) throw Error('未找到真实退出文件等待函数');
-  Object.assign(main.context, { queryFileOperations: new Set(), binaryCellFileActive: false, binaryCellFileText, readBinaryCellFile, writeBinaryCellFile, exportReservations: new ExportReservations(), dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() } });
+  Object.assign(main.context.store, { connections: () => [] });
+  Object.assign(main.context, { queryFileOperations: new Set(), binaryCellFileActive: false, binaryCellFileText, textCellFileTitle, readBinaryCellFile, writeBinaryCellFile, writeTextCellFile, assertSqliteExportDestination, exportReservations: new ExportReservations(), dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() } });
   runInContext(ts.transpileModule(declaration.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, main.context);
   main.request.mockImplementation(async () => { throw Error('二进制文件禁止调用Engine'); });
 });
@@ -57,6 +59,23 @@ describe('二进制单元格真实Main入口', () => {
     openDialog().mockResolvedValue({ canceled: true, filePaths: [path] }); saveDialog().mockResolvedValue({ canceled: true, filePath: path });
     expect(await main.run('binaryCellFiles.open', {})).toBe(null); expect(await main.run('binaryCellFiles.save', { base64: '' })).toBe(null);
     expect(await readFile(path)).toEqual(bytes); expect(main.context.queryFileOperations.size).toBe(0);
+  });
+
+  it('文本另存共享原文档门，晚回的选择不能覆盖已存在目标', async () => {
+    const path = join(directory, '文本.txt'), wait = deferred();
+    await writeFile(path, bytes);
+    expect((await main.invoke('cellFiles.saveText', { text: '新值', filePath: path })).ok).toBe(false);
+    expect(saveDialog()).not.toHaveBeenCalled();
+    saveDialog().mockReturnValue(wait.promise);
+    const operation = main.invoke('cellFiles.saveText', { text: '新值' });
+    expect(main.context.queryFileOperations.size).toBe(1);
+    expect((await main.invoke('binaryCellFiles.save', { base64: '' })).ok).toBe(false);
+    main.windows[0].webContents.mainFrame.url = 'app://新文档';
+    wait.resolve({ canceled: false, filePath: path });
+    expect((await operation).ok).toBe(false);
+    expect(await readFile(path)).toEqual(bytes);
+    expect(main.context.queryFileOperations.size).toBe(0);
+    expect(main.request).not.toHaveBeenCalled();
   });
 
   it('实际校验拒绝路径、getter、继承字段及不规范Base64，选择器零调用', async () => {

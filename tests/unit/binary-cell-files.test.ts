@@ -5,12 +5,25 @@ import { basename, join } from 'node:path';
 import { binaryCellFileBytes, binaryCellFileLimits as limits, binaryCellFileOpenSchema, binaryCellFileSaveSchema, binaryCellFileOpenOutputSchema, binaryCellFileSaveOutputSchema } from '../../src/shared/binaryCellFiles';
 import { nativeAtomicFileIO, type AtomicFileIO, type WritableFile } from '../../src/engine/atomicFile';
 import { readBinaryCellFile, writeBinaryCellFile, nativeBinaryCellFileReadIO, type BinaryCellFileReadIO, type BinaryCellFileReader } from '../../src/main/binaryCellFiles';
+import { textCellFileSaveSchema } from '../../src/shared/binaryCellFiles';
+import { writeTextCellFile } from '../../src/main/binaryCellFiles';
 
 let directory: string;
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'dbark-binary-cell-files-')); });
 /** 精确清理本例登记目录中的普通文件/链接与空目录，不扫描或删除其它路径。 */
 afterEach(async () => { for (const name of await readdir(directory)) { const path = join(directory, name), value = await lstat(path); if (value.isDirectory() && !value.isSymbolicLink()) await rmdir(path); else await unlink(path); } await rmdir(directory); });
 const check = () => undefined;
+it('UTF-8 另存保留空串、NUL、换行和非 BMP 字符，并拒绝路径、孤立代理项及超预算', async () => {
+  const path = join(directory, '目标.txt');
+  const text = '字\0\r\n🚢';
+  expect(await writeTextCellFile(path, { text }, check)).toEqual({ bytes: Buffer.byteLength(text), name: '目标.txt' });
+  expect(await readFile(path)).toEqual(Buffer.from(text));
+  for (const invalid of [{ text, path }, { text: '\ud800' }, { text: '字'.repeat(Math.ceil(limits.saveBytes / 3)) }])
+    expect(textCellFileSaveSchema.safeParse(invalid).success).toBe(false);
+  expect(await writeTextCellFile(path, { text: '' }, check)).toEqual({ bytes: 0, name: '目标.txt' });
+  expect(await readFile(path)).toEqual(Buffer.alloc(0));
+  expect(await readdir(directory)).toEqual(['目标.txt']);
+});
 /** 保留真实open/read/close，只插入确定性的外部文件变更，终态以原close Promise为准。 */
 function observeRead(hooks: { beforeOpen?: (path: string) => Promise<void>; afterRead?: (path: string, count: number) => Promise<void>; closeError?: boolean } = {}) {
   const facts = { opened: 0, closed: 0, reads: 0 };

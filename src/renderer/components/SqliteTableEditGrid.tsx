@@ -20,6 +20,8 @@ import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
 import { primaryKeyCopyZh as keyCopyText } from '../locales/primaryKeyCopy.zh-CN';
 import { sqliteCopyInsertDraftRows, sqliteCopyPrimaryKeyDraftRows, sqliteCopyUpdateDraftRows } from '../sqliteCopyInsertSql';
+import { saveGridCell } from '../gridCellFile';
+import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { useWorkspace } from '../store';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
@@ -220,6 +222,13 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : insertCopyText.invalid); }
   }
   const hasActiveDataColumn = order.some(index => activeCell.current.position?.key === 'c' + index);
+  /** 原动态类型用于判断文件格式，未填值和已删草稿不参与。 */
+  function saveActiveCell(): void {
+    const cell = activeCell.current.position;
+    if (!cell || cell.row.deleted || !hasActiveDataColumn) return;
+    void saveGridCell(() => sqliteClipboardProtocolCell(cell.row.values[Number(cell.key.slice(1))]),
+      () => current(cell.row) && !disabled && noModal());
+  }
   /** 当前RDG无内联editor，onCellPaste不会派发；在原生capture接管一次，不伪造editable/onRowsChange。 */
   function paste(event: ClipboardEvent<HTMLDivElement>): void {
     if (inputTarget(event) || !onPaste) return; event.preventDefault(); event.stopPropagation();
@@ -260,6 +269,7 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
     <GridColumnJump key={'column:' + orderKey} scope={owner} columns={order.map(index => page.columns[index])}
       disabled={disabled} isCurrent={() => !disabled && baseCurrent() && noModal()} onJump={jumpToGridColumn}/>
     <button type="button" title={headerCopyText.namesHint} disabled={disabled} onClick={() => copyFromGrid('names')}>{headerCopyText.names}</button>
+    <button type="button" title={gridCellFileZh.hint} disabled={disabled || !hasActiveDataColumn} onClick={saveActiveCell}>{gridCellFileZh.action}</button>
     <button type="button" title={jsonCopyText.hint} disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => copyFromGrid('json')}>{jsonCopyText.action}</button>
     {page.insertCopy && <CopyInsertSqlButtons disabled={disabled} current={hasActiveDataColumn}

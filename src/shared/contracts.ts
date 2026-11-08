@@ -139,6 +139,7 @@ export interface CommandMap {
   'table.filteredUpdate.release': { input: import('./tableFilteredUpdate').TableFilteredUpdateReleaseInput; output: void };
   'binaryCellFiles.open': { input: import('./binaryCellFiles').BinaryCellFileOpenInput; output: import('./binaryCellFiles').BinaryCellFileOpenOutput };
   'binaryCellFiles.save': { input: import('./binaryCellFiles').BinaryCellFileSaveInput; output: import('./binaryCellFiles').BinaryCellFileSaveOutput };
+  'cellFiles.saveText': { input: import('./binaryCellFiles').TextCellFileSaveInput; output: import('./binaryCellFiles').BinaryCellFileSaveOutput };
   'files.importPresets.list': { input: Record<string, never>; output: import('./importPresets').ImportPresetSnapshot };
   'files.importPresets.save': { input: import('./importPresets').ImportPresetSaveInput; output: import('./importPresets').ImportPresetSnapshot };
   'files.importPresets.delete': { input: import('./importPresets').ImportPresetDeleteInput; output: import('./importPresets').ImportPresetSnapshot };

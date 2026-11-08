@@ -2,6 +2,7 @@ import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from '../engine/atomicFile';
+import { textCellFileSaveSchema, type TextCellFileSaveInput } from '../shared/binaryCellFiles';
 import { binaryCellFileBytes, binaryCellFileLimits as limits, binaryCellFileText as text, binaryCellFileSaveSchema, binaryCellFileOpenOutputSchema, binaryCellFileSaveOutputSchema, type BinaryCellFileOpenOutput, type BinaryCellFileSaveInput, type BinaryCellFileSaveOutput } from '../shared/binaryCellFiles';
 
 export interface BinaryCellFileReader {
@@ -77,9 +78,18 @@ async function parentIdentity(path: string, guard: () => void): Promise<string> 
 
 /** 原值先完整校验，同目录独占暂存/同步/关闭后才替换；替换成功后不再以迟到撤权抹掉事实。 */
 export async function writeBinaryCellFile(path: string, raw: BinaryCellFileSaveInput, guard: () => void, io: AtomicFileIO = nativeAtomicFileIO): Promise<NonNullable<BinaryCellFileSaveOutput>> {
-  const input = binaryCellFileSaveSchema.parse(raw), count = binaryCellFileBytes(input.base64), result = { bytes: count, name: basename(path) };
+  const input = binaryCellFileSaveSchema.parse(raw);
+  return writeCellFile(path, Buffer.from(input.base64, 'base64'), guard, io);
+}
+export async function writeTextCellFile(path: string, raw: TextCellFileSaveInput, guard: () => void, io: AtomicFileIO = nativeAtomicFileIO): Promise<NonNullable<BinaryCellFileSaveOutput>> {
+  const input = textCellFileSaveSchema.parse(raw);
+  return writeCellFile(path, Buffer.from(input.text, 'utf8'), guard, io, '单元格文本保存失败，原目标未替换');
+}
+
+/** 文本和二进制共用目标身份、写盘和失败清理，写入字节由各自合同提前核验。 */
+async function writeCellFile(path: string, bytes: Buffer, guard: () => void, io: AtomicFileIO, writeFailed: string = text.writeFailed): Promise<NonNullable<BinaryCellFileSaveOutput>> {
+  const result = { bytes: bytes.length, name: basename(path) };
   binaryCellFileSaveOutputSchema.parse(result); guard();
-  const bytes = Buffer.from(input.base64, 'base64');
   let writer: AtomicFile | undefined, committed = false, failure: unknown;
   try {
     guard(); const parent = await realpath(dirname(resolve(path))); guard();
@@ -118,11 +128,11 @@ export async function writeBinaryCellFile(path: string, raw: BinaryCellFileSaveI
     if (canonicalKey(finalParent) !== canonicalKey(parent) || currentParent !== parentVersion || currentTarget !== previous) throw Error(text.targetChanged);
     // commit内部的最后身份await后再次执行guard；rename ACK之后不再检查旧文档。
     guard(); await writer.commit(); committed = true;
-  } catch (error) { failure = safeFailure(error, text.writeFailed); }
+  } catch (error) { failure = safeFailure(error, writeFailed); }
   finally {
     // 清理使用原handle绑定的精确删除能力，归属失效不能阻止清理，也不能删被替换的外来temp。
-    try { await writer?.dispose(); } catch (error) { if (!committed) failure = new AggregateError([failure, error], text.writeFailed, { cause: failure }); }
+    try { await writer?.dispose(); } catch (error) { if (!committed) failure = new AggregateError([failure, error], writeFailed, { cause: failure }); }
   }
   if (committed) return result;
-  throw failure ?? Error(text.writeFailed);
+  throw failure ?? Error(writeFailed);
 }

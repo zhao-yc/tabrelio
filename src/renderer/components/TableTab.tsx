@@ -155,6 +155,8 @@ import { useUiCommandScope } from '../uiCommands';
 import { tableToolbarZh } from '../locales/tableToolbar.zh-CN';
 import { primaryKeyCopyZh } from '../locales/primaryKeyCopy.zh-CN';
 import { prepareCopyInsertSql, prepareCopyPrimaryKeyQuery, prepareCopyUpdateSql } from '../copyInsertSql';
+import { saveGridCell } from '../gridCellFile';
+import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { copyInsertSqlZh } from '../../shared/copyInsertSql.zh-CN';
 
@@ -1810,6 +1812,15 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     catch (reason) { setError(errorMessage(reason)); }
   }
   const headerCopyLayoutRevision = layoutRevision.current;
+  /** 勾选记录不改变另存范围，仍绑定活动格及其当前草稿。 */
+  function saveActiveCell(): void {
+    if (!selection || !visibleKeys.includes(selection.key)) return;
+    const row = rows.find(item => item.id === selection.rowId && !item.deleted);
+    if (!row) return;
+    const current = () => tableToolbarCurrent() && !blockedRef.current && !externalStale && !activeGridEditor.current && !record.hasInput() &&
+      rowsRef.current === rows && selectionRef.current === selection && layoutRevision.current === headerCopyLayoutRevision;
+    void saveGridCell(() => ownCell(row.data, selection.key), current);
+  }
   /** 从当前页按显示顺序取值，JSON 总是复制记录的全部可见列。 */
   function copyTableData(mode: 'headers' | 'column' | 'json' | 'names'): void {
     const current = () => tableToolbarCurrent() && !blockedRef.current && !externalStale && !activeGridEditor.current && !record.hasInput()
@@ -2031,6 +2042,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button title={headerCopyText.namesHint} disabled={blocked || externalStale || gridEditing || record.hasInput() || !page || !visibleColumns.length} onClick={() => copyTableData('names')}>{headerCopyText.names}</button>
 <button title={headerCopyText.columnHint} disabled={blocked || externalStale || gridEditing || record.hasInput() || !visibleColumns.some(column => column.key === selection?.key)} onClick={() => copyTableData('column')}>{headerCopyText.column}</button>
 <button title={jsonCopyText.hint} disabled={blocked || externalStale || gridEditing || record.hasInput() || (!selection && !selectedRows.size)} onClick={() => copyTableData('json')}>{jsonCopyText.action}</button>
+<button title={gridCellFileZh.hint} disabled={blocked || externalStale || gridEditing || record.hasInput() || !selection || !visibleKeys.includes(selection.key)} onClick={saveActiveCell}>{gridCellFileZh.action}</button>
 {onTableCopyData && <button title={tableCopyDataZh.title} aria-label={tableCopyDataZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableCopyData(); }}>{tableCopyDataZh.title}</button>}
 {onTableCopyStructure && <button title={tableCopyStructureZh.title} aria-label={tableCopyStructureZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableCopyStructure(); }}>{tableCopyStructureZh.title}</button>}
 <button aria-label={filteredUpdateText.entry} title={filteredUpdateText.scope} disabled={!filteredUpdateAvailable} onClick={openFilteredUpdate}>{filteredUpdateText.entry}</button>
