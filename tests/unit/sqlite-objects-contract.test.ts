@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { publicCommands } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
-import { sqliteViewDraftQuery, parseSqliteObjectsCreateHeader, buildSqliteObjectsPlan, getSqliteObjectsAcknowledgements, assertSqliteObjectsAcknowledgements, sqliteObjectsInspectSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsFactSchema, sqliteObjectsOutcomeSchema, sqliteObjectsLimits, type SqliteObjectsInspectOutput } from '../../src/shared/sqliteObjects';
+import { changeSqliteViewDraftColumns, sqliteViewDraftQuery, parseSqliteObjectsCreateHeader, buildSqliteObjectsPlan, getSqliteObjectsAcknowledgements, assertSqliteObjectsAcknowledgements, sqliteObjectsInspectSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsFactSchema, sqliteObjectsOutcomeSchema, sqliteObjectsLimits, type SqliteObjectsInspectOutput } from '../../src/shared/sqliteObjects';
 
 const target = { connectionId: 'owned', database: 'main' as const, kind: 'view' as const, name: 'owned_view' };
 /** 只验证固定构造的原生语义，不冒称utility授权门或真实文件验收。 */
@@ -66,5 +66,31 @@ describe('SQLite视图与触发器公开合同和前缀词法', () => {
   it('preview细化面对dirty目标或附属数量仍以safeParse失败返回，不越过校验器直接throw', () => {
     const value = { previewId: 'p', catalogueId: 'c', target, action: 'create' as const, ...buildSqliteObjectsPlan(target, 'create', 'CREATE VIEW owned_view AS SELECT 1'), confirmation: 'main.owned_view', expiresAt: '2030-01-01T00:00:00Z' };
     for (const patch of [{ target: { ...target, name: '' }, confirmation: 'main.' }, { attachedTriggerCount: -1 }, { attachedTriggerCount: sqliteObjectsLimits.attachedTriggers + 1 }]) { let accepted: boolean | undefined; expect(() => { accepted = sqliteObjectsPreviewOutputSchema.safeParse({ ...value, ...patch }).success; }).not.toThrow(); expect(accepted).toBe(false); }
+  });
+});
+
+
+describe('SQLite 视图列清单编辑', () => {
+  it('同数量替换只修改所选标识符，保留其余拼写、注释和查询', () => {
+    const sql = "/*头*/ CREATE VIEW main.[v] ([old], /* 中 */ '另一列')AS VALUES (1, 2); -- 尾";
+    const updated = changeSqliteViewDraftColumns(sql, 'v', ['新"列,甲', '另一列']);
+    expect(updated).toBe(sql.replace('[old]', '"新""列,甲"'));
+    expect(sqliteViewDraftQuery(updated, 'v').columns).toEqual(['新"列,甲', '另一列']);
+    expect(changeSqliteViewDraftColumns(updated, 'v', [])).toBe('/*头*/ CREATE VIEW main.[v]  AS VALUES (1, 2); -- 尾');
+  });
+
+  it('把新列清单加在准确目标之后，保留其后的原注释', () => {
+    const sql = 'CREATE VIEW `v`/* 列尾 */ AS SELECT 1;';
+    expect(changeSqliteViewDraftColumns(sql, 'v', ['x'.repeat(65)]))
+      .toBe('CREATE VIEW `v` ("' + 'x'.repeat(65) + '")/* 列尾 */ AS SELECT 1;');
+  });
+
+  it('拒绝多条、目标不符、无效名称及 SQLite 同名折叠', () => {
+    const sql = 'CREATE VIEW main.v AS SELECT 1;';
+    expect(() => changeSqliteViewDraftColumns(sql + 'SELECT 2;', 'v', ['a'])).toThrow('只接受一条');
+    expect(() => changeSqliteViewDraftColumns(sql, 'other', ['a'])).toThrow('准确同名');
+    expect(() => changeSqliteViewDraftColumns(sql, 'v', ['a', 'A'])).toThrow('输出列名重复');
+    expect(() => changeSqliteViewDraftColumns(sql, 'v', [''])).toThrow('第 1 个列名');
+    expect(changeSqliteViewDraftColumns(sql, 'v', ['Ä', 'ä'])).toContain('"Ä", "ä"');
   });
 });

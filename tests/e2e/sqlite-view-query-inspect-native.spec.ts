@@ -5,6 +5,7 @@ import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 import { sqliteObjectsZh as objects } from '../../src/renderer/locales/sqliteObjects.zh-CN';
+import { viewOutputColumnsZh as columnText } from '../../src/renderer/locales/viewOutputColumns.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh as fileText } from '../../src/renderer/locales/viewSqlFile.zh-CN';
 
@@ -19,6 +20,7 @@ test('SQLite CREATE VIEW 草稿预览样本和原生计划，只在原确认流�
   const first = `CREATE VIEW main.${quoted} ("展示编号", [展示标记]) AS
 WITH original AS (SELECT id, marker FROM main.sample_source)
 SELECT id, marker FROM original ORDER BY id; -- 文件尾`;
+  const trigger = 'CREATE TRIGGER keep_view_trigger INSTEAD OF UPDATE ON ' + quoted + ' BEGIN SELECT OLD."展示编号"; END';
   const next = `CREATE VIEW main.${quoted} ("展示编号", [展示标记]) AS
 SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 9007199254740993;`;
 
@@ -55,6 +57,12 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
     } finally { db.close(); }
   }
 
+  function attachedTrigger() {
+    const db = new DatabaseSync(database, { readOnly: true });
+    try { return db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'keep_view_trigger'").get()?.sql; }
+    finally { db.close(); }
+  }
+
   try {
     const fixture = new DatabaseSync(database);
     try {
@@ -84,6 +92,10 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
     const catalog = () => page.evaluate(connectionId => window.dbark.invoke('metadata.objects', { connectionId, database: 'main' }), connectionId);
     const region = (modal: Locator) => modal.getByRole('region', { name: inspect.region, exact: true });
     const action = (modal: Locator, label: string) => region(modal).getByRole('button', { name: label, exact: true }).click();
+    const columns = (modal: Locator) => modal.getByRole('group', { name: columnText.title, exact: true });
+    const column = (modal: Locator, position: number) => columns(modal).getByRole('textbox', { name: columnText.column(position), exact: true });
+    const columnAction = (modal: Locator, label: string) => columns(modal).getByRole('button', { name: label, exact: true });
+
     async function open(kind: 'create' | 'replace') {
       if (kind === 'create') await clickSidebarAction(main, { name: objects.createView + ' main', exact: true });
       else await clickSidebarAction(node.locator('.object-row').filter({ hasText: view }), { name: objects.editDefinition + ' ' + view, exact: true });
@@ -111,6 +123,9 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
     await expect(region(create).getByRole('columnheader', { name: '展示编号 INTEGER', exact: true })).toBeVisible();
     await expect(region(create).getByRole('gridcell', { name: '9007199254740993', exact: true })).toBeVisible();
     await expect(region(create).getByRole('gridcell', { name: '原样本', exact: true })).toBeVisible();
+    await action(create, inspect.rows);
+    await expect(columnAction(create, columnText.fromPreview)).toBeEnabled();
+    await expect(region(create).getByText(inspect.truncated(100), { exact: true })).toBeVisible();
     await action(create, inspect.explain);
     await expect(region(create).getByRole('tree')).toContainText('sample_source');
     expect((await catalog()).some(item => item.name === view)).toBe(false);
@@ -121,17 +136,43 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
     await expect(region(create).getByRole('alert')).toContainText('只接受一条');
     expect(await readFile(database)).toEqual(before);
     await load(create, true);
+    await expect(column(create, 1)).toHaveValue('展示编号');
+    await columnAction(create, columnText.clear).click();
+    await columnAction(create, columnText.apply).click();
+    await action(create, inspect.rows);
+    await expect(region(create).getByRole('columnheader', { name: 'id INTEGER', exact: true })).toBeVisible();
+    await columnAction(create, columnText.fromPreview).click();
+    await expect(column(create, 2)).toHaveValue('marker');
+    await columnAction(create, columnText.add).click();
+    await column(create, 3).fill('多余列');
+    await columnAction(create, columnText.apply).click();
+    await expect(columns(create).getByText(columnText.countMismatch(2))).toBeVisible();
+    await columnAction(create, columnText.remove(3)).click();
+    await column(create, 1).fill('展示编号');
+    await column(create, 2).fill('展示标记');
+    await columnAction(create, columnText.apply).click();
+    await expect(columnAction(create, columnText.fromPreview)).toBeDisabled();
+    expect(await readFile(database)).toEqual(before);
     await apply(create, 'create');
     expect(readView()).toMatchObject({ 展示编号: 9007199254740993n, 展示标记: '原样本' });
 
+    const attached = new DatabaseSync(database);
+    try { attached.exec(trigger); } finally { attached.close(); }
+    expect(attachedTrigger()).toBe(trigger);
     await writeFile(source, next);
     const replacement = await open('replace');
     await load(replacement, true);
     await action(replacement, inspect.rows);
     await expect(region(replacement).getByRole('gridcell', { name: '替换样本', exact: true })).toBeVisible();
+    await columnAction(replacement, columnText.fromPreview).click();
+    await column(replacement, 2).fill('更新"结果');
+    await columnAction(replacement, columnText.apply).click();
+    await action(replacement, inspect.rows);
+    await expect(region(replacement).getByRole('columnheader', { name: '更新"结果', exact: true })).toBeVisible();
     expect(readView()).toMatchObject({ 展示标记: '原样本' });
     await apply(replacement, 'replace');
-    expect(readView()).toMatchObject({ 展示编号: 9007199254740993n, 展示标记: '替换样本' });
+    expect(readView()).toMatchObject({ 展示编号: 9007199254740993n, '更新"结果': '替换样本' });
+    expect(attachedTrigger()).toBe(trigger);
     expect(await history()).toEqual(beforeHistory);
     expect((await readFile(source)).toString()).toBe(next);
     expect(pageErrors).toEqual([]);

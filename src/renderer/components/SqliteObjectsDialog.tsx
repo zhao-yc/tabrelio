@@ -1,13 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TaskEvent } from '../../shared/contracts';
 import { sqliteObjectsFactMessage } from '../../shared/sqliteObjectsFact';
 import { scanSqliteStatementPositions } from '../../shared/sqliteStatementScanner';
-import { buildSqliteObjectsPlan, parseSqliteObjectsCreateHeader, sqliteObjectsLimits, sqliteViewSampleRows, sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsOutcomeSchema, sqliteObjectsFactSchema, assertSqliteObjectsFactTransition, type SqliteObjectsAction, type SqliteObjectsAcknowledgement, type SqliteObjectsTarget, type SqliteObjectsInspectInput, type SqliteObjectsInspectOutput, type SqliteObjectsPreviewInput, type SqliteObjectsPreviewOutput, type SqliteObjectsApplyInput, type SqliteObjectsOutcome, type SqliteObjectsReleaseInput, type SqliteObjectsFact } from '../../shared/sqliteObjects';
+import { buildSqliteObjectsPlan, changeSqliteViewDraftColumns, parseSqliteObjectsCreateHeader, sqliteViewColumnNameLimit, sqliteViewDraftQuery, sqliteObjectsLimits, sqliteViewSampleRows, sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsOutcomeSchema, sqliteObjectsFactSchema, assertSqliteObjectsFactTransition, type SqliteObjectsAction, type SqliteObjectsAcknowledgement, type SqliteObjectsTarget, type SqliteObjectsInspectInput, type SqliteObjectsInspectOutput, type SqliteObjectsPreviewInput, type SqliteObjectsPreviewOutput, type SqliteObjectsApplyInput, type SqliteObjectsOutcome, type SqliteObjectsReleaseInput, type SqliteObjectsFact } from '../../shared/sqliteObjects';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease } from '../store';
 import { assertSqliteObjectsTargetAvailable } from '../sqliteObjectsAvailability';
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteObjectsZh as text } from '../locales/sqliteObjects.zh-CN';
 import { SqlEditor } from './SqlEditor';
+import { ViewOutputColumns } from './ViewOutputColumns';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
@@ -140,6 +141,14 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
   useEffect(() => { if (!valid) stop(); }, [valid]);
   useEffect(() => { const now = Date.now(), times = [catalogue?.expiresAt, previewed?.expiresAt].filter((value): value is string => !!value).map(Date.parse).filter(value => value > now); if (!times.length) return; const timer = setTimeout(() => tick(value => value + 1), Math.max(1, Math.min(...times) - now + 1)); return () => clearTimeout(timer); }, [catalogue, previewed, timeRevision]);
   const draftDisabled = disabled || catalogueExpired, isReadOnly = fixed.profile?.dialect === 'sqlite' && fixed.profile.sqlite.readOnly;
+  const viewEditor = fixed.action !== 'drop' && fixed.scope.kind === 'view';
+  const [sampleColumns, setSampleColumns] = useState<{ owner: Draft; names: string[] }>();
+  // 清空预览列会触发渲染，读取回包按原草稿身份校验，不绑定一次性点击票据。
+  const viewReadCurrent = () => live.current === draft && current() && !operation.current && !closing && !draft.locked;
+  const viewColumns = useMemo(() => {
+    if (!viewEditor || !draft.name || !draft.sql.trim()) return;
+    try { return sqliteViewDraftQuery(draft.sql, draft.name).columns; } catch { return undefined; }
+  }, [viewEditor, draft.name, draft.sql]);
   /** create改名同步撤销原cap和绑定，SQL原文保留；不把旧定义自动替换成新名字。 */
   function changeName(name: string): void { if (!editable() || fixed.action !== 'create') return; nameEpoch.current++; setTemplateConfirm(false); fixed.onTargetChange?.(undefined); replace({ ...draft, name, catalogue: undefined, preview: undefined, acknowledgements: [], confirmation: '', outcome: undefined, fact: undefined, relation: '' }); void releaseAll().catch(report); setError(''); setMessage(''); }
   /** 正文可在同一次React提交前连续发布；按固定来源和最新草稿合并，不能用一次性按钮render票据丢弃后半输入。 */
@@ -169,9 +178,15 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
       {fixed.scope.kind === 'view' && <ViewSqlFileImport owner={draft} name={draft.name} value={draft.sql} disabled={disabled || !draft.name}
         hint={viewSqlFileZh.sqliteHint} current={editable} prepare={prepareViewFile} apply={changeSql}/>}
       {fixed.scope.kind === 'view' && <ViewQueryInspect owner={draft} hint={viewQueryInspectZh.sqliteHint(sqliteViewSampleRows)}
-        disabled={disabled || !draft.name || !draft.sql.trim()} current={editable}
-        read={mode => invoke('sqlite.view.inspectQuery', { connectionId: fixed.scope.connectionId,
-          database: fixed.scope.database, name: draft.name, sql: draft.sql, mode })}/>}
+        disabled={disabled || !draft.name || !draft.sql.trim()} current={viewReadCurrent}
+        read={mode => {
+          if (mode === 'rows') setSampleColumns(undefined);
+          return invoke('sqlite.view.inspectQuery', { connectionId: fixed.scope.connectionId,
+            database: fixed.scope.database, name: draft.name, sql: draft.sql, mode });
+        }} onRows={columns => setSampleColumns({ owner: draft, names: columns.map(column => column.name) })}/>}
+      {viewEditor && <ViewOutputColumns owner={draft} original={viewColumns} disabled={disabled} current={editable}
+        maxLength={sqliteViewColumnNameLimit} previewColumns={sampleColumns?.owner === draft ? sampleColumns.names : undefined}
+        applyNames={names => changeSql(changeSqliteViewDraftColumns(draft.sql, draft.name, names))}/>}
       {catalogue&&<div className="sqlite-objects-template">{fixed.scope.kind==='trigger'&&<Field label={text.relation}><select aria-label={text.relation} value={draft.relation} disabled={draftDisabled} onChange={event=>{if(editable()&&catalogue.eligibleRelations.some(value=>value.name===event.target.value)){setTemplateConfirm(false);replace({...draft,relation:event.target.value});}}}><option value="">{text.chooseRelation}</option>{catalogue.eligibleRelations.map(relation=><option key={relation.kind+':'+relation.name} value={relation.name}>{text.objectKinds[relation.kind]} · {relation.name}</option>)}</select></Field>}<button type="button" disabled={draftDisabled} onClick={fillTemplate}>{text.template}</button>{templateConfirm&&<><p>{text.templateOverwrite}</p><button type="button" disabled={draftDisabled} onClick={()=>{if(local())setTemplateConfirm(false);}}>{text.keepSql}</button><button type="button" disabled={draftDisabled} onClick={fillTemplate}>{text.replaceSql}</button></>}</div>}</section>}
     {previewed&&<section><p>{text.previewHint}</p><pre aria-label={text.previewTitle}>{previewed.sql.join('\n\n')}</pre><section aria-label={text.acknowledgements}>{previewed.requiredAcknowledgements.map(item=><label key={item}><input type="checkbox" aria-label={text.acknowledgementLabels[item]} checked={draft.acknowledgements.includes(item)} disabled={disabled||previewExpired} onChange={event=>{if(editable()&&draft.preview===previewed&&Date.parse(previewed.expiresAt)>Date.now())replace({...draft,acknowledgements:event.target.checked?[...draft.acknowledgements.filter(value=>value!==item),item]:draft.acknowledgements.filter(value=>value!==item)});}}/>{text.acknowledgementLabels[item]}</label>)}</section><Field label={text.confirmationHint(previewed.confirmation)}><input aria-label={text.confirmation} value={draft.confirmation} disabled={disabled||previewExpired} onChange={event=>{if(editable()&&draft.preview===previewed&&Date.parse(previewed.expiresAt)>Date.now())replace({...draft,confirmation:event.target.value});}}/></Field></section>}
     <SqliteObjectsFactSummary fact={draft.fact}/>{draft.outcome?.cleanupWarning===true&&<p role="alert" className="warning-text">{text.cleanupWarning}</p>}<ErrorBox message={!valid?text.invalid:error}/>{catalogueExpired&&<p className="warning-text">{previewed&&!previewExpired?text.catalogueExpiredPreview:text.catalogueExpired}</p>}{previewExpired&&<ErrorBox message={text.previewExpired}/>} {message&&<p role="status">{message}</p>}{progress&&<p role="status">{progress.message}</p>}{busy&&<Spinner text={text.loading}/>} {reread&&<p>{text.reread}</p>}{discard&&<p>{text.discard}</p>}

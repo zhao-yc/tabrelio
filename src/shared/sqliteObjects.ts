@@ -3,10 +3,12 @@ import { scanSqliteStatementPositions, sqliteLeadingKeyword } from './sqliteStat
 
 /** 视图和触发器定义只在原会话短期保存；完整目录超限不截断。 */
 export const sqliteObjectsLimits = { catalogues: 64, previews: 64, catalogueBytes: 64 * 1024 * 1024, previewBytes: 64 * 1024 * 1024, catalogueLifetimeMs: 5 * 60 * 1000, previewLifetimeMs: 5 * 60 * 1000, statements: 4098, attachedTriggers: 4096, relatedObjects: 4096, eligibleRelations: 4096, ddlBytes: 2 * 1024 * 1024 } as const;
+export const sqliteViewColumnNameLimit = 512;
+const sqliteViewColumnLimit = 1024;
 const encoder = new TextEncoder(), fold = (value: string) => value.replace(/[A-Z]/g, character => character.toLowerCase());
 const unicode = (value: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 const id = z.string().min(1).max(200).refine(value => unicode(value) && !value.includes('\0'));
-const name = z.string().min(1).max(512).refine(value => unicode(value) && !value.includes('\0'));
+const name = z.string().min(1).max(sqliteViewColumnNameLimit).refine(value => unicode(value) && !value.includes('\0'));
 const sqlText = z.string().max(sqliteObjectsLimits.ddlBytes).refine(value => unicode(value) && !value.includes('\0'));
 export const sqliteObjectsKindSchema = z.enum(['view', 'trigger']);
 export type SqliteObjectsKind = z.infer<typeof sqliteObjectsKindSchema>;
@@ -87,7 +89,7 @@ export function assertSqliteObjectsFactTransition(previous: SqliteObjectsFact, n
 export const sqliteObjectsOutcomeSchema = budget.pipe(z.object({ operationId: id, target: sqliteObjectsTargetSchema, action: sqliteObjectsActionSchema, outcome: z.enum(['committed', 'rolled-back', 'not-sent', 'unknown']), fact: sqliteObjectsFactSchema, message: z.string().min(1).max(4096).refine(unicode), definitionVerified: z.boolean().optional(), cleanupWarning: z.boolean().optional() }).strict().superRefine((value, context) => { if (value.operationId !== value.fact.operationId || JSON.stringify(value.target) !== JSON.stringify(value.fact.target) || value.action !== value.fact.action || value.outcome !== value.fact.phase || value.definitionVerified && value.outcome !== 'committed') context.addIssue({ code: 'custom', message: 'SQLite对象结果与原用途或确认事实矛盾' }); }));
 export type SqliteObjectsOutcome = z.infer<typeof sqliteObjectsOutcomeSchema>;
 
-interface HeaderToken { value: string; quoted: boolean; }
+interface HeaderToken { value: string; quoted: boolean; start: number; end: number; }
 /** 只读有界CREATE头，理解原生注释和引用名称；不扫描ON/END，也不假装验证SQL正文。 */
 function sqliteObjectsCreatePrefix(raw: string) {
   const sql = sqlText.min(1).parse(raw); let offset = 0;
@@ -103,15 +105,15 @@ function sqliteObjectsCreatePrefix(raw: string) {
   /** 只读前缀必要token；正文中的ON、END及字符串不参与对象身份判定。 */
   function token(): HeaderToken {
     skip(); if (offset >= sql.length) throw Error('SQLite CREATE头不完整');
-    const first = sql[offset++];
+    const start = offset, first = sql[offset++];
     if (first === '"' || first === "'" || first === '\x60' || first === '[') {
       const close = first === '[' ? ']' : first; let value = '';
-      while (offset < sql.length) { const character = sql[offset++]; if (character === close) { if (first !== '[' && sql[offset] === close) { value += close; offset++; continue; } return { value, quoted: true }; } value += character; if (value.length > 512) throw Error('SQLite CREATE头名称超过512字符'); }
+      while (offset < sql.length) { const character = sql[offset++]; if (character === close) { if (first !== '[' && sql[offset] === close) { value += close; offset++; continue; } return { value, quoted: true, start, end: offset }; } value += character; if (value.length > 512) throw Error('SQLite CREATE头名称超过512字符'); }
       throw Error('SQLite CREATE头包含未结束引用名');
     }
     if (first === '.') throw Error('SQLite CREATE头缺少限定名称');
     if (!/[A-Za-z_\u0080-\uffff]/.test(first)) throw Error('SQLite CREATE头中的对象名称或关键字无效');
-    const start = offset - 1; while (offset < sql.length && /[A-Za-z0-9_$\u0080-\uffff]/.test(sql[offset])) { offset++; if (offset - start > 512) throw Error('SQLite CREATE头名称超过512字符'); } return { value: sql.slice(start, offset), quoted: false };
+    while (offset < sql.length && /[A-Za-z0-9_$\u0080-\uffff]/.test(sql[offset])) { offset++; if (offset - start > 512) throw Error('SQLite CREATE头名称超过512字符'); } return { value: sql.slice(start, offset), quoted: false, start, end: offset };
   }
   const create = token(), kindToken = token();
   if (create.quoted || fold(create.value) !== 'create' || kindToken.quoted || !['view', 'trigger'].includes(fold(kindToken.value))) throw Error('只支持main中的单条CREATE VIEW或CREATE TRIGGER；TEMP、IF NOT EXISTS与EXPLAIN不受支持');
@@ -121,7 +123,7 @@ function sqliteObjectsCreatePrefix(raw: string) {
   skip(); if (sql[offset] === '.') { offset++; if (fold(firstName.value) !== 'main') throw Error('SQLite对象定义只允许main schema'); nameToken = token(); }
   const parsed = sqliteObjectsTargetSchema.parse({ connectionId: 'header-only', database: 'main', kind, name: nameToken.value });
   const target = { kind, database: 'main' as const, name: parsed.name };
-  return { target, sql, token, offset: () => offset, take(character: string) {
+  return { target, sql, token, nameEnd: nameToken.end, offset: () => offset, take(character: string) {
     skip();
     if (sql[offset] !== character) return false;
     offset++;
@@ -134,16 +136,19 @@ export function parseSqliteObjectsCreateHeader(raw: string): { kind: SqliteObjec
 }
 
 /** 从准确命名的 CREATE VIEW 提取单条查询及显式列名；正文仍由 SQLite 原生解析。 */
-export function sqliteViewDraftQuery(raw: string, expectedName: string): { query: string; columns: string[] } {
-  const { target, sql, token, offset, take } = sqliteObjectsCreatePrefix(raw);
+function sqliteViewDraftParts(raw: string, expectedName: string) {
+  const { target, sql, token, nameEnd, offset, take } = sqliteObjectsCreatePrefix(raw);
   if (target.kind !== 'view' || target.name !== expectedName) throw Error('SQLite 视图定义须与当前对象准确同名');
-  const columns: string[] = [];
+  const aliases: HeaderToken[] = [];
+  let list: { start: number; end: number } | undefined;
   if (take('(')) {
+    const start = offset() - 1;
     do {
-      if (columns.length >= 1024) throw Error('SQLite 视图显式列清单超过 1024 列');
-      columns.push(token().value);
+      if (aliases.length >= sqliteViewColumnLimit) throw Error('SQLite 视图显式列清单超过 1024 列');
+      aliases.push(token());
     } while (take(','));
     if (!take(')')) throw Error('SQLite 视图列清单不完整');
+    list = { start, end: offset() };
   }
   const as = token();
   if (as.quoted || fold(as.value) !== 'as') throw Error('SQLite 视图定义缺少 AS 查询');
@@ -155,10 +160,46 @@ export function sqliteViewDraftQuery(raw: string, expectedName: string): { query
   const query = sql.slice(offset(), end);
   if (!['SELECT', 'WITH', 'VALUES'].includes(sqliteLeadingKeyword(query) ?? ''))
     throw Error('SQLite 视图预览需要 SELECT、WITH 或 VALUES 查询');
-  return { query, columns };
+  return { query, aliases, list, nameEnd };
+}
+
+export function sqliteViewDraftQuery(raw: string, expectedName: string): { query: string; columns: string[] } {
+  const { query, aliases } = sqliteViewDraftParts(raw, expectedName);
+  return { query, columns: aliases.map(alias => alias.value) };
 }
 
 const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
+/** 仅替换同名视图的显式列清单，保留查询、标识符拼写和相同位置的列间注释。 */
+export function changeSqliteViewDraftColumns(sql: string, expectedName: string, names: readonly string[]): string {
+  const { aliases, list, nameEnd } = sqliteViewDraftParts(sql, expectedName);
+  if (names.length > sqliteViewColumnLimit) throw Error('SQLite 视图显式列清单超过 1024 列');
+  const used = new Set<string>();
+  for (const [index, value] of names.entries()) {
+    if (!name.safeParse(value).success) throw Error(`第 ${index + 1} 个列名须为 1～${sqliteViewColumnNameLimit} 个有效字符。`);
+    const key = fold(value);
+    if (used.has(key)) throw Error(`输出列名重复：${value}`);
+    used.add(key);
+  }
+  let next: string;
+  if (aliases.length === names.length) {
+    const parts: string[] = [];
+    let offset = 0;
+    for (const [index, alias] of aliases.entries()) {
+      if (alias.value === names[index]) continue;
+      parts.push(sql.slice(offset, alias.start), quote(names[index]));
+      offset = alias.end;
+    }
+    parts.push(sql.slice(offset));
+    next = parts.join('');
+  } else {
+    const start = list?.start ?? nameEnd;
+    const replacement = names.length ? (list ? '' : ' ') + '(' + names.map(quote).join(', ') + ')' : ' ';
+    next = sql.slice(0, start) + replacement + sql.slice(list?.end ?? start);
+  }
+  if (encoder.encode(next).length > sqliteObjectsLimits.ddlBytes) throw Error('SQLite 视图定义超过 2 MiB');
+  return next;
+}
+
 /** schema细化只推导固定项，不对已dirty字段重复parse并向safeParse外抛错。 */
 function expectedAcknowledgements(kind: SqliteObjectsKind, action: SqliteObjectsAction, attachedTriggerCount: number): SqliteObjectsAcknowledgement[] {
   return ['definition-effects', ...(action !== 'drop' ? ['native-validation'] as const : []), ...(action !== 'create' ? ['dependent-objects'] as const : []), ...(action !== 'create' && kind === 'view' && attachedTriggerCount > 0 ? ['attached-view-triggers'] as const : []), ...(action === 'drop' ? ['drop-object'] as const : [])];

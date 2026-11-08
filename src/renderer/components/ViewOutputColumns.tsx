@@ -4,8 +4,8 @@ import { viewOutputColumnsZh as text } from '../locales/viewOutputColumns.zh-CN'
 import { ErrorBox, Field } from './ui';
 
 /** 列名在点击应用前只存于表单。定义或连接发生变化时弃用旧列表和预览列。 */
-export function ViewOutputColumns({ owner, original, disabled, current, previewColumns, partial = false, applyNames }: {
-  owner: object; original?: readonly string[]; disabled: boolean; partial?: boolean;
+export function ViewOutputColumns({ owner, original, disabled, current, previewColumns, partial = false, maxLength = partial ? 63 : 64, applyNames }: {
+  owner: object; original?: readonly string[]; disabled: boolean; partial?: boolean; maxLength?: number;
   current(): boolean;
   previewColumns?: readonly string[];
   applyNames(names: readonly string[]): void;
@@ -37,7 +37,7 @@ export function ViewOutputColumns({ owner, original, disabled, current, previewC
     <div className="form-grid">
       {names.map((name, index) => <Field key={index} label={text.column(index + 1)}>
         <span className="input-action">
-          <textarea rows={1} aria-label={text.column(index + 1)} value={name} maxLength={partial ? 63 : 64}
+          <textarea rows={1} aria-label={text.column(index + 1)} value={name} maxLength={maxLength}
             onChange={event => edit(names.map((value, at) => at === index ? event.target.value : value))}/>
           <button type="button" aria-label={text.remove(index + 1)} title={text.remove(index + 1)}
             onClick={() => edit(names.filter((_name, at) => at !== index))}>×</button>
