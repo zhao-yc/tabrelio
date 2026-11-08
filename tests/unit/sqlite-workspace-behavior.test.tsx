@@ -1,3 +1,4 @@
+import { appModalSelector } from '../../src/renderer/modalSelectors';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import * as jsxRuntime from 'react/jsx-runtime';
@@ -82,7 +83,7 @@ describe('SQLite 新查询和声明快捷键的正式组件接线', () => {
   it.each([[false, false, 0], [true, true, 0], [true, false, 1]] as const)('结构搜索快捷键复用声明命令，可用=%s，模态=%s', async (enabled, modal, calls) => {
     let statement = ''; const visit = (node: ts.Node) => { if (ts.isIfStatement(node) && node.expression.getText(app).includes("event.key.toLowerCase()==='f'")) statement = node.getText(app); ts.forEachChild(node, visit); }; visit(app); expect(statement).not.toBe('');
     const registry = new UiCommandRegistry(), run = vi.fn(); registry.update('app', {}, { active: true, contextKey: '网络或SQLite真实可用状态', handlers: { 'structure-search': { enabled, run } } }); registry.setBlocked(false);
-    const vm = publish('function shortcut(event){' + statement + '}', { uiCommands: registry, document: { querySelector: () => modal ? {} : null }, useWorkspace: { getState: () => ({ notify: vi.fn() }) }, errorMessage: String }, ['shortcut']);
+    const vm = publish('function shortcut(event){' + statement + '}', { uiCommands: registry, appModalSelector, document: { querySelector: () => modal ? {} : null }, useWorkspace: { getState: () => ({ notify: vi.fn() }) }, errorMessage: String }, ['shortcut']);
     vm.handlers.shortcut({ shiftKey: true, key: 'F', preventDefault: vi.fn() }); await Promise.resolve(); expect(run).toHaveBeenCalledTimes(calls);
   });
 });
