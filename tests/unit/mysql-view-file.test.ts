@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeMysqlViewDraftColumns, mysqlViewDraftColumns, changeMysqlViewDraftAttribute, exportMysqlViewFileQuery, mysqlViewDraftAttributes, renameMysqlViewDraft, mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
+import { changeMysqlViewDraftColumns, mysqlViewDraftColumns, changeMysqlViewDraftAttribute, copyMysqlViewDraft, exportMysqlViewFileQuery, mysqlViewDraftAttributes, renameMysqlViewDraft, mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
 
 describe('MySQL 和 MariaDB 视图文件草稿', () => {
   it('在单条 CTE 中保留注释、字符串和原始换行，名称独立引用', () => {
@@ -47,6 +47,33 @@ describe('MySQL 和 MariaDB 视图文件草稿', () => {
     expect(() => replaceMysqlViewFileQuery('CREATE VIEW `别库`.`视图` AS SELECT 1', '库', '视图', 'SELECT 2')).toThrow(/无法确认/);
     expect(() => replaceMysqlViewFileQuery('CREATE VIEW `同名` AS SELECT 1; SELECT 2', '库', '同名', 'SELECT 2')).toThrow(/无法确认/);
     expect(() => replaceMysqlViewFileQuery('CREATE VIEW `别名` AS SELECT 1', '库', '视图', 'SELECT 2')).toThrow(/无法确认/);
+  });
+});
+
+describe('MySQL 和 MariaDB 视图另存', () => {
+  it.each([['CREATE OR REPLACE', ''], ['CREATE', ' IF NOT EXISTS'], ['ALTER', '']])(
+    '用 %s 草稿生成普通 CREATE 并保留属性与正文', (verb, exists) => {
+      const options = 'ALGORITHM=MERGE DEFINER=`原@人`@`%` SQL SECURITY INVOKER VIEW';
+      const tail = " (`列`) AS SELECT id FROM `库`.`来源` WHERE id <> '原;视图' WITH LOCAL CHECK OPTION -- 尾注释";
+      const sql = `${verb} ${options}${exists} \`原;视图\`${tail}`;
+      expect(copyMysqlViewDraft(sql, '库', '原;视图', '新` 名')).toBe(
+        'CREATE ' + options + ' `库`.`新`` 名`' + tail + '\n;',
+      );
+    },
+  );
+
+  it.each([
+    'ALTER VIEW `不同库`.`视图` AS SELECT 1',
+    'ALTER VIEW `错误目标` AS SELECT 1',
+    'CREATE VIEW `视图` AS SELECT 1; DROP VIEW `视图`',
+    'CREATE VIEW `视图` AS SELECT 1 /*M! DROP VIEW `视图` */',
+    "CREATE VIEW `视图` AS SELECT 'escape\\' AS n",
+  ])('拒绝边界不确定或源身份不符的草稿 %s', source => {
+    expect(() => copyMysqlViewDraft(source, '库', '视图', '新视图')).toThrow(/无法确认/);
+  });
+
+  it('拒绝完全相同的目标', () => {
+    expect(() => copyMysqlViewDraft('CREATE VIEW `视图` AS SELECT 1', '库', '视图', '视图')).toThrow(/不同/);
   });
 });
 

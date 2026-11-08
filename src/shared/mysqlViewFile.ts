@@ -106,6 +106,7 @@ function mysqlViewParts(source: string, database: string, view: string, quotes: 
   }
   const securityAt = at;
   expectWord('VIEW');
+  const viewKeyword = tokens[at - 1];
   if (verb === 'CREATE' && word(tokens[at]) === 'IF') { at++; expectWord('NOT'); expectWord('EXISTS'); }
   let target = expectName();
   if (symbol(tokens[at], '.')) {
@@ -131,7 +132,7 @@ function mysqlViewParts(source: string, database: string, view: string, quotes: 
   const option = checkOption(tokens);
   const checkTokens = option ? tokens.slice(tokens.lastIndexOf(option)) : [];
   return { statement, aliases, aliasTokens, aliasList, headerEnd: tokens[at - 1].end, bodyTokens: tokens.slice(at), option,
-    targetToken, algorithm, algorithmAt: tokens[algorithmAt].start, security, securityAt: tokens[securityAt].start, checkTokens };
+    targetToken, viewKeyword, algorithm, algorithmAt: tokens[algorithmAt].start, security, securityAt: tokens[securityAt].start, checkTokens };
 }
 
 type ViewParts = ReturnType<typeof mysqlViewParts>;
@@ -216,6 +217,19 @@ export function renameMysqlViewDraft(source: string, database: string, view: str
   return commonSql((quotes, escapes) => {
     const { targetToken } = mysqlViewParts(source, database, view, quotes, escapes);
     return source.slice(0, targetToken.start) + quoteCompletionIdentifier(next) + source.slice(targetToken.end);
+  }, invalidDraft);
+}
+
+/** 复制只生成单条 CREATE。移除重建及忽略重名的语法，由服务器原子拒绝已存在的目标。 */
+export function copyMysqlViewDraft(source: string, database: string, view: string, target: string): string {
+  if (!completionIdentifier(target) || target === view) throw Error('新视图须使用不同的有效名称。');
+  const qualified = quoteCompletionIdentifier(database) + '.' + quoteCompletionIdentifier(target);
+  return commonSql((quotes, escapes) => {
+    const { statement, targetToken, viewKeyword, algorithmAt } = mysqlViewParts(source, database, view, quotes, escapes);
+    const sql = 'CREATE ' + source.slice(algorithmAt, viewKeyword.end) + ' ' + qualified +
+      source.slice(targetToken.end, statement.end) + '\n;';
+    mysqlViewParts(sql, database, target, quotes, escapes);
+    return sql;
   }, invalidDraft);
 }
 

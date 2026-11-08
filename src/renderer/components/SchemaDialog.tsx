@@ -23,7 +23,7 @@ import {databaseSearchZh} from '../locales/databaseSearch.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { completionIdentifier } from '../../shared/completionLexical';
-import { exportMysqlViewFileQuery, mysqlViewSampleRows, mysqlNewViewHeader, mysqlViewFileQuery, renameMysqlViewDraft, replaceMysqlViewFileQuery } from '../../shared/mysqlViewFile';
+import { copyMysqlViewDraft, exportMysqlViewFileQuery, mysqlViewSampleRows, mysqlNewViewHeader, mysqlViewFileQuery, renameMysqlViewDraft, replaceMysqlViewFileQuery } from '../../shared/mysqlViewFile';
 import type { TableCreateApplyOutput } from '../../shared/tableCreate';
 import { TableCreateConfirmation } from './TableCreateConfirmation';
 import { tableCreateZh } from '../locales/tableCreate.zh-CN';
@@ -43,6 +43,7 @@ import { MysqlViewAttributes } from './MysqlViewAttributes';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
+import { mysqlViewCopyZh as copyText } from '../locales/mysqlViewCopy.zh-CN';
 import { SqliteTableCreateDialog } from './SqliteTableCreateDialog';
 import type { SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 
@@ -302,6 +303,8 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
   const [applyTaskId, setApplyTaskId] = useState('');
   const [viewLoaded, setViewLoaded] = useState(false);
   const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
+  const [copy, setCopy] = useState<{ owner: object; name: string; preview?: string }>();
+  const applying = useRef(false);
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const fileOwner = useMemo(() => ({}), [connectionId, database, object, profile, version, kind, name, sql]);
@@ -349,18 +352,73 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
     return state.connections.find(item => item.id === connectionId) === profile &&
       (state.connectionVersions[connectionId] ?? 0) === version;
   }
+  function closeCopy() {
+    if (applying.current) return;
+    setCopy(undefined);
+    setError('');
+  }
+
+  function previewCopy() {
+    if (!copy || copy.owner !== fileOwner || !fileCurrent() || !database || !object || applying.current) return;
+    try {
+      setCopy({ ...copy, preview: copyMysqlViewDraft(sql, database, object.name, copy.name) });
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
   /** 用户确认后独立准备连接并执行一次 SQL，连接失败或写入失败均不自动重试。 */
   async function apply() {
-    if(readOnly || missingName)return;
-    if (!statement.trim()) { setError(zh.schema.text053); return; }
-    if (!window.confirm(zh.schema.text054)) return;
+    if (readOnly || missingName || applying.current) return;
+    if (copy && (!copy.preview || copy.owner !== fileOwner || !fileCurrent())) return;
+    const accepted = copy?.preview ?? statement;
+    if (!accepted.trim()) { setError(zh.schema.text053); return; }
+    if (!copy && !window.confirm(zh.schema.text054)) return;
+    applying.current = true;
     setBusy(true); setError(''); const taskId = uid(); setApplyTaskId(taskId);
-    try { await invoke('connections.open', { id: connectionId }); await invoke('schema.apply', { connectionId, database: database ?? '', sql: statement, taskId }); useWorkspace.getState().notify(zh.schema.text055); onApplied(); onClose(); }
-    catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
+    try {
+      await invoke('connections.open', { id: connectionId });
+      if (copy && !fileCurrent()) throw Error(copyText.stale);
+      await invoke('schema.apply', { connectionId, database: database ?? '', sql: accepted, taskId });
+      useWorkspace.getState().notify(copy ? copyText.saved(copy.name) : zh.schema.text055);
+      onApplied();
+      if (copy) setCopy(undefined);
+      else onClose();
+    } catch (reason) {
+      setError(errorMessage(reason));
+      // 每次提交只消费一份已核对的 SQL，失败后重新预览才能再次确认。
+      if (copy) setCopy({ ...copy, preview: undefined });
+    } finally {
+      applying.current = false;
+      setBusy(false);
+      setApplyTaskId('');
+    }
   }
-  return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} name={name} value={sql} disabled={viewReadDisabled}
+  const title = copy ? copyText.title : readOnly && object ? databaseSearchZh.definitionTitle(kindLabels[object.kind], object.name)
+    : !database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058;
+  const copyStale = !!copy && (!fileView || copy.owner !== fileOwner);
+  const copySql = copyStale ? undefined : copy?.preview;
+  return <Modal title={title} wide onClose={copy ? closeCopy : () => { if (!busy) onClose(); }}>
+    {copy && database && object && <>
+      <div className="modal-content" aria-busy={busy}>
+        <p>{copyText.source(database, object.name)}</p>
+        <p className="muted">{copyText.hint}</p>
+        <Field label={copyText.name}><input autoFocus value={copy.name} maxLength={64} disabled={copyStale || busy}
+          onChange={event => { setCopy({ owner: copy.owner, name: event.target.value }); setError(''); }}/></Field>
+        {copySql && <section aria-label={copyText.preview}><p>{copyText.review}</p>
+          <SqlEditor value={copySql} dialect={profile?.dialect} readOnly height={280}/>
+        </section>}
+        <ErrorBox message={copyStale ? copyText.stale : error}/>
+      </div>
+    </>}
+    {/* 预览时保留原 Monaco 模型和撤销历史。 */}
+    <div className="modal-content" hidden={!!copy}>{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} name={name} value={sql} disabled={viewReadDisabled}
       hint={viewSqlFileZh.mysqlHint} current={fileCurrent} prepare={prepareViewFile}
       prepareSave={value => exportMysqlViewFileQuery(value, database, name)} apply={setSql}/>}
+    {fileView && object && <button type="button" disabled={viewReadDisabled} onClick={() => {
+      if (!fileCurrent()) return;
+      setCopy({ owner: fileOwner, name: '' });
+      setError('');
+    }}>{copyText.open}</button>}
     {fileView && object && <ViewDependenciesPanel owner={dependenciesOwner} current={fileCurrent} connectionId={connectionId} dialect={profile.dialect}
       disabled={busy} load={() => invoke('mysql.view.dependencies', { connectionId, database, name: object.name })}/>}
     {fileView && <MysqlViewAttributes database={database} view={name} sql={sql} disabled={viewReadDisabled}
@@ -374,5 +432,20 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
     {fileView && <MysqlViewColumns owner={fileOwner} database={database} view={name} sql={sql} disabled={viewReadDisabled}
       current={fileCurrent} previewColumns={previewColumns?.owner === fileOwner ? previewColumns.names : undefined}
       change={value => { setSql(value); setError(''); }}/>}
-    <ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>{busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}{!readOnly&&<button className="primary" disabled={busy || missingName || !statement.trim()} onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button>}</footer></Modal>;
+    {!copy && <ErrorBox message={error}/>}</div>
+    <footer className="modal-footer">
+      {copy && <button type="button" disabled={busy} onClick={closeCopy}>{copyText.back}</button>}
+      <span className="grow"/>
+      {!copy && <button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>}
+      {busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}
+      {copy ? <>
+        <button type="button" disabled={copyStale || busy || !completionIdentifier(copy.name) || copy.name === object?.name}
+          onClick={previewCopy}>{copyText.preview}</button>
+        <button type="button" className="primary" disabled={busy || !copySql} onClick={() => void apply()}>
+          {busy ? <Spinner/> : copyText.apply}
+        </button>
+      </> : !readOnly && <button className="primary" disabled={busy || missingName || !statement.trim()}
+        onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button>}
+    </footer>
+  </Modal>;
 }
