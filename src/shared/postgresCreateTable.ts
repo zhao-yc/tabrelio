@@ -143,11 +143,17 @@ export function postgresPartitionBoundSql(child: PostgresPartitionBound): string
 /** 表单只提交结构化字段；分区边界作为数据传入，不能成为 SQL 片段。 */
 export const postgresCreateTablePreviewSchema = target.extend({
   schema: postgresNewIdentifier, table: postgresNewIdentifier, columns: z.array(postgresCreateColumnSchema).min(1).max(128), comment: postgresDdlText,
-  partition: partitionSchema.optional(),
+  partition: partitionSchema.optional(), primaryKeyOrder: z.array(postgresNewIdentifier).min(1).max(32).optional(),
 }).strict().superRefine((input, context) => {
   if (input.schema.startsWith('pg_') || input.schema === 'information_schema') context.addIssue({ code: 'custom', message: '请选择普通用户 schema' });
   if (new Set(input.columns.map(field => field.name)).size !== input.columns.length) context.addIssue({ code: 'custom', message: '字段名称不能重复' });
-  if (input.columns.filter(field => field.primary).length > 32) context.addIssue({ code: 'custom', message: '主键最多允许 32 列' });
+  const primary = new Set(input.columns.filter(field => field.primary).map(field => field.name));
+  if (primary.size > 32) context.addIssue({ code: 'custom', message: '主键最多允许 32 列' });
+  // 显式顺序只能排列已有主键列，不借顺序请求添加、删除或重复列。
+  const primaryOrder = input.primaryKeyOrder;
+  if (primaryOrder && (primaryOrder.length !== primary.size || new Set(primaryOrder).size !== primaryOrder.length ||
+      primaryOrder.some(name => !primary.has(name))))
+    context.addIssue({ code: 'custom', path: ['primaryKeyOrder'], message: '主键顺序必须包含全部已选主键字段且不能重复' });
   let textSize = input.columns.reduce((total, field) => total + utf8.encode(field.comment).byteLength +
     (field.default.mode === 'literal' ? utf8.encode(field.default.value).byteLength : 0) +
     (field.generation ? utf8.encode(field.generation.expression).byteLength : 0), utf8.encode(input.comment).byteLength);
@@ -227,7 +233,7 @@ export function postgresCreateTablePlan(raw: PostgresCreateTableInput): {
     if (check) checks.push({ name: check.name, type: check.type, value: check.value });
     return '  ' + sql;
   });
-  const primary = input.columns.filter(field => field.primary).map(field => postgresIdentifier(field.name));
+  const primary = (input.primaryKeyOrder ?? input.columns.filter(field => field.primary).map(field => field.name)).map(postgresIdentifier);
   if (primary.length) fields.push('  PRIMARY KEY (' + primary.join(', ') + ')');
   const partition = input.partition;
   const partitionBy = partition ? ' PARTITION BY ' + partition.strategy.toUpperCase() +

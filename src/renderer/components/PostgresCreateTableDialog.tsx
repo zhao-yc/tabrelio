@@ -1,3 +1,5 @@
+import { NewTableColumnOrder } from '../newTableColumnOrder';
+import { tableCreateColumnOrderZh as columnOrderText } from '../locales/tableCreateColumnOrder.zh-CN';
 import { duplicateNewTableColumn } from '../newTableColumnCopy';
 import { newTableColumnCopyZh as columnCopy } from '../locales/newTableColumnCopy.zh-CN';
 import { useEffect, useRef, useState } from 'react';
@@ -35,7 +37,10 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
   const [schema, setSchema] = useState('');
   const [table, setTable] = useState(initialDesign?.table ?? '');
   const [comment, setComment] = useState('');
-  const [fields, setFields] = useState(() => initialDesign?.columns.map(field => ({ ...field, id: uid() })) ?? [newField()]);
+  const [{ fields, primaryIds }, setFieldDesign] = useState<{ fields: FieldDraft[]; primaryIds?: string[] }>(() => ({
+    fields: initialDesign?.columns.map(field => ({ ...field, id: uid() })) ?? [newField()],
+  }));
+  const columnOrder = useRef(new NewTableColumnOrder<FieldDraft>());
   const [partition, setPartition] = useState<PostgresPartitionDraft>({ strategy: '', keyIds: [], children: [] });
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -82,6 +87,22 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
     update();
   }
 
+  /** 首次重排冻结原主键顺序。改名按字段 ID 跟随，后来选中的主键字段追加在末尾。 */
+  function setFields(change: (previous: FieldDraft[]) => FieldDraft[] | undefined, preservePrimary = false) {
+    setFieldDesign(previous => {
+      const next = change(previous.fields);
+      if (!next || next === previous.fields) return previous;
+      const ordered = previous.primaryIds ?? (preservePrimary ? previous.fields.filter(field => field.primary).map(field => field.id) : undefined);
+      if (!ordered) return { fields: next };
+      const selected = new Set(next.filter(field => field.primary).map(field => field.id));
+      return { fields: next, primaryIds: [...ordered.filter(id => selected.delete(id)), ...selected] };
+    });
+  }
+
+  function moveField(field: FieldDraft, direction: -1 | 1) {
+    edit(() => setFields(previous => columnOrder.current.move(previous, field, direction), true));
+  }
+
   /** 更新原字段，保留字段顺序和本地控件身份。 */
   function patch(id: string, change: Partial<PostgresCreateColumn>) {
     edit(() => setFields(previous => previous.map(field => field.id === id ? { ...field, ...change } : field)));
@@ -108,7 +129,9 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
   async function prepare() {
     if (operation.current || loading || unknown || isParentCurrent?.() === false) return;
     const input = postgresCreateTablePreviewSchema.safeParse({ ...target, schema, table, comment,
-      columns: fields.map(({ id: _id, ...field }) => field), partition: compilePostgresPartition(partition, fields) });
+      columns: fields.map(({ id: _id, ...field }) => field), partition: compilePostgresPartition(partition, fields),
+      ...(primaryIds && primaryIds.length > 1 ? { primaryKeyOrder: primaryIds.map(id => fields.find(field => field.id === id)!.name) } : {}),
+    });
     if (!input.success) { setError(input.error.issues[0]?.message ?? text.changed); return; }
     const owner = lifecycle.current;
     operation.current = true;
@@ -199,6 +222,10 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
           <Field label={text.comment}><input value={field.comment} maxLength={4096} onChange={event => patch(field.id, { comment: event.target.value })}/></Field>
           <button type="button" title={columnCopy.hint} aria-label={columnCopy.label(index + 1)}
             disabled={fields.length >= 128} onClick={() => duplicateField(field)}>{columnCopy.action}</button>
+          <button type="button" disabled={index === 0} aria-label={columnOrderText.upLabel(index + 1)}
+            onClick={() => moveField(field, -1)}>{columnOrderText.up}</button>
+          <button type="button" disabled={index === fields.length - 1} aria-label={columnOrderText.downLabel(index + 1)}
+            onClick={() => moveField(field, 1)}>{columnOrderText.down}</button>
           <button disabled={fields.length === 1} onClick={() => edit(() => setFields(previous => previous.filter(item => item.id !== field.id)))}>{text.remove}</button>
         </fieldset>)}
         <button disabled={fields.length >= 128} onClick={() => edit(() => setFields(previous => [...previous, newField()]))}>{text.add}</button>

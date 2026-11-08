@@ -234,7 +234,7 @@ export class PostgresCreateTableWorkspace {
   async prepare(input: Scoped<PostgresCreateTableInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'table', connect, () => {
       const draft = { connectionId: input.connectionId, database: input.database, schema: input.schema,
-        table: input.table, columns: input.columns, comment: input.comment, partition: input.partition };
+        table: input.table, columns: input.columns, comment: input.comment, partition: input.partition, primaryKeyOrder: input.primaryKeyOrder };
       const plan = postgresCreateTablePlan(draft);
       const presets = draft.columns.flatMap(({ default: { mode } }) => mode === 'none' || mode === 'literal' ? [] : [mode]);
       const minimum = Math.max(0, ...draft.columns.map(field => field.generation ? postgresGenerationMinimum(field.generation.mode) : 0));

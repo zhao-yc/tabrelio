@@ -40,6 +40,18 @@ it('PostgreSQL 日常维护仅接受固定动作和原对象目录摘要', () =>
 });
 
 describe('PostgreSQL 建表计划', () => {
+  it('字段与复合主键独立排序，旧输入继续按字段顺序生成主键', () => {
+    const first = draft.columns[0], second = { ...first, name: '次列' };
+    const reordered = { ...draft, columns: [second, first] };
+    expect(postgresCreateTablePlan(reordered).statements[0]).toContain('PRIMARY KEY ("次列", "原""列")');
+    const sql = postgresCreateTablePlan({ ...reordered, primaryKeyOrder: [first.name, second.name] }).statements[0];
+    expect(sql.indexOf('"次列" text')).toBeLessThan(sql.indexOf('"原""列" text'));
+    expect(sql).toContain('PRIMARY KEY ("原""列", "次列")');
+    for (const primaryKeyOrder of [[first.name], [first.name, first.name], [first.name, '非主键字段']]) {
+      expect(postgresCreateTablePreviewSchema.safeParse({ ...reordered, primaryKeyOrder }).success).toBe(false);
+    }
+  });
+
   it('分区边界按数据转义，默认分区在显式分区之后创建', () => {
     const key = draft.columns[0].name;
     const planned = postgresCreateTablePlan({ ...draft, partition: { strategy: 'list', keys: [key],

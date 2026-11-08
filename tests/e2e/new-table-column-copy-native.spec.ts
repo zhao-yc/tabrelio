@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 import { newTableColumnCopyZh as copy } from '../../src/renderer/locales/newTableColumnCopy.zh-CN';
+import { tableCreateColumnOrderZh as order } from '../../src/renderer/locales/tableCreateColumnOrder.zh-CN';
 import { postgresCreateTableZh as pg } from '../../src/renderer/locales/postgresCreateTable.zh-CN';
 import { sqliteTableCreateZh as sqlite } from '../../src/renderer/locales/sqliteTableCreate.zh-CN';
 import { tableCreateZh as mysql } from '../../src/renderer/locales/tableCreate.zh-CN';
@@ -102,7 +103,25 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
       await expect(field(2).getByLabel(pg.name, { exact: true })).toHaveValue('id_copy');
       await expect(field(2).getByLabel(pg.identity, { exact: true })).toHaveValue('none');
       await expect(field(2).getByRole('checkbox', { name: pg.unique, exact: true })).not.toBeChecked();
+      await field(1).getByRole('checkbox', { name: pg.unique, exact: true }).uncheck();
+      await field(2).getByRole('checkbox', { name: pg.primary, exact: true }).check();
+      await modal.getByLabel(pg.partition.strategy, { exact: true }).selectOption('range');
+      const keys = modal.getByRole('group', { name: pg.partition.keys, exact: true });
+      await keys.getByRole('checkbox', { name: 'id_copy', exact: true }).check();
+      await keys.getByRole('checkbox', { name: 'id', exact: true }).check();
+
+      await expect(field(1).getByRole('button', { name: order.upLabel(1), exact: true })).toBeDisabled();
+      await field(1).getByRole('button', { name: order.downLabel(1), exact: true }).click();
+      await expect(field(1).getByLabel(pg.name, { exact: true })).toHaveValue('id_copy');
+      await expect(keys.getByRole('checkbox', { name: 'id_copy (1)', exact: true })).toBeChecked();
+      await expect(keys.getByRole('checkbox', { name: 'id (2)', exact: true })).toBeChecked();
+      await field(2).getByRole('button', { name: order.upLabel(2), exact: true }).click();
+      await expect(field(1).getByLabel(pg.name, { exact: true })).toHaveValue('id');
+      await field(2).getByRole('button', { name: order.upLabel(2), exact: true }).click();
+
       await modal.getByRole('button', { name: pg.preview, exact: true }).click();
+      await expect(modal.locator('pre.pg-create-sql')).toContainText('PRIMARY KEY ("id", "id_copy")');
+      await expect(modal.locator('pre.pg-create-sql')).toContainText('PARTITION BY RANGE ("id_copy", "id")');
       await expect(modal.getByRole('button', { name: pg.apply, exact: true })).toBeVisible();
       expect(await catalog()).toEqual(before);
       await modal.getByRole('button', { name: pg.apply, exact: true }).click();
@@ -110,9 +129,10 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
       const result = await page.evaluate(target => window.dbark.invoke('postgres.structure.read', target),
         { connectionId, database, table: '"public"."' + table + '"' });
       expect(result.columns.map(column => [column.name, column.type, column.comment]))
-        .toEqual([['id', 'bigint', '原列说明'], ['id_copy', 'bigint', '原列说明']]);
-      expect(result.constraints.filter(value => value.kind === 'p').map(value => value.keyColumns)).toEqual([['id']]);
-      expect(result.columns.map(column => column.identity)).toEqual(['a', '']);
+        .toEqual([['id_copy', 'bigint', '原列说明'], ['id', 'bigint', '原列说明']]);
+      expect(result.constraints.filter(value => value.kind === 'p').map(value => value.keyColumns)).toEqual([['id', 'id_copy']]);
+      expect(result.columns.map(column => column.identity)).toEqual(['', 'a']);
+      expect(result.partitionKey).toBe('RANGE (id_copy, id)');
     } else {
       await modal.getByLabel(zh.schema.text010, { exact: true }).fill(table);
       await modal.getByLabel(formatText(zh.schema.text024, 1), { exact: true }).fill('原列说明');
