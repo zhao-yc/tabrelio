@@ -528,6 +528,8 @@ TLS 默认验证服务端证书。私有 CA 或自签证书使用 CA 文件；�
 
 SQLite 的可编辑表也可以在「SQLite 多页草稿」删除各保留页的勾选记录。返回有效缓存页时可看到原勾选。确认各页数量后先生成待删除草稿，再用「预览 SQLite 修改」核对并提交。[SQLite 跨页勾选删除](development/sqlite-workspace-checked-delete-20261108.md)
 
+在 PostgreSQL 的可编辑表里，勾选记录后点「收集本页删除目标」，翻到其他页继续收集。返回原页可以更新或移除该页的目标。点「删除跨页收集记录」可核对原主键并暂存整批，之后可一步撤销，或通过「预览记录修改」核对 SQL 后提交。[PostgreSQL 跨页勾选删除](development/postgres-checked-delete-20261108.md)
+
 需要导出服务器上全部匹配记录时，点击“导出全部筛选行”，选择 CSV、JSON、INSERT SQL 或 XLSX。在“导出字段与范围”勾选字段，并用“上移／下移”调整顺序，再选择文件和开始导出。未选择的字段仍参与已应用筛选和排序，范围不限当前页。字段或顺序变化后须重新选择文件；SQL 不写入生成列。导出不包含未提交草稿。[字段选择及验收边界](development/table-filtered-export-fields-20261028.md)另列，暂不发布。
 
 当前源码版可在表页点击“生成查询SQL”，预览SELECT、INSERT、UPDATE或DELETE，再打开独立查询标签。原表暂存草稿会保留，生成和打开不执行SQL。SELECT使用当前结果上限；写入模板保留值参数，请审阅字段／键条件后使用“参数执行”填写类型和值。自增和生成列不进入写入字段，UPDATE／DELETE仅在确认非空主键或可靠唯一键时生成。视图只支持SELECT。[实现及验收范围](development/table-query-template-20261021.md)另列，暂不发布。

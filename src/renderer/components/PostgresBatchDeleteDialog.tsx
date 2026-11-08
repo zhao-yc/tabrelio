@@ -7,11 +7,11 @@ import { ErrorBox, Modal } from './ui';
 import '../tableStatistics.css';
 
 /** 审阅确认只把当前批次的删除计划交给原表页草稿。 */
-export function PostgresBatchDeleteDialog({ plan, offset, onStage, onClose }: {
-  plan: PostgresBatchDeletePlan; offset: number; onStage(): void; onClose(): void;
+export function PostgresBatchDeleteDialog({ plan, offset, collected = false, onStage, onClose }: {
+  plan: PostgresBatchDeletePlan; offset: number; collected?: boolean; onStage(): void; onClose(): void;
 }) {
   const [error, setError] = useState('');
-  return <Modal title={text.title} onClose={onClose} wide>
+  return <Modal title={collected ? text.collectedTitle : text.title} onClose={onClose} wide>
     <div className="modal-content">
       <p>{text.notice}</p>
       <strong>{text.count(plan.rows.length)}</strong>
@@ -19,7 +19,7 @@ export function PostgresBatchDeleteDialog({ plan, offset, onStage, onClose }: {
       <div className="table-statistics-results">
         <table>
           <thead><tr><th>{text.row}</th><th>{text.primary}</th></tr></thead>
-          <tbody>{plan.rows.map(row => <tr key={row.index}>
+          <tbody>{plan.rows.map((row, index) => <tr key={index}>
             <th scope="row">{offset + row.index + 1}</th>
             <td>{row.key.map(item => <div key={item.name}>{item.name} = {item.value}</div>)}</td>
           </tr>)}</tbody>

@@ -332,6 +332,8 @@ export interface PostgresTableColumn extends ResultColumn {
 }
 export interface PostgresTablePage {
   pageToken?: string;
+  /** 仅可写原页提供，跨页收集在确认时核对该令牌的真实有效期。 */
+  writeExpiresAt?: number;
   exportToken?: string;
   retainedHistoryPageTokens?: string[];
   canImport?: true;

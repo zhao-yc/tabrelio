@@ -63,6 +63,7 @@ import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual
 import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
+import { capturePostgresCheckedDelete, planPostgresCheckedDelete, postgresCheckedDeletePageCurrent, postgresCheckedDeletePins, type PostgresCheckedDeletePage } from '../postgresCheckedDelete';
 import { postgresBatchDeletePlan, type PostgresBatchDeletePlan } from '../postgresBatchDelete';
 import { postgresBatchDeleteZh as deleteText } from '../locales/postgresBatchDelete.zh-CN';
 import { PostgresBatchEditDialog } from './PostgresBatchEditDialog';
@@ -97,6 +98,12 @@ type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 
 type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
 type PageRead = PageMovement & Pick<PostgresTablePageInput, 'retainPageTokens' | 'retainHistoryPageTokens'> &
   { keepHistory?: boolean; checkFilterColumns?: true; presetLayout?: TablePreferences };
+type CheckedDeleteIntent = ReturnType<typeof planPostgresCheckedDelete> & {
+  source: readonly PostgresCheckedDeletePage[];
+  originalDraft: DraftEntry[];
+  pageToken: string;
+  scope: object;
+};
 type QueryTemplateIntent = PostgresTemplateSource & { tab: WorkspaceTab; limit: number; connectionVersion: number };
 type BatchSelection = {
   scope: object; page: PostgresTablePage; selected: ReadonlySet<number>;
@@ -129,6 +136,15 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
   const [pageConnectionVersion, setPageConnectionVersion] = useState<number>();
+  const [deletePages, setDeletePages] = useState<readonly PostgresCheckedDeletePage[]>([]);
+  const deletePagesRef = useRef(deletePages);
+  const [checkedDelete, setCheckedDelete] = useState<CheckedDeleteIntent>();
+  const checkedDeleteRef = useRef<CheckedDeleteIntent | undefined>(undefined);
+  function publishDeletePages(next: readonly PostgresCheckedDeletePage[]) {
+    if (next === deletePagesRef.current || !next.length && !deletePagesRef.current.length) return;
+    deletePagesRef.current = next;
+    setDeletePages(next);
+  }
   const [collectedDialog, setCollectedDialog] = useState<ResultExportData>();
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
   const [importPage, setImportPage] = useState<PostgresTablePage>();
@@ -255,8 +271,16 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     }
     issued.current = result.exportToken ?? result.pageToken;
     pageCatalog.current = connectionCatalog;
-    if (retained) history.retain(retained);
-    else history.reset(draftRef.current);
+    if (retained) {
+      history.retain(retained);
+      const saved = deletePagesRef.current;
+      if (saved.some(item => item.valid && !retained.has(item.token))) {
+        publishDeletePages(saved.map(item => item.valid && !retained.has(item.token) ? { ...item, valid: false } : item));
+      }
+    } else {
+      history.reset(draftRef.current);
+      publishDeletePages([]);
+    }
     if (presetLayout) layout.applyPreset(presetLayout, result.columns.map(column => column.name));
     setPage(result);
     setPageConnectionVersion(connectionVersion);
@@ -308,11 +332,16 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || checkedDeleteRef.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
+    const sameWindow = next.limit === options.limit && JSON.stringify(next.filter) === JSON.stringify(options.filter) &&
+      JSON.stringify(next.sort) === JSON.stringify(options.sort);
     if (!keepDraft) checkedExport.clear();
-    const pins = keepDraft ? history.pins() : {};
-    void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
+    if (!keepDraft || !sameWindow) publishDeletePages([]);
+    try {
+      const pins = keepDraft ? postgresCheckedDeletePins(history.pins(), deletePagesRef.current) : {};
+      void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
   /** 更新草稿及标签退出保护。 */
@@ -436,7 +465,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -709,6 +738,67 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     return canFind && !!lifetime.current && latestFindScope.current === findScope && draftRef.current === draft &&
       issued.current === page?.exportToken && layoutScope.current.current() && !lease.current && !inlineOwner.current && !pasteOwner.current &&
       !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+
+  const deletePage = deletePages.find(item => item.offset === options.offset);
+  useLayoutEffect(() => {
+    publishDeletePages([]);
+    if (checkedDeleteRef.current) {
+      checkedDeleteRef.current = undefined;
+      setCheckedDelete(undefined);
+    }
+  }, [collectScope]);
+  useLayoutEffect(() => {
+    if (!active && checkedDeleteRef.current) {
+      checkedDeleteRef.current = undefined;
+      setCheckedDelete(undefined);
+    }
+  }, [active]);
+
+  /** 复用本页主键确认快照，晚到的勾选或翻页不能将同名行号写入别的原页。 */
+  function collectDeletePage(selected: ReadonlySet<number>, current: () => boolean) {
+    if (!page || !canBatch('delete', selected) || !findIsCurrent() || !current() || deletePagesRef.current !== deletePages) return;
+    try {
+      const source = capturePostgresCheckedDelete(page, options.offset, selected, draftRef.current);
+      const next = [...deletePages.filter(item => item.offset !== options.offset), source];
+      if (next.length > postgresTableLimits.draftPages) throw Error(deleteText.pagesLimit);
+      if (next.reduce((count, item) => count + item.targets.length, 0) > postgresTableLimits.changes) throw Error(deleteText.rowsLimit);
+      postgresCheckedDeletePins(history.pins(), next);
+      publishDeletePages(next);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  function closeCheckedDelete(intent: CheckedDeleteIntent) {
+    if (checkedDeleteRef.current !== intent) return;
+    checkedDeleteRef.current = undefined;
+    setCheckedDelete(undefined);
+  }
+
+  function openCheckedDelete() {
+    if (!page?.pageToken || !canChangeGrid || !findIsCurrent() || checkedDeleteRef.current || deletePagesRef.current !== deletePages) return;
+    try {
+      const originalDraft = draftRef.current, pageToken = page.pageToken;
+      const planned = planPostgresCheckedDelete(deletePages, originalDraft);
+      validateChanges(planned.entries, pageToken);
+      const intent = { ...planned, source: deletePages, originalDraft, pageToken, scope: collectScope };
+      checkedDeleteRef.current = intent;
+      setCheckedDelete(intent);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 整批使用收集时的原令牌，一步撤销可恢复所有被替换的更新草稿。 */
+  function stageCheckedDelete(intent: CheckedDeleteIntent) {
+    if (checkedDeleteRef.current !== intent || deletePagesRef.current !== intent.source || draftRef.current !== intent.originalDraft ||
+        intent.scope !== collectScope || issued.current !== intent.pageToken || !layoutScope.current.current() ||
+        lease.current || requiresRefresh || recordInput.current) throw Error(deleteText.stale);
+    if (intent.source.some(item => !postgresCheckedDeletePageCurrent(item))) throw Error(deleteText.pagesExpired);
+    validateChanges(intent.entries, intent.pageToken);
+    setChanges(intent.entries, 'delete');
+    publishDeletePages([]);
+    closeCheckedDelete(intent);
+    setError('');
+    setMessage(deleteText.staged(intent.plan.rows.length));
   }
 
   /** 收集只从当前原页与当前勾选快照投影，草稿值及后来页面不能进入文件。 */
@@ -1303,6 +1393,22 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             <button type="button" title={selectedFilterText.postgresUnsupported}
               disabled={!cellMenuEnabled || !selected.size || !selectedFilterColumn}
               onClick={() => openSelectedFilter(selected, current)}>{selectedFilterText.entry}</button>
+            {page.capabilities.delete && <div className="query-row-details-actions" role="group" aria-label={deleteText.collectRegion}>
+              <button type="button" disabled={!canBatch('delete', selected)} onClick={() => collectDeletePage(selected, current)}>
+                {deletePage ? deleteText.replace : deleteText.collect}
+              </button>
+              {deletePage && <button type="button" disabled={!canChangeGrid} onClick={() => {
+                if (findIsCurrent() && deletePagesRef.current === deletePages) publishDeletePages(deletePages.filter(item => item !== deletePage));
+              }}>{deleteText.removePage}</button>}
+              {!!deletePages.length && <>
+                <button type="button" disabled={!canChangeGrid || deletePages.some(item => !postgresCheckedDeletePageCurrent(item))} onClick={openCheckedDelete}>{deleteText.collectedAction}</button>
+                <button type="button" disabled={!canChangeGrid} onClick={() => {
+                  if (findIsCurrent() && deletePagesRef.current === deletePages) publishDeletePages([]);
+                }}>{deleteText.clear}</button>
+                <span role="status">{deleteText.collectedCount(deletePages.length, deletePages.reduce((count, item) => count + item.rows.length, 0))}</span>
+                {deletePages.some(item => !postgresCheckedDeletePageCurrent(item)) && <span className="warning-text">{deleteText.pagesExpired}</span>}
+              </>}
+            </div>}
             <TableCheckedExportActions collection={checkedExport.value} position={options.offset} selected={selected.size}
               ready={canFind && !draft.length} hasDrafts={!!draft.length}
               onCollect={() => collectCheckedPage(selected, current)}
@@ -1349,6 +1455,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         changes: postgresBatchFillChanges(batch.page, gridLayout.columns, batch.selected, fields,
           key => batch.originalDraft.find(entry => entry.rowKey === key)?.change),
       }))} onClose={() => closeBatch(batch)}/>}
+    {checkedDelete && <PostgresBatchDeleteDialog plan={checkedDelete.plan} offset={0} collected
+      onStage={() => stageCheckedDelete(checkedDelete)} onClose={() => closeCheckedDelete(checkedDelete)}/>}
     {batch?.kind === 'delete' && <PostgresBatchDeleteDialog plan={batch.plan} offset={options.offset}
       onStage={() => stageBatch(batch, () => batch.plan)} onClose={() => closeBatch(batch)}/>}
     {batch?.kind === 'edit' && <PostgresBatchEditDialog rows={batch.rows} columns={editColumns}

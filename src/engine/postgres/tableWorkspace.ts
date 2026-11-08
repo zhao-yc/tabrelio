@@ -453,7 +453,8 @@ export class PostgresTableWorkspace {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
         ...(result.relation.keys.length ? { primaryKey: result.relation.keys } : {}),
-        relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
+        relationKind: result.relation.kind, capabilities, exportToken,
+        ...(writeEligible ? { pageToken: exportToken, writeExpiresAt: current.expires } : {}),
         ...(retainedHistoryPageTokens.length ? { retainedHistoryPageTokens } : {}),
         ...(result.counted ? { counted: { matchingRows: result.counted.matchingRows, offset: result.counted.offset } } : {}),
         ...(result.originals.length && (capabilities.update || capabilities.delete)
