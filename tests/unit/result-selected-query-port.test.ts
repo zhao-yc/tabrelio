@@ -6,6 +6,7 @@ import { ResultExportSelection } from '../../src/renderer/resultExport';
 import { QueryRowDetails } from '../../src/renderer/queryRowDetails';
 import { QueryResultSort } from '../../src/renderer/queryResultSort';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 
 const source=readFileSync(new URL('../../src/renderer/components/QueryTab.tsx',import.meta.url),'utf8'),tree=ts.createSourceFile('QueryTab.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const functions=new Map<string,ts.FunctionDeclaration>();
@@ -16,7 +17,7 @@ function fixture(){
  const tab={id:'q',connectionId:'c',kind:'query'},workspace={settings:{activeTabId:'q',tabs:[tab]},connectionVersions:{c:1},activeJobs:{} as Record<string,unknown>};
  // 真实详情初始无绑定；失效仍调用真实控制器及空值状态回执。
  const resultSorter=new QueryResultSort(),sortBinding=resultSorter.bind(result,['current',1]);
- const context=createContext({snapshotOperation:{current:null},resultInsertRef:{current:null},resultInsertActivity:{current:0},filterBinding:undefined,filterView:undefined,comparisonLeaseRef:{current:null},setComparisonLease:vi.fn(),statisticsLeaseRef:{current:null},setStatisticsLease:vi.fn(),sortLeaseRef:{current:null},setSortLease:vi.fn(),filterLeaseRef:{current:null},setFilterLease:vi.fn(),resultSorter,sortBinding,initialBinding:binding,resultSelection,rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),zh,tab,workspace,useWorkspace:{getState:()=>workspace},connectionVersion:1,alive:{current:true},busyRef:{current:false},document:{querySelector:()=>null},setExportSelected:vi.fn(),setExportResult:vi.fn(),refreshResultSelection:vi.fn(),setError:vi.fn(),errorMessage:(reason:any)=>reason.message});
+ const context=createContext({appDialogSelector,snapshotOperation:{current:null},resultInsertRef:{current:null},resultInsertActivity:{current:0},filterBinding:undefined,filterView:undefined,organizedResult:resultSorter.view(sortBinding)?.result,result,sqlite:false,comparisonLeaseRef:{current:null},setComparisonLease:vi.fn(),statisticsLeaseRef:{current:null},setStatisticsLease:vi.fn(),sortLeaseRef:{current:null},setSortLease:vi.fn(),filterLeaseRef:{current:null},setFilterLease:vi.fn(),resultSorter,sortBinding,initialBinding:binding,resultSelection,rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),zh,tab,workspace,useWorkspace:{getState:()=>workspace},connectionVersion:1,alive:{current:true},busyRef:{current:false},document:{querySelector:()=>null},setExportSelected:vi.fn(),setExportResult:vi.fn(),refreshResultSelection:vi.fn(),setError:vi.fn(),errorMessage:(reason:any)=>reason.message});
  const code=`(function(){const selectionBinding=initialBinding;${['resultViewCurrent','resultSelectionAllowed','selectResultRows','exportSelectedRows','invalidateResultSelection'].map(name=>functions.get(name)!.getText(tree)).join('\n')}return{selectResultRows,exportSelectedRows,invalidateResultSelection};})()`;
  const handlers=runInContext(ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
  return{result,resultSelection,binding,workspace,context,handlers,select(){return handlers.selectResultRows({scope:binding,rows:result.rows,columns:result.columns,indices:new Set([1])});}};
@@ -45,6 +46,7 @@ describe('实际QueryTab勾选导出接线的同步门（RAM）',()=>{
  it('真实执行路径首次await前撤销选择，结果与固定快照按钮也同步撤销',()=>{
   for(const name of ['runQuery','runStreamExport']){const fn=functions.get(name)!;let call=-1,firstAwait=Infinity;function find(n:ts.Node){if(ts.isAwaitExpression(n))firstAwait=Math.min(firstAwait,n.pos);if(ts.isCallExpression(n)&&n.expression.getText(tree)==='invalidateResultSelection')call=n.pos;ts.forEachChild(n,find);}find(fn);expect(call).toBeGreaterThan(0);expect(call).toBeLessThan(firstAwait);}
   expect(source).toContain('selectionScope={selectionBinding} onSelectionChange={selectResultRows}');expect(source).toContain('disabled={!selectedExportCount || busy}');
-  expect(source).toContain('invalidateResultSelection(); setResultIndex(index)');expect(source).toContain('invalidateResultSelection(); setSelectedPin(item.id)');
+  expect(functions.get('selectCurrentResult')?.body?.getText(tree)).toMatch(/invalidateResultSelection\(\);\s+setResultIndex\(index\)/);
+  expect(source).toContain('onClick={() => selectCurrentResult(index)}');expect(source).toContain('invalidateResultSelection(); setSelectedPin(item.id)');
  });
 });

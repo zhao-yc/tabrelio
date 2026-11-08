@@ -35,6 +35,8 @@ function mainPort() {
   const ramStore = { saveTask: (task: TaskRecord) => { records.push(task); }, queryFileSource: () => undefined, queryFileDocument: (id: string) => { if (id !== 'one') throw Error('未知文档'); return { token: document, tab }; }, queryFileSourceRecords: () => [], commitQueryFileSource: () => { throw Error('本例不得持久化'); }, releaseQueryFileSource: () => false, queryRecentFiles: () => [], queryRecentFile: () => undefined, forgetRecentFile: () => false };
   const service = new QueryFileSources({ store: ramStore, report: event => publish(event), choose: async () => { choices++; return choose(); }, reserve: async () => { throw Error('本例不得写文件'); } });
   const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(), structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable: (id: unknown) => { if (id !== undefined) throw Error('本地任务状态不得建立数据库目标'); } }, taskCancelSnapshot, tasks: new Map(), store: ramStore, completionTasks: new Set(), tableApplyReceipts: undefined, pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), persistAuxiliary: (action: () => void) => action(), persistedTaskMessage, columnsMain: owner, queryFileSources: service, window, rendererURL: frame.url, validateCommand, shuttingDown: false, rendererSettingsCurrent: true, rendererHasSettings: true, queryFileOperations: new Set(), Error, Promise });
+  // 真实 IPC 会先判断是否为 PostgreSQL 导入预检取消，本例没有此类任务。
+  context.postgresImportChecks = new Map();
   // 仅补真实INSERT初始依赖，文件来源任务不被登记为INSERT；原query.cancel继续进入原服务。
   context.queryInsertExports = new QueryInsertExports(new Map(), {
     assert: value => owner.assertCapturedOwner(value), same: (left, right) => owner.sharesDocumentOwner(left, right),
@@ -103,7 +105,8 @@ it('既有任务中心取消状态及query.cancel适配精确本地文件任务�
   const original = main.request('queryFileSources.open', { taskId, tabId: 'one', encoding: 'utf8' }); await entry;
   expect(await main.request('tasks.cancelState', { taskIds: [taskId] })).toEqual({ ok: true, result: [{ taskId, state: 'allowed' }] });
   const cancel = main.request('query.cancel', { taskId }); resume();
-  expect(await original).toMatchObject({ ok: true, result: { state: 'blocked', wrote: 'no' } }); expect(await cancel).toEqual({ ok: true, result: { cancelled: true } });
+  expect(await cancel).toEqual({ ok: true, result: { cancelled: true } });
+  expect(await original).toMatchObject({ ok: true, result: { state: 'blocked', wrote: 'no' } });
   expect(await main.request('tasks.cancelState', { taskIds: [taskId] })).toEqual({ ok: true, result: [{ taskId, state: 'finished' }] }); expect(main.context.queryFileOperations.size).toBe(0);
 });
 it('任务概要不透传文件路径和SQL，已写/不确定与未写终态分开', () => {

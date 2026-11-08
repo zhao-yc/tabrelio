@@ -18,6 +18,7 @@ export const navigationZh = {
   ],
   shortcuts: [ ['新建连接', 'Ctrl / ⌘ + Shift + N'], ['新建查询', 'Ctrl / ⌘ + N'],
     ['打开 SQL 文件', 'Ctrl / ⌘ + O'], ['保存当前查询', 'Ctrl / ⌘ + S'], ['执行查询', 'Ctrl / ⌘ + Enter'],
+    ['切换查询结果（第 1 至 10 组）', 'Alt + 1…9、0（macOS 在结果区按 Option + 数字）'],
     ['全库搜索', 'Ctrl / ⌘ + Shift + F'], ['查找已打开标签', 'Ctrl / ⌘ + Shift + A'],
     ['关闭当前标签', 'Ctrl / ⌘ + W'], ['打开右键菜单', 'Shift + F10'], ['关闭菜单', 'Escape'] ]
 } as const;

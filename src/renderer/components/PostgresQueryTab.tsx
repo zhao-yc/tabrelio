@@ -1,3 +1,4 @@
+import { handleQueryResultShortcut } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -1140,6 +1141,17 @@ export function PostgresQueryTab({
     publishPinState({ ...pinState, selected: next?.id });
   }
 
+  /** 离开快照只切换显示来源，快照仍保留在当前查询中。 */
+  function selectCurrentResult(index: number): boolean {
+    if (!pinNavigationCurrent() || !results[index]) return false;
+    if (pin || selected !== index) {
+      resetResultView();
+      if (pin) publishPinState({ ...pinState, selected: undefined });
+      setSelected(index);
+    }
+    return true;
+  }
+
   /** 释放当前快照时返回本次结果，释放其它快照保留当前结果视图。 */
   function releasePinnedResult(item: PinnedQueryResult) {
     if (!pinNavigationCurrent() || !pinState.items.includes(item)) return;
@@ -1751,7 +1763,8 @@ export function PostgresQueryTab({
     return () => { active = false; action.dispose(); selectionQuery.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version]);
   return (
-    <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}>
+    <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
+      onKeyDownCapture={event => handleQueryResultShortcut(event, () => !!editor.current?.hasTextFocus(), results.length, selectCurrentResult)}>
       <div className="context-bar">
         <strong>{profile?.name}</strong>
         <span>PostgreSQL / {scope.database}</span>
@@ -1892,11 +1905,7 @@ export function PostgresQueryTab({
           {(!pin && results.length > 1 || dataResult) && (
             <div className="postgres-result-actions">
               {!pin && results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
-                onChange={event => {
-                  if (!pinNavigationCurrent()) return;
-                  resetResultView();
-                  setSelected(Number(event.target.value));
-                }}>
+                onChange={event => selectCurrentResult(Number(event.target.value))}>
                 {results.map((r, i) => <option key={i} value={i}>{text.result(resultSources?.[i]?.statementOrdinal ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
               {dataResult && <>
@@ -1952,7 +1961,7 @@ export function PostgresQueryTab({
             disabled={locked || !binding}
             onApply={keyword => resultCurrent() && filterCurrent() && !document.querySelector(appModalSelector) &&
               keywordFilter.apply(keyword, () => resultSelection.invalidate())} />}
-          <div className="result-body">
+          <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>
             {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
               !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
               result.columns.length ? (
