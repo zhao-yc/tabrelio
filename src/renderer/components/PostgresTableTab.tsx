@@ -64,7 +64,7 @@ import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
 import { capturePostgresCheckedDelete, planPostgresCheckedDelete, type PostgresCheckedDeletePage } from '../postgresCheckedDelete';
-import { postgresCopyInsertSql } from '../postgresCopyInsertSql';
+import { postgresCopyInsertSql, postgresCopyPrimaryKeyQuery } from '../postgresCopyInsertSql';
 import { planPostgresCheckedEdit } from '../postgresCheckedEdit';
 import { capturePostgresCheckedFill, planPostgresCheckedFill, postgresCheckedFillBytes, type PostgresCheckedFillPage } from '../postgresCheckedFill';
 import { capturePostgresCheckedDuplicate, planPostgresCheckedDuplicate, postgresCheckedDuplicateBytes, type PostgresCheckedDuplicatePage } from '../postgresCheckedDuplicate';
@@ -1563,6 +1563,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         insertSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind)
           ? indices => postgresCopyInsertSql(target.table, page, indices, draftRef.current) : undefined}
+        primaryKeySql={!page.truncated && isPostgresSqlExportRelation(page.relationKind) && page.primaryKey?.length
+          ? indices => postgresCopyPrimaryKeyQuery(target.table, page, indices) : undefined}
         presentCell={draftGrid?.cell} skipRowInInversion={draftGrid?.isDeleted}
         renderRowSelectionAction={(selected, current, tools) =>
           <div className="pg-table-controls pg-batch-actions">

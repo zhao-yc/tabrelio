@@ -867,6 +867,8 @@ PostgreSQL 普通表和只读视图的网格上方也有「复制（含列名）
 
 在 PostgreSQL 普通表或分区表的网格上方，选择一个数据格后可点「复制当前行为 INSERT SQL」，也可勾选多行后点「复制选中行为 INSERT SQL」。所选行有草稿时，先提交或撤销再复制。SQL 沿用原表的 schema 和列名，保留标识列值，计算生成列由目标表重算。[PostgreSQL 表页复制 INSERT](development/postgres-copy-insert-sql-20261108.md)
 
+在有主键的 PostgreSQL 表页，点击「复制原主键查询 SQL」可取得完整的 `SELECT`。有勾选时使用本页勾选行，否则使用当前数据格所在行。SQL 使用已载入的原主键，可粘贴到查询编辑器核对。[PostgreSQL 原主键查询复制](development/postgres-primary-key-query-20261108.md)
+
 SQLite 普通表也提供这两个入口，包括通过只读连接打开的表。复制按原页的实际存储类型生成 SQL，整数、实数、文本、BLOB 和 NULL 分别保留。含草稿的所选行须先提交或撤销。[SQLite 表页复制 INSERT](development/sqlite-copy-insert-sql-20261108.md)
 
 表格和查询结果支持「跳到行」。焦点在网格内时，可按 Ctrl＋G 或选择「编辑 → 跳到行／行列」。输入从 1 开始的当前网格行号并按 Enter，焦点会移到对应行；按 Escape 可取消。行号按当前显示顺序计算，表格只定位当前页，查询结果只定位已载入的可见行。

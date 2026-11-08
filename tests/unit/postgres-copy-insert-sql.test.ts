@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTablePage } from '../../src/shared/postgresTable';
-import { postgresCopyInsertSql } from '../../src/renderer/postgresCopyInsertSql';
+import { postgresCopyInsertSql, postgresCopyPrimaryKeyQuery } from '../../src/renderer/postgresCopyInsertSql';
 
 const page: PostgresTablePage = {
   exportToken: '原页', truncated: false, hasNext: true, order: 'primary', relationKind: 'r',
@@ -43,5 +43,31 @@ describe('PostgreSQL 表页 INSERT 复制', () => {
     expect(() => copyWith('失效\uD800')).toThrow('不保真');
     const rows = Array.from({ length: 3 }, () => ({ ...page.rows[0], c1: "'".repeat(200000) }));
     expect(() => postgresCopyInsertSql(table, { ...page, rows }, new Set([0, 1, 2]), [])).toThrow('字节上限');
+  });
+});
+
+describe('PostgreSQL 原主键查询复制', () => {
+  const original: PostgresTablePage = {
+    ...page, primaryKey: ['raw', 'id'], columns: page.columns.map(column => ({
+      ...column, primary: column.name === 'raw' || column.name === 'id',
+    })),
+    rows: [page.rows[0], { ...page.rows[1], c2: { type: 'binary', base64: '' } }],
+  };
+
+  it('复合键用主键约束顺序，逐行成组，保留二进制和大整数', () => {
+    expect(postgresCopyPrimaryKeyQuery(table, original, new Set([1, 0]))).toBe([
+      'SELECT * FROM ONLY "带点.schema"."表""名"',
+      String.raw`WHERE ("raw" = E'\\x00ff' AND "id" = E'9007199254740993')`,
+      String.raw`   OR ("raw" = E'\\x' AND "id" = E'9007199254740995');`,
+    ].join('\n'));
+    expect(postgresCopyPrimaryKeyQuery(table, { ...original, relationKind: 'p' }, new Set([1])))
+      .toMatch(/^SELECT \* FROM "带点\.schema"\."表""名"\nWHERE /);
+  });
+
+  it('拒绝缺失或不完整主键、空键值、非表来源与过期选择', () => {
+    expect(() => postgresCopyPrimaryKeyQuery(table, { ...original, primaryKey: ['id'] }, new Set([0]))).toThrow('主键目录');
+    expect(() => postgresCopyPrimaryKeyQuery(table, { ...original, relationKind: 'v' }, new Set([0]))).toThrow('主键目录');
+    expect(() => postgresCopyPrimaryKeyQuery(table, { ...original, rows: page.rows }, new Set([0, 1]))).toThrow('缺少原主键值');
+    expect(() => postgresCopyPrimaryKeyQuery(table, original, new Set([2]))).toThrow('有效行');
   });
 });

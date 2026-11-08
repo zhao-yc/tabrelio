@@ -4,6 +4,7 @@ import { postgresDdlLiteral, postgresNewIdentifier } from '../shared/postgresCre
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
 import { isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTablePage } from '../shared/postgresTable';
 import type { PostgresDraftEntry } from '../shared/postgresTableDraft';
+import { postgresPrimaryKeyCopyZh as keyText } from './locales/postgresPrimaryKeyCopy.zh-CN';
 import { cellText, ownCell } from './lib';
 
 const utf8 = new TextEncoder();
@@ -12,45 +13,75 @@ const utf8 = new TextEncoder();
 export function postgresCopyInsertSql(table: string, page: PostgresTablePage, indices: ReadonlySet<number>,
   draft: readonly PostgresDraftEntry[]): string {
   if (!page.exportToken || page.truncated || !isPostgresSqlExportRelation(page.relationKind)) throw Error(text.target);
-  if (!indices.size) throw Error(text.selection);
   const { schema, name } = postgresRelationName(table);
   const columns = page.columns.filter(isPostgresSqlExportColumn);
   if (!columns.length || ![schema, name, ...columns.map(column => column.name)].every(value => postgresNewIdentifier.safeParse(value).success) ||
       new Set(columns.map(column => column.name)).size !== columns.length) throw Error(text.target);
-  if (indices.size > limits.rows || columns.length > limits.columns || indices.size * columns.length > limits.cells) throw Error(text.limit);
-
   const changed = new Set(draft.map(entry => entry.rowKey));
   const prefix = 'INSERT INTO ' + postgresIdentifier(schema) + '.' + postgresIdentifier(name) +
     ' (' + columns.map(column => postgresIdentifier(column.name)).join(', ') + ')' +
     (columns.some(column => column.identityAlways) ? ' OVERRIDING SYSTEM VALUE' : '') + ' VALUES (';
-  let inputBytes = 0, sqlBytes = 0;
+  return copyRows(page, indices, columns, text, (values, index) => {
+    const key = page.rowKeys?.[index];
+    if (key !== undefined && changed.has(key)) throw Error(text.draft);
+    return prefix + values.join(', ') + ');';
+  }, '\n');
+}
+
+/** 沿实际主键顺序构造每行条件，普通表保留 ONLY，分区表读取全部分区。 */
+export function postgresCopyPrimaryKeyQuery(table: string, page: PostgresTablePage, indices: ReadonlySet<number>): string {
+  const keys = page.primaryKey;
+  if (!page.exportToken || page.truncated || !isPostgresSqlExportRelation(page.relationKind) || !keys?.length) throw Error(keyText.target);
+  const { schema, name } = postgresRelationName(table);
+  const primary = page.columns.filter(column => column.primary);
+  const byName = new Map(primary.map(column => [column.name, column]));
+  if (primary.length !== keys.length || new Set(keys).size !== keys.length ||
+      ![schema, name, ...keys].every(value => postgresNewIdentifier.safeParse(value).success) ||
+      keys.some(key => !byName.has(key))) throw Error(keyText.target);
+  const columns = keys.map(key => byName.get(key)!);
+  const prefix = 'SELECT * FROM ' + (page.relationKind === 'r' ? 'ONLY ' : '') +
+    postgresIdentifier(schema) + '.' + postgresIdentifier(name) + '\nWHERE ';
+  const predicates = copyRows(page, indices, columns, keyText, values => {
+    if (values.includes('NULL')) throw Error(keyText.incomplete);
+    return '(' + keys.map((key, index) => postgresIdentifier(key) + ' = ' + values[index]).join(' AND ') + ')';
+  }, '\n   OR ', utf8.encode(prefix).length + 1);
+  return prefix + predicates + ';';
+}
+
+/** 两个复制入口沿相同的值校验与字节预算，整组生成后才交给剪贴板。 */
+function copyRows(page: PostgresTablePage, indices: ReadonlySet<number>, columns: readonly { key: string }[],
+  errors: { selection: string; incomplete: string; type: string; limit: string },
+  render: (values: readonly string[], index: number) => string, separator: string, sqlBytes = 0): string {
+  if (!indices.size) throw Error(errors.selection);
+  if (indices.size > limits.rows || columns.length > limits.columns || indices.size * columns.length > limits.cells) throw Error(errors.limit);
+  const separatorBytes = utf8.encode(separator).length;
+  let inputBytes = 0;
   const statements: string[] = [];
   for (const index of [...indices].sort((left, right) => left - right)) {
-    const row = page.rows[index], key = page.rowKeys?.[index];
-    if (!Number.isSafeInteger(index) || index < 0 || !row) throw Error(text.selection);
-    if (key !== undefined && changed.has(key)) throw Error(text.draft);
+    const row = page.rows[index];
+    if (!Number.isSafeInteger(index) || index < 0 || !row) throw Error(errors.selection);
     const values = columns.map(column => {
       const value = ownCell(row, column.key);
-      if (value === undefined) throw Error(text.incomplete);
+      if (value === undefined) throw Error(errors.incomplete);
       if (value === null) return 'NULL';
       const source = typeof value === 'string' ? value : typeof value === 'object' && value.type === 'binary' ? value.base64 : undefined;
-      if (typeof source !== 'string') throw Error(text.type);
-      if (source.length > limits.cellBytes) throw Error(text.limit);
+      if (typeof source !== 'string') throw Error(errors.type);
+      if (source.length > limits.cellBytes) throw Error(errors.limit);
       const size = utf8.encode(source).length;
       inputBytes += size;
-      if (size > limits.cellBytes || inputBytes > limits.inputBytes) throw Error(text.limit);
+      if (size > limits.cellBytes || inputBytes > limits.inputBytes) throw Error(errors.limit);
       if (typeof value === 'string') {
-        if (/[\u0000\uD800-\uDFFF]/u.test(value)) throw Error(text.type);
+        if (/[\u0000\uD800-\uDFFF]/u.test(value)) throw Error(errors.type);
         return postgresDdlLiteral(value);
       }
       if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$/.test(source))
-        throw Error(text.type);
+        throw Error(errors.type);
       return postgresDdlLiteral('\\x' + cellText(value).slice(2));
     });
-    const statement = prefix + values.join(', ') + ');';
-    sqlBytes += utf8.encode(statement).length + (statements.length ? 1 : 0);
-    if (sqlBytes > limits.sqlBytes) throw Error(text.limit);
+    const statement = render(values, index);
+    sqlBytes += utf8.encode(statement).length + (statements.length ? separatorBytes : 0);
+    if (sqlBytes > limits.sqlBytes) throw Error(errors.limit);
     statements.push(statement);
   }
-  return statements.join('\n');
+  return statements.join(separator);
 }
