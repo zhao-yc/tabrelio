@@ -43,6 +43,9 @@ const viewManageTarget = postgresStructureInputSchema.extend({
 export const postgresViewManagePreviewSchema = z.discriminatedUnion('action', [
   viewManageTarget.extend({ action: z.literal('rename'), name: postgresNewIdentifier }).strict(),
   viewManageTarget.extend({ action: z.literal('drop') }).strict(),
+  viewManageTarget.extend({
+    action: z.literal('renameColumns'), relationKind: z.literal('materialized'), columnNames: postgresViewColumnsSchema,
+  }).strict(),
 ]);
 export type PostgresViewManageInput = z.infer<typeof postgresViewManagePreviewSchema>;
 

@@ -6,6 +6,8 @@ import { errorMessage, invoke } from '../lib';
 import { postgresStructureZh as text } from '../locales/postgresStructure.zh-CN';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
+import { PostgresMaterializedColumnNamesPanel } from './PostgresMaterializedColumnNamesPanel';
+import { postgresMaterializedColumnNamesZh } from '../locales/postgresMaterializedColumnNames.zh-CN';
 import { PostgresMaterializedRefreshPanel } from './PostgresMaterializedRefreshPanel';
 import { postgresMaterializedRefreshZh as refreshText } from '../locales/postgresMaterializedRefresh.zh-CN';
 import { PostgresRelationMaintenanceDialog } from './PostgresRelationMaintenanceDialog';
@@ -44,6 +46,7 @@ type Section = keyof typeof text.sections;
 export interface PostgresStructureSearchFocus { section: Section; name?: string; }
 const editors = {
   materialized: { Panel: PostgresMaterializedRefreshPanel, label: refreshText.title },
+  materializedColumns: { Panel: PostgresMaterializedColumnNamesPanel, label: postgresMaterializedColumnNamesZh.title },
   manage: { Panel: PostgresRelationManagePanel, label: postgresViewManageZh.title },
   definition: { Panel: PostgresViewEditPanel, label: postgresViewEditZh.title },
   columns: { Panel: PostgresColumnEditPanel, label: postgresColumnEditZh.open },
@@ -131,7 +134,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const sectionStamp = section === 'indexes' ? indexStamp : section === 'policies' ? output?.policyStamp : output?.editStamp;
   const manageStamp = output?.tableManage?.stamp ?? output?.materializedManageStamp ?? output?.viewEditStamp;
   const editStamp = editing === 'indexes' ? indexStamp : editing === 'materialized' ? output?.materialized?.stamp :
-    editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp :
+    editing === 'manage' ? manageStamp : editing === 'materializedColumns' ? output?.materializedManageStamp : editing === 'definition' ? output?.viewEditStamp :
       editing === 'comments' ? output?.commentStamp : editing === 'identity' ? output?.identityStamp :
         editing === 'policies' ? output?.policyStamp : output?.editStamp;
   if (maintenance) return <PostgresRelationMaintenanceDialog target={target} onDirtyChange={onDirtyChange}
@@ -148,7 +151,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
       {EditPanel && output && editStamp ? <EditPanel target={target} original={output} version={version}
         onDirtyChange={onDirtyChange} onClose={() => { setEditing(undefined); setAttempt(value => value + 1); }}
-        beforeManage={output.tableManage ? (destination, truncateTables) => beforeTableManage(target, destination, truncateTables) : undefined}
+        beforeManage={output.tableManage || editing === 'materializedColumns' ? (destination, truncateTables) => beforeTableManage(target, destination, truncateTables) : undefined}
         onResult={(message, unknown, receipt, attempted, truncateTables) => {
           if (editing === 'manage') {
             onManaged(target, message, unknown, version, output.tableManage ? 'table' : 'view', receipt?.table ?? attempted, receipt?.identity, truncateTables);
@@ -232,6 +235,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
       {!readOnly && output?.editStamp && !editing && section === 'constraints' &&
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
+      {!readOnly && !editing && section === 'columns' && output?.kind === 'm' && output.materializedManageStamp &&
+        <button onClick={() => setEditing('materializedColumns')}>{editors.materializedColumns.label}</button>}
       {!readOnly && output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
       {!readOnly && !editing && (output?.kind === 'r' || output?.kind === 'm') &&
         <button onClick={() => setMaintenance(true)}>{postgresRelationMaintenanceZh.title}</button>}

@@ -1,4 +1,4 @@
-import { postgresCreateViewPlan, postgresViewColumnsSchema } from '../../src/shared/postgresCreateView';
+import { postgresCreateViewPlan, postgresViewColumnsSchema, postgresViewManagePreviewSchema } from '../../src/shared/postgresCreateView';
 import { postgresViewColumnRenames } from '../../src/engine/postgres/viewDefinition';
 import { describe, expect, it } from 'vitest';
 import { postgresCreateTablePlan, postgresCreateTablePreviewSchema, type PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
@@ -274,6 +274,17 @@ describe('PostgreSQL 视图输出列名', () => {
     ]);
     expect(() => postgresViewColumnRenames(table, ['a', 'b'], ['b'])).toThrow('与现有列重复');
     expect(postgresViewColumnRenames(table, ['a'], ['a', 'new'])).toEqual([]);
+  });
+
+  it('物化视图列操作绑定物化类别，并生成原生 ALTER MATERIALIZED VIEW', () => {
+    const input = { connectionId: 'pg', database: 'db', table, stamp: 'a'.repeat(64),
+      action: 'renameColumns', relationKind: 'materialized', columnNames: ['b', 'a'] };
+    expect(postgresViewManagePreviewSchema.parse(input)).toEqual(input);
+    expect(postgresViewManagePreviewSchema.safeParse({ ...input, relationKind: undefined }).success).toBe(false);
+    expect(postgresViewManagePreviewSchema.safeParse({ ...input, columnNames: ['a', 'a'] }).success).toBe(false);
+    const sql = postgresViewColumnRenames(table, ['a', 'b'], input.columnNames, 'm');
+    expect(sql).toHaveLength(4);
+    expect(sql.every(statement => statement.startsWith('ALTER MATERIALIZED VIEW ' + table + ' RENAME COLUMN '))).toBe(true);
   });
 
   it('按 UTF-8 字节限制并区分双引号标识符的大小写', () => {

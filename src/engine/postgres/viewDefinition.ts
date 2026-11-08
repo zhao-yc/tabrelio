@@ -64,13 +64,14 @@ export function postgresViewOptionsSql(options: string[]): string {
 }
 
 /** 先释放冲突名称，再分配最终名称，交换列名也不会改变列号或依赖。 */
-export function postgresViewColumnRenames(table: string, original: readonly string[], names: readonly string[]): string[] {
+export function postgresViewColumnRenames(table: string, original: readonly string[], names: readonly string[], kind: 'v' | 'm' = 'v'): string[] {
   const final = original.map((name, index) => names[index] ?? name);
   if (new Set(final).size !== final.length) throw Error('输出列名与现有列重复，请检查未覆盖的列名');
   const reserved = new Set([...original, ...names]);
   const release: string[] = [], assign: string[] = [];
   let serial = 0;
-  const rename = (from: string, to: string) => 'ALTER VIEW ' + table + ' RENAME COLUMN ' + postgresIdentifier(from) + ' TO ' + postgresIdentifier(to);
+  const prefix = 'ALTER ' + (kind === 'm' ? 'MATERIALIZED VIEW ' : 'VIEW ') + table + ' RENAME COLUMN ';
+  const rename = (from: string, to: string) => prefix + postgresIdentifier(from) + ' TO ' + postgresIdentifier(to);
   for (const [index, name] of original.entries()) {
     if (name === final[index]) continue;
     let temporary: string;

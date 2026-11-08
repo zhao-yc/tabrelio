@@ -4,6 +4,7 @@ import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopRe
 import { clickSidebarAction } from './sidebar-menu';
 import { postgresCreateViewZh as create } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { postgresViewEditZh as edit } from '../../src/renderer/locales/postgresViewEdit.zh-CN';
+import { postgresMaterializedColumnNamesZh as materializedColumns } from '../../src/renderer/locales/postgresMaterializedColumnNames.zh-CN';
 import { postgresStructureZh as structure } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { viewOutputColumnsZh as columnsText } from '../../src/renderer/locales/viewOutputColumns.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
@@ -161,10 +162,68 @@ test('在原数据库预览视图并编辑列名，确认前无写入且依赖�
     await materialized.getByRole('button', { name: create.preview, exact: true }).click();
     await materialized.getByRole('button', { name: create.materializedApply, exact: true }).click();
     await expect(materialized).toBeHidden();
-    const saved = await page.evaluate(target => window.dbark.invoke('postgres.structure.read', target),
-      { connectionId, database, table: '"public"."view_inspect_mv"' });
+    const mvTarget = { connectionId, database, table: '"public"."view_inspect_mv"' };
+    const readMaterialized = () => page.evaluate(target => window.dbark.invoke('postgres.structure.read', target), mvTarget);
+    const previewMaterialized = (columnNames: string[]) => page.evaluate(async ({ target, columnNames }) => {
+      const original = await window.dbark.invoke('postgres.structure.read', target);
+      return window.dbark.invoke('postgres.viewManage.preview', { ...target, action: 'renameColumns',
+        relationKind: 'materialized', stamp: original.materializedManageStamp!, columnNames });
+    }, { target: mvTarget, columnNames });
+    const applyMaterialized = (token: string) => page.evaluate(input => window.dbark.invoke('postgres.viewManage.apply', input),
+      { connectionId, database, token });
+    const saved = await readMaterialized();
     expect(saved).toMatchObject({ kind: 'm', materialized: { populated: false } });
     expect(saved.columns.map(column => column.name)).toEqual(['快照', 'suffix']);
+    const unfilledRename = await previewMaterialized(['缓存', 'suffix']);
+    expect((await applyMaterialized(unfilledRename.token)).outcome).toBe('committed');
+    const unfilled = await readMaterialized();
+    expect(unfilled.materialized?.populated).toBe(false);
+    expect(unfilled.columns.map(column => column.name)).toEqual(['缓存', 'suffix']);
+
+    await observer.query(`
+      REFRESH MATERIALIZED VIEW public.view_inspect_mv;
+      CREATE UNIQUE INDEX view_inspect_mv_idx ON public.view_inspect_mv ("缓存");
+      CREATE VIEW public.view_inspect_mv_dep AS SELECT "缓存" FROM public.view_inspect_mv;
+      COMMENT ON MATERIALIZED VIEW public.view_inspect_mv IS '保留的视图备注';
+      COMMENT ON COLUMN public.view_inspect_mv."缓存" IS '原第一列备注';
+    `);
+    const storage = async () => (await observer.query(`
+      SELECT c.oid::text, c.relfilenode::text, c.relispopulated,
+        'public.view_inspect_mv_idx'::regclass::oid::text AS index_oid
+      FROM pg_catalog.pg_class c WHERE c.oid = 'public.view_inspect_mv'::regclass
+    `)).rows[0];
+    const beforeStorage = await storage();
+    const staleNames = await previewMaterialized(['计划列', 'suffix']);
+    await observer.query('ALTER MATERIALIZED VIEW public.view_inspect_mv RENAME COLUMN suffix TO outside_rename');
+    const stale = await applyMaterialized(staleNames.token);
+    expect(stale).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('原视图已变化') });
+    expect((await readMaterialized()).columns.map(column => column.name)).toEqual(['缓存', 'outside_rename']);
+    await observer.query('ALTER MATERIALIZED VIEW public.view_inspect_mv RENAME COLUMN outside_rename TO suffix');
+
+    await page.locator('.postgres-table-tab:visible').getByRole('button', { name: structure.open, exact: true }).click();
+    const mvStructure = page.getByRole('dialog', { name: structure.title, exact: true });
+    await mvStructure.getByRole('button', { name: materializedColumns.title, exact: true }).click();
+    const namesPanel = mvStructure.getByRole('region', { name: materializedColumns.title, exact: true });
+    const previewNames = namesPanel.getByRole('button', { name: materializedColumns.preview, exact: true });
+    await expect(previewNames).toBeDisabled();
+    await namesPanel.getByRole('textbox', { name: materializedColumns.name('缓存'), exact: true }).fill('suffix');
+    await namesPanel.getByRole('textbox', { name: materializedColumns.name('suffix'), exact: true }).fill('缓存');
+    await previewNames.click();
+    await expect(namesPanel.getByLabel(materializedColumns.sql)).toContainText('ALTER MATERIALIZED VIEW "public"."view_inspect_mv" RENAME COLUMN');
+    expect((await readMaterialized()).columns.map(column => column.name)).toEqual(['缓存', 'suffix']);
+    expect(await storage()).toEqual(beforeStorage);
+    await namesPanel.getByRole('button', { name: materializedColumns.apply, exact: true }).click();
+    await expect(namesPanel).toBeHidden();
+    await expect(mvStructure.getByRole('rowheader', { name: 'suffix', exact: true })).toBeVisible();
+    await mvStructure.locator('.modal-footer').getByRole('button', { name: structure.close, exact: true }).click();
+    const final = await readMaterialized();
+    expect(final.comment).toBe('保留的视图备注');
+    expect(final.columns.map(column => [column.name, column.comment])).toEqual([['suffix', '原第一列备注'], ['缓存', null]]);
+    expect(await storage()).toEqual(beforeStorage);
+    expect((await observer.query('SELECT suffix, "缓存" FROM public.view_inspect_mv')).rows).toEqual([{ suffix: '物化视图样本', 缓存: 2 }]);
+    expect((await observer.query('SELECT "缓存" FROM public.view_inspect_mv_dep')).rows).toEqual([{ 缓存: '物化视图样本' }]);
+    await observer.query('REFRESH MATERIALIZED VIEW CONCURRENTLY public.view_inspect_mv');
+    expect((await observer.query('SELECT suffix FROM public.view_inspect_mv')).rows).toEqual([{ suffix: '物化视图样本' }]);
     expect(await history()).toEqual(beforeHistory);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

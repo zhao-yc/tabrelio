@@ -613,7 +613,8 @@ export class PostgresCreateTableWorkspace {
     return this.prepareRelation(input, 'viewManage', connect, () => {
       const { connectionId, database, table, stamp, action, relationKind } = input;
       const target = { connectionId, database, table, stamp, action, relationKind };
-      const draft = postgresViewManagePreviewSchema.parse(input.action === 'rename' ? { ...target, name: input.name } : target);
+      const draft = postgresViewManagePreviewSchema.parse(input.action === 'rename' ? { ...target, name: input.name } :
+        input.action === 'renameColumns' ? { ...target, columnNames: input.columnNames } : target);
       const { schema, name } = postgresRelationName(draft.table);
       const prefix = postgresIdentifier(schema) + '.';
       const qualified = prefix + postgresIdentifier(name);
@@ -635,6 +636,22 @@ export class PostgresCreateTableWorkspace {
               const actual = await readPostgresViewFacts(current, schema, draft.name, kind);
               if (actual.preserved !== original.preserved || actual.revision !== original.revision)
                 throw Error('重命名后的视图身份、定义或属性与原视图不同，未提交');
+            },
+          };
+        }
+        if (draft.action === 'renameColumns') {
+          const { columnNames } = draft;
+          if (columnNames.length !== original.columns.length) throw Error('物化视图列名必须与现有列一一对应');
+          const statements = postgresViewColumnRenames(qualified, original.columns, columnNames, 'm');
+          if (!statements.length) throw Error('物化视图列名未改变');
+          return {
+            ...guard, table: qualified, success: 'PostgreSQL 物化视图列名已确认更新', statements,
+            async verify(current) {
+              const actual = await readPostgresViewFacts(current, schema, name, 'm');
+              // preserved 包含原存储节点、填充状态、索引目录及对象身份，规则版本保持原定义。
+              if (actual.preserved !== original.preserved || actual.revision !== original.revision ||
+                  actual.columns.length !== columnNames.length || actual.columns.some((column, index) => column !== columnNames[index]))
+                throw Error('物化视图列名、定义或存储身份与预览不同，未提交');
             },
           };
         }
