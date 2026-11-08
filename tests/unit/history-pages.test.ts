@@ -39,6 +39,12 @@ describe('历史概要和严格协议',()=>{
   for (const patch of [{ encoding: 'ascii' }, { digest: 'bad' }, { sql: 'SELECT 2' }, { path: '任意路径.sql' }, { connectionId: '其他连接' }])
     expect(() => validateCommand('history.exportSql', { ...ref, ...patch })).toThrow();
  });
+ it('保存新查询仅接受历史摘要、非空名称与保留来源选择', () => {
+  const input = { id: 'h', digest: 'a'.repeat(64), name: '查询名', keepSource: true };
+  expect(validateCommand('history.saveQuery', { ...input, name: ' 查询名 ' })).toEqual(input);
+  for (const patch of [{ name: ' ' }, { keepSource: 'true' }, { sql: 'SELECT 2' }, { connectionId: '替代' }, { context: {} }, { queryId: '覆盖' }])
+    expect(() => validateCommand('history.saveQuery', { ...input, ...patch })).toThrow();
+ });
  it('限制筛选、字段、句柄、摘要及未知参数，不能注入SQL或客户端索引位置',()=>{expect(validateCommand('history.page',request())).toMatchObject({status:'all'});for(const patch of[{search:'x'.repeat(513)},{taskId:'h'},{fields:[]},{fields:['sql','sql']},{status:'other'},{scope:{kind:'connection',connectionId:''}},{sql:'SELECT 1'},{after:{id:'h'}},{onError:'skip'}])expect(()=>validateCommand('history.page',{...request(),...patch})).toThrow();expect(()=>validateCommand('history.pageContinue',{taskId:randomUUID(),cursor:randomUUID(),status:'failed'})).toThrow();expect(()=>validateCommand('history.read',{id:'h',digest:'a'.repeat(64)})).toThrow();expect(()=>validateCommand('history.readError',{id:'h',digest:'bad'})).toThrow();});
  it('完整SQL或错误尾部筛选，概要不含全文且Unicode预览不拆代理对',()=>{const entry=history({sql:'x'.repeat(511)+'😀'+'x'.repeat(8000)+'SQL尾部_9007199254740993',error:'x'.repeat(255)+'😀'+'x'.repeat(5000)+'错误尾部',success:false}),raw=JSON.stringify(entry),summary=summarizeHistoryRecord(entry.id,raw,request({search:'错误尾部',fields:['error']}),position(entry))!;expect(summary.sqlPreview).toHaveLength(511);expect(summary.errorPreview).toHaveLength(255);expect(summary.sqlUnits).toBe(entry.sql.length);expect(summary.errorUnits).toBe(entry.error!.length);expect(summary.previewTruncated&&summary.errorTruncated).toBe(true);expect(summary.digest).toMatch(/^[a-f0-9]{64}$/);expect('sql'in summary.entry||'error'in summary.entry).toBe(false);expect(JSON.stringify(summary)).not.toContain('错误尾部');expect(summarizeHistoryRecord(entry.id,raw,request({search:'错误尾部',fields:['sql']}),position(entry))).toBeUndefined();expect(summarizeHistoryRecord(entry.id,raw,request({search:'sql尾部_9007199254740993',fields:['sql']}),position(entry))).toBeTruthy();});
  it('普通包含不执行正则或SQL，状态过滤前先校验完整记录和索引',()=>{const entry=history({sql:'UPDATE t SET n=1 -- A.*% 尾部',success:true}),raw=JSON.stringify(entry);expect(summarizeHistoryRecord('h',raw,request({search:'a.*%'}),position(entry))).toBeTruthy();expect(summarizeHistoryRecord('h',raw,request({search:'^.*$'}),position(entry))).toBeUndefined();expect(()=>summarizeHistoryRecord('h',raw,request({status:'failed'}),{...position(entry),connectionId:'other'})).toThrow('索引不一致');expect(()=>summarizeHistoryRecord('h','{"sql":"绝不回显的原文"}',request({status:'failed'}),position(entry))).toThrow('结构无效');});
@@ -69,6 +75,34 @@ describe('真实SQLite与工作线程历史分页',()=>{
 });
 
 describe('历史打开、保留上限和真实持久化',()=>{
+ it('保存内容准确区分四类历史上下文，并拒绝失效来源与陈旧摘要', async () => {
+  store.saveConnection(profile());
+  const contexts = [
+    { database: '遗留库' }, { databaseContext: { state: 'known', database: null } },
+    { databaseContext: { state: 'known', database: '执行库' } }, { databaseContext: { state: 'unknown' } },
+  ] as const;
+  const sql = 'SELECT 9007199254740993\r\n-- 😀 正文';
+  for (const [index, context] of contexts.entries()) store.addHistory(history({ id: String(index), ...context, sql, error: '错误详情' }));
+  const page = await service.start(request());
+  for (const item of page.items) {
+    const input = { id: item.entry.id, digest: item.digest, name: '同名新查询', keepSource: true };
+    const saved = store.createBoundQuery(service.querySaveContent(input));
+    const expected = contexts[Number(item.entry.id)];
+    expect(saved.source.context).toEqual('databaseContext' in expected ? expected.databaseContext : { state: 'legacy', database: expected.database });
+    expect(saved.source.connectionId).toBe('source');
+  }
+  expect(new Set(store.queries().map(query => query.id)).size).toBe(4);
+  expect(store.queries().every(query => query.sql === sql && !('error' in query))).toBe(true);
+  const item = page.items[0];
+  const input = { id: item.entry.id, digest: item.digest, name: '解除绑定', keepSource: true };
+  store.deleteConnection('source');
+  expect(() => service.querySaveContent(input)).toThrow('来源连接已失效');
+  expect(service.querySaveContent({ ...input, keepSource: false })).toEqual({ name: '解除绑定', sql, context: { state: 'unknown' } });
+  const db = (store as unknown as { db: Database }).db;
+  db.run('UPDATE history SET data=? WHERE id=?', [JSON.stringify({ ...item.entry, sql: 'SELECT 2' }), item.entry.id]);
+  expect(() => service.querySaveContent({ ...input, keepSource: false })).toThrow('历史已变化');
+  expect(store.queries()).toHaveLength(4);
+ });
  it('已知库、无库、未知及遗留上下文重启后保留，替代来源必须明确并变为未知',async()=>{store.saveConnection(profile());store.saveConnection(profile('replacement'));const contexts:Partial<HistoryEntry>[]=[{database:'旧库',databaseContext:{state:'known',database:'实际库'}},{database:'旧库',databaseContext:{state:'known',database:null}},{database:'旧库',databaseContext:{state:'unknown'}},{database:'遗留库'}];for(const[index,context]of contexts.entries())store.addHistory(history({id:String(index),...context,sql:'UPDATE t SET n=999 -- 绝不自动执行',error:'完整错误'}));await service.close();store.close();store=await LocalStore.open(join(directory,'test.sqlite'),require.resolve('sql.js/dist/sql-wasm.wasm'),protector);service=new HistoryPages(store,workerPath);for(const item of(await service.start(request())).items){const opened=service.read({id:item.entry.id,digest:item.digest,connectionId:'source'});expect(opened.databaseContext).toEqual(contexts[Number(item.entry.id)].databaseContext);expect(opened.entry.sql).toContain('绝不自动执行');expect('error'in opened.entry).toBe(false);expect(service.readError({id:item.entry.id,digest:item.digest})).toEqual({error:'完整错误'});expect(()=>service.read({id:item.entry.id,digest:item.digest,connectionId:'missing'})).toThrow('不存在');const changed=service.read({id:item.entry.id,digest:item.digest,connectionId:'replacement'});expect(changed.contextChanged).toBe(true);expect(changed.databaseContext).toEqual({state:'unknown'});expect(changed.database).toBeUndefined();}expect(store.tasks()).toEqual([]);expect(store.history()).toHaveLength(4);});
  it('陈旧摘要与已移除历史不能打开或读取别的错误，读取本身不修改磁盘',async()=>{store.saveConnection(profile());store.addHistory(history({error:'原始完整错误'}));const bytes=readFileSync(join(directory,'test.sqlite')),item=(await service.start(request())).items[0];expect(service.readError({id:'h',digest:item.digest})).toEqual({error:'原始完整错误'});expect(readFileSync(join(directory,'test.sqlite'))).toEqual(bytes);const db=(store as unknown as{db:Database}).db;db.run('UPDATE history SET data=? WHERE id=?',[JSON.stringify(history({error:'新错误'})),'h']);expect(()=>service.readError({id:'h',digest:item.digest})).toThrow('已变化');expect(()=>service.read({id:'h',digest:item.digest,connectionId:'source'})).toThrow('已变化');db.run('DELETE FROM history WHERE id=?',['h']);expect(()=>service.readError({id:'h',digest:item.digest})).toThrow('移除');});
  // 1000条需启动并回收40个真实分页线程；单条2秒产品期限保持不变，整例给慢CI独立预算。

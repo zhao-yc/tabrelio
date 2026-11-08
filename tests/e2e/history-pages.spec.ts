@@ -95,6 +95,80 @@ test('查询内历史按活动标签连接打开，分页保持范围，全局�
  expect(pageErrors).toEqual([]);
 });
 
+test('从历史离线保存完整查询，保留执行上下文或解除绑定', async () => {
+ const sql = 'UPDATE offline_fixture SET n=9007199254740993;\r\n-- ' + '中'.repeat(1024) + '😀历史尾部';
+ await seed(store => {
+  source(store);
+  store.addHistory(entry({ id: 'bound-save', sql, databaseContext: { state: 'known', database: '执行库' } }));
+  store.addHistory(entry({ id: 'orphan-save', connectionId: 'deleted', sql, databaseContext: { state: 'known', database: '旧库' } }));
+  store.saveQuery({ id: 'existing-query', name: '重复名', sql: 'SELECT 42', updatedAt: '2026-10-15T00:00:00Z' });
+ });
+ await desktop.evaluate(({ipcMain}) => {
+  const handlers = (ipcMain as unknown as {_invokeHandlers: Map<string, (...args:any[])=>unknown>})._invokeHandlers;
+  const previous = handlers.get('dbark:request'); if (!previous) throw Error('缺少原历史 IPC 入口');
+  const seen = { saved: [] as unknown[], blocked: 0 };
+  Object.assign(globalThis, { __saveHistoryQuery: seen });
+  handlers.set('dbark:request', (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'history.saveQuery') seen.saved.push(payload.input);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+    seen.blocked++;
+    throw Error('保存历史查询禁止数据库请求');
+   }
+   return previous(event, payload);
+  });
+ });
+ const before = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+ await open();
+ const bound = dialog().locator('[data-history-id="bound-save"]');
+ const trigger = bound.getByRole('button', { name: text.saveQuery, exact: true });
+ await trigger.click();
+ const name = bound.getByRole('textbox', { name: text.saveQueryName, exact: true });
+ const submit = bound.getByRole('button', { name: text.saveQueryConfirm, exact: true });
+ await expect(name).toBeFocused();
+ await expect(submit).toBeDisabled();
+ await name.fill('应取消的查询');
+ await name.press('Escape');
+ await expect(trigger).toBeFocused();
+ await expect(name).toHaveCount(0);
+ await trigger.click();
+ await expect(bound.getByRole('checkbox', { name: text.saveQuerySource, exact: true })).toBeChecked();
+ await expect(bound.getByText(text.saveQueryContext('离线来源 source', '执行库'))).toBeVisible();
+ await name.fill(' 重复名 ');
+ await name.press('Enter');
+ await expect(bound.getByText(text.savedQueryCreated('重复名'), { exact: true })).toBeVisible();
+ const orphan = dialog().locator('[data-history-id="orphan-save"]');
+ await orphan.getByRole('button', { name: text.saveQuery, exact: true }).click();
+ await expect(orphan.getByText(text.saveQueryUnbound, { exact: true })).toBeVisible();
+ await orphan.getByRole('textbox', { name: text.saveQueryName, exact: true }).fill('失效来源的查询');
+ await orphan.getByRole('button', { name: text.saveQueryConfirm, exact: true }).click();
+ await expect(orphan.getByText(text.savedQueryCreated('失效来源的查询'), { exact: true })).toBeVisible();
+ await dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click();
+ const saved = dialog().locator('.history-card strong');
+ await expect(saved).toHaveText(['失效来源的查询', '重复名', '重复名']);
+ const observation = await desktop.evaluate(() => (globalThis as typeof globalThis & { __saveHistoryQuery?: unknown }).__saveHistoryQuery);
+ expect(observation).toEqual({ blocked: 0, saved: [
+  { id: 'bound-save', digest: expect.stringMatching(/^[0-9a-f]{64}$/), name: ' 重复名 ', keepSource: true },
+  { id: 'orphan-save', digest: expect.stringMatching(/^[0-9a-f]{64}$/), name: '失效来源的查询', keepSource: false },
+ ] });
+ expect(await page.evaluate(() => window.dbark.invoke('settings.get', {}))).toEqual(before);
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+ await quitDesktop();
+ await launchDesktop();
+ const records = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
+ expect(records).toHaveLength(3);
+ expect(records.find(query => query.id === 'existing-query')?.sql).toBe('SELECT 42');
+ expect(records.find(query => query.name === '重复名' && query.id !== 'existing-query')).toMatchObject({
+  sql, connectionId: 'source', database: '执行库', databaseContext: { state: 'known', database: '执行库' },
+ });
+ const unbound = records.find(query => query.name === '失效来源的查询');
+ expect(unbound).toMatchObject({ sql, databaseContext: { state: 'unknown' } });
+ expect(unbound?.connectionId).toBeUndefined();
+ expect(unbound?.database).toBeUndefined();
+ expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(2);
+});
+
 test('来源已删除仍可分段查看和另存完整历史 SQL', async () => {
  const head='UPDATE offline_fixture SET n=9007199254740993; -- ';
  const sql=head+'x'.repeat(65535-head.length)+'\r\n'+'y'.repeat(65534)+'😀历史尾部';

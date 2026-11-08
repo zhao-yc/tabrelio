@@ -1,5 +1,6 @@
 import{createHash}from'node:crypto';
-import{historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult}from'../shared/historyPages';
+import{historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,historySaveQuerySchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult}from'../shared/historyPages';
+import { savedQueryOriginContext, type QuerySaveContent } from '../shared/queryBinding';
 import{LocalSqlPages}from'./localSqlPages';
 import{parseHistoryRecord}from'./historyPageMatch';
 
@@ -22,5 +23,13 @@ export class HistoryPages extends LocalSqlPages<HistoryPageInput,HistoryPageEntr
  readSql(raw: unknown): { sql: string } {
   const { id, digest } = historyRecordReferenceSchema.parse(raw);
   return { sql: this.current(id, digest).sql };
+ }
+ /** 保存来源只能取自原历史。未绑定时清除库上下文，随后打开须明确选库。 */
+ querySaveContent(raw: unknown): QuerySaveContent {
+  const { id, digest, name, keepSource } = historySaveQuerySchema.parse(raw);
+  const record = this.current(id, digest);
+  if (!keepSource) return { name, sql: record.sql, context: { state: 'unknown' } };
+  if (!record.connectionId || !this.store.queryConnectionExists(record.connectionId)) throw Error('历史来源连接已失效，请选择不绑定连接后保存');
+  return { name, sql: record.sql, connectionId: record.connectionId, context: savedQueryOriginContext(record.database, record.databaseContext) };
  }
 }

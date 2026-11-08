@@ -17,6 +17,8 @@ export const historyRecordReferenceSchema=z.object({id,digest}).strict();
 export const historyExportSqlSchema = historyRecordReferenceSchema.extend({ encoding: z.enum(['utf8', 'utf16le', 'gb18030']) }).strict();
 export type HistoryExportSqlInput = z.infer<typeof historyExportSqlSchema>;
 export type HistoryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
+export const historySaveQuerySchema = historyRecordReferenceSchema.extend({ name: name.trim().min(1), keepSource: z.boolean() }).strict();
+export type HistorySaveQueryInput = z.infer<typeof historySaveQuerySchema>;
 export type HistoryRecord=z.infer<typeof historyRecordSchema>;
 export type HistoryPageInput=z.infer<typeof historyPageInputSchema>;
 export interface HistoryPagePosition{id:string;startedAt:string;connectionId:string}
