@@ -1,3 +1,5 @@
+import { inspectMysqlViewQuery } from './mysqlViewQueryInspect';
+import { mysqlViewQueryInspectSchema } from '../shared/mysqlViewFile';
 import { excelImportZh, validExcelImport } from '../shared/excelTransfer';
 import { txtImportZh, validTxtImport } from '../shared/txtImport';
 import { recordImportFormats, validXmlImport, xmlImportZh } from '../shared/xmlImport';
@@ -365,6 +367,16 @@ export class Engine {
           throw Error('同步缺少可信右侧连接配置');
         this.copySourceProfile({ connectionId: target.connectionId, profile: targetProfile });
         return this.mysqlDataComparisons.apply(request, { owner, connectionRevision }, target);
+      }
+      case 'mysql.view.inspectQuery': {
+        const { profile, ...raw } = input;
+        const request = mysqlViewQueryInspectSchema.parse(raw);
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== request.connectionId)
+          throw Error('视图预览需要可信的 MySQL／MariaDB 连接');
+        this.copySourceProfile(input);
+        const taskId = randomUUID();
+        return this.withCopySourceTask(request.connectionId, taskId,
+          context => inspectMysqlViewQuery(context, request, () => this.stopIndependentRead(taskId)), '检查视图定义', 'no-default-database');
       }
       case 'mysql.compareData.catalogue': {
         const profile = input.profile;
@@ -1077,7 +1089,7 @@ export class Engine {
   }
 
   /** 新增只读任务受15秒总期限及原KILL/关闭终态保护，不以Promise超时抢先返回。 */
-  private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>) => Promise<T>, label = '读取完整复制源', mode: true | 'no-default-database' = true): Promise<T> {
+  private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: StructureTaskContext) => Promise<T>, label = '读取完整复制源', mode: true | 'no-default-database' = true): Promise<T> {
     let expired = false, settled = false, cancelling: Promise<unknown> | undefined;
     const pending = this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, label, mode, () => ({}), true);
     // 保留原Promise供finally等待并传播控制失败，旁路处理器仅防止等待期间的未处理拒绝。

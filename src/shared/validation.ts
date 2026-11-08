@@ -1,3 +1,4 @@
+import { mysqlViewQueryInspectSchema } from './mysqlViewFile';
 import { batchSyncApplySchema } from './dataCompareBatchSync';
 import { mysqlBatchSyncPreviewSchema } from './mysqlBatchSync';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from './postgresBatchSync';
@@ -412,6 +413,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'mysql.compareData.syncPreview': postgresDataSyncPreviewSchema,
   'mysql.compareData.syncApply': postgresDataSyncApplySchema,
   'mysql.compareData': mysqlDataCompareSchema,
+  'mysql.view.inspectQuery': mysqlViewQueryInspectSchema,
   'mysql.compareData.catalogue': postgresDataCompareCatalogueSchema,
   'mysql.compareData.cancel': z.object({ taskId: z.uuid() }).strict(),
   'postgres.compareData': postgresDataCompareSchema,

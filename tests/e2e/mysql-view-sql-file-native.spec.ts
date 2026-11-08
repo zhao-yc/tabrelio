@@ -4,6 +4,7 @@ import mysql, { type RowDataPacket } from 'mysql2/promise';
 import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
+import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh as text } from '../../src/renderer/locales/viewSqlFile.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
@@ -12,7 +13,7 @@ const dialect = process.env.DBARK_MYSQL_VIEW_FILE_DIALECT;
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(!dialect, '需显式启用 MySQL 或 MariaDB 视图文件专项');
 
-test('载入 SELECT 后创建视图或替换原查询，保留已有视图属性', async ({}, info) => {
+test('载入、预览并保存视图定义，原连接身份和视图属性得到保留', async ({}, info) => {
   const database = process.env.DBARK_MYSQL_VIEW_FILE_DATABASE ?? '', password = process.env.DBARK_MYSQL_VIEW_FILE_PASSWORD ?? '';
   const port = Number(process.env.DBARK_MYSQL_VIEW_FILE_PORT);
   if (process.env.DBARK_DEV_URL || process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_INTEGRATION_ENABLED !== '1' ||
@@ -94,6 +95,31 @@ test('载入 SELECT 后创建视图或替换原查询，保留已有视图属性
     const beforeHistory = await history();
     const catalog = () => page.evaluate(target => window.dbark.invoke('metadata.objects', target), { connectionId, database });
     const editor = (modal: Locator) => modal.locator('.monaco-editor .view-lines');
+    const section = (modal: Locator) => modal.getByRole('region', { name: inspect.region });
+    const preview = async (modal: Locator, marker: string) => {
+      const panel = section(modal);
+      await panel.getByRole('button', { name: inspect.rows, exact: true }).click();
+      await expect(panel.getByText(marker, { exact: true })).toBeVisible();
+      await expect(panel.getByText(inspect.count(1))).toBeVisible();
+      await panel.getByRole('button', { name: inspect.explain, exact: true }).click();
+      await expect(panel.getByText(/view_source/).first()).toBeVisible();
+    };
+    const inspectRows = (sql: string) => page.evaluate(target => window.dbark.invoke('mysql.view.inspectQuery', target),
+      { connectionId, database, name: fresh, mode: 'rows' as const, sql: 'CREATE VIEW ' + target(fresh) + ' ' + sql });
+    const [sample] = (await inspectRows(
+      "(original_database, ordered_id, same_id, precise) AS WITH RECURSIVE n AS (SELECT 1 AS id UNION ALL SELECT id+1 FROM n WHERE id<120) " +
+      "SELECT DATABASE(), CAST(id AS UNSIGNED), CAST(id AS UNSIGNED), CAST(9223372036854775807 AS SIGNED) FROM n ORDER BY id DESC"
+    )).results;
+    expect(sample.columns.map(column => column.name)).toEqual(['original_database', 'ordered_id', 'same_id', 'precise']);
+    expect(sample.rows).toHaveLength(100);
+    expect(sample.rows[0]).toEqual({ c0: database, c1: '120', c2: '120', c3: '9223372036854775807' });
+    expect(sample.rows[99].c1).toBe('21');
+    expect(sample.truncated).toBe(true);
+    const [oversized] = (await inspectRows("AS SELECT REPEAT('x', 600000) AS marker")).results;
+    expect(oversized).toMatchObject({ rows: [], truncated: true });
+    await expect(inspectRows("AS SELECT marker INTO DUMPFILE 'forbidden' FROM view_source")).rejects.toThrow(/INTO/);
+    await expect(inspectRows("AS SELECT marker FROM view_source FOR UPDATE")).rejects.toThrow(/read.only|denied/i);
+
 
     await clickSidebarAction(db, { name: zh.sidebar.text019, exact: true });
     const create = page.getByRole('dialog', { name: zh.schema.text058, exact: true });
@@ -104,7 +130,10 @@ test('载入 SELECT 后创建视图或替换原查询，保留已有视图属性
     await expect(create.getByText(/SQL 文件须包含一条/)).toBeVisible();
     await load(create, valid, true);
     await expect(editor(create)).toContainText('文件尾注释');
+    await preview(create, '新值');
+    expect((await catalog()).some(item => item.name === fresh)).toBe(false);
     await viewName.fill(old);
+    await expect(section(create).getByText(/view_source/)).toHaveCount(0);
     await apply(create, true);
     expect(await showCreate(old)).toBe(original);
     await viewName.fill(renamed);
@@ -118,12 +147,14 @@ test('载入 SELECT 后创建视图或替换原查询，保留已有视图属性
     await clickSidebarAction(row(old), { name: formatText(zh.sidebar.text022, old), exact: true });
     const edit = page.getByRole('dialog', { name: formatText(zh.schema.text057, '视图', old), exact: true });
     await expect(editor(edit)).toContainText(attributes);
+    await preview(edit, '原值');
     await load(edit, valid, false);
     await expect(editor(edit)).not.toContainText('文件尾注释');
     await load(edit, valid, true);
     await expect(editor(edit)).toContainText(attributes);
     await expect(editor(edit)).toContainText('文件尾注释');
     await expect(editor(edit)).toContainText(/WITH\s+LOCAL\s+CHECK\s+OPTION/i);
+    await preview(edit, '新值');
     expect(await showCreate(old)).toBe(original);
     await apply(edit);
     const updated = await showCreate(old);

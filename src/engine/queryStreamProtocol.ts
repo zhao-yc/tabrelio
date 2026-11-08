@@ -125,6 +125,9 @@ export async function consumeQueryFrames(managed: ManagedConnection, sql: string
   const onSessionState = (packet: { sql?: string; warningStatus?: number }) => {
     if (!stopping && active) closeRows(packet.warningStatus);
   };
+  // 取消控制失败时驱动可能仅销毁底层流，必须唤醒没有收到命令终包的读取方。
+  const onAbort = () => fail(Error('数据库读取已取消，未自动重放 SQL'));
+  managed.signal?.addEventListener('abort', onAbort, { once: true });
   connection.on('error', onConnectionError);
   connection.on('end', onConnectionEnd);
   connection.on('dbark:session-state', onSessionState);
@@ -158,6 +161,7 @@ export async function consumeQueryFrames(managed: ManagedConnection, sql: string
   } finally {
     commandFinished?.();commandFinished=undefined;
     connection.resume();
+    managed.signal?.removeEventListener('abort', onAbort);
     connection.removeListener('error', onConnectionError);
     connection.removeListener('end', onConnectionEnd);
     connection.removeListener('dbark:session-state', onSessionState);

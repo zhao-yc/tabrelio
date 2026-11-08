@@ -101,6 +101,17 @@ describe('完整导出协议消费', () => {
     expect(value.connection.listenerCount('end')).toBe(0); expect(value.connection.listenerCount('error')).toBe(0);
     expect(value.command.listenerCount('result')).toBe(0);
   });
+  it('取消控制销毁物理连接且驱动无终包时唤醒流式读取', async () => {
+    const value = fixture([]);
+    const controller = new AbortController();
+    const managed = { ...value.managed, signal: controller.signal };
+    const running = consumeQueryFrames(managed, 'SELECT SLEEP(30)', 'binary', value.consumer);
+    const failed = expect(running).rejects.toThrow('数据库读取已取消');
+    managed.broken = true;
+    controller.abort();
+    await failed;
+    expect(value.command.listenerCount('result')).toBe(0);
+  });
   it('行EOF警告属于当前结果，协议边界先结束行集且不被下一结果覆盖', async () => {
     const value = fixture([fields('x', 0), ['result', ['x'], 0]]);
     const consume = value.consumer.consume;
