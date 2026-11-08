@@ -63,7 +63,7 @@ import { queryAnalyzeZh } from '../locales/queryAnalyze.zh-CN';
 import { ErrorBox, Spinner, Empty, Modal } from './ui';
 import { QueryCloseDialog } from './QueryCloseDialog';
 import { QueryBindingDialog } from './QueryBindingDialog';
-import { QueryDuplicateIntent } from '../queryDuplicateIntent';
+import { QueryDuplicateIntent, type QueryDuplicateMode } from '../queryDuplicateIntent';
 import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { QueryTransactionSettingsIntent } from '../queryTransactionSettingsIntent';
@@ -1613,8 +1613,8 @@ export function PostgresQueryTab({
     }, 0);
   }
   /** 复制只读取原草稿和固定数据库上下文，沿既有意图保护新建未绑定的独立查询。 */
-  async function duplicateQuery() {
-    if (duplicateIntent.current || !commandEditor()) return;
+  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current) {
+    if (duplicateIntent.current || expectedEditor !== editor.current || mode === 'selection' && resultsOnly || !commandEditor()) return;
     let intent: QueryDuplicateIntent | undefined;
     try {
       intent = new QueryDuplicateIntent({
@@ -1658,7 +1658,7 @@ export function PostgresQueryTab({
           if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany);
           workspace.openTab(candidate);
         },
-      });
+      }, mode);
       duplicateIntent.current = intent;
       setDuplicating(true);
       await intent.run();
@@ -1673,6 +1673,8 @@ export function PostgresQueryTab({
     }
   }
   const editable = !!profile && !!editorInstance && !locked;
+  const canDuplicateQuery = editable && !duplicating && duplicateOrigin.current.connectionId === tab.connectionId &&
+    duplicateOrigin.current.version === version;
   const canRun = editable && state.transactionKnown;
   const canPlan = canRun && !state.transactionFailed;
   const canStop = busy && !!phase.current && !phase.current.cancelled;
@@ -1722,8 +1724,14 @@ export function PostgresQueryTab({
       contextMenuGroupId: 'modification', contextMenuOrder: 6,
       run: () => { if (active) openSnippets(true, editorInstance); },
     });
-    return () => { active = false; action.dispose(); };
-  }, [editorInstance, editable, workspace.settings.activeTabId, tab.id, tab.sql, profile, version]);
+    const selectionQuery = editorInstance.addAction({
+      id: `dbark-postgres-open-selection-query:${uid()}`, label: queryDuplicateZh.selection,
+      precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
+      contextMenuGroupId: 'modification', contextMenuOrder: 7,
+      run: () => { if (active) return duplicateQuery('selection', editorInstance); },
+    });
+    return () => { active = false; action.dispose(); selectionQuery.dispose(); };
+  }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version]);
   return (
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}>
       <div className="context-bar">
@@ -1771,9 +1779,10 @@ export function PostgresQueryTab({
             <button disabled={!editable} onClick={() => openFullExport()}>{fullExportText.open}</button>
             <button disabled={!editable} onClick={() => openFullExport('current')}>{fullExportText.openCurrent}</button>
             <button disabled={!editable} onClick={() => openSnippets()}>{zh.snippets.title}</button>
-            <button disabled={!editable || duplicating || duplicateOrigin.current.connectionId !== tab.connectionId ||
-              duplicateOrigin.current.version !== version} title={queryDuplicateZh.hint}
+            <button disabled={!canDuplicateQuery} title={queryDuplicateZh.hint}
               onClick={() => void duplicateQuery()}>{queryDuplicateZh.action}</button>
+            <button disabled={!canDuplicateQuery || !editorSelection.single || resultsOnly} title={queryDuplicateZh.selectionHint}
+              onClick={() => void duplicateQuery('selection')}>{queryDuplicateZh.selection}</button>
             <button disabled={locked} onClick={onHistory}>
               {text.history}
             </button>

@@ -14,7 +14,64 @@ function fixture() {
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 
+/** 只模拟 Monaco 选区读口和选区事件，正文仍走原桥。 */
+function selectionFixture() {
+  const f = fixture(), listeners = new Set<() => void>();
+  type Range = { startLineNumber: number; endLineNumber: number; startColumn: number; endColumn: number; isEmpty(): boolean };
+  let ranges: Range[] = [];
+  Object.assign(f.editor, {
+    getSelections: () => ranges,
+    onDidChangeCursorSelection: (changed: () => void) => {
+      listeners.add(changed);
+      return { dispose: () => listeners.delete(changed) };
+    },
+  });
+  Object.assign(f.model, {
+    getValueInRange: (range: Range) => f.model.value.slice(range.startColumn - 1, range.endColumn - 1),
+  });
+  const select = (...columns: [number, number][]) => {
+    ranges = columns.map(([startColumn, endColumn]) => ({
+      startLineNumber: 1, endLineNumber: 1, startColumn, endColumn, isEmpty: () => startColumn === endColumn,
+    }));
+    for (const changed of listeners) changed();
+  };
+  return { ...f, select };
+}
+
 describe('查询复制意图与既有正文桥', () => {
+  it('选区原文独立建草稿，仍刷新原全文且保留原来源和版本', async () => {
+    const f = selectionFixture(), before = f.getScope().tab, version = f.model.version;
+    f.select([7, 10]);
+    await new QueryDuplicateIntent({ ...f.ports, database: () => ({ state: 'known', database: '当前库' }) }, 'selection').run();
+    expect(f.open).toHaveBeenCalledExactlyOnceWith({ kind: 'query', title: '已保存查询（选区）', connectionId: 'c', sql: ' 原文',
+      database: '当前库', databaseContext: { state: 'known', database: '当前库' } });
+    expect(f.getScope().tab).toBe(before);
+    expect(f.model.version).toBe(version);
+    expect(f.editor.edits).toEqual([]);
+    f.close();
+  });
+  it('空选区、纯空白和多个范围均拒绝，不能回退到全文', () => {
+    const f = selectionFixture();
+    for (const ranges of [[], [[1, 1]], [[7, 8]], [[1, 2], [8, 10]]] as [number, number][][]) {
+      f.select(...ranges);
+      expect(() => new QueryDuplicateIntent(f.ports, 'selection')).toThrow('请选择一段非空 SQL');
+    }
+    expect(f.open).not.toHaveBeenCalled();
+    f.close();
+  });
+  it('等待数据库上下文时移动选区再移回，旧意图仍失效', async () => {
+    const f = selectionFixture(), gate = deferred<{ state: 'known'; database: string }>();
+    f.select([8, 10]);
+    const intent = new QueryDuplicateIntent({ ...f.ports, database: () => gate.promise }, 'selection');
+    const pending = intent.run();
+    await Promise.resolve();
+    f.select([1, 7]);
+    f.select([8, 10]);
+    gate.resolve({ state: 'known', database: '当前库' });
+    await expect(pending).rejects.toThrow('已变化');
+    expect(f.open).not.toHaveBeenCalled();
+    f.close();
+  });
   it('flush补发尚未交付的最新模型正文，只建白名单独立草稿，不编辑原模型/撤销栈/来源', async () => {
     const f = fixture(); f.model.deferred = true; f.editor.nativeInput('SELECT 用户刚输入;'); const binding = f.getScope().tab!.sourceBinding, version = f.model.version;
     const intent = new QueryDuplicateIntent(f.ports); await intent.run();

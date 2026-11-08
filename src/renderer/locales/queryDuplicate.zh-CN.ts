@@ -1,6 +1,8 @@
 /** 查询复制只新建独立草稿，不经过系统剪贴板或保存查询来源。 */
 export const queryDuplicateZh = {
   action: '复制为新查询', hint: '复制当前 SQL 和明确数据库上下文，另建未保存的独立查询', suffix: '（副本）',
+  selection: '从选区打开新查询', selectionHint: '将当前选中的 SQL 原文放入独立查询草稿，沿用原连接和数据库',
+  selectionSuffix: '（选区）', selectionRequired: '请选择一段非空 SQL，再打开新查询。',
   unavailable: '当前查询不可复制，请等待编辑器就绪并确认连接仍有效。',
   changed: '原查询、连接或编辑器已变化，本次未新建查询，请重新复制。',
   contextUnknown: '当前默认库尚未明确，请先确认数据库上下文再复制查询。',

@@ -139,7 +139,7 @@ import { CurrentStatementIntent, type CurrentStatementScope } from '../currentSt
 import { currentStatementZh } from '../locales/currentStatement.zh-CN';
 import { sqliteExplainZh } from '../locales/sqliteExplain.zh-CN';
 import { historyPagesZh } from '../locales/historyPages.zh-CN';
-import { QueryDuplicateIntent } from '../queryDuplicateIntent';
+import { QueryDuplicateIntent, type QueryDuplicateMode } from '../queryDuplicateIntent';
 import { flushEditorContent } from '../editorContentBridge';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
 import { useQueryFileSource } from '../useQueryFileSource';
@@ -524,15 +524,16 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制仅占本地意图，不占SQL任务、不清结果；关闭/换连/新作业会永久撤销等待中的复制。 */
-  async function duplicateQuery() {
-    if (duplicateIntent.current) return;
+  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current) {
+    if (duplicateIntent.current || expectedEditor !== editor.current || mode === 'selection' && resultsOnly) return;
     let intent: QueryDuplicateIntent | undefined;
     try {
       const scope = () => {
         const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), profile = workspace.connections.find(item => item.id === current?.connectionId), origin = duplicateOrigin.current;
         return { tab: current, connection: profile, connectionVersion: workspace.connectionVersions[current?.connectionId ?? ''] ?? 0, sessionId: sessionRef.current,
           present: alive.current && current?.kind === 'query' && !!profile && current.connectionId === tab.connectionId && current.connectionId === origin.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === origin.version,
-          active: workspace.settings.activeTabId === tab.id, blocked: busyRef.current || !!workspace.activeJobs[tab.id] || !!pendingSession.current || !!closeRequestRef.current || !!document.querySelector(appDialogSelector) };
+          active: workspace.settings.activeTabId === tab.id, blocked: busyRef.current || !!workspace.activeJobs[tab.id] || !!pendingSession.current || !!closeRequestRef.current || !!document.querySelector(appDialogSelector) ||
+            mode === 'selection' && (fileSource.isBusy() || !!formatting.current) };
       };
       intent = new QueryDuplicateIntent({ editor: () => editor.current, scope, flush: flushEditorContent,
         subscribe: changed => {
@@ -544,7 +545,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         },
         database: async initial => initial.sessionId ? queryDatabaseFromSession(await invoke('query.completionState', { sessionId: initial.sessionId })) : resolveQueryDatabase(initial.tab?.database, initial.tab?.databaseContext, connectionDatabase(initial.connection)),
         open: candidate => { const workspace = useWorkspace.getState(); if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany); workspace.openTab(candidate); },
-      });
+      }, mode);
       duplicateIntent.current = intent; setDuplicating(true); await intent.run();
     } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
     finally { intent?.dispose(); if (duplicateIntent.current === intent) { duplicateIntent.current = null; if (alive.current) setDuplicating(false); } }
@@ -1998,6 +1999,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       contextMenuGroupId: 'modification', contextMenuOrder: 6,
       run: () => { if (active) createSnippetFromSelection(searchEditor); },
     }));
+    actions.push(searchEditor.addAction({
+      id: `dbark-open-selection-query:${uid()}`, label: queryDuplicateZh.selection,
+      precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
+      contextMenuGroupId: 'modification', contextMenuOrder: 7,
+      run: () => { if (active) return duplicateQuery('selection', searchEditor); },
+    }));
     return () => { active = false; actions.forEach(action => action.dispose()); };
   }, [searchEditor, queryMenuKey, connection, tab.sql, sqlite, resultsOnly]);
   useEffect(() => {
@@ -2068,6 +2075,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setShowPinSql(current => current === resultSqlPreview ? null : current);
   }
   const resultMenuKey = JSON.stringify([queryMenuKey, menuResult.current.revision, resultIndex, selectedPin, resultSelectionRevision, !!activeColumnLease, !!activeFilterLease, !!activeSortLease]);
+  const canDuplicateQuery = !busy && !duplicating && !!connection && !!searchEditor && !closeRequest &&
+    duplicateOrigin.current.connectionId === tab.connectionId && duplicateOrigin.current.version === connectionVersion;
   const canExecuteSelection = hasSingleSelection && !resultsOnly && !busy && !!connection && !closeRequest && !fileSource.busy;
   const canNavigateFromCursor = !!searchEditor && !!connection && !resultsOnly && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy;
   useUiCommandScope(`tab:${tab.id}`, {
@@ -2143,7 +2152,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {!sqlite && <button disabled={busy || !connection || !!closeRequest} onClick={() => void openAnalyze()}><Gauge size={15}/>{queryAnalyzeZh.open}</button>}</ActionMenuSection>
         <ActionMenuSection label={menuText.files}>{fileActions}
 {tab.fileSourceBinding && <button disabled={busy || fileSource.busy} title={queryFilesZh.librarySave} aria-label={queryFilesZh.librarySave} onClick={() => { invalidateResultSelection(); setQueryName(tab.title); setSave(true); }}>{queryFilesZh.librarySave}</button>}</ActionMenuSection>
-        <ActionMenuSection label={menuText.library}><button disabled={busy || duplicating || !connection || !searchEditor || !!closeRequest || duplicateOrigin.current.connectionId !== tab.connectionId || duplicateOrigin.current.version !== connectionVersion} title={queryDuplicateZh.hint} aria-label={queryDuplicateZh.action} onClick={() => void duplicateQuery()}><Copy size={14}/>{queryDuplicateZh.action}</button>
+        <ActionMenuSection label={menuText.library}><button disabled={!canDuplicateQuery} title={queryDuplicateZh.hint} aria-label={queryDuplicateZh.action} onClick={() => void duplicateQuery()}><Copy size={14}/>{queryDuplicateZh.action}</button>
+<button disabled={!canDuplicateQuery || !hasSingleSelection || resultsOnly || fileSource.busy}
+  title={queryDuplicateZh.selectionHint} onClick={() => void duplicateQuery('selection')}>{queryDuplicateZh.selection}</button>
 <button title={zh.snippets.title} aria-label={zh.snippets.title} onClick={openSnippets}><BookOpen size={15}/></button>
 <button onClick={() => { if (queryMenuCurrent()) onHistory(); }} aria-label={historyPagesZh.queryHistory} title={historyPagesZh.queryHistory}><History size={15}/></button></ActionMenuSection>
       </>}
