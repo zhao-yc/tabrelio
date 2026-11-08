@@ -8,18 +8,18 @@ const originals = globalNames.map(name => [name, Object.getOwnPropertyDescriptor
 const properties = ['children', 'classList', 'getBoundingClientRect','offsetHeight','clientHeight'].map(name => [name, Object.getOwnPropertyDescriptor(MemoryNode.prototype, name)] as const);
 let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let height: number, toolbar: number, callbacks: Array<() => void>, observed: Set<Element>, disconnect: ReturnType<typeof vi.fn>, removed: Element[];
-let result = 0, preferred = 500, showExtra = false, showResultBars=false, showFindStatus=false, resultToolbar=34,showDirectGrid=false,gridOuter=96,gridClient=96;
+let result = 0, preferred = 500, showExtra = false, showResultBars=false, showFindStatus=false, resultToolbar=34,showDirectGrid=false, showPlan=false, gridOuter=96,gridClient=96;
 /** 只给真实ResizeObserver hook提供几何/观察端口，不把窗口变矮写进任何设置。 */
-function Example() { const ref = useRef<HTMLDivElement>(null); result = useQueryLayoutMaximum(ref, 8192); return <div ref={ref} className="root"><div className="toolbar"/><div className="sql-editor-wrap" style={{ height: queryEditorVisualHeight(preferred, result) }}/><div className="query-layout-bar"/><div className="result-body">{(showResultBars||showDirectGrid)&&<div className="query-result-with-details"><div className="query-result-grid">{showDirectGrid?<div className="results-grid"/>:<div className="query-result-copy-region"><div className="query-result-copy-actions"/><div className="query-result-find-region"><div className="query-result-find-toolbar"/>{showFindStatus&&<div className="query-result-find-status"/>}<div className="query-result-find-grid"><div className="results-grid"/></div></div></div>}</div></div>}</div>{showExtra && <div className="extra"/>}</div>; }
+function Example() { const ref = useRef<HTMLDivElement>(null); result = useQueryLayoutMaximum(ref, 8192); return <div ref={ref} className="root"><div className="toolbar"/><div className="sql-editor-wrap" style={{ height: queryEditorVisualHeight(preferred, result) }}/><div className="query-layout-bar"/><div className="result-body">{showPlan && <section className="explain-view"><div className="explain-toolbar"/><div className="explain-content"/></section>}{(showResultBars||showDirectGrid)&&<div className="query-result-with-details"><div className="query-result-grid">{showDirectGrid?<div className="results-grid"/>:<div className="query-result-copy-region"><div className="query-result-copy-actions"/><div className="query-result-find-region"><div className="query-result-find-toolbar"/>{showFindStatus&&<div className="query-result-find-status"/>}<div className="query-result-find-grid"><div className="results-grid"/></div></div></div>}</div></div>}</div>{showExtra && <div className="extra"/>}</div>; }
 beforeAll(async () => { doc = memoryDocument();
   Object.defineProperty(MemoryNode.prototype, 'children', { configurable: true, get() { return this.childNodes.filter((node: MemoryNode) => node.nodeType === 1); } });
   Object.defineProperty(MemoryNode.prototype, 'classList', { configurable: true, get() { return { contains: (value: string) => (this.getAttribute('class') ?? '').split(' ').includes(value) }; } });
-  Object.defineProperty(MemoryNode.prototype, 'getBoundingClientRect', { configurable: true, value(this: MemoryNode) { const name = this.getAttribute('class'); return { height: name === 'root' ? height : name === 'toolbar' ? toolbar : name === 'query-layout-bar' ? 18 : name === 'extra' ? 30 : name==='query-result-copy-actions'?34:name==='query-result-find-toolbar'?resultToolbar:name==='query-result-find-status'?44:0 }; } });
+  Object.defineProperty(MemoryNode.prototype, 'getBoundingClientRect', { configurable: true, value(this: MemoryNode) { const name = this.getAttribute('class'); return { height: name === 'root' ? height : name === 'toolbar' ? toolbar : name === 'query-layout-bar' ? 18 : name === 'extra' ? 30 : name==='query-result-copy-actions'?34:(name==='query-result-find-toolbar'||name==='explain-toolbar')?resultToolbar:name==='query-result-find-status'?44:0 }; } });
   Object.defineProperty(MemoryNode.prototype,'offsetHeight',{configurable:true,get(this:MemoryNode){return this.getAttribute('class')==='results-grid'?gridOuter:0;}});
   Object.defineProperty(MemoryNode.prototype,'clientHeight',{configurable:true,get(this:MemoryNode){return this.getAttribute('class')==='results-grid'?gridClient:0;}});
   ({ createRoot } = await import('react-dom/client'));
 });
-beforeEach(() => { height = 600; toolbar = 100; preferred = 500; showExtra = false;showResultBars=false;showFindStatus=false;resultToolbar=34;showDirectGrid=false;gridOuter=96;gridClient=96; callbacks = []; observed = new Set(); removed = []; disconnect = vi.fn(() => observed.clear());
+beforeEach(() => { height = 600; toolbar = 100; preferred = 500; showExtra = false;showResultBars=false;showFindStatus=false;resultToolbar=34;showDirectGrid=false;showPlan=false;gridOuter=96;gridClient=96; callbacks = []; observed = new Set(); removed = []; disconnect = vi.fn(() => observed.clear());
   Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: class { constructor(callback: () => void) { callbacks.push(callback); } observe(node: Element) { observed.add(node); } unobserve(node: Element) { observed.delete(node); removed.push(node); } disconnect = disconnect; } });
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; doc.body.textContent = ''; expect(observed.size).toBe(0); });
@@ -62,4 +62,27 @@ it('筛选草稿打开时没有复制查找容器，直接结果网格仍预留�
   const parent=doc.querySelector('[class="root"]')!,grid=doc.querySelector('[class="results-grid"]')! as unknown as Element;
   expect(observed.has(grid)).toBe(true);expect((parent.style as unknown as Record<string,string>)['--query-result-min-height']).toBe('104px');
   height=100;await act(async()=>callbacks[0]());expect(result).toBe(0);expect(preferred).toBe(500);expect((parent.style as unknown as Record<string,string>)['--query-result-min-height']).toBe('104px');
+});
+it('按计划工具栏实际高度预留树空间，普通结果恢复原可用高度', async () => {
+  showPlan = true;
+  await mount();
+  const parent = doc.querySelector('[class="root"]')!;
+  const bar = doc.querySelector('[class="explain-toolbar"]')! as unknown as Element;
+  const content = doc.querySelector('[class="explain-content"]')! as unknown as Element;
+  expect(observed.has(bar)).toBe(true);
+  expect(observed.has(content)).toBe(false);
+  expect((parent.style as unknown as Record<string,string>)['--query-result-min-height']).toBe('226px');
+  expect(result).toBe(256);
+  resultToolbar = 68;
+  await act(async () => callbacks[0]());
+  expect(result).toBe(222);
+  height = 250;
+  await act(async () => callbacks[0]());
+  expect(result).toBe(130);
+  showPlan = false;
+  height = 600;
+  await render();
+  expect(removed).toContain(bar);
+  expect(result).toBe(386);
+  expect(preferred).toBe(500);
 });

@@ -6,11 +6,13 @@ import { validateCommand } from '../../src/shared/validation';
 const options = { standardStrings: true, version: '18.1', format: 'auto' } as const;
 
 describe('PostgreSQL估算计划', () => {
-  it('专用命令接收光标偏移，原计划命令仍保持严格边界', () => {
+  it('两种计划命令都接受正文内的光标，并拒绝越界或多余字段', () => {
     const input = { sessionId: '原会话', taskId: '计划任务', sql: 'SELECT 1;', maxRows: 1, currentStatement: { offset: 2 } };
-    expect(validateCommand('postgres.explain', input)).toEqual(input);
-    expect(() => validateCommand('postgres.explain', { ...input, currentStatement: { offset: 11 } })).toThrow();
-    expect(() => validateCommand('query.explain', input)).toThrow();
+    for (const command of ['postgres.explain', 'query.explain'] as const) {
+      expect(validateCommand(command, input)).toEqual(input);
+      expect(() => validateCommand(command, { ...input, currentStatement: { offset: 11 } })).toThrow();
+      expect(() => validateCommand(command, { ...input, currentStatement: { offset: 2, text: 'SELECT 2' } })).toThrow();
+    }
   });
   it('只编译选区或光标位置的原语句，保留注释、引号及转义边界', () => {
     const source = "SELECT 0; /* 外 /* 内 */ */ SELECT $标签$含;号$标签$; DELETE FROM items;";
