@@ -1,4 +1,5 @@
 export const gridQuickValueZh = {
+  copyCell: '复制当前单元格',
   context: '单元格操作',
   null: '设为 NULL',
   empty: '设为空字符串',

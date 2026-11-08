@@ -4,12 +4,15 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { gridJsonClipboardZh as text } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
+import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
+import { cellClipboardType } from '../../src/renderer/gridClipboard';
+import { sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('表格和查询结果按显示顺序复制 JSON，保留精确值', async ({}, info) => {
+test('表格和查询结果复制 JSON 与右键命中的单元格，保留精确值', async ({}, info) => {
   const dialect = process.env.DBARK_GRID_JSON_DIALECT;
   test.skip(!dialect, '需要显式启用记录 JSON 复制专项');
   const local = dialect === 'sqlite';
@@ -62,26 +65,52 @@ test('表格和查询结果按显示顺序复制 JSON，保留精确值', async 
     }, { profile, table, sql, database });
     await page.reload();
     await page.evaluate(() => {
-      const packets: { text: string; formats: string[] }[] = [];
-      // 只收集当前渲染器发出的真实 copy 事件，隔离系统剪贴板。
+      const packets: Record<string, string>[] = [];
+      // 在测试渲染器捕获复制事件的数据，隔离系统剪贴板。
       Object.defineProperty(document, 'execCommand', { configurable: true, value(command: string) {
         if (command !== 'copy') throw Error('仅允许本例复制动作');
         const data = new DataTransfer();
         document.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }));
-        packets.push({ text: data.getData('text/plain'), formats: [...data.types] });
+        packets.push(Object.fromEntries(data.types.map(type => [type, data.getData(type)])));
         return true;
       } });
       Object.assign(globalThis, { gridJsonPackets: packets });
     });
     const packets = () => page.evaluate(() => (globalThis as typeof globalThis & {
-      gridJsonPackets: { text: string; formats: string[] }[];
+      gridJsonPackets: Record<string, string>[];
     }).gridJsonPackets);
-    const copy = async (scope: ReturnType<typeof page.locator>, count: number) => {
-      await (await navigationMenuItem(scope, { name: text.action, exact: true })).click();
+    let count = 0;
+    const lastPacket = async () => {
       const data = await packets();
-      expect(data).toHaveLength(count);
-      expect(data.at(-1)?.formats).toEqual(['text/plain']);
-      return JSON.parse(data.at(-1)!.text);
+      expect(data).toHaveLength(++count);
+      return data.at(-1)!;
+    };
+    const copy = async (scope: ReturnType<typeof page.locator>) => {
+      await (await navigationMenuItem(scope, { name: text.action, exact: true })).click();
+      const packet = await lastPacket();
+      expect(Object.keys(packet)).toEqual(['text/plain']);
+      return JSON.parse(packet['text/plain']);
+    };
+    const menuCopy = async (cell: ReturnType<typeof page.locator>, typed: unknown, plain: string, sqlite?: unknown, keyboard = false) => {
+      // 菜单会在网格滚动时关闭。先让测试滚动目标格并等浏览器派发该次滚动，再打开菜单。
+      await cell.scrollIntoViewIfNeeded();
+      await cell.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      if (keyboard) {
+        await cell.click();
+        await page.keyboard.press('Shift+F10');
+      } else await cell.click({ button: 'right' });
+      const action = page.getByRole('menuitem', { name: gridQuickValueZh.copyCell, exact: true });
+      await expect(action).toBeVisible();
+      if (count === 1) await page.screenshot({ path: info.outputPath('复制当前单元格.png') });
+      if (keyboard) {
+        await expect(action).toBeFocused();
+        await page.keyboard.press('Enter');
+      } else await action.click();
+      const packet = await lastPacket();
+      expect(packet['text/plain']).toBe(plain);
+      expect(JSON.parse(packet[cellClipboardType])).toEqual({ version: 1, rows: [[typed]] });
+      if (sqlite === undefined) expect(packet[sqliteCellClipboardType]).toBeUndefined();
+      else expect(JSON.parse(packet[sqliteCellClipboardType])).toMatchObject({ version: 1, rows: [[sqlite]] });
     };
     const open = (id: string) => page.locator('[data-workspace-tab-id="' + id + '"] .tab-select').click();
     const tableTab = page.locator('.table-tab:visible, .postgres-table-tab:visible');
@@ -89,13 +118,19 @@ test('表格和查询结果按显示顺序复制 JSON，保留精确值', async 
     const expectedA = { amount: '9007199254740993', label: 'row A', payload: { type: 'binary', base64: 'AP8=' }, nullable: null };
     await expect(tableCell).toBeVisible();
     await tableCell.click();
-    expect(await copy(tableTab, 1)).toMatchObject([expectedA]);
-    let count = 1;
+    expect(await copy(tableTab)).toMatchObject([expectedA]);
+    const tableB = tableTab.getByRole('row', { name: /row B/ });
+    const tableBCheck = tableB.getByRole('checkbox');
+    await tableBCheck.check();
+    const tableAmount = tableTab.getByRole('gridcell').filter({ hasText: /^(INTEGER · )?9007199254740993$/ });
+    await menuCopy(tableAmount, expectedA.amount, expectedA.amount, local ? { kind: 'integer', value: expectedA.amount } : undefined);
+    await expect(tableBCheck).toBeChecked();
     if (local) {
       await open('json-view');
       await expect(tableCell).toBeVisible();
       await tableCell.click();
-      expect(await copy(tableTab, ++count)).toMatchObject([expectedA]);
+      expect(await copy(tableTab)).toMatchObject([expectedA]);
+      await menuCopy(tableAmount, expectedA.amount, expectedA.amount);
     }
     await open('json-query');
     const query = page.locator('.query-tab:visible');
@@ -112,10 +147,17 @@ test('表格和查询结果按显示顺序复制 JSON，保留精确值', async 
     await rowA.locator('..').getByRole('checkbox').check();
     await rowB.locator('..').getByRole('checkbox').check();
     await page.screenshot({ path: info.outputPath('复制记录为JSON.png') });
-    expect(await copy(query, ++count)).toEqual([
+    expect(await copy(query)).toEqual([
       { alias: '9007199254740994', 'alias [2]': 'row B', payload: { type: 'binary', base64: '' }, nullable: '' },
       { alias: '9007199254740993', 'alias [2]': 'row A', payload: { type: 'binary', base64: 'AP8=' }, nullable: null },
     ]);
+    const resultA = rowA.locator('..'), resultB = rowB.locator('..');
+    await menuCopy(resultA.getByRole('gridcell', { name: expectedA.amount, exact: true }), expectedA.amount, expectedA.amount, undefined, true);
+    await menuCopy(resultA.getByRole('gridcell', { name: 'NULL', exact: true }), null, 'NULL');
+    await menuCopy(resultB.getByRole('gridcell').last(), '', '');
+    await menuCopy(resultA.getByRole('gridcell', { name: /0x00ff|二进制|BLOB/i }), expectedA.payload, '0x00ff');
+    await expect(resultA.getByRole('checkbox')).toBeChecked();
+    await expect(resultB.getByRole('checkbox')).toBeChecked();
     expect(await history()).toEqual(historyBefore);
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);

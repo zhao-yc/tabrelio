@@ -14,7 +14,7 @@ import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
-import { cellClipboardType, copyGridColumnNames, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridCellValue, copyGridColumnNames, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
 import { saveGridCell } from '../gridCellFile';
 import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { GridHeaderDetails, type GridHeaderDetailsOptions } from './GridHeaderDetails';
@@ -288,6 +288,12 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     const current = () => actionCurrent() && tableCopy?.isCurrent() !== false && rows[cell.index] === cell.row && !skipRowInInversion?.(cell.row) &&
       !document.querySelector(appModalSelector);
     const filter = cellMenuFilters?.(cell), actions = [...(filter?.actions ?? [])];
+    if ((rowJump || hasResultTools || tableCopy) && tableCopy?.enabled !== false) {
+      actions.unshift({ label: quickValueText.copyCell, disabled: !!presentCell?.(cell.row, key)?.copyError, run: () => {
+        try { copyGridCellValue(copyValue(cell.row, key), current); }
+        catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
+      } });
+    }
     if (onFilterCell) try {
       const capture = captureQueryResultCellFilter(columns, rows, cell, sqliteSource, filterDialect);
       const apply = (operator: CellFilterOperator) => {

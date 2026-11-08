@@ -27,7 +27,7 @@ import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease, type Works
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
 import { collectChanges, newDraftRow, type DraftRow } from '../dataChanges';
-import { cellClipboardType, copyGridColumnNames, decodeClipboard, encodeClipboard, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridCellValue, copyGridColumnNames, decodeClipboard, encodeClipboard, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import { maxTablePage, parsePageJump, parseTablePageSize, setAllFilterRulesEnabled, type FilterMode, type FilterDraft } from '../tableFilters';
@@ -1944,11 +1944,16 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       filters.push({ label: cellFilterText.equal, run: () => stageMenuCellFilter.current(false, { row, key }) },
         { label: cellFilterText.exclude, run: () => stageMenuCellFilter.current(true, { row, key }) });
     } catch { /* 未经原值校验的格不提供筛选项。 */ }
-    return cellActionMenu.open(target, grid.current?.element, { title: key, current: () => cellActionCurrent(row), actions: [
+    const current = () => cellActionCurrent(row);
+    return cellActionMenu.open(target, grid.current?.element, { title: key, current, actions: [
+      { label: quickValueText.copyCell, run: () => {
+        try { copyGridCellValue(ownCell(row.data, key), current); }
+        catch (reason) { if (current()) setError(errorMessage(reason)); }
+      } },
       ...filters,
       ...gridQuickValueKinds.map(kind => ({ label: quickValueText[kind], disabled: !canSetQuickValue(kind, row, key), run: () => setQuickValueAt(row, key, kind) })),
       { label: gridCellFileZh.action, disabled: ownCell(row.data, key) == null,
-        run: () => { void saveGridCell(() => ownCell(row.data, key), () => cellActionCurrent(row)); } },
+        run: () => { void saveGridCell(() => ownCell(row.data, key), current); } },
     ] }, point);
   }
   /** 单元格弹窗也使用相同 UUID、代次与输入缓冲，关闭不会无提示丢稿。 */

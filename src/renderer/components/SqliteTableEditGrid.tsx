@@ -241,11 +241,17 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
   const quickValue = useRef(onQuickValue); quickValue.current = onQuickValue;
   function openCellActions(row: SqliteDraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const index = key?.startsWith('c') ? Number(key.slice(1)) : -1, edit = page.edit;
-    if (!row || row.deleted || !order.includes(index) || edit?.kind !== 'editable' || disabled || !baseCurrent(row)) return false;
+    if (!row || key === undefined || row.deleted || !order.includes(index) || edit?.kind !== 'editable' || disabled || !baseCurrent(row)) return false;
     const column = edit.columns[index], raw = row.values[index];
     const current = () => source.current === owner && checkedContext.current?.owner === owner &&
       !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal();
     return cellActionMenu.open(target, grid.current?.element, { title: column.name, current, actions: [
+      { label: quickValueText.copyCell, run: () => {
+        try {
+          const content = clipboardContent([], row, key);
+          if (content) writeTableClipboardEvent(current, data => writeSqliteClipboardData(data, content));
+        } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
+      } },
       ...(cellMenuFilters?.(row, index)?.actions ?? []),
       ...gridQuickValueKinds.map(kind => ({ label: quickValueText[kind], disabled: !onQuickValue || !sqliteQuickValueAllowed(column, !!edit.strict, kind),
         run: () => quickValue.current?.({ row, column: index }, kind) })),

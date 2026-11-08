@@ -209,6 +209,15 @@ export function writeTableClipboardEvent(current: () => boolean, write: (data: D
   } finally { target.removeEventListener('copy', copy, true); }
 }
 
+/** 菜单只复制命中的一格，沿用网格键盘复制的文本和类型化格式。 */
+export function copyGridCellValue(value: ClipboardCell, current: () => boolean): void {
+  const content = encodeClipboard([[value]]);
+  writeTableClipboardEvent(current, data => {
+    data.setData('text/plain', content.text);
+    data.setData(cellClipboardType, content.typed);
+  });
+}
+
 /** 只写一行表头文本。即使只有一个空别名，也显式编码空字段，避免写空剪贴板。 */
 export function copyGridColumnNames(names: readonly string[], current: () => boolean): void {
   if (!current() || !names.length || names.some(name => typeof name !== 'string')) throw Error(tableHeaderCopyZh.stale);
