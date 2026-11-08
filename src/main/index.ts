@@ -122,7 +122,7 @@ import type { FileImportPreflightInput, FileImportPreflightReport } from '../sha
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { ExportReservations } from './exportReservations';
 import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
-import { decodeQueryFile, readQueryFile, writeQueryFile } from './queryFiles';
+import { decodeQueryFile, encodeQueryFile, readQueryFile, writeQueryFile, writeQueryFileBytes } from './queryFiles';
 import { writeSavedQueryArchive } from './savedQueryArchive';
 import { readQueryFileSnapshot } from './queryFileSourceFiles';
 import { validateCommand } from '../shared/validation';
@@ -1911,23 +1911,26 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     return savedQuerySearches.readText(input);
   }
   // 文件路径仅来自原生对话框。领取目标占用后按原摘要读取本地快照，再原子保存。
-  if (command === 'queries.exportSql') {
+  if (command === 'queries.exportSql' || command === 'history.exportSql') {
+    const fromHistory = command === 'history.exportSql';
     const assertCurrent = () => {
       columnsMain.assertCapturedOwner(columns);
-      if (shuttingDown) throw Error('客户端正在退出，不能另存保存查询');
+      if (shuttingDown) throw Error('客户端正在退出，不能另存 SQL');
     };
     assertCurrent();
     return queryFileOperation(async () => {
       const selected = await dialog.showSaveDialog(columns!.owner.window, {
-        title: '另存保存查询为 SQL', defaultPath: '保存查询.sql', filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
+        title: fromHistory ? '另存执行历史为 SQL' : '另存保存查询为 SQL',
+        defaultPath: fromHistory ? '执行历史.sql' : '保存查询.sql', filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
       });
       assertCurrent();
       if (selected.canceled || !selected.filePath) return { status: 'cancelled' };
       const release = await exportReservations.acquire(selected.filePath);
       try {
         assertCurrent();
-        const { query } = savedQuerySearches.readText(input);
-        await writeQueryFile(selected.filePath, query.sql, 'utf8');
+        const reference = { id: input.id, digest: input.digest };
+        const sql = fromHistory ? historyPages.readSql(reference).sql : savedQuerySearches.readText(reference).query.sql;
+        await writeQueryFileBytes(selected.filePath, encodeQueryFile(sql, fromHistory ? input.encoding : 'utf8'), assertCurrent);
         return { status: 'saved', name: basename(selected.filePath) };
       } finally { release(); }
     });
@@ -3578,7 +3581,7 @@ else {
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command === 'cellFiles.saveText' || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'history.exportSql' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || payload.command === 'sqlite.tableExport' || payload.command === 'sqlite.queryExport' || payload.command === 'sqlite.workbookExport' || payload.command === 'postgres.workbookExport' || payload.command === 'mysql.workbookExport' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -3617,7 +3620,7 @@ else {
           if (payload.command === 'sqlite.valueOptions') { if (!columns?.sqliteValueOptionsPublication) throw Error('SQLite不同值缺少原窗口发布门'); columns.sqliteValueOptionsPublication(); }
           if (payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript' || payload.command === 'sqlite.view.inspectQuery' || payload.command === 'sqlite.view.dependencies') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
-          if (payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
+          if (payload.command === 'history.exportSql' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'table.filteredUpdate.preview') {
             try { filteredUpdates.assertPublication(result, columns!); }

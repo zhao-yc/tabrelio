@@ -2,6 +2,8 @@ import { UsageHelp } from './ui';
 import{useEffect,useRef,useState}from'react';
 import{ArrowUpRight,Clock3,FileCode2,Search,CheckCircle2,XCircle}from'lucide-react';
 import type{HistoryPageInput,HistoryPage,HistoryPageEntry}from'../../shared/historyPages';
+import type { QueryFileEncoding } from '../../shared/contracts';
+import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import{zh,formatText}from'../locales/zh-CN';
 import{queryContextZh}from'../locales/queryContext.zh-CN';
 import{historyPagesZh as t}from'../locales/historyPages.zh-CN';
@@ -34,6 +36,8 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  const missingScope=selectedConnectionId&&!connections.some(profile=>profile.id===selectedConnectionId);
  const[reply,setReply]=useState<HistoryPage>(),[batch,setBatch]=useState(0),[busy,setBusy]=useState(true),[closing,setClosing]=useState(false),[error,setError]=useState(''),[targets,setTargets]=useState(new Map<string,string>()),[errorView,setErrorView]=useState<{id:string;error:string}>();
  const [sqlView,setSqlView]=useState<{ item: HistoryPageEntry; sql: string }>();
+ const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
+ const [exportNotice, setExportNotice] = useState<{ item: HistoryPageEntry; name: string }>();
  const cursor=useRef<string|undefined>(undefined),active=useRef<string|undefined>(undefined),pending=useRef<Promise<unknown>|undefined>(undefined),locked=useRef(false),closed=useRef(false),filterKey=JSON.stringify({filters,timeDraft,timeZone,durationDraft});
  const [selected,setSelected]=useState<HistoryDeleteReference[]>([]),[selectionNotice,setSelectionNotice]=useState(''),[deleteIntent,setDeleteIntent]=useState<HistoryDeleteIntent>();
  const selectedRef=useRef(selected);selectedRef.current=selected;
@@ -45,7 +49,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  /** 原编辑器事件即时更新可用性；关闭或切换资料源永久撤销本modal的同一租约。 */
  useEffect(()=>{if(!insertion){setInsertAvailable(false);return;}const sync=()=>setInsertAvailable(insertion.current());const unsubscribe=insertion.subscribe(sync);sync();return unsubscribe;},[insertion]);
  /** 每次草稿修改立即使旧范围选择失效；不会把新范围卡片混入旧选择。 */
- function draftChanged(){generation.current++;setSqlView(undefined);deleteRef.current?.invalidate();if(selectedRef.current.length){selectedRef.current=[];setSelected([]);setSelectionNotice(deletion.selectionCleared);}}
+ function draftChanged(){generation.current++;setSqlView(undefined);setExportNotice(undefined);deleteRef.current?.invalidate();if(selectedRef.current.length){selectedRef.current=[];setSelected([]);setSelectionNotice(deletion.selectionCleared);}}
  function changeFilters(value:Filters){draftChanged();setFilters(value);}
  /** 一个原任务只发送一次取消，并一直持有ACK直至原任务也终结。 */
  function cancelPage(){if(!active.current)return cancellation.current;const taskId=active.current;if(!cancellation.current)cancellation.current=invoke('query.cancel',{taskId});return cancellation.current;}
@@ -68,7 +72,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   // 所有草稿先完整校验；非法耗时不释放旧游标、不抹页，也不发出搜索请求。
   let timeRange:HistoryPageInput['timeRange'],durationRange:HistoryDurationInputRange|undefined;try{if(!next&&!exact){timeRange=historyInputRange(timeDraft.from,timeDraft.until,timeZone);durationRange=historyDurationInputRange(durationDraft.minimum,durationDraft.maximum);}}catch(reason){setError(errorMessage(reason));return;}locked.current=true;generation.current++;deleteRef.current?.invalidate();setBusy(true);setError('');const taskId=uid(),source=exact??{...filters,...(timeRange?{timeRange}:{}),...(durationRange?{durationRange}:{})};
   try{const previous=cursor.current;if(!next){await release();if(closed.current)return;setReply(undefined);setBatch(0);setTargets(new Map());}else if(!previous)return;
-   cursor.current=undefined;active.current=taskId;cancellation.current=undefined;setErrorView(undefined);setSqlView(undefined);const request=next?invoke('history.pageContinue',{taskId,cursor:previous!}):invoke('history.page',{taskId,...source});pending.current=request;
+   cursor.current=undefined;active.current=taskId;cancellation.current=undefined;setErrorView(undefined);setSqlView(undefined);setExportNotice(undefined);const request=next?invoke('history.pageContinue',{taskId,cursor:previous!}):invoke('history.page',{taskId,...source});pending.current=request;
    const page=await request;if(pending.current===request)pending.current=undefined;if(active.current===taskId)active.current=undefined;cursor.current=page.cursor;
    if(closed.current){await release();return;}setReply(page);setBatch(value=>next?value+1:1);setApplied(exactKey??filterKey);if(!next)appliedInput.current=structuredClone(source);setTargets(new Map());
   }catch(reason){if(!closed.current)setError(errorMessage(reason));}
@@ -120,10 +124,14 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   }catch(reason){if(!closed.current)setError(errorMessage(reason));}
   finally{pending.current=undefined;locked.current=false;if(!closed.current)setBusy(false);}
  }
+ function captureCurrentCard(item: HistoryPageEntry) {
+  const revision=generation.current;
+  return () => !closed.current && generation.current === revision && view.current.filterKey === view.current.applied &&
+    view.current.reply?.items.includes(item) === true;
+ }
  /** 按当前卡片的编号和摘要读取原文，旧页或已关闭窗口不能接收迟到结果。 */
  async function showSql(item: HistoryPageEntry) {
-  const revision=generation.current;
-  const current=()=>!closed.current&&generation.current===revision&&view.current.filterKey===view.current.applied&&view.current.reply?.items.includes(item)===true;
+  const current = captureCurrentCard(item);
   if(locked.current||!current())return;
   locked.current=true;setBusy(true);setError('');setErrorView(undefined);
   try{
@@ -133,6 +141,27 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
    setSqlView({item,sql:result.sql});
   }catch(reason){if(current())setError(errorMessage(reason));}
   finally{pending.current=undefined;locked.current=false;if(!closed.current)setBusy(false);}
+ }
+ /** 正文只在主进程重读。关闭或切换窗口须等待原生选择和原子写入完成。 */
+ async function exportSql(item: HistoryPageEntry) {
+  const current = captureCurrentCard(item);
+  if (locked.current || !current()) return;
+  locked.current = true;
+  setBusy(true);
+  setError('');
+  setExportNotice(undefined);
+  try {
+    const request = invoke('history.exportSql', { id: item.entry.id, digest: item.digest, encoding: exportEncoding });
+    pending.current = request;
+    const result = await request;
+    if (current() && result.status === 'saved') setExportNotice({ item, name: result.name });
+  } catch (reason) {
+    if (current()) setError(errorMessage(reason));
+  } finally {
+    pending.current = undefined;
+    locked.current = false;
+    if (!closed.current) setBusy(false);
+  }
  }
  /** 错误全文单条按需读取，页内预览不会把长错误和长SQL全部挂进DOM。 */
  async function showError(item:HistoryPageEntry){
@@ -153,9 +182,14 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   <p className="muted small">{t.timeZone}：{timeZone||t.unknownZone}</p>
   <div className="history-time-range" role="group" aria-label={t.durationRange}><label>{t.minDuration}<input type="text" inputMode="numeric" aria-label={t.minDuration} value={durationDraft.minimum} maxLength={64} disabled={busy||closing} autoComplete="off" onChange={event=>{draftChanged();setDurationDraft({...durationDraft,minimum:event.target.value});}}/></label><label>{t.maxDuration}<input type="text" inputMode="numeric" aria-label={t.maxDuration} value={durationDraft.maximum} maxLength={64} disabled={busy||closing} autoComplete="off" onChange={event=>{draftChanged();setDurationDraft({...durationDraft,maximum:event.target.value});}}/></label><button disabled={busy||closing||(!durationDraft.minimum&&!durationDraft.maximum)} onClick={()=>{draftChanged();setDurationDraft({minimum:'',maximum:''});}}>{t.clearDuration}</button></div>
 
+  <label className="inline-field">{t.sqlExportEncoding}<select aria-label={t.sqlExportEncoding} value={exportEncoding}
+    disabled={busy || closing} onChange={event => setExportEncoding(event.target.value as QueryFileEncoding)}>
+    <option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option>
+    <option value="gb18030">{fileText.gb18030}</option>
+  </select></label>
   <UsageHelp><p>{t.timeHint}</p><p>{t.durationHint}</p><p>{t.hint}</p><p>{insertionText.hint}</p><p>{t.openHint}</p></UsageHelp><p role="status">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p>{applied&&filterKey!==applied&&<p role="status" aria-label={t.filterStatus}>{t.pending}</p>}<ErrorBox message={error}/>{busy&&<Spinner/>}{reply&&<p role="status" aria-label={t.pageStatus}>{formatText(t.summary,batch,reply.scanned,reply.matched,reply.failed)} {reply.stoppedOnError?t.failedStop:reply.cursor?t.more:t.done}</p>}
   <section aria-label={deletion.title}><p role="status" aria-label={deletion.selectionStatus}>{deletion.selection(selected.length)}</p>{selectionNotice&&<p role="status" aria-label={deletion.selectionNoticeStatus}>{selectionNotice}</p>}<div className="inline-field"><button disabled={busy||closing||filterKey!==applied||!reply?.items.length} onClick={()=>selectItems(reply?.items??[])}>{deletion.selectBatch}</button><button disabled={busy||closing||!selected.length} onClick={clearSelection}>{deletion.clearSelection}</button><button disabled={busy||closing||filterKey!==applied||!selected.length} onClick={()=>beginDelete({kind:'selected',records:selectedRef.current})}>{deletion.selected}</button><button disabled={busy||closing||!reply||filterKey!==applied} onClick={()=>{const source=appliedInput.current;if(source){const{onError,...matching}=source;beginDelete({kind:'filtered',filters:matching});}}}>{deletion.filtered}</button></div><p className="muted small">{deletion.risk}</p></section>
-  <div className="history-list">{reply?.items.map(item=><article className="history-card" data-history-id={item.entry.id} key={item.entry.id}><div><label><input type="checkbox" aria-label={deletion.select(item.entry.id)} checked={selected.some(value=>value.id===item.entry.id&&value.digest===item.digest)} disabled={busy||closing||filterKey!==applied} onChange={event=>{if(busy||closing||filterKey!==applied)return;if(event.target.checked)selectItems([item]);else{const value=selectedRef.current.filter(record=>record.id!==item.entry.id);selectedRef.current=value;setSelected(value);}}}/></label><strong>{new Date(item.entry.startedAt).toLocaleString('zh-CN',timeZone?{timeZone}:undefined)}</strong><span className="grow"/>{item.entry.success?<CheckCircle2 size={14} className="accent-text"/>:<XCircle size={14} className="danger"/>}<span className="muted small">{connections.find(profile=>profile.id===item.entry.connectionId)?.name||t.sourceMissing} / {databaseLabel(item)}</span></div><pre>{item.sqlPreview}{item.previewTruncated?'…':''}</pre>{item.previewTruncated&&<p className="muted small">{formatText(t.preview,item.sqlUnits)}</p>}{sqlView?.item===item?<SqlTextPreview key={item.digest} title={t.sqlTitle} sql={sqlView.sql} onClose={()=>setSqlView(value=>value===sqlView?undefined:value)}/>:<button disabled={busy||closing||filterKey!==applied} onClick={()=>void showSql(item)}>{t.sqlFull}</button>}{item.errorPreview!==undefined&&<div className="history-error"><p className="danger small">{t.errorPreview}：{item.errorPreview}{item.errorTruncated?'…':''}</p><button disabled={busy||closing} onClick={()=>void showError(item)}>{t.errorFull}</button>{errorView?.id===item.entry.id&&<section aria-label={t.errorTitle}><p className="muted small">{formatText(t.errorSize,item.errorUnits)}</p><pre>{errorView.error}</pre><button onClick={()=>setErrorView(undefined)}>{t.errorClose}</button></section>}</div>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection,item.entry.id)} value={target(item)} disabled={busy||closing} onChange={event=>setTargets(current=>new Map(current).set(item.entry.id,event.target.value))}><option value="">{t.choose}</option>{connections.map(profile=><option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label><footer><span className="muted small">{formatText(zh.activity.text008,item.entry.elapsedMs)}</span><span className="grow"/><button disabled={busy||closing||filterKey!==applied} onClick={()=>beginDelete({kind:'selected',records:[{id:item.entry.id,digest:item.digest}]})}>{deletion.single}</button><button disabled={busy||closing||!insertAvailable||filterKey!==applied} onClick={()=>void insert(item)}>{insertionText.insert}</button><button disabled={busy||closing||!target(item)} onClick={()=>void open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer></article>)}{reply&&!reply.items.length&&<Empty title={t.empty} text={t.emptyHint}/>}</div>
+  <div className="history-list">{reply?.items.map(item=><article className="history-card" data-history-id={item.entry.id} key={item.entry.id}><div><label><input type="checkbox" aria-label={deletion.select(item.entry.id)} checked={selected.some(value=>value.id===item.entry.id&&value.digest===item.digest)} disabled={busy||closing||filterKey!==applied} onChange={event=>{if(busy||closing||filterKey!==applied)return;if(event.target.checked)selectItems([item]);else{const value=selectedRef.current.filter(record=>record.id!==item.entry.id);selectedRef.current=value;setSelected(value);}}}/></label><strong>{new Date(item.entry.startedAt).toLocaleString('zh-CN',timeZone?{timeZone}:undefined)}</strong><span className="grow"/>{item.entry.success?<CheckCircle2 size={14} className="accent-text"/>:<XCircle size={14} className="danger"/>}<span className="muted small">{connections.find(profile=>profile.id===item.entry.connectionId)?.name||t.sourceMissing} / {databaseLabel(item)}</span></div><pre>{item.sqlPreview}{item.previewTruncated?'…':''}</pre>{item.previewTruncated&&<p className="muted small">{formatText(t.preview,item.sqlUnits)}</p>}{sqlView?.item===item?<SqlTextPreview key={item.digest} title={t.sqlTitle} sql={sqlView.sql} onClose={()=>setSqlView(value=>value===sqlView?undefined:value)}/>:<button disabled={busy||closing||filterKey!==applied} onClick={()=>void showSql(item)}>{t.sqlFull}</button>}<button disabled={busy||closing||filterKey!==applied} title={t.sqlExportHint} onClick={()=>void exportSql(item)}>{t.sqlExport}</button>{exportNotice?.item===item&&<p role="status">{t.sqlExported(exportNotice.name)}</p>}{item.errorPreview!==undefined&&<div className="history-error"><p className="danger small">{t.errorPreview}：{item.errorPreview}{item.errorTruncated?'…':''}</p><button disabled={busy||closing} onClick={()=>void showError(item)}>{t.errorFull}</button>{errorView?.id===item.entry.id&&<section aria-label={t.errorTitle}><p className="muted small">{formatText(t.errorSize,item.errorUnits)}</p><pre>{errorView.error}</pre><button onClick={()=>setErrorView(undefined)}>{t.errorClose}</button></section>}</div>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection,item.entry.id)} value={target(item)} disabled={busy||closing} onChange={event=>setTargets(current=>new Map(current).set(item.entry.id,event.target.value))}><option value="">{t.choose}</option>{connections.map(profile=><option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label><footer><span className="muted small">{formatText(zh.activity.text008,item.entry.elapsedMs)}</span><span className="grow"/><button disabled={busy||closing||filterKey!==applied} onClick={()=>beginDelete({kind:'selected',records:[{id:item.entry.id,digest:item.digest}]})}>{deletion.single}</button><button disabled={busy||closing||!insertAvailable||filterKey!==applied} onClick={()=>void insert(item)}>{insertionText.insert}</button><button disabled={busy||closing||!target(item)} onClick={()=>void open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer></article>)}{reply&&!reply.items.length&&<Empty title={t.empty} text={t.emptyHint}/>}</div>
   {reply?.failures.length?<details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure,index)=><p key={index}>{failure.id}：{failure.message}</p>)}</details>:null}
  </div><footer className="modal-footer"><button disabled={busy||closing} onClick={()=>void load()}>{t.refresh}</button><button disabled={busy||closing||!reply?.cursor||filterKey!==applied} onClick={()=>void load(true)}>{t.next}</button>{busy&&<button disabled={closing||!active.current} onClick={()=>{if(active.current)void cancelPage()?.catch(reason=>setError(errorMessage(reason)));}}>{t.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={()=>void close()}>{zh.common.close}</button></footer></Modal>;
 }

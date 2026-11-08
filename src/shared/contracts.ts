@@ -585,6 +585,7 @@ export interface CommandMap {
   'history.read':{input:{id:string;digest:string;connectionId:string};output:HistoryOpenResult};
   'history.readError':{input:{id:string;digest:string};output:{error:string}};
   'history.readSql':{input:{id:string;digest:string};output:{sql:string}};
+  'history.exportSql': { input: import('./historyPages').HistoryExportSqlInput; output: import('./historyPages').HistoryExportSqlResult };
   'history.deletePreview': { input: HistoryDeletePreviewInput; output: HistoryDeletePreviewOutput };
   'history.deleteApply': { input: HistoryDeleteApplyInput; output: HistoryDeleteApplyOutput };
   'history.deleteRelease': { input: HistoryDeleteReleaseInput; output: void };

@@ -1,11 +1,13 @@
-import{readFile}from'node:fs/promises';
-import{join}from'node:path';
+import{readFile,writeFile}from'node:fs/promises';
+import{basename,join}from'node:path';
+import iconv from 'iconv-lite';
 import{createRequire}from'node:module';
 import type{Database}from'sql.js';
 import type{HistoryEntry}from'../../src/shared/contracts';
 import{LocalStore}from'../../src/main/storage';
 import{test,expect,page,dataDir,pageErrors,desktop,quitDesktop,launchDesktop}from'./desktop-fixture';
 import { historyInsertionZh } from '../../src/renderer/locales/historyInsertion.zh-CN';
+import { historyPagesZh as text } from '../../src/renderer/locales/historyPages.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({trace:'off',screenshot:'off',video:'off'});
@@ -93,18 +95,43 @@ test('查询内历史按活动标签连接打开，分页保持范围，全局�
  expect(pageErrors).toEqual([]);
 });
 
-test('来源已删除仍可原地分段查看完整历史 SQL', async () => {
+test('来源已删除仍可分段查看和另存完整历史 SQL', async () => {
  const head='UPDATE offline_fixture SET n=9007199254740993; -- ';
  const sql=head+'x'.repeat(65535-head.length)+'\r\n'+'y'.repeat(65534)+'😀历史尾部';
  await seed(store=>store.addHistory(entry({id:'orphan-full',connectionId:'deleted',sql})));
- await desktop.evaluate(({ipcMain})=>{
+ await desktop.evaluate(({ipcMain,dialog,BrowserWindow})=>{
   const handlers=(ipcMain as unknown as {_invokeHandlers:Map<string, (...args:any[])=>unknown>})._invokeHandlers;
   const previous=handlers.get('dbark:request');if(!previous)throw Error('缺少原历史 IPC 入口');
-  const observed={reads:0,denied:0};Object.assign(globalThis,{__historySqlPreview:observed});
-  handlers.set('dbark:request',(event,payload)=>{
+  const observed={reads:0,denied:0,exports:[] as string[],deleted:0};
+  const controls={pick: undefined as {path:string|null; remove?:boolean}|undefined};
+  Object.assign(globalThis,{__historySqlPreview:observed,__historyExportControls:controls});
+  handlers.set('dbark:request',async(event,payload)=>{
    const command=String(payload.command);
    if(command==='history.readSql')observed.reads++;
    if(command==='connections.open'||/^(query|sessions|metadata|table|schema|sqlite)\./.test(command)){observed.denied++;throw Error('离线历史查看禁止数据库请求');}
+   if (command === 'history.exportSql') {
+    const pick=controls.pick; controls.pick=undefined;
+    const { id,digest,encoding }=payload.input;
+    if (!pick || id!=='orphan-full' || !/^[a-f0-9]{64}$/.test(digest)) throw Error('本例只允许另存准确历史');
+    observed.exports.push(encoding);
+    const original=dialog.showSaveDialog;
+    dialog.showSaveDialog=(async (...args:unknown[])=>{
+     dialog.showSaveDialog=original;
+     const options=args[1] as Electron.SaveDialogOptions;
+     if(args[0]!==BrowserWindow.getAllWindows()[0] || options.defaultPath!=='执行历史.sql' || !options.filters?.[0]?.extensions.includes('sql'))
+      throw Error('本例只允许执行历史的原生 SQL 另存');
+     if(pick.remove){
+      const taskId=crypto.randomUUID();
+      const preview=await previous(event,{command:'history.deletePreview',input:{taskId,scope:{kind:'selected',records:[{id,digest}]}}}) as {ok:boolean;result?:{previewToken:string}};
+      if(!preview.ok||!preview.result)throw Error('本例无法取得原记录清理预览');
+      const result=await previous(event,{command:'history.deleteApply',input:{previewToken:preview.result.previewToken}}) as {ok:boolean;result?:{deleted:number}};
+      if(!result.ok||result.result?.deleted!==1)throw Error('本例未清理准确原记录');
+      observed.deleted=result.result.deleted;
+     }
+     return pick.path ? {canceled:false,filePath:pick.path} : {canceled:true};
+    }) as typeof dialog.showSaveDialog;
+    try{return await previous(event,payload);}finally{dialog.showSaveDialog=original;}
+   }
    return previous(event,payload);
   });
  });
@@ -127,7 +154,38 @@ test('来源已删除仍可原地分段查看完整历史 SQL', async () => {
  await expect(preview.getByRole('status')).toHaveText('第 2 / 3 段');
  expect(await value()).toBe(chunks[1]);
  await preview.getByRole('button',{name:'收起完整 SQL',exact:true}).click();await expect(preview).toHaveCount(0);
- expect(await desktop.evaluate(()=> (globalThis as typeof globalThis & {__historySqlPreview?:unknown}).__historySqlPreview)).toEqual({reads:1,denied:0});
+ const exportButton=card.getByRole('button',{name:text.sqlExport,exact:true});
+ async function pick(path:string|null,remove=false){
+  await desktop.evaluate((_electron,value)=>{
+   const controls=(globalThis as typeof globalThis & {__historyExportControls:{pick:typeof value|undefined}}).__historyExportControls;
+   if(controls.pick)throw Error('原 SQL 另存尚未完成');
+   controls.pick=value;
+  },{path,remove});
+  await exportButton.click();
+  await expect(exportButton).toBeEnabled();
+ }
+ await pick(null);
+ await expect(card.getByText(/已保存历史 SQL/)).toHaveCount(0);
+ const encoding=dialog().getByLabel(text.sqlExportEncoding,{exact:true});
+ const outputs=[
+  ['utf8',Buffer.from(sql)],
+  ['utf16le',Buffer.concat([Buffer.from([0xff,0xfe]),Buffer.from(sql,'utf16le')])],
+  ['gb18030',iconv.encode(sql,'gb18030')],
+ ] as const;
+ for(const [value,bytes] of outputs){
+  await encoding.selectOption(value);
+  const file=join(dataDir,value+'-history.sql');
+  await pick(file);
+  await expect(card.getByText(text.sqlExported(basename(file)),{exact:true})).toBeVisible();
+  expect(await readFile(file)).toEqual(bytes);
+ }
+ const staleFile=join(dataDir,'stale-history.sql');
+ await writeFile(staleFile,'原文件');
+ await pick(staleFile,true);
+ await expect(dialog().getByRole('alert')).toContainText('执行历史已移除，请刷新列表');
+ expect(await readFile(staleFile,'utf8')).toBe('原文件');
+ expect(await desktop.evaluate(()=> (globalThis as typeof globalThis & {__historySqlPreview?:unknown}).__historySqlPreview))
+  .toEqual({reads:1,denied:0,exports:['utf8','utf8','utf16le','gb18030','gb18030'],deleted:1});
  expect(await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).toEqual(before);
  expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);
  expect(pageErrors).toEqual([]);
