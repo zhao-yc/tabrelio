@@ -1,5 +1,7 @@
+import { duplicateNewTableColumn } from '../newTableColumnCopy';
+import { newTableColumnCopyZh as columnCopy } from '../locales/newTableColumnCopy.zh-CN';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { sqliteTableCreateDesignSchema, sqliteTableCreateOutcomeSchema, sqliteTableCreatePreviewSchema, type SqliteTableCreateDesign, type SqliteTableCreatePreviewInput, type SqliteTableCreatePreviewOutput, type SqliteTableCreateApplyInput, type SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
+import { sqliteTableCreateColumnSchema, sqliteTableCreateLimits, sqliteTableCreateDesignSchema, sqliteTableCreateOutcomeSchema, sqliteTableCreatePreviewSchema, type SqliteTableCreateDesign, type SqliteTableCreatePreviewInput, type SqliteTableCreatePreviewOutput, type SqliteTableCreateApplyInput, type SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease } from '../store';
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteTableCreateZh as text } from '../locales/sqliteTableCreate.zh-CN';
@@ -75,6 +77,12 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
     if (!editable() || !design.columns.includes(column)) return;
     const name = patch.name, previous = column.name;
     change({ ...design, columns: design.columns.map(value => value === column ? { ...value, ...patch } : value), ...(name !== undefined && name !== previous ? { primaryKey: design.primaryKey.map(value => value === previous ? name : value), indexes: design.indexes.map(index => ({ ...index, columns: index.columns.map(part => part.name === previous ? { ...part, name } : part) })), foreignKeys: design.foreignKeys.map(key => ({ ...key, columns: key.columns.map(value => value === previous ? name : value) })) } : {}) });
+  }
+  /** 仅插入一列本地草稿。原主键、索引、自增及外键引用保持。 */
+  function duplicateColumn(column: Column) {
+    if (!editable() || design.columns.length >= sqliteTableCreateLimits.columns) return;
+    const result = duplicateNewTableColumn(design.columns, column, name => sqliteTableCreateColumnSchema.shape.name.safeParse(name).success);
+    if (result) change({ ...design, columns: result.columns });
   }
   function rowActions(label: string, index: number, length: number, move: (delta: -1 | 1) => void, remove: () => void) {
     return <span className="sqlite-create-actions"><button type="button" aria-label={text.up(label)} disabled={!canEdit || index === 0} onClick={() => { if (editable()) move(-1); }}>↑</button><button type="button" aria-label={text.down(label)} disabled={!canEdit || index === length - 1} onClick={() => { if (editable()) move(1); }}>↓</button><button type="button" aria-label={text.remove(label)} disabled={!canEdit} onClick={() => { if (editable()) remove(); }}>×</button></span>;
@@ -193,6 +201,8 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
       <Field label={text.defaultKind(index + 1)}><select aria-label={text.defaultKind(index + 1)} value={column.default.kind} disabled={!canEdit} onChange={event => { const kind = event.target.value as Column['default']['kind']; columnAt(column, { default: ['text', 'integer', 'real', 'blob'].includes(kind) ? { kind: kind as 'text' | 'integer' | 'real' | 'blob', value: '' } : { kind: kind as 'none' | 'null' | 'current-date' | 'current-time' | 'current-timestamp' } }); }}>{Object.entries(text.defaultKinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></Field>
       <Field label={text.defaultValue(index + 1)}><input aria-label={text.defaultValue(index + 1)} value={'value' in column.default ? column.default.value : ''} disabled={!canEdit || !('value' in column.default)} onChange={event => { if ('value' in column.default) columnAt(column, { default: { ...column.default, value: event.target.value } }); }}/></Field>
       <Field label={text.collation(index + 1)}><select aria-label={text.collation(index + 1)} value={column.collation ?? ''} disabled={!canEdit} onChange={event => { const next = { ...column }; if (event.target.value) next.collation = event.target.value as NonNullable<Column['collation']>; else delete next.collation; columnAt(column, next); }}><option value="">{text.inheritCollation}</option>{['BINARY', 'NOCASE', 'RTRIM'].map(value => <option key={value}>{value}</option>)}</select></Field>
+      <button type="button" title={columnCopy.hint} aria-label={columnCopy.label(index + 1)}
+        disabled={!canEdit || design.columns.length >= sqliteTableCreateLimits.columns} onClick={() => duplicateColumn(column)}>{columnCopy.action}</button>
       {rowActions(text.columns + ' ' + (index + 1), index, design.columns.length, delta => change({ ...design, columns: moved(design.columns, index, delta) }), () => change({ ...design, columns: design.columns.filter(value => value !== column), primaryKey: design.primaryKey.filter(name => name !== column.name) }))}
     </fieldset>)}</div><button type="button" disabled={!canEdit} onClick={() => change({ ...design, columns: [...design.columns, { name: 'column_' + (design.columns.length + 1), declaredType: 'TEXT', nullable: true, default: { kind: 'none' } }] })}>{text.addColumn}</button></section>
     <section aria-label={text.primary}><h3>{text.primary}</h3>{design.primaryKey.map((name, index) => <div className="sqlite-create-primary" key={index}><span>{index + 1}. {name}</span>{rowActions(text.primary + ' ' + name, index, design.primaryKey.length, delta => change({ ...design, primaryKey: moved(design.primaryKey, index, delta) }), () => change({ ...design, primaryKey: design.primaryKey.filter((_value, at) => at !== index) }))}</div>)}

@@ -1,6 +1,8 @@
+import { duplicateNewTableColumn } from '../newTableColumnCopy';
+import { newTableColumnCopyZh as columnCopy } from '../locales/newTableColumnCopy.zh-CN';
 import { useEffect, useRef, useState } from 'react';
 import {
-  acceptsPostgresDefaultPreset, postgresCreateTablePreviewSchema, postgresCreateTypes, type PostgresCreateColumn, type PostgresCreateTablePreview,
+  acceptsPostgresDefaultPreset, postgresCreateTablePreviewSchema, postgresCreateTypes, postgresNewIdentifier, type PostgresCreateColumn, type PostgresCreateTablePreview,
   type PostgresCreateTableTarget,
 } from '../../shared/postgresCreateTable';
 import { errorMessage, invoke, uid } from '../lib';
@@ -83,6 +85,14 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
   /** 更新原字段，保留字段顺序和本地控件身份。 */
   function patch(id: string, change: Partial<PostgresCreateColumn>) {
     edit(() => setFields(previous => previous.map(field => field.id === id ? { ...field, ...change } : field)));
+  }
+
+  /** 副本使用独立字段身份，原主键、唯一约束、标识列及分区键保持原归属。 */
+  function duplicateField(field: FieldDraft) {
+    const id = uid();
+    edit(() => setFields(previous => previous.length >= 128 ? previous :
+      duplicateNewTableColumn(previous, field, name => postgresNewIdentifier.safeParse(name).success,
+        { id, primary: false, unique: false, identity: 'none' })?.columns ?? previous));
   }
 
   /** 进入其他数据类型时撤下不兼容的长度、精度、默认函数和标识选项。 */
@@ -187,6 +197,8 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
           <PostgresColumnGenerationFields value={field.generation} onChange={generation => patch(field.id,
             generation ? { generation, identity: 'none', default: { mode: 'none' } } : { generation })}/>
           <Field label={text.comment}><input value={field.comment} maxLength={4096} onChange={event => patch(field.id, { comment: event.target.value })}/></Field>
+          <button type="button" title={columnCopy.hint} aria-label={columnCopy.label(index + 1)}
+            disabled={fields.length >= 128} onClick={() => duplicateField(field)}>{columnCopy.action}</button>
           <button disabled={fields.length === 1} onClick={() => edit(() => setFields(previous => previous.filter(item => item.id !== field.id)))}>{text.remove}</button>
         </fieldset>)}
         <button disabled={fields.length >= 128} onClick={() => edit(() => setFields(previous => [...previous, newField()]))}>{text.add}</button>
