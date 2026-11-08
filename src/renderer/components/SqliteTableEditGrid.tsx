@@ -12,6 +12,7 @@ import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
 import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
+import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
 import { copyGridColumnNames, encodeGridJson, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
@@ -241,6 +242,12 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
     handle.setActivePosition(position, { enableEditor: false, shouldFocus: true });
     return true;
   }
+  /** SQLite 编辑网格前两列是辅助列，显示索引须按本页布局转换。 */
+  function jumpToGridColumn(index: number): boolean {
+    if (order[index] === undefined || disabled || !baseCurrent() || !noModal()) return false;
+    const row = activeCell.current.position?.row;
+    return focusGridColumn(grid.current, index + 2, row ? rows.indexOf(row) : -1);
+  }
   // 表头、行复选框和页操作共用同一勾选修订与父级通知。
   function changeCheckedRows(ids: ReadonlySet<string>) {
     if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return;
@@ -250,6 +257,8 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
   }
 
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+    <GridColumnJump key={'column:' + orderKey} scope={owner} columns={order.map(index => page.columns[index])}
+      disabled={disabled} isCurrent={() => !disabled && baseCurrent() && noModal()} onJump={jumpToGridColumn}/>
     <button type="button" title={headerCopyText.namesHint} disabled={disabled} onClick={() => copyFromGrid('names')}>{headerCopyText.names}</button>
     <button type="button" title={jsonCopyText.hint} disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => copyFromGrid('json')}>{jsonCopyText.action}</button>

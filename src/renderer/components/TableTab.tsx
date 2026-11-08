@@ -9,6 +9,7 @@ import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
+import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { readGridRowHeight } from '../../shared/gridRowHeight';
 import { tableChecksZh } from '../locales/tableChecks.zh-CN';
 import { tableCopyDataZh } from '../locales/tableCopyData.zh-CN';
@@ -469,19 +470,29 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const checkedExport = useTableCheckedExport(collectScope, collectSignature);
   const rowJumpScope = pageFindGeneration();
   const rowJumpDisabled = blocked || externalStale || gridEditing || record.hasInput() || record.pending || !visibleKeys.length;
-  /** 使用本页行身份与当前可见列，页或草稿变化后拒绝旧行号。 */
+  /** 行列定位共用本页、可见列与编辑门；换页或草稿变化后旧坐标失效。 */
+  function gridJumpCurrent(): boolean {
+    const workspace = useWorkspace.getState();
+    return !!grid.current?.element?.isConnected && mounted.current && getRecordPageContext().active
+      && (workspace.connectionVersions[tab.connectionId] ?? 0) === connectionVersion
+      && !workspace.activeJobs[tab.id] && !blockedRef.current && !externalStale && observedRefresh.current === refreshVersion
+      && !activeGridEditor.current && !record.hasInput() && !record.pending && !document.querySelector('[role="dialog"], [role="alertdialog"]')
+      && rowJumpScope === pageFindGeneration();
+  }
   function jumpToGridRow(rowIdx: number): boolean {
-    const workspace = useWorkspace.getState(), row = rowsRef.current[rowIdx], handle = grid.current;
-    if (!row || !handle?.element?.isConnected || !mounted.current || !getRecordPageContext().active
-      || (workspace.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion
-      || workspace.activeJobs[tab.id] || blockedRef.current || externalStale || observedRefresh.current !== refreshVersion
-      || activeGridEditor.current || record.hasInput() || record.pending || document.querySelector('[role="dialog"], [role="alertdialog"]')
-      || rowJumpScope !== pageFindGeneration()) return false;
+    const row = rowsRef.current[rowIdx];
+    if (!row || !gridJumpCurrent()) return false;
     const activeKey = selectionRef.current?.key;
     const key = activeKey && visibleKeys.includes(activeKey) ? activeKey : visibleKeys[0];
     if (!key) return false;
     jumpToMatch(row.id, key);
     return true;
+  }
+  function jumpToGridColumn(index: number): boolean {
+    if (!visibleKeys[index] || !gridJumpCurrent()) return false;
+    const rowIdx = rowsRef.current.findIndex(item => item.id === selectionRef.current?.rowId);
+    recordPages.cancel();
+    return focusGridColumn(grid.current, index + 1, rowIdx);
   }
   useEffect(() => {
     let alive = true; preferenceLifecycle.current++; const revision = ++layoutRevision.current; setPreferencesLoading(true); setPreferencesDirty(false); setPreferencesError('');
@@ -2012,6 +2023,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
         <button type="submit" disabled={blocked || restoredDraftView || gridEditing}>{zh.table.applyPageSize}</button>
         <button type="button" disabled={blocked || restoredDraftView || gridEditing} onClick={closePageSizeDraft}>{zh.common.cancel}</button>
       </form>}<GridRowJump grid={grid} scope={rowJumpScope} count={rows.length} disabled={rowJumpDisabled} onJump={jumpToGridRow}/>
+      <GridColumnJump scope={rowJumpScope} columns={visibleColumns} disabled={rowJumpDisabled || !page}
+        isCurrent={gridJumpCurrent} onJump={jumpToGridColumn}/>
       <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={rowJumpDisabled}
         keyFor={row => row.deleted ? undefined : row.id}
         isCurrent={() => tableToolbarCurrent() && rowsRef.current === rows && selectedRowsRef.current === selectedRows

@@ -19,6 +19,7 @@ import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { appModalSelector } from '../modalSelectors';
 import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
+import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { encodeQueryResultColumn, encodeQueryResultWithHeaders, encodeTableGridCopy, writeQueryResultClipboard, type QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { queryResultCopyZh as copyText } from '../locales/queryResultCopy.zh-CN';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
@@ -111,6 +112,8 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   const activeCopyCell = headerCell?.scope === scope ? headerCell.cell : undefined;
   const activeJumpColumn = useRef<{ scope: typeof scope; key: string }>(undefined);
   const rowJumpIsCurrent = () => actionCurrent() && rowJumpCurrent?.() !== false && !document.querySelector(appModalSelector);
+  const columnJumpAvailable = !!isCurrent && !!selectionScope || !!rowJumpCurrent && tableCopy?.enabled === true;
+  const columnJumpIsCurrent = () => columnJumpAvailable && rowJumpIsCurrent();
   /** 定位当前展示数组中的行，保留活动可见列，且不修改勾选集。 */
   function jumpToGridRow(rowIdx: number): boolean {
     const handle = gridRef.current;
@@ -121,6 +124,13 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     handle.scrollToCell(position);
     handle.setActivePosition(position, { enableEditor: false, shouldFocus: true });
     return true;
+  }
+  /** 定位显示列时沿活动格的原行身份，不修改勾选。 */
+  function jumpToGridColumn(index: number): boolean {
+    if (!columns[index] || !columnJumpIsCurrent()) return false;
+    const cell = copyCellRef.current?.scope === scope ? copyCellRef.current.cell : undefined;
+    const rowIdx = cell && rows[cell.index] === cell.row ? cell.index : -1;
+    return focusGridColumn(gridRef.current, index + (onActiveRowChange ? 0 : 1), rowIdx);
   }
   /** 仅在明确换列或父级接纳新勾选后捕获；不在旧按钮点击时读取后来选择。 */
   function captureSelectedFilter(cell:typeof copyCellRef.current,indices:ReadonlySet<number>):void{
@@ -393,8 +403,12 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     });
   }
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
-  const jump = rowJump ? <GridRowJump grid={gridRef} scope={scope} count={rows.length}
-    disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/> : undefined;
+  const jump = rowJump ? <>
+    <GridRowJump grid={gridRef} scope={scope} count={rows.length}
+      disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/>
+    <GridColumnJump scope={scope} columns={columns} disabled={!columnJumpAvailable}
+      isCurrent={columnJumpIsCurrent} onJump={jumpToGridColumn}/>
+  </> : undefined;
   const copyLabels = tableCopy ? tableCopyText : copyText;
   const copyEnabled = actionCurrent() && tableCopy?.enabled !== false;
   const copyTools = <>

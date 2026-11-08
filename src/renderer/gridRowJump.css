@@ -1,3 +1,6 @@
 .grid-row-jump { display: inline-flex; align-items: center; gap: 4px; }
 .grid-row-jump input { width: 92px; }
+.grid-column-jump { flex-wrap: wrap; }
+.grid-column-jump input { width: 110px; }
+.grid-column-jump select { width: 135px; min-width: 0; }
 .sqlite-grid-row-jump { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; }
