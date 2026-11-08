@@ -1,5 +1,5 @@
 import { sameConnectionFamily } from '../shared/connectionDialect';
-import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetDocumentSchema, sqliteTablePresetLimits, type SqliteTablePresetTarget, type SqliteTablePresetDocument, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../shared/sqliteTablePresets';
+import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetDocumentSchema, sqliteTablePresetLayoutsSchema, sqliteTablePresetLimits, type SqliteTablePresetTarget, type SqliteTablePresetDocument, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../shared/sqliteTablePresets';
 import { RecordTemplateStorage, readRecordTemplateDocuments } from './recordTemplateStorage';
 import type { RecordTemplateTarget, RecordTemplateSource } from '../shared/recordTemplates';
 import { sqliteLayoutTargetSchema, sqliteLayoutDocumentSchema, sqliteLayoutResetSchema, sqliteLayoutSaveSchema, type SqliteLayoutStoredSnapshot, postgresLayoutSchemas, type PostgresLayoutDocument, type PostgresLayoutStoredSnapshot } from '../shared/sqliteTableLayout';
@@ -144,6 +144,8 @@ export class LocalStore {
         -- SQLite命名筛选为可选schema9元数据，与MySQL方案合同隔离。
         CREATE TABLE IF NOT EXISTS table_presets_sqlite (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         DELETE FROM table_presets_sqlite WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=table_presets_sqlite.connection_id);
+        CREATE TABLE IF NOT EXISTS table_preset_layouts_sqlite (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        DELETE FROM table_preset_layouts_sqlite WHERE NOT EXISTS (SELECT 1 FROM table_presets_sqlite AS p WHERE p.connection_id=table_preset_layouts_sqlite.connection_id AND p.database_name=table_preset_layouts_sqlite.database_name AND p.table_name=table_preset_layouts_sqlite.table_name);
         -- SQLite列布局是独立可选元数据，不改变原MySQL偏好或行数据。
         CREATE TABLE IF NOT EXISTS table_layouts_sqlite (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         DELETE FROM table_layouts_sqlite WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=table_layouts_sqlite.connection_id);
@@ -395,7 +397,7 @@ export class LocalStore {
     return { connectionRevision: this.connectionRevisionValue, connectionDigest: queryConnectionDigest(profile) };
   }
   /** 原始字节先于JSON解析，逐条扫描可选元数据，防损坏内容先被巨量复制。 */
-  private validateSqlitePresetRows(replacement?: SqliteTablePresetDocument): void {
+  private validateSqlitePresetRows(replacement?: SqliteTablePresetDocument, layoutData?: string): void {
     const statement = this.db.prepare('SELECT connection_id,database_name,table_name,data FROM table_presets_sqlite');
     let targets = replacement ? 1 : 0, entries = replacement?.entries.length ?? 0, bytes = replacement ? Buffer.byteLength(JSON.stringify(replacement) + replacement.target.connectionId + replacement.target.database + replacement.target.table) : 0;
     try {
@@ -411,6 +413,21 @@ export class LocalStore {
         if (entries > sqliteTablePresetLimits.entries) throw Error('SQLite方案超过500项本机上限');
       }
     } finally { statement.free(); }
+    if (layoutData && replacement) bytes += Buffer.byteLength(layoutData + replacement.target.connectionId + replacement.target.database + replacement.target.table);
+    if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_preset_layouts_sqlite'").length) {
+      const layouts = this.db.prepare('SELECT connection_id,database_name,table_name,data FROM table_preset_layouts_sqlite');
+      let count = 0;
+      try {
+        while (layouts.step()) {
+          const [connectionId, database, table, data] = layouts.get();
+          const target = sqliteTablePresetTargetSchema.parse({ connectionId, database, table });
+          if (replacement && JSON.stringify(target) === JSON.stringify(replacement.target)) continue;
+          bytes += Buffer.byteLength(String(data) + target.connectionId + target.database + target.table);
+          if (++count > sqliteTablePresetLimits.targets || bytes > sqliteTablePresetLimits.totalBytes) throw Error('SQLite方案布局超过本机数量或字节上限');
+          sqliteTablePresetLayoutsSchema.parse(JSON.parse(String(data)));
+        }
+      } finally { layouts.free(); }
+    }
     if (targets > sqliteTablePresetLimits.targets || entries > sqliteTablePresetLimits.entries || bytes > sqliteTablePresetLimits.totalBytes) throw Error('SQLite方案超过本机数量或字节上限');
   }
   /** 精确目标读取保修订墓碑；读取只访问本机配置，不连接服务器或目标文件。 */
@@ -419,7 +436,13 @@ export class LocalStore {
     const value = this.records<unknown>('SELECT data FROM table_presets_sqlite WHERE connection_id=? AND database_name=? AND table_name=?', [target.connectionId, target.database, target.table])[0];
     const document = sqliteTablePresetDocumentSchema.parse(value ?? { version: 1, target, revision: 0, entries: [] });
     if (JSON.stringify(document.target) !== JSON.stringify(target)) throw Error('SQLite方案目标不匹配');
-    return { ...document, source };
+    if (!document.entries.length) return { ...document, source };
+    const stored = this.records<unknown>('SELECT data FROM table_preset_layouts_sqlite WHERE connection_id=? AND database_name=? AND table_name=?', [target.connectionId, target.database, target.table])[0];
+    const layouts = new Map(sqliteTablePresetLayoutsSchema.parse(stored ?? []).map(item => [item.id, item]));
+    return { ...document, source, entries: document.entries.map(entry => {
+      const item = layouts.get(entry.id);
+      return item?.digest === this.presetEntryDigest(entry) ? { ...entry, layout: item.layout } : entry;
+    }) };
   }
   /** 连接修订、路径摘要及文档CAS必须同时相同，客户端摘要本身不能授予来源。 */
   private checkedSqlitePresets(input: SqliteTablePresetSave | SqliteTablePresetSelect): SqliteTablePresetStoredSnapshot {
@@ -429,9 +452,19 @@ export class LocalStore {
   }
   /** 先核完整文档及全库预算，再由原mutate事务负责原子落盘或内存/文件回滚。 */
   private writeSqlitePresets(document: SqliteTablePresetStoredSnapshot): void {
-    const stored = sqliteTablePresetDocumentSchema.parse({ version: 1, target: document.target, revision: document.revision, entries: document.entries });
-    this.validateSqlitePresetRows(stored); const target = stored.target;
-    this.db.run('INSERT INTO table_presets_sqlite VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data', [target.connectionId, target.database, target.table, JSON.stringify(stored)]);
+    const entries = document.entries.map(({ layout: _layout, ...entry }) => entry);
+    const stored = sqliteTablePresetDocumentSchema.parse({ version: 1, target: document.target, revision: document.revision, entries });
+    const layoutById = new Map(document.entries.map(entry => [entry.id, entry.layout]));
+    const layouts = sqliteTablePresetLayoutsSchema.parse(stored.entries.flatMap(entry => {
+      const layout = layoutById.get(entry.id);
+      return layout ? [{ id: entry.id, digest: this.presetEntryDigest(entry), layout }] : [];
+    }));
+    const layoutData = layouts.length ? JSON.stringify(layouts) : undefined;
+    this.validateSqlitePresetRows(stored, layoutData);
+    const keys = [stored.target.connectionId, stored.target.database, stored.target.table];
+    this.db.run('INSERT INTO table_presets_sqlite VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data', [...keys, JSON.stringify(stored)]);
+    if (layoutData) this.db.run('INSERT INTO table_preset_layouts_sqlite VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data', [...keys, layoutData]);
+    else this.db.run('DELETE FROM table_preset_layouts_sqlite WHERE connection_id=? AND database_name=? AND table_name=?', keys);
   }
   /** 同名不自动覆盖；replaceId只可覆盖明确选中的同名项，连接重新绑定也须此明确动作。 */
   saveSqliteTablePreset(raw: unknown, assertCurrent?: () => void): SqliteTablePresetStoredSnapshot {
@@ -439,7 +472,7 @@ export class LocalStore {
     this.mutate(() => {
       const current = this.checkedSqlitePresets(input), same = current.entries.find(entry => entry.name === input.name), replaced = current.entries.find(entry => entry.id === input.replaceId);
       if (input.replaceId ? !replaced || replaced.name !== input.name : !!same) throw Error('同名SQLite方案已存在或已变化，请明确选择覆盖');
-      const entry = { id: input.replaceId ?? randomUUID(), name: input.name, connectionDigest: current.source.connectionDigest, query: input.query };
+      const entry = { id: input.replaceId ?? randomUUID(), name: input.name, connectionDigest: current.source.connectionDigest, query: input.query, ...(input.layout ? { layout: input.layout } : {}) };
       result = { ...current, revision: current.revision + 1, entries: input.replaceId ? current.entries.map(value => value.id === input.replaceId ? entry : value) : [...current.entries, entry] };
       this.writeSqlitePresets(result);
     }, assertCurrent); return result;
@@ -454,7 +487,7 @@ export class LocalStore {
   selectedSqliteTablePreset(raw: unknown) {
     const input = sqliteTablePresetSelectSchema.parse(raw), current = this.checkedSqlitePresets(input), entry = current.entries.find(value => value.id === input.id);
     if (!entry || entry.connectionDigest !== current.source.connectionDigest) throw Error('SQLite方案来源连接已失效，请明确重新保存或覆盖');
-    return structuredClone(entry.query);
+    return structuredClone({ ...entry.query, ...(entry.layout ? { layout: entry.layout } : {}) });
   }
   /** 可选布局先核原始字节与目标总量，再解析完整文档；损坏内容不得被迁移覆盖。 */
   private validateLayoutRows(postgres: boolean, replacement?: PostgresLayoutDocument): void {
@@ -825,6 +858,7 @@ export class LocalStore {
       this.db.run('DELETE FROM table_presets_postgres WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_preset_layouts_postgres WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets_sqlite WHERE connection_id=?', [id]);
+      this.db.run('DELETE FROM table_preset_layouts_sqlite WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM record_templates WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_layouts_sqlite WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_layouts_postgres WHERE connection_id=?', [id]);

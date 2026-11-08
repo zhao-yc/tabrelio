@@ -8,6 +8,7 @@ import initSqlJs from 'sql.js';
 import { LocalStore } from '../../src/main/storage';
 import type { SqliteConnectionProfile } from '../../src/shared/contracts';
 import type { SqliteTablePresetStoredSnapshot, SqliteTablePresetQuery } from '../../src/shared/sqliteTablePresets';
+import { sqliteTablePresetDocumentSchema } from '../../src/shared/sqliteTablePresets';
 import { mainColumnsHarness } from './main-columns-owner-harness';
 
 const wasm = createRequire(import.meta.url).resolve('sql.js/dist/sql-wasm.wasm');
@@ -32,6 +33,29 @@ it('真实配置SQLite保存、重开及精确目标隔离，不解密或打开�
   store.close(); store = await LocalStore.open(file, wasm, protector); const reopened = store.sqliteTablePresets(target);
   expect(reopened.entries).toEqual(first.entries); expect(store.selectedSqliteTablePreset({ ...packet(reopened), id: first.entries[0].id })).toEqual(query);
   expect(protector.decrypt).not.toHaveBeenCalled(); success = true;
+});
+it('布局与旧条件文档一同原子保存，旧客户端改写条件后不套用旧布局', async () => {
+  const layout = { version: 1, columns: [{ name: 'memo', hidden: false, width: 310 }, { name: 'id', hidden: true }], frozenThrough: 'memo', rowHeight: 56 };
+  const saved = store.saveSqliteTablePreset({ ...packet(store.sqliteTablePresets(target)), name: '组合', query, layout });
+  const id = saved.entries[0].id;
+  mkdirSync(file + '.tmp');
+  try {
+    expect(() => store.deleteSqliteTablePreset({ ...packet(saved), id })).toThrow('未保存');
+    expect(store.selectedSqliteTablePreset({ ...packet(saved), id })).toEqual({ ...query, layout });
+  } finally { rmdirSync(file + '.tmp'); }
+  store.close(); store = await LocalStore.open(file, wasm, protector);
+  expect(store.sqliteTablePresets(target).entries).toEqual(saved.entries);
+  store.close();
+  const SQL = await initSqlJs({ locateFile: () => wasm }), db = new SQL.Database(readFileSync(file));
+  const legacy = sqliteTablePresetDocumentSchema.parse(JSON.parse(String(db.exec('SELECT data FROM table_presets_sqlite')[0].values[0][0])));
+  expect(legacy.entries[0].query).toEqual(query);
+  legacy.entries[0].query.limit = 8;
+  legacy.revision++;
+  db.run('UPDATE table_presets_sqlite SET data=?', [JSON.stringify(legacy)]);
+  writeFileSync(file, db.export()); db.close();
+  store = await LocalStore.open(file, wasm, protector);
+  expect(store.selectedSqliteTablePreset({ ...packet(store.sqliteTablePresets(target)), id })).toEqual(legacy.entries[0].query);
+  success = true;
 });
 it('真实Main IPC注册、校验、分发、发布与配置SQLite闭环，导航撤销来源且零worker请求', async () => {
   const f = mainColumnsHarness(); f.context.store = store; f.setRevision(store.connectionRevision()); f.request.mockImplementation(async () => { throw Error('本机方案禁止worker'); });

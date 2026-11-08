@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetSnapshotSchema, validateSqlitePresetColumns, type SqliteTablePresetQuery, type SqliteTablePresetTarget, type SqliteTablePresetSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../../shared/sqliteTablePresets';
+import { sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetSnapshotSchema, validateSqlitePresetProfile, type SqliteTablePresetProfile, type SqliteTablePresetQuery, type SqliteTablePresetTarget, type SqliteTablePresetSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../../shared/sqliteTablePresets';
+import type { TablePreferences } from '../../shared/tablePreferences';
 import { sqliteTablePresetsZh as text } from '../locales/sqliteTablePresets.zh-CN';
 import { invoke, errorMessage } from '../lib';
 import { ErrorBox } from './ui';
@@ -8,9 +9,9 @@ export interface SqliteTablePresetServices {
   list(target: SqliteTablePresetTarget): Promise<SqliteTablePresetSnapshot>;
   save(input: SqliteTablePresetSave): Promise<SqliteTablePresetSnapshot>;
   remove(input: SqliteTablePresetSelect): Promise<SqliteTablePresetSnapshot>;
-  read(input: SqliteTablePresetSelect): Promise<SqliteTablePresetQuery>;
+  read(input: SqliteTablePresetSelect): Promise<SqliteTablePresetProfile>;
 }
-interface Props { scope: object; target: SqliteTablePresetTarget; columns: readonly string[]; draftKey: string; current(): boolean; configuration(): SqliteTablePresetQuery; onLoad(query: SqliteTablePresetQuery): boolean; services?: SqliteTablePresetServices; }
+interface Props { scope: object; target: SqliteTablePresetTarget; columns: readonly string[]; draftKey: string; current(): boolean; configuration(): SqliteTablePresetQuery; layout?: TablePreferences; onLoad(query: SqliteTablePresetProfile): boolean; services?: SqliteTablePresetServices; }
 interface Owner { scope: object; api: SqliteTablePresetServices; key: string; valid: boolean; busy: boolean; }
 const services: SqliteTablePresetServices = { list: target => invoke('sqlite.tablePresets.list', target), save: input => invoke('sqlite.tablePresets.save', input), remove: input => invoke('sqlite.tablePresets.delete', input), read: input => invoke('sqlite.tablePresets.read', input) };
 
@@ -21,6 +22,7 @@ export function SqliteTablePresetPanel(props: Props) {
   const draftGeneration = useRef(0), lastDraft = useRef(props.draftKey);
   const [snapshot, setSnapshot] = useState<SqliteTablePresetSnapshot>(), [selected, setSelected] = useState(''), [name, setName] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const key = JSON.stringify([props.target, props.columns]);
+  const [includeLayout, setIncludeLayout] = useState(false);
   useLayoutEffect(() => { alive.current = true; return () => { alive.current = false; if (owner.current) owner.current.valid = false; }; }, []);
   useLayoutEffect(() => { committed.current = render; return () => { if (committed.current === render) committed.current = undefined; }; });
   // 用户改完又改回也算新草稿代次，旧载入请求不能借表单ABA覆盖。
@@ -60,7 +62,8 @@ export function SqliteTablePresetPanel(props: Props) {
     value.busy = true; setBusy(true);
     try {
       const entry = snapshot?.entries.find(entry => entry.id === selected); if (replace && !entry) throw Error(text.missing);
-      const input = sqliteTablePresetSaveSchema.parse({ ...packet(value), name: replace ? entry!.name : name, query: latest.current.configuration(), ...(replace ? { replaceId: entry!.id } : {}) });
+      const input = sqliteTablePresetSaveSchema.parse({ ...packet(value), name: replace ? entry!.name : name, query: latest.current.configuration(),
+        ...(includeLayout && latest.current.layout ? { layout: latest.current.layout } : {}), ...(replace ? { replaceId: entry!.id } : {}) });
       if (replace && !window.confirm(text.confirmReplace(input.name)) || !current(value)) return;
       setError(''); setNotice('');
       const result = await api.save(input);
@@ -76,9 +79,9 @@ export function SqliteTablePresetPanel(props: Props) {
       const input = sqliteTablePresetSelectSchema.parse({ ...packet(value), id: selected }), before = latest.current.draftKey, generation = draftGeneration.current;
       setError(''); setNotice('');
       const result = await api.read(input); if (!current(value)) return;
-      const query = validateSqlitePresetColumns(result, latest.current.columns);
+      const query = validateSqlitePresetProfile(result, latest.current.columns);
       if (generation !== draftGeneration.current || before !== latest.current.draftKey || !latest.current.onLoad(query)) throw Error(text.changed);
-      if (current(value)) setNotice(text.loaded);
+      if (current(value)) setNotice(query.layout ? text.loadedLayout : text.loaded);
     } catch (reason) { if (current(value)) setError(errorMessage(reason)); }
     finally { value.busy = false; if (current(value)) setBusy(false); }
   }
@@ -101,6 +104,9 @@ export function SqliteTablePresetPanel(props: Props) {
       <input aria-label={text.name} disabled={disabled} value={name} maxLength={80} onChange={event => { if (eventCurrent()) setName(event.target.value); }}/>
       <button disabled={disabled || !snapshot} onClick={() => { void save(false); }}>{text.save}</button><button disabled={disabled || !entry} onClick={() => { void save(true); }}>{text.replace}</button>
       <button disabled={disabled || !entry} onClick={() => { void load(); }}>{text.load}</button><button disabled={disabled || !entry} onClick={() => { void remove(); }}>{text.remove}</button>
-    </div>{busy && valid && <p role="status">{text.busy}</p>}{!valid && !busy && <p role="status">{text.stale}</p>}{snapshot && !snapshot.entries.length && <p>{text.empty}</p>}{notice && <p role="status">{notice}</p>}<ErrorBox message={error}/>
+    </div>{props.layout && <label className="check"><input type="checkbox" checked={includeLayout} disabled={disabled}
+      onChange={event => { if (eventCurrent()) setIncludeLayout(event.target.checked); }}/>{text.includeLayout}</label>}
+    {entry?.layout && <p>{text.hasLayout}</p>}
+    {busy && valid && <p role="status">{text.busy}</p>}{!valid && !busy && <p role="status">{text.stale}</p>}{snapshot && !snapshot.entries.length && <p>{text.empty}</p>}{notice && <p role="status">{notice}</p>}<ErrorBox message={error}/>
   </fieldset>;
 }

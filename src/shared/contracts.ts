@@ -293,7 +293,7 @@ export interface CommandMap {
   'sqlite.tableLayout.reset': { input: import('./sqliteTableLayout').SqliteLayoutInput; output: import('./sqliteTableLayout').SqliteLayoutSnapshot };
   'sqlite.tablePresets.save': { input: import('./sqliteTablePresets').SqliteTablePresetSave; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
-  'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetQuery };
+  'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetProfile };
   'postgres.completion': { input: import('./postgresCompletion').PostgresCompletionInput; output: import('./postgresCompletion').PostgresCompletionResult };
   'postgres.storage.read': { input: import('./postgresStorage').PostgresStorageRead; output: import('./postgresStorage').PostgresStorageReport };
   'postgres.storage.detail': { input: import('./postgresStorage').PostgresStorageDetailInput; output: import('./postgresStorage').PostgresStorageDetail };

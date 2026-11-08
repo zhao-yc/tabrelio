@@ -76,6 +76,21 @@ describe('SQLite 原表请求串行与准确生命周期', () => {
   it('错目标和错页回包不能交付，失败保留可重试状态', async () => {
     const f = fixture(), pending = f.controller.load(query(), 0), page = result(f.reads[0].input); page.target.table = '其他表'; f.reads[0].pending.resolve(page); await pending; expect(f.view().page).toBeUndefined(); expect(f.view().error).toContain('不匹配'); expect(f.busy).toBe(false); f.controller.dispose();
   });
+  it('布局交付只接收准确新页，拒绝后不显示未经布局校验的响应', async () => {
+    const f = fixture(), accept = vi.fn(() => { throw Error('列布局与最新字段不匹配'); });
+    const first = f.controller.load(query(), 0, accept), page = result(f.reads[0].input);
+    f.reads[0].pending.resolve({ ...page, offset: 10 });
+    await first;
+    expect(accept).not.toHaveBeenCalled();
+    const second = f.controller.load(query(), 0, accept);
+    f.reads[1].pending.resolve(page);
+    await second;
+    expect(accept).toHaveBeenCalledExactlyOnceWith(page);
+    expect(f.view().page).toBeUndefined();
+    expect(f.view().error).toBe('列布局与最新字段不匹配');
+    expect(f.busy).toBe(false);
+    f.controller.dispose();
+  });
 });
 
 it('索引结构代次改变时旧准确页和在途读取均失效，恢复数值不能复活旧页', async () => {

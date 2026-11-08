@@ -45,6 +45,11 @@ it('完整预算同时覆盖停用原文、启用列表绑定及超大单项序�
   expect(() => sqliteTablePresetQuerySchema.parse({ ...query, filters: [disabled, disabled, { ...disabled, value: { kind: 'text', value: 'x' } }] })).toThrow('总量');
   const big = { ...query, filters: [{ ...disabled, value: { kind: 'text', value: '\0'.repeat(65536) } }, { ...disabled, value: { kind: 'text', value: '\0'.repeat(65536) } }, ...Array.from({ length: 30 }, () => ({ ...disabled, value: { kind: 'text', value: '' } }))] };
   expect(() => sqliteTablePresetQuerySchema.parse(big)).not.toThrow();
+  const layout = { version: 1, columns: Array.from({ length: 200 }, (_, index) => ({ name: '列'.repeat(505) + index, hidden: false })) };
+  const entry = { id: randomUUID(), name: '含布局', connectionDigest: source.connectionDigest, query: big, layout };
+  expect(Buffer.byteLength(JSON.stringify(entry))).toBeGreaterThan(1024 * 1024);
+  expect(() => sqliteTablePresetSnapshotSchema.parse({ version: 1, target, revision: 1, source,
+    bindingToken: randomUUID(), entries: [entry] })).not.toThrow();
 });
 it('缺失字段包含停用条件，整份拒绝且不调用编号生成器，不作部分回填', () => {
   let called = 0;

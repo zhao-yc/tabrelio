@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ColumnsInvocation } from './columnsMainCapabilities';
 import type { LocalStore } from './storage';
-import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, type SqliteTablePresetTarget, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSnapshot, type SqliteTablePresetQuery } from '../shared/sqliteTablePresets';
+import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, type SqliteTablePresetTarget, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSnapshot, type SqliteTablePresetProfile } from '../shared/sqliteTablePresets';
 
 export type SqlitePresetCommand = 'list' | 'save' | 'delete' | 'read';
 interface Ports {
@@ -41,7 +41,7 @@ export class SqliteTablePresetMain {
   /** 导航、崩溃或窗口销毁撤销全部来源，旧同URL文档不得领取后继能力。 */
   invalidate(): void { this.tokens.clear(); }
   /** 全部操作同步访问本机存储；发布前再核状态，已落盘的事实不因后续撤权伪装为未保存。 */
-  execute(command: SqlitePresetCommand, raw: unknown, owner?: ColumnsInvocation): { value: SqliteTablePresetSnapshot | SqliteTablePresetQuery; publish(): void } {
+  execute(command: SqlitePresetCommand, raw: unknown, owner?: ColumnsInvocation): { value: SqliteTablePresetSnapshot | SqliteTablePresetProfile; publish(): void } {
     const input = command === 'list' ? sqliteTablePresetTargetSchema.parse(raw) : command === 'save' ? sqliteTablePresetSaveSchema.parse(raw) : sqliteTablePresetSelectSchema.parse(raw);
     const target = sqliteTablePresetTargetSchema.parse({ connectionId: input.connectionId, database: input.database, table: input.table }); this.check(owner, target);
     let saved = false, snapshot: SqliteTablePresetStoredSnapshot;
@@ -50,7 +50,7 @@ export class SqliteTablePresetMain {
     if (command === 'save') { snapshot = this.ports.store.saveSqliteTablePreset(input, assertCurrent); saved = true; }
     else if (command === 'delete') { snapshot = this.ports.store.deleteSqliteTablePreset(input, assertCurrent); saved = true; }
     else snapshot = this.ports.store.sqliteTablePresets(target);
-    let value: SqliteTablePresetSnapshot | SqliteTablePresetQuery;
+    let value: SqliteTablePresetSnapshot | SqliteTablePresetProfile;
     try { value = command === 'read' ? this.ports.store.selectedSqliteTablePreset(input) : this.issue(owner, snapshot); }
     catch (reason) { if (saved) throw Error('本机SQLite方案已保存，但来源签发失败；请刷新核对，不要自动重试'); throw reason; }
     return { value, publish: () => {

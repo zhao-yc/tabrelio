@@ -1,7 +1,6 @@
 import { z } from 'zod';
-import { sqliteTablePageSchema, sqliteTableBrowseLimits } from './sqliteTableBrowse';
 import { strictTableLayoutPreferences, tablePreferencesLimits, type TablePreferences, type TablePreferenceTarget } from './tablePreferences';
-import { sqliteTablePresetTargetSchema, sqliteTablePresetSourceSchema } from './sqliteTablePresets';
+import { sqliteTableLayoutPreferenceShape, sqliteTablePresetTargetSchema, sqliteTablePresetSourceSchema } from './sqliteTablePresets';
 import { postgresTablePresetListSchema } from './tablePresets';
 import { postgresTableLayoutPreferencesSchema } from './postgresTable';
 
@@ -20,7 +19,7 @@ function layoutSchemas<T extends TablePreferenceTarget>(
   return { target, preferences, document, snapshot };
 }
 export const sqliteLayoutTargetSchema = sqliteTablePresetTargetSchema;
-const sqliteSchemas = layoutSchemas(sqliteLayoutTargetSchema, strictTableLayoutPreferences(sqliteTablePageSchema.shape.table, sqliteTableBrowseLimits.columns));
+const sqliteSchemas = layoutSchemas(sqliteLayoutTargetSchema, sqliteTableLayoutPreferenceShape);
 export const { preferences: sqliteLayoutPreferencesSchema, document: sqliteLayoutDocumentSchema, snapshot: sqliteLayoutSnapshotSchema } = sqliteSchemas;
 const checked = { expectedRevision: revision, source: sqliteTablePresetSourceSchema, bindingToken: z.string().uuid() };
 export const sqliteLayoutResetSchema = sqliteLayoutTargetSchema.extend(checked).strict();

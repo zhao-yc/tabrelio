@@ -127,7 +127,7 @@ export class SqliteTableBrowser {
   /** 停止不清理其他查询会话或事务，只撤销本表原读取的交付权。 */
   async stop(): Promise<void> { this.generation++; this.wanted = undefined; const operation = this.operation; if (operation) { await this.cancelOperation(operation); await operation.done; } this.emit({ stopping: false }); }
   /** 配置先验证，准确旧任务真正结束后才取得下一次占用；读取成功后才发布当前页。 */
-  async load(query: SqliteTableQuery, offset: number | 'last'): Promise<void> {
+  async load(query: SqliteTableQuery, offset: number | 'last', acceptPage?: (page: SqliteTablePage) => void): Promise<void> {
     // 捕获各字段的本次值和引用；port 即使复用可变概要对象，也不能同时改写捕获侧。
     const scope = { ...this.ports.scope() };
     if (this.disposed || !scope.present || !scope.active || !scope.sqlite) return;
@@ -146,7 +146,7 @@ export class SqliteTableBrowser {
       this.emit({ stopping: false }); operation.sent = true;
       const page = await this.ports.read(input); operation.terminal = true;
       if (!operation.cancelled && generation === this.generation && this.same(scope) && operation.lease.owns()) {
-        try { assertSqliteTablePage(page, input); } catch (reason) { this.releaseSnapshot(page); throw reason; }
+        try { assertSqliteTablePage(page, input); acceptPage?.(page); } catch (reason) { this.releaseSnapshot(page); throw reason; }
         this.pageScope = scope; if (page.edit?.kind === 'editable') this.unadopted = page;
         this.emit({ page, columns: page.columns, error: '' });
       } else this.releaseSnapshot(page);
