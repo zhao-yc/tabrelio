@@ -1,0 +1,15 @@
+export const mysqlViewRenameZh = {
+  title: '重命名 MySQL 视图',
+  savedOnly: '请先保存视图定义，再重命名。',
+  source: (database: string, name: string) => `原视图 ${database} / ${name}`,
+  name: '新视图名称',
+  preview: '预览视图改名 SQL',
+  sourceDdl: '核对原视图定义',
+  hint: '在同一数据库改名。提交时会短暂申请写锁，再核对原定义和当前账号可见的视图依赖。',
+  acknowledge: '我已核对外部调用和当前账号不可见的依赖。对象级授权和调用 SQL 需要按新名称分别调整。',
+  apply: '确认重命名视图',
+  stale: '原连接已变化，请返回后重新打开。',
+  success: (name: string) => `视图已重命名为 ${name}`,
+  unverified: '服务器已返回改名响应，完整定义核验未通过。请在原库核对两个名称。',
+  checkResult: '请在原库核对两个名称后再操作。',
+} as const;

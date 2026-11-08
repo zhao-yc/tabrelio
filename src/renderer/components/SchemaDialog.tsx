@@ -44,6 +44,8 @@ import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import { mysqlViewCopyZh as copyText } from '../locales/mysqlViewCopy.zh-CN';
+import { mysqlViewRenameZh as renameText } from '../locales/mysqlViewRename.zh-CN';
+import { MysqlViewRenameDialog } from './MysqlViewRenameDialog';
 import { SqliteTableCreateDialog } from './SqliteTableCreateDialog';
 import type { SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 
@@ -290,7 +292,7 @@ function template(kind: string, database: string, name: string) {
 }
 
 /** 统一入口分流：新建库与既有对象编辑分别维护确认生命周期，无默认库也能创建。 */
-interface DdlDialogProps { onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; sqliteIndex?: string; }
+interface DdlDialogProps { onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; onViewRenamed?(before: string, after: string, verified: boolean): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; sqliteIndex?: string; }
 /** 只读定义使用独立组件生命周期，切换编辑/查看模式不会改变同一组件的Hook顺序。 */
 export function DdlDialog(props: DdlDialogProps) {
   // 新建库走独立编码目录与一次性预览，原对象DDL编辑器保持原生命周期。
@@ -298,10 +300,12 @@ export function DdlDialog(props: DdlDialogProps) {
   return props.readOnly && props.object && props.database ? <DefinitionViewer connectionId={props.connectionId} database={props.database} object={props.object} search={props.definitionSearch} sqliteIndex={props.sqliteIndex} onClose={props.onClose}/> : <DdlEditorDialog {...props}/>;
 }
 /** 原有显式DDL编辑、预览与确认执行路径保持独立。 */
-function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, readOnly=false }: DdlDialogProps) {
+function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, onViewRenamed, readOnly=false }: DdlDialogProps) {
   const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(database ? template('view', database, '') : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   const [viewLoaded, setViewLoaded] = useState(false);
+  const [savedViewSql, setSavedViewSql] = useState('');
+  const [renameVersion, setRenameVersion] = useState<number>();
   const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
   const [copy, setCopy] = useState<{ owner: object; name: string; preview?: string }>();
   const applying = useRef(false);
@@ -320,7 +324,9 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
       // 搜索按名称导航时只展示重新读取的原定义，不把新同名对象变成可执行重建脚本。
       if(readOnly)setSql(ddl);
       else if (object.kind === 'view') {
-        setSql(ddl.replace(/^CREATE\s+/i, 'CREATE OR REPLACE '));
+        const saved = ddl.replace(/^CREATE\s+/i, 'CREATE OR REPLACE ');
+        setSql(saved);
+        setSavedViewSql(saved);
         setViewLoaded(true);
       }
       else if (['procedure', 'function', 'trigger', 'event'].includes(object.kind)) setSql(`DROP ${object.kind.toUpperCase()} IF EXISTS ${qualifiedName(database, object.name)};\nDELIMITER $$\n${ddl.replace(/;\s*$/, '')}$$\nDELIMITER ;`);
@@ -393,6 +399,15 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
       setApplyTaskId('');
     }
   }
+  if (renameVersion !== undefined && database && object) return <MysqlViewRenameDialog connectionId={connectionId} database={database}
+    name={object.name} version={renameVersion} onBack={() => setRenameVersion(undefined)} onChanged={(next, verified) => {
+      onViewRenamed?.(object.name, next, verified);
+      onApplied();
+      if (verified) {
+        useWorkspace.getState().notify(renameText.success(next));
+        onClose();
+      }
+    }}/>;
   const title = copy ? copyText.title : readOnly && object ? databaseSearchZh.definitionTitle(kindLabels[object.kind], object.name)
     : !database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058;
   const copyStale = !!copy && (!fileView || copy.owner !== fileOwner);
@@ -419,6 +434,10 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
       setCopy({ owner: fileOwner, name: '' });
       setError('');
     }}>{copyText.open}</button>}
+    {fileView && object && profile.dialect === 'mysql' && <button type="button" disabled={viewReadDisabled || sql !== savedViewSql}
+      title={sql !== savedViewSql ? renameText.savedOnly : undefined} onClick={() => {
+        if (fileCurrent()) setRenameVersion(version);
+      }}>{renameText.title}</button>}
     {fileView && object && <ViewDependenciesPanel owner={dependenciesOwner} current={fileCurrent} connectionId={connectionId} dialect={profile.dialect}
       disabled={busy} load={() => invoke('mysql.view.dependencies', { connectionId, database, name: object.name })}/>}
     {fileView && <MysqlViewAttributes database={database} view={name} sql={sql} disabled={viewReadDisabled}

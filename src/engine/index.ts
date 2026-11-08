@@ -1,5 +1,7 @@
 import { readMysqlViewDependencies } from './mysqlViewDependencies';
 import { mysqlViewDependenciesSchema } from '../shared/viewDependencies';
+import { mysqlViewRenamePreviewSchema } from '../shared/mysqlViewRename';
+import { applyMysqlViewRename, previewMysqlViewRename } from './mysqlViewRename';
 import { inspectMysqlViewQuery } from './mysqlViewQueryInspect';
 import { mysqlViewQueryInspectSchema } from '../shared/mysqlViewFile';
 import { excelImportZh, validExcelImport } from '../shared/excelTransfer';
@@ -369,6 +371,18 @@ export class Engine {
           throw Error('同步缺少可信右侧连接配置');
         this.copySourceProfile({ connectionId: target.connectionId, profile: targetProfile });
         return this.mysqlDataComparisons.apply(request, { owner, connectionRevision }, target);
+      }
+      case 'mysql.view.renamePreview':
+      case 'mysql.view.renameApply': {
+        const { profile, stamp, ...raw } = input;
+        const target = mysqlViewRenamePreviewSchema.parse(raw);
+        if (profile?.dialect !== 'mysql' || profile.id !== target.connectionId) throw Error('视图改名需要可信 MySQL 连接');
+        this.copySourceProfile(input);
+        if (command === 'mysql.view.renamePreview') return this.withCopySourceTask(target.connectionId, randomUUID(),
+          context => previewMysqlViewRename(context, target), '预览视图改名', 'no-default-database');
+        if (typeof stamp !== 'string' || !/^[a-f0-9]{64}$/.test(stamp)) throw Error('缺少可信视图改名预览');
+        return this.withCopySourceTask(target.connectionId, randomUUID(),
+          context => applyMysqlViewRename(context, target, stamp), '执行视图改名', 'no-default-database');
       }
       case 'mysql.view.dependencies': {
         const { profile, ...raw } = input;

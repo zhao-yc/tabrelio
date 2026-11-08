@@ -106,6 +106,7 @@ import { sqliteColumnsFactMessage } from '../shared/sqliteColumnsFact';
 import { sqliteTableEditMessages, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
 import { sqliteWriteFactMessage } from '../shared/sqliteWriteFact';
 import { ColumnsMainCapabilities, type ColumnsInvocation } from './columnsMainCapabilities';
+import { mysqlViewRenameSql, type MysqlViewRenameTarget } from '../shared/mysqlViewRename';
 import { TableChecksMainCapabilities, tableChecksFailureProgress, type TableChecksInvocation } from './tableChecksMainCapabilities';
 import { ResultInsertOwners } from './resultInsertOwners';
 import type { ResultInsertPreviewInput, ResultInsertApplyInput, ResultInsertProgress } from '../shared/resultInsert';
@@ -1043,6 +1044,9 @@ const postgresExportChoosing = new WeakSet<object>();
 const postgresImportPreparing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresImportSource; conflictKeys: PostgresImportKey[]; revision: number; expires: number }>();
 const postgresImportChecks = new Map<string, { owner: ColumnsInvocation; controller: AbortController }>();
+const mysqlViewRenamePlans = new Map<string, {
+  owner: ColumnsInvocation; target: MysqlViewRenameTarget; revision: number; expires: number; stamp: string;
+}>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
@@ -2719,6 +2723,41 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'postgres.compareData.syncApply': return applyNetworkSync('postgres', input, columns);
     case 'mysql.compareData.cancel':
     case 'postgres.compareData.cancel': return cancelNetworkCompare(input.taskId, columns);
+    case 'mysql.view.renamePreview':
+    case 'mysql.view.renameApply': {
+      const owner = columns!;
+      const revision = store.connectionRevision();
+      const check = (connectionId: string) => {
+        columnsMain.assertCapturedOwner(owner);
+        connectionConfig.assertAvailable(connectionId);
+        if (shuttingDown || revision !== store.connectionRevision()) throw Error('原视图改名窗口或连接已变化');
+      };
+      if (command === 'mysql.view.renameApply') {
+        const plan = mysqlViewRenamePlans.get(input.token);
+        if (!plan || plan.expires <= Date.now() || plan.revision !== revision ||
+            !columnsMain.sharesDocumentOwner(plan.owner, owner)) throw Error('视图改名预览已失效，请重新预览');
+        check(plan.target.connectionId);
+        const profile = store.resolveConnection(plan.target.connectionId);
+        if (profile.dialect !== 'mysql') throw Error('视图改名需要 MySQL 连接');
+        // 单次令牌在分配连接前消费，断线及结果未知均不自动重放。
+        mysqlViewRenamePlans.delete(input.token);
+        const result = await broker.request(command, { ...plan.target, profile, stamp: plan.stamp });
+        check(plan.target.connectionId);
+        return result;
+      }
+      const target: MysqlViewRenameTarget = input;
+      check(target.connectionId);
+      const profile = store.resolveConnection(target.connectionId);
+      if (profile.dialect !== 'mysql') throw Error('视图改名需要 MySQL 连接');
+      const result = await broker.request(command, { ...target, profile });
+      check(target.connectionId);
+      if (result.sql !== mysqlViewRenameSql(target) || !/^[a-f0-9]{64}$/.test(result.stamp)) throw Error('视图改名预览回包无效');
+      for (const [id, plan] of mysqlViewRenamePlans) if (plan.expires <= Date.now() || plan.revision !== revision) mysqlViewRenamePlans.delete(id);
+      if (mysqlViewRenamePlans.size >= 32) throw Error('视图改名预览已达上限，请稍后重试');
+      const token = randomUUID();
+      mysqlViewRenamePlans.set(token, { owner, target, revision, expires: Date.now() + 120_000, stamp: result.stamp });
+      return { token, sql: result.sql, sourceDdl: result.sourceDdl };
+    }
     case 'mysql.view.dependencies':
     case 'mysql.view.inspectQuery': {
       const revision = store.connectionRevision();
@@ -3549,7 +3588,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
-        if (payload.command === 'mysql.view.inspectQuery' || payload.command === 'mysql.view.dependencies' || payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
+        if (payload.command === 'mysql.view.inspectQuery' || payload.command === 'mysql.view.dependencies' || payload.command === 'mysql.view.renamePreview' || payload.command === 'mysql.view.renameApply' || payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') || payload.command.startsWith('mysql.backup.') ||
             payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview', 'mysql.compareData.batchPreview'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||

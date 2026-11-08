@@ -17,6 +17,7 @@ export const publicCommands: Record<Command, true> = {
   'mysql.compareData.syncPreview': true, 'mysql.compareData.syncApply': true,
   'mysql.view.inspectQuery': true,
   'mysql.view.dependencies': true,
+  'mysql.view.renamePreview': true, 'mysql.view.renameApply': true,
   'mysql.compareData': true, 'mysql.compareData.catalogue': true, 'mysql.compareData.cancel': true,
   'postgres.compareData': true, 'postgres.compareData.catalogue': true, 'postgres.compareData.cancel': true,
   'postgres.explain': true,

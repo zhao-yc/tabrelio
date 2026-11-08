@@ -2,6 +2,7 @@ import mysql, { type RowDataPacket } from 'mysql2/promise';
 import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 import { viewDependenciesZh as text } from '../../src/renderer/locales/viewDependencies.zh-CN';
+import { mysqlViewRenameZh as rename } from '../../src/renderer/locales/mysqlViewRename.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 
@@ -87,6 +88,59 @@ test('已保存视图显示可见的直接引用与被引用对象', async ({}, 
     expect(await original()).toBe(originalSql);
     expect(await history()).toEqual(beforeHistory);
     await dialog.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+    if (dialect === 'mysql') {
+      const newName = '新`视图';
+      const openRename = async () => {
+        await clickSidebarAction(node.locator('.object-row').filter({ hasText: name }), { name: formatText(zh.sidebar.text022, name), exact: true });
+        await dialog.getByRole('button', { name: rename.title, exact: true }).click();
+      };
+      const renameDialog = page.getByRole('dialog', { name: rename.title, exact: true });
+      const renameInput = renameDialog.getByLabel(rename.name, { exact: true });
+      const previewRename = renameDialog.getByRole('button', { name: rename.preview, exact: true });
+      const confirmRename = renameDialog.getByRole('button', { name: rename.apply, exact: true });
+      await openRename();
+      await renameInput.fill(newName);
+      await previewRename.click();
+      await expect(renameDialog.getByRole('alert')).toContainText('当前视图有可见引用');
+      await observer.query('DROP VIEW ' + target(database, indirect) + ', ' + target(database, localView));
+      await renameInput.fill('view_source');
+      await previewRename.click();
+      await expect(renameDialog.getByRole('alert')).toContainText('同库目标名称已被占用');
+      await renameInput.fill(newName);
+      await previewRename.click();
+      await expect(renameDialog.getByLabel(rename.preview, { exact: true })).toHaveText(
+        'RENAME TABLE ' + target(database, name) + ' TO ' + target(database, newName) + ';');
+      expect(await original()).toBe(originalSql);
+      await expect(confirmRename).toBeDisabled();
+      await observer.query('DROP VIEW ' + target(database, name));
+      await observer.query('CREATE TABLE ' + target(database, name) + ' (id INT)');
+      await renameDialog.getByRole('checkbox', { name: rename.acknowledge, exact: true }).check();
+      await confirmRename.click();
+      await expect(renameDialog.getByRole('alert')).toContainText(rename.checkResult);
+      const list = async () => (await observer.query<RowDataPacket[]>('SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (?, ?)',
+        [database, name, newName]))[0];
+      expect(await list()).toEqual([{ TABLE_NAME: name, TABLE_TYPE: 'BASE TABLE' }]);
+      await renameDialog.getByRole('button', { name: zh.common.close, exact: true }).click();
+      await dialog.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+      await observer.query('DROP TABLE ' + target(database, name));
+      await observer.query(originalSql);
+      expect(await list()).toEqual([{ TABLE_NAME: name, TABLE_TYPE: 'VIEW' }]);
+      // 外部恢复后重新读取对象树，避免用上一轮已失效的目录行打开编辑器。
+      await page.reload();
+      await node.getByRole('button', { name: dialect, exact: true }).click();
+      await db.locator('.tree-label').click();
+      await openRename();
+      await renameInput.fill(newName);
+      await previewRename.click();
+      await renameDialog.getByRole('checkbox', { name: rename.acknowledge, exact: true }).check();
+      await confirmRename.click();
+      await expect(renameDialog).toBeHidden();
+      expect(await list()).toEqual([{ TABLE_NAME: newName, TABLE_TYPE: 'VIEW' }]);
+      expect((await observer.query<RowDataPacket[]>('SHOW CREATE VIEW ' + target(database, newName)))[0][0]['Create View'])
+        .toBe(originalSql.replace(quoted(name), quoted(newName)));
+      expect((await observer.query<RowDataPacket[]>('SELECT * FROM ' + target(database, newName)))[0]).toEqual([{ id: 41 }]);
+      expect(await history()).toEqual(beforeHistory);
+    }
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

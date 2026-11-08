@@ -435,6 +435,8 @@ export interface CommandMap {
   'mysql.compareData.syncApply': { input: import('./postgresDataCompare').PostgresDataSyncApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'mysql.compareData': { input: import('./postgresDataCompare').PostgresDataCompareInput; output: import('./postgresDataCompare').PostgresDataCompareOutput };
   'mysql.view.dependencies': { input: import('./viewDependencies').MysqlViewDependenciesInput; output: import('./viewDependencies').ViewDependencies };
+  'mysql.view.renamePreview': { input: import('./mysqlViewRename').MysqlViewRenameTarget; output: import('./mysqlViewRename').MysqlViewRenamePreview };
+  'mysql.view.renameApply': { input: { token: string; confirmed: true }; output: import('./mysqlViewRename').MysqlViewRenameResult };
   'mysql.view.inspectQuery': { input: import('./mysqlViewFile').MysqlViewQueryInspectInput; output: QueryOutcome };
   'mysql.compareData.catalogue': { input: import('./postgresDataCompare').PostgresDataCompareCatalogueInput; output: string[] };
   'mysql.compareData.cancel': { input: { taskId: string }; output: void };
