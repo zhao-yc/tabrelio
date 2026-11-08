@@ -57,7 +57,7 @@ describe('MySQL／MariaDB 原生整库备份参数', () => {
     expect(mysqlDatabaseBackupExecuteSchema.parse(input)).toEqual(input);
     for (const tables of [[], ['重复', '重复'], ['跨.库'], ['坏\0名称']])
       expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, tableScope: { ...scope, tables } }).success).toBe(false);
-    expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, format: 'archive' }).success).toBe(false);
+    expect(mysqlDatabaseBackupExecuteSchema.safeParse({ ...input, format: 'archive' }).success).toBe(true);
     expect(mysqlBackupDumpArguments('迁移测试', scope)).toEqual(['--skip-routines', '--skip-events', '--skip-triggers',
       '--skip-add-drop-table', '--skip-add-drop-trigger', '--skip-disable-keys', '--complete-insert', '--no-create-info',
       '--', '迁移测试', '--账目', '有`引号']);

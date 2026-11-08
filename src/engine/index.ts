@@ -394,7 +394,7 @@ export class Engine {
         const profile = input.profile;
         if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId ||
           input.acknowledgeScript !== true || !input.source) throw Error('缺少可信的归档来源、恢复目标或执行确认');
-        const execution = { ...input, database: null, encoding: 'utf8' };
+        const execution = { ...input, database: input.targetDatabase ?? null, encoding: 'utf8' };
         const evidence = createSqlFileImportEvidence(input.taskId, 'utf8');
         let received = false;
         try {
@@ -409,7 +409,7 @@ export class Engine {
                   task.inFlight = true; task.generation++;
                   return () => { task.inFlight = false; };
                 }
-              }, manifest);
+              }, manifest, input.targetDatabase, true);
               if (!canRestoreBackupArchive(audit))
                 throw Error([databaseBackupArchiveZh.restoreRejected + '。', ...audit.blockers.map(blocker => blocker.message)].join(' '));
               checkCancelled();
@@ -430,7 +430,7 @@ export class Engine {
           throw Error('缺少可信的备份恢复目标连接');
         this.copySourceProfile(input);
         return this.withCopySourceTask(input.connectionId, input.taskId,
-          context => auditDatabaseBackupTarget(context, input.manifest), '检查备份恢复目标', 'no-default-database');
+          context => auditDatabaseBackupTarget(context, input.manifest, input.targetDatabase), '检查备份恢复目标', 'no-default-database');
       }
       case 'schema.compare': {
         for (const [profile, target] of [[input.sourceProfile, input.source], [input.targetProfile, input.target]]) {

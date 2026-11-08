@@ -128,6 +128,16 @@ describe('B01顺序归档writer与严格inspect（纯RAM）', () => {
     await expect(archive(sql, { ...input, toolSuiteSha256: 'd'.repeat(64) } as unknown as DatabaseBackupArchiveManifestInput)).rejects.toThrow('清单');
     await expect(archive(sql, { ...input, objects: [] })).rejects.toThrow('清单');
   });
+  it('指定表清单约束所选表和内容，保留可独立校验的原始 SQL', async () => {
+    const sql = Buffer.from('INSERT INTO `账目` (`id`) VALUES (1);\n');
+    const input = { ...selectedToolManifest(), schemaVersion: 3 as const, tableScope: { tables: ['账目'], content: 'data' as const },
+      objects: [{ kind: 'table' as const, name: '账目', engine: 'InnoDB', definitionSha256: null }] };
+    const value = await archive(sql, input);
+    expect((await inspectDatabaseBackupArchive(reader(value.bytes))).manifest).toMatchObject(input);
+    for (const invalid of [{ ...input, objects: [] }, { ...input, tableScope: { ...input.tableScope, tables: ['账目', '账目'] } },
+      { ...input, objects: [...input.objects, { kind: 'trigger' as const, name: 't', definitionSha256: null }] }])
+      await expect(archive(sql, invalid)).rejects.toThrow('清单');
+  });
   it('实际dump字节损坏由CRC阻断；CRC全部重算后仍须通过SHA', async () => {
     const value = await archive(), altered = Buffer.from(value.bytes); altered[58] ^= 1;
     await expect(inspectDatabaseBackupArchive(reader(altered))).rejects.toThrow('CRC');

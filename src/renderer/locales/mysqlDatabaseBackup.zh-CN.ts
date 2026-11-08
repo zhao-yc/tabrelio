@@ -29,5 +29,5 @@ export const mysqlDatabaseBackupZh = {
   cancel: '取消备份',
   close: '关闭',
   saved: (bytes: number, version: string, archive: boolean, scoped = false) =>
-    `已保存${archive ? '整库 ZIP 归档' : scoped ? '指定表 SQL' : '整库 SQL'} · ${bytes.toLocaleString()} 字节 · 工具 ${version}`,
+    `已保存${scoped ? '指定表' : '整库'}${archive ? ' ZIP 归档' : ' SQL'} · ${bytes.toLocaleString()} 字节 · 工具 ${version}`,
 } as const;

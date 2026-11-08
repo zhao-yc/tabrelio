@@ -1328,7 +1328,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const name = target.database.replace(/[<>:"/\\|?*]/g, '_');
         const archive = target.format === 'archive';
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: mysqlDatabaseBackupTitle,
-          defaultPath: name + (archive ? '-整库备份.dbark-backup.zip' : target.tableScope ? '-指定表备份.sql' : '-整库备份.sql'),
+          defaultPath: name + (target.tableScope ? '-指定表备份' : '-整库备份') + (archive ? '.dbark-backup.zip' : '.sql'),
           filters: archive ? [{ name: 'tabrelio 数据库备份归档', extensions: ['zip'] }] : [{ name: 'SQL', extensions: ['sql'] }] });
         check();
         connectionConfig.assertAvailable(target.connectionId);
@@ -2577,27 +2577,28 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'backupArchive.inspectSql': return queryFileOperation(() => backupArchiveFiles.inspectSql(columns!, input.operationId, input.token));
     case 'backupArchive.restore':
     case 'backupArchive.auditTarget': {
-      const { connectionId, operationId, token } = input;
+      const { connectionId, operationId, token, targetDatabase } = input;
       const revision = store.connectionRevision();
       const assertConnection = () => {
         columnsMain.assertCapturedOwner(columns);
         if (shuttingDown || revision !== store.connectionRevision()) throw Error('恢复目标的窗口或连接配置已变化，请重新检查');
         connectionConfig.assertAvailable(connectionId);
       };
-      const targetKey = JSON.stringify([connectionId, revision]);
+      const targetKey = JSON.stringify([connectionId, revision, targetDatabase]);
       const start = (registerStop: (stop: () => Promise<void>) => void) => {
         assertConnection();
         const profile = store.resolveConnection(connectionId);
         if (profile.dialect !== 'mysql' && profile.dialect !== 'mariadb') throw Error('恢复目标需要已保存的 MySQL 或 MariaDB 连接');
         const taskId = randomUUID();
         registerStop(() => broker.request('query.cancel', { taskId }));
-        return { connectionId, profile, taskId };
+        return { connectionId, profile, taskId, targetDatabase };
       };
       if (command === 'backupArchive.restore') return queryFileOperation(() => backupArchiveFiles.restore(columns!, operationId, token, targetKey,
         async (source, registerStop) => broker.request(command, { ...start(registerStop), source, acknowledgeScript: input.acknowledgeScript })));
       const result = await queryFileOperation(() => backupArchiveFiles.auditTarget(columns!, operationId, token,
-        async ({ family, serverVersion, database }, registerStop) =>
-          broker.request(command, { ...start(registerStop), manifest: { family, serverVersion, database } }), targetKey));
+        async (manifest, registerStop) =>
+          broker.request(command, { ...start(registerStop), manifest: { family: manifest.family, serverVersion: manifest.serverVersion,
+            database: manifest.database, ...(manifest.schemaVersion === 3 ? { tableScope: manifest.tableScope } : {}) } }), targetKey));
       assertConnection();
       return result;
     }

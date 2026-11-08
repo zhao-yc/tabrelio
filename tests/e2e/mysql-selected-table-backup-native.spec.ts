@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import mysql from 'mysql2/promise';
+import { databaseBackupArchiveZh as archiveText } from '../../src/shared/databaseBackupArchiveFiles';
 import { mysqlDatabaseBackupZh as backup } from '../../src/renderer/locales/mysqlDatabaseBackup.zh-CN';
 import { mysqlSqlFileZh as restore } from '../../src/renderer/locales/mysqlSqlFile.zh-CN';
 import { sqlFileImportZh as receipt } from '../../src/renderer/locales/sqlFileImport.zh-CN';
@@ -11,7 +12,7 @@ test.skip(process.env.DBARK_MYSQL_BACKUP_NATIVE !== '1', '只运行隔离 MySQL 
 test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' });
 test.describe.configure({ timeout: 120000, retries: 0 });
 
-for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL 的三种内容可恢复到指定库', async ({}, info) => {
+for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL 与 ZIP 的三种内容可恢复到指定库', async ({}, info) => {
   const user = process.env.DBARK_BACKUP_AUDIT_USER ?? '', password = process.env.DBARK_BACKUP_AUDIT_PASSWORD ?? '';
   const port = Number(process.env[dialect === 'mysql' ? 'DBARK_BACKUP_AUDIT_MYSQL_PORT' : 'DBARK_BACKUP_AUDIT_MARIA_PORT']);
   const tool = process.env[dialect === 'mysql' ? 'DBARK_MYSQL_DUMP_TOOL' : 'DBARK_MARIA_DUMP_TOOL'] ?? '';
@@ -23,14 +24,16 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
 
   const config = { host: '127.0.0.1', port, user, password };
   const database = user + '_scope_source', full = user + '_scope_full', split = user + '_scope_split';
+  const zipFull = user + '_scope_zip_full', zipSplit = user + '_scope_zip_split';
   const [first, second, extra] = ['--账目', '无主键`表', '未选表'];
   const control = await mysql.createConnection(config);
   const { page, application } = ownedDesktopResources(info);
   const all = info.outputPath(dialect + '-指定表完整.sql'), schema = info.outputPath(dialect + '-指定表结构.sql');
   const data = info.outputPath(dialect + '-指定表数据.sql'), sentinel = info.outputPath(dialect + '-原文件.sql');
+  const zip = ['all', 'schema', 'data'].map(content => info.outputPath(dialect + '-' + content + '.dbark-backup.zip'));
   let desktopClosed = false;
   try {
-    for (const db of [database, full, split]) await control.query('CREATE DATABASE ?? CHARACTER SET utf8mb4', [db]);
+    for (const db of [database, full, split, zipFull, zipSplit]) await control.query('CREATE DATABASE ?? CHARACTER SET utf8mb4', [db]);
     await control.query('USE ??', [database]);
     await control.query('CREATE TABLE ?? (id BIGINT UNSIGNED PRIMARY KEY, note VARCHAR(32), raw BLOB) ENGINE=InnoDB', [first]);
     await control.query('CREATE TABLE ?? (label VARCHAR(32)) ENGINE=InnoDB', [second]);
@@ -48,6 +51,8 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
         if (title === input.toolTitle) return { canceled: false, filePaths: [input.tool] };
         if (title === input.restoreTitle && input.restoreFiles.length)
           return { canceled: false, filePaths: [input.restoreFiles.shift()!] };
+        if (title === input.archiveTitle && input.archives.length)
+          return { canceled: false, filePaths: [input.archives.shift()!] };
         throw Error('出现非本例的打开文件对话框');
       }) as typeof dialog.showOpenDialog;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
@@ -55,8 +60,8 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
         if (title === input.title && input.paths.length) return { canceled: false, filePath: input.paths.shift()! };
         throw Error('出现非本例的保存文件对话框');
       }) as typeof dialog.showSaveDialog;
-    }, { title: backup.title, toolTitle: backup.tool, restoreTitle: restore.title, tool,
-      paths: [all, schema, data, sentinel], restoreFiles: [all, schema, data] });
+    }, { title: backup.title, toolTitle: backup.tool, restoreTitle: restore.title, archiveTitle: archiveText.select, tool,
+      paths: [all, schema, data, ...zip, sentinel], restoreFiles: [all, schema, data], archives: [zip[2], ...zip] });
     const connectionId = await page.evaluate(async profile => (await window.dbark.invoke('connections.save', profile)).id, {
       ...config, database, id: '', name: dialect + ' 指定表备份', group: '', color: '#123456', dialect, rememberPassword: false,
     });
@@ -90,6 +95,15 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
       expect(script.includes('TRIGGER')).toBe(content !== 'data');
       if (content === 'all') await modal.screenshot({ path: info.outputPath(dialect + ' 指定表备份.png') });
     }
+    await modal.getByLabel(backup.format, { exact: true }).selectOption('archive');
+    for (const content of ['all', 'schema', 'data'] as const) {
+      await modal.getByLabel(backup.content, { exact: true }).selectOption(content);
+      await button(backup.choose).click();
+      await modal.getByRole('checkbox', { name: backup.confirm, exact: true }).check();
+      await button(backup.start).click();
+      await expect(modal.getByRole('status')).toContainText('已保存指定表 ZIP 归档', { timeout: 20000 });
+      if (content === 'all') await modal.screenshot({ path: info.outputPath(dialect + ' 指定表 ZIP 备份.png') });
+    }
     await button(backup.close).click();
 
     for (const [db, file] of [[full, all], [split, schema], [split, data]] as const) {
@@ -104,7 +118,50 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(dialect + ' 选表 SQL
       if (file === data) await dialog.screenshot({ path: info.outputPath(dialect + ' 指定表恢复.png') });
       await dialog.getByRole('button', { name: restore.close, exact: true }).click();
     }
-    for (const db of [full, split]) {
+    await menu(archiveText.title);
+    const archive = page.getByRole('dialog', { name: archiveText.title, exact: true });
+    const archiveButton = (name: string) => archive.getByRole('button', { name, exact: true });
+    const audit = archive.getByRole('region', { name: archiveText.auditResult });
+    const selectArchive = async (content: 'all' | 'schema' | 'data', db: string) => {
+      await archiveButton(archiveText.select).click();
+      await expect(archive.getByRole('status')).toContainText(archiveText.checked);
+      await expect(archive).toContainText(archiveText.tables + '（2） · ' + archiveText.contents[content]);
+      await archive.getByLabel(archiveText.target, { exact: true }).selectOption(connectionId);
+      await archive.getByLabel(archiveText.selectedDatabase, { exact: true }).selectOption(db);
+      await archiveButton(archiveText.audit).click();
+    };
+    await selectArchive('data', zipSplit);
+    await expect(audit).toContainText('目标库中缺少可见的同名 InnoDB 表');
+    await expect(archiveButton(archiveText.restore)).toHaveCount(0);
+    for (const [content, db] of [['all', zipFull], ['schema', zipSplit], ['data', zipSplit]] as const) {
+      await selectArchive(content, db);
+      await expect(audit).toContainText(archiveText.targetState[content === 'data' ? 'tables-present' : 'empty']);
+      if (content === 'all') {
+        // 另一个会话在确认后占用目标库，执行连接必须重新读取目录。
+        await control.query('CREATE TABLE ??.reserved(id int) ENGINE=InnoDB', [db]);
+        await archive.getByRole('checkbox', { name: archiveText.restoreAcknowledgement, exact: true }).check();
+        await archiveButton(archiveText.restore).click();
+        await expect(archive.getByRole('alert')).toContainText(archiveText.restoreRejected);
+        expect((await control.query('SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA=BINARY ?', [db]))[0])
+          .toEqual([{ name: 'reserved' }]);
+        await control.query('DROP TABLE ??.reserved', [db]);
+        await archiveButton(archiveText.audit).click();
+        await expect(audit).toContainText(archiveText.targetState.empty);
+      }
+      if (content === 'data') {
+        await archiveButton(archiveText.inspectSql).click();
+        const inventory = archive.getByRole('region', { name: archiveText.sqlInventory });
+        await expect(inventory).toContainText('数据写入语句 2');
+        await expect(inventory).not.toContainText(archiveText.sqlMissing);
+      }
+      await archive.getByRole('checkbox', { name: archiveText.restoreAcknowledgement, exact: true }).check();
+      await archiveButton(archiveText.restore).click();
+      const status = archive.getByRole('status', { name: receipt.title });
+      await expect(status).toContainText(receipt.completed, { timeout: 20000 });
+      if (content === 'data') await status.screenshot({ path: info.outputPath(dialect + ' 指定表 ZIP 恢复.png') });
+    }
+    await archiveButton(archiveText.close).click();
+    for (const db of [full, split, zipFull, zipSplit]) {
       const [rows] = await control.query('SELECT CAST(id AS CHAR) AS id,note,HEX(raw) AS raw FROM ??.??', [db, first]);
       expect(rows).toEqual([{ id: '18446744073709551615', note: '备份🧪', raw: '00FF0A' }]);
       const [notes] = await control.query('SELECT label FROM ??.?? ORDER BY label', [db, second]);

@@ -1,5 +1,6 @@
 import type { DatabaseBackupManifest } from '../shared/databaseBackup';
-import type { DatabaseBackupFileManifest, DatabaseBackupSelectedToolManifest } from '../shared/databaseBackupArchiveFiles';
+import type { DatabaseBackupFileManifest, DatabaseBackupSelectedToolManifest, DatabaseBackupTableManifest } from '../shared/databaseBackupArchiveFiles';
+import { mysqlBackupDatabase, mysqlBackupTableScopeSchema } from '../shared/mysqlDatabaseBackup';
 
 export interface DatabaseBackupArchiveDump {
   entry: 'dump.sql';
@@ -8,7 +9,7 @@ export interface DatabaseBackupArchiveDump {
 }
 export type DatabaseBackupArchiveManifest = DatabaseBackupFileManifest;
 export type DatabaseBackupArchiveManifestInput = (Omit<DatabaseBackupManifest, 'dump'> |
-  Omit<DatabaseBackupSelectedToolManifest, 'dump'>) & { dump?: DatabaseBackupArchiveDump };
+  Omit<DatabaseBackupSelectedToolManifest, 'dump'> | Omit<DatabaseBackupTableManifest, 'dump'>) & { dump?: DatabaseBackupArchiveDump };
 export const databaseBackupArchiveLimits = { archiveBytes: 10n * 1024n ** 3n, manifestBytes: 2 * 1024 * 1024, blockBytes: 64 * 1024 } as const;
 const invalid = () => new Error('备份清单结构、字段或预算无效');
 
@@ -81,9 +82,11 @@ function hash(v: unknown): void {
 export function databaseBackupArchiveManifest(value: unknown, dump?: DatabaseBackupArchiveDump): { manifest: DatabaseBackupArchiveManifest; bytes: Buffer } {
 
   const cloned = safeClone(value);
-  const selectedTool = (cloned as { schemaVersion?: unknown } | null)?.schemaVersion === 2;
+  const version = (cloned as { schemaVersion?: unknown } | null)?.schemaVersion;
+  const tableArchive = version === 3, selectedTool = version === 2 || tableArchive;
   const fields = ['format', 'schemaVersion', 'family', 'serverVersion', 'toolVersion', 'database', 'objects', 'consistency', 'resourcesConfirmed', 'restoreVerified',
-    ...(selectedTool ? ['toolExecutableSha256'] : ['toolSuiteSha256', 'toolRegistryRevision', 'externalDependencies'])];
+    ...(selectedTool ? ['toolExecutableSha256'] : ['toolSuiteSha256', 'toolRegistryRevision', 'externalDependencies']),
+    ...(tableArchive ? ['tableScope'] : [])];
   const clone = record(cloned, fields, ['dump']);
 
   if (dump) {
@@ -103,6 +106,8 @@ export function databaseBackupArchiveManifest(value: unknown, dump?: DatabaseBac
   text(r.toolVersion);
   text(r.database, 64);
   if (!Array.isArray(r.objects)) throw invalid();
+  const tableScope = tableArchive ? mysqlBackupTableScopeSchema.safeParse(r.tableScope) : undefined;
+  if (tableScope && (!tableScope.success || !mysqlBackupDatabase.safeParse(r.database).success)) throw invalid();
   if (selectedTool) {
     hash(r.toolExecutableSha256);
     if (!/^\d{1,2}\.\d{1,2}\.\d{1,2}$/.test(r.serverVersion) || r.resourcesConfirmed !== true) throw invalid();
@@ -123,11 +128,17 @@ export function databaseBackupArchiveManifest(value: unknown, dump?: DatabaseBac
   }
   const seen = new Set<string>();
   let databases = 0;
+  const remainingTables = tableScope?.success ? new Set(tableScope.data.tables) : undefined;
 
   for (const obj of r.objects) {
     const o = record(obj, ['kind', 'name', 'definitionSha256'], ['engine']);
     if (typeof o.kind !== 'string' || !['database', 'table', 'view', 'trigger', 'procedure', 'function', 'event'].includes(o.kind)) throw invalid();
     text(o.name, 64);
+    if (tableScope?.success) {
+      if (o.kind === 'table') {
+        if (!remainingTables?.delete(o.name)) throw invalid();
+      } else if (o.kind !== 'trigger' || tableScope.data.content === 'data') throw invalid();
+    }
     if (selectedTool) {
       if (o.definitionSha256 !== null || (o.kind === 'table' ? o.engine !== 'InnoDB' : Object.hasOwn(o, 'engine'))) throw invalid();
       if (o.kind === 'database') {
@@ -142,7 +153,7 @@ export function databaseBackupArchiveManifest(value: unknown, dump?: DatabaseBac
     seen.add(key);
   }
 
-  if (selectedTool && databases !== 1) throw invalid();
+  if (tableArchive ? remainingTables?.size !== 0 : selectedTool && databases !== 1) throw invalid();
   const d = record(r.dump, ['entry', 'bytes', 'sha256']);
   if (d.entry !== 'dump.sql' || typeof d.bytes !== 'string' || d.bytes.length > 20 || !/^(0|[1-9]\d*)$/.test(d.bytes) || BigInt(d.bytes) > databaseBackupArchiveLimits.archiveBytes) throw invalid();
   hash(d.sha256);

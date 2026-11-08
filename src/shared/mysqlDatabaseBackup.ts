@@ -10,20 +10,18 @@ export const mysqlDatabaseBackupFormats = ['sql', 'archive'] as const;
 export type MysqlDatabaseBackupFormat = typeof mysqlDatabaseBackupFormats[number];
 export const mysqlBackupTableName = z.string().min(1).refine(value => [...value].length <= 64 && !/[\x00-\x1f\x7f/\\.]| $/u.test(value));
 export const mysqlBackupTableLimit = 64;
-const tableScope = z.object({
+export const mysqlBackupTableScopeSchema = z.object({
   tables: z.array(mysqlBackupTableName).min(1).max(mysqlBackupTableLimit).refine(names => new Set(names).size === names.length),
   content: z.enum(['all', 'schema', 'data']),
 }).strict();
-export type MysqlBackupTableScope = z.infer<typeof tableScope>;
+export type MysqlBackupTableScope = z.infer<typeof mysqlBackupTableScopeSchema>;
 export const mysqlBackupTablesSchema = z.object({ connectionId: identity, database: mysqlBackupDatabase }).strict();
-const backup = mysqlBackupTablesSchema.extend({
-  toolToken: z.uuid(), format: z.enum(mysqlDatabaseBackupFormats).optional(), tableScope: tableScope.optional(),
+export const mysqlDatabaseBackupChooseSchema = mysqlBackupTablesSchema.extend({
+  toolToken: z.uuid(), format: z.enum(mysqlDatabaseBackupFormats).optional(), tableScope: mysqlBackupTableScopeSchema.optional(),
 }).strict();
-const supportsScope = (input: z.infer<typeof backup>) => !input.tableScope || input.format !== 'archive';
-export const mysqlDatabaseBackupChooseSchema = backup.refine(supportsScope, '指定表备份请选择 SQL 脚本');
-export const mysqlDatabaseBackupExecuteSchema = backup.extend({
+export const mysqlDatabaseBackupExecuteSchema = mysqlDatabaseBackupChooseSchema.extend({
   fileToken: z.uuid(), taskId: identity, acknowledgeSnapshot: z.literal(true),
-}).refine(supportsScope, '指定表备份请选择 SQL 脚本');
+});
 export type MysqlDatabaseBackupChooseInput = z.infer<typeof mysqlDatabaseBackupChooseSchema>;
 export type MysqlDatabaseBackupInput = z.infer<typeof mysqlDatabaseBackupExecuteSchema>;
 export interface MysqlDatabaseBackupResult { bytes: number; toolVersion: string; serverVersion: string; archiveSha256?: string }

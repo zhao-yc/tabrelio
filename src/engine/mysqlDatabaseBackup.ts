@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { mysqlBackupDatabase, mysqlBackupDumpArguments, mysqlBackupTableName, mysqlBackupTunnelRoute, mysqlDatabaseBackupPathMatches,
   type MysqlBackupTableScope, type MysqlDatabaseBackupFormat, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
 import type { DatabaseBackupObject } from '../shared/databaseBackup';
-import type { DatabaseBackupSelectedToolManifest } from '../shared/databaseBackupArchiveFiles';
+import type { DatabaseBackupSelectedToolManifest, DatabaseBackupTableManifest } from '../shared/databaseBackupArchiveFiles';
 import { DatabaseBackupArchiveWriter, databaseBackupArchiveLimits } from './databaseBackupArchive';
 import { AtomicFile, privateAtomicFileIO } from './atomicFile';
 import { execute } from './connection';
@@ -154,12 +154,12 @@ async function catalogue(context: Context, database: string, tableScope?: MysqlB
 }
 
 /** 只记录目录可见的对象名称。快照未冻结所有定义，因此不写定义摘要或依赖结论。 */
-function archiveObjects(database: string, snapshot: Awaited<ReturnType<typeof catalogue>>): DatabaseBackupObject[] {
+function archiveObjects(database: string, snapshot: Awaited<ReturnType<typeof catalogue>>, tableScope?: MysqlBackupTableScope): DatabaseBackupObject[] {
   const object = (kind: DatabaseBackupObject['kind'], name: unknown): DatabaseBackupObject => {
     if (typeof name !== 'string') throw Error('备份对象名称无效');
     return { kind, name, definitionSha256: null };
   };
-  const objects = [object('database', database),
+  const objects = [...(tableScope ? [] : [object('database', database)]),
     ...snapshot.tables.map(row => row.objectType === 'VIEW' ? object('view', row.name) : { ...object('table', row.name), engine: 'InnoDB' }),
     ...snapshot.routines.map(row => {
       if (row.routineType !== 'PROCEDURE' && row.routineType !== 'FUNCTION') throw Error('备份例程类型无效');
@@ -196,7 +196,7 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
   let output: AtomicFile | undefined, result: MysqlDatabaseBackupResult | undefined;
   let publish: (() => void) | undefined;
   let archive: DatabaseBackupArchiveWriter | undefined;
-  let manifest: Omit<DatabaseBackupSelectedToolManifest, 'dump'> | undefined;
+  let manifest: Omit<DatabaseBackupSelectedToolManifest, 'dump'> | Omit<DatabaseBackupTableManifest, 'dump'> | undefined;
   return {
     abort() { controller.abort(Error((input.tableScope ? '指定表备份' : '整库备份') + '已取消')); },
     async stage(context: Context) {
@@ -209,12 +209,11 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
       const serverVersion = managed.status.version;
       if (toolVersion.split('.')[0] !== serverVersion.replace(/^5\.5\.5-/, '').split('.')[0])
         throw Error('请选择与服务器主版本相同的原生转储工具');
-      if (tableScope && format === 'archive') throw Error('指定表备份请选择 SQL 脚本');
       const before = await catalogue(context, database, tableScope);
       const archiveVersion = format === 'archive' ? /^\d{1,2}\.\d{1,2}\.\d{1,2}(?!\d)/.exec(serverVersion.replace(/^5\.5\.5-/, ''))?.[0] : undefined;
       if (format === 'archive' && !archiveVersion) throw Error('无法确认归档所需的数据库版本');
       const archiveToolHash = archiveVersion ? await hashMysqlDumpTool(tool, signal) : undefined;
-      const objects = archiveVersion ? archiveObjects(database, before) : undefined;
+      const objects = archiveVersion ? archiveObjects(database, before, tableScope) : undefined;
       const lock = family === 'mysql' ? 'tabrelio-dump-' + randomUUID() : undefined;
       let uuid: string | undefined;
       if (lock) {
@@ -287,7 +286,7 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
       } finally { await rm(directory, { recursive: true, force: true }); }
       if (JSON.stringify(before) !== JSON.stringify(await catalogue(context, database, tableScope))) throw Error('备份期间数据库对象目录发生变化，未保存备份');
       if (archiveVersion && archiveToolHash && objects) {
-        manifest = { format: 'dbark-backup-zip-store-v1', schemaVersion: 2, family, database, serverVersion: archiveVersion,
+        manifest = { format: 'dbark-backup-zip-store-v1', ...(tableScope ? { schemaVersion: 3, tableScope } : { schemaVersion: 2 }), family, database, serverVersion: archiveVersion,
           toolVersion, toolExecutableSha256: archiveToolHash, objects, resourcesConfirmed: true, restoreVerified: false,
           consistency: { mode: 'innodb-consistent-read', startedAt, completedAt: new Date().toISOString(), allObjectsFrozen: false } };
       } else await output.prepare(true);

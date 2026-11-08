@@ -1,4 +1,5 @@
 import type { DatabaseBackupBlocker, DatabaseBackupKind, DatabaseBackupManifest } from './databaseBackup';
+import type { MysqlBackupTableScope } from './mysqlDatabaseBackup';
 
 /** ZIP64 容器兼容旧清单。用户选取的程序只记录实际可执行文件摘要，目录记录可见对象。 */
 export type DatabaseBackupSelectedToolManifest = Omit<DatabaseBackupManifest,
@@ -8,7 +9,12 @@ export type DatabaseBackupSelectedToolManifest = Omit<DatabaseBackupManifest,
   consistency: { mode: 'innodb-consistent-read'; startedAt: string; completedAt: string; allObjectsFrozen: false };
   resourcesConfirmed: true;
 };
-export type DatabaseBackupFileManifest = DatabaseBackupManifest | DatabaseBackupSelectedToolManifest;
+export type DatabaseBackupTableManifest = Omit<DatabaseBackupSelectedToolManifest, 'schemaVersion'> & {
+  schemaVersion: 3;
+  tableScope: MysqlBackupTableScope;
+};
+export type DatabaseBackupFileManifest = DatabaseBackupManifest | DatabaseBackupSelectedToolManifest | DatabaseBackupTableManifest;
+export type DatabaseBackupTargetManifest = Pick<DatabaseBackupManifest, 'family' | 'serverVersion' | 'database'> & { tableScope?: MysqlBackupTableScope };
 
 export interface DatabaseBackupArchiveView {
   token: string;
@@ -43,14 +49,14 @@ export interface DatabaseBackupRestoreTargetAudit {
   versionMatches: boolean;
   database: string;
   actualDatabase: string | null;
-  state: 'absent' | 'empty' | 'occupied' | 'unknown';
+  state: 'absent' | 'empty' | 'occupied' | 'unknown' | 'tables-present';
   visible: { relations: number; views: number; routines: number; triggers: number; events: number } | null;
   scheduler: 'enabled' | 'disabled' | 'unknown';
   blockers: DatabaseBackupBlocker[];
 }
 
 export function canRestoreBackupArchive(audit: DatabaseBackupRestoreTargetAudit): boolean {
-  return audit.blockers.length === 0 && (audit.state === 'absent' || audit.state === 'empty');
+  return audit.blockers.length === 0 && (audit.state === 'absent' || audit.state === 'empty' || audit.state === 'tables-present');
 }
 
 export const databaseBackupArchiveZh = {
@@ -74,6 +80,7 @@ export const databaseBackupArchiveZh = {
   objects: '清单对象',
   dependencies: '清单中的外部依赖',
   snapshotScope: '清单记录可见对象与 InnoDB 数据快照，外部依赖需另行核对。',
+  tables: '归档所选表', contents: { all: '结构及数据', schema: '仅结构', data: '仅数据' },
   executableHash: '转储工具 SHA-256',
   scope: '归档校验只核对容器和字节摘要。来源与恢复可用性须另行核对，导出不会执行 SQL。',
   saved: (name: string) => `已导出「${name}」`,
@@ -94,6 +101,7 @@ export const databaseBackupArchiveZh = {
   sqlReason: { encoding: '脚本编码无法按 UTF-8 完整读取。', lexical: '脚本语句边界或会话词法条件无法完整解析。', budget: '脚本超过对象检查预算。', version: '清单中的服务器版本无法用于判断条件注释。' },
   sqlScope: '检查只核对显式语句和定义名称。结果以清单声明的方言与版本解释条件注释，完整依赖、定义内容及恢复可用性仍待验证。',
   target: '恢复目标连接',
+  selectedDatabase: '现有目标数据库', selectDatabase: '请选择现有数据库',
   targetPlaceholder: '选择已保存的 MySQL 或 MariaDB 连接',
   noTargets: '保存 MySQL 或 MariaDB 连接后，可以检查恢复目标。',
   audit: '检查目标',
@@ -103,12 +111,13 @@ export const databaseBackupArchiveZh = {
   restoreRejected: '目标复查未通过，未执行归档 SQL',
   restoreAcknowledgement: '我信任这份归档，确认用所选账号执行其中的 SQL。',
   restoreScope: '恢复时会复查同名库是否为空或不存在。SQL 可以使用所选账号的权限，检查无法隔离其他会话的并发修改。停止或失败后，已提交的语句和部分 DDL 可能保留。',
+  restoreTables: '从所选现有数据库开始回放。结构恢复需要空库，仅数据需要匹配的目标表，已有触发器会照常运行。SQL 以所选账号权限执行，停止或失败后可能保留已提交操作。',
   auditing: '正在只读检查恢复目标',
   auditResult: '目标检查结果',
   targetServer: '实际服务器',
   targetDatabase: '目标同名库',
   targetVersion: { match: '与清单版本一致', mismatch: '与清单版本不同' },
-  targetState: { absent: '同名库未发现', empty: '同名库为空', occupied: '同名库已有对象', unknown: '同名库状态未知' },
+  targetState: { absent: '目标库未发现', empty: '目标库为空', occupied: '目标库已有对象', unknown: '目标库状态未知', 'tables-present': '所选 InnoDB 表均已找到' },
   scheduler: '事件调度器',
   schedulerState: { enabled: '开启', disabled: '关闭', unknown: '未知' },
   visible: { relations: '表及其他关系', views: '视图', routines: '过程及函数', triggers: '触发器', events: '事件' },

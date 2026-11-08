@@ -1,14 +1,13 @@
-import type { DatabaseBackupManifest } from '../shared/databaseBackup';
-import type { DatabaseBackupRestoreTargetAudit } from '../shared/databaseBackupArchiveFiles';
+import type { DatabaseBackupRestoreTargetAudit, DatabaseBackupTargetManifest as Manifest } from '../shared/databaseBackupArchiveFiles';
+import { mysqlBackupDatabase } from '../shared/mysqlDatabaseBackup';
 import { execute } from './connection';
 import { databaseBackupGlobalGrants, databaseBackupSourceSql } from './databaseBackupSource';
 import type { StructureTaskContext } from './structureDefinition';
 
 type Context = Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>;
 type Row = Record<string, unknown>;
-type Manifest = Pick<DatabaseBackupManifest, 'family' | 'serverVersion' | 'database'>;
 const factsSql = `SELECT VERSION() AS version, @@version_comment AS versionComment,
-  @@lower_case_table_names AS identifierCase, CAST(@@GLOBAL.event_scheduler AS CHAR) AS scheduler`;
+  @@lower_case_table_names AS identifierCase, CAST(@@GLOBAL.event_scheduler AS CHAR) AS scheduler, DATABASE() AS currentDatabase`;
 const visibleSql = `SELECT
   (SELECT COUNT(*) FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA = BINARY ? AND TABLE_TYPE <> 'VIEW') AS relations,
   (SELECT COUNT(*) FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA = BINARY ? AND TABLE_TYPE = 'VIEW') AS views,
@@ -57,8 +56,12 @@ function count(value: unknown): number {
 }
 
 /** 只发送固定元数据查询。归档库名始终走绑定参数，清单中的 SQL、对象名和权限声明均不参与执行。 */
-export async function auditDatabaseBackupTarget(context: Context, manifest: Manifest): Promise<DatabaseBackupRestoreTargetAudit> {
-  const { database } = manifest;
+export async function auditDatabaseBackupTarget(context: Context, manifest: Manifest, targetDatabase?: string,
+  requireCurrent = false): Promise<DatabaseBackupRestoreTargetAudit> {
+  const { tableScope } = manifest;
+  if (tableScope ? !mysqlBackupDatabase.safeParse(targetDatabase).success : targetDatabase !== undefined)
+    throw Error(tableScope ? '请选择现有目标数据库' : '整库归档使用清单中的同名库');
+  const database = targetDatabase ?? manifest.database;
   if (typeof database !== 'string' || !database || [...database].length > 64 || database.includes('\0') ||
     /^(mysql|information_schema|performance_schema|sys)$/i.test(database)) throw Error('归档库名无效或指向系统库');
 
@@ -82,6 +85,15 @@ export async function auditDatabaseBackupTarget(context: Context, manifest: Mani
     visible = { relations: count(row?.relations), views: count(row?.views), routines: count(row?.routines),
       triggers: count(row?.triggers), events: count(row?.events) };
   }
+  let missingTables: string[] | undefined;
+  if (tableScope?.content === 'data' && actualDatabase === database) {
+    const names = tableScope.tables;
+    const matches = await read(context, 'SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA=BINARY ?' +
+      " AND TABLE_TYPE='BASE TABLE' AND ENGINE='InnoDB' AND BINARY TABLE_NAME IN (" + names.map(() => 'BINARY ?').join(',') + ')',
+      [database, ...names]);
+    const found = new Set(matches.map(row => row.name));
+    missingTables = names.filter(name => !found.has(name));
+  }
   const after = before.schemas ? await visibility(context, family, version) : before;
   const [last] = await read(context, factsSql);
   const sameSession = last && ['version', 'versionComment', 'identifierCase']
@@ -89,7 +101,7 @@ export async function auditDatabaseBackupTarget(context: Context, manifest: Mani
   if (!sameSession) throw Error('检查期间目标服务器或会话条件已变化，请重新检查');
   // 大小写折叠规则跨版本存在差异，非 ASCII 库名在折叠模式下的零行不据此认定为缺失。
   const absenceProven = before.schemas && after.schemas && (identifierCase === 0 || /^[\x20-\x7e]+$/.test(database));
-  const state = visible && Object.values(visible).some(value => value > 0) ? 'occupied'
+  const state = missingTables?.length === 0 ? 'tables-present' : visible && Object.values(visible).some(value => value > 0) ? 'occupied'
     : visible && before.objects && after.objects ? 'empty'
       : schemas.length === 0 && absenceProven ? 'absent' : 'unknown';
   const scheduler = facts.scheduler !== last.scheduler ? 'unknown' : last.scheduler === 'ON' ? 'enabled'
@@ -97,7 +109,11 @@ export async function auditDatabaseBackupTarget(context: Context, manifest: Mani
   const blockers: DatabaseBackupRestoreTargetAudit['blockers'] = [];
   if (!versionMatches) blockers.push({ code: 'version-mismatch', message: '实际服务器系列或版本与归档清单不一致。' });
   if (actualDatabase !== null && actualDatabase !== database) blockers.push({ code: 'case-mismatch', message: '同名库的实际拼写与清单不同。' });
-  if (state === 'occupied') blockers.push({ code: 'occupied', message: '同名库已有对象，恢复可能覆盖现有数据。' });
+  if (requireCurrent && tableScope && (facts.currentDatabase !== database || last.currentDatabase !== database))
+    blockers.push({ code: 'target-changed', message: '执行连接的当前数据库与所选目标不同。' });
+  if (tableScope && state === 'absent') blockers.push({ code: 'missing-database', message: '指定表归档需要已存在的目标数据库。' });
+  if (missingTables?.length) blockers.push({ code: 'missing-tables', message: '目标库中缺少可见的同名 InnoDB 表：' + missingTables.join('、') });
+  if (state === 'occupied' && tableScope?.content !== 'data') blockers.push({ code: 'occupied', message: '目标库已有对象，恢复结构需要空库。' });
   if (state === 'unknown') blockers.push({ code: 'visibility', message: '现有权限或库名匹配结果无法证明同名库不存在或为空。' });
   if (scheduler !== 'disabled') blockers.push({ code: 'event-scheduler', message: '事件调度器未确认关闭。' });
   return { family, version, versionMatches, database, actualDatabase, state, visible, scheduler, blockers };

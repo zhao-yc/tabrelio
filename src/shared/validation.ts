@@ -20,7 +20,7 @@ import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './f
 import { postgresTransactionReadSchema, postgresTransactionApplySchema } from './postgresTransactionSettings';
 import { postgresSearchPathReadSchema, postgresSearchPathApplySchema } from './postgresSearchPath';
 import { postgresQueryTimeoutRead, postgresQueryTimeoutApply } from './postgresQueryTimeouts';
-import { mysqlBackupTablesSchema, mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
+import { mysqlBackupDatabase, mysqlBackupTablesSchema, mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
 import { mysqlSqlFileCancelInspectionSchema, mysqlSqlFileExecuteSchema, mysqlSqlFileInspectionSchema, mysqlSqlFilePickSchema } from './mysqlSqlFile';
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
 import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema, postgresSqlFileInspectionCancelSchema, postgresSqlFileInspectionSchema, postgresSqlFilePickSchema } from './postgresSqlFile';
@@ -661,8 +661,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'backupArchive.open': z.object({ operationId: id }).strict(),
   'backupArchive.exportSql': z.object({ operationId: id, token: id }).strict(),
   'backupArchive.inspectSql': z.object({ operationId: id, token: id }).strict(),
-  'backupArchive.auditTarget': z.object({ operationId: id, token: id, connectionId: id }).strict(),
-  'backupArchive.restore': z.object({ operationId: id, token: id, connectionId: id, acknowledgeScript: z.literal(true) }).strict(),
+  'backupArchive.auditTarget': z.object({ operationId: id, token: id, connectionId: id, targetDatabase: mysqlBackupDatabase.optional() }).strict(),
+  'backupArchive.restore': z.object({ operationId: id, token: id, connectionId: id, targetDatabase: mysqlBackupDatabase.optional(), acknowledgeScript: z.literal(true) }).strict(),
   'backupArchive.cancel': z.object({ operationId: id }).strict(),
   'postgres.archive.choose': postgresArchiveChooseSchema,
   'postgres.archive.list': postgresArchiveListSchema,

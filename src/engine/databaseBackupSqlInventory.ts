@@ -1,5 +1,6 @@
 import { databaseBackupKinds, type DatabaseBackupKind, type DatabaseBackupManifest } from '../shared/databaseBackup';
-import type { DatabaseBackupSqlInventory as Report } from '../shared/databaseBackupArchiveFiles';
+import type { DatabaseBackupFileManifest, DatabaseBackupSqlInventory as Report } from '../shared/databaseBackupArchiveFiles';
+import type { MysqlBackupTableScope } from '../shared/mysqlDatabaseBackup';
 import { SqlScriptScanner } from '../shared/sqlScriptScanner';
 import type { TableDefinitionContext } from '../shared/tableColumnPatches';
 import type { DatabaseBackupArchiveSink } from './databaseBackupArchive';
@@ -88,6 +89,8 @@ export class DatabaseBackupSqlInventoryReader implements DatabaseBackupArchiveSi
   private readonly definitions = new Map<string, Item>();
   private readonly databases = new Set<string>();
   private readonly definers = new Set<string>();
+  private readonly unexpectedTables = new Set<string>();
+  private readonly tableScope?: MysqlBackupTableScope;
   private readonly savedModes = new Map<string, Mode>();
   private mode: Mode = null;
   private database: string | undefined;
@@ -97,10 +100,15 @@ export class DatabaseBackupSqlInventoryReader implements DatabaseBackupArchiveSi
   private other = 0;
   private reason: Report['reason'] = null;
 
-  constructor(private readonly manifest: Pick<DatabaseBackupManifest, 'family' | 'serverVersion' | 'database' | 'objects'>) {
+  constructor(private readonly manifest: Pick<DatabaseBackupManifest, 'family' | 'serverVersion' | 'database' | 'objects'> |
+    DatabaseBackupFileManifest) {
     const version = versionNumber(manifest.serverVersion);
     this.version = version ?? 0;
     if (version === undefined) this.reason = 'version';
+    if ('schemaVersion' in manifest && manifest.schemaVersion === 3) {
+      this.tableScope = manifest.tableScope;
+      this.database = manifest.database;
+    }
   }
 
   async writeBytes(bytes: Uint8Array) {
@@ -179,7 +187,7 @@ export class DatabaseBackupSqlInventoryReader implements DatabaseBackupArchiveSi
     }
     const database = kind === 'database' ? first : this.database;
     if (!database) return;
-    this.remember(this.databases, database);
+    if (!this.tableScope || kind === 'database') this.remember(this.databases, database);
     return { database, object: first, next: cursor + 1 };
   }
 
@@ -203,7 +211,8 @@ export class DatabaseBackupSqlInventoryReader implements DatabaseBackupArchiveSi
     if (verb === 'CREATE' || verb === 'DROP') return this.definition(tokens, verb);
     if (verb === 'INSERT' || verb === 'REPLACE') {
       const target = word(tokens[1]) === 'INTO' && this.readTarget(tokens, 2);
-      if (!target || word(tokens[target.next]) !== 'VALUES') return false;
+      if (!target || word(tokens[target.next]) !== 'VALUES' && !(this.tableScope && symbol(tokens[target.next], '('))) return false;
+      if (this.tableScope && !this.tableScope.tables.includes(target.object)) this.remember(this.unexpectedTables, target.object);
       this.inserts++;
       return true;
     }
@@ -250,14 +259,20 @@ export class DatabaseBackupSqlInventoryReader implements DatabaseBackupArchiveSi
 
   finish(): Report {
     if (!this.reason) this.decode();
-    const expected = new Map(this.manifest.objects.map(item => [key(item), { kind: item.kind, name: item.name }]));
+    const definitions = this.tableScope?.content === 'data' ? [] : this.manifest.objects;
+    const expected = new Map(definitions.map(item => [key(item), { kind: item.kind, name: item.name }]));
     const missing = [...expected].filter(([id]) => !this.definitions.has(id)).map(([, item]) => item);
-    const extra = [...this.definitions].filter(([id]) => !expected.has(id)).map(([, item]) => item);
-    const state = this.reason || this.other || expected.size !== this.manifest.objects.length ? 'partial'
-      : missing.length || extra.length || [...this.databases].some(database => database !== this.manifest.database) ? 'differs' : 'matches';
+    const extra = new Map([...this.definitions].filter(([id]) => !expected.has(id)));
+    for (const name of this.unexpectedTables) {
+      const item = { kind: 'table' as const, name };
+      extra.set(key(item), item);
+    }
+    const wrongDatabase = this.tableScope ? this.databases.size > 0 : [...this.databases].some(database => database !== this.manifest.database);
+    const state = this.reason || this.other || expected.size !== definitions.length ? 'partial'
+      : missing.length || extra.size || wrongDatabase || this.tableScope?.content === 'schema' && this.inserts > 0 ? 'differs' : 'matches';
     const summarize = (items: Item[]) => ({ total: items.length, items: items.slice(0, limits.examples) });
     return { state, statements: this.statements, dataStatements: this.inserts, definitions: this.definitions.size,
       otherStatements: this.other, databases: [...this.databases], definers: [...this.definers],
-      missing: summarize(missing), extra: summarize(extra), reason: this.reason };
+      missing: summarize(missing), extra: summarize([...extra.values()]), reason: this.reason };
   }
 }

@@ -3,6 +3,7 @@ import type { NetworkConnectionProfile } from '../../shared/contracts';
 import { databaseBackupKinds } from '../../shared/databaseBackup';
 import { canRestoreBackupArchive, databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlInventory } from '../../shared/databaseBackupArchiveFiles';
 import { sqlFileImportReceiptSchema, type SqlFileImportReceipt } from '../../shared/sqlFileImport';
+import { mysqlBackupDatabase } from '../../shared/mysqlDatabaseBackup';
 import { databaseBackupZh } from '../locales/databaseBackup.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal } from './ui';
@@ -17,6 +18,8 @@ export function DatabaseBackupArchiveDialog({ connections, onClose, onRefresh }:
 }) {
   const [archive, setArchive] = useState<DatabaseBackupArchiveView | null>(null);
   const [connectionId, setConnectionId] = useState('');
+  const [targetDatabase, setTargetDatabase] = useState('');
+  const [databases, setDatabases] = useState<string[]>([]);
   const [audit, setAudit] = useState<DatabaseBackupRestoreTargetAudit | null>(null);
   const [trusted, setTrusted] = useState(false);
   const [receipt, setReceipt] = useState<SqlFileImportReceipt | null>();
@@ -25,18 +28,31 @@ export function DatabaseBackupArchiveDialog({ connections, onClose, onRefresh }:
   const [busy, setBusy] = useState(''), [status, setStatus] = useState(''), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
   const target = connections.find(connection => connection.id === connectionId);
+  const tableScope = archive?.manifest.schemaVersion === 3 ? archive.manifest.tableScope : undefined;
+  const selectableTarget = !!target && (!tableScope || !!targetDatabase);
   const familyName = (family: NetworkConnectionProfile['dialect']) => family === 'mysql' ? 'MySQL' : 'MariaDB';
   const ready = !!audit && canRestoreBackupArchive(audit);
   useEffect(() => { if (receipt !== undefined) receiptPanel.current?.scrollIntoView({ block: 'nearest' }); }, [receipt]);
+  useEffect(() => {
+    if (!tableScope || !connectionId) return;
+    let current = true;
+    void invoke('mysql.compareData.catalogue', { connectionId }).then(names => {
+      if (current) setDatabases(names.filter(name => mysqlBackupDatabase.safeParse(name).success));
+    }).catch(reason => { if (current) setError(errorMessage(reason)); });
+    return () => { current = false; };
+  }, [tableScope, connectionId]);
+
+  function resetTarget() { setAudit(null); setTrusted(false); setReceipt(undefined); setError(''); }
   async function run(action: 'open' | 'export' | 'audit' | 'inspectSql' | 'restore') {
     if (running.current) return;
     const operationId = uid();
     running.current = operationId;
     const busyMessage = { open: text.checking, export: text.exporting, audit: text.auditing, inspectSql: text.inspectingSql, restore: text.restoring };
+    const scope = tableScope ? { targetDatabase } : {};
     setError(''); setStatus(''); setBusy(busyMessage[action]);
     try {
       if (action === 'open') {
-        setArchive(null); setAudit(null); setInventory(null); setTrusted(false); setReceipt(undefined);
+        setArchive(null); setAudit(null); setInventory(null); setTrusted(false); setReceipt(undefined); setTargetDatabase(''); setDatabases([]);
         const result = await invoke('backupArchive.open', { operationId });
         if (result) { setArchive(result); setStatus(text.checked); }
       } else if (action === 'export' && archive) {
@@ -45,13 +61,13 @@ export function DatabaseBackupArchiveDialog({ connections, onClose, onRefresh }:
       } else if (action === 'inspectSql' && archive) {
         setInventory(null);
         setInventory(await invoke('backupArchive.inspectSql', { operationId, token: archive.token }));
-      } else if (action === 'audit' && archive && target) {
+      } else if (action === 'audit' && archive && target && selectableTarget) {
         setAudit(null); setTrusted(false);
-        setAudit(await invoke('backupArchive.auditTarget', { operationId, token: archive.token, connectionId: target.id }));
-      } else if (action === 'restore' && archive && target && ready && trusted) {
+        setAudit(await invoke('backupArchive.auditTarget', { operationId, token: archive.token, connectionId: target.id, ...scope }));
+      } else if (action === 'restore' && archive && target && selectableTarget && ready && trusted) {
         setAudit(null); setTrusted(false); setReceipt(undefined);
         try {
-          const result = await invoke('backupArchive.restore', { operationId, token: archive.token, connectionId: target.id, acknowledgeScript: true });
+          const result = await invoke('backupArchive.restore', { operationId, token: archive.token, connectionId: target.id, ...scope, acknowledgeScript: true });
           const checked = sqlFileImportReceiptSchema.safeParse(result.sql);
           setReceipt(checked.success && checked.data.encoding === 'utf8' ? checked.data : null);
         } finally { onRefresh(target.id); }
@@ -78,10 +94,13 @@ export function DatabaseBackupArchiveDialog({ connections, onClose, onRefresh }:
         <p>{text.archiveHash}　<code>{archive.archive.sha256}</code></p>
         <h3>{text.objects}</h3>
         <ul>{databaseBackupKinds.map(kind => <li key={kind}>{databaseBackupZh.kinds[kind]}　{counts.get(kind) ?? 0}</li>)}</ul>
-        {archive.manifest.schemaVersion === 2 && <>
+        {archive.manifest.schemaVersion !== 1 && <>
           <p>{text.snapshotScope}</p>
           <p>{text.executableHash}　<code>{archive.manifest.toolExecutableSha256}</code></p>
         </>}
+        {tableScope && <details open><summary>{text.tables}（{tableScope.tables.length}） · {text.contents[tableScope.content]}</summary>
+          <ul>{tableScope.tables.map(name => <li key={name}>{name}</li>)}</ul>
+        </details>}
         {archive.manifest.schemaVersion === 1 && archive.manifest.externalDependencies.length > 0 && <details>
           <summary>{text.dependencies}（{archive.manifest.externalDependencies.length}）</summary>
           <ul>{archive.manifest.externalDependencies.map((value, index) => <li key={index}>{value}</li>)}</ul>
@@ -105,21 +124,26 @@ export function DatabaseBackupArchiveDialog({ connections, onClose, onRefresh }:
         <h3>{text.target}</h3>
         {connections.length ? <div className="database-backup-target">
           <select aria-label={text.target} disabled={!!busy} value={target?.id ?? ''}
-            onChange={event => { setConnectionId(event.target.value); setAudit(null); setTrusted(false); setReceipt(undefined); setError(''); }}>
+            onChange={event => { setConnectionId(event.target.value); setTargetDatabase(''); setDatabases([]); resetTarget(); }}>
             <option value="">{text.targetPlaceholder}</option>
             {connections.map(connection => <option key={connection.id} value={connection.id}>{connection.name} · {familyName(connection.dialect)}</option>)}
           </select>
-          <button disabled={!!busy || !target} onClick={() => void run('audit')}>{text.audit}</button>
+          {tableScope && <select aria-label={text.selectedDatabase} disabled={!!busy || !target || !databases.length} value={targetDatabase}
+            onChange={event => { setTargetDatabase(event.target.value); resetTarget(); }}>
+            <option value="">{text.selectDatabase}</option>
+            {databases.map(name => <option key={name}>{name}</option>)}
+          </select>}
+          <button disabled={!!busy || !selectableTarget} onClick={() => void run('audit')}>{text.audit}</button>
         </div> : <p>{text.noTargets}</p>}
         {audit && target && <div role="region" aria-label={text.auditResult} aria-live="polite">
           <p>{text.targetServer}　{familyName(audit.family)} {audit.version} · {text.targetVersion[audit.versionMatches ? 'match' : 'mismatch']}</p>
-          <p>{text.targetDatabase}　{audit.actualDatabase ?? audit.database} · {text.targetState[audit.state]}</p>
+          <p>{tableScope ? text.selectedDatabase : text.targetDatabase}　{audit.actualDatabase ?? audit.database} · {text.targetState[audit.state]}</p>
           <p>{text.scheduler}　{text.schedulerState[audit.scheduler]}</p>
           {audit.visible && <p>{Object.entries(audit.visible).map(([kind, amount]) => `${text.visible[kind as keyof typeof text.visible]} ${amount}`).join(' · ')}</p>}
           {audit.blockers.length > 0 && <ul>{audit.blockers.map(item => <li key={item.code}>{item.message}</li>)}</ul>}
           <p>{text.auditScope}</p>
           {ready && <div className="database-backup-restore-controls">
-            <p className="warning-text">{text.restoreScope}</p>
+            <p className="warning-text">{tableScope ? text.restoreTables : text.restoreScope}</p>
             <label><input type="checkbox" disabled={!!busy} checked={trusted} onChange={event => setTrusted(event.target.checked)}/> {text.restoreAcknowledgement}</label>
             <button className="danger" disabled={!!busy || !trusted} onClick={() => void run('restore')}>{text.restore}</button>
           </div>}

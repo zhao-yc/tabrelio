@@ -115,10 +115,9 @@ export function MysqlDatabaseBackupDialog({ connections, onClose }: {
         <Field label={text.selection}><select aria-label={text.selection} value={scope} onChange={event => {
           const value = event.target.value === 'tables' ? 'tables' : 'whole';
           setScope(value);
-          if (value === 'tables') setFormat('sql');
           resetTables();
         }}><option value="whole">{text.whole}</option><option value="tables">{text.selected}</option></select></Field>
-        <Field label={text.format}><select aria-label={text.format} value={format} disabled={scoped} onChange={event => {
+        <Field label={text.format}><select aria-label={text.format} value={format} onChange={event => {
           setFormat(event.target.value === 'archive' ? 'archive' : 'sql'); resetFile();
         }}>
           <option value="sql">{text.sql}</option><option value="archive">{text.archive}</option>
