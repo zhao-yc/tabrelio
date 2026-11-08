@@ -1,7 +1,7 @@
 import { mappedColumns, mappedKeyNames, type CompareSide } from '../shared/dataCompareMapping';
 import { randomUUID } from 'node:crypto';
 import type { CellValue, TaskEvent } from '../shared/contracts';
-import { batchSyncApplySchema, batchSyncConfirmation, batchSyncPreviewRow, resolveBatchSyncSelection, type BatchSyncPreview } from '../shared/dataCompareBatchSync';
+import { batchSyncApplySchema, batchSyncConfirmation, batchSyncPreviewRow, createBatchSyncPreviewBudget, requireBatchSyncSelection, type BatchSyncPreview } from '../shared/dataCompareBatchSync';
 import { mysqlBatchSyncPreviewSchema } from '../shared/mysqlBatchSync';
 import { mysqlDataCompareSchema, mysqlDataCompareZh as text, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareLimits as limits, postgresDataSyncLimits as syncLimits,
@@ -209,7 +209,7 @@ export class MysqlDataCompareTasks {
       const groups: MysqlSyncGroup[] = [], tables: BatchSyncPreview<CellValue>['tables'] = [];
       const counts = { insert: 0, update: 0, delete: 0 };
       const actions = { 'source-only': 'insert', 'target-only': 'delete', different: 'update' } as const;
-      let size = 0, rowCount = 0;
+      const reserve = createBatchSyncPreviewBudget();
       for (const pair of input.pairs) {
         const target = { ...input.target, table: pair.target };
         const { result, evidence } = await this.readPair({
@@ -224,11 +224,10 @@ export class MysqlDataCompareTasks {
           if (!input.actions.includes(action)) continue;
           const row = evidence?.rows[index];
           if (!row) throw Error('右侧表不能生成同步证据：' + table);
-          if (++rowCount > syncLimits.selected) throw Error('MySQL／MariaDB 多表同步最多 100 行，请减少表对或操作范围');
-          size += Buffer.byteLength(JSON.stringify(row));
-          if (size > syncLimits.bytes) throw Error('MySQL／MariaDB 多表同步超过 1 MiB，请减少表对或操作范围');
+          const detail = batchSyncPreviewRow(action, difference, columns, row, pair.mapping);
+          reserve(detail);
           tableCounts[action]++; counts[action]++;
-          rows.push(row); details.push(batchSyncPreviewRow(action, difference, columns, pair.mapping));
+          rows.push(row); details.push(detail);
         }
         if (evidence && rows.length) {
           groups.push({ target, rows, evidence: { ...evidence, rows: [] } });
@@ -281,7 +280,7 @@ export class MysqlDataCompareTasks {
         record.owner !== scope.owner || record.connectionRevision !== scope.connectionRevision ||
         record.expires <= Date.now() || this.active.size || record.groups[0].target.connectionId !== targetConnectionId)
       throw Error(mysqlDataSyncZh.stale);
-    const selection = resolveBatchSyncSelection(record.report.tables, input.selected);
+    const selection = requireBatchSyncSelection(record.report.tables, input.selected);
     if (selection.confirmation !== input.confirmation) throw Error(mysqlDataSyncZh.stale);
     this.batch = undefined;
     return this.write(input.taskId, selection.groups.map(({ tableIndex, rows }) => {

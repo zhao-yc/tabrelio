@@ -7,7 +7,7 @@ SQLite、PostgreSQL、MySQL 和 MariaDB 的多表同步预览可逐表或逐行�
 3. 展开记录下的「查看字段差异」，核对两侧原值及异名字段。新增和删除行会显示对应的缺行提示。
 4. 检查更新后的操作数和目标确认文字，输入确认文字并提交。调整选择后需要重新输入，全部取消时提交不可用。
 
-确认只领取原预览中选中的记录，保留原有的事务、原值复核和冲突回滚。取消整张表后，该表不参与本次写入。每批预览沿用最多 100 条差异和 1 MiB 的写入证据预算。
+确认只领取原预览中选中的记录，保留原有的事务、原值复核和冲突回滚。取消整张表后，该表不参与本次写入。单次提交沿用 100 条差异和 1 MiB 写入证据预算。候选可以通过[大批差异分页预览](data-compare-batch-large-preview-20261108.md)分批选择。
 
 对标工作流参考 [Navicat 数据同步差异预览](https://help.navicat.com/hc/en-us/articles/115003576232-Can-I-check-for-data-differences-between-the-source-and-target-during-synchronization)。
 

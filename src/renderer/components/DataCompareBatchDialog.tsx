@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { batchSyncActions, resolveBatchSyncSelection, type BatchSyncAction, type BatchSyncPreview } from '../../shared/dataCompareBatchSync';
+import { batchSyncActions, batchSyncLimits, batchSyncSelectionIssue, resolveBatchSyncSelection,
+  type BatchSyncAction, type BatchSyncPreview } from '../../shared/dataCompareBatchSync';
 import { sqliteDataSyncZh as syncText } from '../../shared/sqliteDataCompare';
 import { displaySqliteCompareValue } from '../sqliteDataCompareValues';
 import { sqliteBatchSyncZh, postgresBatchSyncZh, mysqlBatchSyncZh } from '../locales/sqliteBatchSync.zh-CN';
@@ -87,12 +88,14 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   const [actions, setActions] = useState<BatchSyncAction[]>(['insert', 'update']);
   const [syncPreview, setSyncPreview] = useState<BatchSyncPreview<string>>();
   const [omitted, setOmitted] = useState<ReadonlySet<number>>(new Set());
+  const [previewPage, setPreviewPage] = useState(0);
   const [inspected, setInspected] = useState<number>();
   const [syncPhase, setSyncPhase] = useState<'preview' | 'apply'>();
   const [confirmation, setConfirmation] = useState('');
   const syncWork = useRef<{ taskId: string; phase: 'preview' | 'apply' } | undefined>(undefined);
   const reviewSync = useRef<HTMLFieldSetElement>(null);
   const reviewDetail = useRef<HTMLFieldSetElement>(null);
+  const reviewRows = useRef<HTMLDivElement>(null);
   const detailId = useId();
   const active = useRef<Active | undefined>(undefined);
   const applying = useRef(false);
@@ -233,7 +236,20 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
   const syncTables = syncPreview?.tables.map(item => ({ ...item, rows: item.rows.map(row => ({ ...row, ordinal: rowOrdinal++ })) })) ?? [];
   const selected = syncTables.flatMap(item => item.rows.filter(row => !omitted.has(row.ordinal)).map(row => row.ordinal));
   const selection = syncPreview && resolveBatchSyncSelection(syncPreview.tables, selected);
+  const all = syncPreview && resolveBatchSyncSelection(syncPreview.tables);
+  const allFit = !!all && !batchSyncSelectionIssue(all);
+  const selectionIssue = selection && batchSyncSelectionIssue(selection);
   const detail = syncTables.flatMap(item => item.rows).find(row => row.ordinal === inspected);
+  const pages = Math.max(1, Math.ceil(rowOrdinal / batchSyncLimits.page));
+  const pageStart = previewPage * batchSyncLimits.page;
+  const visibleRows = (ordinal: number) => ordinal >= pageStart && ordinal < pageStart + batchSyncLimits.page;
+  const pageOrdinals = syncTables.flatMap(item => item.rows.filter(row => visibleRows(row.ordinal)).map(row => row.ordinal));
+
+  function changePreviewPage(page: number) {
+    setPreviewPage(page);
+    setInspected(undefined);
+    if (reviewRows.current) reviewRows.current.scrollTop = 0;
+  }
 
   function markPreviewRows(ordinals: number[], checked: boolean) {
     setOmitted(previous => {
@@ -257,13 +273,19 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
           targetConnectionId: target.connectionId }), displaySqliteCompareValue)
         : displayBatchValues(await invoke(`${networkDialect}.compareData.batchPreview`, { ...request, source, target }),
           key => displayServerCompareValue(key, networkDialect));
-      if (preview) { setOmitted(new Set()); setInspected(undefined); setSyncPreview(preview); } else setNotice(batchSyncText.noChanges);
+      if (preview) {
+        const scope = resolveBatchSyncSelection(preview.tables);
+        // 大批预览先留空，让用户逐页选中，避免默认准备超预算或大批量写入。
+        setOmitted(new Set(batchSyncSelectionIssue(scope) ? Array.from({ length: scope.rowCount }, (_, index) => index) : []));
+        changePreviewPage(0);
+        setSyncPreview(preview);
+      } else setNotice(batchSyncText.noChanges);
     } catch (reason) { setError(errorMessage(reason)); }
     finally { syncWork.current = undefined; setSyncPhase(undefined); }
   }
 
   async function applySync() {
-    if (!syncPreview || !selection?.groups.length || confirmation !== selection.confirmation || syncWork.current) return;
+    if (!syncPreview || !selection?.groups.length || selectionIssue || confirmation !== selection.confirmation || syncWork.current) return;
     const taskId = uid();
     syncWork.current = { taskId, phase: 'apply' }; setSyncPhase('apply'); setError(''); setNotice('');
     try {
@@ -353,12 +375,18 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
         <legend>{batchSyncText.previewTitle}</legend>
         <p>{label(target)}　{selection.confirmation || batchSyncText.noneSelected}</p>
         <p>{batchSyncActions.map(action => syncText[action] + ' ' + selection.counts[action]).join(' · ')}</p>
+        <p>{batchSyncText.selectionCount(selection.rowCount, rowOrdinal)}{!allFit && ' · ' + batchSyncText.largePreview}</p>
+        {selectionIssue && <p role="alert">{selectionIssue}</p>}
         <div className="check-row">
-          <button type="button" disabled={selected.length === rowOrdinal} onClick={() => markPreviewRows([...omitted], true)}>{batchSyncText.selectAll}</button>
+          <button type="button" disabled={!allFit || selected.length === rowOrdinal} onClick={() => markPreviewRows([...omitted], true)}>{batchSyncText.selectAll}</button>
           <button type="button" disabled={!selected.length} onClick={() => markPreviewRows(selected, false)}>{batchSyncText.clearAll}</button>
+          {pages > 1 && <button type="button" disabled={pageOrdinals.every(ordinal => !omitted.has(ordinal))}
+            onClick={() => markPreviewRows(pageOrdinals, true)}>{batchSyncText.selectPage}</button>}
         </div>
-        <div className="sqlite-data-sync-preview-rows">
-          {syncTables.map(item => {
+        <div className="sqlite-data-sync-preview-rows" ref={reviewRows}>
+          {syncTables.flatMap(item => {
+            const rows = item.rows.filter(row => visibleRows(row.ordinal));
+            if (!rows.length) return [];
             const tableLabel = family === 'sqlite' ? 'main.' + item.table : item.table;
             const checked = item.rows.some(row => !omitted.has(row.ordinal));
             const tableAction = checked ? batchSyncText.clearTable : batchSyncText.selectTable;
@@ -366,7 +394,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
               <strong>{tableLabel}</strong>{' '}
               <button type="button" aria-label={tableAction + ' ' + tableLabel}
                 onClick={() => markPreviewRows(item.rows.map(row => row.ordinal), !checked)}>{tableAction}</button>
-              <ul>{item.rows.map(row => <li key={row.ordinal}>
+              <ul>{rows.map(row => <li key={row.ordinal}>
                 <div className="sqlite-data-sync-preview-choice">
                   <label className="check"><input type="checkbox" checked={!omitted.has(row.ordinal)}
                     onChange={event => markPreviewRows([row.ordinal], event.target.checked)}/>
@@ -379,6 +407,14 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
             </div>;
           })}
         </div>
+        {pages > 1 && <div className="sqlite-data-compare-pager">
+          <button type="button" disabled={previewPage === 0} onClick={() => changePreviewPage(previewPage - 1)}>{batchSyncText.previousPage}</button>
+          <span aria-live="polite">{batchSyncText.page(previewPage + 1, pages)}</span>
+          <button type="button" disabled={previewPage + 1 === pages} onClick={() => changePreviewPage(previewPage + 1)}>{batchSyncText.nextPage}</button>
+          <select aria-label={batchSyncText.jumpPage} value={previewPage} onChange={event => changePreviewPage(Number(event.target.value))}>
+            {Array.from({ length: pages }, (_, index) => <option key={index} value={index}>{batchSyncText.page(index + 1, pages)}</option>)}
+          </select>
+        </div>}
         {detail && <fieldset id={detailId} ref={reviewDetail} className="sqlite-data-compare-endpoint">
           <legend>{batchSyncText.detailHeading}</legend>
           <p>{syncText[detail.action]}　{detail.key.join(' / ')}</p>
@@ -389,7 +425,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
             </tr>)}</tbody>
           </table>
         </fieldset>}
-        <Field label={syncText.confirm}><input aria-label={syncText.confirm} disabled={!selected.length} value={confirmation} onChange={event => setConfirmation(event.target.value)}/></Field>
+        <Field label={syncText.confirm}><input aria-label={syncText.confirm} disabled={!selected.length || !!selectionIssue} value={confirmation} onChange={event => setConfirmation(event.target.value)}/></Field>
       </fieldset>}
       {syncPhase && <p role="status">{syncPhase === 'preview' ? batchSyncText.prepare : batchSyncText.working}</p>}
       {catalogues && !pairs.length && <p>{text.noPairs}</p>}
@@ -403,7 +439,8 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
       {syncPhase === 'preview' && <button onClick={stopSyncPreview}>{text.cancel}</button>}
       {syncPreview ? <>
         <button disabled={!!syncPhase} onClick={() => { setSyncPreview(undefined); setConfirmation(''); }}>{batchSyncText.back}</button>
-        <button className="danger" disabled={!!syncPhase || !selection?.groups.length || confirmation !== selection.confirmation} onClick={() => void applySync()}>{batchSyncText.apply}</button>
+        <button className="danger" disabled={!!syncPhase || !selection?.groups.length || !!selectionIssue || confirmation !== selection.confirmation}
+          onClick={() => void applySync()}>{batchSyncText.apply}</button>
       </> : syncEligible && <button disabled={locked || !actions.length || !configuration.success} onClick={() => void prepareSync()}>{batchSyncText.preview}</button>}
       <span className="grow"/>
       <button disabled={locked || !catalogues} onClick={swap}>{profileText.swap}</button>

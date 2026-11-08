@@ -509,6 +509,20 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
     expect((await readBatch(right))[0]).toEqual(partialAlpha);
     expect((await readGamma()).map(row => row.payload)).toEqual(['00ff80', '88']);
+    await left.query(`INSERT INTO "对照".batch_alpha SELECT id,'分页候选' FROM generate_series(1000,1124) AS series(id)`);
+    await overview.getByRole('checkbox', { name: sync.update, exact: true }).uncheck();
+    await overview.getByRole('checkbox', { name: sync.delete, exact: true }).uncheck();
+    await prepareSync.click();
+    await expect(batchReview).toContainText(batchSync.selectionCount(0, 125));
+    await batchReview.getByRole('combobox', { name: batchSync.jumpPage, exact: true }).selectOption('4');
+    await expect(batchReview.locator('[aria-live="polite"]')).toHaveText(batchSync.page(5, 5));
+    await batchReview.getByRole('listitem').filter({ hasText: '"1124"' }).getByRole('checkbox').check();
+    await batchConfirm.fill(targetDatabase + '."对照"."batch_alpha"');
+    await page.screenshot({ path: info.outputPath('PostgreSQL多表同步大批分页.png') });
+    await batchApply.click();
+    await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+    expect((await right.query(`SELECT id::text, note FROM "对照".batch_alpha WHERE id>=1000`)).rows)
+      .toEqual([{ id: '1124', note: '分页候选' }]);
     await overview.getByRole('button', { name: batch.return, exact: true }).click();
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();

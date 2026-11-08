@@ -414,6 +414,29 @@ test('MySQL 与 MariaDB 对两端同步所选差异并确认冲突回滚', async
     await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
     expect((await readMappedRight()).map(row => row.raw)).toEqual(['00FF85', '66']);
     expect(await values(right, mirror, 'mirror')).toEqual(mariaBeforeSelection);
+    const seedLarge = (client: typeof left, start: number) => client.query(
+      'INSERT INTO ' + mirror + '.mirror(id,note) VALUES ' + Array.from({ length: 125 }, (_, index) => '(' + (start + index) + ",'分页候选')").join(','),
+    );
+    const selectLast = async (client: typeof left, start: number, capture = false) => {
+      await prepareBatch.click();
+      await expect(batchReview).toContainText(batchSync.selectionCount(0, 125));
+      await batchReview.getByRole('combobox', { name: batchSync.jumpPage, exact: true }).selectOption('4');
+      await batchReview.getByRole('listitem').filter({ hasText: '"' + (start + 124) + '"' }).getByRole('checkbox').check();
+      await batchConfirm.fill('`' + mirror + '`.`mirror`');
+      if (capture) await page.screenshot({ path: info.outputPath('MySQL与MariaDB多表同步大批分页.png') });
+      await applyBatch.click();
+      await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+      const result = (await client.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS id,note FROM ' + mirror +
+        '.mirror WHERE id BETWEEN ? AND ? ORDER BY id', [start, start + 124]))[0];
+      expect(result).toEqual([{ id: String(start + 124), note: '分页候选' }]);
+    };
+    await overview.getByRole('checkbox', { name: sync.update, exact: true }).uncheck();
+    await seedLarge(left, 1000);
+    await selectLast(right, 1000, true);
+    await overview.getByRole('button', { name: profiles.swap, exact: true }).click();
+    await overview.getByRole('checkbox', { name: sync.update, exact: true }).uncheck();
+    await seedLarge(right, 2000);
+    await selectLast(left, 2000);
     await overview.getByRole('button', { name: batch.return, exact: true }).click();
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();

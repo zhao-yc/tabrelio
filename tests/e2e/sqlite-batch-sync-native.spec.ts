@@ -215,6 +215,45 @@ test('SQLite 同文件多表事务原子提交、冲突回滚与精确回执', a
     await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
     expect(values(right)[0]).toEqual(alphaBeforeSelection);
     expect(readMapped().map(row => row.payload)).toEqual(['00FF80', '88', '66']);
+
+    edit(left, `WITH RECURSIVE n(i) AS (VALUES(1000) UNION ALL SELECT i+1 FROM n WHERE i<1123)
+      INSERT INTO alpha SELECT i, '分页候选' FROM n;
+      INSERT INTO mapped_left(code,seq,raw) VALUES('page-extra',4,X'44')`);
+    await overview.getByRole('checkbox', { name: sync.update, exact: true }).uncheck();
+    await deleteRows.uncheck();
+    await preview.click();
+    const next = review.getByRole('button', { name: batchSync.nextPage, exact: true });
+    const previous = review.getByRole('button', { name: batchSync.previousPage, exact: true });
+    await expect(review).toContainText(batchSync.selectionCount(0, 125));
+    await expect(review.getByRole('button', { name: batchSync.selectAll, exact: true })).toBeDisabled();
+    await expect(review.getByRole('listitem')).toHaveCount(25);
+    for (let number = 1; number <= 5; number++) {
+      await review.getByRole('button', { name: batchSync.selectPage, exact: true }).click();
+      if (number < 5) await next.click();
+    }
+    await expect(review).toContainText(batchSync.selectionCount(125, 125));
+    await expect(review.getByRole('alert')).toContainText('100 条');
+    await expect(apply).toBeDisabled();
+    await review.getByRole('button', { name: batchSync.clearAll, exact: true }).click();
+    const last = review.getByRole('listitem').filter({ hasText: 'TEXT "page-extra"' }).getByRole('checkbox');
+    await last.check();
+    await previous.click();
+    const jump = review.getByRole('combobox', { name: batchSync.jumpPage, exact: true });
+    await jump.selectOption('0');
+    await review.getByRole('listitem').filter({ hasText: 'INTEGER 1000' }).getByRole('checkbox').check();
+    await jump.selectOption('4');
+    await expect(review).toContainText(batchSync.selectionCount(2, 125));
+    await expect(review.locator('[aria-live="polite"]')).toHaveText(batchSync.page(5, 5));
+    await expect(last).toBeChecked();
+    await confirmation.fill('main.alpha 等 2 张表');
+    await last.scrollIntoViewIfNeeded();
+    await expect(last).toBeInViewport();
+    await page.screenshot({ path: info.outputPath('SQLite多表同步大批分页.png') });
+    await apply.click();
+    await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+    expect(values(right)[0].filter(row => Number(row.id) >= 1000)).toEqual([{ id: 1000, value: '分页候选' }]);
+    expect(readMapped().find(row => row.identifier === 'page-extra')).toEqual(
+      { identifier: 'page-extra', serial: '4', payload: '44', local_note: '目标默认', derived: 1 });
     expect(pageErrors).toEqual([]);
     await overview.getByRole('button', { name: batch.return, exact: true }).click();
     await modal.getByRole('button', { name: text.close, exact: true }).click();

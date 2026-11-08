@@ -9,7 +9,7 @@ import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSql
 import { inspectMysqlRestoreSql } from '../engine/mysqlSqlFileInspection';
 import type { PostgresBatchSyncPreview, PostgresBatchSyncPreviewInput } from '../shared/postgresBatchSync';
 import type { MysqlBatchSyncPreviewInput } from '../shared/mysqlBatchSync';
-import { resolveBatchSyncSelection, type BatchSyncApplyInput } from '../shared/dataCompareBatchSync';
+import { requireBatchSyncSelection, type BatchSyncApplyInput } from '../shared/dataCompareBatchSync';
 import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
@@ -200,7 +200,7 @@ interface SqliteSynchronization extends SqliteSyncScope {
   id: string; evidence: SqliteSyncEvidence; preview?: { id: string; claim: SqliteEditClaim };
 }
 let sqliteSynchronization: SqliteSynchronization | undefined;
-let sqliteBatchSync: (SqliteSyncScope & { id: string; claim: SqliteEditClaim; tables: SqliteBatchSyncPreview['tables'] }) | undefined;
+let sqliteBatchSync: (SqliteSyncScope & { id: string; groups: SqliteSyncEvidence[]; tables: SqliteBatchSyncPreview['tables'] }) | undefined;
 
 let sqliteCopyTask: { id: string; owner: MainInvocation; abort: AbortController } | undefined;
 let binaryCellFileActive = false;
@@ -1145,7 +1145,7 @@ function applyNetworkBatchSync(dialect: 'postgres' | 'mysql', input: BatchSyncAp
   if (!record || record.dialect !== dialect || record.previewId !== input.previewId ||
       record.revision !== store.connectionRevision() || record.expires <= Date.now() || networkDataComparison ||
       shuttingDown || !columnsMain.sharesDocumentOwner(record.owner, owner!)) throw Error(stale);
-  if (resolveBatchSyncSelection(record.tables, input.selected).confirmation !== input.confirmation) throw Error(stale);
+  if (requireBatchSyncSelection(record.tables, input.selected).confirmation !== input.confirmation) throw Error(stale);
   if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('同步任务编号已使用');
   connectionConfig.assertAvailable(record.sourceId); connectionConfig.assertAvailable(record.target.connectionId);
   const targetProfile = store.resolveConnection(record.target.connectionId);
@@ -1238,11 +1238,12 @@ async function previewSqliteBatchSync(input: SqliteBatchSyncPreviewInput, owner:
     });
     assertOwner();
     if (!prepared) return null;
-    const { claim, tables } = prepared;
+    const { groups, ...preview } = prepared;
     const id = randomUUID();
-    sqliteBatchSync = { id, claim, tables, owner: owner!, revision, expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, targetConnectionId: input.targetConnectionId };
+    sqliteBatchSync = { id, groups, tables: preview.tables, owner: owner!, revision,
+      expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, targetConnectionId: input.targetConnectionId };
     setTimeout(() => { if (sqliteBatchSync?.id === id) sqliteBatchSync = undefined; }, sqliteDataSyncLimits.lifetimeMs).unref();
-    return { previewId: id, confirmation: claim.confirmation, counts: claim.counts, tables };
+    return { previewId: id, ...preview };
   });
 }
 
@@ -1281,13 +1282,15 @@ function applySqliteBatchSync(input: BatchSyncApplyInput, owner: MainInvocation 
   const record = sqliteBatchSync;
   assertSqliteSyncOwner(record, owner);
   if (record.id !== input.previewId) throw Error(sqliteDataSyncZh.stale);
-  const selection = resolveBatchSyncSelection(record.tables, input.selected);
+  const selection = requireBatchSyncSelection(record.tables, input.selected);
   if (selection.confirmation !== input.confirmation) throw Error(sqliteDataSyncZh.stale);
   if (tasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('SQLite 任务编号已使用');
+  const profile = store.resolveConnection(record.targetConnectionId);
+  if (profile.dialect !== 'sqlite') throw Error(sqliteDataSyncZh.stale);
+  const claim = selectSqliteBatchSyncClaim(record.groups, selection, profile);
   sqliteBatchSync = undefined;
   const { previewId, taskId, confirmation } = input;
-  return executeSqliteSync({ previewId, taskId, confirmation }, selectSqliteBatchSyncClaim(record.claim, selection),
-    () => assertSqliteSyncOwner(record, owner));
+  return executeSqliteSync({ previewId, taskId, confirmation }, claim, () => assertSqliteSyncOwner(record, owner));
 }
 
 async function executeSqliteSync(input: import('../shared/sqliteTableEdit').SqliteTableEditApplyInput, claim: SqliteEditClaim, assertCurrent: () => void) {

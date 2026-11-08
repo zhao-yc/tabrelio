@@ -16,6 +16,8 @@
 
 多表同步预览可展开每条差异的左右原值，取消整张表或单条记录。确认文字及操作数会随选择更新。[多表同步预览逐表与逐行选择](development/data-compare-batch-row-selection-20261108.md)
 
+差异较多时可分页查看并跨页勾选。预览最多容纳 2,000 条候选，单次事务最多提交 100 条。[多表同步大批差异分页预览](development/data-compare-batch-large-preview-20261108.md)
+
 SQLite 多表比较窗口可对同一个可写右侧文件执行多表同步。选择操作后预览各表及记录键，输入窗口显示的目标确认文字后提交。默认选择插入和更新，删除需单独勾选。[SQLite 多表事务同步](development/sqlite-multi-table-sync-20261108.md)
 
 SQLite 单表和多表同步也可使用自定义业务键及异名字段。更新只写映射的非键列，插入的未映射列使用右侧默认值。[SQLite 自定义键与字段映射同步](development/sqlite-mapped-data-sync-20261108.md)

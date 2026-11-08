@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { SqliteConnectionProfile } from '../shared/contracts';
 import type { SqliteBatchSyncPreview, SqliteBatchSyncPreviewInput } from '../shared/sqliteBatchSync';
-import { batchSyncConfirmation, batchSyncPreviewRow, resolveBatchSyncSelection } from '../shared/dataCompareBatchSync';
+import { batchSyncConfirmation, batchSyncPreviewRow, createBatchSyncPreviewBudget, type requireBatchSyncSelection } from '../shared/dataCompareBatchSync';
 import type { SqliteDataCompareEndpoint, SqliteDataCompareInput, SqliteDataCompareOutput } from '../shared/sqliteDataCompare';
 import { sqliteDataSyncLimits as limits } from '../shared/sqliteDataCompare';
 import type { SqliteFileIdentity, SqliteValue } from '../engine/sqlite/protocol';
@@ -60,15 +60,15 @@ export function buildSqliteSyncClaim(evidence: SqliteSyncEvidence, selected: rea
     synchronization: { columns: evidence.columns, rows: selectedRows.map(row => row.after) } };
 }
 
-/** 读取并编译同一目标文件内的多个表。预览仅保留选定操作所需的原值及绑定参数。 */
+/** 冻结同一目标文件的候选差异。只有最终选中的行才编译绑定参数。 */
 export async function buildSqliteBatchSync(
   input: SqliteBatchSyncPreviewInput, profile: SqliteConnectionProfile,
   compare: (request: SqliteDataCompareInput, capture: (evidence: SqliteSyncEvidence) => void) => Promise<SqliteDataCompareOutput>,
-): Promise<{ claim: SqliteEditClaim; tables: SqliteBatchSyncPreview['tables'] } | undefined> {
+) {
   if (profile.id !== input.targetConnectionId || profile.sqlite.readOnly) throw Error('SQLite 多表同步需要可写的右侧连接');
-  const groups: SqliteEditClaim[] = [], tables: SqliteBatchSyncPreview['tables'] = [];
+  const groups: SqliteSyncEvidence[] = [], tables: SqliteBatchSyncPreview['tables'] = [];
   const counts = { insert: 0, update: 0, delete: 0 };
-  let total = 0, bytes = 0;
+  const reserve = createBatchSyncPreviewBudget();
   const byDifference = { insert: 'source-only', update: 'different', delete: 'target-only' } as const;
   for (const pair of input.pairs) {
     let evidence: SqliteSyncEvidence | undefined;
@@ -79,30 +79,27 @@ export async function buildSqliteBatchSync(
     }, value => { evidence = value; });
     const requested = input.actions.reduce((count, action) => count + output.counts[byDifference[action]], 0);
     if (!requested) continue;
-    if (total + requested > limits.selected) throw Error('SQLite 多表同步最多 100 行，请减少表对或操作范围');
     if (!evidence) throw Error('右侧表不能生成完整同步证据：' + pair.target);
-    const selected: number[] = [];
+    const selected: SqliteSyncEvidence['rows'] = [];
     const rows: SqliteBatchSyncPreview['tables'][number]['rows'] = [];
+    const tableCounts = { insert: 0, update: 0, delete: 0 };
     for (const [index, row] of evidence.rows.entries()) {
       const action = row.before ? row.after ? 'update' : 'delete' : 'insert';
       if (!input.actions.includes(action)) continue;
-      selected.push(index);
-      rows.push(batchSyncPreviewRow(action, output.differences[index], output.columns, pair.mapping));
-      bytes += Buffer.byteLength(JSON.stringify(row));
-      if (bytes > limits.bytes) throw Error('SQLite 多表同步超过 1 MiB，请减少表对或操作范围');
+      const detail = batchSyncPreviewRow(action, output.differences[index], output.columns, row, pair.mapping);
+      reserve(detail);
+      selected.push(row); rows.push(detail);
+      tableCounts[action]++; counts[action]++;
     }
     if (selected.length !== requested) throw Error('SQLite 多表同步证据与比较计数不一致');
-    const group = buildSqliteSyncClaim(evidence, selected, profile);
-    const first = groups[0]?.snapshot;
-    if (first && (JSON.stringify(first.identity) !== JSON.stringify(group.snapshot.identity) || first.schemaVersion !== group.snapshot.schemaVersion))
+    const first = groups[0];
+    if (first && (JSON.stringify(first.identity) !== JSON.stringify(evidence.identity) || first.schemaVersion !== evidence.schemaVersion))
       throw Error('预览期间右侧文件身份或表结构已变化，请重新比较');
-    groups.push(group); tables.push({ table: pair.target, confirmation: group.confirmation, counts: group.counts, rows });
-    total += requested;
-    for (const action of input.actions) counts[action] += group.counts[action];
+    groups.push({ ...evidence, rows: selected });
+    tables.push({ table: pair.target, confirmation: 'main.' + pair.target, counts: tableCounts, rows });
   }
-  const first = groups[0];
-  if (!first) return;
-  return { claim: combineSqliteSyncClaims(groups, counts, batchSyncConfirmation(tables.map(table => table.confirmation))), tables };
+  if (!groups.length) return;
+  return { groups, counts, confirmation: batchSyncConfirmation(tables.map(table => table.confirmation)), tables };
 }
 
 function combineSqliteSyncClaims(groups: SqliteEditClaim[], counts: SqliteEditClaim['counts'], confirmation: string): SqliteEditClaim {
@@ -111,19 +108,9 @@ function combineSqliteSyncClaims(groups: SqliteEditClaim[], counts: SqliteEditCl
   };
 }
 
-/** 从冻结计划提取所选项，同时重排行定位、原值和写后证据。 */
-export function selectSqliteBatchSyncClaim(claim: SqliteEditClaim, selection: ReturnType<typeof resolveBatchSyncSelection>): SqliteEditClaim {
-  const original = claim.batch ?? [claim];
-  const groups = selection.groups.map(({ tableIndex, rows, counts }) => {
-    const group = original[tableIndex], { snapshot } = group;
-    return { ...group, counts,
-      snapshot: { ...snapshot, rows: rows.map(index => snapshot.rows[index]), locators: rows.map(index => snapshot.locators[index]) },
-      statements: rows.map((index, row) => {
-        const statement = group.statements[index];
-        return statement.row === undefined ? statement : { ...statement, row };
-      }),
-      synchronization: { ...group.synchronization!, rows: rows.map(index => group.synchronization!.rows[index]) },
-    };
-  });
+/** 领取可信候选的最终子集，沿用单表的原行定位、参数及写后复核。 */
+export function selectSqliteBatchSyncClaim(evidence: SqliteSyncEvidence[], selection: ReturnType<typeof requireBatchSyncSelection>,
+  profile: SqliteConnectionProfile): SqliteEditClaim {
+  const groups = selection.groups.map(({ tableIndex, rows }) => buildSqliteSyncClaim(evidence[tableIndex], rows, profile));
   return combineSqliteSyncClaims(groups, selection.counts, selection.confirmation);
 }

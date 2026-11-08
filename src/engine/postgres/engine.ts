@@ -1,6 +1,6 @@
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
 import { preparePostgresBatchSync } from './batchSync';
-import { resolveBatchSyncSelection } from '../../shared/dataCompareBatchSync';
+import { requireBatchSyncSelection } from '../../shared/dataCompareBatchSync';
 import { postgresSequenceTargets, postgresSequenceVisibleSql, readPostgresSequence } from './sequence';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -690,7 +690,7 @@ export class PostgresEngine {
         this.closing.has(record.sourceId) || this.closing.has(record.target.connectionId) ||
         profile?.dialect !== 'postgresql' || profile.id !== record.target.connectionId)
       throw Error(postgresDataSyncZh.stale);
-    const selection = resolveBatchSyncSelection(record.preview.tables, input.selected);
+    const selection = requireBatchSyncSelection(record.preview.tables, input.selected);
     if (selection.confirmation !== input.confirmation) throw Error(postgresDataSyncZh.stale);
     if (this.ownsTask(input.taskId) || this.transfers.size >= 32) throw Error('PostgreSQL 同步任务编号已使用或已达并发上限');
     this.batchSync = undefined;
