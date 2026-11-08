@@ -5,6 +5,7 @@ import type { Locator } from '@playwright/test';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { saveViewSql } from './view-sql-file-save';
 import { clickSidebarAction } from './sidebar-menu';
+import { mysqlViewColumnsZh as columnsText } from '../../src/renderer/locales/mysqlViewColumns.zh-CN';
 import { mysqlViewAttributesZh as properties } from '../../src/renderer/locales/mysqlViewAttributes.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { viewSqlFileZh as text } from '../../src/renderer/locales/viewSqlFile.zh-CN';
@@ -39,8 +40,12 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
     return rows[0]['Create View'] as string;
   };
   const values = async (name: string) => {
-    const [rows] = await observer.query<RowDataPacket[]>('SELECT id, marker FROM ' + target(name));
-    return rows.map(({ id, marker }) => [id, marker]);
+    const [rows] = await observer.query<RowDataPacket[][]>({ sql: 'SELECT * FROM ' + target(name), rowsAsArray: true });
+    return rows;
+  };
+  const columnNames = async (name: string) => {
+    const [rows] = await observer.query<RowDataPacket[]>('SHOW COLUMNS FROM ' + target(name));
+    return rows.map(column => column.Field);
   };
   async function load(modal: Locator, filePath: string, replace?: boolean) {
     await desktop.evaluate(({ dialog, BrowserWindow }, filePath) => {
@@ -98,8 +103,24 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
     const beforeHistory = await history();
     const catalog = () => page.evaluate(target => window.dbark.invoke('metadata.objects', target), { connectionId, database });
     const editor = (modal: Locator) => modal.locator('.monaco-editor .view-lines');
+    // Monaco 把换行后的视图行追加到 DOM 末尾，按屏幕位置还原长 DDL。
+    const editorText = (modal: Locator) => editor(modal).locator('.view-line').evaluateAll(lines =>
+      (lines as HTMLElement[]).sort((left, right) => left.offsetTop - right.offsetTop)
+        .map(line => line.textContent?.replaceAll('\u00a0', ' ')).join(''));
+
     const property = (modal: Locator, label: string) => modal.getByRole('combobox', { name: label, exact: true });
     const section = (modal: Locator) => modal.getByRole('region', { name: inspect.region });
+    const columns = (modal: Locator) => modal.getByRole('group', { name: columnsText.title, exact: true });
+    const columnInput = (modal: Locator, position: number) =>
+      columns(modal).getByRole('textbox', { name: columnsText.column(position), exact: true });
+    const columnButton = (modal: Locator, name: string) => columns(modal).getByRole('button', { name, exact: true });
+    const seedColumns = async (modal: Locator) => {
+      await section(modal).getByRole('button', { name: inspect.rows, exact: true }).click();
+      await columnButton(modal, columnsText.fromPreview).click();
+      await expect(columnInput(modal, 1)).toHaveValue('id');
+      await expect(columnInput(modal, 2)).toHaveValue('marker');
+    };
+
     const preview = async (modal: Locator, marker: string) => {
       const panel = section(modal);
       await panel.getByRole('button', { name: inspect.rows, exact: true }).click();
@@ -146,6 +167,28 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
     await writeFile(saved, '待覆盖的旧文件');
     await saveViewSql(create, saved);
     expect(await readFile(saved, 'utf8')).toBe(query + '\n;');
+    await seedColumns(create);
+    await columnButton(create, columnsText.add).click();
+    await columnInput(create, 3).fill('多余列');
+    await columnButton(create, columnsText.apply).click();
+    await expect(columns(create).getByText(columnsText.countMismatch(2))).toBeVisible();
+    await columns(create).getByRole('button', { name: columnsText.remove(3), exact: true }).click();
+    await columnInput(create, 1).fill('Same');
+    await columnInput(create, 2).fill('same');
+    await columnButton(create, columnsText.apply).click();
+    await expect(columns(create).getByText(/输出列名重复/)).toBeVisible();
+    await columnInput(create, 1).fill('记录`编号');
+    await columnInput(create, 2).fill('内容,别名');
+    await columnButton(create, columnsText.apply).click();
+    await expect(columnButton(create, columnsText.fromPreview)).toBeDisabled();
+    await expect.poll(() => editorText(create)).toContain('(`记录``编号`, `内容,别名`)');
+    await columnButton(create, columnsText.clear).click();
+    await columnButton(create, columnsText.apply).click();
+    await expect.poll(() => editorText(create)).not.toContain('(`记录``编号`, `内容,别名`)');
+    await seedColumns(create);
+    await columnInput(create, 1).fill('记录`编号');
+    await columnInput(create, 2).fill('内容,别名');
+    await columnButton(create, columnsText.apply).click();
     await preview(create, '新值');
     expect((await catalog()).some(item => item.name === fresh)).toBe(false);
     await viewName.fill(old);
@@ -158,6 +201,7 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
     expect((await catalog()).some(item => item.name === fresh || item.name === renamed)).toBe(false);
     await apply(create);
     expect(await values(renamed)).toEqual([[2, '新值']]);
+    expect(await columnNames(renamed)).toEqual(['记录`编号', '内容,别名']);
     const newDefinition = await showCreate(renamed);
     expect(newDefinition).toContain(attributes);
     expect(newDefinition).toMatch(/WITH CASCADED CHECK OPTION/i);
@@ -184,13 +228,18 @@ test('载入、预览并保存视图定义，原连接身份和视图属性得�
     await expect(editor(edit)).toContainText('ALGORITHM=TEMPTABLE');
     await expect(editor(edit)).toContainText('DEFINER=' + quote(database) + '@`%` SQL SECURITY DEFINER');
     await expect(editor(edit)).not.toContainText(/WITH\s+LOCAL\s+CHECK\s+OPTION/i);
+    await seedColumns(edit);
+    await columnInput(edit, 2).fill('更新后的内容');
+    await columnButton(edit, columnsText.apply).click();
     await preview(edit, '新值');
     expect(await showCreate(old)).toBe(original);
+    expect(await columnNames(old)).toEqual(['id', 'marker']);
     await apply(edit);
     const updated = await showCreate(old);
     expect(updated).toContain('ALGORITHM=TEMPTABLE DEFINER=' + quote(database) + '@`%` SQL SECURITY DEFINER');
     expect(updated).not.toMatch(/WITH (?:LOCAL|CASCADED) CHECK OPTION/i);
     expect(await values(old)).toEqual([[2, '新值']]);
+    expect(await columnNames(old)).toEqual(['id', '更新后的内容']);
     expect(await history()).toEqual(beforeHistory);
     expect(await readFile(valid)).toEqual(bytes);
     expect(pageErrors).toEqual([]);

@@ -37,6 +37,7 @@ import type { DefinitionSearchOpen } from '../../shared/definitionNavigation';
 import { DatabaseCreateDialog } from './DatabaseCreateDialog';
 import { DefinitionViewer } from './DefinitionViewer';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { MysqlViewColumns } from './MysqlViewColumns';
 import { MysqlViewAttributes } from './MysqlViewAttributes';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { viewQueryInspectZh } from '../locales/viewQueryInspect.zh-CN';
@@ -299,6 +300,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
   const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(database ? template('view', database, '') : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   const [viewLoaded, setViewLoaded] = useState(false);
+  const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const fileOwner = useMemo(() => ({}), [connectionId, database, object, profile, version, kind, name, sql]);
@@ -361,6 +363,12 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, r
       current={fileCurrent} change={value => { setSql(value); setError(''); }}/>}
     <SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/>
     {fileView && <ViewQueryInspect owner={fileOwner} hint={viewQueryInspectZh.mysqlHint(mysqlViewSampleRows)} current={fileCurrent}
-      disabled={viewReadDisabled} read={mode => invoke('mysql.view.inspectQuery', { connectionId, database, name, sql, mode })}/>}
+      disabled={viewReadDisabled} read={mode => {
+        if (mode === 'rows') setPreviewColumns(undefined);
+        return invoke('mysql.view.inspectQuery', { connectionId, database, name, sql, mode });
+      }} onRows={columns => setPreviewColumns({ owner: fileOwner, names: columns.map(column => column.name) })}/>}
+    {fileView && <MysqlViewColumns owner={fileOwner} database={database} view={name} sql={sql} disabled={viewReadDisabled}
+      current={fileCurrent} previewColumns={previewColumns?.owner === fileOwner ? previewColumns.names : undefined}
+      change={value => { setSql(value); setError(''); }}/>}
     <ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>{busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}{!readOnly&&<button className="primary" disabled={busy || missingName || !statement.trim()} onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button>}</footer></Modal>;
 }

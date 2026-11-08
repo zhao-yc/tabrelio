@@ -37,7 +37,7 @@ function checkOption(tokens: CompletionToken[]) {
 }
 
 /** 引号模式取决于执行连接。四种模式必须得到同一草稿，才能保留准确的语句边界。 */
-function commonSql<T extends string | MysqlViewAttributes>(build: (ansiQuotes: boolean, noBackslashEscapes: boolean) => T, message: string): T {
+function commonSql<T>(build: (ansiQuotes: boolean, noBackslashEscapes: boolean) => T, message: string): T {
   const value = build(false, false);
   const comparable = (item: T) => typeof item === 'string' ? item : JSON.stringify(item);
   const expected = comparable(value);
@@ -114,16 +114,23 @@ function mysqlViewParts(source: string, database: string, view: string, quotes: 
   }
   if (target !== view) throw Error(invalidDraft);
   const targetToken = tokens[at - 1];
-  const aliases: string[] = [];
+  const aliases: string[] = [], aliasTokens: CompletionToken[] = [];
+  let aliasList: { start: number; end: number } | undefined;
   if (symbol(tokens[at], '(')) {
-    do { at++; aliases.push(expectName()); } while (symbol(tokens[at], ','));
+    const start = tokens[at].start;
+    do {
+      at++;
+      aliasTokens.push(tokens[at]);
+      aliases.push(expectName());
+    } while (symbol(tokens[at], ','));
     expectSymbol(')');
+    aliasList = { start, end: tokens[at - 1].end };
   }
   expectWord('AS');
   if (!tokens[at]) throw Error(invalidDraft);
   const option = checkOption(tokens);
   const checkTokens = option ? tokens.slice(tokens.lastIndexOf(option)) : [];
-  return { statement, aliases, headerEnd: tokens[at - 1].end, bodyTokens: tokens.slice(at), option,
+  return { statement, aliases, aliasTokens, aliasList, headerEnd: tokens[at - 1].end, bodyTokens: tokens.slice(at), option,
     targetToken, algorithm, algorithmAt: tokens[algorithmAt].start, security, securityAt: tokens[securityAt].start, checkTokens };
 }
 
@@ -169,6 +176,37 @@ export function changeMysqlViewDraftAttribute(source: string, database: string, 
     const scope = parts.checkTokens[1];
     return parts.checkTokens.length === 4 ? replace(scope.start, scope.end, change.value) :
       replace(parts.option.end, parts.option.end, ' ' + change.value);
+  }, invalidDraft);
+}
+
+export function mysqlViewDraftColumns(source: string, database: string, view: string): string[] {
+  return commonSql((quotes, escapes) => mysqlViewParts(source, database, view, quotes, escapes).aliases, invalidDraft);
+}
+
+/** 显式列名按查询投影顺序生效。等长编辑仅替换标识符，保留列清单内部注释。 */
+export function changeMysqlViewDraftColumns(source: string, database: string, view: string, names: readonly string[]): string {
+  const folded = new Set<string>();
+  for (const [index, column] of names.entries()) {
+    if (!completionIdentifier(column) || column.endsWith(' '))
+      throw Error(`第 ${index + 1} 个列名须为 1～64 个有效字符，末尾不能有空格。`);
+    const key = column.toLowerCase();
+    if (folded.has(key)) throw Error(`输出列名重复：${column}`);
+    folded.add(key);
+  }
+  return commonSql((quotes, escapes) => {
+    const { aliases, aliasTokens, aliasList, targetToken } = mysqlViewParts(source, database, view, quotes, escapes);
+    let next: string;
+    if (aliases.length === names.length) {
+      next = aliasTokens.reduceRight((sql, token, index) => aliases[index] === names[index] ? sql :
+        sql.slice(0, token.start) + quoteCompletionIdentifier(names[index]) + sql.slice(token.end), source);
+    } else {
+      const list = names.length ? '(' + names.map(quoteCompletionIdentifier).join(', ') + ')' : ' ';
+      const start = aliasList?.start ?? targetToken.end;
+      next = source.slice(0, start) + (aliasList ? '' : ' ') + list + source.slice(aliasList?.end ?? start);
+    }
+    // 重新扫描生成稿，列清单不能将定义推过现有解析预算。
+    if (next !== source) mysqlViewParts(next, database, view, quotes, escapes);
+    return next;
   }, invalidDraft);
 }
 

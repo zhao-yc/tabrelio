@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeMysqlViewDraftAttribute, exportMysqlViewFileQuery, mysqlViewDraftAttributes, renameMysqlViewDraft, mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
+import { changeMysqlViewDraftColumns, mysqlViewDraftColumns, changeMysqlViewDraftAttribute, exportMysqlViewFileQuery, mysqlViewDraftAttributes, renameMysqlViewDraft, mysqlViewDraftQuery, mysqlNewViewHeader, mysqlViewFileQuery, replaceMysqlViewFileQuery } from '../../src/shared/mysqlViewFile';
 
 describe('MySQL 和 MariaDB 视图文件草稿', () => {
   it('在单条 CTE 中保留注释、字符串和原始换行，名称独立引用', () => {
@@ -120,5 +120,35 @@ describe('MySQL 和 MariaDB 视图属性草稿', () => {
   ])('目标或语句边界不明时禁止生成属性 SQL %s', sql => {
     expect(() => change(sql, { key: 'check', value: 'LOCAL' })).toThrow(/无法确认/);
     expect(() => renameMysqlViewDraft(sql, '库', '视图', '新名称')).toThrow(/无法确认/);
+  });
+});
+
+describe('MySQL 和 MariaDB 视图输出列名', () => {
+  const source = 'CREATE ALGORITHM=MERGE SQL SECURITY INVOKER VIEW `库`.`v` AS SELECT x, y FROM t WITH LOCAL CHECK OPTION;';
+  const read = (sql: string) => mysqlViewDraftColumns(sql, '库', 'v');
+  const change = (sql: string, names: string[]) => changeMysqlViewDraftColumns(sql, '库', 'v', names);
+
+  it('只插入显式列清单，正确引用点、逗号、反引号和换行', () => {
+    const names = ['甲,列.`名', '乙\n列'];
+    const sql = change(source, names);
+    expect(sql).toBe(source.replace('`v` AS', '`v` (`甲,列.``名`, `乙\n列`) AS'));
+    expect(read(sql)).toEqual(names);
+    expect(change(sql, names)).toBe(sql);
+    expect(renameMysqlViewDraft(sql, '库', 'v', 'new')).toBe(sql.replace('`v`', '`new`'));
+  });
+
+  it('修改同数量列名时保留内部注释，清空紧接 AS 的列表时仍保留分隔', () => {
+    const sql = 'ALTER VIEW `v`(a, /* 位置 */ `b`)AS SELECT x, y FROM t;';
+    expect(change(sql, ['a', '新列'])).toBe(sql.replace('`b`', '`新列`'));
+    expect(change(sql, [])).toBe('ALTER VIEW `v` AS SELECT x, y FROM t;');
+    expect(read(change(sql, []))).toEqual([]);
+  });
+
+  it('拒绝无效名称、大小写重复和不相符的 DDL', () => {
+    expect(() => change(source, ['a', 'A'])).toThrow('重复');
+    for (const invalid of ['', 'x'.repeat(65), '尾空格 ', 'nul\0', '😀'])
+      expect(() => change(source, [invalid])).toThrow('第 1 个列名');
+    expect(() => change(source + 'DROP VIEW v;', ['x'])).toThrow('无法确认');
+    expect(() => change(source.replace('`库`', '`别库`'), ['x'])).toThrow('无法确认');
   });
 });

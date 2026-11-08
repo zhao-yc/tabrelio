@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { QueryOutcome } from '../../shared/contracts';
+import type { QueryOutcome, ResultColumn } from '../../shared/contracts';
 import { errorMessage } from '../lib';
 import { viewQueryInspectZh as text } from '../locales/viewQueryInspect.zh-CN';
 import { ExplainPlanView } from './ExplainPlanView';
@@ -9,12 +9,13 @@ import { ErrorBox, Spinner } from './ui';
 import '../viewQueryInspect.css';
 
 /** 结果只归属发起时的定义。编辑、切换连接或离开面板后不发布迟到响应。 */
-export function ViewQueryInspect({ read, hint, owner, disabled, current }: {
+export function ViewQueryInspect({ read, hint, owner, disabled, current, onRows }: {
   read(mode: 'rows' | 'explain'): Promise<QueryOutcome>;
   hint: string;
   owner: object;
   disabled: boolean;
   current(): boolean;
+  onRows?(columns: readonly ResultColumn[]): void;
 }) {
   const lifetime = useRef<object | undefined>(undefined), pending = useRef(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -37,7 +38,10 @@ export function ViewQueryInspect({ read, hint, owner, disabled, current }: {
     const live = () => lifetime.current === lease && current();
     try {
       const result = await read(mode);
-      if (live()) setOutcome(result);
+      if (live()) {
+        setOutcome(result);
+        if (mode === 'rows') onRows?.(result.results[0]?.columns ?? []);
+      }
     } catch (reason) {
       if (live()) setError(errorMessage(reason));
     } finally {
