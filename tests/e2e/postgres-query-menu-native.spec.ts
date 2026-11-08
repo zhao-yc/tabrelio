@@ -78,7 +78,7 @@ async function inspectModel() {
     const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
     if (!instance?.getModel()) throw Error('缺少当前 PostgreSQL 编辑器');
     const model = instance.getModel()!, selection = instance.getSelection();
-    return {sql: model.getValue(), position: instance.getPosition(), selected: selection ? model.getValueInRange(selection) : '',
+    return {sql: model.getValue(), language: model.getLanguageId(), position: instance.getPosition(), selected: selection ? model.getValueInRange(selection) : '',
       identity: [instance.getId(), model.id]};
   });
 }
@@ -1700,6 +1700,52 @@ test('PostgreSQL 查询结果 INSERT 文件预览、截断范围、勾选和真�
   await quitDesktop();
 });
 
+test('PostgreSQL 方言着色跨行匹配 dollar 标签和嵌套注释', async ({}, info) => {
+  const sql = [
+    'SeLeCt $Body$第一行',
+    '-- 字符串正文 $body$ /* 正文 */ $inner$',
+    "末行$Body$ AS quoted, '同类字符串' AS sample, $1::bigint;",
+    '/* 外层 /* 内层 */ 仍在外注释',
+    '结束外注释 */ SELECT 42; -- 真注释',
+  ].join('\n');
+  await prepare({id: '', name: '离线 PostgreSQL 着色', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  const initial = await inspectModel();
+  expect(initial.language).toBe('dbark-postgresql');
+  const colors = () => editor().locator('.view-lines').evaluate(node => {
+    const lines = node.querySelectorAll('.view-line');
+    return [
+      [0, 'SeLeCt'], [1, '字符串正文'], [2, '同类字符串'], [3, '仍在外注释'], [4, 'SELECT'], [4, '真注释'],
+    ].map(([index, text]) => {
+      const span = Array.from(lines[Number(index)]?.querySelectorAll(':scope > span > span') ?? [])
+        .find(part => part.textContent?.includes(String(text)));
+      return span ? getComputedStyle(span).color : '';
+    });
+  });
+  const correct = async () => {
+    const [opening, body, literal, outer, following, comment] = await colors();
+    return !!opening && !!literal && !!comment && opening === following && body === literal && outer === comment &&
+      new Set([opening, literal, comment]).size === 3;
+  };
+  await expect.poll(correct).toBe(true);
+  await page.screenshot({path: info.outputPath('PostgreSQL方言着色.png')});
+  const broken = sql.replace('末行$Body$', '末行$body$');
+  const tagColumn = '末行$'.length + 1;
+  await modelSelection(3, tagColumn, tagColumn + 1);
+  await page.keyboard.press('b');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(broken);
+  await expect.poll(async () => {
+    const [, body, , outer, , comment] = await colors();
+    return !!body && body === outer && body === comment;
+  }).toBe(true);
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+  await expect.poll(correct).toBe(true);
+  expect((await inspectModel()).identity).toEqual(initial.identity);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('PostgreSQL 语句折叠离线保留标题和同行的下一条 SQL', async ({}, info) => {
   const sql = "SELECT 0;\n/* 外层 /* 内层; */ */\nDO $body$\nBEGIN\nPERFORM 42;\nEND;\n$body$; SELECT '相邻语句';";
   await prepare({id: '', name: '离线 PostgreSQL 折叠', dialect: 'postgresql', group: '', color: '#123456',
@@ -1749,6 +1795,7 @@ test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => 
     host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, set + 'off');
   const lines = editor().locator('.view-lines');
   const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const originalModel = (await inspectModel()).identity;
   await command('editor-sql-folding');
   for (const mode of ['off', 'on'] as const) {
     if (mode === 'on') await replaceDraft(set + mode);
@@ -1757,6 +1804,8 @@ test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => 
     await expect.poll(() => enabled('execute-all')).toBe(true);
     const baseline = await history();
     await replaceDraft(ambiguousFoldingScript);
+    await expect.poll(async () => (await inspectModel()).language).toBe(mode === 'on' ? 'dbark-postgresql' : 'dbark-postgresql-backslash');
+    expect((await inspectModel()).identity).toEqual(originalModel);
     const foldStart = mode === 'off' ? 1 : 2;
     await modelSelection(foldStart, 1);
     await expect.poll(() => page.evaluate(() => (window as Window & {foldingMode?: boolean}).foldingMode)).toBe(mode === 'on');
@@ -1785,6 +1834,46 @@ test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => 
     await editor().locator('.codicon-folding-collapsed').click();
   }
   expect(pageErrors).toEqual([]);
+  await quitDesktop();
+});
+
+test('PostgreSQL 两种着色模式保留真实目录补全和参数提示', async () => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({ host, port, user, password, database: user, connectionTimeoutMillis: 3000 });
+  await observer.connect();
+  try {
+    await observer.query("CREATE FUNCTION public.color_signature_marker(input_number integer, input_label text) RETURNS text LANGUAGE SQL AS 'SELECT input_label'");
+    const modeSql = 'SET standard_conforming_strings = ';
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await prepare({ id: '', name: '隔离 PostgreSQL 方言服务', dialect: 'postgresql', group: '', color: '#123456',
+      host, port, user, database: user, password, rememberPassword: false }, modeSql + 'off');
+    const identity = (await inspectModel()).identity;
+    for (const mode of ['off', 'on'] as const) {
+      if (mode === 'on') await replaceDraft(modeSql + mode);
+      await command('execute-all');
+      await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === modeSql + mode)).toBe(true);
+      await expect.poll(() => enabled('execute-all')).toBe(true);
+      await expect.poll(async () => (await inspectModel()).language).toBe(mode === 'on' ? 'dbark-postgresql' : 'dbark-postgresql-backslash');
+      const baseline = await history();
+      await replaceDraft('SELECT public.color_signature_mar');
+      await triggerSuggestions();
+      await expect(tab().locator('.suggest-widget.visible .monaco-list-row.focused')).toContainText('color_signature_marker');
+      await page.keyboard.press('Enter');
+      await expect.poll(async () => (await inspectModel()).sql).toBe('SELECT public."color_signature_marker"()');
+      const activeParameter = tab().locator('.parameter-hints-widget:visible .signature .parameter.active');
+      await expect(activeParameter).toContainText('input_number');
+      await page.keyboard.type('1,');
+      await expect(activeParameter).toContainText('input_label');
+      await page.keyboard.press('Escape');
+      expect((await inspectModel()).identity).toEqual(identity);
+      expect(await history()).toEqual(baseline);
+    }
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
   await quitDesktop();
 });
 

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。PostgreSQL 查询与 SQL 预览使用方言着色，识别跨行 dollar 引号、嵌套注释、位置参数及会话字符串模式。Q01 仍为部分覆盖。[PostgreSQL SQL 着色](development/postgres-editor-highlighting-20261108.md)
+
 2026-11-08 源码增量。PostgreSQL 查询支持选区或全文格式化，沿用编辑器缩进并支持单次撤销。Q01 仍为部分覆盖。[PostgreSQL 选区格式化](development/postgres-query-format-selection-20261108.md)
 
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表页可按当前行或本页勾选行直接打开原主键查询草稿。新标签沿用原连接和数据库，由用户决定是否执行。D02 仍为部分覆盖。[表页原主键查询草稿](development/primary-key-query-draft-20261108.md)

@@ -48,6 +48,7 @@ import '../localRename.css';
 import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
 import { snippetCatalog } from '../snippetCompletion';
 import { createSnippetCompletionProvider } from '../snippetCompletionProvider';
+import { postgresEditorLanguage, postgresEditorLanguages, registerPostgresEditorLanguages } from '../postgresEditorLanguage';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
@@ -61,6 +62,11 @@ loader.config({ monaco });
 export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
+  const language = requestedDialect === 'postgresql' ? postgresEditorLanguage(postgresStandardStrings) : 'sql';
+  const languageSelector = requestedDialect === 'postgresql' ? postgresEditorLanguages : 'sql';
+  useLayoutEffect(() => {
+    if (requestedDialect === 'postgresql') registerPostgresEditorLanguages(monaco.languages);
+  }, [requestedDialect]);
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
@@ -87,12 +93,12 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if (!contentReady || !instance || !queryEditor || !sqlFolding || !requestedDialect) return;
     let active = true;
     const client = new StatementNavigationWorkerClient(() => new StatementNavigationWorker({ name: 'dbark-sql-folding' }));
-    const registration = monaco.languages.registerFoldingRangeProvider('sql', sqlStatementFoldingProvider(instance, requestedDialect, client,
+    const registration = monaco.languages.registerFoldingRangeProvider(languageSelector, sqlStatementFoldingProvider(instance, requestedDialect, client,
       () => active && aliveRef.current && editorRef.current === instance && foldingScope.current.dialect === requestedDialect &&
         foldingScope.current.standardStrings === postgresStandardStrings && useWorkspace.getState().settings.editorSqlFolding === true,
       postgresStandardStrings === undefined ? {} : { noBackslashEscapes: postgresStandardStrings }));
     return () => { active = false; registration.dispose(); client.dispose(); };
-  }, [contentReady, queryEditor, sqlFolding, requestedDialect, postgresStandardStrings]);
+  }, [contentReady, queryEditor, sqlFolding, requestedDialect, postgresStandardStrings, languageSelector]);
   /** 原生菜单只收到可用状态，选区内容留在当前模型内。 */
   useEffect(() => {
     if (!onSelectionState) return;
@@ -239,9 +245,9 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
           next.connectionVersions[original.connectionId] !== previous.connectionVersions[original.connectionId] ||
           next.settings.tabs.find(item => item.id === original.tabId) !== previous.settings.tabs.find(item => item.id === original.tabId))) provider.invalidate();
     });
-    const registration = monaco.languages.registerCompletionItemProvider('sql', provider);
+    const registration = monaco.languages.registerCompletionItemProvider(languageSelector, provider);
     return () => { stop(); registration.dispose(); provider.dispose(); };
-  }, [snippetCompletion, readOnly, contentReady, requestedDialect, postgresStandardStrings, postgresCompletion?.tabId,
+  }, [snippetCompletion, readOnly, contentReady, requestedDialect, postgresStandardStrings, languageSelector, postgresCompletion?.tabId,
     postgresCompletion?.connectionId, postgresCompletion?.connectionVersion, postgresCompletion?.database, postgresCompletion?.sessionId]);
   useEffect(() => {
     if (requestedDialect !== 'postgresql' || !postgresCompletion || readOnly || !contentReady) return;
@@ -268,8 +274,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       status: status => statusRef.current?.(status),
     });
     statusRef.current?.('idle');
-    const registration = monaco.languages.registerCompletionItemProvider('sql', provider);
-    const signatureRegistration = monaco.languages.registerSignatureHelpProvider('sql', provider.signatureHelp);
+    const registration = monaco.languages.registerCompletionItemProvider(postgresEditorLanguages, provider);
+    const signatureRegistration = monaco.languages.registerSignatureHelpProvider(postgresEditorLanguages, provider.signatureHelp);
     const stop = useWorkspace.subscribe((next, previous) => {
       if (next.settings.activeTabId !== previous.settings.activeTabId ||
           next.activeJobs[original.tabId] !== previous.activeJobs[original.tabId] ||
@@ -407,5 +413,5 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);
   };
-  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language="sql" theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}</div>;
+  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}</div>;
 }

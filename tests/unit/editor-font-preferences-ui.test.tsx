@@ -10,6 +10,7 @@ import React, { act, useState } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 import ts from 'typescript';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -50,7 +51,7 @@ function appEntry() {
   }
   visit(app); expect([declaration, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
   const menu = workspaceToolCommandSource(source, readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), 'editor-font');
-  const context: any = createContext({ exports: {}, useState, document, useWorkspace: store, flushSettings: flush, errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, EditorFontPreferencesDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  const context: any = createContext({ exports: {}, useState, document, appDialogSelector, useWorkspace: store, flushSettings: flush, errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, EditorFontPreferencesDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
   runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}
 ${methods.join('\n')}
 ${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu>${modal ? '{' + modal + '}' : ''}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);

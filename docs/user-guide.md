@@ -718,6 +718,8 @@ PostgreSQL 当前查询结果会显示语句序号、服务器回执、服务端
 
 在 PostgreSQL 查询中，点击「格式化 PostgreSQL SQL」或按 Alt＋Shift＋F（macOS 为 Option＋Shift＋F）。有选区时仅排版该范围，光标未选中文字时排版全文。排版采用当前编辑器缩进，保留关键字原有大小写，可一步撤销或重做。[PostgreSQL 选区格式化](development/postgres-query-format-selection-20261108.md)
 
+PostgreSQL 查询编辑器和 SQL 预览会区分 dollar-quoted 字符串、嵌套注释、双引号标识符和 `$1` 等位置参数。空闲查询已取得会话字符串模式时，普通单引号按该模式着色。离线编辑使用 PostgreSQL 的默认字符串规则。[PostgreSQL SQL 着色](development/postgres-editor-highlighting-20261108.md)
+
 后续开发版可在命令栏打开“编辑器字号”，输入 8–32 的整数字号并保存；默认 13。恢复默认只修改弹窗草稿，保存才应用，取消保持当前值。“自动换行”可直接切换，按钮按下表示开启，偏好会在重启后恢复。这两项适用于 SQL 编辑器及只读 SQL 预览，字号不改变结果网格或窗口缩放；公开 0.20 尚不含该增量。
 
 创建查询时选择连接和可选数据库。每个标签保持独立会话，因此临时表、会话变量和事务不会在标签间共享。Monaco 提供本地高亮、元数据补全和格式化。
