@@ -1,5 +1,5 @@
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
-import { useGridHeaderSortMenu } from './GridHeaderSortMenu';
+import { useGridHeaderMenu, type GridHeaderFreeze } from './GridHeaderMenu';
 import { gridQuickValueKinds, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -63,7 +63,7 @@ function displayedValue(row: DataRow, key: string, present?: PresentGridCell) {
 }
 
 /** 表页可覆盖展示值，定位、编辑及原页能力仍引用原网格数据。查询结果默认使用原值。 */
-export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, tableCopy, insertSql, updateSql, primaryKeySql, onOpenPrimaryKeyQuery, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, cellMenuFilters, onCellEdit, onCellPaste, findTarget, findMarks, navigateTo, onGridAnchor, quickValueActions, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; headerDetails?: GridHeaderDetailsOptions; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; tableCopy?: { enabled: boolean; isCurrent(): boolean }; insertSql?(indices: ReadonlySet<number>): string; updateSql?(indices: ReadonlySet<number>): string; primaryKeySql?(indices: ReadonlySet<number>): string; onOpenPrimaryKeyQuery?(sql: string): void; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; cellMenuFilters?(cell: QueryResultCopyCell): { label?: string; actions: GridCellAction[] } | undefined; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; onGridAnchor?(anchor: GridFindTarget | undefined): void; quickValueActions?: { allowed(cell: QueryResultCopyCell, kind: GridQuickValue): boolean; apply(cell: QueryResultCopyCell, kind: GridQuickValue): void }; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
+export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, freezeColumns, tableCopy, insertSql, updateSql, primaryKeySql, onOpenPrimaryKeyQuery, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, cellMenuFilters, onCellEdit, onCellPaste, findTarget, findMarks, navigateTo, onGridAnchor, quickValueActions, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; headerDetails?: GridHeaderDetailsOptions; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; freezeColumns?: GridHeaderFreeze; tableCopy?: { enabled: boolean; isCurrent(): boolean }; insertSql?(indices: ReadonlySet<number>): string; updateSql?(indices: ReadonlySet<number>): string; primaryKeySql?(indices: ReadonlySet<number>): string; onOpenPrimaryKeyQuery?(sql: string): void; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; cellMenuFilters?(cell: QueryResultCopyCell): { label?: string; actions: GridCellAction[] } | undefined; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; onGridAnchor?(anchor: GridFindTarget | undefined): void; quickValueActions?: { allowed(cell: QueryResultCopyCell, kind: GridQuickValue): boolean; apply(cell: QueryResultCopyCell, kind: GridQuickValue): void }; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
   const height = readGridRowHeight(rowHeight);
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
@@ -80,7 +80,9 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   })();
   const [gridRevision,setGridRevision]=useState(0), gridRevisionRef=useRef(0);
   const filterCapable=!!(onFilterCell||onFilterSelected||onStatistics)&&!onActiveRowChange;
-  const scope = useMemo(() => ({ columns, rows, selectionScope,filterCapable,sqliteSource,filterDialect }), [columns, rows, selectionScope,gridRevision,filterCapable,frozenCount,sqliteSource,filterDialect]);
+  // 冻结会撤销旧网格动作，但可见列及原行未变，勾选仍归同一结果。
+  const rowScope = useMemo(() => ({}), [columns, rows, selectionScope, gridRevision, filterCapable, sqliteSource, filterDialect]);
+  const scope = useMemo(() => ({}), [rowScope, frozenCount]);
   const currentScope = useRef<typeof scope|null>(scope); currentScope.current = scope;
   const latestPresentation = useRef(presentCell);
   latestPresentation.current = presentCell;
@@ -109,7 +111,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const [findHit, setFindHit] = useState<{ scope: typeof scope; hit: QueryResultFindHit }>();
   const activeHit = findHit?.scope === scope && findHit.hit.scan.current() && actionCurrent() ? findHit.hit.match : undefined;
   const [selection, setSelection] = useState<{ scope: typeof scope; indices: ReadonlySet<number> }>();
-  const selectedRows = selection?.scope === scope ? selection.indices : new Set<number>();
+  const selectedRows = selection?.scope === rowScope ? selection.indices : new Set<number>();
   const [headerCell, setHeaderCell] = useState<{ scope: typeof scope; cell: QueryResultCopyCell }>();
   const copyRevisionRef = useRef(0), copyRevision = copyRevisionRef.current;
   const filterCellRef=useRef<{scope:typeof scope;capture:QueryResultCellFilterCapture}|undefined>(undefined);
@@ -159,7 +161,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     if(onFilterCell&&next)try{filterCellRef.current={scope,capture:captureQueryResultCellFilter(columns,rows,next.cell,sqliteSource,filterDialect)};}catch{/* 不支持的原值仅禁用快捷填入，不影响原复制或查看。 */}
     copyCellRef.current=next;
     onActiveCellChange?.(next?.cell);
-    captureSelectedFilter(next,selectedRowsRef.current?.scope===scope?selectedRowsRef.current.indices:new Set());
+    captureSelectedFilter(next,selectedRowsRef.current?.scope===rowScope?selectedRowsRef.current.indices:new Set());
     setHeaderCell(next);
   }
   /** 旧网格回调在首次effect前也不能覆盖新选择；复制仍沿用同一组当前勾选行。 */
@@ -169,7 +171,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     // 导出父级须明确接纳同一选择；模态或任务门拒绝时保留原勾选，避免显示与文件范围分离。
     if (onSelectionChange && onSelectionChange({ scope: selectionScope ?? scope, rows, columns, indices: next }) !== true) return;
     if (!actionCurrent()) return;
-    copyRevisionRef.current++;selectedRowsRef.current={scope,indices:next};captureSelectedFilter(copyCellRef.current,next);setSelection({ scope, indices: next });
+    copyRevisionRef.current++;selectedRowsRef.current={scope:rowScope,indices:next};captureSelectedFilter(copyCellRef.current,next);setSelection({ scope: rowScope, indices: next });
   }
   /** 表页按钮与原 Ctrl+C 共用草稿值和 DEFAULT 拒绝规则。 */
   function copyValue(row: DataRow, key: string) {
@@ -436,21 +438,19 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
   const fitHeader = onColumnResize || onColumnWidthsChange ? fitHeaderColumn : undefined;
-  const headerSortMenu = useGridHeaderSortMenu(cellActionMenu.open, {
+  const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
     owner: scope, grid: () => gridRef.current?.element,
-    column: index => {
-      const column = columns[index - (onActiveRowChange ? 0 : 1)];
-      return column && !sortReasons?.get(column.key) ? column : undefined;
-    },
+    column: index => columns[index - (onActiveRowChange ? 0 : 1)],
     sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
-    current: () => !!onSortChange && actionCurrent(), apply: changeSortColumns,
+    current: actionCurrent, canSort: key => !!onSortChange && !sortReasons?.get(key), applySort: changeSortColumns,
+    freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,
   });
-  const grid = onCellPaste || fitHeader || onSortChange ? <div style={{ display: 'contents' }}
-    {...(onSortChange ? headerSortMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
+  const grid = onCellPaste || fitHeader || onSortChange || freezeColumns ? <div style={{ display: 'contents' }}
+    {...(onSortChange || freezeColumns ? headerMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。
   const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&
-    (selectionBefore?.scope === scope ? selectionBefore.indices === selectedRows : !selectedRows.size);
+    (selectionBefore?.scope === rowScope ? selectionBefore.indices === selectedRows : !selectedRows.size);
   /** 复制与打开查询草稿共用活动格或勾选代次，生成失败时不产生副作用。 */
   function handleRowOutput(build: ((indices: ReadonlySet<number>) => string) | undefined, checked: boolean, destination: string | ((sql: string) => void)) {
     const current = () => tableCopy?.enabled !== false && selectedActionCurrent() &&

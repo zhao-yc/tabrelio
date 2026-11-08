@@ -5,7 +5,7 @@ import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, re
 import { navigationMenuItem } from './navigation-menu';
 import { gridJsonClipboardZh as text } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
-import { gridHeaderSortZh } from '../../src/renderer/locales/gridHeaderSort.zh-CN';
+import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
 import { sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
@@ -114,8 +114,8 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       else expect(JSON.parse(packet[sqliteCellClipboardType])).toMatchObject({ version: 1, rows: [[sqlite]] });
     };
     const open = (id: string) => page.locator('[data-workspace-tab-id="' + id + '"] .tab-select').click();
-    const headerMenu = page.getByRole('menu', { name: gridHeaderSortZh.menu, exact: true });
-    const sortHeader = async (header: ReturnType<typeof page.locator>, action: string, keyboard = false, capture = false) => {
+    const headerMenu = page.getByRole('menu', { name: gridHeaderMenuZh.menu, exact: true });
+    const chooseHeaderAction = async (header: ReturnType<typeof page.locator>, action: string, keyboard = false, capture = false) => {
       await header.scrollIntoViewIfNeeded();
       await header.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
       if (keyboard) { await header.focus(); await page.keyboard.press('Shift+F10'); }
@@ -163,9 +163,10 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       const port = ipcMain as unknown as { _invokeHandlers: Map<string, (event: unknown, value: { command: string; input: { sort?: unknown } }) => Promise<{ ok: boolean }>> };
       const handle = port._invokeHandlers.get('dbark:request');
       if (!handle) throw Error('缺少正式分页入口');
-      const completedSorts: unknown[] = [];
-      Object.assign(globalThis, { completedSorts });
+      const completedSorts: unknown[] = [], layoutSaves: string[] = [];
+      Object.assign(globalThis, { completedSorts, layoutSaves });
       port._invokeHandlers.set('dbark:request', async (event, value) => {
+        if (['table.preferences.save', 'postgres.table.layout.save', 'sqlite.tableLayout.save'].includes(value.command)) layoutSaves.push(value.command);
         const reply = await handle(event, value);
         if (reply.ok && ['table.page', 'postgres.table.page', 'sqlite.tablePage'].includes(value.command))
           completedSorts.push(value.input.sort ?? []);
@@ -173,20 +174,37 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       });
     });
     const tableSorts = () => desktop.evaluate(() => (globalThis as typeof globalThis & { completedSorts: unknown[] }).completedSorts);
+    const layoutSaves = () => desktop.evaluate(() => (globalThis as typeof globalThis & { layoutSaves: string[] }).layoutSaves);
     const sortTable = async (header: ReturnType<typeof page.locator>, action: string, rules: [string, 'ASC' | 'DESC'][], keyboard = false, capture = false) => {
       const count = (await tableSorts()).length;
-      await sortHeader(header, action, keyboard, capture);
+      await chooseHeaderAction(header, action, keyboard, capture);
       await expect.poll(async () => (await tableSorts()).slice(count)).toEqual([
         rules.map(([column, direction]) => ({ column, direction: local ? direction.toLowerCase() : direction })),
       ]);
     };
     const amountHeader = tableTab.getByRole('columnheader', { name: /^amount\b/ });
     const labelHeader = tableTab.getByRole('columnheader', { name: /^label\b/ });
-    await sortTable(amountHeader, gridHeaderSortZh.desc, [['amount', 'DESC']], false, true);
+    const frozen = /rdg-cell-frozen-start/;
+    const checkTableFreeze = async (capture = false) => {
+      const previous = await tableSorts();
+      await chooseHeaderAction(amountHeader, gridHeaderMenuZh.freeze);
+      await expect(amountHeader).toHaveClass(frozen);
+      await expect(tableTab.getByRole('columnheader', { name: /^id\b/ })).toHaveClass(frozen);
+      await expect(labelHeader).not.toHaveClass(frozen);
+      await expect(tableBCheck).toBeChecked();
+      if (capture) await page.screenshot({ path: info.outputPath('表头冻结.png') });
+      await chooseHeaderAction(labelHeader, gridHeaderMenuZh.unfreeze, true);
+      await expect(amountHeader).not.toHaveClass(frozen);
+      await expect(tableBCheck).toBeChecked();
+      expect(await tableSorts()).toEqual(previous);
+      expect(await layoutSaves()).toEqual([]);
+    };
+    await checkTableFreeze(true);
+    await sortTable(amountHeader, gridHeaderMenuZh.desc, [['amount', 'DESC']], false, true);
     await expectLabels(tableTab, 'B');
-    await sortTable(labelHeader, gridHeaderSortZh.asc, [['amount', 'DESC'], ['label', 'ASC']]);
+    await sortTable(labelHeader, gridHeaderMenuZh.asc, [['amount', 'DESC'], ['label', 'ASC']]);
     await expectLabels(tableTab, 'B');
-    await sortTable(amountHeader, gridHeaderSortZh.clear, [['label', 'ASC']]);
+    await sortTable(amountHeader, gridHeaderMenuZh.clear, [['label', 'ASC']]);
     await expectLabels(tableTab, 'A');
     if (local) {
       await open('json-view');
@@ -197,7 +215,8 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await tableBCheck.check();
       await fitAmount();
       await expect(tableBCheck).toBeChecked();
-      await sortTable(amountHeader, gridHeaderSortZh.desc, [['amount', 'DESC']], true);
+      await checkTableFreeze();
+      await sortTable(amountHeader, gridHeaderMenuZh.desc, [['amount', 'DESC']], true);
       await expectLabels(tableTab, 'B');
     }
     await open('json-query');
@@ -233,13 +252,23 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await menuCopy(resultA.getByRole('gridcell', { name: /0x00ff|二进制|BLOB/i }), expectedA.payload, '0x00ff');
     await expect(resultA.getByRole('checkbox')).toBeChecked();
     await expect(resultB.getByRole('checkbox')).toBeChecked();
+    await chooseHeaderAction(aliases.nth(1), gridHeaderMenuZh.freeze);
+    await expect(aliases.nth(0)).toHaveClass(frozen);
+    await expect(aliases.nth(1)).toHaveClass(frozen);
+    await expect(resultA.getByRole('checkbox')).toBeChecked();
+    await expect(resultB.getByRole('checkbox')).toBeChecked();
+    await chooseHeaderAction(aliases.nth(0), gridHeaderMenuZh.unfreeze);
+    await expect(aliases.nth(0)).not.toHaveClass(frozen);
+    await expect(aliases.nth(1)).not.toHaveClass(frozen);
+    await expect(resultA.getByRole('checkbox')).toBeChecked();
+    await expect(resultB.getByRole('checkbox')).toBeChecked();
     // 两个同名标题命中不同字段，加入和清除只修改相应排序规则。
     const tableSortsBeforeResult = await tableSorts();
-    await sortHeader(aliases.nth(0), gridHeaderSortZh.asc, true);
+    await chooseHeaderAction(aliases.nth(0), gridHeaderMenuZh.asc, true);
     await expectLabels(grid, 'A');
-    await sortHeader(aliases.nth(1), gridHeaderSortZh.desc);
+    await chooseHeaderAction(aliases.nth(1), gridHeaderMenuZh.desc);
     await expectLabels(grid, 'A');
-    await sortHeader(aliases.nth(0), gridHeaderSortZh.clear);
+    await chooseHeaderAction(aliases.nth(0), gridHeaderMenuZh.clear);
     await expectLabels(grid, 'B');
     expect(await tableSorts()).toEqual(tableSortsBeforeResult);
     expect(await history()).toEqual(historyBefore);

@@ -1483,6 +1483,18 @@ export function PostgresQueryTab({
       layout: { ...(layout ?? { order: keys, visible: keys }), widths } });
   }
 
+  const headerFreeze = {
+    current: resultCurrent,
+    apply(key?: string) {
+      if (!resultSource || !visibleColumns) return;
+      try {
+        const keys = queryResultColumnKeys(resultSource.columns);
+        const next = setQueryResultFrozenThrough(layout ?? { order: keys, visible: keys }, key);
+        setColumnLayout({ source: resultSource, layout: next, columns: visibleColumns });
+      } catch (reason) { setError(errorMessage(reason)); }
+    },
+  };
+
   /** 仅接收当前网格送出的行位置；校验失败后旧勾选失效。 */
   function acceptResultSelection(selection: ResultGridSelection) {
     if (!resultCurrent()) return false;
@@ -1942,7 +1954,7 @@ export function PostgresQueryTab({
                 <div className="query-result-with-details">
                   <div className="query-result-grid">
                     <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
-                      frozenKeys={frozenKeys} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
+                      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
                       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
                       onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
                       filterDialect="postgresql"

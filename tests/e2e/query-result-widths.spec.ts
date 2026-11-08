@@ -6,6 +6,7 @@ import { LocalStore } from '../../src/main/storage';
 import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
+import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { dataDir, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -100,6 +101,34 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   await apply.click();
   await expect.poll(() => width(0)).toBe(290);
   await expect.poll(() => width(1)).toBe(210);
+
+  await open();
+  await first.fill('250');
+  await second.fill('1400');
+  await apply.click();
+  await expect.poll(() => width(1)).toBe(1400);
+  const grid = query.getByRole('grid');
+  const menu = page.getByRole('menu', { name: gridHeaderMenuZh.menu, exact: true });
+  const openHeaderMenu = async () => {
+    const header = headers.first();
+    await header.scrollIntoViewIfNeeded();
+    // 菜单会响应滚动关闭，先等定位带来的滚动事件派发完。
+    await header.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await header.click({ button: 'right' });
+  };
+  await openHeaderMenu();
+  await menu.getByRole('menuitem', { name: gridHeaderMenuZh.freeze, exact: true }).click();
+  await expect(headers.first()).toHaveClass(/rdg-cell-frozen-start/);
+  const frozenLeft = () => headers.first().evaluate(element => element.getBoundingClientRect().left);
+  const initialLeft = await frozenLeft();
+  await grid.evaluate(element => { element.scrollLeft = 350; });
+  await expect.poll(() => grid.evaluate(element => element.scrollLeft)).toBeGreaterThan(100);
+  await expect.poll(async () => Math.abs(await frozenLeft() - initialLeft)).toBeLessThan(2);
+  await test.info().attach('表头冻结后横向滚动', { body: await page.screenshot(), contentType: 'image/png' });
+  await openHeaderMenu();
+  await menu.getByRole('menuitem', { name: gridHeaderMenuZh.unfreeze, exact: true }).click();
+  await expect(headers.first()).not.toHaveClass(/rdg-cell-frozen-start/);
+  await grid.evaluate(element => { element.scrollLeft = 0; });
 
   await open();
   await modal.getByRole('button', { name: text.resetWidths, exact: true }).click();

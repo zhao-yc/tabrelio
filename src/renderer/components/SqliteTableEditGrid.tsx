@@ -1,5 +1,5 @@
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
-import { useGridHeaderSortMenu } from './GridHeaderSortMenu';
+import { useGridHeaderMenu, type GridHeaderFreeze } from './GridHeaderMenu';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
@@ -34,9 +34,9 @@ import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenPrimaryKeyQuery?(sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; fitSource?(): GridColumnFitSource | undefined; }
+interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenPrimaryKeyQuery?(sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenPrimaryKeyQuery, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFilterCell, cellMenuFilters, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, fitSource, rowHeight }: Props) {
+export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenPrimaryKeyQuery, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFilterCell, cellMenuFilters, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight }: Props) {
   const height = readGridRowHeight(rowHeight);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
@@ -241,11 +241,12 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       () => current(cell.row) && !disabled && noModal());
   }
   const cellActionMenu = useGridCellActionMenu();
-  const headerSortMenu = useGridHeaderSortMenu(cellActionMenu.open, {
+  const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
     owner, grid: () => grid.current?.element,
     column: index => page.result.columns[order[index - 2]],
-    sort: sort ?? [], current: () => !!onSortChange && !disabled && baseCurrent() && noModal(),
-    apply: next => onSortChange?.(next),
+    sort: sort ?? [], current: () => !disabled && baseCurrent() && noModal(),
+    canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
+    freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,
   });
   const quickValue = useRef(onQuickValue); quickValue.current = onQuickValue;
   function openCellActions(row: SqliteDraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
@@ -315,7 +316,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     selectionChanged(value => value + 1);
   }
 
-  return <div className="sqlite-edit-clipboard-region" {...headerSortMenu} onPasteCapture={paste} onDoubleClickCapture={fitSource && onColumnResize ? fitHeaderColumn : undefined}>{cellActionMenu.menu}{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+  return <div className="sqlite-edit-clipboard-region" {...headerMenu} onPasteCapture={paste} onDoubleClickCapture={fitSource && onColumnResize ? fitHeaderColumn : undefined}>{cellActionMenu.menu}{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
     <GridColumnJump key={'column:' + orderKey} scope={owner} columns={order.map(index => page.columns[index])}
       disabled={disabled} isCurrent={() => !disabled && baseCurrent() && noModal()} onJump={jumpToGridColumn}/>
     <button type="button" title={headerCopyText.namesHint} disabled={disabled} onClick={() => copyFromGrid('names')}>{headerCopyText.names}</button>
