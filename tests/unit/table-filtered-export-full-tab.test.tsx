@@ -85,6 +85,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (target === path.join(renderer, 'store')) return { useWorkspace: store };
       if (target === path.join(renderer, 'uiCommands')) return navigationMenuVmPort;
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
+      if (target === path.join(renderer, 'components/GridCellActionMenu')) return { useGridCellActionMenu: () => ({ menu: null }) };
       if (target.startsWith(path.join(renderer, 'components') + path.sep)) return new Proxy({}, { get: (_, key) => String(key) });
       for (const extension of ['.ts', '.tsx']) if (existsSync(target + extension)) return load(target + extension);
       throw Error('纯组件不允许未知依赖：' + name);

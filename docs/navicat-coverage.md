@@ -72,6 +72,10 @@
 
 2026-11-09 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 表格可在适用文本列为活动格生成 UUID v4。MariaDB 与 PostgreSQL 也支持原生 UUID 列。D02、R01、R02 仍为部分覆盖。[活动格快速赋值](user-guide.md#将活动格设为-null-或空字符串)
 
+2026-11-09 源码增量。四种数据库的表格支持通过右键或 Shift+F10 打开单元格操作，沿用快速赋值和单格另存。PostgreSQL 保留原值筛选，普通查询结果提供另存。D02、D06、D07、Q05、R01、R02 仍为部分覆盖。[单元格菜单](user-guide.md#将活动格设为-null-或空字符串)
+
+同轮修复快速切换 SQLite 标签时，已取消读取反复发布停止状态导致的渲染错误。取消仍等待原读取终态，旧响应不能显示到新标签。
+
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 实体表可为当前记录或本页勾选行生成 UPDATE SQL，WHERE 使用完整原主键，SET 使用已加载的普通非键原值。D02、R01、R02 仍为部分覆盖。[复制记录为 UPDATE SQL](user-guide.md#复制记录为-update-sql)
 
 2026-11-08 源码增量。PostgreSQL 单文件原生 CSV 可在导入前完整检查编码、引号和列数，并保留列映射。写入沿已核对的字节范围并核对记录数。F01、R01 仍为部分覆盖。[原生 CSV 整文件检查](development/postgres-copy-csv-preflight-20261108.md)

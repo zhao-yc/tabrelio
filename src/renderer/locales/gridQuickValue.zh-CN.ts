@@ -1,4 +1,5 @@
 export const gridQuickValueZh = {
+  context: '单元格操作',
   null: '设为 NULL',
   empty: '设为空字符串',
   uuid: '生成 UUID',

@@ -68,6 +68,23 @@ describe('SQLite 原表请求串行与准确生命周期', () => {
   it('其他作业接管busy后旧finally不清理其占用', async () => {
     const f = fixture(), pending = f.controller.load(query(), 0); f.otherJob(); expect(f.cancels[0].id).toBe('read-1'); f.cancels[0].pending.resolve(); f.reads[0].pending.resolve(result(f.reads[0].input)); await pending; expect(f.busy).toBe(true); expect(f.releases).toBe(0); expect(f.view().page).toBeUndefined(); f.controller.dispose();
   });
+  it('切换标签后重复观察正在取消的读取，只发布一次停止状态', async () => {
+    const f = fixture(), pending = f.controller.load(query(), 0);
+    f.scope.active = false;
+    f.emit();
+    const states = f.states.length;
+    for (let index = 0; index < 60; index++) f.controller.observe();
+    expect(f.states).toHaveLength(states);
+    expect(f.cancels).toHaveLength(1);
+    expect(f.view().stopping).toBe(true);
+    f.cancels[0].pending.resolve();
+    f.reads[0].pending.resolve(result(f.reads[0].input));
+    await pending;
+    expect(f.view().page).toBeUndefined();
+    expect(f.view().stopping).toBe(false);
+    expect(f.releases).toBe(1);
+    f.controller.dispose();
+  });
   it('停止和卸载仅取消原任务，真实终态前均不释放busy或显示晚回页', async () => {
     for (const dispose of [false, true]) {
       const f = fixture(), pending = f.controller.load(query(), 0), stopping = dispose ? (f.controller.dispose(), Promise.resolve()) : f.controller.stop(); f.cancels[0].pending.resolve(); await flush(); expect(f.busy).toBe(true); expect(f.releases).toBe(0); const writes = f.states.length; f.reads[0].pending.resolve(result(f.reads[0].input)); await pending; await stopping; expect(f.busy).toBe(false); expect(f.releases).toBe(1); if (dispose) expect(f.states).toHaveLength(writes); else expect(f.view().page).toBeUndefined(); f.controller.dispose();

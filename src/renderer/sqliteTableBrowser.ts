@@ -119,7 +119,11 @@ export class SqliteTableBrowser {
   }
   /** 取消仅投递准确原任务，取消失败仍保留原 Promise 的终态屏障。 */
   private async cancelOperation(operation: Operation): Promise<void> {
-    operation.cancelled = true; this.emit({ stopping: !operation.terminal });
+    // 标签切换后的渲染会重复观察原读取。停止状态只发布一次，避免触发同步重渲染循环。
+    if (!operation.cancelled) {
+      operation.cancelled = true;
+      this.emit({ stopping: !operation.terminal });
+    }
     if (!operation.sent || operation.terminal) return;
     operation.cancel ??= this.ports.cancel(operation.input.taskId).then(() => undefined, reason => { if (!this.disposed && this.operation === operation) this.emit({ error: String(reason instanceof Error ? reason.message : reason) }); });
     await operation.cancel;

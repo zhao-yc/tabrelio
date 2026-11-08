@@ -9,6 +9,7 @@ import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickVa
 import { sqliteTableEditZh as sqliteText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { draftHistoryZh } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -71,6 +72,8 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     const undo = local ? sqliteText.undo : draftHistoryZh.undo;
     const jobs = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
     const before = await jobs();
+    const menu = page.getByRole('menu', { name: /^(单元格操作|单元格筛选)$/ });
+    const item = (name: string) => menu.getByRole('menuitem', { name, exact: true });
     await other.locator('..').getByRole('checkbox').check();
     if (local) {
       await grid.getByRole('gridcell').getByText('INTEGER · 17', { exact: true }).click();
@@ -78,11 +81,28 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
       await expect(await action(text.empty)).toBeDisabled();
       await page.keyboard.press('Escape');
     }
-    await cell.click();
-    await clickAction(text.null);
+    await other.click();
+    await cell.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    if (dialect === 'postgresql') {
+      await expect(item(tableCellFilterZh.equal)).toBeFocused();
+      await item(tableCellFilterZh.equal).click();
+      const advanced = tab.getByRole('region', { name: postgresTableZh.advancedFilter, exact: true });
+      await expect(advanced.getByLabel(zh.table.text011, { exact: true })).toHaveValue('row A');
+      await clickAction(postgresTableZh.advancedFilter);
+      await cell.click({ button: 'right' });
+    }
+    await page.screenshot({ path: info.outputPath('单元格右键菜单.png') });
+    await item(text.null).click();
     await expect(cell).toHaveText('NULL');
     await cell.click();
-    await clickAction(text.empty);
+    await page.keyboard.press('Shift+F10');
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await expect(cell).toBeFocused();
+    await page.keyboard.press('Shift+F10');
+    await item(text.empty).click();
     await expect(cell).toHaveText(local ? 'TEXT ·' : '');
     await expect(other).toBeVisible();
     await page.screenshot({ path: info.outputPath('活动格暂存空字符串.png') });

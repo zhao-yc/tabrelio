@@ -6,6 +6,7 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { gridCellFileZh as text } from '../../src/renderer/locales/gridCellFile.zh-CN';
 import { binaryCellFileText, textCellFileTitle } from '../../src/shared/binaryCellFiles';
+import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
@@ -36,6 +37,9 @@ test('从 SQLite 表格、只读视图及查询结果另存活动格原值', asy
     fixture.exec('CREATE TABLE cells(id INTEGER PRIMARY KEY, memo TEXT, image BLOB, empty TEXT, nil TEXT); CREATE VIEW cells_view AS SELECT * FROM cells;');
     fixture.prepare('INSERT INTO cells VALUES(?,?,?,?,?)').run(9007199254740993n, value, png, '', null);
   } finally { fixture.close(); }
+  const failures: string[] = [];
+  let step = '打开 SQLite 表';
+  page.on('pageerror', error => failures.push(step + '\n' + (error.stack ?? error.message)));
   const baseline = await readFile(database);
   await writeFile(textPath, '已存在文件');
   try {
@@ -86,18 +90,37 @@ test('从 SQLite 表格、只读视图及查询结果另存活动格原值', asy
     await expect(page.getByText(text.noValue, { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('单元格另存.png') });
 
+    step = '打开只读视图';
     await selectTab('file-view');
     await cell(5).click();
     await openSave(textCellFileTitle, 'cell.txt', emptyPath);
     await expect.poll(() => readFile(emptyPath).catch(() => undefined)).toEqual(Buffer.alloc(0));
+    step = '打开并执行查询';
     await selectTab('file-query');
     const query = page.locator('.query-tab:visible');
     await query.locator('.query-execute-split button.primary').click();
-    await rows(query).getByRole('gridcell', { name: '9007199254740993', exact: true }).click();
-    await openSave(textCellFileTitle, 'cell.txt');
-    await openSave(textCellFileTitle, 'cell.txt', numericPath);
+    const resultCell = rows(query).getByRole('gridcell', { name: '9007199254740993', exact: true });
+    const menu = page.getByRole('menu', { name: gridQuickValueZh.context, exact: true });
+    step = '打开查询菜单';
+    await resultCell.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('menuitem')).toHaveCount(1);
+    step = '从查询切到视图';
+    await selectTab('file-view');
+    await expect(menu).toBeHidden();
+    step = '返回查询';
+    await selectTab('file-query');
+    await resultCell.click({ button: 'right' });
+    step = '选择另存并取消';
+    await mockSaveDialog(textCellFileTitle, 'cell.txt');
+    await menu.getByRole('menuitem', { name: text.action, exact: true }).click();
+    await resultCell.click({ button: 'right' });
+    step = '选择另存并保存';
+    await mockSaveDialog(textCellFileTitle, 'cell.txt', numericPath);
+    await menu.getByRole('menuitem', { name: text.action, exact: true }).click();
     await expect.poll(() => readFile(numericPath, 'utf8').catch(() => undefined)).toBe('9007199254740993');
     expect(await readFile(database)).toEqual(baseline);
+    expect(failures).toEqual([]);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

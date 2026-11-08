@@ -16,12 +16,11 @@ import { cellPreview, cellText, errorMessage, invoke, ownCell, uid } from '../li
 import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
-import { ResultsGrid, type GridCellMenuAnchor, type GridFindTarget } from './ResultsGrid';
+import { ResultsGrid, type GridFindTarget } from './ResultsGrid';
 import { PostgresTableExportDialog } from './PostgresTableExportDialog';
 import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
-import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
 import { PostgresRecordTransferDialog } from './PostgresRecordTransferDialog';
@@ -39,6 +38,7 @@ import { postgresFindPlan, postgresFindRows, type PostgresFindPlan } from '../po
 import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh-CN';
 import { useUiCommandScope } from '../uiCommands';
 import { openFocusedGridRowJump } from './GridRowJump';
+import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
@@ -240,10 +240,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     scope: object; column: string; rowCount: number; values: readonly (string | null)[]; current(): boolean;
   }>();
   const [selectionColumn, setSelectionColumn] = useState<string>();
-  const [cellMenu, setCellMenu] = useState<{
-    scope: object; cell: QueryResultCopyCell; anchor: GridCellMenuAnchor; seed: FilterDraft;
-  }>();
-  const cellMenuOwner = useRef<typeof cellMenu>(undefined);
   const [inlineEdit, setInlineEdit] = useState<InlineEdit>();
   const inlineOwner = useRef<InlineEdit>(undefined);
   const inlineReturnFocus = useRef<HTMLElement>(undefined);
@@ -564,7 +560,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const intent: QueryTemplateIntent = { page, table: target.table, tab, connectionVersion, limit: resultLimit,
       ...(filtered ? { readScope: structuredClone({ filter: options.filter, sort: options.sort }) } : {}) };
-    closeCellMenu(cellMenuOwner.current, false);
     queryTemplateOwner.current = intent;
     setQueryTemplate(intent);
   }
@@ -610,7 +605,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const next = history.move(direction);
     if (!next) return;
-    closeCellMenu(cellMenuOwner.current, false);
     publishChanges(next);
     setMessage('');
     setError('');
@@ -670,45 +664,30 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (selectedFilter && (!cellMenuEnabled || recordView || selectedFilter.scope !== cellScope)) setSelectedFilter(undefined);
   }, [cellMenuEnabled, cellScope, recordView, selectedFilter]);
 
-  function closeCellMenu(menu: typeof cellMenu, restoreFocus: boolean) {
-    if (!menu || cellMenuOwner.current !== menu) return;
-    cellMenuOwner.current = undefined;
-    setCellMenu(undefined);
-    if (restoreFocus && menu.anchor.element.isConnected) menu.anchor.element.focus({ preventScroll: true });
-  }
-
-  useLayoutEffect(() => {
-    const owner = cellMenuOwner.current;
-    if (owner && (!cellMenuEnabled || owner.scope !== cellScope)) closeCellMenu(owner, false);
-  }, [cellMenuEnabled, cellScope]);
-
   /** 在打开及选中菜单项时都校验原页及活动标签，避免用旧格或其他连接的值。 */
   function canFilterCell(): boolean {
     return cellMenuEnabled && !inlineOwner.current && !!lifetime.current && issued.current === page?.exportToken && layoutScope.current.current() &&
       !lease.current && !recordDirty.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
   }
 
-  function openCellMenu(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean {
-    if (!page || !canFilterCell()) return false;
+  function cellMenuFilters(cell: QueryResultCopyCell) {
+    if (!page || !canFilterCell()) return;
     try {
       const seed = postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows);
-      const menu = { scope: cellScope, cell, anchor, seed };
-      cellMenuOwner.current = menu;
-      setCellMenu(menu);
-      return true;
-    } catch { return false; }
-  }
-
-  function chooseCellFilter(menu: NonNullable<typeof cellMenu>, exclude: boolean) {
-    if (cellMenuOwner.current !== menu) return;
-    closeCellMenu(menu, true);
-    if (!page || !canFilterCell() || menu.scope !== cellScope || !menu.anchor.element.isConnected) return;
-    try {
-      const current = postgresTableCellFilterDraft(menu.cell, gridLayout.columns, page.rows);
-      if (current.value !== menu.seed.value || current.operator !== menu.seed.operator || current.column !== menu.seed.column) return;
-      setCellFilterSeed(exclude ? postgresTableCellFilterDraft(menu.cell, gridLayout.columns, page.rows, true) : current);
-      setAdvancedFilters(true);
-    } catch { /* 原值失效时保留当前条件。 */ }
+      const apply = (exclude: boolean) => {
+        if (!canFilterCell()) return;
+        try {
+          const current = postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows);
+          if (current.value !== seed.value || current.operator !== seed.operator || current.column !== seed.column) return;
+          setCellFilterSeed(exclude ? postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows, true) : current);
+          setAdvancedFilters(true);
+        } catch { /* 原值失效时保留当前条件。 */ }
+      };
+      return { label: cellFilterText.context, actions: [
+        { label: cellFilterText.equal, run: () => apply(false) },
+        { label: cellFilterText.exclude, run: () => apply(true) },
+      ] };
+    } catch { return; }
   }
 
   /** 捕获只建立本地预览。加入条件前仍须持有原页、活动格及勾选集合。 */
@@ -763,7 +742,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         ? { ...source, kind, plan: postgresBatchDeletePlan(page, selected, prior) }
         : kind === 'edit' ? { ...source, kind, rows: postgresBatchRows(page, selected, prior) }
           : kind === 'duplicate' ? { ...source, kind, plan: postgresBatchDuplicatePlan(page, selected, prior) } : { ...source, kind };
-      closeCellMenu(cellMenuOwner.current, false);
       batchOwner.current = intent;
       setBatch(intent);
     } catch (reason) { setError(errorMessage(reason)); }
@@ -1129,7 +1107,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     const originalText = raw === null ? '' : cellText(raw);
     const initial = staged ?? (raw === null ? { mode: 'null' } : { mode: 'text', value: originalText });
     const owner: InlineEdit = { scope: cellScope, cell, column, rowKey, anchor, originalText, initial, typed };
-    closeCellMenu(cellMenuOwner.current, false);
     inlineOwner.current = owner;
     useWorkspace.getState().setDirty(tab.id, true);
     setInlineEdit(owner);
@@ -1245,7 +1222,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current ||
         draftRef.current !== draft || !draft.includes(entry) || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const source = { page, entry, change: entry.change, originalDraft: draft };
-    closeCellMenu(cellMenuOwner.current, false);
     insertDraftOwner.current = source;
     setForm({ row: null, insertion: source });
   }
@@ -1307,7 +1283,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       const prior = viewKey ? originalDraft.find(entry => entry.rowKey === viewKey)?.change : undefined;
       const source = { ...postgresRecordDuplicatePlan(page, row, prior), page, scope: cellScope,
         row, rowNumber: options.offset + row + 1, originalDraft };
-      closeCellMenu(cellMenuOwner.current, false);
       duplicateOwner.current = source;
       setForm({ row: null, duplicate: source });
     } catch (reason) { setError(errorMessage(reason)); }
@@ -1350,7 +1325,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     const owner: RecordTemplateLease = new RecordTemplateLease(uid(), () => templateOwner.current === owner && issued.current === page.pageToken &&
       layoutScope.current.key === layoutKey && layoutScope.current.current() && !lease.current && !recordInput.current &&
       draftRef.current === originalDraft && !useWorkspace.getState().activeJobs[tab.id]);
-    closeCellMenu(cellMenuOwner.current, false);
     templateOwner.current = owner;
     setTemplateDialog({ lease: owner, target: { ...layoutTarget, table: postgresIdentifier(schema) + '.' + postgresIdentifier(name) },
       page, columns: postgresTemplateColumns(page.columns),
@@ -1437,7 +1411,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   function switchRecordView(next: boolean) {
     if (!active || blocked || recordInput.current || lease.current || !page || next === recordView) return;
-    closeCellMenu(cellMenuOwner.current, false);
     setFindRequest(undefined);
     if (next) setRow(row !== null && page.rows[row] ? row : page.rows.length ? 0 : null);
     else if (row !== null && gridLayout.columns.length) {
@@ -1479,7 +1452,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <button disabled={!canPasteAppend} onClick={() => {
         if (!canPasteAppend || lease.current || inlineOwner.current || !layoutScope.current.current() ||
           document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-        closeCellMenu(cellMenuOwner.current, false);
         pasteOwner.current = cellScope;
         setPasteScope(cellScope);
       }}>{pasteText.append}</button>
@@ -1691,7 +1663,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           setSelectionColumn(value && value.row >= 0 ? value.key : undefined);
           if (gridReturn) setGridReturn(undefined);
         }}
-        onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
+        cellMenuFilters={cellMenuEnabled ? cellMenuFilters : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
         onCellPaste={(cell, data) => {
@@ -1709,9 +1681,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           } catch (reason) { setError(errorMessage(reason)); }
         }}/>}/></div> : <Empty title={text.empty}/>}
     </div>
-    {cellMenu && cellMenuEnabled && cellMenu.scope === cellScope &&
-      <PostgresTableCellFilterMenu anchor={cellMenu.anchor} column={cellMenu.seed.column}
-        onClose={restoreFocus => closeCellMenu(cellMenu, restoreFocus)} onChoose={exclude => chooseCellFilter(cellMenu, exclude)}/>}
     {inlineEdit && <PostgresInlineCellEditor anchor={inlineEdit.anchor} column={inlineEdit.column}
       initial={inlineEdit.initial} originalText={inlineEdit.originalText} typed={inlineEdit.typed} visible={active}
       onStage={value => stageInlineEdit(inlineEdit, value)} onCancel={() => closeInlineEdit(inlineEdit)}/>}
