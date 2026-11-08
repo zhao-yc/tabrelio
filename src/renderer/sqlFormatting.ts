@@ -5,13 +5,14 @@ import { completionLimits } from '../shared/sqlCompletion';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 import { editorIndentationOptions } from '../shared/editorIndentation';
 import { readSqlKeywordCase, sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
+import { scanPostgresFormattingTokens } from '../shared/postgresSql';
 
 type RoleModule = typeof import('./sqlFormattingRoles');
 let preparedRoles: RoleModule | undefined;
 /** 仅显式大写/小写入口调用；模块加载成功前上层必须保留原模型/选区/owner，默认入口不调用。 */
 export async function prepareSqlFormattingRoles(): Promise<void> { preparedRoles = await import('./sqlFormattingRoles'); }
 
-export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; dialect?: 'mysql' | 'sqlite'; }
+export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; dialect?: 'mysql' | 'sqlite' | 'postgresql'; }
 type FormatterToken = Parameters<NonNullable<typeof mysql.tokenizerOptions.postProcess>>[0][number];
 // 只列正式词法类型，不维护关键字单词表；函数/数据类型/变量/参数/标识符均不在其中。
 const keywordTypes = new Set<string>(['RESERVED_KEYWORD', 'RESERVED_KEYWORD_PHRASE', 'RESERVED_SET_OPERATION', 'RESERVED_CLAUSE', 'RESERVED_SELECT', 'RESERVED_JOIN', 'CASE', 'END', 'WHEN', 'ELSE', 'THEN', 'LIMIT', 'BETWEEN', 'AND', 'OR', 'XOR']);
@@ -93,38 +94,70 @@ function keywordCaseFormatting(source: string, start: number, end: number, origi
   return { formatted, eligible };
 }
 
-/** 四种引号模式均保持token原文及敏感空白；任何疑点都在修改模型前拒绝。 */
+/** 只接纳完整词法单元。COPY 数据区与客户端脚本中的换行可能有执行含义。 */
+function postgresAtoms(source: string, standardStrings: boolean): Atom[] {
+  let scanned;
+  try { scanned = scanPostgresFormattingTokens(source, completionLimits.tokens, standardStrings); }
+  catch { return fail(); }
+  if (!scanned) return fail();
+  const closing: string[] = [];
+  let statementStart = true, copyStatement = false, previous = '';
+  const tokens = scanned.map(token => {
+    const raw = source.slice(token.start, token.end);
+    if (raw === '(' || raw === '[') {
+      closing.push(raw === '(' ? ')' : ']');
+      if (closing.length > completionLimits.depth) throw Error(text.limited);
+    } else if ((raw === ')' || raw === ']') && closing.pop() !== raw) fail();
+    if (token.kind !== 'comment') {
+      const word = token.kind === 'word' ? raw.toLowerCase() : '';
+      if (statementStart) copyStatement = word === 'copy';
+      if (copyStatement && !closing.length && previous === 'from' && word === 'stdin') fail();
+      statementStart = raw === ';';
+      previous = word;
+    }
+    return { ...token, raw };
+  });
+  if (closing.length) fail();
+  return tokens;
+}
+
+/** 按方言检查原词法单元及敏感空白，修改模型前拒绝改变原文含义的结果。 */
 export function planSqlFormatting(source: string, start: number, end: number, eol: string = '\n', indentation: FormattingPreferences = {}): { start: number; end: number; text: string } | null {
-  if (source.length > completionLimits.sourceUnits) throw new Error(text.limited);
+  const postgres = indentation.dialect === 'postgresql', sqlite = indentation.dialect === 'sqlite';
+  const limit = postgres ? 64 * 1024 : completionLimits.sourceUnits;
+  if (source.length > limit) throw new Error(text.limited);
   if (source.includes('\0') || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > source.length || !['\n', '\r\n'].includes(eol)) fail();
-  const sqlite = indentation.dialect === 'sqlite';
-  const scans = sqlite ? [{ ansi: true, escapes: true, tokens: atoms(source, true, true, true) }] : [false, true].flatMap(ansi => [false, true].map(escapes => ({ ansi, escapes, tokens: atoms(source, ansi, escapes) })));
-  for (const { tokens } of scans) if (tokens.some(token => start > token.start && start < token.end || end > token.start && end < token.end)) throw new Error(text.selection);
+  const scans = postgres ? [true, false].map(standard => (sql: string) => postgresAtoms(sql, standard)) :
+    sqlite ? [(sql: string) => atoms(sql, true, true, true)] :
+      [false, true].flatMap(ansi => [false, true].map(escapes => (sql: string) => atoms(sql, ansi, escapes)));
+  const originalTokens = scans.map(scan => scan(source));
+  for (const tokens of originalTokens) if (tokens.some(token => start > token.start && start < token.end || end > token.start && end < token.end)) throw new Error(text.selection);
   if (source[start - 1] === '\r' && source[start] === '\n' || source[end - 1] === '\r' && source[end] === '\n') throw new Error(text.selection);
   const original = source.slice(start, end), leading = /^[\t\n\r\f ]*/.exec(original)![0], trailing = /[\t\n\r\f ]*$/.exec(original)![0];
   if (!original.trim()) return null;
   let formatted: string, eligible: { start: number; end: number }[] = [];
   // 仅显式格式化时使用当前缩进；更改偏好本身从不改写SQL。
   const options = editorIndentationOptions(indentation.tabSize, indentation.insertSpaces);
-  const keywordCase = readSqlKeywordCase(indentation.keywordCase);
+  // PostgreSQL 沿用关键字原样。MySQL 的角色解析器不能证明 PostgreSQL 的名称位置。
+  const keywordCase = postgres ? 'preserve' : readSqlKeywordCase(indentation.keywordCase);
   // SQLite 尚无名称角色证明，显式大小写转换必须拒绝，不能借用 MySQL 解析器猜名称。
   if (sqlite && keywordCase !== 'preserve') throw Error(sqliteZh.formatCaseUnavailable);
-  if (keywordCase !== 'preserve' && (source.length > sqlKeywordRoleLimits.sourceUnits || scans[0].tokens.length > sqlKeywordRoleLimits.tokens)) throw Error(text.limited);
+  if (keywordCase !== 'preserve' && (source.length > sqlKeywordRoleLimits.sourceUnits || originalTokens[0].length > sqlKeywordRoleLimits.tokens)) throw Error(text.limited);
   try {
     if (keywordCase !== 'preserve') {
       const roles = preparedRoles; if (!roles) throw Error(text.unavailable);
       ({ formatted, eligible } = keywordCaseFormatting(source, start, end, original, options, keywordCase, roles.sqlFormattingNameRanges(source)));
     }
-    else formatted = format(original.trim(), { language: sqlite ? 'sqlite' : 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
+    else formatted = format(original.trim(), { language: indentation.dialect ?? 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
     formatted = formatted.trim().replace(/\r?\n/g, eol);
   }
   catch { throw new Error(text.failed); }
   const replacement = leading + formatted + trailing, next = source.slice(0, start) + replacement + source.slice(end);
-  if (next.length > completionLimits.sourceUnits) throw new Error(text.limited);
-  for (const scan of scans) {
-    const after = atoms(next, scan.ansi, scan.escapes, sqlite); if (after.length !== scan.tokens.length) fail(); let range = 0;
-    for (let index = 0; index < scan.tokens.length; index++) {
-      const before = scan.tokens[index], value = after[index];
+  if (next.length > limit) throw new Error(text.limited);
+  for (const [mode, scan] of scans.entries()) {
+    const previous = originalTokens[mode], after = scan(next); if (after.length !== previous.length) fail(); let range = 0;
+    for (let index = 0; index < previous.length; index++) {
+      const before = previous[index], value = after[index];
       if (before.kind !== value.kind || before.gapSensitive !== value.gapSensitive) fail();
       if (before.raw === value.raw) continue;
       while (range < eligible.length && eligible[range].end <= before.start) range++;

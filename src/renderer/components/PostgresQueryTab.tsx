@@ -3,7 +3,8 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { flushSync } from 'react-dom';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
-import { format } from 'sql-formatter';
+import { formatSqlEditor } from '../sqlFormatting';
+import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import type { PostgresResultSource, QueryOutcome, QueryResult, ResultColumn } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
 import { postgresTableLimits } from '../../shared/postgresTable';
@@ -1549,16 +1550,10 @@ export function PostgresQueryTab({
   function formatQuery() {
     const target = commandEditor();
     if (!target) return;
-    const { instance, model } = target;
     try {
-      const sql = model.getValue();
-      if (sql.length > 65536) throw Error(text.formatTooLarge);
-      const formatted = format(sql, { language: 'postgresql' });
-      if (formatted === sql) return;
-      instance.pushUndoStop();
-      instance.executeEdits('postgres-format', [{ range: model.getFullModelRange(), text: formatted }]);
-      instance.pushUndoStop();
-      instance.focus();
+      const settings = useWorkspace.getState().settings;
+      setError('');
+      formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces });
     } catch (reason) { setError(errorMessage(reason)); }
   }
   function openSaveQuery() {
@@ -1767,7 +1762,7 @@ export function PostgresQueryTab({
             <button disabled={!canStop} onClick={stop}>
               {text.stop}
             </button>
-            <button disabled={!editable} onClick={formatQuery}>
+            <button disabled={!editable} title={sqlFormattingZh.hint} onClick={formatQuery}>
               {text.format}
             </button>
             <button disabled={!editable} onClick={openSaveQuery}>

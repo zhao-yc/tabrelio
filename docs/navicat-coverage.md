@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。PostgreSQL 查询支持选区或全文格式化，沿用编辑器缩进并支持单次撤销。Q01 仍为部分覆盖。[PostgreSQL 选区格式化](development/postgres-query-format-selection-20261108.md)
+
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表页可按当前行或本页勾选行直接打开原主键查询草稿。新标签沿用原连接和数据库，由用户决定是否执行。D02 仍为部分覆盖。[表页原主键查询草稿](development/primary-key-query-draft-20261108.md)
 
 2026-11-08 源码增量。MySQL 和 MariaDB 的表页可从当前行或勾选行复制原主键查询 SQL，保留精确数值、二进制和 TIMESTAMP 原时刻。D02 仍为部分覆盖。[MySQL 和 MariaDB 原主键查询复制](development/mysql-primary-key-query-20261108.md)

@@ -327,6 +327,76 @@ export function scanPostgresEditorTokens(source: string, budget: number, standar
   return result;
 }
 
+/** 格式化必须在两种字符串模式中保留原词法单元，含 PostgreSQL 的运算符和字面量前缀。 */
+export function scanPostgresFormattingTokens(source: string, budget: number, standardStrings: boolean) {
+  const tokens: { start: number; end: number; kind: 'word' | 'literal' | 'comment' | 'symbol' }[] = [];
+  const numeric = /(?:0x_?[0-9a-f]+(?:_[0-9a-f]+)*|0o_?[0-7]+(?:_[0-7]+)*|0b_?[01]+(?:_[01]+)*|(?:[0-9]+(?:_[0-9]+)*(?:\.(?!\.)(?:[0-9]+(?:_[0-9]+)*)?)?|\.[0-9]+(?:_[0-9]+)*)(?:e[+-]?[0-9]+(?:_[0-9]+)*)?)/iy;
+  const operator = /[+*/<>=~!@#%^&|`?\-]/;
+  let i = 0;
+  while (i < source.length) {
+    const char = source[i], start = i;
+    if (whitespace.test(char)) { i++; continue; }
+    if (tokens.length >= budget) return;
+    let kind: typeof tokens[number]['kind'] = 'symbol';
+    if (source.startsWith('--', i)) {
+      kind = 'comment';
+      while (i < source.length && !/[\r\n]/.test(source[i])) i++;
+    } else if (source.startsWith('/*', i)) {
+      kind = 'comment';
+      i = postgresBlockCommentEnd(source, i);
+    } else {
+      const prefix = /^(?:[eEbBxXnN](?=')|[uU]&(?=['"]))/u.exec(source.slice(i, i + 3))?.[0] ?? '';
+      const quote = source[i + prefix.length];
+      const tag = char === '$' ? dollarTag(source, i) : undefined;
+      if (quote === "'" || quote === '"') {
+        kind = quote === "'" ? 'literal' : 'symbol';
+        const backslash = quote === "'" && (/^e$/i.test(prefix) || !standardStrings && !/^[bx]|^u&/i.test(prefix));
+        i = quotedEnd(source, i + prefix.length, backslash);
+        // 相邻单引号字符串只有跨行才会续接，E 字符串的转义规则随续行保留。
+        if (quote === "'") {
+          const continuation = /(?:[ \t\r\n\f\v]|--[^\r\n]*)+/y;
+          while (true) {
+            continuation.lastIndex = i;
+            const gap = continuation.exec(source)?.[0];
+            if (!gap || !/[\r\n]/.test(gap) || source[i + gap.length] !== "'") break;
+            i = quotedEnd(source, i + gap.length, backslash);
+          }
+        }
+      } else if (tag) {
+        kind = 'literal';
+        const end = source.indexOf(tag, i + tag.length);
+        if (end < 0) throw new IncompletePostgresSql('PostgreSQL dollar-quote未闭合');
+        i = end + tag.length;
+      } else if (char === '$' && /[0-9]/.test(source[i + 1] ?? '')) {
+        i++;
+        while (/[0-9]/.test(source[i] ?? '')) i++;
+        if (identifierPart.test(source[i] ?? '')) return;
+      } else if (identifierStart.test(char)) {
+        kind = 'word';
+        i++;
+        while (identifierPart.test(source[i] ?? '')) i++;
+      } else {
+        numeric.lastIndex = i;
+        const number = numeric.exec(source);
+        if (number) {
+          i = numeric.lastIndex;
+          if (identifierPart.test(source[i] ?? '')) return;
+        } else if (operator.test(char)) {
+          i++;
+          while (operator.test(source[i] ?? '') && !source.startsWith('--', i) && !source.startsWith('/*', i)) i++;
+          const raw = source.slice(start, i);
+          if (!/[~!@#%^&|`?]/.test(raw)) while (i > start + 1 && /[+-]/.test(source[i - 1])) i--;
+        } else if (source.startsWith('::', i) || source.startsWith(':=', i) || source.startsWith('..', i)) {
+          i += 2;
+        } else if (';,.:()[]'.includes(char)) i++;
+        else return;
+      }
+    }
+    tokens.push({ start, end: i, kind });
+  }
+  return tokens;
+}
+
 /** 在 standard_conforming_strings=on 下隔离 CHECK 或生成列表达式，语义交给 PostgreSQL。 */
 export function assertPostgresCheckExpression(source: string, label = 'CHECK'): void {
   if (!source.length || new TextEncoder().encode(source).length > 16384 || /[\u0000\uD800-\uDFFF]/u.test(source))

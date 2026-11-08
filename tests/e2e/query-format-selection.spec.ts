@@ -1,5 +1,6 @@
 import { test as baseTest, expect } from '@playwright/test';
 import { isDeepStrictEqual } from 'node:util';
+import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 
 // 列表阶段先短路，不加载桌面夹具、认证、系统剪贴板或私网帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -24,16 +25,21 @@ async function observe(desktop: Desktop) {
   });
 }
 /** 只建本例离线连接和保存查询；正文由正式打开入口进入编辑器，不建立数据库会话。 */
-async function openSource(sql: string) {
+async function openSource(sql: string, dialect: 'mysql' | 'postgresql' = 'mysql') {
   // Playwright转译为CJS后，动态import命名空间可能固化上一例的page；读取同一夹具当前导出。
   const desktop = require('./desktop-fixture') as Desktop, { page } = desktop;
   await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
-  await page.evaluate(async source => {
-    const connection = await window.dbark.invoke('connections.save', { id: '', name: '格式化离线连接', group: '', color: '#51bda5', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline' });
-    await window.dbark.invoke('queries.create', { name: '格式化来源', connectionId: connection.id, context: { state: 'known', database: null }, sql: source });
-  }, sql);
+  await page.evaluate(async ({ sql, dialect }) => {
+    const database = dialect === 'postgresql' ? 'postgres' : undefined;
+    const connection = await window.dbark.invoke('connections.save', { id: '', name: '格式化离线连接', group: '', color: '#51bda5', dialect, host: '127.0.0.1', port: 1, user: 'offline', database });
+    await window.dbark.invoke('queries.create', { name: '格式化来源', connectionId: connection.id, context: { state: 'known', database: database ?? null }, sql });
+    if (dialect === 'postgresql') {
+      const settings = await window.dbark.invoke('settings.get', {});
+      await window.dbark.invoke('settings.save', { ...settings, editorTabSize: 4, editorInsertSpaces: false });
+    }
+  }, { sql, dialect });
   await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible();
-  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '历史与查询', exact: true })).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '执行历史', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true }); await (await navigationMenuItem(dialog, { name: '保存的查询', exact: true })).click();
   await (await navigationMenuItem(dialog.locator('.history-card').filter({ has: page.getByText('格式化来源', { exact: true }) }), { name: '在新标签打开', exact: true })).click();
   await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();
@@ -55,11 +61,24 @@ async function exactSql(desktop: Desktop, expected: string) {
   }, expected), { message: '格式化及撤销后的草稿应沿原保存路径落盘' }).toBe(true);
 }
 
-for (const selected of [true, false]) test(selected ? '真实选区格式化保持外部原文、Unicode注释字符串，单次撤销重做且零执行' : '无选区格式化全文，单次撤销重做且来源会话任务历史不变', async () => {
-  const prefix = "select '🚢外面' as 前; -- 头部保持\n", body = "select 名称,'🚢  ; -- 字符串' as 标记 from 表 where 编号=1; -- 注释保持", suffix = "\nselect '尾部' as 后;";
-  const source = selected ? prefix + body + suffix : 'select 1,2 from 表 where 编号=1;';
-  const formatted = selected ? prefix + "select\n  名称,\n  '🚢  ; -- 字符串' as 标记\nfrom\n  表\nwhere\n  编号 = 1;\n\n-- 注释保持" + suffix : 'select\n  1,\n  2\nfrom\n  表\nwhere\n  编号 = 1;';
-  const desktop = await openSource(source), { page } = desktop, initial = await observe(desktop);
+const formatCases = {
+  mysql: {
+    selection: ["select 名称,'🚢  ; -- 字符串' as 标记 from 表 where 编号=1; -- 注释保持", "select\n  名称,\n  '🚢  ; -- 字符串' as 标记\nfrom\n  表\nwhere\n  编号 = 1;\n\n-- 注释保持"],
+    document: ['select 1,2 from 表 where 编号=1;', 'select\n  1,\n  2\nfrom\n  表\nwhere\n  编号 = 1;'],
+    button: '格式化 SQL',
+  },
+  postgresql: {
+    selection: ['SeLeCt "MiX", $body$🚢 ; -- 文本$body$ as note from "数据" where id=$1::bigint; -- 注释', 'SeLeCt\n\t"MiX",\n\t$body$🚢 ; -- 文本$body$ as note\nfrom\n\t"数据"\nwhere\n\tid = $1::bigint;\n\n-- 注释'],
+    document: ["select payload->>'id', amount+1 from items where id=$1;", "select\n\tpayload ->> 'id',\n\tamount + 1\nfrom\n\titems\nwhere\n\tid = $1;"],
+    button: postgresZh.format,
+  },
+} as const;
+
+for (const dialect of ['mysql', 'postgresql'] as const) for (const selected of [true, false]) test(dialect + (selected ? ' 真实选区格式化保持外部原文、Unicode注释字符串，单次撤销重做且零执行' : ' 无选区格式化全文，单次撤销重做且来源会话任务历史不变'), async ({}, info) => {
+  const prefix = "select '🚢外面' as 前; -- 头部保持\n", suffix = "\nselect '尾部' as 后;";
+  const entryCase = formatCases[dialect], [body, rendered] = selected ? entryCase.selection : entryCase.document;
+  const source = selected ? prefix + body + suffix : body, formatted = selected ? prefix + rendered + suffix : rendered;
+  const desktop = await openSource(source, dialect), { page } = desktop, initial = await observe(desktop);
   const expected = (formatted + ' ').replaceAll('\n', initial.eol), original = (source + ' ').replaceAll('\n', initial.eol), box = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
   // 先用真实按键追加普通空格，格式化的一次撤销必须保留这次独立用户输入。
   await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End'); await page.keyboard.press('Space'); await exactSql(desktop, original);
@@ -74,10 +93,11 @@ for (const selected of [true, false]) test(selected ? '真实选区格式化保�
     const chosen = await observe(desktop);
     expect(chosen.focused && chosen.selections?.length === 1 && (selected ? chosen.selections[0].start === start && chosen.selections[0].end === start + body.length : chosen.selections[0].start === chosen.selections[0].end), '真实按键必须得到唯一准确选区或空选区').toBe(true);
     if (entry === '快捷键') await page.keyboard.press('Alt+Shift+f');
-    else await (await navigationMenuItem(page, { name: '格式化 SQL', exact: true })).click();
+    else await (await navigationMenuItem(page, { name: entryCase.button, exact: true })).click();
     await exactSql(desktop, expected);
     const after = await observe(desktop); expect(after.focused, '格式化两入口完成后均须将焦点保留或返回真实编辑器').toBe(true);
     if (selected) expect(after.selections?.length === 1 && after.selections[0].start === start && after.selections[0].end === expected.length - (suffix.replaceAll('\n', initial.eol).length + 1), '选区跟随格式化范围且不纳入外部原文').toBe(true);
+    if (dialect === 'postgresql' && selected && entry === '按钮') await page.screenshot({ path: info.outputPath('PostgreSQL选区格式化.png') });
     // 每次只按一次撤销便恢复含用户空格的原文；不补设焦点掩盖格式化的焦点错误。
     await page.keyboard.press(`${modifier}+z`); await exactSql(desktop, original);
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y'); await exactSql(desktop, expected);
@@ -87,14 +107,15 @@ for (const selected of [true, false]) test(selected ? '真实选区格式化保�
   expect(desktop.pageErrors.length, '正式界面不应产生页面错误').toBe(0);
 });
 
-for (const [label, source, message] of [
-  ['分隔符脚本', 'DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$', '无法确认此 SQL 的引号、分隔符或语法可安全排版，请手动调整；原文未改动。'],
-  ['格式器不支持语法', 'select [合成字段] from 表;', 'SQL 格式化失败，原文未改动。'],
-]) test(`${label}格式化失败保持原文，不创建编辑或执行SQL`, async () => {
-  const desktop = await openSource(source), initial = await observe(desktop), before = await sideEffects(desktop);
+for (const [dialect, label, source, message] of [
+  ['mysql', '分隔符脚本', 'DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$', '无法确认此 SQL 的引号、分隔符或语法可安全排版，请手动调整；原文未改动。'],
+  ['mysql', '格式器不支持语法', 'select [合成字段] from 表;', 'SQL 格式化失败，原文未改动。'],
+  ['postgresql', '跨行续接字符串', "select 'one'\n 'two';", '无法确认此 SQL 的引号、分隔符或语法可安全排版，请手动调整；原文未改动。'],
+] as const) test(`${dialect} ${label}格式化失败保持原文，不创建编辑或执行SQL`, async () => {
+  const desktop = await openSource(source, dialect), initial = await observe(desktop), before = await sideEffects(desktop);
   for (const entry of ['快捷键', '按钮']) {
     if (entry === '快捷键') { await desktop.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus(); await desktop.page.keyboard.press('Alt+Shift+f'); }
-    else await (await navigationMenuItem(desktop.page, { name: '格式化 SQL', exact: true })).click();
+    else await (await navigationMenuItem(desktop.page, { name: formatCases[dialect].button, exact: true })).click();
     await expect(desktop.page.getByText(message, { exact: true })).toBeVisible();
     const after = await observe(desktop); expect(after.value === initial.value && after.version === initial.version, '拒绝排版不得改模型或编辑版本').toBe(true);
   }

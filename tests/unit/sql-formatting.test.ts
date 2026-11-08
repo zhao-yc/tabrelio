@@ -34,3 +34,32 @@ describe('选区格式化的原文与安全边界', () => {
     expect(() => planSqlFormatting('select 1;\r\nselect 2;', 0, 10)).toThrow();
   });
 });
+
+describe('PostgreSQL 格式化', () => {
+  const preferences = { dialect: 'postgresql', tabSize: 4, insertSpaces: false } as const;
+
+  it('沿用制表符和 CRLF，保留 dollar 正文、参数、类型转换和选区外原文', () => {
+    const prefix = '-- 前缀\r\n', body = 'SeLeCt "MiX",$body$🚢;\r\n原文$body$,data->>\'id\',$12::bigint from "表";', suffix = '\r\n-- 后缀';
+    const source = prefix + body + suffix;
+    const plan = planSqlFormatting(source, prefix.length, prefix.length + body.length, '\r\n', preferences);
+    expect(plan).toEqual({ start: prefix.length, end: prefix.length + body.length,
+      text: 'SeLeCt\r\n\t"MiX",\r\n\t$body$🚢;\r\n原文$body$,\r\n\tdata ->> \'id\',\r\n\t$12::bigint\r\nfrom\r\n\t"表";' });
+  });
+
+  it('保留嵌套注释、转义字符串、数字和数组下标', () => {
+    const source = "select 1 /* 外层 /* 内层 */ 结束 */ +2,E'it\\'s',0xF0,1.1e-2,1_000,arr[1:2] from t;";
+    const text = planSqlFormatting(source, 0, source.length, '\n', preferences)?.text;
+    expect(text).toContain("/* 外层 /* 内层 */ 结束 */ + 2,\n\tE'it\\'s',\n\t0xF0,\n\t1.1e-2,\n\t1_000,");
+    expect(text).toMatch(/arr\[1\s*:\s*2\]/);
+  });
+
+  it.each(["select 'one'\n 'two';", 'select a*@b from t;', 'copy t from stdin;\n1\n2\n',
+    "select 'a\\'b';", 'select arr[1;', 'select $未闭合$原文'])('拒绝无法证明保持词法的输入：%s', source => {
+    expect(() => planSqlFormatting(source, 0, source.length, '\n', preferences)).toThrow('原文未改动');
+  });
+
+  it.each(['$12', '$tag$原文$tag$', 'U&"原名"', "E'\\n'", '1.25e-4', '->>', '/* 外 /* 内 */ 层 */'])('不能从词法单元中间选起：%s', token => {
+    const source = 'select ' + token + ';';
+    expect(() => planSqlFormatting(source, 'select '.length + 1, source.length, '\n', preferences)).toThrow('完整文本范围');
+  });
+});

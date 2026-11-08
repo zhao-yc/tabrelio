@@ -3,6 +3,7 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { UiCommandRegistry } from '../../src/renderer/uiCommandRegistry';
+import { appModalSelector } from '../../src/renderer/modalSelectors';
 
 /** 执行App实际快捷键监听；不加载App或构造GUI，确保格式化没有抢占结构搜索。 */
 it.each(['Control', 'Meta', 'Alt'])('%s+Shift+F仍分别归结构搜索和编辑器动作', modifier => {
@@ -15,7 +16,7 @@ it.each(['Control', 'Meta', 'Alt'])('%s+Shift+F仍分别归结构搜索和编辑
   visit(tree); expect(listener).not.toBe('');
   const search = vi.fn(), prevent = vi.fn(), registry = new UiCommandRegistry();
   registry.update('app', {}, { active: true, contextKey: '正式结构及离线保存查询入口', handlers: { 'structure-search': { enabled: true, run: search } } }); registry.setBlocked(false);
-  const port = createContext({ document: { querySelector: () => null }, uiCommands: registry });
+  const port = createContext({ document: { querySelector: () => null }, uiCommands: registry, appModalSelector });
   runInContext(ts.transpileModule('globalThis.listener=' + listener, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port);
   port.listener({ key: 'F', ctrlKey: modifier === 'Control', metaKey: modifier === 'Meta', altKey: modifier === 'Alt', shiftKey: true, isComposing: false, keyCode: 70, preventDefault: prevent });
   expect(search).toHaveBeenCalledTimes(modifier === 'Alt' ? 0 : 1); expect(prevent).toHaveBeenCalledTimes(modifier === 'Alt' ? 0 : 1);
