@@ -1,6 +1,7 @@
 import { Client } from 'pg';
 import { test, expect, desktop, page, confirmOwnedDesktopExit, retainOwnedDesktopResources } from './desktop-fixture';
 import { gridRowJumpZh as jump } from '../../src/renderer/locales/gridRowJump.zh-CN';
+import { gridRowSelectionZh as selection } from '../../src/renderer/locales/gridRowSelection.zh-CN';
 import { postgresTableZh as table } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresTableFindZh as find } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 
@@ -88,8 +89,27 @@ test('PostgreSQL 表和只读视图跳到本页行并保留活动列、勾选和
     await expect(cell('记录 61')).toBeVisible();
     await expect(input).toHaveCount(0);
     await cell('记录 61').click();
+    await expect(button(selection.clear)).toBeDisabled();
+    await button(table.remove).click();
+    await expect(cell('记录 61').locator('.pg-grid-deleted')).toBeVisible();
+    const second = cell('62').locator('..').getByRole('checkbox');
+    await second.check();
+    const selectionTasks = await tasks();
+    await button(selection.invert).click();
+    await expect(cell('61').locator('..').getByRole('checkbox')).not.toBeChecked();
+    await expect(second).not.toBeChecked();
+    await expect(cell('63').locator('..').getByRole('checkbox')).toBeChecked();
     await button(jump.open).click();
     await go('60', '记录 120');
+    const last = cell('120').locator('..').getByRole('checkbox');
+    await expect(last).toBeChecked();
+    await page.screenshot({ path: info.outputPath('PostgreSQL本页反选.png') });
+    await button(selection.clear).click();
+    await expect(last).not.toBeChecked();
+    await expect(button(selection.clear)).toBeDisabled();
+    expect(await tasks()).toEqual(selectionTasks);
+    expect((await observer.query('SELECT COUNT(*)::int AS count FROM public.jump_rows')).rows).toEqual([{ count: 140 }]);
+    await button(table.discard).click();
 
     await page.locator('[data-workspace-tab-id="jump_view"]').getByRole('button', { name: 'jump_view', exact: true }).click();
     await expect(cell('记录 1')).toBeVisible();

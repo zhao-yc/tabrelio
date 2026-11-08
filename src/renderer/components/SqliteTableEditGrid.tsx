@@ -10,6 +10,7 @@ import type { SqlitePasteAnchor } from '../sqliteTableRangePaste';
 import type { SqliteCheckedRows } from '../sqliteTableSelection';
 import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
+import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
 import { writeTableClipboardEvent } from '../gridClipboard';
@@ -193,10 +194,22 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     handle.setActivePosition(position, { enableEditor: false, shouldFocus: true });
     return true;
   }
-  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
+  // 表头、行复选框和页操作共用同一勾选修订与父级通知。
+  function changeCheckedRows(ids: ReadonlySet<string>) {
+    if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return;
+    selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} };
+    notifyChecked();
+    selectionChanged(value => value + 1);
+  }
+
+  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+    <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
+      keyFor={row => row.deleted ? undefined : row.id}
+      isCurrent={() => baseCurrent() && selection.current.revision === selectionTicket && noModal()}
+      onChange={changeCheckedRows}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
-    selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; notifyChecked(); selectionChanged(value => value + 1); }}
+    selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={changeCheckedRows}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}
     onCellClick={({ row, column }) => { if (baseCurrent(row)) { onSelect(row); captureCell(row, column?.key); } }}
     onCellDoubleClick={({ row, column }, event) => { event.preventGridDefault(); edit(row, column.key); }}

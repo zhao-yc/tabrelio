@@ -1256,7 +1256,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows}
         rowJump={canFind} rowJumpCurrent={findIsCurrent}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
-        presentCell={draftGrid?.cell}
+        presentCell={draftGrid?.cell} skipRowInInversion={draftGrid?.isDeleted}
         renderRowSelectionAction={(selected, current, tools) =>
           <div className="pg-table-controls pg-batch-actions">
             {tools}

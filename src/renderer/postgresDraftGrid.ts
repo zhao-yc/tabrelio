@@ -25,6 +25,7 @@ export function postgresDraftGrid(page: PostgresTablePage, draft: readonly Postg
   }
   return {
     hasChanges: fields.size > 0 || deleted.size > 0,
+    isDeleted: (row: DataRow) => deleted.has(row),
     cell(row: DataRow, key: string): GridCellPresentation | undefined {
       if (deleted.has(row)) {
         const value = ownCell(row, key);

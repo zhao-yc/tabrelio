@@ -5,6 +5,7 @@ import { recordViewZh as record } from '../../src/renderer/locales/recordViews.z
 import { recordProjectionZh as projection } from '../../src/renderer/locales/recordProjections.zh-CN';
 import { draftHistoryZh as historyText } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { gridRowSelectionZh as selectionText } from '../../src/renderer/locales/gridRowSelection.zh-CN';
 
 // 默认与--list仅登记跳过项；不读取认证、不加载数据库驱动或桌面资源。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list=')), active = !listing && process.env.DBARK_RECORD_BATCH_LIVE === '1';
@@ -95,7 +96,17 @@ test('真实MySQL或MariaDB勾选逐条表单、取消保留、整组undo／redo
     const object = connection.locator('.object-row .tree-label').filter({ hasText: /^items$/ }); if (!await step(() => object.isVisible())) await step(() => database.click()); await step(() => object.dblclick());
     await step(() => expect(grid()).toBeVisible()); await step(() => expect(table().getByRole('gridcell', { name: sourceLabel, exact: true })).toBeVisible()); await step(() => table().getByRole('gridcell', { name: sourceLabel, exact: true }).click());
     stage = '真实checkbox只选第1／3条，取消局部不同输入不落原草稿';
-    for(const label of [sourceLabel,'第三原记录']) await step(()=>grid().getByRole('row').filter({has:page.getByRole('gridcell',{name:label,exact:true})}).getByRole('checkbox').check());
+    const rowCheckbox = (label: string) => grid().getByRole('row').filter({ has: page.getByRole('gridcell', { name: label, exact: true }) }).getByRole('checkbox');
+    const clearChecks = table().getByRole('button', { name: selectionText.clear, exact: true });
+    const middle = rowCheckbox('对照原记录');
+    await step(() => middle.check());
+    await step(() => clearChecks.click());
+    await step(() => expect(middle).not.toBeChecked());
+    await step(() => expect(clearChecks).toBeDisabled());
+    await step(() => middle.check());
+    await step(() => table().getByRole('button', { name: selectionText.invert, exact: true }).click());
+    await step(() => expect(middle).not.toBeChecked());
+    for (const label of [sourceLabel, '第三原记录']) await step(() => expect(rowCheckbox(label)).toBeChecked());
     const beforeInput=await audit();await open();await step(()=>expect(modal().getByText(text.position(1,2),{exact:true})).toBeVisible());await expand('label');await fill('label','取消第一');await press(text.next);await press(text.keepContinue);await step(()=>expect(modal().getByText(text.position(2,2),{exact:true})).toBeVisible());await expand('label');await fill('label','取消第三');await press(text.cancel);await step(()=>expect(modal()).toBeHidden());await count(0);expect(await read(rowsSql)).toEqual(baseline);
     const canceled=await audit();for(const command of ['table.page','table.preview','table.apply'])expect(facts(canceled,command)).toHaveLength(facts(beforeInput,command).length);
     stage = '逐条独立赋值，后条非法JSON保持并拒绝整组，修正后表单及树共享';

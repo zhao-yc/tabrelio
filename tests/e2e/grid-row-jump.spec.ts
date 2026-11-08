@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
 import { LocalStore } from '../../src/main/storage';
 import { gridRowJumpZh as text } from '../../src/renderer/locales/gridRowJump.zh-CN';
+import { gridRowSelectionZh as selectionText } from '../../src/renderer/locales/gridRowSelection.zh-CN';
 import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
@@ -95,6 +96,15 @@ test('查询结果和 SQLite 可编辑表、只读视图可定位未渲染行且
     const originalTasks = await tasks();
     await table.getByRole('gridcell', { name: value('1'), exact: true }).focus();
     await jump(table, '80', value('80'), readOnly === 'false' ? nativeGoto : () => page.keyboard.press('Control+g'));
+    if (readOnly === 'true') {
+      const row = table.getByRole('gridcell', { name: value('80'), exact: true }).locator('..').getByRole('checkbox');
+      const clear = table.getByRole('button', { name: selectionText.clear, exact: true });
+      await table.getByRole('button', { name: selectionText.invert, exact: true }).click();
+      await expect(row).toBeChecked();
+      await clear.click();
+      await expect(row).not.toBeChecked();
+      await expect(clear).toBeDisabled();
+    }
     expect(await tasks()).toEqual(originalTasks);
   }
   expect(pageErrors).toEqual([]);
@@ -172,11 +182,24 @@ test('查询结果可复制尚未渲染的列值，倒序勾选仍沿显示顺�
     for (const id of [178, 180]) await cell(id).locator('..').getByRole('checkbox').check();
     await cell(180).click();
     await copyColumn.click();
+    await query.getByRole('button', { name: selectionText.invert, exact: true }).click();
+    await expect(cell(180).locator('..').getByRole('checkbox')).not.toBeChecked();
+    await expect(cell(179).locator('..').getByRole('checkbox')).toBeChecked();
+    await copyColumn.click();
+    const clear = query.getByRole('button', { name: selectionText.clear, exact: true });
+    await clear.click();
+    await expect(clear).toBeDisabled();
+    await expect(cell(179).locator('..').getByRole('checkbox')).not.toBeChecked();
     const result = await page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { transfers: DataTransfer[] } }).__headerCopyTest.transfers.map(data => ({
       text: data.getData('text/plain'), rows: JSON.parse(data.getData('application/x-dbark-cells')).rows,
     })));
     const values = Array.from({ length: 180 }, (_, index) => String(180 - index));
-    expect(result).toEqual([{ text: values.join('\n'), rows: values.map(value => [value]) }, { text: '180\n178', rows: [['180'], ['178']] }]);
+    const inverted = values.filter(value => value !== '180' && value !== '178');
+    expect(result).toEqual([
+      { text: values.join('\n'), rows: values.map(value => [value]) },
+      { text: '180\n178', rows: [['180'], ['178']] },
+      { text: inverted.join('\n'), rows: inverted.map(value => [value]) },
+    ]);
     expect(await tasks()).toEqual(before);
     expect(pageErrors).toEqual([]);
   } finally { await restore(); }
@@ -203,16 +226,27 @@ test('SQLite 可编辑网格支持含列名及当前列复制，内部 MIME 保�
     await copy.click();
     await idCell(1).click();
     await copyColumn.click();
+    await expect(idCell(100)).toHaveCount(0);
+    await pane.getByRole('button', { name: selectionText.invert, exact: true }).click();
+    await expect(idCell(1).locator('..').getByRole('checkbox')).not.toBeChecked();
+    await expect(idCell(3).locator('..').getByRole('checkbox')).toBeChecked();
+    await copyColumn.click();
+    const clear = pane.getByRole('button', { name: selectionText.clear, exact: true });
+    await clear.click();
+    await expect(clear).toBeDisabled();
+    await expect(idCell(3).locator('..').getByRole('checkbox')).not.toBeChecked();
     const result = await page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { transfers: DataTransfer[] } }).__headerCopyTest.transfers.map(data => ({
       text: data.getData('text/plain'), typed: JSON.parse(data.getData('application/x-dbark-cells')), sqlite: JSON.parse(data.getData('application/x-dbark-sqlite-cells')),
     })));
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(5);
     expect(result[0]).toMatchObject({ text: 'id\n1', typed: { rows: [['1']] }, sqlite: { columns: ['id'], rows: [[{ kind: 'integer', value: '1' }]] } });
     expect(result[1]).toMatchObject({ text: Array.from({ length: 100 }, (_, index) => index + 1).join('\n'), sqlite: { columns: ['id'] } });
     expect(result[1].sqlite.rows).toEqual(Array.from({ length: 100 }, (_, index) => [{ kind: 'integer', value: String(index + 1) }]));
     expect(result[2]).toMatchObject({ text: 'id\tname\n1\t记录 1\n2\t记录 2', typed: { rows: [['1', '记录 1'], ['2', '记录 2']] }, sqlite: { columns: ['id', 'name'] } });
     expect(result[2].sqlite.rows).toHaveLength(2);
     expect(result[3]).toMatchObject({ text: '1\n2', typed: { rows: [['1'], ['2']] }, sqlite: { columns: ['id'], rows: [[{ kind: 'integer', value: '1' }], [{ kind: 'integer', value: '2' }]] } });
+    const inverted = Array.from({ length: 98 }, (_, index) => String(index + 3));
+    expect(result[4]).toMatchObject({ text: inverted.join('\n'), sqlite: { columns: ['id'], rows: inverted.map(value => [{ kind: 'integer', value }]) } });
     expect(pageErrors).toEqual([]);
   } finally {
     await restore();
