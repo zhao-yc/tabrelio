@@ -277,8 +277,9 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  if(deleteIntent)return <HistoryDeleteDialog intent={deleteIntent} onClose={()=>{if(deleteRef.current===deleteIntent){deleteRef.current=undefined;setDeleteIntent(undefined);}}} onDeleted={(result,current)=>deleted(deleteIntent,result,current)} onCleanupError={message=>useWorkspace.getState().notify(deletion.cleanupFailed+message,true)}/>;
  return <Modal title={zh.activity.text003} wide onClose={()=>void close()} onEscape={event => {
   event.stopPropagation();
-  if (!saveDraft) void close();
-  else if (!locked.current) closeSaveDraft();
+  if (saveDraft) { if (!locked.current) closeSaveDraft(); }
+  else if (sqlView) setSqlView(undefined);
+  else void close();
  }}><div className="dialog-tabs"><button className="selected"><Clock3 size={14}/>{zh.activity.text004}</button><button disabled={closing} onClick={()=>void close(onQueries)}><FileCode2 size={14}/>{zh.activity.text005}</button></div><div className="modal-content saved-query-pages history-pages">
   <div className="search-box"><Search size={15}/><input aria-label={t.search} value={filters.search} maxLength={512} disabled={busy||closing} onChange={event=>changeFilters({...filters,search:event.target.value})} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();void load();}}}/><button disabled={busy||closing} onClick={()=>void load()}>{t.searchButton}</button></div>
   <div className="inline-field" role="group" aria-label={t.fields}>{(['sql','error']as const).map(field=><label key={field}><input type="checkbox" checked={filters.fields.includes(field)} disabled={busy||closing} onChange={event=>changeFilters({...filters,fields:(['sql','error']as const).filter(value=>value===field?event.target.checked:filters.fields.includes(value))})}/>{field==='sql'?t.sql:t.error}</label>)}</div>

@@ -321,6 +321,73 @@ test('跨批次导出历史 ZIP，保留原文和已有目标文件', async () =
  expect(pageErrors).toEqual([]);
 });
 
+test('在两类只读 SQL 预览循环查找并高亮跨段正文', async () => {
+ const needle = 'K😀[Q?]';
+ const sql = 'x'.repeat(65535) + needle + '\r\n' + 'y'.repeat(65540) + 'k😀[Q?]\n' + needle;
+ await seed(store => {
+  store.addHistory(entry({ id: 'find-history', connectionId: 'deleted', sql }));
+  store.saveQuery({ id: 'find-saved', name: '离线定位', sql, updatedAt: '2026-10-15T00:00:00Z' });
+ });
+ await desktop.evaluate(({ ipcMain }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args:any[]) => unknown> })._invokeHandlers;
+  const previous = handlers.get('dbark:request'); if (!previous) throw Error('缺少原历史 IPC 入口');
+  const seen = { history: 0, saved: 0, denied: 0 };
+  Object.assign(globalThis, { __sqlPreviewFind: seen });
+  handlers.set('dbark:request', (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'history.readSql') seen.history++;
+   if (command === 'queries.readText') seen.saved++;
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+    seen.denied++;
+    throw Error('预览查找禁止数据库请求');
+   }
+   return previous(event, payload);
+  });
+ });
+ await open();
+ const view = dialog().getByRole('button', { name: text.sqlFull, exact: true });
+ await view.click();
+ const preview = dialog().getByRole('region', { name: text.sqlTitle, exact: true });
+ const find = preview.getByRole('textbox', { name: text.sqlFindTitle, exact: true });
+ const part = preview.getByRole('status', { name: text.sqlPartStatus, exact: true });
+ const mark = preview.locator('mark');
+ await find.fill(needle);
+ await find.press('Enter');
+ await expect(find).toBeFocused();
+ await expect(part).toHaveText('第 1 / 3 段');
+ await expect(mark).toHaveText('K');
+ expect(await preview.locator('pre').textContent()).toBe(sql.slice(0, 65536));
+ await preview.getByRole('button', { name: text.sqlNext, exact: true }).click();
+ await expect(part).toHaveText('第 2 / 3 段');
+ await expect(mark).toHaveText(needle.slice(1));
+ expect(await preview.locator('pre').textContent()).toBe(sql.slice(65536, 131072));
+ await find.press('Enter');
+ await expect(part).toHaveText('第 3 / 3 段');
+ await expect(mark).toHaveText(needle);
+ await find.press('Enter');
+ await expect(part).toHaveText('第 1 / 3 段');
+ await find.press('Shift+Enter');
+ await expect(part).toHaveText('第 3 / 3 段');
+ await find.fill('无匹配[?]');
+ await find.press('Enter');
+ await expect(preview.getByRole('status', { name: text.sqlFindStatus, exact: true })).toHaveText(text.sqlFindMissing);
+ await expect(mark).toHaveCount(0);
+ await find.press('Escape');
+ await expect(preview).toHaveCount(0);
+ await expect(view).toBeVisible();
+ await dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click();
+ await view.click();
+ const saved = dialog().getByRole('region', { name: '完整保存查询 SQL', exact: true });
+ const savedFind = saved.getByRole('textbox', { name: text.sqlFindTitle, exact: true });
+ await savedFind.fill(needle);
+ await saved.getByRole('button', { name: text.sqlFindPrevious, exact: true }).click();
+ await expect(saved.locator('mark')).toHaveText(needle);
+ await expect(saved.getByRole('status', { name: text.sqlPartStatus, exact: true })).toHaveText('第 3 / 3 段');
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __sqlPreviewFind: unknown }).__sqlPreviewFind))
+  .toEqual({ history: 1, saved: 1, denied: 0 });
+ expect(pageErrors).toEqual([]);
+});
+
 test('来源已删除仍可分段查看和另存完整历史 SQL', async () => {
  const head='UPDATE offline_fixture SET n=9007199254740993; -- ';
  const sql=head+'x'.repeat(65535-head.length)+'\r\n'+'y'.repeat(65534)+'😀历史尾部';
