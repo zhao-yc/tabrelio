@@ -74,13 +74,33 @@ export function useUiCommandRuntime(): void {
       if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229 || !event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'g') return;
       if (openFocusedGridRowJump()) { event.preventDefault(); event.stopPropagation(); }
     };
+    /** 进入渲染层的组合键沿用当前窗口命令，先于编辑器处理 Tab 或括号。 */
+    const tabShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229 || event.altKey ||
+          !event.metaKey && !event.ctrlKey) return;
+      const mac = globalThis.navigator?.platform?.startsWith('Mac');
+      let id: UiCommandId;
+      if (mac && event.metaKey && event.shiftKey && !event.ctrlKey) {
+        if (event.key === '}' || event.key === ']') id = 'next-tab';
+        else if (event.key === '{' || event.key === '[') id = 'previous-tab';
+        else return;
+      } else if (!mac && event.ctrlKey && !event.metaKey && event.key === 'Tab') {
+        id = event.shiftKey ? 'previous-tab' : 'next-tab';
+      } else return;
+      if (modal()) return;
+      const snapshot = uiCommands.getSnapshot();
+      if (!snapshot.commands.some(command => command.id === id && command.enabled)) return;
+      event.preventDefault(); event.stopPropagation();
+      void uiCommands.execute({ id, revision: snapshot.revision }).catch(reason => useWorkspace.getState().notify(errorMessage(reason), true));
+    };
     document.addEventListener('keydown', gridShortcut, true);
+    document.addEventListener('keydown', tabShortcut, true);
     let previous = useWorkspace.getState();
     const offStore = useWorkspace.subscribe(next => {
       const changed = next.settings.activeTabId !== previous.settings.activeTabId || next.connections !== previous.connections
         || next.connectionVersions !== previous.connectionVersions || next.selection !== previous.selection;
       previous = next; if (changed) uiCommands.invalidate();
     });
-    return () => { alive = false; document.removeEventListener('keydown', gridShortcut, true); observer.disconnect(); off(); offNative?.(); offInternal?.(); offStore(); uiCommands.setBlocked(true); };
+    return () => { alive = false; document.removeEventListener('keydown', gridShortcut, true); document.removeEventListener('keydown', tabShortcut, true); observer.disconnect(); off(); offNative?.(); offInternal?.(); offStore(); uiCommands.setBlocked(true); };
   }, []);
 }

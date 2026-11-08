@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-09 源码增量。工作区可以通过 Windows 的 `Ctrl+Tab` 与 `Ctrl+Shift+Tab`、macOS 的 `⌘⇧]` 与 `⌘⇧[`，在已打开的标签之间按当前顺序双向循环。
+
 2026-11-09 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表和视图可以从对象树、对象列表或数据页生成独立 SELECT 草稿。草稿绑定原连接和库，保留原标签，手动执行。Q02 仍为部分覆盖。[对象查询草稿](user-guide.md)
 
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 查询编辑器可以把单一选区原文带入独立草稿，保留原连接和已确认的默认库。Q02 与 Q03 仍为部分覆盖。[从选区打开新查询](development/query-selection-draft-20261108.md)

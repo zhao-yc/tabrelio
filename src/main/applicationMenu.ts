@@ -80,7 +80,8 @@ export class ApplicationMenu {
       ] },
       { label: text.window, submenu: [
         item('tab-search', 'CmdOrCtrl+Shift+A'), item('close-tab', 'CmdOrCtrl+W'), item('reopen-query', 'CmdOrCtrl+Shift+T'), item('close-other-queries'), item('close-left-queries'), item('close-right-queries'), separator,
-        item('previous-tab'), item('next-tab')
+        item('previous-tab', mac ? 'Command+Shift+[' : 'Control+Shift+Tab'),
+        item('next-tab', mac ? 'Command+Shift+]' : 'Control+Tab')
       ] },
       { label: text.help, submenu: [item('help'), item('shortcuts'), ...(!mac ? [separator, item('about')] : [])] }
     ];

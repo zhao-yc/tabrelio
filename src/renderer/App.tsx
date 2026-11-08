@@ -1077,10 +1077,13 @@ function WorkspaceApp() {
       onRoutineInvocation: openRoutineInvocation, onRefresh: refresh });
   }
   /** 相邻标签只改变活动ID，不创建页面、关闭会话或执行查询。 */
-  function switchTab(direction: number) {
-    const current = useWorkspace.getState(), index = current.settings.tabs.findIndex(tab => tab.id === current.settings.activeTabId);
-    const next = current.settings.tabs[(index + direction + current.settings.tabs.length) % current.settings.tabs.length];
-    if (next) current.updateSettings({ activeTabId: next.id });
+  function switchTab(direction: -1 | 1) {
+    const current = useWorkspace.getState(), { tabs, activeTabId } = current.settings;
+    if (tabs.length < 2) return;
+    // 设置中的旧活动 ID 无法解析时，界面本身也从第一项显示。
+    const index = Math.max(0, tabs.findIndex(tab => tab.id === activeTabId));
+    workbenchNavigation.invalidate();
+    current.updateSettings({ activeTabId: tabs[(index + direction + tabs.length) % tabs.length].id });
   }
   function closeSide(side: 'left' | 'right') {
     const current = useWorkspace.getState(), anchor = current.tabOrderSnapshot().find(item => item.id === current.settings.activeTabId);

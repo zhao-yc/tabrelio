@@ -43,6 +43,11 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(windows.find('sql-goto-line')).toMatchObject({ label: '跳到行／行列', accelerator: 'Ctrl+G' });
     expect(fixture('darwin').find('sql-goto-line')?.accelerator).toBe('Ctrl+G');
     expect(windows.find('select-current-statement')).toMatchObject({ label: '选中当前语句', enabled: false });
+    expect(windows.find('next-tab')?.accelerator).toBe('Control+Tab');
+    expect(windows.find('previous-tab')?.accelerator).toBe('Control+Shift+Tab');
+    const mac = fixture('darwin');
+    expect(mac.find('next-tab')?.accelerator).toBe('Command+Shift+]');
+    expect(mac.find('previous-tab')?.accelerator).toBe('Command+Shift+[');
   });
 
   it('状态仅控制白名单项，缺项禁用并在发出时携带准确修订', () => {

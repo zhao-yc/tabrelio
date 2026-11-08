@@ -26,5 +26,7 @@ export const navigationZh = {
     ['应用正在编辑的表格筛选或排序', 'Ctrl / ⌘ + R'],
     ['刷新当前表数据（聚焦网格）', 'F5 或 macOS 的 ⌘ + R'],
     ['全库搜索', 'Ctrl / ⌘ + Shift + F'], ['查找已打开标签', 'Ctrl / ⌘ + Shift + A'],
+    ['下一个标签', 'Windows 用 Ctrl + Tab，macOS 用 ⌘ + Shift + ]'],
+    ['上一个标签', 'Windows 用 Ctrl + Shift + Tab，macOS 用 ⌘ + Shift + ['],
     ['关闭当前标签', 'Ctrl / ⌘ + W'], ['打开右键菜单', 'Shift + F10'], ['关闭菜单', 'Escape'] ]
 } as const;
