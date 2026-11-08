@@ -110,18 +110,37 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
       await keys.getByRole('checkbox', { name: 'id_copy', exact: true }).check();
       await keys.getByRole('checkbox', { name: 'id', exact: true }).check();
 
+      await modal.getByRole('button', { name: pg.partition.add, exact: true }).click();
+      const childName = table + '_range';
+      const child = modal.getByRole('group', { name: pg.partition.child(1), exact: true });
+      await child.getByLabel(pg.partition.name, { exact: true }).fill(childName);
+      await child.getByLabel('id_copy' + pg.partition.from, { exact: true }).fill('10');
+      await child.getByLabel('id_copy' + pg.partition.to, { exact: true }).fill('20');
+      await child.getByLabel('id' + pg.partition.from, { exact: true }).fill('1');
+      await child.getByLabel('id' + pg.partition.to, { exact: true }).fill('2');
+
+      const primaryOrder = modal.getByRole('group', { name: pg.primaryOrder, exact: true });
+      const partitionOrder = modal.getByRole('group', { name: pg.partition.keyOrder, exact: true });
+      await primaryOrder.getByRole('button', { name: pg.keyOrderUp(pg.primaryOrder, 2), exact: true }).click();
+      await partitionOrder.getByRole('button', { name: pg.keyOrderDown(pg.partition.keyOrder, 1), exact: true }).click();
+      await expect(field(1).getByLabel(pg.name, { exact: true })).toHaveValue('id');
+      await expect(child.getByLabel('id_copy' + pg.partition.from, { exact: true })).toHaveValue('10');
+      await expect(child.getByLabel('id' + pg.partition.to, { exact: true })).toHaveValue('2');
+
       await expect(field(1).getByRole('button', { name: order.upLabel(1), exact: true })).toBeDisabled();
       await field(1).getByRole('button', { name: order.downLabel(1), exact: true }).click();
       await expect(field(1).getByLabel(pg.name, { exact: true })).toHaveValue('id_copy');
-      await expect(keys.getByRole('checkbox', { name: 'id_copy (1)', exact: true })).toBeChecked();
-      await expect(keys.getByRole('checkbox', { name: 'id (2)', exact: true })).toBeChecked();
+      await expect(keys.getByRole('checkbox', { name: 'id_copy (2)', exact: true })).toBeChecked();
+      await expect(keys.getByRole('checkbox', { name: 'id (1)', exact: true })).toBeChecked();
       await field(2).getByRole('button', { name: order.upLabel(2), exact: true }).click();
       await expect(field(1).getByLabel(pg.name, { exact: true })).toHaveValue('id');
       await field(2).getByRole('button', { name: order.upLabel(2), exact: true }).click();
 
       await modal.getByRole('button', { name: pg.preview, exact: true }).click();
-      await expect(modal.locator('pre.pg-create-sql')).toContainText('PRIMARY KEY ("id", "id_copy")');
-      await expect(modal.locator('pre.pg-create-sql')).toContainText('PARTITION BY RANGE ("id_copy", "id")');
+      const sql = modal.locator('pre.pg-create-sql');
+      await expect(sql).toContainText('PRIMARY KEY ("id_copy", "id")');
+      await expect(sql).toContainText('PARTITION BY RANGE ("id", "id_copy")');
+      await expect(sql).toContainText("FOR VALUES FROM (E'1', E'10') TO (E'2', E'20')");
       await expect(modal.getByRole('button', { name: pg.apply, exact: true })).toBeVisible();
       expect(await catalog()).toEqual(before);
       await modal.getByRole('button', { name: pg.apply, exact: true }).click();
@@ -130,9 +149,12 @@ test('复制新表字段保留字段配置及原主键，预览后实际创建',
         { connectionId, database, table: '"public"."' + table + '"' });
       expect(result.columns.map(column => [column.name, column.type, column.comment]))
         .toEqual([['id_copy', 'bigint', '原列说明'], ['id', 'bigint', '原列说明']]);
-      expect(result.constraints.filter(value => value.kind === 'p').map(value => value.keyColumns)).toEqual([['id', 'id_copy']]);
+      expect(result.constraints.filter(value => value.kind === 'p').map(value => value.keyColumns)).toEqual([['id_copy', 'id']]);
       expect(result.columns.map(column => column.identity)).toEqual(['', 'a']);
-      expect(result.partitionKey).toBe('RANGE (id_copy, id)');
+      expect(result.partitionKey).toBe('RANGE (id, id_copy)');
+      const childResult = await page.evaluate(target => window.dbark.invoke('postgres.structure.read', target),
+        { connectionId, database, table: '"public"."' + childName + '"' });
+      expect(childResult.partitionBound?.replaceAll("'", '')).toBe('FOR VALUES FROM (1, 10) TO (2, 20)');
     } else {
       await modal.getByLabel(zh.schema.text010, { exact: true }).fill(table);
       await modal.getByLabel(formatText(zh.schema.text024, 1), { exact: true }).fill('原列说明');

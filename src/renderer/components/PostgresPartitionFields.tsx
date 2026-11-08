@@ -1,3 +1,4 @@
+import { movePostgresCreateKey, PostgresCreateKeyOrder } from './PostgresCreateKeyOrder';
 import { postgresPartitionStrategies, type PostgresCreateColumn, type PostgresPartitionBound, type PostgresPartitionDesign, type PostgresPartitionValue } from '../../shared/postgresCreateTable';
 import { uid } from '../lib';
 import { postgresCreateTableZh } from '../locales/postgresCreateTable.zh-CN';
@@ -137,6 +138,10 @@ export function PostgresPartitionFields({ draft, fields, onChange }: {
         })}
         {!eligible.length && <p>{text.noFields}</p>}
       </fieldset>
+      <PostgresCreateKeyOrder label={text.keyOrder} fields={keys} onMove={(id, direction) => {
+        const keyIds = movePostgresCreateKey(ids, id, direction);
+        if (keyIds) onChange({ ...draft, keyIds });
+      }}/>
       <p>{text.hints[strategy]}</p>
       {children.map((child, index) => <fieldset key={child.id} className="pg-create-field">
         <legend>{text.child(index + 1)}</legend>

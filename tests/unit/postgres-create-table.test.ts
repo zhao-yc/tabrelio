@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { postgresCreateTablePlan, postgresCreateTablePreviewSchema, type PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
+import { movePostgresCreateKey } from '../../src/renderer/components/PostgresCreateKeyOrder';
 import { splitPostgresSql } from '../../src/shared/postgresSql';
 import { postgresTableManageApplySchema, postgresTableManagePreviewSchema } from '../../src/shared/postgresTableManage';
 import { postgresTriggerEditorDraft, postgresTriggerChangeSchema } from '../../src/shared/postgresTrigger';
@@ -40,6 +41,15 @@ it('PostgreSQL 日常维护仅接受固定动作和原对象目录摘要', () =>
 });
 
 describe('PostgreSQL 建表计划', () => {
+  it('键顺序只移动当前字段，边界和不存在的字段不会修改草稿', () => {
+    const ids = ['一', '二', '三'];
+    expect(movePostgresCreateKey(ids, '二', -1)).toEqual(['二', '一', '三']);
+    expect(movePostgresCreateKey(ids, '二', 1)).toEqual(['一', '三', '二']);
+    expect(movePostgresCreateKey(ids, '一', -1)).toBeUndefined();
+    expect(movePostgresCreateKey(ids, '旧字段', 1)).toBeUndefined();
+    expect(ids).toEqual(['一', '二', '三']);
+  });
+
   it('字段与复合主键独立排序，旧输入继续按字段顺序生成主键', () => {
     const first = draft.columns[0], second = { ...first, name: '次列' };
     const reordered = { ...draft, columns: [second, first] };

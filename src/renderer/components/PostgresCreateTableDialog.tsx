@@ -1,3 +1,4 @@
+import { movePostgresCreateKey, PostgresCreateKeyOrder } from './PostgresCreateKeyOrder';
 import { NewTableColumnOrder } from '../newTableColumnOrder';
 import { tableCreateColumnOrderZh as columnOrderText } from '../locales/tableCreateColumnOrder.zh-CN';
 import { duplicateNewTableColumn } from '../newTableColumnCopy';
@@ -103,6 +104,19 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
     edit(() => setFields(previous => columnOrder.current.move(previous, field, direction), true));
   }
 
+  const primaryFields = primaryIds
+    ? primaryIds.map(id => fields.find(field => field.id === id)!)
+    : fields.filter(field => field.primary);
+
+  /** 只改变原主键的顺序，不改列位置或分区键。 */
+  function movePrimaryKey(id: string, direction: -1 | 1) {
+    edit(() => setFieldDesign(previous => {
+      const ids = previous.primaryIds ?? previous.fields.filter(field => field.primary).map(field => field.id);
+      const next = movePostgresCreateKey(ids, id, direction);
+      return next ? { ...previous, primaryIds: next } : previous;
+    }));
+  }
+
   /** 更新原字段，保留字段顺序和本地控件身份。 */
   function patch(id: string, change: Partial<PostgresCreateColumn>) {
     edit(() => setFields(previous => previous.map(field => field.id === id ? { ...field, ...change } : field)));
@@ -130,7 +144,7 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
     if (operation.current || loading || unknown || isParentCurrent?.() === false) return;
     const input = postgresCreateTablePreviewSchema.safeParse({ ...target, schema, table, comment,
       columns: fields.map(({ id: _id, ...field }) => field), partition: compilePostgresPartition(partition, fields),
-      ...(primaryIds && primaryIds.length > 1 ? { primaryKeyOrder: primaryIds.map(id => fields.find(field => field.id === id)!.name) } : {}),
+      ...(primaryIds && primaryIds.length > 1 ? { primaryKeyOrder: primaryFields.map(field => field.name) } : {}),
     });
     if (!input.success) { setError(input.error.issues[0]?.message ?? text.changed); return; }
     const owner = lifecycle.current;
@@ -229,6 +243,7 @@ export function PostgresCreateTableDialog({ target, initialDesign, isParentCurre
           <button disabled={fields.length === 1} onClick={() => edit(() => setFields(previous => previous.filter(item => item.id !== field.id)))}>{text.remove}</button>
         </fieldset>)}
         <button disabled={fields.length >= 128} onClick={() => edit(() => setFields(previous => [...previous, newField()]))}>{text.add}</button>
+        <PostgresCreateKeyOrder label={text.primaryOrder} fields={primaryFields} onMove={movePrimaryKey}/>
         {!initialDesign && <PostgresPartitionFields draft={partition} fields={fields} onChange={value => edit(() => setPartition(value))}/>}
       </fieldset>}
     </div>

@@ -1,6 +1,9 @@
 export const postgresCreateTableZh = {
   title: '新建 PostgreSQL 表', schema: '目标 schema', table: '表名', tableComment: '表注释',
   fields: '字段', field: (n: number) => '字段 ' + n, name: '字段名称', type: '字段类型', nullable: '允许 NULL',
+  primaryOrder: '主键列顺序', keyUp: '上移', keyDown: '下移',
+  keyOrderUp: (label: string, position: number) => `${label} 上移第 ${position} 列`,
+  keyOrderDown: (label: string, position: number) => `${label} 下移第 ${position} 列`,
   primary: '主键', unique: '唯一', identity: '标识列', identityNone: '普通字段', identityAlways: '始终生成', identityDefault: '默认生成',
   length: '长度', precision: '精度', scale: '小数位', default: '默认值', noDefault: '未设置', literal: '文字值',
   presets: {
@@ -13,13 +16,13 @@ export const postgresCreateTableZh = {
   generationExample: '例如 "数量" * "单价"',
   partition: {
     strategy: '分区策略', none: '普通表', strategies: { range: 'RANGE 范围', list: 'LIST 列表', hash: 'HASH 哈希' },
-    keys: '分区键（按选择顺序）', noFields: '先填写普通字段的名称，再选择分区键。',
+    keys: '选择分区键', keyOrder: '分区键列顺序', noFields: '先填写普通字段的名称，再选择分区键。',
     child: (n: number) => '子分区 ' + n, name: '子分区名称', default: '默认分区',
     add: '添加子分区', remove: '移除此子分区', from: '下界（含）', to: '上界（不含）', boundMode: '类型', value: '文字值',
     listValue: (n: number) => '分区值 ' + n, addValue: '添加分区值', removeValue: '移除此值',
     modulus: '模数', remainder: '余数',
     hints: {
-      range: '按分区键顺序填写上下界。日期建议使用 ISO 格式，带时区的时间填写偏移量。',
+      range: '上下界按字段保存。改变分区键顺序后请重新核对范围。日期建议使用 ISO 格式，带时区的时间填写偏移量。',
       list: 'LIST 只使用一个分区键。可逐项填写文字值或指定 NULL。',
       hash: '每个分区需指定模数和余数。使用相同模数并覆盖所有余数可匹配全部行。',
     },
