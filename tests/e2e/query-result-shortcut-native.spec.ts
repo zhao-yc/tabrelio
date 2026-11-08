@@ -3,13 +3,12 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
-import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('原生查询结果数字切换保留焦点和快照，且不重新执行 SQL', async ({}, info) => {
+test('原生查询运行、停止与结果数字切换各自遵循焦点和原任务', async ({}, info) => {
   const dialect = process.env.DBARK_RESULT_SHORTCUT_DIALECT;
   test.skip(!dialect, '需显式启用结果集快捷键专项');
   const sqlite = dialect === 'sqlite', postgres = dialect === 'postgresql';
@@ -71,9 +70,10 @@ test('原生查询结果数字切换保留焦点和快照，且不重新执行 S
       if (postgres) await expect(select).toHaveValue(String(ordinal - 1));
       else await expect(buttons.nth(ordinal - 1)).toHaveAttribute('aria-pressed', 'true');
     };
+    const mac = process.platform === 'darwin', modifier = mac ? 'Meta' : 'Control';
+    const runKey = modifier + '+r', currentKey = modifier + '+Shift+r', stopKey = mac ? 'Meta+.' : 'Control+t';
     await expect(editor).toBeVisible();
-    await (postgres ? query.getByRole('button', { name: postgresZh.execute, exact: true }) :
-      query.locator('.query-execute-split button.primary')).click();
+    await editor.press(runKey);
     await current(1);
     await expect.poll(async () => (await history()).length).toBeGreaterThan(0);
     const beforeHistory = await history();
@@ -100,7 +100,45 @@ test('原生查询结果数字切换保留焦点和快照，且不重新执行 S
     await page.keyboard.press('Alt+1');
     await current(1);
     await expect(pins.getByRole('button', { name: zh.query.currentResults, exact: true })).toHaveAttribute('aria-pressed', 'true');
-    expect(await history()).toEqual(beforeHistory);
+    // 结果区和组合输入保留本地焦点，执行键不能送出 SQL。
+    await body.press(runKey);
+    await editor.dispatchEvent('keydown', { key: 'r', ctrlKey: !mac, metaKey: mac, isComposing: true });
+    const replaceSql = async (sql: string) => {
+      await editor.focus();
+      await page.keyboard.press(modifier + '+a');
+      await page.keyboard.insertText(sql);
+    };
+    const start = () => editor.press(mac ? 'Meta+ArrowUp' : 'Control+Home');
+    const statements = ["SELECT '首句哨兵' AS marker;", "SELECT '仅当前语句' AS marker;", "SELECT '仅执行选区' AS marker;"];
+    await replaceSql(statements.join('\n'));
+    await start();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press(currentKey);
+    await expect(body.getByRole('gridcell', { name: '仅当前语句', exact: true })).toBeVisible();
+    await expect(body.getByRole('gridcell', { name: '首句哨兵', exact: true })).toHaveCount(0);
+    await expect.poll(async () => (await history()).length).toBe(beforeHistory.length + 1);
+
+    await start();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press(mac ? 'Meta+Shift+ArrowRight' : 'Shift+End');
+    await page.keyboard.press(runKey);
+    await expect(body.getByRole('gridcell', { name: '仅执行选区', exact: true })).toBeVisible();
+    await expect.poll(async () => (await history()).length).toBe(beforeHistory.length + 2);
+    const ran = (await history()).slice(0, 2).map(entry => entry.sql.trim().replace(/;$/, ''));
+    expect(ran).toEqual([statements[2].slice(0, -1), statements[1].slice(0, -1)]);
+
+    const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    const known = new Set((await tasks()).map(task => task.id));
+    const slow = sqlite
+      ? 'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n;'
+      : postgres ? 'SELECT pg_sleep(25);' : 'SELECT SLEEP(25);';
+    await replaceSql(slow + "\nSELECT '停止后不得执行' AS marker;");
+    await editor.press(runKey);
+    await expect.poll(async () => (await tasks()).find(task => !known.has(task.id) && task.kind === 'query.execute')?.status).toBe('running');
+    await body.press(stopKey);
+    await expect.poll(async () => (await tasks()).find(task => !known.has(task.id) && task.kind === 'query.execute')?.status).toBe('cancelled');
+    await expect(body.getByRole('gridcell', { name: '停止后不得执行', exact: true })).toHaveCount(0);
     if (sqlite) expect(await readFile(file)).toEqual(beforeFile);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

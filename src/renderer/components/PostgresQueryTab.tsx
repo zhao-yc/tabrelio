@@ -1,3 +1,4 @@
+import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { handleQueryResultShortcut } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -1764,7 +1765,11 @@ export function PostgresQueryTab({
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version]);
   return (
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
-      onKeyDownCapture={event => handleQueryResultShortcut(event, () => !!editor.current?.hasTextFocus(), results.length, selectCurrentResult)}>
+      onKeyDownCapture={event => {
+        const focused = () => !!editor.current?.hasTextFocus();
+        if (!handleQueryExecutionShortcut(event, tab.id, focused))
+          handleQueryResultShortcut(event, focused, results.length, selectCurrentResult);
+      }}>
       <div className="context-bar">
         <strong>{profile?.name}</strong>
         <span>PostgreSQL / {scope.database}</span>
