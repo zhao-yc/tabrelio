@@ -10,7 +10,7 @@ export const postgresSqlFileLimits = { bytes: 10 * 1024 ** 3, statementBytes: po
 export const postgresSqlFileChooseSchema = z.object({
   connectionId: identity, database: identity, newDatabase: postgresRestoreDatabaseName.optional(),
 }).strict();
-const execution = postgresSqlFileChooseSchema.extend({ taskId: identity });
+const execution = postgresSqlFileChooseSchema.extend({ taskId: identity, targetToken: z.uuid() });
 export const postgresSqlFileExecuteSchema = z.union([
   execution.extend({ fileToken: z.uuid() }).strict(),
   execution.extend({ archive: postgresArchiveRestoreSchema }).strict().refine(
@@ -19,11 +19,24 @@ export const postgresSqlFileExecuteSchema = z.union([
 export type PostgresSqlFileExecuteInput = z.infer<typeof postgresSqlFileExecuteSchema>;
 export type PostgresSqlFileChooseInput = z.infer<typeof postgresSqlFileChooseSchema>;
 export interface PostgresSqlFileChoice { token: string; name: string; bytes: number; }
+export type PostgresRestoreTargetIssue = 'read-only' | 'template' | 'database-exists' | 'createdb' | 'name-bytes';
+export interface PostgresRestoreTargetPreview {
+  token?: string;
+  database: string;
+  newDatabase?: string;
+  role: string;
+  server: string;
+  address?: string;
+  encoding: string;
+  relations: string[];
+  moreRelations: boolean;
+  issue?: PostgresRestoreTargetIssue;
+}
 export interface PostgresSqlFileResult {
   outcome: 'not-started' | 'committed' | 'rolled-back' | 'unknown';
   completed: number;
   cancelled: boolean;
-  failure?: { reason: 'connection' | 'create-database' | 'database-exists' | 'archive' | 'file' | 'encoding' | 'syntax' | 'budget' | 'command' | 'server' | 'transaction' | 'cancelled';
+  failure?: { reason: 'connection' | 'target-changed' | 'create-database' | 'database-exists' | 'archive' | 'file' | 'encoding' | 'syntax' | 'budget' | 'command' | 'server' | 'transaction' | 'cancelled';
     statement?: number; detail?: string; sqlState?: string };
   cleanupWarning?: true;
   databaseCreation?: 'created' | 'refused' | 'unknown';

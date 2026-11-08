@@ -16,7 +16,8 @@ import { sameConnectionFamily } from '../shared/connectionDialect';
 import { postgresTableExportExtension, type PostgresImportKey, type PostgresTableImportChooseInput } from '../shared/postgresTable';
 import { inspectPostgresCopySource } from '../engine/postgres/copyImportFile';
 import { inspectPostgresSqlFile, type PostgresSqlFileSource } from '../engine/postgres/sqlFile';
-import { postgresSqlFileTitle } from '../shared/postgresSqlFile';
+import { postgresSqlFileTitle, type PostgresSqlFileChooseInput, type PostgresSqlFileResult } from '../shared/postgresSqlFile';
+import type { PostgresRestoreTargetFacts } from '../engine/postgres/restoreTarget';
 import { isPostgresCustomArchiveDestination, postgresCustomArchiveExtensions, postgresDatabaseBackupPickToolTitle,
   postgresDatabaseBackupTitle, type PostgresDatabaseBackupChooseInput } from '../shared/postgresDatabaseBackup';
 import { inspectPostgresNativeTool, type PostgresNativeTool } from '../engine/postgres/nativeTool';
@@ -1013,6 +1014,8 @@ const monitorSignals = new ServerMonitorSignals(id => {
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
 const mysqlSqlFileSources = new WeakMap<object, MysqlSqlFileChooseInput & { token: string; revision: number; source: MysqlSqlFileSource; expires: number }>();
 const postgresSqlFileSources = new WeakMap<object, { token: string; connectionId: string; database: string; newDatabase?: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
+const postgresRestoreTargets = new WeakMap<object, PostgresSqlFileChooseInput & { revision: number;
+  verified?: Pick<PostgresRestoreTargetFacts, 'stamp' | 'serverStamp'> & { token: string; expires: number } }>();
 const sqlFileChoosing = new WeakSet<object>();
 const mysqlDumpTools = new WeakMap<object, { token: string; tool: MysqlDumpTool }>();
 const mysqlBackupFiles = new WeakMap<object, MysqlDatabaseBackupChooseInput & { token: string; path: string; revision: number; expires: number }>();
@@ -2700,18 +2703,42 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = { ...input, profile, source: file.source, connectionRevision: file.revision };
       break;
     }
+    case 'postgres.sqlFile.target': {
+      columnsMain.assertCapturedOwner(columns);
+      const document = columns!.owner.document, revision = store.connectionRevision();
+      connectionConfig.assertAvailable(input.connectionId);
+      const profile = store.resolveConnection(input.connectionId);
+      if (shuttingDown || profile.dialect !== 'postgresql') throw Error('恢复预检需要可用的 PostgreSQL 连接');
+      const pending: NonNullable<ReturnType<typeof postgresRestoreTargets.get>> = { ...input, revision };
+      postgresRestoreTargets.set(document, pending);
+      const { preview, stamp, serverStamp }: PostgresRestoreTargetFacts = await broker.request(command, { ...input, profile });
+      columnsMain.assertCapturedOwner(columns);
+      connectionConfig.assertAvailable(input.connectionId);
+      if (shuttingDown || store.connectionRevision() !== revision || postgresRestoreTargets.get(document) !== pending)
+        throw Error('PostgreSQL 恢复目标已变化，请重新核对');
+      if (preview.issue) return preview;
+      const token = randomUUID();
+      pending.verified = { stamp, serverStamp, token, expires: Date.now() + 5 * 60_000 };
+      return { ...preview, token };
+    }
     case 'postgres.sqlFile.execute': {
       columnsMain.assertCapturedOwner(columns);
+      const document = columns!.owner.document, selected = postgresRestoreTargets.get(document), verified = selected?.verified;
+      if (!selected || !verified || verified.token !== input.targetToken || verified.expires <= Date.now() ||
+          selected.revision !== store.connectionRevision() || selected.connectionId !== input.connectionId ||
+          selected.database !== input.database || selected.newDatabase !== input.newDatabase)
+        return { outcome: 'not-started', completed: 0, cancelled: false, failure: { reason: 'target-changed' } } satisfies PostgresSqlFileResult;
+      const restoreTarget = { stamp: verified.stamp, serverStamp: verified.serverStamp };
       if (input.archive) {
         if (shuttingDown) throw Error('客户端正在退出，不能恢复 PostgreSQL 归档');
         const profile = store.resolveConnection(input.connectionId);
         if (profile.dialect !== 'postgresql') throw Error('归档恢复需要已保存的 PostgreSQL 连接');
         const { archive, ...target } = input;
         const archiveSource = postgresArchiveFiles.restoreSource(columns!, archive);
-        input = { ...target, profile, archiveSource, connectionRevision: store.connectionRevision() };
+        input = { ...target, profile, archiveSource, restoreTarget, connectionRevision: selected.revision };
         break;
       }
-      const document = columns!.owner.document, file = postgresSqlFileSources.get(document);
+      const file = postgresSqlFileSources.get(document);
       if (shuttingDown || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
         file.revision !== store.connectionRevision() || file.connectionId !== input.connectionId ||
         file.database !== input.database || file.newDatabase !== input.newDatabase)
@@ -2719,7 +2746,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const profile = store.resolveConnection(input.connectionId);
       if (profile.dialect !== 'postgresql') throw Error('SQL 文件执行需要已保存的 PostgreSQL 连接');
       postgresSqlFileSources.delete(document);
-      input = { ...input, profile, source: file.source, connectionRevision: file.revision };
+      input = { ...input, profile, source: file.source, restoreTarget, connectionRevision: file.revision };
       break;
     }
     case 'table.exportFiltered':

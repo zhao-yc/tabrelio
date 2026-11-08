@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { postgresRestoreDatabaseName, type PostgresSqlFileChoice, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
+import { postgresRestoreDatabaseName, type PostgresRestoreTargetPreview, type PostgresSqlFileChoice,
+  type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
 import type { PostgresArchiveRestoreChoice } from '../../shared/postgresArchive';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresSqlFileZh as text } from '../locales/postgresSqlFile.zh-CN';
@@ -22,6 +23,8 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
   const [catalogueVersion, setCatalogueVersion] = useState(0);
   const [file, setFile] = useState<PostgresSqlFileChoice | null>(null);
   const [result, setResult] = useState<PostgresSqlFileResult>();
+  const [targetAttempt, setTargetAttempt] = useState(0);
+  const [targetCheck, setTargetCheck] = useState<{ key: string; preview?: PostgresRestoreTargetPreview; error?: string }>();
   const [choosing, setChoosing] = useState(false), [task, setTask] = useState<string>();
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
   const occupied = useRef(false);
@@ -29,8 +32,12 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
   const validName = !create || postgresRestoreDatabaseName.safeParse(newDatabase).success;
   const archiveReady = !!archive && !error && result?.outcome !== 'committed' &&
     result?.outcome !== 'unknown' && result?.databaseCreation !== 'unknown';
-  const ready = !!database && validName && (!!file || archiveReady);
   const target = { connectionId, database, ...(create ? { newDatabase } : {}) };
+  const targetKey = JSON.stringify([connectionId, database, target.newDatabase, targetAttempt, catalogueVersion]);
+  const validTarget = !!connectionId && !!database && validName;
+  const currentCheck = validTarget && targetCheck?.key === targetKey ? targetCheck : undefined;
+  const targetToken = currentCheck?.preview?.token;
+  const ready = !!targetToken && (!!file || archiveReady);
 
   // 切换连接后的迟到目录不覆盖当前执行目标。
   useEffect(() => {
@@ -41,10 +48,22 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
     }).catch(reason => { if (current) setError(errorMessage(reason)); });
     return () => { current = false; };
   }, [connectionId, catalogueVersion]);
+
+  // 新库名输入停止后再查目录，旧连接或旧名称的迟到结果不得解锁恢复。
+  useEffect(() => {
+    if (!validTarget) return;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void invoke('postgres.sqlFile.target', { connectionId, database, ...(create ? { newDatabase } : {}) }).then(preview => {
+        if (current) setTargetCheck({ key: targetKey, preview });
+      }).catch(reason => { if (current) setTargetCheck({ key: targetKey, error: errorMessage(reason) }); });
+    }, create ? 250 : 0);
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [validTarget, targetKey, connectionId, database, create, newDatabase]);
   function changeDatabase(value: string) {
     setDatabase(value); resetFile();
   }
-  function resetFile() { setFile(null); setResult(undefined); setError(''); }
+  function resetFile() { setFile(null); setResult(undefined); setError(''); setTargetCheck(undefined); }
   async function choose() {
     if (occupied.current || !database || !validName) return;
     occupied.current = true;
@@ -54,14 +73,17 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
     finally { occupied.current = false; setChoosing(false); }
   }
   async function execute() {
-    if (occupied.current || !ready) return;
+    if (occupied.current || !ready || !targetToken) return;
     occupied.current = true;
     const taskId = uid();
     setTask(taskId); setFile(null); setResult(undefined); setError('');
     try {
       const source = archive ? { archive: archive.selection } : { fileToken: file!.token };
-      const result = await invoke('postgres.sqlFile.execute', { ...target, ...source, taskId });
+      const result = await invoke('postgres.sqlFile.execute', { ...target, ...source, taskId, targetToken });
       setResult(result);
+      if (result.failure?.reason === 'target-changed' || result.failure?.reason === 'database-exists') {
+        setTargetCheck({ key: targetKey, error: text.reason[result.failure.reason] });
+      }
       if (result.databaseCreation === 'created') {
         setCatalogueVersion(version => version + 1);
         onDatabaseCreated(connectionId);
@@ -101,6 +123,20 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
             }}/></Field>}
       </fieldset>
       {create && <p>{newDatabase && !validName ? text.nameError : text.createWarning}</p>}
+      {validTarget && <section className="database-backup-plan" aria-label={text.targetCheck}>
+        <div><strong>{text.targetCheck}</strong> · <button type="button" disabled={locked || !currentCheck}
+          onClick={() => setTargetAttempt(attempt => attempt + 1)}>{text.targetRefresh}</button></div>
+        {!currentCheck ? <p aria-live="polite">{text.targetLoading}</p> : currentCheck.error ?
+          <p>{text.targetReadError} {currentCheck.error}</p> : currentCheck.preview && <>
+            <p>{text.targetLabel(currentCheck.preview.database, currentCheck.preview.newDatabase)}</p>
+            <p>{text.targetIdentity(currentCheck.preview.role, currentCheck.preview.server, currentCheck.preview.encoding)}</p>
+            {currentCheck.preview.address && <p>{text.targetAddress(currentCheck.preview.address)}</p>}
+            {currentCheck.preview.issue ? <p>{text.targetIssues[currentCheck.preview.issue]}</p> : !create &&
+              (currentCheck.preview.relations.length ? <details><summary>{text.targetRelations}</summary>
+                <ul>{currentCheck.preview.relations.map(relation => <li key={relation}>{relation}</li>)}</ul>
+                {currentCheck.preview.moreRelations && <p>{text.targetMore}</p>}</details> : <p>{text.targetEmpty}</p>)}
+          </>}
+      </section>}
       {file && <p>{file.name} · {file.bytes.toLocaleString('zh-CN')} B</p>}
       {task && <p role="status">{cancelling ? text.cancelling : archive ? text.archiveRunning : text.running}</p>}
       {result && <section className="database-backup-plan" role="status">

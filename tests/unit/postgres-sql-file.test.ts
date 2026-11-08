@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import { executePostgresSqlFile, inspectPostgresSqlFile, postgresRestoreDatabaseCommand,
   readPostgresRestoreDatabaseOid } from '../../src/engine/postgres/sqlFile';
+import { readPostgresRestoreTarget } from '../../src/engine/postgres/restoreTarget';
 import { postgresRestoreDatabaseName, postgresSqlFileExecuteSchema } from '../../src/shared/postgresSqlFile';
 
 async function fixture(sql: string | Buffer, action: (path: string) => Promise<void>) {
@@ -166,11 +167,34 @@ describe('PostgreSQL SQL 文件流式执行', () => {
     });
   });
 
-  it('只接受目标连接、数据库、任务号和一次性文件令牌', () => {
-    const input = { connectionId: '已保存', database: '目标库', taskId: '任务', fileToken: 'f0fa0d30-5367-48ca-b920-c2a7fe9f155d' };
+  it('只接受目标、任务号及文件和预检令牌', () => {
+    const token = 'f0fa0d30-5367-48ca-b920-c2a7fe9f155d';
+    const input = { connectionId: '已保存', database: '目标库', taskId: '任务', fileToken: token, targetToken: token };
     expect(postgresSqlFileExecuteSchema.parse(input)).toEqual(input);
-    for (const field of [{ path: '/tmp/file.sql' }, { sql: 'SELECT 1' }, { source: {} }])
+    for (const field of [{ path: '/tmp/file.sql' }, { sql: 'SELECT 1' }, { source: {} }, { targetToken: undefined }, { restoreTarget: {} }])
       expect(postgresSqlFileExecuteSchema.safeParse({ ...input, ...field }).success).toBe(false);
+  });
+
+  it('预检只展示有界关系样本，并区分物理库、服务器代次和建库阻断原因', async () => {
+    const base = { database: '目标库', databaseOid: '12345', ownerOid: '10', template: false, encoding: 'UTF8',
+      role: '测试者', roleOid: '11', canCreate: true, readOnly: false, fits: true, exists: false, server: '18.6',
+      started: '1781000000.1', address: '::1', port: 5432, relations: Array.from({ length: 9 }, (_, i) => ['公开', '表' + i]) };
+    const read = (fields: Partial<typeof base>, name?: string) => readPostgresRestoreTarget({ database: base.database,
+      query: async (_sql: string, params: unknown[]) => {
+        expect(params).toEqual([name ?? null, name === undefined]);
+        return { rows: [{ c0: JSON.stringify({ ...base, ...fields }) }], truncated: false };
+      },
+    } as unknown as PostgresConnection, base.database, name, true);
+    const first = await read({});
+    expect(first.preview).toMatchObject({ role: '测试者', address: '[::1]:5432', moreRelations: true });
+    expect(first.preview.relations).toHaveLength(8);
+    expect(first.preview.relations[0]).toBe('"公开"."表0"');
+    expect((await read({ relations: [] })).stamp).toBe(first.stamp);
+    expect((await read({ databaseOid: '12346' })).stamp).not.toBe(first.stamp);
+    expect((await read({ started: '1781000001.1' })).serverStamp).not.toBe(first.serverStamp);
+    expect((await read({ readOnly: true })).preview.issue).toBe('read-only');
+    expect((await read({ exists: true }, '新库')).preview.issue).toBe('database-exists');
+    expect((await read({ canCreate: false }, '新库')).preview.issue).toBe('createdb');
   });
 
   it('接受可精确引用的新库名称，拒绝可能截断或被替换的字节', () => {

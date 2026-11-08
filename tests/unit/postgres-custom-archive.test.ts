@@ -36,7 +36,7 @@ it('授权读取前核验普通文件及 PGDMP 标记，拒绝纯文本与链接
 });
 
 it('同一次恢复只接收一种来源，且仅数据归档需要现有目标库', () => {
-  const input = { connectionId: '连接', database: '目标库', taskId: token,
+  const input = { connectionId: '连接', database: '目标库', taskId: token, targetToken: token,
     archive: { sourceToken: token, toolToken: token, content: 'data', portable: true } };
   expect(postgresSqlFileExecuteSchema.parse(input)).toEqual(input);
   expect(postgresSqlFileExecuteSchema.safeParse({ ...input, newDatabase: '新库' }).success).toBe(false);

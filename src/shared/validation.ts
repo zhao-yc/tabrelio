@@ -369,6 +369,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'mysql.backup.tables': mysqlBackupTablesSchema,
   'mysql.sqlFile.choose': mysqlSqlFileChooseSchema, 'mysql.sqlFile.execute': mysqlSqlFileExecuteSchema,
   'postgres.sqlFile.choose': postgresSqlFileChooseSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
+  'postgres.sqlFile.target': postgresSqlFileChooseSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.draft.save': postgresTablePreviewSchema,

@@ -237,11 +237,8 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
       await page.screenshot({ path: info.outputPath('PostgreSQL整库恢复完成.png') });
 
       await choose();
-      await createAndRestore();
-      await expect(status).toContainText(text.databaseCreation.refused);
-      await expect(status).toContainText(text.outcome['not-started']);
-      await expect(status).toContainText(text.reason['database-exists']);
-      await expect(status).toContainText('SQLSTATE 42P04');
+      await expect(modal.getByRole('region', { name: text.targetCheck })).toContainText(text.targetIssues['database-exists']);
+      await expect(modal.getByRole('button', { name: text.createAndExecute, exact: true })).toBeDisabled();
       expect(await databaseOid(freshName)).toBe(originalOid);
       expect((await fresh.query(facts)).rows).toEqual(originalFacts);
 

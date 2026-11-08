@@ -57,6 +57,7 @@ import { readPostgresBackupCatalogue } from './tableBackup';
 import { assertPostgresSqlFileSource, executePostgresSqlFile, postgresRestoreDatabaseCommand, readPostgresRestoreDatabaseOid,
   type PostgresSqlFileControl, type PostgresSqlFileSource } from './sqlFile';
 import { postgresRestoreDatabaseName, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
+import { readPostgresRestoreTarget, type PostgresRestoreTargetFacts } from './restoreTarget';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { comparePostgresSnapshots, configurePostgresCompare, inPostgresCompareSnapshot, readPostgresCompareTable, type PostgresSyncEvidence, type PostgresSyncRow } from './dataCompare';
@@ -447,6 +448,8 @@ export class PostgresEngine {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 文件任务已存在、连接关闭中或已达并发上限');
     const target = input.newDatabase === undefined ? undefined : postgresRestoreDatabaseName.parse(input.newDatabase);
+    const expected = input.restoreTarget as Pick<PostgresRestoreTargetFacts, 'stamp' | 'serverStamp'> | undefined;
+    if (!expected) throw Error('缺少已核对的 PostgreSQL 恢复目标');
     const archive = input.archiveSource as PostgresArchiveRestoreSource | undefined;
     if (archive?.content === 'data' && target) throw Error('仅数据归档需要已有目标表结构');
     const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true };
@@ -472,6 +475,11 @@ export class PostgresEngine {
         control.check();
         setupFailure = 'create-database';
         newOid = await this.use(profile, input.database, async connection => {
+          const actual = await readPostgresRestoreTarget(connection, input.database, target);
+          if (actual.stamp !== expected.stamp || actual.preview.issue) {
+            setupFailure = actual.stamp === expected.stamp && actual.preview.issue === 'database-exists' ? 'database-exists' : 'target-changed';
+            throw Error('PostgreSQL 恢复目标已变化');
+          }
           const sql = await postgresRestoreDatabaseCommand(connection, target);
           // CREATE DATABASE 必须独立提交，发出后单独记录状态，文件事务失败也不删除数据库。
           setupFailure = 'file';
@@ -508,8 +516,13 @@ export class PostgresEngine {
       }
       setupFailure = 'connection';
       return this.use(profile, target ?? input.database, async connection => {
-        if (target && (connection.database !== target || await readPostgresRestoreDatabaseOid(connection, target) !== newOid))
+        const actual = await readPostgresRestoreTarget(connection, target ?? input.database);
+        const matches = target ? actual.serverStamp === expected.serverStamp && actual.databaseOid === newOid && actual.ownedByRole :
+          actual.stamp === expected.stamp;
+        if (!matches || actual.preview.issue) {
+          setupFailure = 'target-changed';
           throw Error('PostgreSQL 恢复目标已变化');
+        }
         control.check();
         task.connection = connection;
         started = true;
@@ -1398,6 +1411,12 @@ export class PostgresEngine {
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || Boolean(input.source) === Boolean(input.archiveSource))
           throw Error('缺少可信的 PostgreSQL 文件连接及来源');
         return this.runSqlFile(input, profile);
+      }
+      case 'postgres.sqlFile.target': {
+        const profile = input.profile as PostgresConnectionProfile;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId)
+          throw Error('缺少可信的 PostgreSQL 恢复连接');
+        return this.use(profile, input.database, connection => readPostgresRestoreTarget(connection, input.database, input.newDatabase, true));
       }
       case 'postgres.compareData.catalogue': {
         const profile = input.profile as PostgresConnectionProfile;

@@ -3,6 +3,7 @@ import { postgresArchiveRestoreTitle } from '../../shared/postgresArchive';
 
 const reason: Record<NonNullable<PostgresSqlFileResult['failure']>['reason'], string> = {
   connection: '未能建立或确认专用数据库连接。',
+  'target-changed': '恢复目标或预检授权已变化，请重新核对目标。',
   'create-database': '未能完成新建数据库，请检查维护库连接和创建数据库权限。',
   'database-exists': '同名数据库已存在。请选择其他名称，或切换到现有数据库后重新选择文件。',
   archive: '未能准备 PostgreSQL 归档，数据库执行未开始。',
@@ -25,6 +26,17 @@ export const postgresSqlFileZh = {
   nameError: '请输入有效名称，UTF-8 最多 63 字节，首尾不要留空白。',
   createWarning: '使用维护数据库创建空目标库，需要 CREATEDB 权限。同名库存在时停止。文件执行失败或取消后，已创建的数据库会保留。',
   createAndExecute: '确认创建并恢复',
+  targetCheck: '恢复目标预检', targetLoading: '正在只读核对恢复目标', targetRefresh: '重新核对目标',
+  targetReadError: '无法核对恢复目标。',
+  targetLabel: (database: string, newDatabase?: string) => newDatabase === undefined ? '目标库 ' + database : '从维护库 ' + database + ' 创建 ' + newDatabase,
+  targetIdentity: (role: string, server: string, encoding: string) => '角色 ' + role + ' · PostgreSQL ' + server + ' · 连接库编码 ' + encoding,
+  targetAddress: (address: string) => '服务器地址 ' + address,
+  targetRelations: '可见用户关系样本', targetMore: '还有其他关系。', targetEmpty: '在可访问的 Schema 中未发现用户关系。',
+  targetIssues: {
+    'read-only': '当前目标连接为只读，无法开始恢复。', template: '请选择普通数据库作为目标库或维护库。',
+    'database-exists': '同名数据库已存在，请更换名称或选择现有库恢复。',
+    createdb: '当前角色缺少 CREATEDB 权限。', 'name-bytes': '名称超过服务器允许的标识符字节长度。',
+  },
   choose: '选择 SQL 文件', execute: '确认并执行文件', cancel: '取消执行', close: '关闭',
   running: '正在流式执行 SQL 文件', cancelling: '正在等待原执行任务结束',
   scope: '按 UTF-8 流式读取并在目标库的独立事务中执行。支持回放 tabrelio 的 PostgreSQL 备份和含内联 COPY FROM STDIN 的 pg_dump 纯文本 SQL。请确认文件可信、目标库正确且依赖已准备。',
