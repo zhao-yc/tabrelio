@@ -18,6 +18,15 @@ export const sqliteEditWorkspaceZh = {
   fillNotice: tableEditWorkspaceZh.fillNotice,
   fillGroup: tableEditWorkspaceZh.fillGroup,
   fillLimit: '跨页勾选或填充值超过 SQLite 批量暂存上限，请缩小范围。',
+  duplicateChecked: tableEditWorkspaceZh.duplicateChecked,
+  duplicateNone: tableEditWorkspaceZh.duplicateNone,
+  duplicateOverlap: tableEditWorkspaceZh.duplicateOverlap,
+  duplicated: tableEditWorkspaceZh.duplicated,
+  duplicateOriginal: '仅支持复制已有记录。请取消勾选本地新增或已删除的行。',
+  duplicateLimit: '勾选和已有草稿合计超过 SQLite 批量暂存上限，请缩小范围。',
+  duplicateConfirm: (groups: readonly { index: number; count: number }[]) =>
+    '将以下勾选记录复制为新增草稿？\n' + groups.map(({ index, count }) => tableEditWorkspaceZh.fillGroup(index, count)).join('\n') +
+    '\n生成列和可自动分配的整数主键会省略。请核对其它主键及唯一键，再预览并提交。',
   deleteChecked: tableEditWorkspaceZh.deleteChecked,
   deleteNone: tableEditWorkspaceZh.deleteNone,
   deleteConfirm: tableEditWorkspaceZh.deleteConfirm,

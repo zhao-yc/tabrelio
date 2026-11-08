@@ -28,7 +28,7 @@ function copyOriginal(value: SqliteOriginalValue | undefined): SqliteOriginalVal
 }
 
 /** 只准备独立虚拟新增行，不调用editor.add、剪贴板或IPC；生成列全部省略，键保留供明确修改。 */
-export function prepareSqliteDuplicate(page: SqliteTablePage, rows: SqliteDraftRow[], source: SqliteDraftRow, id: string): SqliteDuplicateSource {
+export function prepareSqliteDuplicate(page: SqliteTablePage, rows: SqliteDraftRow[], source: SqliteDraftRow, id: string, omitRowidAlias = false): SqliteDuplicateSource {
   const edit = page.edit, width = page.columns.length;
   if (edit?.kind !== 'editable' || !width || width > 1024 || edit.columns.length !== width || !rows.includes(source) || source.deleted || source.values.length !== width || !id || rows.some(row => row.id === id) || edit.columns.some((column, i) => column.name !== page.columns[i].name || column.generated !== !!page.columns[i].generated)) throw Error(text.invalid);
   if (Reflect.ownKeys(source.values).length !== width + 1) throw Error(text.invalid);
@@ -37,7 +37,9 @@ export function prepareSqliteDuplicate(page: SqliteTablePage, rows: SqliteDraftR
     if (!descriptor?.enumerable || !('value' in descriptor)) throw Error(text.invalid);
     return copyOriginal(descriptor.value);
   });
-  const values = original.map((value, i) => edit.columns[i].generated ? undefined : value === undefined ? undefined : Object.freeze({ ...value }));
+  const alias = omitRowidAlias ? edit.copy?.rowidAlias : undefined;
+  const values = original.map((value, i) => edit.columns[i].generated || edit.columns[i].name === alias || value === undefined
+    ? undefined : Object.freeze({ ...value }));
   Object.freeze(values);
   const row: SqliteDraftRow = Object.freeze({ id, values, deleted: false }), result = Object.freeze({ row });
   sources.set(result, { page, rows, source, values: source.values, original, edit, schemaKey: page.schemaKey, columns: JSON.stringify([page.columns, edit.columns]), id: source.id, index: source.index, snapshot: edit.snapshotId, expiresAt: edit.expiresAt });

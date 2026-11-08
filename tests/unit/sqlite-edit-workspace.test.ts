@@ -10,7 +10,7 @@ function fixture(){
  const workspace=new SqliteEditWorkspace({now:()=>now,changed,forgotten}),query={limit:1,mode:'and' as const,filters:[],sort:[]};
  const preview=vi.fn(async(input:SqliteTableEditPreviewInput):Promise<SqliteTableEditPreview>=>({previewId:'p'+ ++serial,snapshotId:input.snapshotId,...(input.additionalPages?{snapshotIds:[input.snapshotId,...input.additionalPages.map(p=>p.snapshotId)]}:{}),target:{connectionId:'c',database:'main',table:'items'},schemaKey:'a'.repeat(64),expiresAt:new Date(300000).toISOString(),confirmation:'main.items',sql:['正式计划'],counts:{insert:0,update:[input,...(input.additionalPages??[])].reduce((n,p)=>n+p.changes.length,0),delete:0}}));
  const apply=vi.fn(async(_input:unknown):Promise<SqliteTableEditOutcome>=>({operationId:'op',target:{connectionId:'c',database:'main',table:'items'},outcome,counts:{insert:0,update:2,delete:0},fact:{operationId:'op',target:{connectionId:'c',database:'main',table:'items'},phase:outcome,requestedRows:2,appliedRows:outcome==='committed'?2:0,commitAcknowledged:outcome==='committed',commitMayHaveBeenSent:outcome==='committed'||outcome==='unknown',rollbackAcknowledged:outcome==='rolled-back'},message:outcome}));
- function make(offset:number,expires=1800000){const page:SqliteTablePage={target:{connectionId:'c',database:'main',table:'items',kind:'table'},schemaKey:'a'.repeat(64),offset,limit:1,hasMore:true,columns:[{name:'note',declaredType:'TEXT'}],result:{columns:[{key:'c0',name:'note',type:'SQLITE'}],rows:[{c0:'原'+offset}],truncated:false,elapsedMs:0,statement:'不进入草稿持久化的SQL'},edit:{kind:'editable',snapshotId:'s'+offset,expiresAt:new Date(expires).toISOString(),columns:[{name:'note',declaredType:'TEXT',generated:false,nullable:true,hasDefault:false}],rows:[[{kind:'text',value:'原'+offset}]],locator:{kind:'rowid',columns:[]}}};
+ function make(offset:number,expires=1800000,key=offset){const page:SqliteTablePage={target:{connectionId:'c',database:'main',table:'items',kind:'table'},schemaKey:'a'.repeat(64),offset,limit:1,hasMore:true,columns:[{name:'note',declaredType:'TEXT'}],result:{columns:[{key:'c0',name:'note',type:'SQLITE'}],rows:[{c0:'原'+offset}],truncated:false,elapsedMs:0,statement:'不进入草稿持久化的SQL'},edit:{kind:'editable',snapshotId:'s'+offset,expiresAt:new Date(expires).toISOString(),columns:[{name:'note',declaredType:'TEXT',generated:false,nullable:true,hasDefault:false}],rows:[[{kind:'text',value:'原'+offset}]],copy:{rowKeys:[key.toString(16).padStart(64, '0')]},locator:{kind:'rowid',columns:[]}}};
  const editor:SqliteTableEditor=new SqliteTableEditor(page,{current:()=>live&&workspace.has(editor)&&workspace.current(query)&&!workspace.unknown,active:()=>active&&workspace.isActive(editor),available:()=>true,acquire:()=>({owns:()=>true,release:()=>true}),id:()=> '任务'+ ++serial,now:()=>now,changed,dirty:()=>{},preview,apply,release,cancel,committed:()=>{committed();workspace.clear();},batch:()=>workspace.batch(editor),settled:value=>workspace.settled(editor,value)});workspace.add(editor,query);return editor;}
  const stage=(editor:SqliteTableEditor,value=' {"n":9007199254740993,"n":1e999}\r\n')=>editor.save('original-0',[{kind:'text',value}]);
  return{workspace,query,make,stage,preview,apply,release,cancel,committed,forgotten,clock:(value:number)=>{now=value;},live:(value:boolean)=>{live=value;workspace.observe();},active:(value:boolean)=>{active=value;},outcome:(value:typeof outcome)=>{outcome=value;}};
@@ -169,4 +169,54 @@ it('跨页填充合计变化超限时保持所有行及历史', () => {
   expect(first.view.rows).toBe(left);
   expect(second.view.rows).toBe(right);
   expect(workspace.changes).toBe(500);
+});
+
+it('跨页复制逐页暂存准确的已编辑值并保留勾选，撤销仅影响所在页', async () => {
+  const f = fixture(), left = f.make(0);
+  f.stage(left, '修改后复制');
+  const original = left.view.rows;
+  f.workspace.rememberChecks(left, original, original);
+  const right = f.make(1);
+  f.workspace.rememberChecks(right, right.view.rows, right.view.rows);
+  let serial = 0;
+  const plan = f.workspace.planCheckedDuplication(right, () => '临时' + ++serial);
+  expect(plan.pages).toEqual([{ index: 1, count: 1 }, { index: 2, count: 1 }]);
+  expect(left.view.rows).toBe(original);
+  plan.stage();
+  expect(left.view.rows[1].values).toEqual([{ kind: 'text', value: '修改后复制' }]);
+  expect(f.workspace.checkedIds(left)).toEqual(new Set(['original-0']));
+  expect(f.workspace.checkedIds(right)).toEqual(new Set(['original-0']));
+  expect(() => plan.stage()).toThrow();
+  f.workspace.select(left);
+  left.undo();
+  expect(left.view.rows).toBe(original);
+  expect(right.changes).toHaveLength(1);
+  left.redo();
+  await left.preview();
+  expect(f.preview.mock.calls[0][0]).toMatchObject({ snapshotId: 's0',
+    changes: [{ kind: 'update' }, { kind: 'insert' }], additionalPages: [{ snapshotId: 's1', changes: [{ kind: 'insert' }] }] });
+});
+
+it('跨页复制拒绝原定位重叠、本地新增和确认期间原值变化', () => {
+  for (const failure of ['overlap', 'new', 'drift']) {
+    const f = fixture(), left = f.make(0);
+    if (failure === 'new') left.add();
+    const first = left.view.rows;
+    f.workspace.rememberChecks(left, first, [first.at(-1)!]);
+    const right = f.make(1, undefined, failure === 'overlap' ? 0 : 1), second = right.view.rows;
+    f.workspace.rememberChecks(right, second, second);
+    let serial = 0;
+    const prepare = () => f.workspace.planCheckedDuplication(right, () => '临时' + ++serial);
+    if (failure === 'drift') {
+      const plan = prepare();
+      const value = first[0].values[0] as { value: string }, original = value.value;
+      value.value = '确认后迟到值';
+      expect(plan.current()).toBe(false);
+      value.value = original;
+      expect(plan.current()).toBe(false);
+      expect(() => plan.stage()).toThrow();
+    } else expect(prepare).toThrow(failure === 'overlap' ? /同一条原记录/ : /本地新增/);
+    expect(left.view.rows).toBe(first);
+    expect(right.view.rows).toBe(second);
+  }
 });

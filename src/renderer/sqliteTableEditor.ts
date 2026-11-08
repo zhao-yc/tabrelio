@@ -102,7 +102,16 @@ export class SqliteTableEditor {
   add(): string | undefined { if (!this.canEdit()) return; const id = this.ports.id(); this.replace([...this.rows, { id, values: this.page.columns.map(() => undefined), deleted: false }]); return id; }
   /** 多行粘贴仅新增本地草稿；整组与原脏修改通过原预算后才分配ID并一次发布/形成一步undo。 */
   appendRows(values: readonly (readonly (SqliteOriginalValue | undefined)[])[]): string[] {
-    if (!this.canEdit() || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
+    const plan = this.prepareAppendRows(values);
+    plan.check();
+    plan.stage();
+    plan.publish();
+    return plan.ids;
+  }
+  /** 只构造已验证的新增计划，各页都通过后才允许修改行数组与历史。 */
+  prepareAppendRows(values: readonly (readonly (SqliteOriginalValue | undefined)[])[], retained = false): SqliteRowsPlan & { ids: string[] } {
+    const editable = () => retained ? this.canStageRetained() && !this.input : this.canEdit();
+    if (!editable() || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
     const edit = this.page.edit, width = this.page.columns.length, original = this.rows, past = this.past, pastLength = past.length, future = this.future, preview = this.previewValue, snapshotId = edit.snapshotId, schemaKey = this.page.schemaKey;
     if (!width || width > 1024 || edit.columns.length !== width || edit.columns.some((column, index) => column.name !== this.page.columns[index].name)) throw Error(text.invalid);
     const matrix = appendArray(values, 1, sqliteTableEditLimits.changes), sources: (readonly unknown[])[] = [];
@@ -121,11 +130,14 @@ export class SqliteTableEditor {
       }
       copied.push(row); inserts.push({ kind: 'insert', values: fields });
     }
-    sqliteTableEditPreviewSchema.parse({ snapshotId, taskId: 'sqlite-append-validation', changes: [...existing, ...inserts] });
-    const current = () => { if (!this.canEdit() || this.page.edit !== edit || edit.snapshotId !== snapshotId || this.page.schemaKey !== schemaKey || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || this.previewValue !== preview) throw Error(this.message || text.stale); };
+    const changes = [...existing, ...inserts];
+    sqliteTableEditPreviewSchema.parse({ snapshotId, taskId: 'sqlite-append-validation', changes });
+    const current = () => { if (!editable() || this.page.edit !== edit || edit.snapshotId !== snapshotId || this.page.schemaKey !== schemaKey || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || this.previewValue !== preview) throw Error(this.message || text.stale); };
     current(); const used = new Set<string>(); for (const row of original) { if (typeof row.id !== 'string' || !row.id.length || used.has(row.id)) throw Error(text.invalid); used.add(row.id); }
     const ids: string[] = []; for (const _row of copied) { const id = this.ports.id(); if (typeof id !== 'string' || !id.length || used.has(id)) throw Error(text.invalid); used.add(id); ids.push(id); }
-    current(); this.replace([...original, ...copied.map((row, index) => ({ id: ids[index], values: row, deleted: false }))]); return ids;
+    const next = [...original, ...copied.map((row, index) => ({ id: ids[index], values: row, deleted: false }))];
+    current();
+    return { ids, count: ids.length, changes, check: current, stage: () => this.replaceRows(next), publish: () => this.emit() };
   }
   /** 连续矩形只替换已有可见草稿格；全组后状态通过原预算才一次发布，不补行/跳列/分配ID或写DB。 */
   pasteCells(rowId: string, column: number, values: readonly (readonly (SqliteOriginalValue | undefined)[])[], columnIndices?: readonly number[]): number {

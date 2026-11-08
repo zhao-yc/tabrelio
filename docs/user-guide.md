@@ -558,6 +558,8 @@ SQLite 的可编辑表也可以在「SQLite 多页草稿」删除各保留页的
 
 在 SQLite 的可编辑表里，逐页勾选后到「SQLite 多页草稿」点击「填充保留页勾选记录」。选择字段、值类型及统一值，核对各页数量后暂存。可逐页撤销或重做，再统一预览并提交。[SQLite 跨页勾选填充](development/sqlite-workspace-checked-fill-20261108.md)
 
+SQLite 的「多页草稿」也支持「复制保留页勾选记录为新增草稿」。确认后副本追加到各自来源页，可逐页撤销，再统一预览并提交。[SQLite 跨页勾选复制](development/sqlite-workspace-checked-duplicate-20261108.md)
+
 主键、可靠定位键、自增及生成列不可选择；新增、待删或不完整记录不能参与。字段和历史预算超限会整批拒绝，同值不会增加撤销步骤。页面、勾选、连接、结构或草稿改变后需关闭并重新打开窗口。此操作只处理已加载完整记录，不自动补取或跨页；尚未进入公开安装包，验收边界见[本版记录](../tests/integration/acceptance-table-batch-fill-20261018.md)。
 
 ### 记录表单（0.11）

@@ -2,6 +2,7 @@ import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteTableEditLimits, sqliteTableEditPreviewSchema, type SqliteTableEditPreviewInput, type SqliteTableEditOutcome, type SqliteTableChange } from '../shared/sqliteTableEdit';
 import type { SqliteTableQuery } from './sqliteTableBrowser';
 import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
+import { prepareSqliteDuplicate, sqliteDuplicateSourceCurrent } from './sqliteTableDuplicate';
 import { prepareSqliteFill, sqliteFillSourceCurrent, sqliteFillSourceLimits, type SqliteFillField } from './sqliteTableFill';
 import { sqliteEditWorkspaceZh as text } from './locales/sqliteEditWorkspace.zh-CN';
 export interface SqliteEditBatch { input: Omit<SqliteTableEditPreviewInput, 'taskId'>; current(): boolean; }
@@ -27,8 +28,8 @@ export class SqliteEditWorkspace {
   constructor(private readonly ports: Ports) {}
   private key(page: Pick<SqliteTablePage, 'offset' | 'limit'>): string { return page.offset + ':' + page.limit; }
   /** 只比目标和编辑元数据；原行大值仍由各准确Editor持有，不为切页序列化大BLOB。 */
-  private signature(page: SqliteTablePage): string { const edit = page.edit; return JSON.stringify([page.target, page.schemaKey, page.offset, page.limit, page.columns, page.relation ?? null, edit?.kind === 'editable' ? [edit.snapshotId,edit.expiresAt,edit.columns,edit.locator] : null]); }
-  private scope(page: SqliteTablePage): string { const edit=page.edit;return JSON.stringify([page.target,page.schemaKey,page.columns,page.relation??null,edit?.kind==='editable'?[edit.columns,edit.locator]:null]); }
+  private signature(page: SqliteTablePage): string { const edit = page.edit; return JSON.stringify([page.target, page.schemaKey, page.offset, page.limit, page.columns, page.relation ?? null, edit?.kind === 'editable' ? [edit.snapshotId,edit.expiresAt,edit.columns,edit.locator,edit.copy?.rowidAlias] : null]); }
+  private scope(page: SqliteTablePage): string { const edit=page.edit;return JSON.stringify([page.target,page.schemaKey,page.columns,page.relation??null,edit?.kind==='editable'?[edit.columns,edit.locator,edit.copy?.rowidAlias]:null]); }
   /** 查询对象和实际内容都固定；观察漂移后相同对象恢复也不能复活旧账本。 */
   current(query = this.query): boolean {
     if(this.dead)return false;
@@ -84,7 +85,7 @@ export class SqliteEditWorkspace {
     if (!this.dead && !this.unknown && !this.restored && entry?.editor === editor && entry.checks?.revision === editor.rowsRevision && editor.view.valid)
       return entry.checks.ids;
   }
-  /** 两种跨页操作均绑定勾选、原快照和编辑器代次；填充可独占活动页的输入门。 */
+  /** 跨页操作均绑定勾选、原快照和编辑器代次；填充可独占活动页的输入门。 */
   private captureChecked(actor: SqliteTableEditor, allowActorInput = false) {
     this.observe();
     if (this.restored || this.unknown || !this.isActive(actor) || !actor.canEdit() || !this.current()) throw Error(text.stale);
@@ -127,6 +128,56 @@ export class SqliteEditWorkspace {
         for (const { plan } of plans) plan.check();
         if (!current()) throw Error(text.stale);
         for (const { entry, plan } of plans) { plan.stage(); entry.checks = undefined; }
+        for (const { plan } of plans) plan.publish();
+      },
+    };
+  }
+  /** 先冻结原值和新增计划；所有页及合计预算通过后才一次发布，副本仍归所属原页。 */
+  planCheckedDuplication(actor: SqliteTableEditor, newId: () => string) {
+    const { source, targets, pages, current } = this.captureChecked(actor);
+    if (!targets.some(item => item.editor !== actor)) throw Error(text.duplicateNone);
+    const count = pages.reduce((total, group) => total + group.count, 0);
+    if (count + this.changes > sqliteTableEditLimits.changes) throw Error(text.duplicateLimit);
+    const keys = new Set<string>();
+    const plans = targets.map(item => {
+      const { editor, rows } = item, edit = editor.page.edit;
+      if (edit?.kind !== 'editable' || !edit.copy || edit.copy.rowKeys.length !== edit.rows.length) throw Error(text.stale);
+      const rowKeys = edit.copy.rowKeys;
+      const ids = new Set(item.ids), selected = rows.filter(row => ids.has(row.id));
+      if (selected.length !== ids.size) throw Error(text.stale);
+      const copies = selected.map(row => {
+        const key = row.index === undefined ? undefined : rowKeys[row.index];
+        if (!key || !/^[a-f0-9]{64}$/.test(key) || row.deleted) throw Error(text.duplicateOriginal);
+        if (keys.has(key)) throw Error(text.duplicateOverlap);
+        keys.add(key);
+        return { key, index: row.index!, copy: prepareSqliteDuplicate(editor.page, rows, row, newId(), true) };
+      });
+      return { ...item, ids, copies, rowKeys, plan: editor.prepareAppendRows(copies.map(item => item.copy.row.values), true) };
+    });
+    this.validateCheckedChanges(source.map(item => item.editor), new Map(plans.map(({ editor, plan }) => [editor, plan.changes])));
+    let consumed = false;
+    const stillCurrent = () => {
+      if (consumed || !current() || plans.some(({ editor, rows, copies, ids, checks, rowKeys }) =>
+        checks!.ids.size !== ids.size || [...ids].some(id => !checks!.ids.has(id)) ||
+        editor.page.edit?.kind !== 'editable' || editor.page.edit.copy?.rowKeys !== rowKeys ||
+        copies.some(({ key, index, copy }) => rowKeys[index] !== key || !sqliteDuplicateSourceCurrent(copy, editor.page, rows)))) {
+        consumed = true;
+        return false;
+      }
+      return true;
+    };
+    return {
+      pages, count, current: stillCurrent,
+      stage: () => {
+        if (!stillCurrent() || !actor.canEdit()) throw Error(text.stale);
+        for (const { plan } of plans) plan.check();
+        if (!stillCurrent()) throw Error(text.stale);
+        consumed = true;
+        for (const { entry, editor, ids, plan } of plans) {
+          plan.stage();
+          // 新增不会改变原勾选行身份，显式续绑到本次发布后的代次。
+          entry.checks = { revision: editor.rowsRevision, ids };
+        }
         for (const { plan } of plans) plan.publish();
       },
     };

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { parseSqliteTableDraft, sqliteDraftChanges, sqliteDraftGroups, sqliteTableDraftMessages, type SqliteTableDraftDocument, type SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
@@ -104,7 +104,7 @@ function display(statement: Statement): string {
 
 /** 同一目录快照下选择原生唯一键。编辑及搜索定位共用 rowid 遮蔽、索引和排序规则判定。 */
 export async function chooseSqliteTableLocator(driver: SqliteDriverSession, table: string, catalogue: SqliteTableCatalogue,
-  control: Pick<SqliteTableBrowseControl, 'check'>): Promise<{ locator?: SqliteTableLocator; strict: boolean }> {
+  control: Pick<SqliteTableBrowseControl, 'check'>, identifyCopyAlias = false): Promise<{ locator?: SqliteTableLocator; strict: boolean; rowidAlias?: string }> {
   const facts = await read(driver, "SELECT type,wr,strict FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY", [table], control, 2);
   if (facts.length !== 1 || facts[0][0] !== 'table') return { locator: undefined, strict: false };
   const withoutRowid = integer(facts[0][1]) === '1', strict = integer(facts[0][2]) === '1';
@@ -122,11 +122,24 @@ export async function chooseSqliteTableLocator(driver: SqliteDriverSession, tabl
       locator = { kind: item[1] === 'pk' ? 'primary-key' : 'unique-key', columns: parts.map(part => part[1] as string), collations: parts.map(part => part[2] as string) }; break;
     }
   }
-  return { locator, strict };
+  // INTEGER 单列主键仍可能因内联 DESC 有独立主键索引；只在目录证明没有该索引时省略。
+  const primary = identifyCopyAlias && !withoutRowid ? catalogue.xinfo.filter(row => integer(row[5]) !== '0') : [];
+  const candidate = primary.length === 1 && String(primary[0][2]).toUpperCase() === 'INTEGER' ? primary[0][1] as string : undefined;
+  const rowidAlias = candidate && !(await read(driver, "SELECT 1 FROM pragma_index_list(?, 'main') WHERE origin='pk' LIMIT 1", [table], control, 1)).length
+    ? candidate : undefined;
+  return { locator, strict, rowidAlias };
+}
+
+/** 同一定位排序规则也用于跨页复制去重；只向窗口提供本进程内的摘要。 */
+function sqliteLocatorKey(locator: SqliteTableLocator, values: readonly SqliteValue[]): string {
+  return JSON.stringify(values.map((value, index) => typeof value !== 'string' ? value :
+    locator.collations[index] === 'NOCASE' ? value.replace(/[A-Z]/g, letter => letter.toLowerCase()) :
+      locator.collations[index] === 'RTRIM' ? value.replace(/ +$/, '') : value));
 }
 
 /** Main专有快照与一次性预览账本；释放不取消已经claim的写事务。 */
 export class SqliteTableEdits {
+  private readonly copyKey = randomBytes(32);
   private readonly snapshots = new Map<string, Snapshot>();
   private readonly previews = new Map<string, Preview>();
   private bytes = 0;
@@ -148,7 +161,7 @@ export class SqliteTableEdits {
   async preparePage(driver: SqliteDriverSession, input: SqliteTablePageInput, profile: SqliteConnectionProfile, catalogue: SqliteTableCatalogue, control: SqliteTableBrowseControl, inspectLocator?: (value: SqliteTableLocator) => void): Promise<SqliteEditReadPlan> {
     const readonly = (reason = text.readonly): SqliteEditReadPlan => ({ capture: () => ({ kind: 'readonly', reason }) });
     if (profile.sqlite.readOnly || catalogue.kind !== 'table' || /^sqlite_/i.test(input.table) || !driver.identity) return readonly();
-    const { locator, strict } = await chooseSqliteTableLocator(driver, input.table, catalogue, control);
+    const { locator, strict, rowidAlias } = await chooseSqliteTableLocator(driver, input.table, catalogue, control, true);
     const fields = catalogue.xinfo.filter(row => integer(row[6]) !== '1');
     const columns = fields.map(row => ({ name: row[1] as string, declaredType: row[2] as string, generated: ['2', '3'].includes(integer(row[6])), nullable: integer(row[3]) === '0', hasDefault: row[4] !== null }));
     if (!locator) return readonly();
@@ -168,7 +181,9 @@ export class SqliteTableEdits {
         this.snapshots.set(snapshot.id, snapshot); this.bytes += size;
         // 主键标记仅供界面判断映射兼容性，磁盘草稿继续使用既有字段格式。
         const pageColumns: SqliteEditColumn[] = columns.map((column, index) => ({ ...column, ...(integer(fields[index][5]) !== '0' ? { primary: true } : {}) }));
-        return { kind: 'editable', snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), columns: pageColumns, rows: rows.map(row => row.map(original)), ...(strict ? { strict: true } : {}), locator: { kind: chosen.kind, columns: [...chosen.columns] } };
+        const rowKeys = locators.map(values => createHmac('sha256', this.copyKey).update(sqliteLocatorKey(chosen, values)).digest('hex'));
+        return { kind: 'editable', snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), columns: pageColumns, rows: rows.map(row => row.map(original)),
+          ...(strict ? { strict: true } : {}), copy: { rowKeys, ...(rowidAlias ? { rowidAlias } : {}) }, locator: { kind: chosen.kind, columns: [...chosen.columns] } };
       },
     };
   }
@@ -265,8 +280,7 @@ export class SqliteTableEdits {
       counts[change.kind]++;
       if (change.kind !== 'insert') {
         const locator = snapshot.locators[change.row]; if (!locator) throw Error(text.stale);
-        // NOCASE只折ASCII，RTRIM只去末尾空格；与可靠键实际collation一致，拒绝重叠页重复修改同一行。
-        const key = JSON.stringify(locator.map((value, index) => typeof value !== 'string' ? value : snapshot.locator.collations[index] === 'NOCASE' ? value.replace(/[A-Z]/g, letter => letter.toLowerCase()) : snapshot.locator.collations[index] === 'RTRIM' ? value.replace(/ +$/, '') : value));
+        const key = sqliteLocatorKey(snapshot.locator, locator);
         if (touched.has(key)) throw Error('SQLite不同原页包含同一定位记录，不能重复修改'); touched.add(key);
       }
       if (change.kind !== 'insert' && !snapshot.rows[change.row]) throw Error(text.stale);

@@ -67,6 +67,7 @@ import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableBrowseLimits } from '../../shared/sqliteTableBrowse';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab, type WorkspaceBusyLease } from '../store';
 import { cellPreview, invoke, ownCell, uid, errorMessage } from '../lib';
+import { formatText } from '../locales/zh-CN';
 import { resultExportData, type ResultGridSelection } from '../resultExport';
 import { SqliteRecordPageNavigation, sqliteAdjacentRecord, sqliteRecordPageOffset } from '../sqliteRecordPageNavigation';
 import { SqliteRowDetailPageNavigation, sqliteRowDetailPageOffset } from '../sqliteRowDetailPageNavigation';
@@ -1006,6 +1007,27 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     return !!renderedEditor && editActionCurrent() && available() && !inputRef.current && !previewRef.current &&
       !pasteRef.current && !rangeRef.current && !importRef.current && !fullExportRef.current && !exportData && !findRef.current?.preview;
   }
+  /** 确认后只追加本机草稿。监听原页、忙态和活动标签，旧确认不能跨来源提交。 */
+  function duplicateWorkspaceCheckedRows(): void {
+    const actor = renderedEditor;
+    const current = () => workspaceCheckedCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+    if (!actor || !current()) return;
+    try {
+      const plan = drafts.planCheckedDuplication(actor, uid);
+      let valid = true;
+      const stop = useWorkspace.subscribe(() => { if (!current() || !plan.current()) valid = false; });
+      try {
+        if (!window.confirm(workspaceText.duplicateConfirm(plan.pages)) || !valid || !current() || !plan.current()) return;
+      } finally { stop(); }
+      plan.stage();
+      if (actor.view.rows !== editRows) {
+        checkedRef.current = undefined;
+        setCheckedRows(undefined);
+      }
+      useWorkspace.getState().notify(formatText(workspaceText.duplicated, plan.count));
+      setValidation('');
+    } catch (reason) { setValidation(errorMessage(reason)); }
+  }
   /** 确认期间持续核对活动表页和原工作区。提交前只改变本地草稿。 */
   function removeWorkspaceCheckedRows(): void {
     const actor = renderedEditor, current = workspaceCheckedCurrent;
@@ -1424,6 +1446,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       })}
       {drafts.pages.some(editor => editor !== renderedEditor && drafts.checkedIds(editor)?.size) && <>
         <button type="button" disabled={!renderedEditor || editBlocked || !!previewOpen || view.busy} onClick={openWorkspaceFill}>{workspaceText.fillChecked}</button>
+        <button type="button" disabled={!renderedEditor || editBlocked || !!previewOpen || view.busy} onClick={duplicateWorkspaceCheckedRows}>{workspaceText.duplicateChecked}</button>
         <button type="button" disabled={!renderedEditor || editBlocked || !!previewOpen || view.busy} onClick={removeWorkspaceCheckedRows}>{workspaceText.deleteChecked}</button>
       </>}
     </section>}
