@@ -16,6 +16,7 @@ export const publicCommands: Record<Command, true> = {
   'mysql.compareData.batchPreview': true, 'mysql.compareData.batchApply': true,
   'mysql.compareData.syncPreview': true, 'mysql.compareData.syncApply': true,
   'mysql.view.inspectQuery': true,
+  'mysql.view.dependencies': true,
   'mysql.compareData': true, 'mysql.compareData.catalogue': true, 'mysql.compareData.cancel': true,
   'postgres.compareData': true, 'postgres.compareData.catalogue': true, 'postgres.compareData.cancel': true,
   'postgres.explain': true,

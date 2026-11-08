@@ -1,3 +1,5 @@
+import { readMysqlViewDependencies } from './mysqlViewDependencies';
+import { mysqlViewDependenciesSchema } from '../shared/mysqlViewDependencies';
 import { inspectMysqlViewQuery } from './mysqlViewQueryInspect';
 import { mysqlViewQueryInspectSchema } from '../shared/mysqlViewFile';
 import { excelImportZh, validExcelImport } from '../shared/excelTransfer';
@@ -367,6 +369,15 @@ export class Engine {
           throw Error('同步缺少可信右侧连接配置');
         this.copySourceProfile({ connectionId: target.connectionId, profile: targetProfile });
         return this.mysqlDataComparisons.apply(request, { owner, connectionRevision }, target);
+      }
+      case 'mysql.view.dependencies': {
+        const { profile, ...raw } = input;
+        const request = mysqlViewDependenciesSchema.parse(raw);
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== request.connectionId)
+          throw Error('视图依赖需要可信的 MySQL／MariaDB 连接');
+        this.copySourceProfile(input);
+        return this.withCopySourceTask(request.connectionId, randomUUID(),
+          context => readMysqlViewDependencies(context, request), '读取视图依赖', 'no-default-database');
       }
       case 'mysql.view.inspectQuery': {
         const { profile, ...raw } = input;
