@@ -75,7 +75,10 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
   const differences: SqliteDataCompareRow[] = [];
   const syncRows: SqliteSyncEvidence['rows'] = [];
   const identity = right.identity;
-  const sync = !!capture && !mapping && identity && !input.filters.some(filter => filter.enabled !== false) && !target.columns.some(column => column.generated);
+  const writable = target.columns.filter(column => !column.generated).map(column => column.name);
+  const writableNames = new Set(writable);
+  const sync = !!capture && identity && !input.filters.some(filter => filter.enabled !== false) &&
+    targetColumns.every(name => writableNames.has(name));
 
   const counts = { 'source-only': 0, 'target-only': 0, different: 0 };
   let equal = 0, bytes = 0;
@@ -96,9 +99,20 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
     if (sync && differences.length > count) syncRows.push({ key: differences[count].key, before: after?.values, after: before?.values });
   }
   if (sync && syncRows.length) {
+    // 映射可只显示部分字段。用于锁内冲突检查的右侧旧值仍包含全部普通列。
+    const originalColumns = [...targetColumns, ...writable.filter(name => !targetColumns.includes(name))];
+    let originals: typeof b | undefined = b;
+    if (originalColumns.length !== targetColumns.length && syncRows.some(row => row.before)) {
+      try { originals = await data(right, input.target, target, originalColumns, targetKeys, input, control); }
+      catch { check(); originals = undefined; }
+    }
     const version = await readSqliteTableRows(right, 'PRAGMA main.schema_version', [], 1, control);
     if (!version[0]?.[0] || typeof version[0][0] !== 'object' || version[0][0].type !== 'integer') throw Error('SQLite 同步目录版本无效');
-    capture!({ target: input.target, identity, catalogue: target, schemaVersion: version[0][0].value, columns, keyColumns: source.key, rows: syncRows });
+    if (originals) {
+      for (const row of syncRows) if (row.before) row.before = originals.get(JSON.stringify(row.key))!.values;
+      capture!({ target: input.target, identity, catalogue: target, schemaVersion: version[0][0].value,
+        columns: targetColumns, originalColumns, keyColumns: targetKeys, rows: syncRows });
+    }
   }
   return { snapshot: oneFile ? 'one-file' : 'two-files', columns, keyColumns: sourceKeys, sourceRows: a.size, targetRows: b.size, equal, counts, differences: input.summaryOnly ? [] : differences };
 }

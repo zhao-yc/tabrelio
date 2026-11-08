@@ -221,7 +221,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
 
   const networkDialect = family === 'postgresql' ? 'postgres' : 'mysql';
   const batchSyncText = family === 'sqlite' ? sqliteBatchSyncZh : family === 'postgresql' ? postgresBatchSyncZh : mysqlBatchSyncZh;
-  const syncEligible = pairs.length > 1 && !pairs.some(pair => pair.mapping);
+  const syncEligible = pairs.length > 1 && (family === 'sqlite' || !pairs.some(pair => pair.mapping));
   async function prepareSync() {
     if (!syncEligible || !actions.length || !configuration.success || active.current || applying.current || syncWork.current || syncPreview) return;
     const taskId = uid();
@@ -231,7 +231,7 @@ export function DataCompareBatchDialog({ family, initial, connections, onClose, 
     try {
       const request = { taskId, pairs: pairs.map(({ source, target }) => ({ source, target })), actions };
       const preview = family === 'sqlite'
-        ? displayBatchKeys(await invoke('sqlite.compareSync.batchPreview', { ...request, sourceConnectionId: source.connectionId,
+        ? displayBatchKeys(await invoke('sqlite.compareSync.batchPreview', { ...request, pairs, sourceConnectionId: source.connectionId,
           targetConnectionId: target.connectionId }), displaySqliteCompareValue)
         : displayBatchKeys(await invoke(`${networkDialect}.compareData.batchPreview`, { ...request, source, target }),
           key => displayServerCompareValue(key, networkDialect));

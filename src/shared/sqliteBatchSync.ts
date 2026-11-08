@@ -1,14 +1,15 @@
 import { z } from 'zod';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { batchPairLimit } from './dataCompareBatch';
+import { dataCompareMappingSchema } from './dataCompareMapping';
 import { sqliteDataCompareSchema } from './sqliteDataCompare';
 import { batchSyncActions, type BatchSyncPreview } from './dataCompareBatchSync';
 
 const { connectionId, table } = sqliteDataCompareSchema.shape.source.shape;
-/** 一个事务只写入一个右侧文件，每张目标表仅出现一次。自定义字段映射不能进入写入合同。 */
+/** 一个事务只写入一个右侧文件。每张目标表只能出现一次，并沿用其显式字段映射。 */
 export const sqliteBatchSyncPreviewSchema = z.object({
   sourceConnectionId: connectionId, targetConnectionId: connectionId,
-  pairs: z.array(z.object({ source: table, target: table }).strict()).min(2).max(batchPairLimit),
+  pairs: z.array(z.object({ source: table, target: table, mapping: dataCompareMappingSchema.optional() }).strict()).min(2).max(batchPairLimit),
   actions: z.array(z.enum(batchSyncActions)).min(1).max(3),
   taskId: z.uuid(),
 }).strict().refine(({ pairs, actions, sourceConnectionId, targetConnectionId }) => {

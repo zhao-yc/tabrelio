@@ -28,7 +28,7 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     try { db.exec(sql); } finally { db.close(); }
   }
   seed(left, create + insert('来源') + "INSERT INTO ledger VALUES(9223372036854775807,X'00FF80',NULL),(101,NULL,'仅左'); CREATE TABLE mirror(id INTEGER PRIMARY KEY, value, note TEXT); INSERT INTO mirror SELECT * FROM ledger; CREATE TABLE without_key(id); CREATE TABLE mapped_source(code, raw, ignored); INSERT INTO mapped_source VALUES(9223372036854775807,X'00FF80','仅左字段');");
-  seed(right, create + insert('目标') + "INSERT INTO ledger VALUES(9223372036854775807,X'00FF81',NULL),(102,NULL,'仅右'); CREATE TABLE without_key(id); CREATE TABLE renamed(id INTEGER PRIMARY KEY, value, note TEXT); CREATE TABLE mapped_target(identifier, payload); INSERT INTO mapped_target VALUES(9223372036854775807,X'00FF81');");
+  seed(right, create + insert('目标') + "INSERT INTO ledger VALUES(9223372036854775807,X'00FF81',NULL),(102,NULL,'仅右'); CREATE TABLE without_key(id); CREATE TABLE renamed(id INTEGER PRIMARY KEY, value, note TEXT); CREATE TABLE mapped_target(identifier, payload, local_note TEXT DEFAULT '保留'); INSERT INTO mapped_target(identifier,payload) VALUES(9223372036854775807,X'00FF81');");
   try {
     // 仅代填系统文件选择，两条保存连接及比较操作经过真实 IPC 和 SQLite utility。
     await application.evaluate(({ dialog }, files) => {
@@ -70,7 +70,7 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
 
     await choose(text.source, '比较左库', 'mapped_source');
     await choose(text.target, '比较右库', 'mapped_target');
-    await modal.getByText(mapping.title, { exact: true }).click();
+    if (!await modal.getByLabel(mapping.source, { exact: true }).isVisible()) await modal.getByText(mapping.title, { exact: true }).click();
     const mapField = async (source: string, target: string, key: boolean) => {
       await modal.getByLabel(mapping.source, { exact: true }).selectOption(source);
       await modal.getByLabel(mapping.target, { exact: true }).selectOption(target);
@@ -81,7 +81,7 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     await mapField('raw', 'payload', false);
     await run.click();
     await expect(modal.getByRole('status')).toContainText('字段值不同 1');
-    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toBeDisabled();
     await modal.getByRole('button', { name: text.detail, exact: true }).click();
     const mappedDetails = modal.getByRole('table', { name: text.detail, exact: true });
     await expect(mappedDetails).toContainText('raw → payload');
@@ -108,7 +108,7 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     seed(right, 'INSERT INTO mapped_target SELECT * FROM mapped_target');
     await run.click();
     await expect(modal.getByRole('alert')).toContainText('重复主键');
-    seed(right, 'DELETE FROM mapped_target WHERE rowid=2; INSERT INTO mapped_target VALUES(NULL,NULL)');
+    seed(right, 'DELETE FROM mapped_target WHERE rowid=2; INSERT INTO mapped_target(identifier,payload) VALUES(NULL,NULL)');
     await run.click();
     await expect(modal.getByRole('alert')).toContainText('NULL 主键');
     seed(right, 'DELETE FROM mapped_target WHERE identifier IS NULL');
@@ -157,7 +157,7 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     await mappedRow.getByRole('button', { name: batch.review, exact: true }).click();
     await run.click();
     await expect(modal.getByRole('status')).toContainText('字段值不同 1');
-    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toBeDisabled();
     await modal.getByRole('button', { name: text.detail, exact: true }).click();
     await expect(mappedDetails).toContainText('raw → payload');
     await modal.getByRole('button', { name: text.close, exact: true }).click();
@@ -293,6 +293,35 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页、�
     } finally { targetDb.close(); }
     await run.click();
     await expect(modal.getByRole('status')).toContainText('相同 2 · 仅左侧 0 · 仅右侧 0 · 字段值不同 26');
+
+    await choose(text.source, '比较左库', 'mapped_source');
+    await choose(text.target, '比较右库', 'mapped_target');
+    if (!await modal.getByLabel(mapping.source, { exact: true }).isVisible()) await modal.getByText(mapping.title, { exact: true }).click();
+    await mapField('code', 'identifier', true);
+    await mapField('raw', 'payload', false);
+    const readMapped = () => {
+      const db = new DatabaseSync(right, { readOnly: true });
+      try { return db.prepare('SELECT CAST(identifier AS TEXT) AS id, hex(payload) AS value, local_note FROM mapped_target').get(); }
+      finally { db.close(); }
+    };
+    const prepareMapped = async () => {
+      await run.click();
+      await expect(modal.getByRole('status')).toContainText('字段值不同 1');
+      await modal.getByRole('checkbox', { name: sync.select + ' INTEGER 9223372036854775807', exact: true }).check();
+      await modal.getByRole('button', { name: sync.preview, exact: true }).click();
+      await expect(review.getByRole('listitem')).toHaveText(['更新　INTEGER 9223372036854775807']);
+      await modal.getByLabel(sync.confirm, { exact: true }).fill('main.mapped_target');
+    };
+    await prepareMapped();
+    seed(right, "UPDATE mapped_target SET local_note='预览后编辑'");
+    await apply.click();
+    await expect(modal.getByRole('alert')).toContainText('原记录已被其他操作修改');
+    expect(readMapped()).toEqual({ id: '9223372036854775807', value: '00FF81', local_note: '预览后编辑' });
+    await prepareMapped();
+    await page.screenshot({ path: info.outputPath('SQLite自定义字段单表同步.png') });
+    await apply.click();
+    await expect(modal.getByRole('status').filter({ hasText: '已确认提交' })).toBeVisible();
+    expect(readMapped()).toEqual({ id: '9223372036854775807', value: '00FF80', local_note: '预览后编辑' });
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();
     await confirmOwnedDesktopExit(info);

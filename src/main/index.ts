@@ -1215,7 +1215,7 @@ async function compareSqliteData(input: SqliteDataCompareInput, owner: MainInvoc
   return withSqliteComparison(input.taskId, input.source.connectionId, input.target.connectionId, owner, async ({ signal, assertOwner, revision }) => {
     const profile = store.connections().find(value => value.id === input.target.connectionId);
     let evidence: SqliteSyncEvidence | undefined;
-    const capture = !input.summaryOnly && !input.mapping && profile?.dialect === 'sqlite' && !profile.sqlite.readOnly ? (value: SqliteSyncEvidence) => { evidence = value; } : undefined;
+    const capture = !input.summaryOnly && profile?.dialect === 'sqlite' && !profile.sqlite.readOnly ? (value: SqliteSyncEvidence) => { evidence = value; } : undefined;
     const output = await broker.request('sqlite.compareData', { source: input, signal, assertOwner, capture });
     assertOwner();
     if (!evidence) return output;

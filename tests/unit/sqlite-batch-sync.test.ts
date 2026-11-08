@@ -8,6 +8,10 @@ describe('SQLite 多表事务同步合同', () => {
   it('只接收明确的表对和操作，禁止重复对象、同文件源目标重叠以及任意 SQL', () => {
     expect(validateCommand('sqlite.compareSync.batchPreview', base)).toEqual(base);
     expect(validateCommand('sqlite.compareSync.batchPreview', { ...base, targetConnectionId: 'left' })).toBeDefined();
+    const mapped = { ...base, pairs: [{ ...base.pairs[0], mapping: [
+      { source: 'code', target: 'identifier', key: true }, { source: 'raw', target: 'payload', key: false },
+    ] }, base.pairs[1]] };
+    expect(validateCommand('sqlite.compareSync.batchPreview', mapped)).toEqual(mapped);
     for (const input of [
       { ...base, pairs: [{ source: 'a', target: 'x' }, { source: 'b', target: 'x' }] },
       { ...base, pairs: [{ source: 'a', target: 'x' }, { source: 'a', target: 'y' }] },

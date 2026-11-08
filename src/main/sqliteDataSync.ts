@@ -13,6 +13,7 @@ export interface SqliteSyncEvidence {
   catalogue: SqliteTableCatalogue;
   schemaVersion: string;
   columns: string[];
+  originalColumns: string[];
   keyColumns: string[];
   rows: { key: SqliteValue[]; before?: SqliteValue[]; after?: SqliteValue[] }[];
 }
@@ -23,7 +24,7 @@ export function buildSqliteSyncClaim(evidence: SqliteSyncEvidence, selected: rea
   const selectedRows = selected.map(index => evidence.rows[index]);
   if (selectedRows.some(row => !row) || Buffer.byteLength(JSON.stringify(selectedRows)) > limits.bytes)
     throw Error('SQLite 同步选择无效或超过 1 MiB，请减少所选行');
-  const columns = evidence.columns.map(name => {
+  const columns = evidence.originalColumns.map(name => {
     const column = evidence.catalogue.columns.find(item => item.name === name)!;
     return { name, declaredType: column.declaredType, generated: false, nullable: true, hasDefault: false };
   });
@@ -54,7 +55,8 @@ export function buildSqliteSyncClaim(evidence: SqliteSyncEvidence, selected: rea
       parameters: [...nonKey.map(field => after[field.index]), ...where.parameters] };
   });
   if (statements.some(statement => statement.parameters.length > 1024)) throw Error('SQLite 同步参数数目超过上限');
-  return { snapshot, statements, counts, confirmation: 'main.' + evidence.target.table, synchronization: selectedRows.map(row => row.after) };
+  return { snapshot, statements, counts, confirmation: 'main.' + evidence.target.table,
+    synchronization: { columns: evidence.columns, rows: selectedRows.map(row => row.after) } };
 }
 
 /** 读取并编译同一目标文件内的多个表。预览仅保留选定操作所需的原值及绑定参数。 */
@@ -72,7 +74,7 @@ export async function buildSqliteBatchSync(
     const output = await compare({
       source: { connectionId: input.sourceConnectionId, database: 'main', table: pair.source },
       target: { connectionId: input.targetConnectionId, database: 'main', table: pair.target },
-      taskId: input.taskId, mode: 'and', filters: [], summaryOnly: true,
+      taskId: input.taskId, mode: 'and', filters: [], summaryOnly: true, mapping: pair.mapping,
     }, value => { evidence = value; });
     const requested = input.actions.reduce((count, action) => count + output.counts[byDifference[action]], 0);
     if (!requested) continue;

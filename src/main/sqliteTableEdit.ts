@@ -32,7 +32,7 @@ interface Snapshot {
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
 interface Statement { sql: string; parameters: SqliteValue[]; row?: number; source?: number; kind: SqliteTableChange['kind']; }
-export interface SqliteEditClaim { batch?: SqliteEditClaim[]; snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; synchronization?: (SqliteValue[] | undefined)[]; }
+export interface SqliteEditClaim { batch?: SqliteEditClaim[]; snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; synchronization?: { columns: string[]; rows: (SqliteValue[] | undefined)[] }; }
 interface Preview extends SqliteEditClaim { id: string; expires: number; bytes: number; }
 export interface SqliteEditApplyRequest extends SqliteTableEditApplyInput {
   operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteWriteFact): void;
@@ -355,8 +355,8 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
       const snapshot = group.snapshot;
       if (batchTables) currentTable = snapshot.target.table;
       if (group.synchronization) {
-        const fields = snapshot.columns.map(column => projection(quote(column.name))).join(', ');
-        for (const [row, expected] of group.synchronization.entries()) {
+        const fields = group.synchronization.columns.map(column => projection(quote(column))).join(', ');
+        for (const [row, expected] of group.synchronization.rows.entries()) {
           const where = locate(snapshot, row);
           const actual = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' WHERE ' + where.sql + ' LIMIT 2', where.parameters, control, 2);
           if (!equal(actual, expected === undefined ? [] : [expected])) throw Error('同步后原值复核不一致，整批回滚');
