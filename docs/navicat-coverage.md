@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。SQLite 查询与带方言标识的 SQL 预览使用 SQLite 着色，区分标识符、BLOB、绑定参数及注释。Q01 仍为部分覆盖。[SQLite SQL 着色](development/sqlite-editor-highlighting-20261108.md)
+
 2026-11-08 源码增量。PostgreSQL 查询与 SQL 预览使用方言着色，识别跨行 dollar 引号、嵌套注释、位置参数及会话字符串模式。Q01 仍为部分覆盖。[PostgreSQL SQL 着色](development/postgres-editor-highlighting-20261108.md)
 
 2026-11-08 源码增量。PostgreSQL 查询支持选区或全文格式化，沿用编辑器缩进并支持单次撤销。Q01 仍为部分覆盖。[PostgreSQL 选区格式化](development/postgres-query-format-selection-20261108.md)

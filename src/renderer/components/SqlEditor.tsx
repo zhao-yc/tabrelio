@@ -49,6 +49,7 @@ import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared
 import { snippetCatalog } from '../snippetCompletion';
 import { createSnippetCompletionProvider } from '../snippetCompletionProvider';
 import { postgresEditorLanguage, postgresEditorLanguages, registerPostgresEditorLanguages } from '../postgresEditorLanguage';
+import { registerSqliteEditorLanguage, sqliteEditorLanguage } from '../sqliteEditorLanguage';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
@@ -62,10 +63,11 @@ loader.config({ monaco });
 export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
-  const language = requestedDialect === 'postgresql' ? postgresEditorLanguage(postgresStandardStrings) : 'sql';
-  const languageSelector = requestedDialect === 'postgresql' ? postgresEditorLanguages : 'sql';
+  const language = requestedDialect === 'postgresql' ? postgresEditorLanguage(postgresStandardStrings) : requestedDialect === 'sqlite' ? sqliteEditorLanguage : 'sql';
+  const languageSelector = requestedDialect === 'postgresql' ? postgresEditorLanguages : language;
   useLayoutEffect(() => {
     if (requestedDialect === 'postgresql') registerPostgresEditorLanguages(monaco.languages);
+    if (requestedDialect === 'sqlite') registerSqliteEditorLanguage(monaco.languages);
   }, [requestedDialect]);
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
@@ -174,17 +176,17 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       begin: signal => referenceCompletionGuard.current.acquire(signal), notify: setRenameMessage,
       prepare: () => { setRenameMessage(null); editorRef.current?.trigger('dbark.localRename', 'hideSuggestWidget', {}); },
     });
-    const registration = monaco.languages.registerRenameProvider('sql', rename.provider);
+    const registration = monaco.languages.registerRenameProvider(languageSelector, rename.provider);
     return () => { registration.dispose(); void rename.dispose().catch(() => {}); };
-  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+  }, [dialect, readOnly, contentReady, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   /** 内置函数参数提示只分析当前模型；模式缓存之外没有数据库入口，与补全／声明线程独立。 */
   useEffect(() => {
     if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
     const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector(appModalSelector) && (!completion || sameCompletionScope(completionRef.current, completion));
     const signatures = createSqlSignatureProvider({ model: () => editorRef.current?.getModel() ?? null, current, dialect, scope: completion, state: sessionId => invoke('query.completionState', { sessionId }) });
-    const registration = monaco.languages.registerSignatureHelpProvider('sql', signatures.provider);
+    const registration = monaco.languages.registerSignatureHelpProvider(languageSelector, signatures.provider);
     return () => { registration.dispose(); signatures.dispose(); };
-  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+  }, [dialect, readOnly, contentReady, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   /** 本文引用按方言复用声明语义，独占线程；SQLite不读取会话缓存或回退到MySQL解析器。 */
   useEffect(() => {
     if (readOnly || !contentReady || dialect !== 'sqlite' && !completion) return;
@@ -198,9 +200,9 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       // 走Monaco正式命令收起尚未选择的候选，不改正文；避免候选框覆盖引用列表标题。
       prepare: () => editorRef.current?.trigger('dbark.localReferences', 'hideSuggestWidget', {}),
     });
-    const registration = monaco.languages.registerReferenceProvider('sql', references.provider);
+    const registration = monaco.languages.registerReferenceProvider(languageSelector, references.provider);
     return () => { registration.dispose(); void references.dispose().catch(() => {}); };
-  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+  }, [dialect, readOnly, contentReady, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   /** 声明导航独立于元数据补全；MySQL只读既有会话模式缓存，不为F12建立连接或执行SQL。 */
   useEffect(() => {
     if (readOnly || !contentReady || dialect !== 'sqlite' && !completion) return;
@@ -212,9 +214,9 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const navigation = createSqlDefinitionProvider({ worker, model: () => editorRef.current?.getModel() ?? null,
       current, sourceLimit: dialect === 'sqlite' ? sqliteCompletionLimits.sourceUnits : completionLimits.sourceUnits,
     });
-    const registration = monaco.languages.registerDefinitionProvider('sql', navigation.provider);
+    const registration = monaco.languages.registerDefinitionProvider(languageSelector, navigation.provider);
     return () => { registration.dispose(); void navigation.dispose().catch(() => {}); };
-  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+  }, [dialect, readOnly, contentReady, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   useEffect(() => {
     const instance = editorRef.current;
     if (!snippetCompletion || readOnly || !contentReady || !requestedDialect || !instance) return;
@@ -296,13 +298,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         worker, request: input => invoke('sqlite.completion', input), cancel: taskId => invoke('query.cancel', { taskId }),
         state: sessionId => invoke('query.completionState', { sessionId }), id: () => sqliteCompletionTaskPrefix + uid(), status: status => statusRef.current?.(status),
       });
-      const registration = monaco.languages.registerCompletionItemProvider('sql', { triggerCharacters: provider.triggerCharacters,
+      const registration = monaco.languages.registerCompletionItemProvider(sqliteEditorLanguage, { triggerCharacters: provider.triggerCharacters,
         provideCompletionItems: async (model, position, context, token) => {
           const result = await provider.provideCompletionItems(model, position, context, token);
           return { ...result, suggestions: result.suggestions.map(item => ({ ...item, kind: completionKinds[item.kind], ...(item.trigger ? { command: { id: 'editor.action.triggerSuggest', title: '' } } : {}) })) };
         },
       });
-      const hoverRegistration = monaco.languages.registerHoverProvider('sql', { provideHover: (model, position, token) => provider.provideHover(model, position, token) });
+      const hoverRegistration = monaco.languages.registerHoverProvider(sqliteEditorLanguage, { provideHover: (model, position, token) => provider.provideHover(model, position, token) });
       return () => { hoverRegistration.dispose(); registration.dispose(); void provider.dispose().catch(() => {}); };
     }
     const worker=new CompletionWorkerClient(()=>new CompletionWorker()),directory=new CompletionDirectory(completion.connectionId,completion.connectionVersion,{request:input=>invoke('metadata.completion',input),cancel:taskId=>invoke('query.cancel',{taskId}),id:uid});
