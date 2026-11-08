@@ -5,13 +5,14 @@ import { postgresIdentifier } from '../../shared/postgresSql';
 import { postgresTableCondition } from '../../shared/postgresTableReadSql';
 import type { PostgresConnection } from './connection';
 import { readRelation } from './tableWorkspace';
-import { compareTableData, type TableDataSnapshot } from '../tableDataDifferences';
+import { compareMappedTableData, compareTableData, type TableDataSnapshot } from '../tableDataDifferences';
 
 export interface PostgresCompareVersion { tid: string; version: string; tableOid: string; }
 export interface PostgresSyncRow { before?: CellValue[]; after?: CellValue[]; version?: PostgresCompareVersion; }
 export interface PostgresSyncEvidence {
   relation: Awaited<ReturnType<typeof readRelation>>;
   columns: string[];
+  mappedKeys?: string[];
   rows: PostgresSyncRow[];
 }
 interface Snapshot extends TableDataSnapshot {
@@ -69,12 +70,25 @@ export async function readPostgresCompareTable(connection: PostgresConnection, e
     if (!fullColumns.some(column => column.name === name)) throw Error('两侧表均须存在筛选列');
     return postgresIdentifier(name);
   }, value => '$' + args.push(value));
-  const withVersion = capture && !mapping && !filter?.text && relation.syncCompatible;
-  const versionSql = withVersion ? ', pg_catalog.json_build_array(ctid::text, xmin::text, tableoid::oid::text)::text' : '';
-  const sql = 'SELECT ' + columns.map(column => postgresIdentifier(column.name)).join(', ') + versionSql +
-    ' FROM ' + (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql + (condition ? ' WHERE ' + condition : '') + ' LIMIT $1';
-  const result = await connection.query(sql, args, { rows: limits.rows, bytes: limits.bytes });
+  let withVersion = capture && !filter?.text && (mapping
+    ? Object.values(relation.syncCapabilities).some(Boolean) && mapping.every(({ target, key }) => {
+      const column = relation.columns.find(column => column.name === target);
+      return column && relation.syncColumns.includes(target) && (!column.generated || (key && column.identityAlways));
+    })
+    : relation.syncCompatible);
+  const read = (versions: boolean) => connection.query(
+    'SELECT ' + columns.map(column => postgresIdentifier(column.name)).join(', ') +
+    (versions ? ', pg_catalog.json_build_array(ctid::text, xmin::text, tableoid::oid::text)::text' : '') +
+    ' FROM ' + (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql + (condition ? ' WHERE ' + condition : '') + ' LIMIT $1',
+    args, { rows: limits.rows, bytes: limits.bytes });
+  let result = await read(withVersion);
   check();
+  // 行版本也占字节。证据超过预算时保留原映射比较的只读结果。
+  if (withVersion && mapping && result.truncated) {
+    withVersion = false;
+    result = await read(false);
+    check();
+  }
   if (result.truncated || result.rows.length > limits.rows) throw Error('PostgreSQL 比较超过每侧 10,000 行或 8 MiB，请缩小筛选范围');
   if (result.columns.length !== columns.length + Number(withVersion) || result.columns.slice(0, columns.length).some((column, index) => column.name !== columns[index].name))
     throw Error('PostgreSQL 比较读取的字段与目录不一致');
@@ -87,14 +101,18 @@ export async function readPostgresCompareTable(connection: PostgresConnection, e
       throw Error('PostgreSQL 比较无法确认右侧原行版本');
     return { tid, version, tableOid };
   });
-  return { keys: relation.keys, columns, rows, sync: { relation, versions } };
+  return { keys, columns, rows, sync: { relation, versions } };
 }
 
-export function comparePostgresSnapshots(left: Snapshot, right: Snapshot, sharedSnapshot: boolean, capture?: (evidence: PostgresSyncEvidence) => void): PostgresDataCompareOutput {
+export function comparePostgresSnapshots(left: Snapshot, right: Snapshot, sharedSnapshot: boolean,
+  capture?: (evidence: PostgresSyncEvidence) => void, mapping?: DataCompareMapping): PostgresDataCompareOutput {
   const sync = right.sync, rows: PostgresSyncRow[] = [];
-  const result = compareTableData(left, right, sharedSnapshot, 'PostgreSQL', capture && sync ? (after, before, position) => {
+  const collect: Parameters<typeof compareTableData>[4] = capture && sync ? (after, before, position) => {
     rows.push({ before, after, version: position === undefined ? undefined : sync.versions[position] });
-  } : undefined);
-  if (sync && rows.length) capture?.({ relation: sync.relation, columns: right.columns.map(column => column.name), rows });
+  } : undefined;
+  const result = mapping ? compareMappedTableData(left, right, sharedSnapshot, 'PostgreSQL', mapping, collect)
+    : compareTableData(left, right, sharedSnapshot, 'PostgreSQL', collect);
+  if (sync && rows.length) capture?.({ relation: sync.relation, columns: right.columns.map(column => column.name),
+    ...(mapping ? { mappedKeys: right.keys } : {}), rows });
   return result;
 }

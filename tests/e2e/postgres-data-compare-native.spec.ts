@@ -53,8 +53,8 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
       INSERT INTO "对照"."明细" (id,amount,raw,note,moment) SELECT i, i, NULL, '右', '2026-04-08T02:11:12.123456Z' FROM generate_series(1,26) i;
       INSERT INTO "对照"."明细" (id,amount,raw,note,moment) VALUES (102,0,NULL,'仅右',NULL),
         (9223372036854775807,9007199254740993.000000000000000002,decode('00ff81','hex'),'',NULL);
-      CREATE TABLE "对照"."映射右"(identifier bigint, payload bytea);
-      INSERT INTO "对照"."映射右" VALUES (9223372036854775807,decode('00ff81','hex'));`);
+      CREATE TABLE "对照"."映射右"(identifier bigint, payload bytea, local_note text DEFAULT '右侧保留');
+      INSERT INTO "对照"."映射右"(identifier,payload) VALUES (9223372036854775807,decode('00ff81','hex'));`);
     await right.query("ALTER DATABASE " + targetDatabase + " SET timezone = 'Pacific/Auckland'");
 
     const profileName = '对照隔离连接', secondProfile = '对照另一连接';
@@ -108,7 +108,7 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await mapField('raw', 'payload', false);
     await run.click();
     await expect(modal.getByRole('status')).toContainText('字段值不同 1');
-    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toBeDisabled();
     await modal.getByRole('button', { name: text.details, exact: true }).click();
     const mappedDetails = modal.getByRole('group', { name: text.details, exact: true });
     await expect(mappedDetails).toContainText('raw → payload');
@@ -122,6 +122,27 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await expect(mappedOverview.getByRole('table', { name: batch.result, exact: true })).toContainText('相同 0 · 仅左侧 0 · 仅右侧 0 · 字段值不同 1');
     await page.screenshot({ path: info.outputPath('PostgreSQL多表字段映射.png') });
     await mappedOverview.getByRole('button', { name: batch.return, exact: true }).click();
+    const mappedKey = '9223372036854775807';
+    const readMapped = async () => (await right.query(`SELECT identifier::text AS id, encode(payload,'hex') AS raw, local_note FROM "对照"."映射右"`)).rows;
+    const prepareMapped = async () => {
+      await run.click();
+      await expect(modal.getByRole('status')).toContainText('字段值不同 1');
+      await modal.getByRole('checkbox', { name: sync.select + ' "' + mappedKey + '"', exact: true }).check();
+      await modal.getByRole('button', { name: sync.preview, exact: true }).click();
+      await expect(modal.getByRole('group', { name: sync.preview, exact: true })).toContainText('更新　"' + mappedKey + '"');
+      await modal.getByLabel(sync.confirm, { exact: true }).fill(targetDatabase + '."对照"."映射右"');
+    };
+    const mappedApply = modal.getByRole('button', { name: sync.apply, exact: true });
+    await prepareMapped();
+    await right.query(`UPDATE "对照"."映射右" SET local_note='并发修改'`);
+    await mappedApply.click();
+    await expect(modal.getByRole('alert')).toContainText('原记录已被修改');
+    expect(await readMapped()).toEqual([{ id: mappedKey, raw: '00ff81', local_note: '并发修改' }]);
+    await prepareMapped();
+    await page.screenshot({ path: info.outputPath('PostgreSQL自定义字段单表同步.png') });
+    await mappedApply.click();
+    await expect(modal.getByRole('status').filter({ hasText: '已确认整批提交' })).toBeVisible();
+    expect(await readMapped()).toEqual([{ id: mappedKey, raw: '00ff80', local_note: '并发修改' }]);
     await choose(text.source, database, '明细');
     await choose(text.target, targetDatabase, '明细');
     await run.click();
@@ -338,10 +359,16 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     const batchDdl = 'CREATE TABLE "对照".batch_alpha(id bigint PRIMARY KEY, note text);';
     await left.query(batchDdl + `CREATE TABLE "对照".batch_beta(id bigint PRIMARY KEY, note text, raw bytea);
       INSERT INTO "对照".batch_alpha VALUES (1,'左'), (2,'新增');
-      INSERT INTO "对照".batch_beta VALUES (9223372036854775807,'block',decode('00ff80','hex'));`);
+      INSERT INTO "对照".batch_beta VALUES (9223372036854775807,'block',decode('00ff80','hex'));
+      CREATE TABLE "对照".batch_gamma_left(code text, seq numeric, raw bytea);
+      INSERT INTO "对照".batch_gamma_left VALUES ('Key',9223372036854775807.0,decode('00ff80','hex')),('new',2.000,decode('ff','hex'));`);
     await right.query(batchDdl + `CREATE TABLE "对照".batch_beta(id bigint PRIMARY KEY, note text CHECK (note <> 'block'), raw bytea);
       INSERT INTO "对照".batch_alpha VALUES (1,'右'), (3,'仅右');
-      INSERT INTO "对照".batch_beta VALUES (9223372036854775807,'旧',decode('00ff81','hex'));`);
+      INSERT INTO "对照".batch_beta VALUES (9223372036854775807,'旧',decode('00ff81','hex'));
+      CREATE TABLE "对照".batch_gamma_right(identifier text, serial numeric, payload bytea CHECK(payload <> decode('ff','hex')),
+        local_note text NOT NULL DEFAULT '目标默认', derived integer GENERATED ALWAYS AS (length(payload)) STORED);
+      INSERT INTO "对照".batch_gamma_right(identifier,serial,payload,local_note) VALUES
+        ('Key',9223372036854775807.00,decode('00ff81','hex'),'右侧保留'),('key',9223372036854775807.0,decode('00ff82','hex'),'仅右');`);
     const readBatch = async (client: Client) => [
       (await client.query('SELECT id::text, note FROM "对照".batch_alpha ORDER BY id')).rows,
       (await client.query(`SELECT id::text, note, encode(raw,'hex') AS raw FROM "对照".batch_beta ORDER BY id`)).rows,
@@ -403,6 +430,61 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
     expect(await readBatch(right)).toEqual(wantedBatch);
     expect(await readBatch(left)).toEqual(wantedBatch);
+    await prepareSync.click();
+    await expect(overview.getByRole('status')).toHaveText(batchSync.noChanges);
+
+    // 默认主键与无主键的异名联合键可在同一批中写入。
+    await left.query(`UPDATE "对照".batch_alpha SET note='再次更新' WHERE id=1`);
+    const gammaLeft = '"对照"."batch_gamma_left"', gammaRight = '"对照"."batch_gamma_right"';
+    const readGamma = async () => (await right.query(`SELECT identifier,serial::text,encode(payload,'hex') AS payload,local_note,derived
+      FROM ${gammaRight} ORDER BY identifier COLLATE "C"`)).rows;
+    const initialGamma = await readGamma(), initialAlpha = (await readBatch(right))[0];
+    await overview.getByRole('row').filter({ hasText: 'batch_beta' }).getByRole('button', { name: batch.remove, exact: true }).click();
+    await overview.getByLabel(batch.source, { exact: true }).selectOption(gammaLeft);
+    await overview.getByLabel(batch.target, { exact: true }).selectOption(gammaRight);
+    await overview.getByRole('button', { name: batch.add, exact: true }).click();
+    await overview.getByRole('row').filter({ hasText: 'batch_gamma_left' }).getByRole('button', { name: batch.editFields, exact: true }).click();
+    const editor = overview.getByRole('region', { name: batch.fieldEditor(gammaLeft, gammaRight), exact: true });
+    for (const [source, target, key] of [['code', 'identifier', true], ['seq', 'serial', true], ['raw', 'payload', false]] as const) {
+      await editor.getByLabel(mapping.source, { exact: true }).selectOption(source);
+      await editor.getByLabel(mapping.target, { exact: true }).selectOption(target);
+      await editor.getByRole('button', { name: mapping.add, exact: true }).click();
+      if (key) await editor.getByRole('checkbox', { name: mapping.key + ' ' + source, exact: true }).check();
+    }
+    await overview.getByRole('button', { name: batch.finishFields, exact: true }).click();
+    await prepareSync.click();
+    await expect(batchReview).toContainText('插入 1 · 更新 2 · 删除 1');
+    await right.query(`INSERT INTO ${gammaRight}(identifier,serial,payload,local_note)
+      VALUES ('Key',9223372036854775807.000,decode('00','hex'),'并发重复')`);
+    const concurrentGamma = await readGamma();
+    await confirmBatch();
+    await expect(overview.getByRole('alert')).toContainText('右侧映射键的匹配行数已变化');
+    expect((await readBatch(right))[0]).toEqual(initialAlpha);
+    expect(await readGamma()).toEqual(concurrentGamma);
+    await right.query(`DELETE FROM ${gammaRight} WHERE local_note='并发重复'`);
+
+    await prepareSync.click();
+    await expect(batchReview).toContainText('插入 1 · 更新 2 · 删除 1');
+    await confirmBatch();
+    await expect(overview.getByRole('alert')).toContainText(gammaRight + '：整批已回滚');
+    expect((await readBatch(right))[0]).toEqual(initialAlpha);
+    expect(await readGamma()).toEqual(initialGamma);
+
+    await left.query(`UPDATE ${gammaLeft} SET raw=decode('00ff83','hex') WHERE code='new'`);
+    await prepareSync.click();
+    await expect(batchReview).toContainText('插入 1 · 更新 2 · 删除 1');
+    await batchConfirm.fill(batchExact);
+    await page.screenshot({ path: info.outputPath('PostgreSQL自定义字段多表同步.png') });
+    await batchApply.click();
+    await expect(overview.getByRole('status')).toContainText(batchSync.confirmed);
+    expect(await readGamma()).toEqual([
+      { identifier: 'Key', serial: '9223372036854775807.00', payload: '00ff80', local_note: '右侧保留', derived: 3 },
+      { identifier: 'new', serial: '2.000', payload: '00ff83', local_note: '目标默认', derived: 3 },
+    ]);
+    expect((await readBatch(right))[0]).toEqual((await readBatch(left))[0]);
+    expect((await left.query(`SELECT code,seq::text,encode(raw,'hex') AS raw FROM ${gammaLeft} ORDER BY code COLLATE "C"`)).rows).toEqual([
+      { code: 'Key', seq: '9223372036854775807.0', raw: '00ff80' }, { code: 'new', seq: '2.000', raw: '00ff83' },
+    ]);
     await prepareSync.click();
     await expect(overview.getByRole('status')).toHaveText(batchSync.noChanges);
     await overview.getByRole('button', { name: batch.return, exact: true }).click();

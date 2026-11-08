@@ -165,7 +165,7 @@ export function SqliteDataCompareDialog({ connections, onClose, initialPair }: {
       {output && <>
         <p>{output.snapshot === 'one-file' ? text.singleSnapshot : text.splitSnapshot}</p>
         <p role="status">{keyTitle}　{output.keyColumns.join('，')}　{[[text.sourceRows, output.sourceRows], [text.targetRows, output.targetRows], [text.equal, output.equal], ...kinds.map(item => [text[item], output.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
-        {output.syncSnapshotId ? <p>{mapping.length ? mappingText.sqliteSync : syncText.scope}　{syncText.count(marked.size)}</p> :
+        {output.syncSnapshotId ? <p>{mapping.length ? mappingText.sync : syncText.scope}　{syncText.count(marked.size)}</p> :
           output.differences.length > 0 && <p>{mapping.length ? mappingText.sqliteSyncUnavailable : syncText.unavailable}</p>}
         {preview && <fieldset disabled={syncBusy}>
           <legend>{syncText.preview}</legend>

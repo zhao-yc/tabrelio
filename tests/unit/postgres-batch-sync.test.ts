@@ -8,9 +8,13 @@ const base = {
 };
 
 describe('PostgreSQL 多表事务同步合同', () => {
-  it('固定一个右侧数据库，拒绝重复或重叠的关系和字段映射', () => {
+  it('固定一个右侧数据库，允许合法字段映射并拒绝重复或重叠的关系', () => {
     expect(validateCommand('postgres.compareData.batchPreview', base)).toEqual(base);
     expect(validateCommand('postgres.compareData.batchPreview', { ...base, target: base.source })).toBeDefined();
+    const mapped = { ...base, pairs: [{ ...base.pairs[0], mapping: [
+      { source: 'left_code', target: 'right_code', key: true }, { source: 'raw', target: 'payload', key: false },
+    ] }, base.pairs[1]] };
+    expect(validateCommand('postgres.compareData.batchPreview', mapped)).toEqual(mapped);
     for (const request of [
       { ...base, target: { ...base.target, table: 'x' } },
       { ...base, pairs: [base.pairs[0], { source: 'b', target: '"public"."x"' }] },

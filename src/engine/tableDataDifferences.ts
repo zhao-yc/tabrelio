@@ -20,18 +20,26 @@ function keyValue(value: CellValue, type: string): CellValue {
   return value;
 }
 
+/** 写入事务内的键复核与比较必须使用同一种规范化表示。 */
+export function tableDataKey(values: CellValue[], types: string[]): string {
+  return JSON.stringify(values.map((value, index) => keyValue(value, types[index])));
+}
+
 /** 按确定的完整键比较，同一方言的驱动类型和值保持到字段详情。 */
 export function compareTableData(left: TableDataSnapshot, right: TableDataSnapshot, sharedSnapshot: boolean, dialect: string,
-  capture?: (source: CellValue[] | undefined, target: CellValue[] | undefined, targetPosition: number | undefined) => void): PostgresDataCompareOutput {
+  capture?: (source: CellValue[] | undefined, target: CellValue[] | undefined, targetPosition: number | undefined) => void,
+  matchKeysOnly = false): PostgresDataCompareOutput {
   if (JSON.stringify(left.columns) !== JSON.stringify(right.columns)) throw Error('两侧字段名及 ' + dialect + ' 声明类型须一致');
   if (JSON.stringify([...left.keys].sort()) !== JSON.stringify([...right.keys].sort())) throw Error('两侧主键字段须一致');
   const keyColumns = left.keys.map(name => left.columns.findIndex(column => column.name === name));
+  const matchingColumns = new Set(keyColumns);
+  const keyTypes = keyColumns.map(column => left.columns[column].type);
   const index = (rows: CellValue[][]) => {
     const result = new Map<string, { key: CellValue[]; values: CellValue[]; position: number }>();
     for (const [position, values] of rows.entries()) {
       const key = keyColumns.map(column => values[column]);
       if (key.some(value => value == null)) throw Error(dialect + ' 比较发现空主键');
-      const id = JSON.stringify(key.map((value, position) => keyValue(value, left.columns[keyColumns[position]].type)));
+      const id = tableDataKey(key, keyTypes);
       if (result.has(id)) throw Error(dialect + ' 比较发现重复的主键表示');
       result.set(id, { key, values, position });
     }
@@ -46,6 +54,8 @@ export function compareTableData(left: TableDataSnapshot, right: TableDataSnapsh
     if (!source && !target) continue;
     const kind = !target ? 'source-only' : !source ? 'target-only' : 'different';
     const cells = left.columns.flatMap((_, column) => {
+      // 已匹配的映射键仅用于定位，小数尾零等表示差异不会反复请求更新键。
+      if (matchKeysOnly && source && target && matchingColumns.has(column)) return [];
       const before = source?.values[column], after = target?.values[column];
       if (before !== undefined && after !== undefined && valueEqual(before, after)) return [];
       return [{ column, ...(source ? { source: before } : {}), ...(target ? { target: after } : {}) }];
@@ -61,7 +71,7 @@ export function compareTableData(left: TableDataSnapshot, right: TableDataSnapsh
 
 /** 两侧已按映射顺序读取。右侧临时使用左侧列名对齐，原声明类型与行值继续参与原比较。 */
 export function compareMappedTableData(left: TableDataSnapshot, right: TableDataSnapshot, shared: boolean, dialect: string,
-  mapping: DataCompareMapping): PostgresDataCompareOutput {
+  mapping: DataCompareMapping, capture?: Parameters<typeof compareTableData>[4]): PostgresDataCompareOutput {
   const aligned = { ...right, keys: left.keys, columns: right.columns.map((column, index) => ({ ...column, name: mapping[index].source })) };
-  return compareTableData(left, aligned, shared, dialect);
+  return compareTableData(left, aligned, shared, dialect, capture, true);
 }

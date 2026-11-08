@@ -11,7 +11,7 @@ SQLite、PostgreSQL、MySQL 和 MariaDB 的多表批次可以为每对表分别�
 
 ## 范围
 
-每批最多 32 对表，每对最多 64 对字段。真实比较仍检查字段目录、声明类型、NULL 键、重复键及读取预算。单表回查沿用该规则。[SQLite 多表事务同步](sqlite-multi-table-sync-20261108.md)可混合默认规则和[自定义字段映射](sqlite-mapped-data-sync-20261108.md)。[PostgreSQL](postgres-multi-table-sync-20261108.md)和[MySQL／MariaDB](mysql-multi-table-sync-20261108.md)也支持默认规则的多表事务同步。网络数据库的自定义映射写入仍待实现。
+每批最多 32 对表，每对最多 64 对字段。真实比较仍检查字段目录、声明类型、NULL 键、重复键及读取预算。单表回查沿用该规则。[SQLite 多表事务同步](sqlite-multi-table-sync-20261108.md)可混合默认规则和[自定义字段映射](sqlite-mapped-data-sync-20261108.md)。[PostgreSQL](postgres-mapped-data-sync-20261108.md)也可混用默认和映射规则。[MySQL／MariaDB](mysql-multi-table-sync-20261108.md)的多表事务同步适用于默认规则。
 
 ## 验证
 

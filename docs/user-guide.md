@@ -20,6 +20,8 @@ SQLite 单表和多表同步也可使用自定义业务键及异名字段。更�
 
 PostgreSQL 多表比较窗口可在一个右侧数据库内同步多张普通表。预览会重新读取差异，列出每张表的操作和记录键。核对并输入目标确认文字后，全部变更在同一个事务中提交。[PostgreSQL 多表事务同步](development/postgres-multi-table-sync-20261108.md)
 
+PostgreSQL 单表及多表同步也支持异名字段和联合业务键。目标表可以没有主键，提交前会在表锁内核对业务键和原行版本。[PostgreSQL 自定义键与字段映射同步](development/postgres-mapped-data-sync-20261108.md)
+
 MySQL 和 MariaDB 可将多对 InnoDB 表的差异同步到同一个右侧数据库，支持两种引擎互为来源和目标。预览按目标表列出所选操作及记录键，确认后整批提交。[MySQL／MariaDB 多表事务同步](development/mysql-multi-table-sync-20261108.md)
 
 对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)

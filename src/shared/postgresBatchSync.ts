@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CellValue } from './contracts';
 import { batchPairLimit, sameCompareScope } from './dataCompareBatch';
+import { dataCompareMappingSchema } from './dataCompareMapping';
 import { batchSyncActions, batchSyncApplySchema, type BatchSyncApplyInput, type BatchSyncPreview } from './dataCompareBatchSync';
 import { postgresRelationName } from './postgresSql';
 import { tableDataCompareRequestSchema } from './postgresDataCompare';
@@ -8,10 +9,10 @@ import { tableDataCompareRequestSchema } from './postgresDataCompare';
 const endpoint = tableDataCompareRequestSchema.shape.source;
 const scope = endpoint.omit({ table: true });
 
-/** 单次事务只能写入一个已保存的右侧数据库。映射使用目录原名，不接受字段映射、SQL 或任意目标。 */
+/** 单次事务只能写入一个已保存的右侧数据库。表和字段映射使用目录原名。 */
 export const postgresBatchSyncPreviewSchema = z.object({
   source: scope, target: scope,
-  pairs: z.array(z.object({ source: endpoint.shape.table, target: endpoint.shape.table }).strict()).min(2).max(batchPairLimit),
+  pairs: z.array(z.object({ source: endpoint.shape.table, target: endpoint.shape.table, mapping: dataCompareMappingSchema.optional() }).strict()).min(2).max(batchPairLimit),
   actions: z.array(z.enum(batchSyncActions)).min(1).max(3),
   taskId: z.uuid(),
 }).strict().refine(({ source, target, pairs, actions }) => {

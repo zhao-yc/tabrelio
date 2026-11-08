@@ -4,7 +4,7 @@ import { postgresDataSyncLimits as limits, type PostgresDataCompareInput, type P
 import type { PostgresSyncEvidence } from './dataCompare';
 import type { PostgresSyncGroup } from './tableWorkspace';
 
-type Compare = (input: Pick<PostgresDataCompareInput, 'source' | 'target'>, capture: boolean) =>
+type Compare = (input: Pick<PostgresDataCompareInput, 'source' | 'target' | 'mapping'>, capture: boolean) =>
   Promise<{ report: PostgresDataCompareOutput; evidence?: PostgresSyncEvidence }>;
 
 /** 保留已选操作的可信快照证据。各表依次读取，累计行数及字节共用批次预算。 */
@@ -14,7 +14,9 @@ export async function preparePostgresBatchSync(input: PostgresBatchSyncPreviewIn
   const actions = { 'source-only': 'insert', 'target-only': 'delete', different: 'update' } as const;
   let size = 0, rows = 0;
   for (const pair of input.pairs) {
-    const { report, evidence } = await compare({ source: { ...input.source, table: pair.source }, target: { ...input.target, table: pair.target } }, true);
+    const { report, evidence } = await compare({
+      source: { ...input.source, table: pair.source }, target: { ...input.target, table: pair.target }, mapping: pair.mapping,
+    }, true);
     const selected = report.differences.flatMap((row, index) => {
       const action = actions[row.kind];
       return input.actions.includes(action) ? [{ action, key: row.key, index }] : [];
@@ -25,7 +27,7 @@ export async function preparePostgresBatchSync(input: PostgresBatchSyncPreviewIn
     const tableCounts = { insert: 0, update: 0, delete: 0 };
     const selectedRows = selected.map(({ action, index }) => {
       const row = evidence.rows[index];
-      if (!row || !evidence.relation.capabilities[action]) throw Error('右侧表缺少准确行版本或所选写权限：' + pair.target);
+      if (!row || !evidence.relation.syncCapabilities[action]) throw Error('右侧表缺少准确行版本或所选写权限：' + pair.target);
       size += Buffer.byteLength(JSON.stringify(row));
       if (size > limits.bytes) throw Error('PostgreSQL 多表同步超过 1 MiB，请减少表对或操作范围');
       tableCounts[action]++; counts[action]++;

@@ -31,6 +31,16 @@ describe('数据比较的键与字段映射', () => {
       false, 'PostgreSQL', mapping)).toThrow('声明类型须一致');
   });
 
+  it('匹配键的小数尾零不产生重复同步，但业务字段仍按原值比较', () => {
+    const a = { ...left, columns: [{ ...left.columns[0], type: 'numeric' }, left.columns[1]],
+      rows: [['9007199254740993.0', '原值']] };
+    const b = { ...right, columns: [{ ...right.columns[0], type: 'numeric' }, right.columns[1]],
+      rows: [['9007199254740993.00', '原值']] };
+    expect(compareMappedTableData(a, b, false, 'PostgreSQL', mapping)).toMatchObject({ equal: 1, differences: [] });
+    expect(compareMappedTableData(a, { ...b, rows: [[b.rows[0][0], '另一值']] }, false, 'PostgreSQL', mapping).differences)
+      .toEqual([{ kind: 'different', key: ['9007199254740993.0'], cells: [{ column: 1, source: '原值', target: '另一值' }] }]);
+  });
+
   it('IPC 拒绝无键、重复映射和非目录标识数据，已有配置仍可读取', () => {
     expect(dataCompareMappingSchema.safeParse(mapping).success).toBe(true);
     for (const value of [

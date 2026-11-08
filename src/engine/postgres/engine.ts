@@ -1,6 +1,5 @@
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
 import { preparePostgresBatchSync } from './batchSync';
-import { compareMappedTableData } from '../tableDataDifferences';
 import { postgresSequenceTargets, postgresSequenceVisibleSql, readPostgresSequence } from './sequence';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -626,8 +625,7 @@ export class PostgresEngine {
         ];
       check();
       let evidence: PostgresSyncEvidence | undefined;
-      const report = mapping ? compareMappedTableData(a, b, shared, 'PostgreSQL', mapping) :
-        comparePostgresSnapshots(a, b, shared, capture ? value => { evidence = value; } : undefined);
+      const report = comparePostgresSnapshots(a, b, shared, capture ? value => { evidence = value; } : undefined, mapping);
       return { report, evidence };
     }));
     task.done = done;
@@ -651,7 +649,7 @@ export class PostgresEngine {
     const left = raw.sourceProfile as PostgresConnectionProfile, right = raw.targetProfile as PostgresConnectionProfile;
     if (left?.dialect !== 'postgresql' || right?.dialect !== 'postgresql' || left.id !== source.connectionId || right.id !== target.connectionId)
       throw Error('比较需要两条准确的已保存 PostgreSQL 连接配置');
-    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text && !summaryOnly && !mapping;
+    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text && !summaryOnly;
     return this.withCompareTask(taskId, left, right, async compare => {
       const { report, evidence } = await compare({ source, target, filter, mapping }, capture);
       // 批次只交付计数，不保留逐行值和同步能力。
@@ -717,7 +715,7 @@ export class PostgresEngine {
     const counts = { insert: 0, update: 0, delete: 0 };
     for (const row of rows) {
       const kind = !row.before ? 'insert' : !row.after ? 'delete' : 'update';
-      if (!record.evidence.relation.capabilities[kind]) throw Error('右侧账号缺少所选操作的权限');
+      if (!record.evidence.relation.syncCapabilities[kind]) throw Error('右侧账号缺少所选操作的权限');
       counts[kind]++;
     }
     const report = { previewId: randomUUID(), confirmation: record.target.database + '.' + record.evidence.relation.sql, counts };
