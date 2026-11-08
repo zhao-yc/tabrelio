@@ -4,6 +4,8 @@ import { zh } from './locales/zh-CN';
 import { queryResultCopyZh as text } from './locales/queryResultCopy.zh-CN';
 
 export interface QueryResultCopyCell { index: number; row: DataRow; column?: ResultColumn; }
+type CopyMode = 'headers' | 'column';
+type ReadTableValue = (row: DataRow, key: string) => CellValue | undefined;
 /** 含列名复制保持现有格式；列名仅作表头，重复和空别名不参与字段定位。 */
 export function encodeQueryResultWithHeaders(columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>, cell?: QueryResultCopyCell) {
   return encodeQueryResultCopy('headers', columns, rows, indices, cell);
@@ -14,8 +16,15 @@ export function encodeQueryResultColumn(columns: ResultColumn[], rows: DataRow[]
   return encodeQueryResultCopy('column', columns, rows, indices, cell);
 }
 
+/** 表页使用当前展示值。表头仅进入外部 TSV，内部粘贴只消费类型化数据行。 */
+export function encodeTableGridCopy(mode: CopyMode, columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>,
+  cell: QueryResultCopyCell | undefined, readTableValue: ReadTableValue) {
+  return encodeQueryResultCopy(mode, columns, rows, indices, cell, readTableValue);
+}
+
 /** 两种复制共用准确行列定位、结果值校验及总单元格上限。 */
-function encodeQueryResultCopy(mode: 'headers' | 'column', columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>, cell?: QueryResultCopyCell) {
+function encodeQueryResultCopy(mode: CopyMode, columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>,
+  cell?: QueryResultCopyCell, readTableValue?: ReadTableValue) {
   if (!columns.length || columns.length > maxClipboardCells) throw Error(text.invalid);
   const keys = columns.map(column => column.key);
   if (keys.some(key => typeof key !== 'string' || !key.length) || new Set(keys).size !== keys.length || columns.some(column => typeof column.name !== 'string')) throw Error(text.invalid);
@@ -28,14 +37,17 @@ function encodeQueryResultCopy(mode: 'headers' | 'column', columns: ResultColumn
   if ((count + (headers ? 1 : 0)) * visible.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
   const positions = selected ? [...indices].sort((a, b) => a - b) : headers ? [cell!.index] : Array.from({ length: count }, (_, index) => index);
   if (positions.some(index => !Number.isSafeInteger(index) || index < 0 || index >= rows.length)) throw Error(text.invalid);
-  const values: CellValue[][] = headers ? [visible.map(column => column.name)] : [];
+  const names = headers ? visible.map(column => column.name) : undefined;
+  const values: CellValue[][] = names && !readTableValue ? [names] : [];
   for (const index of positions) values.push(visible.map(column => {
     const field = Object.getOwnPropertyDescriptor(rows[index], column.key);
     // 查询结果没有 DEFAULT；缺失、继承或访问器字段不能冒充空串，更不能调用 getter 补取。
     if (!field || !('value' in field) || field.value === undefined) throw Error(text.invalid);
-    return field.value as CellValue;
+    const value = readTableValue ? readTableValue(rows[index], column.key) : field.value as CellValue;
+    if (value === undefined) throw Error(text.invalid);
+    return value;
   }));
-  return encodeClipboard(values);
+  return encodeClipboard(values, readTableValue ? names : undefined);
 }
 
 /** 只在显式按钮点击的同步 copy 事件写原两种格式；无主进程、SQL、焦点或异步补偿入口。 */

@@ -11,13 +11,14 @@ import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
-import { cellClipboardType, encodeClipboard, maxClipboardCells } from '../gridClipboard';
+import { cellClipboardType, encodeClipboard, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { appModalSelector } from '../modalSelectors';
 import { GridRowJump } from './GridRowJump';
-import { encodeQueryResultColumn, encodeQueryResultWithHeaders, writeQueryResultClipboard, type QueryResultCopyCell } from '../queryResultHeaderCopy';
+import { encodeQueryResultColumn, encodeQueryResultWithHeaders, encodeTableGridCopy, writeQueryResultClipboard, type QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { queryResultCopyZh as copyText } from '../locales/queryResultCopy.zh-CN';
+import { tableHeaderCopyZh as tableCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import '../queryResultCopy.css';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import { captureQueryResultCellFilter, currentQueryResultCellFilter, type CellFilterOperator, type QueryResultCellFilterCapture } from '../queryResultCellFilter';
@@ -47,7 +48,7 @@ function displayedValue(row: DataRow, key: string, present?: PresentGridCell) {
 }
 
 /** 表页可覆盖展示值，定位、编辑及原页能力仍引用原网格数据。查询结果默认使用原值。 */
-export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu, onCellEdit, onCellPaste, findTarget, findMarks, navigateTo, onGridAnchor, renderRowSelectionAction, presentCell }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; onGridAnchor?(anchor: GridFindTarget | undefined): void; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, jump?: ReactNode): ReactNode; presentCell?: PresentGridCell }) {
+export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, tableCopy, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu, onCellEdit, onCellPaste, findTarget, findMarks, navigateTo, onGridAnchor, renderRowSelectionAction, presentCell }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; tableCopy?: { enabled: boolean; isCurrent(): boolean }; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; onGridAnchor?(anchor: GridFindTarget | undefined): void; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell }) {
   const height = readGridRowHeight(rowHeight);
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
@@ -127,7 +128,7 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     if (!actionCurrent()) return;
     if (rowJump && row && rows[rowIdx] === row && column && columns.some(item => item.key === column.key))
       activeJumpColumn.current = { scope, key: column.key };
-    if (!selectionScope || !isCurrent || onActiveRowChange) return;
+    if (((!selectionScope || !isCurrent) && !tableCopy) || onActiveRowChange) return;
     copyRevisionRef.current++;
     const next=row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row && (!column || columns.some(item => item.key === column.key)) ? { scope, cell: { index: rowIdx, row, column: columns.find(item => item.key === column?.key) } } : undefined;
     filterCellRef.current=undefined;
@@ -146,15 +147,29 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     if (!actionCurrent()) return;
     copyRevisionRef.current++;selectedRowsRef.current={scope,indices:next};captureSelectedFilter(copyCellRef.current,next);setSelection({ scope, indices: next });
   }
-  /** 既有选择接口不变；新入口独立核渲染代次，旧按钮不能复制后来变更之前的行/列。 */
+  /** 表页按钮与原 Ctrl+C 共用草稿值和 DEFAULT 拒绝规则。 */
+  function copyValue(row: DataRow, key: string) {
+    const presentation = presentCell?.(row, key);
+    if (presentation?.copyError) throw Error(presentation.copyError);
+    return presentation ? presentation.value : ownCell(row, key);
+  }
+
+  /** 旧按钮不能复制后来变更的行、列或草稿。 */
   function copyResult(mode: 'headers' | 'column') {
-    const current = () => actionCurrent() && copyRevisionRef.current === copyRevision;
+    const current = () => actionCurrent() && copyRevisionRef.current === copyRevision && tableCopy?.isCurrent() !== false;
     if (!current()) return;
     try {
-      const encode = mode === 'headers' ? encodeQueryResultWithHeaders : encodeQueryResultColumn;
-      writeQueryResultClipboard(encode(columns, rows, selectedRows, activeCopyCell), current);
-    }
-    catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+      if (tableCopy) {
+        const content = encodeTableGridCopy(mode, columns, rows, selectedRows, activeCopyCell, copyValue);
+        writeTableClipboardEvent(current, data => {
+          data.setData('text/plain', content.text);
+          data.setData(cellClipboardType, content.typed);
+        });
+      } else {
+        const encode = mode === 'headers' ? encodeQueryResultWithHeaders : encodeQueryResultColumn;
+        writeQueryResultClipboard(encode(columns, rows, selectedRows, activeCopyCell), current);
+      }
+    } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** 单格漂移一旦观察就撤销，恢复旧值也不能复活原按钮；新选择必须重新捕获。 */
   function filterCellCurrent(expected:typeof filterCellRef.current):boolean{
@@ -299,7 +314,7 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
       className={['grid-row-preview', value === null && 'null-value', presentation?.className].filter(Boolean).join(' ')}
       title={presentation?.title ?? label}>{label}</DataTypeColor>;
   } }))], [columns, columnWidths, onColumnWidthsChange, frozenCount, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, findTarget, findMarks, rowIndexes, presentCell, dataTypeColors, dataTypeColors ? selectedRows : null]);
-  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}`} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellClick={rowJump || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={onCellFilterMenu ? ({ row, rowIdx, column }, event) => {
+  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}`} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={onCellFilterMenu ? ({ row, rowIdx, column }, event) => {
     if (event.defaultPrevented || !openCellFilterMenu(row, rowIdx, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
     event.preventGridDefault();
     event.preventDefault();
@@ -321,12 +336,7 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
       if(selectedRows.size*columns.length>maxClipboardCells)throw Error(zh.clipboard.copyLimit);
       const indices=[...selectedRows].sort((a,b)=>a-b);
       if(indices.some(index=>!Number.isSafeInteger(index)||index<0||index>=rows.length))return;
-      const copied = (source: DataRow, key: string) => {
-        const presentation = presentCell?.(source, key);
-        if (presentation?.copyError) throw Error(presentation.copyError);
-        return presentation ? presentation.value : ownCell(source, key);
-      };
-      const values=indices.length?indices.map(index=>columns.map(column=>copied(rows[index],column.key))):[[copied(row,column.key)]];
+      const values=indices.length?indices.map(index=>columns.map(column=>copyValue(rows[index],column.key))):[[copyValue(row,column.key)]];
       const content=encodeClipboard(values);event.clipboardData.setData('text/plain',content.text);event.clipboardData.setData(cellClipboardType,content.typed);
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
@@ -337,6 +347,15 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
   const jump = rowJump ? <GridRowJump grid={gridRef} scope={scope} count={rows.length}
     disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/> : undefined;
-  return <>{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : jump)}
-    {!hasResultTools && !renderRowSelectionAction && jump && <div className="query-result-copy-actions">{jump}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions"><button type="button" title={copyText.hint} disabled={!actionCurrent() || !selectedRows.size && !activeCopyCell} onClick={() => copyResult('headers')}>{copyText.action}</button><button type="button" title={copyText.columnHint} disabled={!actionCurrent() || !activeCopyCell?.column} onClick={() => copyResult('column')}>{copyText.column}</button>{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{onFilterSelected&&<button type="button" title={selectedFilterAllowed?selectedFilterText.hint:selectedFilterErrorRef.current||selectedFilterText.unavailable} disabled={!selectedFilterAllowed} onClick={filterFromSelected}>{selectedFilterText.open}</button>}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind owner={scope} rows={rows} columns={columns} grid={gridRef} isCurrent={actionCurrent} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
+  const copyLabels = tableCopy ? tableCopyText : copyText;
+  const copyEnabled = actionCurrent() && tableCopy?.enabled !== false;
+  const copyTools = <>
+    <button type="button" title={copyLabels.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
+      onClick={() => copyResult('headers')}>{copyLabels.action}</button>
+    <button type="button" title={copyLabels.columnHint} disabled={!copyEnabled || !activeCopyCell?.column}
+      onClick={() => copyResult('column')}>{copyLabels.column}</button>
+  </>;
+  const gridTools = jump || tableCopy ? <>{jump}{tableCopy && copyTools}</> : undefined;
+  return <>{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : gridTools)}
+    {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{onFilterSelected&&<button type="button" title={selectedFilterAllowed?selectedFilterText.hint:selectedFilterErrorRef.current||selectedFilterText.unavailable} disabled={!selectedFilterAllowed} onClick={filterFromSelected}>{selectedFilterText.open}</button>}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind owner={scope} rows={rows} columns={columns} grid={gridRef} isCurrent={actionCurrent} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
 }

@@ -1,7 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DataRow, ResultColumn } from '../../src/shared/contracts';
-import { encodeQueryResultColumn, encodeQueryResultWithHeaders, writeQueryResultClipboard } from '../../src/renderer/queryResultHeaderCopy';
+import { encodeQueryResultColumn, encodeQueryResultWithHeaders, encodeTableGridCopy, writeQueryResultClipboard } from '../../src/renderer/queryResultHeaderCopy';
 import { decodeClipboard, encodeClipboard, maxClipboardCells, parseTabularText } from '../../src/renderer/gridClipboard';
+
+it('表页按显示列取草稿值，内部剪贴板不含列名，遇到待应用值整份拒绝', () => {
+  const columns = [{ name: '金额', key: 'amount', type: 'DECIMAL' }];
+  const rows = [{ amount: '1', hidden: '不复制' }, { amount: '2', hidden: '不复制' }];
+  const content = encodeTableGridCopy('headers', columns, rows, new Set([1, 0]), undefined,
+    row => row === rows[0] ? '9007199254740993.001' : null);
+  expect(content.text).toBe('金额\n9007199254740993.001\nNULL');
+  expect(JSON.parse(content.typed).rows).toEqual([['9007199254740993.001'], [null]]);
+  expect(() => encodeTableGridCopy('headers', columns, rows, new Set([0, 1]), undefined, row => {
+    if (row === rows[1]) throw Error('待应用 DEFAULT');
+    return null;
+  })).toThrow('待应用 DEFAULT');
+});
 
 const columns: ResultColumn[] = [
   { key: '__proto__', name: '同名', type: 'BIGINT' }, { key: 'decimal', name: '同名', type: 'DECIMAL' },

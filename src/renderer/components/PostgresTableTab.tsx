@@ -1255,10 +1255,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows}
         rowJump={canFind} rowJumpCurrent={findIsCurrent}
+        tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         presentCell={draftGrid?.cell}
-        renderRowSelectionAction={(selected, current, jump) =>
+        renderRowSelectionAction={(selected, current, tools) =>
           <div className="pg-table-controls pg-batch-actions">
-            {jump}
+            {tools}
             {!!fillColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('fill', selected)}
               onClick={() => openBatch('fill', selected, current)}>{fillText.action}</button>}
             {!!editColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('edit', selected)}
