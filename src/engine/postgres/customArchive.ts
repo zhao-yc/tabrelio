@@ -1,8 +1,8 @@
 import { constants, type BigIntStats } from 'node:fs';
-import { lstat, mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
+import { lstat, mkdtemp, open, rm, writeFile, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join } from 'node:path';
-import { postgresArchiveListLimit, type PostgresArchiveExportInput,
+import { postgresArchiveEntryIds, postgresArchiveListLimit, type PostgresArchiveEntry, type PostgresArchiveExportInput,
   type PostgresArchiveListing, type PostgresArchiveSqlExport } from '../../shared/postgresArchive';
 import { postgresSqlFileLimits } from '../../shared/postgresSqlFile';
 import { AtomicFile, privateAtomicFileIO } from '../atomicFile';
@@ -12,7 +12,8 @@ import { inspectPostgresSqlFile, type PostgresSqlFileSource } from './sqlFile';
 type ArchiveStamp = Pick<BigIntStats, 'dev' | 'ino' | 'size' | 'mtimeNs' | 'ctimeNs'>;
 export interface PostgresArchiveSource { path: string; stamp: ArchiveStamp }
 type RestoreTool = PostgresNativeTool<'pg_restore'>;
-export interface PostgresArchiveRestoreSource extends Pick<PostgresArchiveExportInput, 'portable' | 'content'> {
+type ArchiveOptions = Pick<PostgresArchiveExportInput, 'portable' | 'content' | 'entryIds'>;
+export interface PostgresArchiveRestoreSource extends ArchiveOptions {
   source: PostgresArchiveSource;
   tool: RestoreTool;
 }
@@ -60,6 +61,19 @@ export async function inspectPostgresArchive(path: string, check: () => void): P
   return source;
 }
 
+/** 仅解释原生目录的数字编号，标识符与对象描述按原行显示，不参与生成 SQL。 */
+export function parsePostgresArchiveEntries(text: string): PostgresArchiveEntry[] {
+  const entries = new Map<number, PostgresArchiveEntry>();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim() || line.startsWith(';')) continue;
+    const match = /^([1-9][0-9]{0,9}); [0-9]+ [0-9]+ (.+)$/s.exec(line);
+    const id = Number(match?.[1]);
+    if (!match || id > 2_147_483_647 || entries.has(id)) return [];
+    entries.set(id, { id, label: match[2].trimEnd() });
+  }
+  return [...entries.values()];
+}
+
 export async function listPostgresArchive(source: PostgresArchiveSource, tool: RestoreTool,
   signal: AbortSignal, check: () => void): Promise<PostgresArchiveListing> {
   const toolVersion = await readPostgresToolVersion(tool, signal);
@@ -74,12 +88,24 @@ export async function listPostgresArchive(source: PostgresArchiveSource, tool: R
     }, file.fd));
   const text = new TextDecoder('utf8', { fatal: true }).decode(Buffer.concat(chunks));
   if (!text.trim()) throw Error('pg_restore 未返回归档目录');
-  return { text, toolVersion, ...(warning ? { warning } : {}) };
+  return { text, entries: parsePostgresArchiveEntries(text), toolVersion, ...(warning ? { warning } : {}) };
+}
+
+/** pg_restore 只读取本次授权的数字编号，目录中的名称不会进入临时清单。 */
+async function withArchiveEntryList<T>(ids: ArchiveOptions['entryIds'], action: (args: string[]) => Promise<T>): Promise<T> {
+  if (!ids) return action([]);
+  const entries = postgresArchiveEntryIds.parse(ids);
+  const directory = await mkdtemp(join(tmpdir(), 'tabrelio-pg-archive-list-'));
+  try {
+    const path = join(directory, 'entries.list');
+    await writeFile(path, entries.map(id => `${id};\n`).join(''), { flag: 'wx', mode: 0o600 });
+    return await action([`--use-list=${path}`]);
+  } finally { await rm(directory, { recursive: true, force: true }).catch(() => { throw new PostgresArchiveRestoreCleanupError(); }); }
 }
 
 /** 转换只写标准输出，既不传连接信息，也不向目标库执行 SQL。 */
 export async function exportPostgresArchiveSql(source: PostgresArchiveSource, tool: RestoreTool, target: string,
-  options: Pick<PostgresArchiveExportInput, 'portable' | 'content'>, signal: AbortSignal,
+  options: ArchiveOptions, signal: AbortSignal,
   check: () => void, publishing: () => void): Promise<PostgresArchiveSqlExport> {
   if (!isAbsolute(target) || !/\.sql$/i.test(target)) throw Error('请选择 .sql 目标文件');
   const targetStat = await lstat(target, { bigint: true }).catch(error => {
@@ -91,8 +117,8 @@ export async function exportPostgresArchiveSql(source: PostgresArchiveSource, to
   try {
     const decoder = new TextDecoder('utf8', { fatal: true });
     let header = '', utf8 = false;
-    const warning = await withArchive(source, check, file => runPostgresNativeTool(tool, [
-      '--format=custom', '--file=-', '--no-password',
+    const warning = await withArchive(source, check, file => withArchiveEntryList(options.entryIds, args => runPostgresNativeTool(tool, [
+      '--format=custom', '--file=-', '--no-password', ...args,
       ...(options.content === 'schema' ? ['--schema-only'] : options.content === 'data' ? ['--data-only'] : []),
       ...(options.portable ? ['--no-owner', '--no-privileges'] : []),
     ], postgresToolEnvironment(), signal, async chunk => {
@@ -104,7 +130,7 @@ export async function exportPostgresArchiveSql(source: PostgresArchiveSource, to
         if (!utf8 && header.length >= 64 * 1024) throw Error('归档 SQL 未声明 UTF-8 客户端编码');
       }
       await staged.writeBytes(chunk);
-    }, file.fd));
+    }, file.fd)));
     decoder.decode();
     if (!utf8) throw Error('归档 SQL 未声明 UTF-8 客户端编码');
     await staged.prepare(true);

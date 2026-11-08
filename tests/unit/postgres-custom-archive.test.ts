@@ -2,7 +2,7 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { inspectPostgresArchive } from '../../src/engine/postgres/customArchive';
+import { inspectPostgresArchive, parsePostgresArchiveEntries } from '../../src/engine/postgres/customArchive';
 import { postgresArchiveExportSchema } from '../../src/shared/postgresArchive';
 import { postgresDatabaseBackupChooseSchema } from '../../src/shared/postgresDatabaseBackup';
 import { postgresSqlFileExecuteSchema } from '../../src/shared/postgresSqlFile';
@@ -42,4 +42,17 @@ it('同一次恢复只接收一种来源，且仅数据归档需要现有目标�
   expect(postgresSqlFileExecuteSchema.safeParse({ ...input, newDatabase: '新库' }).success).toBe(false);
   expect(postgresSqlFileExecuteSchema.safeParse({ ...input, fileToken: token }).success).toBe(false);
   expect(postgresSqlFileExecuteSchema.safeParse({ ...input, archive: { ...input.archive, path: '/tmp/dump' } }).success).toBe(false);
+});
+
+it('归档条目只接受有限且唯一的正整数，目录顺序保留原生顺序', () => {
+  const input = { operationId: token, toolToken: token, sourceToken: token, content: 'all', portable: false };
+  expect(postgresArchiveExportSchema.parse({ ...input, entryIds: [41, 3] }).entryIds).toEqual([41, 3]);
+  for (const entryIds of [[], [1, 1], [0], [1.5], ['41'], [2_147_483_648], Array.from({ length: 4097 }, (_, id) => id + 1)])
+    expect(postgresArchiveExportSchema.safeParse({ ...input, entryIds }).success).toBe(false);
+  expect(parsePostgresArchiveEntries('; Selected TOC Entries:\r\n41; 1259 123 TABLE 范围 含空格;表 role\r\n' +
+    '3; 0 123 TABLE DATA 范围 含空格;表 role\r\n')).toEqual([
+    { id: 41, label: 'TABLE 范围 含空格;表 role' }, { id: 3, label: 'TABLE DATA 范围 含空格;表 role' },
+  ]);
+  expect(parsePostgresArchiveEntries('41; 1259 123 TABLE demo t r\n41; 0 123 TABLE DATA demo t r\n')).toEqual([]);
+  expect(parsePostgresArchiveEntries('3; 0 123 TABLE DATA demo t r\n无法识别的行\n')).toEqual([]);
 });

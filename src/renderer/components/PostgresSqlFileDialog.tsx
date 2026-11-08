@@ -80,7 +80,8 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
   return <Modal title={archive ? text.archiveTitle : text.title} wide onClose={close}>
     <div className="modal-content database-backup-content">
       <p>{archive ? text.archiveScope : text.scope}</p>
-      {archive ? <p>{archive.name} · {archiveText[archive.selection.content]}{archive.selection.portable && ' · ' + archiveText.portable}</p> : <p>{text.limits}</p>}
+      {archive ? <p>{archive.name} · {archive.selection.entryIds ? archiveText.selectedEntries(archive.selection.entryIds.length) :
+        archiveText[archive.selection.content]}{archive.selection.portable && ' · ' + archiveText.portable}</p> : <p>{text.limits}</p>}
       <p>{text.warning}</p>
       {dataOnly ? <p>{text.archiveDataOnly}</p> : <label className="check"><input type="checkbox" checked={create} disabled={locked} onChange={event => {
         setCreate(event.target.checked); resetFile();

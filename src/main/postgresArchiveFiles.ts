@@ -10,6 +10,7 @@ type Choice<T> = { token: string; value: T };
 interface Selections {
   tool?: Choice<PostgresNativeTool<'pg_restore'>>;
   source?: Choice<PostgresArchiveSource> & { expires: number };
+  entries?: readonly number[];
 }
 interface Job {
   id: string;
@@ -40,6 +41,7 @@ export class PostgresArchiveFiles<Owner> {
     const original = this.selections.get(key) ?? {};
     this.selections.set(key, original);
     delete original[kind];
+    delete original.entries;
     this.choosing.add(key);
     try {
       const path = await this.ports.pick(owner, kind);
@@ -60,11 +62,18 @@ export class PostgresArchiveFiles<Owner> {
   }
 
   list(owner: Owner, input: PostgresArchiveListInput) {
-    return this.run(owner, input, (tool, source, signal, check) => listPostgresArchive(source, tool, signal, check));
+    return this.run(owner, input, async (tool, source, signal, check, _publishing, selected) => {
+      delete selected.entries;
+      const listing = await listPostgresArchive(source, tool, signal, check);
+      check();
+      selected.entries = listing.entries.map(entry => entry.id);
+      return listing;
+    });
   }
 
   exportSql(owner: Owner, input: PostgresArchiveExportInput) {
-    return this.run(owner, input, async (tool, source, signal, check, publishing) => {
+    return this.run(owner, input, async (tool, source, signal, check, publishing, selected) => {
+      const entryIds = this.resolveEntries(selected, input);
       const name = basename(source.path).replace(/\.[^.]+$/, '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 120);
       const target = await this.ports.pick(owner, 'export', (name || 'postgresql') + '-恢复.sql');
       check();
@@ -74,7 +83,7 @@ export class PostgresArchiveFiles<Owner> {
         check();
         await this.ports.assertDestination(target);
         check();
-        return await exportPostgresArchiveSql(source, tool, target, input, signal, check, publishing);
+        return await exportPostgresArchiveSql(source, tool, target, { ...input, entryIds }, signal, check, publishing);
       } finally { release(); }
     });
   }
@@ -91,8 +100,19 @@ export class PostgresArchiveFiles<Owner> {
 
   /** 只向主进程分派返回归档和工具能力，转换与恢复由同一个引擎任务负责。 */
   restoreSource(owner: Owner, input: PostgresArchiveRestoreInput): PostgresArchiveRestoreSource {
-    const { source, tool } = this.resolve(owner, input);
-    return { source: source.value, tool: tool.value, content: input.content, portable: input.portable };
+    const { source, tool, selected } = this.resolve(owner, input);
+    return { source: source.value, tool: tool.value, content: input.content, portable: input.portable,
+      entryIds: this.resolveEntries(selected, input) };
+  }
+
+  /** 按已授权目录顺序生成清单。切换工具或文件后必须重新读取。 */
+  private resolveEntries(selected: Selections, input: PostgresArchiveRestoreInput) {
+    if (!input.entryIds) return undefined;
+    const requested = new Set(input.entryIds);
+    const ordered = selected.entries?.filter(id => requested.has(id));
+    if (!ordered || ordered.length !== requested.size || input.content !== 'all')
+      throw Error('请选择当前归档目录中的条目');
+    return ordered;
   }
 
   private assertIdle(key: object) {
@@ -105,23 +125,23 @@ export class PostgresArchiveFiles<Owner> {
     this.assertIdle(key);
     const selected = this.selections.get(key);
     const { source, tool } = selected ?? {};
-    if (source?.token !== input.sourceToken || tool?.token !== input.toolToken || source.expires <= Date.now())
+    if (!selected || source?.token !== input.sourceToken || tool?.token !== input.toolToken || source.expires <= Date.now())
       throw Error('PostgreSQL 归档或 pg_restore 选择已失效，请重新选择');
-    return { key, source, tool };
+    return { key, source, tool, selected };
   }
 
   private async run<T>(owner: Owner, input: PostgresArchiveListInput, action: (
     tool: PostgresNativeTool<'pg_restore'>, source: PostgresArchiveSource, signal: AbortSignal,
-    check: () => void, publishing: () => void,
+    check: () => void, publishing: () => void, selected: Selections,
   ) => Promise<T>): Promise<T> {
-    const { key, source, tool } = this.resolve(owner, input);
+    const { key, source, tool, selected } = this.resolve(owner, input);
     const job = { id: input.operationId, abort: new AbortController(), publishing: false };
     this.jobs.set(key, job);
     const check = () => { job.abort.signal.throwIfAborted(); this.ports.assert(owner); };
     try {
       return await action(tool.value, source.value, job.abort.signal, check, () => {
         check(); job.publishing = true;
-      });
+      }, selected);
     } finally { this.jobs.delete(key); }
   }
 }
