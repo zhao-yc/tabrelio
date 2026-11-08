@@ -459,6 +459,8 @@ export class PostgresTableWorkspace {
         ...(result.counted ? { counted: { matchingRows: result.counted.matchingRows, offset: result.counted.offset } } : {}),
         ...(result.originals.length && (capabilities.update || capabilities.delete)
           ? { rowKeys: result.originals.map(row => row.key) } : {}),
+        ...(result.originals.length && capabilities.insert ? { copyRowKeys: result.originals.map(row => result.relation.keys.length
+          ? row.key : digest([result.relation.fingerprint, row.tableOid, row.tid, row.version])) } : {}),
         ...(!result.truncated && result.originals.length ? { canBrowseReferences: true as const } : {}),
         ...(result.relation.canImport ? { canImport: true as const } : {}),
       };

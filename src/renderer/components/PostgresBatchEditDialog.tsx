@@ -12,7 +12,7 @@ import { ErrorBox, Modal } from './ui';
 /** 每条原记录使用独立缓冲。只在确认整批时把各条输入交回表页。 */
 export function PostgresBatchEditDialog({ rows, columns, primary, offset, duplicate, onStage, onClose }: {
   rows: readonly PostgresBatchRow[]; columns: readonly PostgresTableColumn[]; primary: readonly PostgresTableColumn[];
-  duplicate?: { initial: ReadonlyMap<number, PostgresRecordValues>; omitted: readonly string[] };
+  duplicate?: { initial: ReadonlyMap<number, PostgresRecordValues>; omitted: readonly string[]; groups?: readonly { index: number; count: number }[]; positions?: readonly { page: number; row: number }[] };
   offset: number; onStage(inputs: PostgresBatchEditInput): void; onClose(): void;
 }) {
   const [active, setActive] = useState(0);
@@ -28,17 +28,23 @@ export function PostgresBatchEditDialog({ rows, columns, primary, offset, duplic
       .map(field => [field.column, field.value]));
   }
 
-  return <Modal title={labels.title} onClose={onClose} wide>
+  function rowLabel(target: PostgresBatchRow): string {
+    const position = duplicate?.positions?.[target.index];
+    return position ? duplicateText.pageRow(position.page, position.row) : text.record(offset + target.index + 1);
+  }
+
+  return <Modal title={duplicate?.groups ? duplicateText.collectedTitle : labels.title} onClose={onClose} wide>
     <div className="modal-content pg-batch-edit">
       <p>{labels.notice}</p>
+      {duplicate?.groups && <ul>{duplicate.groups.map(group => <li key={group.index}>{duplicateText.pageCount(group.index, group.count)}</li>)}</ul>}
       {!!duplicate?.omitted.length && <p>{duplicateText.omitted(duplicate.omitted.join('、'))}</p>}
       <div className="pg-batch-edit-records">
         <nav aria-label={text.rows}>{rows.map((target, index) => {
-          const label = text.record(offset + target.index + 1);
+          const label = rowLabel(target);
           return <button type="button" key={target.key} aria-label={label} aria-pressed={active === index}
             onClick={() => { setActive(index); setError(''); }}>{label} {draft.has(target.index) && <small>{text.edited}</small>}</button>;
         })}</nav>
-        <section aria-label={text.record(offset + row.index + 1)} key={row.key}>
+        <section aria-label={rowLabel(row)} key={row.key}>
           <PostgresRecordFields columns={primary} original={row.original} fields={new Map()} editable={false} inspect onChange={() => {}}/>
           <PostgresRecordFields columns={columns} original={duplicate ? undefined : row.original} fields={draft.get(row.index) ?? originalFields(row)}
             editable inspect onChange={change => {

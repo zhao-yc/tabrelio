@@ -318,6 +318,8 @@ PostgreSQL 表页的「按当前筛选删除」会预览目标表中所有匹配
 
 「[复制当前记录](development/postgres-record-duplicate-20261106.md)」可从网格或记录表单打开预填的新增草稿，调整手动主键或唯一字段，再预览确认提交。
 
+逐页勾选并点「收集本页复制目标」后，可用「复制跨页收集记录」查看各页范围并分别调整每条副本。确认后整批暂存、撤销或重做，再统一预览和提交。[PostgreSQL 跨页勾选复制](development/postgres-checked-duplicate-20261108.md)
+
 「[复制勾选记录](development/postgres-batch-duplicate-20261106.md)」可逐条编辑本页副本，整批暂存或撤销，再通过表页预览确认新增。
 
 PostgreSQL 表页同时显示「整批已回滚」和「草稿已保留」时，可直接修正各页草稿，再生成提交预览。若显示提交状态待核对，先核对数据库实际记录，再刷新表页。[回滚后修正草稿](development/postgres-rollback-recovery-20261106.md)

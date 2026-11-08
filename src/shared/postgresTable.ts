@@ -342,6 +342,8 @@ export interface PostgresTablePage {
   primaryKey?: string[];
   rows: DataRow[];
   rowKeys?: string[];
+  /** 只供跨页复制去重，插入权限不授予原行更新能力。 */
+  copyRowKeys?: string[];
   capabilities: { insert: boolean; update: boolean; delete: boolean };
   hasNext: boolean;
   truncated: boolean;

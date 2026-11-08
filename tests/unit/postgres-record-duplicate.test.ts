@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTablePage } from '../../src/shared/postgresTable';
+import { capturePostgresCheckedDuplicate, planPostgresCheckedDuplicate } from '../../src/renderer/postgresCheckedDuplicate';
+import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
 import { postgresBatchDuplicateChanges, postgresBatchDuplicatePlan, postgresRecordDuplicatePlan } from '../../src/renderer/postgresRecordDuplicate';
 
 const page: PostgresTablePage = {
@@ -48,5 +50,38 @@ describe('PostgreSQL 复制当前记录', () => {
     const source = { ...page, rowKeys: ['一', '二'], rows: [page.rows[0], { ...page.rows[0], c0: '2' }] };
     expect(() => postgresBatchDuplicatePlan(source, new Set([0, 1]), key => key === '二' ? { kind: 'delete', row: 1 } : undefined))
       .toThrow('已变化');
+  });
+});
+
+describe('PostgreSQL 跨页勾选复制', () => {
+  const first = () => capturePostgresCheckedDuplicate({ ...page, writeExpiresAt: Date.now() + 60000,
+    copyRowKeys: ['原一'], rowKeys: ['已编辑'] }, 0, new Set([0]));
+  const second = () => capturePostgresCheckedDuplicate({ ...page, writeExpiresAt: Date.now() + 60000,
+    pageToken: '第二页', copyRowKeys: ['原二'], rowKeys: undefined }, 2, new Set([0]));
+
+  it('同名页内索引分别保留各自原令牌，编辑一个副本不影响另一条', () => {
+    const draft: PostgresDraftEntry[] = [{ rowKey: '已编辑', offset: 0, change: { kind: 'update', row: 0, pageToken: '原页',
+      fields: [{ column: 'c5', value: { mode: 'text', value: '已暂存值' } }] } }];
+    const plan = planPostgresCheckedDuplicate([second(), first()], page.columns, draft, 2);
+    expect(plan.groups).toEqual([{ index: 1, count: 1 }, { index: 2, count: 1 }]);
+    expect(plan.positions).toEqual([{ page: 1, row: 1 }, { page: 2, row: 1 }]);
+    expect(plan.initial.get(0)?.get('c5')).toEqual({ mode: 'text', value: '已暂存值' });
+    expect(plan.initial.get(1)?.get('c5')).toEqual({ mode: 'null' });
+    const input = new Map(plan.initial.get(1));
+    input.set('c0', { mode: 'text', value: '9007199254740997' });
+    const next = plan.entries(new Map([[1, input]]));
+    expect(next[0]).toBe(draft[0]);
+    expect(next.slice(1).map(entry => [entry.offset, entry.change.pageToken])).toEqual([[0, '原页'], [2, '第二页']]);
+    expect(next[1].change).toMatchObject({ kind: 'insert', fields: [{ column: 'c0', value: { mode: 'text', value: '9007199254740993' } }, ...postgresRecordDuplicatePlan(page, 0, draft[0].change).fields.slice(1)] });
+    expect(next[2].change).toMatchObject({ kind: 'insert', fields: expect.arrayContaining([{ column: 'c0', value: { mode: 'text', value: '9007199254740997' } }]) });
+  });
+
+  it('拒绝重复原记录、无可靠身份、过期令牌和越界的副本输入', () => {
+    const a = first(), b = second();
+    expect(() => planPostgresCheckedDuplicate([a, { ...a, offset: 2 }], page.columns, [], 2)).toThrow(/同一条原记录/);
+    expect(() => capturePostgresCheckedDuplicate({ ...page, writeExpiresAt: Date.now() + 60000 }, 0, new Set([0]))).toThrow(/行身份/);
+    expect(() => planPostgresCheckedDuplicate([a, { ...b, expiresAt: 0 }], page.columns, [], 2)).toThrow(/失效/);
+    const plan = planPostgresCheckedDuplicate([a, b], page.columns, [], 2);
+    expect(() => plan.entries(new Map([[2, new Map()]]))).toThrow(/已变化/);
   });
 });

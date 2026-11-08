@@ -1,4 +1,5 @@
-import { postgresTableLimits, type PostgresTableChange, type PostgresTableField, type PostgresTablePage } from '../shared/postgresTable';
+import type { DataRow } from '../shared/contracts';
+import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../shared/postgresTable';
 import { cellText, ownCell } from './lib';
 import { postgresRecordDuplicateZh as text } from './locales/postgresRecordDuplicate.zh-CN';
 import { postgresBatchValueValid } from './postgresBatchSelection';
@@ -10,10 +11,16 @@ export function postgresRecordDuplicatePlan(page: PostgresTablePage, index: numb
   const original = page.rows[index];
   if (!page.pageToken || !page.capabilities.insert || page.truncated || !Number.isSafeInteger(index) || !original ||
       prior?.kind === 'delete') throw Error(text.stale);
+  return postgresDuplicateFields(page.columns, original, prior);
+}
+
+/** 跨页收集只保存勾选行投影，同样沿用原值、待修改值和生成字段规则。 */
+export function postgresDuplicateFields(columns: readonly PostgresTableColumn[], original: DataRow, prior?: PostgresTableChange) {
+  if (prior?.kind === 'delete') throw Error(text.stale);
   const staged = new Map(prior?.kind === 'update' ? prior.fields.map(field => [field.column, field.value]) : []);
   const fields: PostgresTableField[] = [], omitted: string[] = [];
   let size = 0;
-  for (const column of page.columns) {
+  for (const column of columns) {
     if (column.generated || column.sequenceDefault) { omitted.push(column.name); continue; }
     let value = staged.get(column.key);
     if (!value) {
@@ -60,11 +67,15 @@ export function postgresBatchDuplicateChanges(page: PostgresTablePage, plan: Ret
     if (page.rows[index] !== original) throw Error(postgresBatchDuplicateZh.stale);
     const values = inputs.get(index) ?? plan.initial.get(index);
     if (!values) throw Error(postgresBatchDuplicateZh.stale);
-    const fields = Array.from(values, ([key, value]) => {
-      const column = columns.get(key);
-      if (!column || !postgresBatchValueValid(column, value)) throw Error(text.invalid(column?.name ?? key));
-      return { column: key, value };
-    });
-    return { kind: 'insert', fields };
+    return { kind: 'insert', fields: postgresDuplicateInput(columns, values) };
+  });
+}
+
+export function postgresDuplicateInput(columns: ReadonlyMap<string, PostgresTableColumn>,
+  values: ReadonlyMap<string, PostgresTableField['value']>): PostgresTableField[] {
+  return Array.from(values, ([key, value]) => {
+    const column = columns.get(key);
+    if (!column || !postgresBatchValueValid(column, value)) throw Error(text.invalid(column?.name ?? key));
+    return { column: key, value };
   });
 }

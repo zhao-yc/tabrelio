@@ -65,6 +65,7 @@ import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZ
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
 import { capturePostgresCheckedDelete, planPostgresCheckedDelete, type PostgresCheckedDeletePage } from '../postgresCheckedDelete';
 import { capturePostgresCheckedFill, planPostgresCheckedFill, postgresCheckedFillBytes, type PostgresCheckedFillPage } from '../postgresCheckedFill';
+import { capturePostgresCheckedDuplicate, planPostgresCheckedDuplicate, postgresCheckedDuplicateBytes, type PostgresCheckedDuplicatePage } from '../postgresCheckedDuplicate';
 import { postgresCheckedPageCurrent, postgresCheckedPagePins, retainPostgresCheckedPages } from '../postgresCheckedPages';
 import { postgresBatchDeletePlan, type PostgresBatchDeletePlan } from '../postgresBatchDelete';
 import { postgresBatchDeleteZh as deleteText } from '../locales/postgresBatchDelete.zh-CN';
@@ -115,6 +116,13 @@ type CheckedFillIntent = {
   pageToken: string;
   scope: object;
 };
+type CheckedDuplicateIntent = {
+  source: readonly PostgresCheckedDuplicatePage[];
+  originalDraft: DraftEntry[];
+  page: PostgresTablePage;
+  scope: object;
+  plan: ReturnType<typeof planPostgresCheckedDuplicate>;
+};
 type QueryTemplateIntent = PostgresTemplateSource & { tab: WorkspaceTab; limit: number; connectionVersion: number };
 type BatchSelection = {
   scope: object; page: PostgresTablePage; selected: ReadonlySet<number>;
@@ -164,6 +172,15 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (next === fillPagesRef.current || !next.length && !fillPagesRef.current.length) return;
     fillPagesRef.current = next;
     setFillPages(next);
+  }
+  const [duplicatePages, setDuplicatePages] = useState<readonly PostgresCheckedDuplicatePage[]>([]);
+  const duplicatePagesRef = useRef(duplicatePages);
+  const [checkedDuplicate, setCheckedDuplicate] = useState<CheckedDuplicateIntent>();
+  const checkedDuplicateRef = useRef<CheckedDuplicateIntent | undefined>(undefined);
+  function publishDuplicatePages(next: readonly PostgresCheckedDuplicatePage[]) {
+    if (next === duplicatePagesRef.current || !next.length && !duplicatePagesRef.current.length) return;
+    duplicatePagesRef.current = next;
+    setDuplicatePages(next);
   }
   const [collectedDialog, setCollectedDialog] = useState<ResultExportData>();
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
@@ -295,10 +312,12 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       history.retain(retained);
       publishDeletePages(retainPostgresCheckedPages(deletePagesRef.current, retained));
       publishFillPages(retainPostgresCheckedPages(fillPagesRef.current, retained));
+      publishDuplicatePages(retainPostgresCheckedPages(duplicatePagesRef.current, retained));
     } else {
       history.reset(draftRef.current);
       publishDeletePages([]);
       publishFillPages([]);
+      publishDuplicatePages([]);
     }
     if (presetLayout) layout.applyPreset(presetLayout, result.columns.map(column => column.name));
     setPage(result);
@@ -351,7 +370,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || checkedDeleteRef.current || checkedFillRef.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || checkedDeleteRef.current || checkedFillRef.current || checkedDuplicateRef.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const sameWindow = next.limit === options.limit && JSON.stringify(next.filter) === JSON.stringify(options.filter) &&
       JSON.stringify(next.sort) === JSON.stringify(options.sort);
@@ -359,9 +378,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (!keepDraft || !sameWindow) {
       publishDeletePages([]);
       publishFillPages([]);
+      publishDuplicatePages([]);
     }
     try {
-      const pins = keepDraft ? postgresCheckedPagePins(history.pins(), [...deletePagesRef.current, ...fillPagesRef.current]) : {};
+      const pins = keepDraft ? postgresCheckedPagePins(history.pins(), [...deletePagesRef.current, ...fillPagesRef.current, ...duplicatePagesRef.current]) : {};
       void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
     } catch (reason) { setError(errorMessage(reason)); }
   }
@@ -487,7 +507,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedFill || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedFill || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -629,6 +649,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     page.columns.map(({ key, name, type }) => [key, name, type]), gridLayout.columns.map(({ key }) => key)]) : undefined;
   const fillSignature = page && JSON.stringify([page.relationKind, page.columns, gridLayout.columns.map(column => column.key)]);
   const fillScope = useMemo(() => ({}), [collectScope, fillSignature]);
+  const duplicateSignature = page && JSON.stringify([page.relationKind, page.columns]);
+  const duplicateScope = useMemo(() => ({}), [collectScope, duplicateSignature]);
   const checkedExport = useTableCheckedExport(collectScope, collectSignature);
   const cellScope = useMemo(() => ({}), [page, gridLayout.columns, connectionVersion]);
   const cellMenuEnabled = active && !frozenPage && !requiresRefresh && pageConnectionVersion === connectionVersion && !!page?.exportToken;
@@ -787,7 +809,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       const next = [...deletePages.filter(item => item.offset !== options.offset), source];
       if (next.length > postgresTableLimits.draftPages) throw Error(deleteText.pagesLimit);
       if (next.reduce((count, item) => count + item.targets.length, 0) > postgresTableLimits.changes) throw Error(deleteText.rowsLimit);
-      postgresCheckedPagePins(history.pins(), [...next, ...fillPagesRef.current]);
+      postgresCheckedPagePins(history.pins(), [...next, ...fillPagesRef.current, ...duplicatePagesRef.current]);
       publishDeletePages(next);
       setError('');
     } catch (reason) { setError(errorMessage(reason)); }
@@ -857,7 +879,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       const remaining = other.reduce((budget, item) => budget - item.bytes, postgresCheckedFillBytes);
       const captured = capturePostgresCheckedFill(page, options.offset, fillColumns, selected, draftRef.current, remaining);
       const next = [...other, captured];
-      postgresCheckedPagePins(history.pins(), [...deletePagesRef.current, ...next]);
+      postgresCheckedPagePins(history.pins(), [...deletePagesRef.current, ...next, ...duplicatePagesRef.current]);
       publishFillPages(next);
       setError('');
     } catch (reason) { setError(errorMessage(reason)); }
@@ -892,6 +914,71 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setError('');
     setMessage(planned.count ? fillText.staged(planned.count) : fillText.unchanged);
   }
+
+  const duplicatePage = duplicatePages.find(item => item.offset === options.offset);
+  function closeCheckedDuplicate(intent: CheckedDuplicateIntent) {
+    if (checkedDuplicateRef.current !== intent) return;
+    checkedDuplicateRef.current = undefined;
+    setCheckedDuplicate(undefined);
+  }
+
+  useLayoutEffect(() => {
+    publishDuplicatePages([]);
+    if (checkedDuplicateRef.current) closeCheckedDuplicate(checkedDuplicateRef.current);
+  }, [duplicateScope]);
+  useLayoutEffect(() => {
+    if (!active && checkedDuplicateRef.current) closeCheckedDuplicate(checkedDuplicateRef.current);
+  }, [active]);
+  /** 同一轮切换标签或连接后再恢复，也不能复活旧窗口的副本输入。 */
+  useEffect(() => useWorkspace.subscribe((state, previous) => {
+    const intent = checkedDuplicateRef.current;
+    if (intent && (state.settings.activeTabId !== tab.id || state.settings.tabs.find(item => item.id === tab.id) !== tab ||
+        state.connections.find(item => item.id === tab.connectionId) !== previous.connections.find(item => item.id === tab.connectionId) ||
+        (state.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion || state.activeJobs[tab.id])) closeCheckedDuplicate(intent);
+  }), [tab, connectionVersion]);
+
+  function collectDuplicatePage(selected: ReadonlySet<number>, current: () => boolean) {
+    if (!page || !canBatch('duplicate', selected) || !findIsCurrent() || !current() || duplicatePagesRef.current !== duplicatePages) return;
+    try {
+      const other = duplicatePages.filter(item => item.offset !== options.offset);
+      const count = other.reduce((total, item) => total + item.rows.length, selected.size);
+      if (count > postgresTableLimits.changes) throw Error(batchDuplicateText.rowsLimit);
+      const remaining = other.reduce((budget, item) => budget - item.bytes, postgresCheckedDuplicateBytes);
+      const captured = capturePostgresCheckedDuplicate(page, options.offset, selected, remaining);
+      const next = [...other, captured];
+      postgresCheckedPagePins(history.pins(), [...deletePagesRef.current, ...fillPagesRef.current, ...next]);
+      publishDuplicatePages(next);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  function openCheckedDuplicate() {
+    if (!page?.pageToken || !page.capabilities.insert || !canChangeGrid || !findIsCurrent() || checkedDuplicateRef.current ||
+        duplicatePagesRef.current !== duplicatePages || !duplicatePages.length) return;
+    try {
+      const originalDraft = draftRef.current;
+      const plan = planPostgresCheckedDuplicate(duplicatePages, page.columns, originalDraft, options.limit);
+      const intent = { source: duplicatePages, originalDraft, plan, page, scope: duplicateScope };
+      checkedDuplicateRef.current = intent;
+      setCheckedDuplicate(intent);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 窗口只暂存新增。每条副本保留准确来源令牌并合用原草稿预算。 */
+  function stageCheckedDuplicate(intent: CheckedDuplicateIntent, inputs: PostgresBatchEditInput) {
+    const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
+    if (checkedDuplicateRef.current !== intent || duplicatePagesRef.current !== intent.source || draftRef.current !== intent.originalDraft ||
+        intent.page !== page || !page.pageToken || intent.scope !== duplicateScope || issued.current !== page.pageToken || !layoutScope.current.current() ||
+        dialogs.length !== 1 || dialogs[0].getAttribute('aria-label') !== batchDuplicateText.collectedTitle ||
+        lease.current || requiresRefresh || recordInput.current || inlineOwner.current || useWorkspace.getState().activeJobs[tab.id]) throw Error(batchDuplicateText.stale);
+    const next = intent.plan.entries(inputs);
+    validateChanges(next, page.pageToken);
+    setChanges(next, 'duplicate');
+    closeCheckedDuplicate(intent);
+    setError('');
+    setMessage(batchDuplicateText.staged(intent.plan.rows.length));
+  }
+
 
 
   /** 收集只从当前原页与当前勾选快照投影，草稿值及后来页面不能进入文件。 */
@@ -1519,6 +1606,24 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
                 {fillPages.some(item => !postgresCheckedPageCurrent(item)) && <span className="warning-text">{fillText.pagesExpired}</span>}
               </>}
             </div>}
+            {page.capabilities.insert && <div className="query-row-details-actions" role="group" aria-label={batchDuplicateText.collectRegion}>
+              <button type="button" disabled={!canBatch('duplicate', selected) || [...selected].some(index => !page.copyRowKeys?.[index])}
+                title={batchDuplicateText.noSource} onClick={() => collectDuplicatePage(selected, current)}>
+                {duplicatePage ? batchDuplicateText.replace : batchDuplicateText.collect}
+              </button>
+              {duplicatePage && <button type="button" disabled={!canChangeGrid} onClick={() => {
+                if (findIsCurrent() && duplicatePagesRef.current === duplicatePages) publishDuplicatePages(duplicatePages.filter(item => item !== duplicatePage));
+              }}>{batchDuplicateText.removePage}</button>}
+              {!!duplicatePages.length && <>
+                <button type="button" disabled={!canChangeGrid || duplicatePages.some(item => !postgresCheckedPageCurrent(item))}
+                  onClick={openCheckedDuplicate}>{batchDuplicateText.collectedAction}</button>
+                <button type="button" disabled={!canChangeGrid} onClick={() => {
+                  if (findIsCurrent() && duplicatePagesRef.current === duplicatePages) publishDuplicatePages([]);
+                }}>{batchDuplicateText.clear}</button>
+                <span role="status">{batchDuplicateText.collectedCount(duplicatePages.length, duplicatePages.reduce((count, item) => count + item.rows.length, 0))}</span>
+                {duplicatePages.some(item => !postgresCheckedPageCurrent(item)) && <span className="warning-text">{batchDuplicateText.pagesExpired}</span>}
+              </>}
+            </div>}
             <TableCheckedExportActions collection={checkedExport.value} position={options.offset} selected={selected.size}
               ready={canFind && !draft.length} hasDrafts={!!draft.length}
               onCollect={() => collectCheckedPage(selected, current)}
@@ -1575,6 +1680,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       primary={batch.page.columns.filter(column => column.primary)} offset={options.offset}
       onStage={(inputs: PostgresBatchEditInput) => stageBatch(batch, () => postgresBatchEditPlan(batch.page, batch.rows, inputs))}
       onClose={() => closeBatch(batch)}/>}
+    {checkedDuplicate && <PostgresBatchEditDialog rows={checkedDuplicate.plan.rows} duplicate={checkedDuplicate.plan}
+      columns={checkedDuplicate.page.columns.filter(column => !column.generated)}
+      primary={checkedDuplicate.page.columns.filter(column => column.primary)} offset={0}
+      onStage={inputs => stageCheckedDuplicate(checkedDuplicate, inputs)} onClose={() => closeCheckedDuplicate(checkedDuplicate)}/>}
     {batch?.kind === 'duplicate' && <PostgresBatchEditDialog rows={batch.plan.rows} duplicate={batch.plan}
       columns={batch.page.columns.filter(column => !column.generated)} primary={batch.page.columns.filter(column => column.primary)}
       offset={options.offset}
