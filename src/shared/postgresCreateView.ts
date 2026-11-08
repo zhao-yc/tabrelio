@@ -40,6 +40,11 @@ export function postgresViewQuery(definition: string): string {
   return query.sql.trim() + '\n';
 }
 
+/** 文件载入先核对正文预算和单条查询边界，保留原文供设计器预览。 */
+export function validatePostgresViewDefinition(definition: string): void {
+  postgresViewQuery(definitionSchema.parse(definition));
+}
+
 /** 定义只允许一条不带参数的查询，保留字符串、注释和美元引号原文。 */
 export function postgresCreateViewPlan(raw: PostgresCreateViewInput) {
   const input = postgresCreateViewPreviewSchema.parse(raw);

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview, PostgresCreateTableTarget } from '../../shared/postgresCreateTable';
-import { postgresCreateViewPreviewSchema, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
+import { postgresCreateViewPreviewSchema, validatePostgresViewDefinition, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
 import { errorMessage, invoke } from '../lib';
 import { postgresCreateViewZh as text } from '../locales/postgresCreateView.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import './PostgresCreateTableDialog.css';
 
 /** 编辑、预览及确认绑定原数据库和连接修订，提交结果未知时停止再次发送。 */
@@ -19,7 +21,8 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
   const materialized = kind === 'materialized';
   const { connectionId, database } = target;
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
-  const dialect = useWorkspace(state => state.connections.find(item => item.id === connectionId)?.dialect);
+  const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
+  const dialect = profile?.dialect;
   const [schemas, setSchemas] = useState<string[]>([]);
   const [draft, setDraft] = useState({ schema: '', view: '', definition: '', comment: '', populate: true });
   const [preview, setPreview] = useState<(PostgresCreateTablePreview & { version: number })>();
@@ -108,6 +111,13 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
     onClose();
   }
 
+  function importCurrent(): boolean {
+    const state = useWorkspace.getState();
+    return !!lifecycle.current && !operation.current && !unknown &&
+      (state.connectionVersions[connectionId] ?? 0) === version &&
+      state.connections.find(item => item.id === connectionId) === profile;
+  }
+
   return <Modal title={materialized ? text.materializedTitle : text.title} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>PostgreSQL / {database}</strong>
@@ -125,6 +135,9 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
           </div>
           <Field label={text.definition}><textarea className="pg-create-view-definition" value={draft.definition}
             spellCheck={false} rows={8} maxLength={128 * 1024} onChange={event => edit('definition', event.target.value)} /></Field>
+          <ViewSqlFileImport owner={draft} value={draft.definition} disabled={busy || loading || unknown || !schemas.length}
+            hint={viewSqlFileZh.postgresHint} current={importCurrent} validate={validatePostgresViewDefinition}
+            apply={sql => edit('definition', sql)}/>
           {materialized && <label><input type="checkbox" checked={draft.populate}
             onChange={event => edit('populate', event.target.checked)} /> {text.populate}</label>}
         </fieldset>}

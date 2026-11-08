@@ -1,14 +1,19 @@
-import { useState } from 'react';
-import { postgresEditViewPreviewSchema } from '../../shared/postgresCreateView';
+import { useMemo, useState } from 'react';
+import { postgresEditViewPreviewSchema, validatePostgresViewDefinition } from '../../shared/postgresCreateView';
 import { invoke } from '../lib';
 import { postgresViewEditZh as text } from '../locales/postgresViewEdit.zh-CN';
 import { ErrorBox } from './ui';
 import { usePostgresStructureEdit, type PostgresStructureEditProps } from './usePostgresStructureEdit';
+import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
+import { useWorkspace } from '../store';
 
 /** 预填服务器定义，沿用结构编辑器的原窗口保护、预览和明确提交。 */
 export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
   const { target, original, onClose } = props;
   const [definition, setDefinition] = useState(original.viewDefinition ?? '');
+  const profile = useWorkspace(state => state.connections.find(item => item.id === target.connectionId));
+  const importOwner = useMemo(() => ({}), [definition, original, profile, props.version, target.connectionId, target.database, target.table]);
   const dirty = definition !== original.viewDefinition;
   const { preview, setPreview, busy, unknown, error, setError, operation, submit } =
     usePostgresStructureEdit(props, dirty, false,
@@ -16,6 +21,17 @@ export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
         ...target, definition, stamp: original.viewEditStamp,
       })),
       token => invoke('postgres.editView.apply', { connectionId: target.connectionId, database: target.database, token }));
+
+  function changeDefinition(sql: string) {
+    setDefinition(sql);
+    setError('');
+  }
+
+  function importCurrent(): boolean {
+    const state = useWorkspace.getState();
+    return !operation.current && !unknown && (state.connectionVersions[target.connectionId] ?? 0) === props.version &&
+      state.connections.find(item => item.id === target.connectionId) === profile;
+  }
 
   /** 明确放弃本地草稿，未知终态下关闭编辑将重新读取目录。 */
   function close() {
@@ -32,10 +48,9 @@ export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
     </> : <>
       <p>{text.hint}</p>
       <label>{text.definition}<textarea rows={10} spellCheck={false} maxLength={128 * 1024}
-        value={definition} disabled={busy || unknown} onChange={event => {
-          setDefinition(event.target.value);
-          setError('');
-        }}/></label>
+        value={definition} disabled={busy || unknown} onChange={event => changeDefinition(event.target.value)}/></label>
+      <ViewSqlFileImport owner={importOwner} value={definition} disabled={busy || unknown}
+        hint={viewSqlFileZh.postgresHint} current={importCurrent} validate={validatePostgresViewDefinition} apply={changeDefinition}/>
     </>}
     <div className="pg-column-edit-actions">
       {preview ? <>
