@@ -6,6 +6,13 @@ import { sqliteTableEditZh as text } from './locales/sqliteTableEdit.zh-CN';
 import { prepareSqliteFill, sqliteFillSourceCurrent, type SqliteFillField, type SqliteFillSource } from './sqliteTableFill';
 
 export interface SqliteDraftRow { id: string; index?: number; values: (SqliteOriginalValue | undefined)[]; deleted: boolean; }
+interface SqliteRemoveRowsPlan {
+  count: number;
+  changes: SqliteTableChange[];
+  check(): void;
+  stage(): void;
+  publish(): void;
+}
 export interface SqliteEditView { page: SqliteTablePage; rows: SqliteDraftRow[]; dirty: boolean; busy: boolean; valid: boolean; unknown: boolean; undo: boolean; redo: boolean; message: string; preview?: SqliteTableEditPreview; taskId?: string; }
 interface Lease { owns(): boolean; release(): boolean; }
 interface Ports { batch?(): SqliteEditBatch | undefined; settled?(outcome: SqliteTableEditOutcome['outcome']): void; current(): boolean; active(): boolean; available(): boolean; acquire(): Lease; id(): string; now(): number; changed(view: SqliteEditView): void; dirty(value: boolean): void; preview(input: { snapshotId: string; taskId: string; changes: SqliteTableChange[] }): Promise<SqliteTableEditPreview>; apply(input: { previewId: string; taskId: string; confirmation: string }): Promise<SqliteTableEditOutcome>; release(input: { snapshotId?: string; previewId?: string }): Promise<unknown>; cancel(taskId: string): Promise<unknown>; committed(): void; }
@@ -54,8 +61,11 @@ export function sqliteRestoredRows(page: SqliteTablePage, changes: readonly Sqli
 /** 独立草稿账本持有准确快照；离开活动标签可保留，来源 ABA 或未知提交永久撤销原批次。 */
 export class SqliteTableEditor {
   private generationValue: object = {};
+  private rowsRevisionValue: object = {};
   /** 记录每次可观察编辑状态变代，撤销/重做恢复原数组也不复活旧模板预览。 */
   get generation(): object { return this.generationValue; }
+  /** 撤销可回到同一数组引用，勾选仍只属于原数组的那次发布。 */
+  get rowsRevision(): object { return this.rowsRevisionValue; }
   private rows: SqliteDraftRow[]; private past: SqliteDraftRow[][] = []; private future: SqliteDraftRow[][] = [];
   private valid = true; private unknown = false; private input = false; private disposed = false; private snapshotReleased = false; private message = ''; private previewValue?: SqliteTableEditPreview; private batchCurrent?: () => boolean; private operation?: Operation;
   constructor(readonly page: SqliteTablePage, private readonly ports: Ports, restored?: readonly SqliteTableChange[]) {
@@ -86,7 +96,9 @@ export class SqliteTableEditor {
   canEdit(): boolean { this.observe(); return this.valid && !this.unknown && !this.disposed && !this.busy && this.ports.active() && this.ports.available(); }
   inputOpen(value: boolean): void { if (!this.busy) { this.input = value; this.emit(); } }
   /** 每次本地修改形成一个撤销步骤，并同步废弃旧 SQL 预览。 */
-  private replace(rows: SqliteDraftRow[]): void { this.invalidatePreview(); this.past.push(this.rows); this.future = []; this.rows = rows; this.input = false; this.message = ''; this.emit(); }
+  private setDraftRows(rows: SqliteDraftRow[]): void { this.rows = rows; this.rowsRevisionValue = {}; }
+  private replaceRows(rows: SqliteDraftRow[]): void { this.invalidatePreview(); this.past.push(this.rows); this.future = []; this.setDraftRows(rows); this.input = false; this.message = ''; }
+  private replace(rows: SqliteDraftRow[]): void { this.replaceRows(rows); this.emit(); }
   add(): string | undefined { if (!this.canEdit()) return; const id = this.ports.id(); this.replace([...this.rows, { id, values: this.page.columns.map(() => undefined), deleted: false }]); return id; }
   /** 多行粘贴仅新增本地草稿；整组与原脏修改通过原预算后才分配ID并一次发布/形成一步undo。 */
   appendRows(values: readonly (readonly (SqliteOriginalValue | undefined)[])[]): string[] {
@@ -194,7 +206,18 @@ export class SqliteTableEditor {
   remove(id: string): void { if (this.canEdit()) this.replace(this.rows.flatMap(row => row.id !== id ? [row] : row.index === undefined ? [] : [{ ...row, deleted: true }])); }
   /** 勾选删除仅改变本地草稿；整批及最终累计预算通过后形成一个撤销步骤，不分配ID或发送任务。 */
   removeRows(ids: readonly string[]): number {
-    if (!this.canEdit() || this.input || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
+    const plan = this.prepareRemoveRows(ids);
+    if (plan.count) { plan.stage(); plan.publish(); }
+    return plan.count;
+  }
+  /** 工作区先校验所有原页，再暂存全部，最后才通知 UI。后台页仅在无预览和输入时参与。 */
+  prepareRemoveRows(ids: readonly string[], retained = false): SqliteRemoveRowsPlan {
+    const editable = () => {
+      if (!retained) return this.canEdit();
+      this.observe();
+      return this.valid && !this.unknown && !this.disposed && !this.busy && !this.previewValue && this.ports.available();
+    };
+    if (!editable() || this.input || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
     const edit = this.page.edit, original = this.rows, past = this.past, pastLength = past.length, future = this.future, futureLength = future.length, preview = this.previewValue, snapshotId = edit.snapshotId, schemaKey = this.page.schemaKey;
     const width = this.page.columns.length;
     if (!width || width > 1024 || edit.columns.length !== width || edit.columns.some((item, index) => item.name !== this.page.columns[index].name || item.generated !== !!this.page.columns[index].generated)) throw Error(text.invalid);
@@ -202,7 +225,7 @@ export class SqliteTableEditor {
     const sourceRows = edit.rows, metadata = JSON.stringify([this.page.target, edit.snapshotId, edit.expiresAt, edit.columns, this.page.columns, edit.locator]);
     const before = JSON.stringify([original, edit.rows]), rowRefs = original.map(row => ({ row, values: row.values }));
     const current = () => {
-      if (!this.canEdit() || this.input || this.page.edit !== edit || edit.rows !== sourceRows || edit.snapshotId !== snapshotId || this.page.schemaKey !== schemaKey || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || future.length !== futureLength || this.previewValue !== preview || JSON.stringify([this.page.target, edit.snapshotId, edit.expiresAt, edit.columns, this.page.columns, edit.locator]) !== metadata || JSON.stringify([original, edit.rows]) !== before || original.length !== rowRefs.length || rowRefs.some((item, index) => original[index] !== item.row || item.row.values !== item.values)) throw Error(this.message || text.stale);
+      if (!editable() || this.input || this.page.edit !== edit || edit.rows !== sourceRows || edit.snapshotId !== snapshotId || this.page.schemaKey !== schemaKey || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || future.length !== futureLength || this.previewValue !== preview || JSON.stringify([this.page.target, edit.snapshotId, edit.expiresAt, edit.columns, this.page.columns, edit.locator]) !== metadata || JSON.stringify([original, edit.rows]) !== before || original.length !== rowRefs.length || rowRefs.some((item, index) => original[index] !== item.row || item.row.values !== item.values)) throw Error(this.message || text.stale);
     };
     const requested = appendArray(ids, 0, 1500), selected = new Set<string>(), byId = new Map<string, SqliteDraftRow>();
     for (const row of original) {
@@ -216,12 +239,13 @@ export class SqliteTableEditor {
       if (!row || row.deleted || row.values.length !== width || row.index !== undefined && (!Number.isInteger(row.index) || row.index < 0 || row.index >= edit.rows.length)) throw Error(text.invalid);
       selected.add(id);
     }
-    current(); if (!selected.size) return 0;
-    const next = original.flatMap(row => !selected.has(row.id) ? [row] : row.index === undefined ? [] : [{ ...row, deleted: true }]);
+    current();
+    const next = selected.size ? original.flatMap(row => !selected.has(row.id) ? [row] : row.index === undefined ? [] : [{ ...row, deleted: true }]) : original;
     // 删除本地新增可令最终changes为空；原schema的min(1)只在确有最终修改时适用。
-    const changes = sqliteDraftChanges(this.page, next);
+    const changes = selected.size ? sqliteDraftChanges(this.page, next) : [];
     if (changes.length && !sqliteTableEditPreviewSchema.safeParse({ snapshotId, taskId: 'sqlite-remove-selected-validation', changes }).success) throw Error(text.bulkDeleteLimit);
-    current(); this.replace(next); return selected.size;
+    current();
+    return { count: selected.size, changes, check: current, stage: () => this.replaceRows(next), publish: () => this.emit() };
   }
   /** 多字段统一填充只暂存当前准确勾选行；整批校验后一次发布，同值不清预览或消耗undo。 */
   fillRows(rowIds: readonly string[], fields: readonly SqliteFillField[]): number {
@@ -301,10 +325,10 @@ export class SqliteTableEditor {
     const changes = sqliteDraftChanges(this.page, next); if (changes.length) sqliteTableEditPreviewSchema.parse({ snapshotId: edit.snapshotId, taskId: 'sqlite-record-batch-validation', changes });
     current(); if (changed) this.replace(next); return changed;
   }
-  undo(): void { if (!this.canEdit() || !this.past.length) return; this.invalidatePreview(); this.future.push(this.rows); this.rows = this.past.pop()!; this.emit(); }
-  redo(): void { if (!this.canEdit() || !this.future.length) return; this.invalidatePreview(); this.past.push(this.rows); this.rows = this.future.pop()!; this.emit(); }
+  undo(): void { if (!this.canEdit() || !this.past.length) return; this.invalidatePreview(); this.future.push(this.rows); this.setDraftRows(this.past.pop()!); this.emit(); }
+  redo(): void { if (!this.canEdit() || !this.future.length) return; this.invalidatePreview(); this.past.push(this.rows); this.setDraftRows(this.future.pop()!); this.emit(); }
   /** 明确放弃只处理本地草稿；未知提交仍不可重放，必须重新读取新快照。 */
-  discard(): void { if (this.busy) return; this.invalidatePreview(); this.rows = this.page.edit?.kind === 'editable' ? this.page.edit.rows.map((values, index) => ({ id: 'original-' + index, index, values: structuredClone(values), deleted: false })) : []; this.past = []; this.future = []; this.input = false; this.unknown = false; this.emit(); }
+  discard(): void { if (this.busy) return; this.invalidatePreview(); this.setDraftRows(this.page.edit?.kind === 'editable' ? this.page.edit.rows.map((values, index) => ({ id: 'original-' + index, index, values: structuredClone(values), deleted: false })) : []); this.past = []; this.future = []; this.input = false; this.unknown = false; this.emit(); }
   closePreview(): void { if (!this.busy) { this.invalidatePreview(); this.emit(); } }
   /** 自有租约获得期间接受同步 store 通知；其它作业接管后永久失效。 */
   private begin(kind: Operation['kind']): Operation {
@@ -346,7 +370,7 @@ export class SqliteTableEditor {
       const result = await this.ports.apply({ previewId: preview.previewId, taskId: op.id, confirmation: preview.confirmation });
       if (result.target.connectionId !== this.page.target.connectionId || result.target.database !== 'main' || result.target.table !== this.page.target.table || !['committed', 'rolled-back', 'not-sent', 'unknown'].includes(result.outcome) || result.outcome === 'committed' && !result.fact.commitAcknowledged) throw Error(text.invalid);
       this.message = result.message; this.ports.settled?.(result.outcome);
-      if (result.outcome === 'committed') { this.rows = []; this.past = []; this.future = []; this.input = false; this.valid = false; this.unknown = false; }
+      if (result.outcome === 'committed') { this.setDraftRows([]); this.past = []; this.future = []; this.input = false; this.valid = false; this.unknown = false; }
       else if (result.outcome === 'unknown') { this.unknown = true; this.valid = false; this.message = text.unknown; }
       if (result.outcome === 'committed') { await this.end(op); op = undefined; if (!this.disposed) { try { this.ports.committed(); } catch { /* 刷新或通知异常不能改写真实提交成功。 */ } } }
     } catch (reason) { this.message = sent ? text.unknown + ' ' + String(reason instanceof Error ? reason.message : reason) : String(reason instanceof Error ? reason.message : reason); if (sent) { this.unknown = true; this.valid = false; this.ports.settled?.('unknown'); } }

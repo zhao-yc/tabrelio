@@ -33,3 +33,73 @@ it('当前页移除后不保留活动权，全部移除后允许建立全新工�
 it('过期页可明确移除，不重绑或撤销其它仍有效原来源',async()=>{const f=fixture(),a=f.make(0,1000);f.stage(a);const b=f.make(1);f.stage(b);f.clock(2000);f.workspace.observe();expect(a.view.valid).toBe(false);expect(f.workspace.discardPage(a)).toBe(true);expect(b.canEdit()).toBe(true);await b.preview();expect(f.preview.mock.calls[0][0]).toMatchObject({snapshotId:'s1'});expect(f.preview.mock.calls[0][0].additionalPages).toBeUndefined();});
 it('任何保留页有输入或预览都不允许拆组，关闭准确预览后才允许移除',async()=>{const f=fixture(),a=f.make(0);f.stage(a);const b=f.make(1);b.inputOpen(true);expect(f.workspace.discardPage(a)).toBe(false);b.inputOpen(false);await b.preview();expect(f.workspace.discardPage(a)).toBe(false);expect(f.release).not.toHaveBeenCalled();b.closePreview();expect(f.workspace.discardPage(a)).toBe(true);expect(f.release.mock.calls.map(([x])=>x)).toEqual([{previewId:expect.any(String)},{snapshotId:'s0'}]);});
 it('准确预览在途及结果unknown均阻止逐页移除，不以移页提前释放或重放事务',async()=>{const f=fixture(),a=f.make(0);f.stage(a);const b=f.make(1);f.stage(b);const original=f.preview.getMockImplementation()!;let resolve!:(x:SqliteTableEditPreview)=>void,plan!:SqliteTableEditPreview;f.preview.mockImplementation(input=>new Promise(yes=>{resolve=yes;void original(input).then(x=>{plan=x;});}));const pending=b.preview();for(let i=0;i<5;i++)await Promise.resolve();expect(f.workspace.discardPage(a)).toBe(false);expect(f.release).not.toHaveBeenCalled();resolve(plan);await pending;f.outcome('unknown');await b.apply();expect(f.workspace.discardPage(a)).toBe(false);expect(f.workspace.discardPage(b)).toBe(false);expect(f.workspace.pages).toHaveLength(2);expect(f.workspace.unknown).toBe(true);});
+
+it('两个原页的同名行 UUID 各自暂存，逐页撤销并使用原快照预览', async () => {
+  const f = fixture(), first = f.make(0);
+  f.workspace.rememberChecks(first, first.view.rows, first.view.rows);
+  const second = f.make(1);
+  f.workspace.rememberChecks(second, second.view.rows, second.view.rows);
+  expect(f.workspace.checkedIds(first)).toEqual(new Set(['original-0']));
+  const plan = f.workspace.planCheckedDeletion(second);
+  expect(plan.pages).toEqual([{ index: 1, count: 1 }, { index: 2, count: 1 }]);
+  expect(first.canEdit()).toBe(false);
+  expect(f.workspace.changes).toBe(0);
+  plan.stage();
+  expect(f.workspace.changes).toBe(2);
+  expect(f.workspace.checkedIds(first)).toBeUndefined();
+  expect(f.workspace.checkedIds(second)).toBeUndefined();
+  expect(() => plan.stage()).toThrow();
+  f.workspace.select(first);
+  first.undo();
+  expect(first.view.rows[0].deleted).toBe(false);
+  expect(second.view.rows[0].deleted).toBe(true);
+  first.redo();
+  await first.preview();
+  expect(f.preview.mock.calls[0][0]).toMatchObject({
+    snapshotId: 's0', changes: [{ kind: 'delete', row: 0 }],
+    additionalPages: [{ snapshotId: 's1', changes: [{ kind: 'delete', row: 0 }] }],
+  });
+});
+
+it('拒绝过期原页和后来变化的勾选，全部页仍保持原数组', () => {
+  const f = fixture(), first = f.make(0, 1000);
+  const original = first.view.rows;
+  f.workspace.rememberChecks(first, original, original);
+  const second = f.make(1), secondRows = second.view.rows;
+  f.workspace.rememberChecks(second, secondRows, secondRows);
+  const plan = f.workspace.planCheckedDeletion(second);
+  f.workspace.rememberChecks(second, secondRows, []);
+  expect(plan.current()).toBe(false);
+  expect(() => plan.stage()).toThrow();
+  const next = f.workspace.planCheckedDeletion(second);
+  f.clock(2000);
+  expect(() => next.stage()).toThrow();
+  expect(first.view.rows).toBe(original);
+  expect(second.view.rows).toBe(secondRows);
+});
+
+it('跨页总预算超限拒绝，未先暂存任何一页', () => {
+  const f = fixture(), first = f.make(0);
+  const values = Array.from({ length: 250 }, () => [{ kind: 'text' as const, value: '已有草稿' }]);
+  first.appendRows(values);
+  f.workspace.rememberChecks(first, first.view.rows, [first.view.rows[0]]);
+  const second = f.make(1);
+  second.appendRows(values);
+  f.workspace.rememberChecks(second, second.view.rows, [second.view.rows[0]]);
+  expect(() => f.workspace.planCheckedDeletion(second)).toThrow();
+  expect(f.workspace.changes).toBe(500);
+  expect(first.view.rows[0].deleted || second.view.rows[0].deleted).toBe(false);
+});
+
+it('有效原页的勾选受缓存保护，修改原行后不迁移到新草稿数组', () => {
+  const f = fixture(), first = f.make(0);
+  f.workspace.rememberChecks(first, first.view.rows, first.view.rows);
+  for (let offset = 1; offset < 17; offset++) f.make(offset);
+  expect(f.workspace.pages).toContain(first);
+  expect(f.workspace.pages.some(editor => editor.page.offset === 1)).toBe(false);
+  f.workspace.select(first);
+  f.stage(first, '改变原行数组');
+  expect(f.workspace.checkedIds(first)).toBeUndefined();
+  first.undo();
+  expect(f.workspace.checkedIds(first)).toBeUndefined();
+});

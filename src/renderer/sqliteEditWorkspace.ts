@@ -1,10 +1,11 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
-import { sqliteTableEditLimits, type SqliteTableEditPreviewInput, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
+import { sqliteTableEditLimits, sqliteTableEditPreviewSchema, type SqliteTableEditPreviewInput, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
 import type { SqliteTableQuery } from './sqliteTableBrowser';
-import type { SqliteTableEditor } from './sqliteTableEditor';
+import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
 import { sqliteEditWorkspaceZh as text } from './locales/sqliteEditWorkspace.zh-CN';
 export interface SqliteEditBatch { input: Omit<SqliteTableEditPreviewInput, 'taskId'>; current(): boolean; }
-interface Entry { editor: SqliteTableEditor; page: SqliteTablePage; key: string; signature: string; }
+interface PageChecks { revision: object; ids: ReadonlySet<string>; }
+interface Entry { editor: SqliteTableEditor; page: SqliteTablePage; key: string; signature: string; checks?: PageChecks; }
 interface Ports { now(): number; changed(): void; forgotten(page: SqliteTablePage): void; }
 /** 同一已应用查询的有界原页账本；不接管数据库任务，不用页行号跨快照查找记录。 */
 export class SqliteEditWorkspace {
@@ -32,8 +33,8 @@ export class SqliteEditWorkspace {
   get busy(): boolean { return this.pages.some(editor=>editor.busy); }
   get changes(): number { return this.pages.reduce((sum,editor)=>sum+editor.changes.length,0); }
   /** 只淘汰离开后无需保留的干净页，不丢输入、修改或撤销／重做历史，不静默丢弃用户历史。 */
-  private disposable(entry: Entry): boolean { const view=entry.editor.view;return !entry.editor.dirty&&!entry.editor.busy&&!view.undo&&!view.redo; }
-  capacity(query: SqliteTableQuery, leaving?: SqliteTableEditor): void { if(this.restored||!this.current(query)||this.unknown)throw Error(this.unknown?text.unknown:text.stale);if(this.entries.size>=sqliteTableEditLimits.pages&&![...this.entries.values()].some(entry=>this.disposable(entry)||entry.editor===leaving&&!entry.editor.changes.length&&!entry.editor.busy&&!entry.editor.view.undo&&!entry.editor.view.redo&&!entry.editor.view.unknown))throw Error(text.limit); }
+  private disposable(entry: Entry): boolean { const view=entry.editor.view;return !this.checkedIds(entry.editor)?.size&&!entry.editor.dirty&&!entry.editor.busy&&!view.undo&&!view.redo; }
+  capacity(query: SqliteTableQuery, leaving?: SqliteTableEditor): void { if(this.restored||!this.current(query)||this.unknown)throw Error(this.unknown?text.unknown:text.stale);if(this.entries.size>=sqliteTableEditLimits.pages&&![...this.entries.values()].some(entry=>this.disposable(entry)||entry.editor===leaving&&!this.checkedIds(entry.editor)?.size&&!entry.editor.changes.length&&!entry.editor.busy&&!entry.editor.view.undo&&!entry.editor.view.redo&&!entry.editor.view.unknown))throw Error(text.limit); }
   /** 已采用页只在元数据相容时登记；后端保有真实文件与schema_version的最终裁决。 */
   add(editor: SqliteTableEditor,query: SqliteTableQuery): void {
     const page=editor.page;if(page.edit?.kind!=='editable'||!this.current(this.query?query:undefined)||this.unknown||this.entries.has(this.key(page)))throw Error(text.stale);
@@ -60,6 +61,55 @@ export class SqliteEditWorkspace {
   select(editor:SqliteTableEditor):void{if(!this.has(editor))throw Error(text.stale);this.selected=editor;this.ports.changed();}
   /** 逐页观察连接／结构墓碑，后台页变化也更新标签dirty与预览资格。 */
   observe():void{this.current();for(const editor of this.pages)editor.observe();}
+  /** 勾选只记在准确编辑器和行数组上，刷新、改草稿或恢复文件不会迁移同名 UUID。 */
+  rememberChecks(editor: SqliteTableEditor, rows: readonly SqliteDraftRow[], selected: readonly SqliteDraftRow[]): void {
+    const entry = this.entries.get(this.key(editor.page));
+    if (this.restored || this.dead || this.selected !== editor || entry?.editor !== editor || editor.view.rows !== rows) return;
+    const ids = new Set(selected.map(row => row.id));
+    if (ids.size !== selected.length || selected.some(row => row.deleted || !rows.includes(row))) return;
+    entry.checks = ids.size ? { revision: editor.rowsRevision, ids } : undefined;
+  }
+  checkedIds(editor: SqliteTableEditor): ReadonlySet<string> | undefined {
+    const entry = this.entries.get(this.key(editor.page));
+    if (!this.dead && !this.unknown && !this.restored && entry?.editor === editor && entry.checks?.revision === editor.rowsRevision && editor.view.valid)
+      return entry.checks.ids;
+  }
+  /** 全部原页通过后先静默暂存，再发布各页通知。复核期间旧确认不得认领后来勾选。 */
+  planCheckedDeletion(actor: SqliteTableEditor) {
+    this.observe();
+    if (this.restored || this.unknown || !this.isActive(actor) || !actor.canEdit() || !this.current()) throw Error(text.stale);
+    const source = [...this.entries.values()].map(entry => {
+      const { editor } = entry, view = editor.view;
+      const ids = this.checkedIds(editor);
+      if (editor.hasInput || view.busy || view.preview || (!view.valid || view.unknown) && (entry.checks?.revision === editor.rowsRevision || editor.changes.length))
+        throw Error(text.stale);
+      return { entry, editor, rows: view.rows, generation: editor.generation, checks: entry.checks,
+        plan: ids?.size ? editor.prepareRemoveRows([...ids], true) : undefined };
+    });
+    const targets = source.filter(item => item.plan !== undefined).sort((left, right) => left.entry.page.offset - right.entry.page.offset);
+    if (!targets.some(item => item.editor !== actor)) throw Error(text.deleteNone);
+    const groups = source.flatMap(({ entry, editor, plan }) => {
+      const changes = plan?.changes ?? editor.changes, edit = entry.page.edit;
+      return changes.length && edit?.kind === 'editable' ? [{ snapshotId: edit.snapshotId, changes }] : [];
+    });
+    const [primary, ...additionalPages] = groups;
+    if (primary) sqliteTableEditPreviewSchema.parse({ ...primary, taskId: 'sqlite-workspace-delete',
+      ...(additionalPages.length ? { additionalPages } : {}) });
+    const current = () => this.current() && !this.unknown && !this.restored && this.isActive(actor) && this.entries.size === source.length &&
+      source.every(({ entry, editor, rows, generation, checks }) => this.entries.get(entry.key) === entry &&
+        editor.view.rows === rows && editor.generation === generation && entry.checks === checks);
+    return {
+      pages: targets.map(({ entry, plan }) => ({ index: Math.floor(entry.page.offset / entry.page.limit) + 1, count: plan!.count })),
+      current,
+      stage: () => {
+        if (!current() || !actor.canEdit()) throw Error(text.stale);
+        for (const { plan } of targets) plan!.check();
+        if (!current()) throw Error(text.stale);
+        for (const { entry, plan } of targets) { plan!.stage(); entry.checks = undefined; }
+        for (const { plan } of targets) plan!.publish();
+      },
+    };
+  }
   /** 聚合全部dirty页；每条原row仍属自己的snapshot，旧回包须核准确页集合和各页rows数组。 */
   batch(actor:SqliteTableEditor):SqliteEditBatch|undefined {
     this.observe();if(!this.isActive(actor)||!this.current()||this.unknown||this.pages.some(editor=>editor.hasInput||editor.busy||(editor===actor||editor.changes.length>0)&&(!editor.view.valid||editor.view.unknown)))throw Error(text.stale);

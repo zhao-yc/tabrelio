@@ -17,9 +17,9 @@ import { writeTableClipboardEvent } from '../gridClipboard';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
+interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, rowHeight }: Props) {
+export function SqliteTableEditGrid({ page, rows, disabled, selected, initialCheckedRows, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, rowHeight }: Props) {
   const height = readGridRowHeight(rowHeight);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
@@ -30,8 +30,9 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
   const owner = source.current, [, selectionChanged] = useState(0), [error, setError] = useState('');
-  const selection = useRef<{ owner: typeof owner; ids: ReadonlySet<string>; revision: object }>({ owner, ids: new Set(), revision: {} });
-  if (selection.current.owner !== owner) selection.current = { owner, ids: new Set(), revision: {} };
+  const selection = useRef<{ owner: typeof owner; ids: ReadonlySet<string>; revision: object }>({ owner, ids: initialCheckedRows ?? new Set(), revision: {} });
+  // 返回同一个缓存页时恢复准确行数组的勾选。新草稿数组不会继承原选择。
+  if (selection.current?.owner !== owner) selection.current = { owner, ids: new Set(initialCheckedRows), revision: {} };
   const selectedRows = selection.current.ids, selectionTicket = selection.current.revision;
   // capture只读最新已提交上下文，父接纳selection引发重渲染不会撤销同源勾选。
   const checkedContext = useRef<{ owner: typeof owner; disabled: boolean; isCurrent(): boolean } | undefined>(undefined);

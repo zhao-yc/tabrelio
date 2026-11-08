@@ -951,6 +951,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     try {
       if (!editActionCurrent() || capture.page !== page || capture.rows !== editRows || !capture.current() || capture.selected.some(row => !editRows.includes(row) || row.deleted) || new Set(capture.selected).size !== capture.selected.length || checkedRef.current?.capture === capture) return;
       const owner: CheckedRowsOwner = { id: uid(), editor: renderedEditor!, capture };
+      drafts.rememberChecks(owner.editor, capture.rows, capture.selected);
       checkedRef.current = owner; setCheckedRows(owner);
     } catch { /* 不能确认的勾选事件只丢弃，不借单行选中状态补齐批次。 */ }
   }
@@ -998,6 +999,28 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       if (!remaining.some(row => row.id === selectedRow && !row.deleted)) setSelectedRow(remaining.find(row => !row.deleted)?.id);
     } catch (reason) { if (current()) setValidation(errorMessage(reason)); }
     finally { stop(); }
+  }
+  /** 确认期间持续核对活动表页和原工作区。提交前只改变本地草稿。 */
+  function removeWorkspaceCheckedRows(): void {
+    const actor = renderedEditor;
+    const current = () => !!actor && editActionCurrent() && available() && !inputRef.current && !previewRef.current &&
+      !pasteRef.current && !rangeRef.current && !importRef.current && !fullExportRef.current && !exportData && !findRef.current?.preview;
+    if (!actor || !current()) return;
+    try {
+      const plan = drafts.planCheckedDeletion(actor);
+      let valid = true;
+      const stop = useWorkspace.subscribe(() => { if (!current() || !plan.current()) valid = false; });
+      try {
+        if (!window.confirm(workspaceText.deleteConfirm(plan.pages)) || !valid || !current() || !plan.current()) return;
+      } finally { stop(); }
+      plan.stage();
+      if (actor.view.rows !== editRows) {
+        checkedRef.current = undefined; setCheckedRows(undefined);
+        const remaining = actor.view.rows;
+        if (!remaining.some(row => row.id === selectedRow && !row.deleted)) setSelectedRow(remaining.find(row => !row.deleted)?.id);
+      }
+      setValidation('');
+    } catch (reason) { setValidation(errorMessage(reason)); }
   }
   function removeRow(): void { const row = editRows.find(row => row.id === selectedRow); if (row && editActionCurrent() && available() && window.confirm(editText.confirmDelete) && editActionCurrent() && editRows.includes(row)) renderedEditor!.remove(row.id); }
   /** 打开时冻结准确勾选；自身模态禁用Grid后不借已经撤销的Grid捕获继续授权。 */
@@ -1345,7 +1368,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {findOpen && <SqliteTableFindPanel key={findOpen.id} page={findOpen.page} rows={findOpen.rows} seed={findOpen.seed} previewOwner={findOpen.id} focusRequest={findFocus} isCurrent={() => findCurrent(findOpen)} onJump={(rowId, column, focus, range) => jumpFind(findOpen, rowId, column, focus, range)} onStage={(plan, seed) => stageFind(findOpen, plan, seed)} onClearHit={() => clearFindHit(findOpen)} onPreviewChange={opened => findPreviewChanged(findOpen, opened)} onClose={() => closeFind(findOpen)}/>}
     {restoredDraftView && <div role="status" className="sqlite-browse-hint"><strong>{draftFileText.restored}</strong><button onClick={() => read(0)} disabled={view.busy || externalBusy || !!cellInput || !!previewOpen}>{draftFileText.leave}</button></div>}
     <ErrorBox message={invalidTarget ? text.unsupported : validation || view.error}/>
-    <div className="sqlite-browse-result">{view.busy ? <div className="empty"><Spinner text={view.stopping ? text.stopping : text.loading}/></div> : page && editView && editView.page === page ? <SqliteTableEditGrid rowHeight={layoutView.preferences.rowHeight} page={page} rows={editView.rows} projection={projection} onColumnResize={resizeLayout} disabled={editBlocked || !layoutView.ready} selected={selectedRow} isCurrent={() => editActionCurrent(false) && !!renderedEditor?.canEdit()} onSelect={selectEditRow} onEdit={editRow} onPaste={openRange} onActiveCell={selectPasteCell} onFilterCell={selectEditFilterCell} findHit={findHit} sort={headerSort} onSortChange={sortFromHeader} onCheckedRows={selectCheckedRows}/> : page ? <div className="query-result-with-details"><div className="query-result-grid"><ResultsGrid rowJump rowHeight={layoutView.preferences.rowHeight} columns={displayColumns} rows={page.result.rows} frozenKeys={displayFrozen} columnWidths={displayWidths} onColumnResize={resizeLayout} selectionScope={page} isCurrent={() => controller.pageCurrent(page) && available() && !externalBusy} binarySourceIdentity={[tab, profile, version, refreshVersion, page]} binaryIsCurrent={() => latest.current.active && latest.current.tab === tab && latest.current.refreshVersion === refreshVersion && controller.pageCurrent(page) && !editorRef.current && !externalBusy} onActiveCellChange={selectReadFilterCell} onSelectionChange={selectReadCheckedRows} onActiveRowIndexChange={detailPage ? selectDetailRow : undefined} sort={headerSort.map(rule => ({ column: rule.columnKey, direction: rule.direction }))} onSortChange={next => sortFromHeader(next.map(rule => ({ columnKey: rule.column, direction: rule.direction })))}/></div>
+    <div className="sqlite-browse-result">{view.busy ? <div className="empty"><Spinner text={view.stopping ? text.stopping : text.loading}/></div> : page && editView && editView.page === page ? <SqliteTableEditGrid rowHeight={layoutView.preferences.rowHeight} page={page} rows={editView.rows} projection={projection} onColumnResize={resizeLayout} disabled={editBlocked || !layoutView.ready} selected={selectedRow} initialCheckedRows={renderedEditor ? drafts.checkedIds(renderedEditor) : undefined} isCurrent={() => editActionCurrent(false) && !!renderedEditor?.canEdit()} onSelect={selectEditRow} onEdit={editRow} onPaste={openRange} onActiveCell={selectPasteCell} onFilterCell={selectEditFilterCell} findHit={findHit} sort={headerSort} onSortChange={sortFromHeader} onCheckedRows={selectCheckedRows}/> : page ? <div className="query-result-with-details"><div className="query-result-grid"><ResultsGrid rowJump rowHeight={layoutView.preferences.rowHeight} columns={displayColumns} rows={page.result.rows} frozenKeys={displayFrozen} columnWidths={displayWidths} onColumnResize={resizeLayout} selectionScope={page} isCurrent={() => controller.pageCurrent(page) && available() && !externalBusy} binarySourceIdentity={[tab, profile, version, refreshVersion, page]} binaryIsCurrent={() => latest.current.active && latest.current.tab === tab && latest.current.refreshVersion === refreshVersion && controller.pageCurrent(page) && !editorRef.current && !externalBusy} onActiveCellChange={selectReadFilterCell} onSelectionChange={selectReadCheckedRows} onActiveRowIndexChange={detailPage ? selectDetailRow : undefined} sort={headerSort.map(rule => ({ column: rule.columnKey, direction: rule.direction }))} onSortChange={next => sortFromHeader(next.map(rule => ({ columnKey: rule.column, direction: rule.direction })))}/></div>
       {visibleRowDetail && detailPage && <QueryRowDetailsPanel controller={rowDetails} view={visibleRowDetail} sqlitePage={detailPage} pageNavigation={{ previous: sqliteRowDetailPageOffset(detailPage, visibleRowDetail.index, -1) !== undefined, next: sqliteRowDetailPageOffset(detailPage, visibleRowDetail.index, 1) !== undefined, move: moveRowDetailPage }} isCurrent={() => rowDetailsCurrent(visibleRowDetail.binding)} onMove={showRowDetail}
         onClose={current => { if (rowDetailsCurrent(current.binding) && rowDetails.close(current)) setRowDetail(null); }}/>}
       </div> : <Empty title={text.noPage}/>}</div>
@@ -1359,7 +1382,25 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {recordPageNotice && <p role="status" className="sqlite-browse-hint">{recordPageNotice}</p>}
     {templateNotice && <p role="status" className="sqlite-browse-hint">{templateNotice}</p>}
     {editView?.message && <p role="status" className="sqlite-browse-hint">{editView.message}</p>}
-    {drafts.pages.length > 0 && <section className="query-row-details-actions" aria-label={workspaceText.region}><strong>{workspaceText.summary(drafts.pages.length, drafts.changes)}</strong><small>{drafts.restored ? workspaceText.restoredHint : workspaceText.hint}</small>{drafts.pages.map(editor => <span className="query-row-details-actions" key={editor.page.edit?.kind === 'editable' ? editor.page.edit.snapshotId : editor.page.offset}><button disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} aria-label={workspaceText.page(editor.page.offset, editor.page.limit)} aria-pressed={drafts.isActive(editor)} title={editor.view.valid ? undefined : workspaceText.stalePage} onClick={() => drafts.restored ? selectRestoredPage(editor) : navigatePage(editor.page.offset)}>{workspaceText.page(editor.page.offset, editor.page.limit)} · {editor.changes.length}{drafts.isActive(editor) ? ' · ' + workspaceText.active : ''}</button><button aria-label={workspaceText.discardPage(editor.page.offset, editor.page.limit)} disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} onClick={() => discardRetainedPage(editor)}>{workspaceText.discardPageShort}</button></span>)}</section>}
+    {drafts.pages.length > 0 && <section className="query-row-details-actions" aria-label={workspaceText.region}>
+      <strong>{workspaceText.summary(drafts.pages.length, drafts.changes)}</strong>
+      <small>{drafts.restored ? workspaceText.restoredHint : workspaceText.hint}</small>
+      {drafts.pages.map(editor => {
+        const count = drafts.checkedIds(editor)?.size ?? 0;
+        const label = workspaceText.page(editor.page.offset, editor.page.limit);
+        const disabled = view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active;
+        return <span className="query-row-details-actions" key={editor.page.edit?.kind === 'editable' ? editor.page.edit.snapshotId : editor.page.offset}>
+          <button disabled={disabled} aria-label={label} aria-pressed={drafts.isActive(editor)} title={editor.view.valid ? undefined : workspaceText.stalePage}
+            onClick={() => drafts.restored ? selectRestoredPage(editor) : navigatePage(editor.page.offset)}>
+            {label} · {editor.changes.length}{count > 0 && ' · ' + workspaceText.checked(count)}{drafts.isActive(editor) ? ' · ' + workspaceText.active : ''}
+          </button>
+          <button aria-label={workspaceText.discardPage(editor.page.offset, editor.page.limit)} disabled={disabled}
+            onClick={() => discardRetainedPage(editor)}>{workspaceText.discardPageShort}</button>
+        </span>;
+      })}
+      {drafts.pages.some(editor => editor !== renderedEditor && drafts.checkedIds(editor)?.size) &&
+        <button type="button" disabled={!renderedEditor || editBlocked || !!previewOpen || view.busy} onClick={removeWorkspaceCheckedRows}>{workspaceText.deleteChecked}</button>}
+    </section>}
     <div className="tab-status"><button aria-label={text.first} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(0)}>{text.first}</button><button aria-label={text.previous} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(Math.max(0, page!.offset - page!.limit))}>{text.previous}</button><button aria-label={text.next} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page?.hasMore || externalBusy || page.offset + page.limit > sqliteTableBrowseLimits.offset} onClick={() => navigatePage(page!.offset + page!.limit)}>{text.next}</button>
       <button aria-label={text.last} title={text.lastHint} disabled={restoredDraftView || drafts.unknown || drafts.busy || !page || !active || invalidTarget || view.busy || externalBusy} onClick={() => navigatePage('last')}>{text.last}</button>
       <form className="page-jump" title={text.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}>
