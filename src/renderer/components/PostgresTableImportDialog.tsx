@@ -65,15 +65,24 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const [mode, setMode] = useState<'insert' | PostgresImportConflict['mode']>('insert');
   const [keyId, setKeyId] = useState('');
   const [choosing, setChoosing] = useState(false), [taskId, setTaskId] = useState<string>();
+  const [checkId, setCheckId] = useState<string>();
+  const [checkStatus, setCheckStatus] = useState<'checked' | 'cancelled' | 'failed'>();
+  const checking = useRef<string>(undefined);
+  useEffect(() => () => {
+    const id = checking.current;
+    checking.current = undefined;
+    if (id) void invoke('query.cancel', { taskId: id }).catch(() => undefined);
+  }, []);
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
   const [pendingPreset, setPendingPreset] = useState<ImportPresetConfiguration>();
   const [presetNotice, setPresetNotice] = useState('');
   const [presetBusy, setPresetBusy] = useState(false);
   const presetOperation = useRef(false);
   const occupied = useRef(false), cancelRequested = useRef(false);
-  const locked = choosing || !!taskId || presetBusy;
+  const locked = choosing || !!taskId || !!checkId || presetBusy;
   const recordCsv = format === 'csv' && csvProtocol === 'tabrelio';
   const records = !!initialSource || format !== 'csv' || recordCsv;
+  const canCheck = !!file && !file.files && !records && checkStatus !== 'failed' && checkStatus !== 'checked';
   const selectedKeys = mapping.filter(Boolean);
   const mapped = !!file && mapping.length === file.header.length && selectedKeys.length > 0 &&
     new Set(selectedKeys).size === selectedKeys.length && (records || selectedKeys.length === mapping.length);
@@ -88,7 +97,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
 
   /** 文件解释变化后，旧样本、令牌和映射须一起撤下。 */
   function resetSource() {
-    setFile(null); changeMapping([]); setError('');
+    setFile(null); setCheckStatus(undefined); changeMapping([]); setError('');
   }
 
   function editSource() {
@@ -195,9 +204,44 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     finally { occupied.current = false; setChoosing(false); }
   }
 
+  /** 只检查已选文件，成功时保留原映射与写入策略，失败后需要重新选文件。 */
+  async function checkSource() {
+    if (!file || !canCheck || occupied.current || presetOperation.current || !page.exportToken) return;
+    if (!isCurrent()) { setError(text.stale); return; }
+    const id = crypto.randomUUID();
+    let lease: ReturnType<typeof acquireWorkspaceBusy>;
+    try { lease = acquireWorkspaceBusy(target.tabId); }
+    catch (reason) { setError(errorMessage(reason)); return; }
+    occupied.current = true;
+    cancelRequested.current = false;
+    checking.current = id;
+    setCheckId(id);
+    setCheckStatus(undefined);
+    setError('');
+    try {
+      const result = await invoke('postgres.table.importCheck', { ...target, pageToken: page.exportToken, fileToken: file.token, taskId: id });
+      if (checking.current !== id) return;
+      if (!isCurrent()) throw Error(text.stale);
+      if (result.state === 'checked') setFile({ ...file, records: result.records });
+      setCheckStatus(result.state);
+    } catch (reason) {
+      if (checking.current !== id) return;
+      setCheckStatus('failed');
+      setError(errorMessage(reason));
+    } finally {
+      occupied.current = false;
+      lease.release();
+      if (checking.current === id) {
+        checking.current = undefined;
+        setCheckId(undefined);
+        setCancelling(false);
+      }
+    }
+  }
+
   /** 提交期间保护标签，结束后由表页接管回执和刷新。 */
   async function start() {
-    if (occupied.current || presetOperation.current || !file || !page.exportToken || !mapped || conflictError) return;
+    if (occupied.current || presetOperation.current || checkStatus === 'failed' || !file || !page.exportToken || !mapped || conflictError) return;
     if (!isCurrent()) { setError(text.stale); return; }
     const id = crypto.randomUUID(), lease = acquireWorkspaceBusy(target.tabId);
     occupied.current = true; cancelRequested.current = false;
@@ -217,9 +261,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
 
   /** 取消只请求一次，仍由正在运行的事务给出最终回执。 */
   async function cancel() {
-    if (!taskId || cancelRequested.current) return;
+    const id = checkId ?? taskId;
+    if (!id || cancelRequested.current) return;
     cancelRequested.current = true; setCancelling(true);
-    try { await invoke('query.cancel', { taskId }); }
+    try { await invoke('query.cancel', { taskId: id }); }
     catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -297,13 +342,17 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
       {!validTxt && <ErrorBox message={txtImportZh.invalid}/>}
       {!validXml && <ErrorBox message={xmlImportZh.invalid}/>}</>}
       {!initialSource && <details><summary>{presetsText.title}</summary><ImportPresets source={JSON.stringify([page.exportToken, format, file?.token, mapping, pendingPreset])}
-        busy={choosing || !!taskId} canSave={canSavePreset} isCurrent={isCurrent} supports={supportsPreset}
+        busy={choosing || !!taskId || !!checkId} canSave={canSavePreset} isCurrent={isCurrent} supports={supportsPreset}
         applyHint={presetsText.postgresApplyHint} capture={capturePreset} onApply={applyPreset} onActivity={presetActivity}/></details>}
       {presetNotice && <p role="status">{presetNotice}</p>}
       {pendingPreset && <button type="button" disabled={locked} onClick={editSource}>{presetsText.cancelApply}</button>}
       {choosing && <Spinner text={text.reading}/>}
       {file && <>
         <p>{text.file} · {file.name} · {file.bytes.toLocaleString('zh-CN')} {text.bytes}{file.records !== undefined && <> · {format === 'xml' && xmlOptions.documentResult !== undefined ? xmlImportZh.documentRecords(file.records) : text.records(file.records)}</>}</p>
+        {canCheck && <button type="button" disabled={locked} onClick={() => void checkSource()}>{text.check}</button>}
+        {checkStatus === 'checked' && <p role="status">{text.checked}</p>}
+        {checkStatus === 'cancelled' && <p role="status">{text.checkCancelled}</p>}
+        {checkStatus === 'failed' && <><ErrorBox message={error}/><p className="warning-text">{text.checkRetry}</p></>}
         {file.files && <>
           <p>{text.batchHint}</p>
           <ol aria-label={text.batchFiles}>{file.files.map((item, index) =>
@@ -339,7 +388,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         </div>}
         {mode !== 'insert' && conflictError && <p className="warning-text">{conflictError}</p>}
         <section aria-label={text.sample}>
-          <p>{file.sampleLimited ? (records || file.files) ? text.recordSampleLimited : text.sampleLimited : file.sample.length ? text.sampleLimit : text.sampleEmpty}</p>
+          <p>{file.sampleLimited ? (records || file.files || checkStatus === 'checked') ? text.recordSampleLimited : text.sampleLimited : file.sample.length ? text.sampleLimit : text.sampleEmpty}</p>
           {file.sample.length > 0 && <div className="pg-copy-import-sample">
             <table className="design-table" aria-label={text.sample}>
               <thead><tr>{previewHeaders.map((name, i) => <th scope="col" key={i}>{name || text.unnamed}</th>)}</tr></thead>
@@ -353,12 +402,13 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         </section>
       </>}
       {taskId && <p role="status">{cancelling ? text.cancelling : text.running}</p>}
-      <ErrorBox message={error}/>
+      {checkId && <p role="status">{cancelling ? text.checkCancelling : text.checking}</p>}
+      {checkStatus !== 'failed' && <ErrorBox message={error}/>}
     </div>
     <footer className="modal-footer">
       <button disabled={locked} onClick={() => { if (!occupied.current && !presetOperation.current) onClose(); }}>{text.close}</button>
-      {taskId ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
-        <button className="primary" disabled={locked || !mapped || !!conflictError} onClick={() => void start()}>{mode === 'insert' ? text.confirm : text.confirmConflict}</button>}
+      {taskId || checkId ? <button disabled={cancelling} onClick={() => void cancel()}>{checkId ? text.cancelCheck : text.cancel}</button> :
+        <button className="primary" disabled={locked || checkStatus === 'failed' || !mapped || !!conflictError} onClick={() => void start()}>{mode === 'insert' ? text.confirm : text.confirmConflict}</button>}
     </footer>
   </Modal>;
 }

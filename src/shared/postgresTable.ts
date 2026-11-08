@@ -290,6 +290,8 @@ const postgresImportConflict = z.object({ mode: z.enum(fileImportConflictModes),
 export type PostgresImportConflict = z.infer<typeof postgresImportConflict>;
 export interface PostgresImportKey { id: string; name: string; columns: string[]; }
 const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token, conflict: postgresImportConflict.optional() });
+export const postgresTableImportCheckSchema = target.extend({ pageToken: token, taskId: token, fileToken: token }).strict();
+export type PostgresTableImportCheckInput = z.infer<typeof postgresTableImportCheckSchema>;
 export const postgresTableImportSchema = z.union([
   importTarget.extend({ columns: z.array(column).min(1).max(1022).refine(value => new Set(value).size === value.length, '导入目标列不能重复') }).strict(),
   importTarget.extend({ format: z.enum(recordImportFormats), columns: z.array(column.nullable()).min(1).max(1022).refine(value => {

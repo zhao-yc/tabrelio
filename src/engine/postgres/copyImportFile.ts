@@ -24,6 +24,8 @@ export interface PostgresCopySource {
   selection?: { end: number; records: number };
 }
 type NativeRecord = (Buffer | null)[];
+type CopyPreflight = { version: string; signal: AbortSignal };
+class CopyPreflightIssue extends Error {}
 
 /** 二进制解析保留 NULL 和带引号空串的区别。 */
 function nativeCell(value: string | Buffer, context: { quoting: boolean }) {
@@ -99,31 +101,33 @@ function summarize(records: NativeRecord[], hasHeader: boolean, sampleLimited: b
 
 /** 流式确定原字节边界，选中的数据连续发送，保留 PostgreSQL 的原生 CSV 值语义。 */
 async function inspectCopyRange(stream: Readable, delimiter: CsvImportDelimiter,
-  range: ReturnType<typeof importRecordRange>, bom: number, check: () => void, complete: boolean) {
+  range: ReturnType<typeof importRecordRange>, bom: number, check: () => void, complete: boolean, preflight?: CopyPreflight) {
   const { headerRow, firstDataRow, lastDataRow } = range;
   const hasHeader = headerRow > 0;
   const parser = streamCsv({
-    delimiter, encoding: null, info: true, relax_column_count: true, max_record_size: 64 * 1024 * 1024,
-    cast(value, context) { return nativeCell(value, context); },
+    delimiter, encoding: preflight ? 'utf8' : null, info: true, relax_column_count: true, max_record_size: 64 * 1024 * 1024,
+    ...(preflight ? { raw: true, record_delimiter: ['\r\n', '\n', '\r'] } : {}),
+    cast(value, context) { return nativeCell(preflight ? Buffer.from(value) : value, context); },
   });
   // 多选逐份完整检查原字节编码，列数只约束所选数据，允许范围外有说明和汇总。
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const encoding = complete ? new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       try { decoder.decode(chunk, { stream: true }); callback(null, chunk); }
-      catch (error) { callback(error as Error); }
+      catch (error) { callback(preflight ? new CopyPreflightIssue('CSV 包含无效的 UTF-8 字节') : error as Error); }
     },
     flush(callback) {
       try { decoder.decode(); callback(); }
-      catch (error) { callback(error as Error); }
+      catch (error) { callback(preflight ? new CopyPreflightIssue('CSV 末尾包含不完整的 UTF-8 字节') : error as Error); }
     },
   }) : undefined;
-  const done = encoding ? pipeline(stream, encoding, parser) : pipeline(stream, parser);
+  const done = encoding ? pipeline(stream, encoding, parser, { signal: preflight?.signal }) : pipeline(stream, parser);
   void done.catch(() => undefined);
   const sample: NativeRecord[] = [];
   let previous = bom, offset = -1, end = -1, records = 0, sampleBytes = 0, width = 0;
+  let lineEnding: 'lf' | 'crlf' | 'cr' | undefined;
   try {
-    for await (const { record, info } of parser as AsyncIterable<{ record: NativeRecord; info: { bytes: number; records: number } }>) {
+    for await (const { record, info, raw } of parser as AsyncIterable<{ record: NativeRecord; info: { bytes: number; records: number }; raw?: string }>) {
       check();
       const start = previous;
       previous = info.bytes + bom;
@@ -134,7 +138,22 @@ async function inspectCopyRange(stream: Readable, delimiter: CsvImportDelimiter,
         if (hasHeader) sample.push(record);
       }
       if (info.records < firstDataRow || info.records > lastDataRow) continue;
-      if (complete && (record.length !== width || record.some(value => value?.includes(0))))
+      if (preflight) {
+        if (typeof raw !== 'string') throw Error('无法读取 CSV 原始记录边界');
+        // csv-parse 的 raw 仅保留 CRLF 的首字节，用原字节区间区分 CR 与 CRLF。
+        const last = raw.at(-1);
+        const ending = last === '\n' ? 'lf' : last === '\r' ? (previous - start > Buffer.byteLength(raw) ? 'crlf' : 'cr') : undefined;
+        const bodyLength = raw.length - Number(ending !== undefined);
+        const prefix = 'CSV 第 ' + info.records + ' 条记录';
+        if (ending !== undefined && lineEnding !== undefined && ending !== lineEnding)
+          throw new CopyPreflightIssue(prefix + '的行尾格式与此前数据记录不一致');
+        lineEnding ??= ending;
+        if (bodyLength === 2 && raw.startsWith('\\.'))
+          throw new CopyPreflightIssue(prefix + '是未加引号的结束标记，请用双引号包围');
+        if (record.length !== width)
+          throw new CopyPreflightIssue(prefix + '有 ' + record.length + ' 列，预期 ' + width + ' 列');
+        if (record.some(value => value?.includes(0))) throw new CopyPreflightIssue(prefix + '含有空字节');
+      } else if (complete && (record.length !== width || record.some(value => value?.includes(0))))
         throw Error('CSV 记录列数与字段名不符，或含有不支持的空字节');
       if (records === 0) offset = start;
       records++;
@@ -145,8 +164,12 @@ async function inspectCopyRange(stream: Readable, delimiter: CsvImportDelimiter,
       } else sampleBytes = headerLimit;
     }
     await done;
-  } catch {
+  } catch (reason) {
     check();
+    if (reason instanceof CopyPreflightIssue) throw reason;
+    if (preflight && typeof reason === 'object' && reason !== null && 'records' in reason &&
+        typeof reason.records === 'number' && Number.isSafeInteger(reason.records))
+      throw Error('CSV 第 ' + (reason.records + 1) + ' 条记录无法解析，请核对分隔符和引号');
     throw Error('无法读取 PostgreSQL CSV 记录范围，请检查文件格式、引号和记录号');
   } finally {
     await done.catch(() => undefined);
@@ -157,7 +180,7 @@ async function inspectCopyRange(stream: Readable, delimiter: CsvImportDelimiter,
 
 /** 文件授权固定记录解释及字节边界，样本单独返回。 */
 export async function inspectPostgresCopySource(path: string, delimiter: CsvImportDelimiter, csvHasHeader?: boolean,
-  csvRowRange?: ImportRecordRange, check = () => {}, complete = false) {
+  csvRowRange?: ImportRecordRange, check = () => {}, complete = false, preflight?: CopyPreflight) {
   if (!isAbsolute(path) || path.includes('\0')) throw Error('未取得授权 CSV 文件路径');
   csvImportDelimiter('csv', delimiter);
   const hasHeader = csvImportHasHeader('csv', csvHasHeader);
@@ -166,6 +189,8 @@ export async function inspectPostgresCopySource(path: string, delimiter: CsvImpo
   const fullScan = range.skipsRecords || complete;
   const stat = await lstat(path, { bigint: true });
   const expected = version(stat), bytes = Number(stat.size);
+  if (preflight && preflight.version !== expected) throw Error(changed);
+  check();
   const handle = await openRead(path);
   try {
     await assertVersion(path, handle, expected);
@@ -180,7 +205,7 @@ export async function inspectPostgresCopySource(path: string, delimiter: CsvImpo
     if (fullScan) {
       if (offset === bytes) throw Error('指定范围没有可导入的 CSV 数据');
       const stream = handle.createReadStream({ autoClose: false, start: offset, end: bytes - 1 });
-      const { offset: start, selection, header, sample, sampleLimited } = await inspectCopyRange(stream, delimiter, range, offset, check, complete);
+      const { offset: start, selection, header, sample, sampleLimited } = await inspectCopyRange(stream, delimiter, range, offset, check, complete, preflight);
       await assertVersion(path, handle, expected);
       const source: PostgresCopySource = { path, version: expected, bytes, offset: start, delimiter, hasHeader: false, header, selection };
       return { source, sample, sampleLimited };
@@ -190,6 +215,17 @@ export async function inspectPostgresCopySource(path: string, delimiter: CsvImpo
     const source: PostgresCopySource = { path, version: expected, bytes, offset, delimiter, hasHeader, header };
     return { source, sample, sampleLimited };
   } finally { await handle.close(); }
+}
+
+/** 预检只复读原授权的文件版本，成功后用核对过的字节范围和记录数约束实际 COPY。 */
+export async function preflightPostgresCopySource(source: PostgresCopySource, hasHeader: boolean | undefined,
+  range: ImportRecordRange | undefined, check: () => void, signal: AbortSignal) {
+  const result = await inspectPostgresCopySource(source.path, source.delimiter, hasHeader, range, check, true,
+    { version: source.version, signal });
+  if (!result.source.selection || result.source.header.length !== source.header.length ||
+      result.source.header.some((name, index) => name !== source.header[index])) throw Error(changed);
+  check();
+  return { ...result.source, selection: result.source.selection };
 }
 
 /** 按已检查文件的准确字节范围推送 COPY，读完再核路径和版本。 */

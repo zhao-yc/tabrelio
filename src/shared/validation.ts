@@ -43,7 +43,7 @@ import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgre
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresTableCopyApplySchema, postgresTableCopyPreviewSchema } from './postgresTableCopy';
 import { postgresStructureInputSchema } from './postgresStructure';
-import { postgresBackupCatalogueSchema, postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
+import { postgresBackupCatalogueSchema, postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportCheckSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
 import { postgresTableHistogramSchema } from './postgresTable';
 import { postgresFilteredUpdateSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
@@ -372,7 +372,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.sqlFile.choose': postgresSqlFilePickSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
   'postgres.sqlFile.target': postgresSqlFileChooseSchema,
   'postgres.sqlFile.inspect': postgresSqlFileInspectionSchema, 'postgres.sqlFile.cancelInspection': postgresSqlFileInspectionCancelSchema,
-  'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
+  'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.importCheck': postgresTableImportCheckSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.draft.save': postgresTablePreviewSchema,
   'postgres.table.draft.restore': postgresTableReleaseSchema,

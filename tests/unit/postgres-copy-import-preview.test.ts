@@ -2,8 +2,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { inspectPostgresCopySource, readPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
+import { inspectPostgresCopySource, preflightPostgresCopySource, readPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
 import { postgresImportColumnOrder } from '../../src/engine/postgres/importSource';
+import { validateCommand } from '../../src/shared/validation';
 
 /** 测试使用真实文件句柄，覆盖预览前缀和选择阶段的文件身份读取。 */
 async function inspect(csv: string, hasHeader?: boolean) {
@@ -97,5 +98,75 @@ describe('PostgreSQL CSV 导入样本', () => {
     expect(await inspect('甲;乙')).toMatchObject({ sample: [], sampleLimited: false });
     expect(await inspect('甲;乙\n"未闭合')).toMatchObject({ sample: [], sampleLimited: true });
     expect(await inspect('甲;乙\n多余;1;2\n')).toMatchObject({ sample: [], sampleLimited: true });
+  });
+});
+
+describe('PostgreSQL 原生 CSV 全文件检查', () => {
+  async function withFile<T>(bytes: string | Buffer, run: (path: string) => Promise<T>) {
+    const directory = await mkdtemp(join(tmpdir(), 'tabrelio-copy-check-'));
+    try {
+      const path = join(directory, '待检查.csv');
+      await writeFile(path, bytes);
+      return await run(path);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  }
+  const checked = async (path: string) => {
+    const { source } = await inspectPostgresCopySource(path, ';', true);
+    const { signal } = new AbortController();
+    return preflightPostgresCopySource(source, true, undefined, () => signal.throwIfAborted(), signal);
+  };
+
+  it('复用同一字节范围及逻辑记录数，保留 BOM、带换行和引号的原字段', async () => {
+    const body = ';1;"带\r\n换行与""引号"""\r\n"";2;无末尾换行';
+    await withFile('\uFEFF说明\r\n值;编号;注释\r\n' + body, async path => {
+      const range = { headerRow: 2, firstDataRow: 3 };
+      const { source } = await inspectPostgresCopySource(path, ';', true, range);
+      const signal = new AbortController().signal;
+      const validated = await preflightPostgresCopySource(source, true, range, () => signal.throwIfAborted(), signal);
+      expect(validated).toMatchObject({ header: ['值', '编号', '注释'], selection: { records: 2 } });
+      await expect(readPostgresCopySource(validated, async stream => {
+        const bytes: Buffer[] = [];
+        for await (const chunk of stream) bytes.push(Buffer.from(chunk));
+        expect(Buffer.concat(bytes)).toEqual(Buffer.from(body));
+        return 2;
+      })).resolves.toBe(2);
+    });
+    await withFile('值\r\n"\\."\r\n中文\r\n', async path => {
+      expect((await checked(path)).selection.records).toBe(2);
+    });
+  });
+
+  it('定位样本之后的列数、混合行尾和未引用结束标记，拒绝无效编码或空字节', async () => {
+    for (const [content, error] of [
+      ['id;note\r\n' + '1;样本\r\n'.repeat(6) + '8;末尾;多余\r\n', '第 8 条记录有 3 列，预期 2 列'],
+      ['id;note\r\n1;首条\r\n2;另一种行尾\n', '第 3 条记录的行尾格式'],
+      ['id\n1\n\\.\n', '第 3 条记录是未加引号的结束标记'],
+      ['id\n1\n\0\n', '第 3 条记录含有空字节'],
+      [Buffer.concat([Buffer.from('id\n' + '1\n'.repeat(6)), Buffer.from([0xff])]), '无效的 UTF-8'],
+      ['id\n1\n"未关闭', '第 3 条记录无法解析'],
+    ] as const) await withFile(content, async path => {
+      await expect(checked(path)).rejects.toThrow(error);
+    });
+  });
+
+  it('拒绝替换后的文件，扫描期间取消不返回已核验的来源', async () => {
+    await withFile('id\n' + '12345\n'.repeat(20_000), async path => {
+      const { source } = await inspectPostgresCopySource(path, ';', true);
+      const controller = new AbortController();
+      let calls = 0;
+      const check = () => { if (++calls === 20) controller.abort(); controller.signal.throwIfAborted(); };
+      await expect(preflightPostgresCopySource(source, true, undefined, check, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+      await writeFile(path, 'id\n' + '67890\n'.repeat(20_000));
+      const signal = new AbortController().signal;
+      await expect(preflightPostgresCopySource(source, true, undefined, () => {}, signal)).rejects.toThrow('已变化');
+    });
+  });
+
+  it('受限命令只允许原表页、文件及操作编号', () => {
+    const uuid = '9c5dd0a2-5341-4333-921e-36a3c84490bc';
+    const target = { connectionId: 'c', database: 'd', table: '"public"."t"', tabId: 'tab', pageToken: uuid, fileToken: uuid, taskId: uuid };
+    expect(validateCommand('postgres.table.importCheck', target)).toEqual(target);
+    for (const extra of [{ path: '/tmp/example.csv' }, { csvDelimiter: ',' }, { fileToken: '无授权' }])
+      expect(() => validateCommand('postgres.table.importCheck', { ...target, ...extra })).toThrow();
   });
 });

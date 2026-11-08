@@ -972,6 +972,8 @@ CSV 导入的“CSV 分隔符”可选择逗号（默认）、分号或制表符
 
 MySQL 和 MariaDB 的现有 InnoDB 基本表支持「多文件导入」。一次选择 2 至 16 个同结构的 CSV、TXT、JSON 或 XML 文件，共用字段映射并逐份预检，确认后在同一个事务中新增。选择「Excel（XLSX）」后也可点击「多文件导入」，逐本选表，共用行范围、文本协议及映射，再扫描和预检。[多文件导入](development/multi-file-import-20261107.md)
 
+PostgreSQL 单文件原生 CSV 在选定文件后可点击「检查整个 CSV 文件」。检查通过会显示所选数据记录数，并保留已配置的列映射。正式写入仍需点击确认导入。[原生 CSV 整文件检查](development/postgres-copy-csv-preflight-20261108.md)
+
 PostgreSQL 现有表的导入窗口可点击「选择多个文件」。原生 CSV 和 tabrelio CSV 均可批量导入，也支持 TXT、JSON 和 XML。每个文件的记录数单独显示，所有选中的数据共用映射和一次事务。匹配键模式会一并核对跨文件的重复键。导入 XLSX 时点击「选择多个 Excel 工作簿」，逐本选定工作表，填写共用行范围和文本协议，完整扫描后核对各表记录数及映射。[PostgreSQL 多文件导入](development/multi-file-import-20261107.md#postgresql)
 
 SQLite 现有普通表可点击「选择多个 SQLite 导入文件」，一次选择 2 至 16 个同结构的 CSV、TXT、JSON 或 XML 文件。共用字段映射和动态类型，逐份检查、整批预检后，用同一事务新增到目标表。选择 XLSX 时可批量选工作簿，逐本选表后共用范围、文本协议和类型映射。[SQLite 多文件导入](development/multi-file-import-20261107.md#sqlite)

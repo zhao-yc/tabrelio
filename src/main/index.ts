@@ -14,8 +14,8 @@ import { buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync'
 import type { SqliteEditClaim } from './sqliteTableEdit';
 import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
 import { sameConnectionFamily } from '../shared/connectionDialect';
-import { postgresTableExportExtension, type PostgresImportKey, type PostgresTableImportChooseInput } from '../shared/postgresTable';
-import { inspectPostgresCopySource } from '../engine/postgres/copyImportFile';
+import { postgresTableExportExtension, type PostgresImportKey, type PostgresTableImportCheckInput, type PostgresTableImportChooseInput } from '../shared/postgresTable';
+import { inspectPostgresCopySource, preflightPostgresCopySource } from '../engine/postgres/copyImportFile';
 import { inspectPostgresRestoreSql, inspectPostgresSqlFile, type PostgresSqlFileSource } from '../engine/postgres/sqlFile';
 import { postgresSqlFileTitle, type PostgresSqlFileChooseInput, type PostgresSqlFileResult } from '../shared/postgresSqlFile';
 import type { PostgresRestoreTargetFacts } from '../engine/postgres/restoreTarget';
@@ -912,6 +912,7 @@ async function queryFileOperation<T>(action: () => Promise<T>, allowShutdown = f
 
 /** 长文件预检先沿原任务通道取消，再由文件等待集合等待真实收尾；不预先落定任务状态。 */
 async function cancelFileImportPreflights(): Promise<void> {
+  for (const operation of postgresImportChecks.values()) operation.controller.abort();
   const stopping: Promise<unknown>[] = [];
   for (const task of tasks.values()) if (task.kind === 'files.preflight' && task.status === 'running') {
     const preparing = preparingTasks.get(task.id);
@@ -1029,8 +1030,9 @@ const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupCh
 }>();
 const databaseBackupChoosing = new WeakSet<object>();
 const postgresExportChoosing = new WeakSet<object>();
-const postgresImportChoosing = new WeakSet<object>();
+const postgresImportPreparing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresImportSource; conflictKeys: PostgresImportKey[]; revision: number; expires: number }>();
+const postgresImportChecks = new Map<string, { owner: ColumnsInvocation; controller: AbortController }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
@@ -1454,9 +1456,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     const document = columns!.owner.document, revision = store.connectionRevision();
     const target: PostgresTableImportChooseInput = input;
     const owner = postgresTableOwners.get(document);
-    if (shuttingDown || !owner || postgresImportChoosing.has(document))
+    if (shuttingDown || !owner || postgresImportPreparing.has(document))
       throw Error('PostgreSQL 原表页或文件选择当前不可用');
-    postgresImportChoosing.add(document);
+    postgresImportPreparing.add(document);
     postgresImportFiles.delete(document);
     return queryFileOperation(async () => {
       let workbookGrant: ImportBatchGrant | undefined;
@@ -1563,7 +1565,48 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         return { token, name: batch ? `${selected.length} 个文件` : basename(first.source.path), header: source.header, bytes,
           sample: first.sample, sampleLimited: first.sampleLimited, conflictKeys,
           ...(count === undefined ? {} : { records: count }), ...(batchFiles ? { files: batchFiles } : {}) };
-      } finally { postgresImportChoosing.delete(document); }
+      } finally { postgresImportPreparing.delete(document); }
+    });
+  }
+  if (command === 'postgres.table.importCheck') {
+    columnsMain.assertCapturedOwner(columns);
+    const target: PostgresTableImportCheckInput = input;
+    const document = columns!.owner.document, owner = postgresTableOwners.get(document);
+    const file = postgresImportFiles.get(document);
+    if (shuttingDown || !owner || !file || postgresImportPreparing.has(document) || tasks.has(target.taskId) ||
+        postgresImportChecks.has(target.taskId) || file.expires <= Date.now() || file.token !== target.fileToken || 'format' in file.target ||
+        !('version' in file.source) || (['connectionId', 'database', 'table', 'tabId', 'pageToken'] as const)
+          .some(key => file.target[key] !== target[key]))
+      throw Error('PostgreSQL 原表页或 CSV 文件选择已失效');
+    const { source, target: choice } = file;
+    const controller = new AbortController();
+    /** 原表页、连接和文件租约只读复核，不发数据库请求或扩大文件授权。 */
+    const check = () => {
+      controller.signal.throwIfAborted();
+      columnsMain.assertCapturedOwner(columns);
+      connectionConfig.assertAvailable(target.connectionId);
+      if (shuttingDown || postgresTableOwners.get(document) !== owner || postgresImportFiles.get(document) !== file ||
+          file.revision !== store.connectionRevision())
+        throw Error('PostgreSQL 原表页或 CSV 文件选择已失效');
+    };
+    check();
+    postgresImportPreparing.add(document);
+    postgresImportChecks.set(target.taskId, { owner: columns!, controller });
+    return queryFileOperation(async () => {
+      try {
+        const checked = await preflightPostgresCopySource(source, choice.csvHasHeader, choice.csvRowRange, check, controller.signal);
+        check();
+        file.source = checked;
+        file.expires = Date.now() + 5 * 60 * 1000;
+        return { state: 'checked', records: checked.selection.records };
+      } catch (reason) {
+        if (controller.signal.aborted) return { state: 'cancelled' };
+        if (postgresImportFiles.get(document) === file) postgresImportFiles.delete(document);
+        throw reason;
+      } finally {
+        postgresImportPreparing.delete(document);
+        postgresImportChecks.delete(target.taskId);
+      }
     });
   }
   // 原生文件路径仅由 Main 取得。引擎捕获原页，恢复前重新核对连接绑定及窗口归属。
@@ -2326,6 +2369,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      const importCheck = postgresImportChecks.get(input.taskId);
+      if (importCheck) {
+        columnsMain.assertCapturedOwner(columns);
+        if (!columnsMain.sharesDocumentOwner(importCheck.owner, columns!)) throw Error('取消请求与原 CSV 检查窗口不符');
+        importCheck.controller.abort();
+        return;
+      }
       if (['postgres.compareData', 'mysql.compareData'].includes(tasks.get(input.taskId)?.kind ?? '')) return cancelNetworkCompare(input.taskId, columns);
       if (['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get(input.taskId)?.kind ?? '')) {
         const backupOwner = sqlFileTaskOwners.get(input.taskId);
@@ -2620,7 +2670,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       columnsMain.assertCapturedOwner(columns);
       const document = columns!.owner.document, owner = postgresTableOwners.get(document);
       const file = postgresImportFiles.get(document), revision = store.connectionRevision();
-      if (shuttingDown || !owner || !file || file.token !== input.fileToken || file.revision !== revision || file.expires <= Date.now() ||
+      if (shuttingDown || !owner || !file || postgresImportPreparing.has(document) || file.token !== input.fileToken || file.revision !== revision || file.expires <= Date.now() ||
           ('format' in file.target ? file.target.format : undefined) !== input.format ||
           (['connectionId', 'database', 'table', 'tabId', 'pageToken'] as const).some(key => file.target[key] !== input[key]))
         throw Error('PostgreSQL 导入的原表页或源文件选择已失效');
@@ -3363,7 +3413,7 @@ else {
         if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') || payload.command.startsWith('mysql.backup.') ||
-            payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
+            payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||

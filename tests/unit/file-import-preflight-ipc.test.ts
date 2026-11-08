@@ -106,15 +106,20 @@ function harness() {
   const event = { sender: webContents, senderFrame: webContents.mainFrame };
   const broker = { request: vi.fn(async (_command: string, _input: unknown): Promise<any> => ({ complete: true })), close: vi.fn(async () => undefined), forceClose: vi.fn() };
   const store = { saveTask: vi.fn(), addHistory: vi.fn(), close: vi.fn(), connectionRevision: () => 1, resolveConnection: vi.fn(), deleteConnection: vi.fn() };
-  const columnsMain = { hasUnpublished: () => false, capture: vi.fn(), assertCapturedOwner: vi.fn() };
+  const document = {}, invocation = { owner: { document } };
+  const columnsMain = { hasUnpublished: () => false, capture: vi.fn(() => invocation), assertCapturedOwner: vi.fn(),
+    sharesDocumentOwner: (original: unknown, next: unknown) => original === next };
   const owners = () => ({ has: () => false, drain: vi.fn(async () => undefined), observe: vi.fn(), invalidateConnection: vi.fn() });
   const context = createContext({
     sqliteCopyTask: undefined, postgresArchiveFiles: { cancelAll: vi.fn() }, closeSqliteDatabaseCopies: emptySqliteCreateCleanup(), closeSqliteDatabaseCreates: emptySqliteCreateCleanup(),
     sqliteTableRebuild: emptySqliteTableRebuildMain(), sqliteObjects: emptySqliteObjectsMain(), sqliteTableMaintenance: emptySqliteTableMaintenanceMain(), sqliteTableRename: emptySqliteTableRenameMain(), sqliteColumns: emptySqliteColumnsMain(), sqliteIndexes: emptySqliteIndexesMain(), sqliteTableCreates: emptySqliteTableCreateMain(), sqliteTableImports: emptySqliteTableImportMain(),
-    Error, Date, Map, Set, Promise, console, setTimeout, clearTimeout, resolveFileToken, persistedTaskMessage, validateMainCommand: validateCommand,
+    Error, Date, Map, Set, Promise, AbortController, console, setTimeout, clearTimeout, resolveFileToken, persistedTaskMessage, validateMainCommand: validateCommand,
     tasks, files, broker, store, window: { webContents, isDestroyed: () => false }, rendererURL: 'RAM:预检', columnsMain,
     applicationMenu: applicationMenuRamPort().menu, shuttingDown: false, shutdownComplete: false, rendererHasSettings: false, hasPendingEdits: false,
     structureTokens: new Map(), sessions: new Map(), preparingTasks: new Map(), completionTasks: new Set(), pendingQueryHistory: new Map(),
+    postgresImportChecks: new Map(), sqlFileInspections: new Map(),
+    postgresImportPreparing: new WeakSet(), postgresImportFiles: new WeakMap(), postgresTableOwners: new WeakMap([[document, {}]]),
+    preflightPostgresCopySource: vi.fn(),
     exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), resultInsertProgress: new Map(), filteredUpdateProgress: new Map(), filteredDeleteProgress: new Map(),
     queryFileOperations: new Set(), localSearchOperations: new Set(), tableValueOptionsConnectionOwners: new Map(), tableValueOptionsClosing: new Map(),
     queryInsertExports: { has: () => false }, tableApplyReceipts: { confirmed: () => undefined, interrupt: vi.fn() },
@@ -124,13 +129,34 @@ function harness() {
     persistAuxiliary: (action: () => void) => action(), SavedQuerySearchCancelled: class extends Error {},
     externalObjectUris: { close: vi.fn() }, app: { quit: vi.fn() }, dialog: { showMessageBox: vi.fn(async () => ({ response: 1 })), showErrorBox: vi.fn() },
   });
-  const names = ['taskEvent', 'dispatch', 'cancelFileImportPreflights'];
+  const names = ['taskEvent', 'dispatch', 'cancelFileImportPreflights', 'queryFileOperation'];
   const source = names.map(name => extractMainProductionFunction(mainSource, name)).join('\n') + `\nvar request=${wrapper!.getText(tree)};var beforeQuit=${quit!.getText(tree)};`;
   runInContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
-  return { context, broker, store, tasks, files, event, request: context.request as (event: unknown, payload: unknown) => Promise<any>, beforeQuit: context.beforeQuit as (event: unknown) => void };
+  return { context, broker, store, tasks, files, event, document, request: context.request as (event: unknown, payload: unknown) => Promise<any>, beforeQuit: context.beforeQuit as (event: unknown) => void };
 }
 
 describe('整文件预检Main实际接线', () => {
+  it('PostgreSQL 检查期间拒绝重复检查，原窗口取消后保留同一文件租约，不调用数据库', async () => {
+    const h = harness();
+    const uuid = '9c5dd0a2-5341-4333-921e-36a3c84490bc';
+    const target = { connectionId: 'c', database: 'd', table: '"public"."t"', tabId: 'tab', pageToken: uuid };
+    const file = { token: uuid, target, source: { version: '已授权版本' }, revision: 1, expires: Date.now() + 30_000 };
+    h.context.postgresImportFiles.set(h.document, file);
+    h.context.preflightPostgresCopySource.mockImplementation((_source: unknown, _header: unknown, _range: unknown, _check: unknown, signal: AbortSignal) =>
+      new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })));
+    const payload = { command: 'postgres.table.importCheck', input: { ...target, fileToken: uuid, taskId: uuid } };
+    const pending = h.request(h.event, payload);
+    await vi.waitFor(() => expect(h.context.postgresImportChecks.size).toBe(1));
+    expect(await h.request(h.event, payload)).toMatchObject({ ok: false });
+    expect(await h.request(h.event, { command: 'query.cancel', input: { taskId: uuid } })).toMatchObject({ ok: true });
+    expect(await pending).toEqual({ ok: true, result: { state: 'cancelled' } });
+    expect(h.context.postgresImportFiles.get(h.document)).toBe(file);
+    expect(h.context.postgresImportChecks.size).toBe(0);
+    expect(h.context.queryFileOperations.size).toBe(0);
+    expect(h.broker.request).not.toHaveBeenCalled();
+    expect(h.store.saveTask).not.toHaveBeenCalled();
+  });
+
   it('仅导入且格式一致的已选令牌解析路径，原报告只通过当轮回包返回且不写历史', async () => {
     const h = harness(), report = { complete: true, checkedRecords: 2, issues: [{ source: '夹具源', target: '夹具目标', message: '合成错误' }] };
     h.broker.request.mockResolvedValue(report);
@@ -177,8 +203,11 @@ describe('整文件预检Main实际接线', () => {
     h.tasks.set('已结束预检', { ...base, id: '已结束预检', kind: 'files.preflight', status: 'completed' });
     h.tasks.set('普通导入', { ...base, id: '普通导入', kind: 'files.import' });
     const preparing = { cancelled: false }; h.context.preparingTasks.set('准备预检', preparing);
+    const controller = new AbortController();
+    h.context.postgresImportChecks.set('原生 CSV 检查', { controller });
     await h.context.cancelFileImportPreflights();
     expect(preparing.cancelled).toBe(true); expect(h.tasks.get('准备预检')?.status).toBe('running');
+    expect(controller.signal.aborted).toBe(true);
     expect(h.broker.request).not.toHaveBeenCalled();
   });
 

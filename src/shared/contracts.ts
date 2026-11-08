@@ -394,6 +394,7 @@ export interface CommandMap {
   'postgres.sqlFile.cancelInspection': { input: { operationId: string }; output: void };
   'postgres.sqlFile.execute': { input: import('./postgresSqlFile').PostgresSqlFileExecuteInput; output: import('./postgresSqlFile').PostgresSqlFileResult };
   'postgres.table.importChoose': { input: import('./postgresTable').PostgresTableImportChooseInput; output: import('./postgresTable').PostgresTableImportChoice | null };
+  'postgres.table.importCheck': { input: import('./postgresTable').PostgresTableImportCheckInput; output: { state: 'checked'; records: number } | { state: 'cancelled' } };
   'postgres.table.import': { input: import('./postgresTable').PostgresTableImportInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.table.page': { input: import('./postgresTable').PostgresTablePageInput; output: import('./postgresTable').PostgresTablePage };
   'postgres.table.draft.save': { input: import('./postgresTable').PostgresTablePreviewInput; output: { name: string } | null };
