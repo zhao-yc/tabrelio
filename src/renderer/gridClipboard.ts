@@ -209,6 +209,13 @@ export function writeTableClipboardEvent(current: () => boolean, write: (data: D
   } finally { target.removeEventListener('copy', copy, true); }
 }
 
+/** 只写一行表头文本。即使只有一个空别名，也显式编码空字段，避免写空剪贴板。 */
+export function copyGridColumnNames(names: readonly string[], current: () => boolean): void {
+  if (!current() || !names.length || names.some(name => typeof name !== 'string')) throw Error(tableHeaderCopyZh.stale);
+  const { text } = encodeClipboard([[...names]]);
+  writeTableClipboardEvent(current, data => data.setData('text/plain', text || '""'));
+}
+
 /** 剪贴板属于外部输入，类型化数据必须逐格校验，不能直接信任 JSON 内容。 */
 export function decodeClipboard(typed: string, text: string, rowBudget?: ClipboardRowBudget): ClipboardCell[][] {
   if (!typed) {

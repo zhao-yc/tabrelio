@@ -11,7 +11,7 @@ import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
-import { cellClipboardType, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridColumnNames, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import type { ResultGridSelection } from '../resultExport';
@@ -175,6 +175,16 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
         const encode = mode === 'headers' ? encodeQueryResultWithHeaders : encodeQueryResultColumn;
         writeQueryResultClipboard(encode(columns, rows, selectedRows, activeCopyCell), current);
       }
+    } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+  }
+  /** 表头复制只需要当前列布局，不借用行勾选或活动格。 */
+  function copyVisibleNames() {
+    const current = () => actionCurrent() && tableCopy?.enabled !== false &&
+      tableCopy?.isCurrent() !== false && !document.querySelector(appModalSelector);
+    if (!current()) return;
+    try {
+      copyGridColumnNames(columns.map(column => column.name), current);
+      useWorkspace.getState().notify(tableCopyText.namesCopied);
     } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** 单格漂移一旦观察就撤销，恢复旧值也不能复活原按钮；新选择必须重新捕获。 */
@@ -390,6 +400,8 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   const copyTools = <>
     <button type="button" title={copyLabels.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
       onClick={() => copyResult('headers')}>{copyLabels.action}</button>
+    <button type="button" title={tableCopyText.namesHint} disabled={!copyEnabled || !columns.length}
+      onClick={copyVisibleNames}>{tableCopyText.names}</button>
     <button type="button" title={copyLabels.columnHint} disabled={!copyEnabled || !activeCopyCell?.column}
       onClick={() => copyResult('column')}>{copyLabels.column}</button>
     <button type="button" title={jsonCopyText.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}

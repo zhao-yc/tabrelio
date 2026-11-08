@@ -13,7 +13,7 @@ import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.
 import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
-import { encodeGridJson, writeTableClipboardEvent } from '../gridClipboard';
+import { copyGridColumnNames, encodeGridJson, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
@@ -156,10 +156,16 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
     } catch (reason) { try { event.clipboardData.clearData(); } catch { /* 仅原事件可清理，不借系统剪贴板重试。 */ } if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
   }
   /** 复制只读本页；JSON 取当前记录的全部可见列。 */
-  function copyFromGrid(mode: 'headers' | 'column' | 'json') {
-    const allowed = () => !disabled && current() && noModal();
+  function copyFromGrid(mode: 'headers' | 'column' | 'json' | 'names') {
+    const allowed = () => !disabled && (mode === 'names' ? baseCurrent() : current()) && noModal();
     if (!allowed()) return;
     try {
+      if (mode === 'names') {
+        copyGridColumnNames(order.map(index => page.columns[index].name), allowed);
+        setError('');
+        useWorkspace.getState().notify(headerCopyText.namesCopied);
+        return;
+      }
       const checked = rows.filter(item => selectedRows.has(item.id) && !item.deleted);
       const cell = activeCell.current.position;
       if (selectedRows.size && !checked.length) throw Error(headerCopyText.stale);
@@ -244,6 +250,7 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
   }
 
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+    <button type="button" title={headerCopyText.namesHint} disabled={disabled} onClick={() => copyFromGrid('names')}>{headerCopyText.names}</button>
     <button type="button" title={jsonCopyText.hint} disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => copyFromGrid('json')}>{jsonCopyText.action}</button>
     {page.insertCopy && <CopyInsertSqlButtons disabled={disabled} current={hasActiveDataColumn}

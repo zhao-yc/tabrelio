@@ -23,7 +23,7 @@ import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease, type Works
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
 import { collectChanges, newDraftRow, type DraftRow } from '../dataChanges';
-import { cellClipboardType, decodeClipboard, encodeClipboard, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridColumnNames, decodeClipboard, encodeClipboard, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import { maxTablePage, parsePageJump, parseTablePageSize, setAllFilterRulesEnabled, type FilterMode, type FilterDraft } from '../tableFilters';
@@ -1771,12 +1771,19 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   const headerCopyLayoutRevision = layoutRevision.current;
   /** 从当前页按显示顺序取值，JSON 总是复制记录的全部可见列。 */
-  function copyTableData(mode: 'headers' | 'column' | 'json'): void {
+  function copyTableData(mode: 'headers' | 'column' | 'json' | 'names'): void {
     const current = () => tableToolbarCurrent() && !blockedRef.current && !externalStale && !activeGridEditor.current && !record.hasInput()
-      && rowsRef.current === rows && selectedRowsRef.current === selectedRows && selectionRef.current === selection
+      && (mode === 'names' ? !!page && tableReadAction.current === tableReadRender :
+        rowsRef.current === rows && selectedRowsRef.current === selectedRows && selectionRef.current === selection)
       && layoutRevision.current === headerCopyLayoutRevision;
     if (!current()) return;
     try {
+      if (mode === 'names') {
+        copyGridColumnNames(visibleColumns.map(column => column.name), current);
+        setError('');
+        useWorkspace.getState().notify(headerCopyText.namesCopied);
+        return;
+      }
       const columns = mode === 'json' || mode === 'headers' && selectedRows.size ? visibleColumns : visibleColumns.filter(column => column.key === selection?.key);
       const records = rows.filter(row => !row.deleted && (selectedRows.size ? selectedRows.has(row.id) : mode === 'column' || row.id === selection?.rowId));
       if (!columns.length || !records.length) throw Error(headerCopyText.stale);
@@ -1981,6 +1988,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     onClick={() => handlePrimaryKeyQuery('draft')}>{primaryKeyCopyZh.open}</button>}
 </>}</ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.transfer}><button title={headerCopyText.hint} disabled={blocked || externalStale || gridEditing || record.hasInput() || (!selection && !selectedRows.size)} onClick={() => copyTableData('headers')}>{headerCopyText.action}</button>
+<button title={headerCopyText.namesHint} disabled={blocked || externalStale || gridEditing || record.hasInput() || !page || !visibleColumns.length} onClick={() => copyTableData('names')}>{headerCopyText.names}</button>
 <button title={headerCopyText.columnHint} disabled={blocked || externalStale || gridEditing || record.hasInput() || !visibleColumns.some(column => column.key === selection?.key)} onClick={() => copyTableData('column')}>{headerCopyText.column}</button>
 <button title={jsonCopyText.hint} disabled={blocked || externalStale || gridEditing || record.hasInput() || (!selection && !selectedRows.size)} onClick={() => copyTableData('json')}>{jsonCopyText.action}</button>
 {onTableCopyData && <button title={tableCopyDataZh.title} aria-label={tableCopyDataZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableCopyData(); }}>{tableCopyDataZh.title}</button>}

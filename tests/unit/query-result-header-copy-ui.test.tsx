@@ -13,6 +13,8 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { validateResultExportData } from '../../src/shared/resultExport';
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { gridJsonClipboardZh as jsonText } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
+import { tableHeaderCopyZh as tableCopyText } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
+import { parseTabularText } from '../../src/renderer/gridClipboard';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 const grids=vi.hoisted(()=>({all:[] as any[]}));
@@ -34,7 +36,8 @@ beforeAll(async()=>{
 afterEach(async()=>{if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();grids.all=[];});
 afterAll(()=>{ restoreNavigationMenuPort();for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只给真实查询端口合成响应；所有文件选择、写入和settings保存都是RAM事件。 */
-async function mount(multiple = false, large = false){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
+async function mount(multiple = false, large = false, aliases?: readonly string[]){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
+ aliases?.forEach((name, index) => { original.columns[index].name = name; });
  if(multiple){ original.rows[0].n='同组';original.rows[1].n='同组';original.rows.push(JSON.parse('{"__proto__":"3","d":"0.50000000000000000000","n":"同组","b":{"type":"binary","base64":"AA=="},"secret":"秘密"}')); }
  if (large) original.rows[0].n = '\0'.repeat(2_000_000);
  (window as any).dbark={onTask:()=>()=>{},onMenu:()=>()=>{},invoke:async(command:string,input:any)=>{commands.push(command);if(command==='settings.save'||command==='connections.open'||command==='sessions.close')return;if(command==='sessions.open')return {sessionId:'s'};if(command==='query.completionState')return {databaseKnown:true,database:null,temporaryObjects:[]};if(command==='query.execute')return {results:[original,second],elapsedMs:1,transactionOpen:false};if(command==='files.choose')return {token:'ram-file',name:'内存文件'};if(command==='files.exportResult'){validateResultExportData(input.result);exports.push(structuredClone(input));return {rows:input.result.rows.length};}throw Error('禁止外界命令：'+command);}};
@@ -89,6 +92,25 @@ it('复制 JSON 使用当前可见列及勾选行，改选后旧动作不可重�
   expect(port.writes).toHaveLength(1);
   await click(jsonText.action);
   expect(JSON.parse(port.writes[1].get('text/plain')!)).toHaveLength(1);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('仅复制列名无需选行，按显示布局保留重复和特殊别名，旧列布局不可复用', async () => {
+  const special = '制表\t换行\r\n"引号"';
+  await mount(false, false, ['同名', '同名', '', special]);
+  const port = clipboardPort();
+  const stale = callback(button(tableCopyText.names));
+  await layout();
+  await act(async () => stale());
+  expect(port.writes).toHaveLength(0);
+  await click(tableCopyText.names);
+  expect([...port.writes[0].keys()]).toEqual(['text/plain']);
+  expect(parseTabularText(port.writes[0].get('text/plain')!)).toEqual([[special, '同名', '同名', '']]);
+  await click(text.open);
+  for (const position of [1, 2, 4]) await toggle(position, false);
+  await click(text.apply);
+  await click(tableCopyText.names);
+  expect(port.writes[1].get('text/plain')).toBe('""');
   expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
 });
 

@@ -4,6 +4,9 @@ export const tableHeaderCopyZh = {
   hint: '勾选记录时复制其可见列，否则复制当前单元格。普通文本含列名，DBArk 内部粘贴只读取数据。',
   column: '复制当前列',
   columnHint: '先选中该列的单元格。仅复制当前页，有勾选时只复制勾选记录。',
+  names: '仅复制列名',
+  namesHint: '按当前可见列顺序复制一行制表符文本，可直接粘贴为表头。',
+  namesCopied: '已复制可见列名',
   stale: '表格、列布局或选择已变化，请重新选择后复制。',
   unavailable: '未能复制表格数据，请重试。',
 };
