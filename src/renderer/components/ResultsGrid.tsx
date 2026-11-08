@@ -11,7 +11,8 @@ import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
-import { cellClipboardType, encodeClipboard, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { appModalSelector } from '../modalSelectors';
@@ -349,11 +350,11 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&
     (selectionBefore?.scope === scope ? selectionBefore.indices === selectedRows : !selectedRows.size);
-  /** 两种去向都使用同一活动格或勾选代次，生成失败时不产生副作用。 */
-  function handleTableSql(build: ((indices: ReadonlySet<number>) => string) | undefined, checked: boolean, destination: string | ((sql: string) => void)) {
+  /** 复制与打开查询草稿共用活动格或勾选代次，生成失败时不产生副作用。 */
+  function handleRowOutput(build: ((indices: ReadonlySet<number>) => string) | undefined, checked: boolean, destination: string | ((sql: string) => void)) {
     const current = () => tableCopy?.enabled !== false && selectedActionCurrent() &&
       copyRevisionRef.current === copyRevision && tableCopy?.isCurrent() !== false && !document.querySelector(appModalSelector);
-    if (!build || !current() || (!checked && !activeCopyCell)) return;
+    if (!build || !current() || (!checked && (!activeCopyCell || rows[activeCopyCell.index] !== activeCopyCell.row))) return;
     try {
       const sql = build(checked ? selectedRows : new Set([activeCopyCell!.index]));
       if (typeof destination === 'function') {
@@ -363,6 +364,22 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
       writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
       useWorkspace.getState().notify(destination);
     } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+  }
+  /** 勾选顺序独立于显示顺序，列名与值从同一当前视图取出。 */
+  function copyRowsAsJson(indices: ReadonlySet<number>): string {
+    if (indices.size * columns.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
+    const selected = [...indices].sort((left, right) => left - right).map(index => {
+      const row = rows[index];
+      if (!Number.isSafeInteger(index) || !row || skipRowInInversion?.(row)) throw Error(jsonCopyText.invalid);
+      return row;
+    });
+    return encodeGridJson(columns, selected, (row, key) => {
+      const presentation = tableCopy && presentCell?.(row, key);
+      if (presentation) return presentation.value;
+      const descriptor = Object.getOwnPropertyDescriptor(row, key);
+      if (!descriptor || !('value' in descriptor) || descriptor.value === undefined) throw Error(jsonCopyText.invalid);
+      return descriptor.value;
+    });
   }
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
   const jump = rowJump ? <GridRowJump grid={gridRef} scope={scope} count={rows.length}
@@ -374,13 +391,15 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
       onClick={() => copyResult('headers')}>{copyLabels.action}</button>
     <button type="button" title={copyLabels.columnHint} disabled={!copyEnabled || !activeCopyCell?.column}
       onClick={() => copyResult('column')}>{copyLabels.column}</button>
+    <button type="button" title={jsonCopyText.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
+      onClick={() => handleRowOutput(copyRowsAsJson, selectedRows.size > 0, jsonCopyText.copied)}>{jsonCopyText.action}</button>
     {insertSql && <CopyInsertSqlButtons disabled={!copyEnabled}
-      current={!!activeCopyCell} selected={!!selectedRows.size} onCopy={checked => handleTableSql(insertSql, checked, insertCopyText.copied)}/>}
+      current={!!activeCopyCell} selected={!!selectedRows.size} onCopy={checked => handleRowOutput(insertSql, checked, insertCopyText.copied)}/>}
     {primaryKeySql && <button type="button" title={keyCopyText.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
-      onClick={() => handleTableSql(primaryKeySql, selectedRows.size > 0, keyCopyText.copied)}>{keyCopyText.action}</button>}
+      onClick={() => handleRowOutput(primaryKeySql, selectedRows.size > 0, keyCopyText.copied)}>{keyCopyText.action}</button>}
     {primaryKeySql && onOpenPrimaryKeyQuery && <button type="button" title={keyCopyText.openHint}
       disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
-      onClick={() => handleTableSql(primaryKeySql, selectedRows.size > 0, onOpenPrimaryKeyQuery)}>{keyCopyText.open}</button>}
+      onClick={() => handleRowOutput(primaryKeySql, selectedRows.size > 0, onOpenPrimaryKeyQuery)}>{keyCopyText.open}</button>}
   </>;
   const selectionTools = !onActiveRowChange && (rowJump || hasResultTools) ?
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={tableCopy?.enabled === false}

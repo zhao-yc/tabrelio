@@ -62,6 +62,10 @@ function sourceColumnNames(raw: unknown, width: number): string[] {
 }
 /** 通用MIME保兼容，int64与REAL仍按原文字串交给非SQLite网格，不经过Number。 */
 function genericCell(value: SqliteClipboardCell): ClipboardCell { if (value === undefined) return undefined; if (value.kind === 'null') return null; if (value.kind === 'blob') { let binary = ''; for (let index = 0; index < value.value.length; index += 2) binary += String.fromCharCode(parseInt(value.value.slice(index, index + 2), 16)); return { type: 'binary', base64: btoa(binary) }; } return value.value; }
+/** SQLite 表草稿复制 JSON 时复用通用值表示，避免大整数、REAL 原文和 BLOB 在转换时丢失。 */
+export function sqliteClipboardProtocolCell(value: SqliteClipboardCell): ClipboardCell {
+  return genericCell(nativeCell(value));
+}
 /** 原页最多1000行可复制；三种格式分别受2MiB限制，原生MIME完整区分NULL和DEFAULT。 */
 export function encodeSqliteClipboard(input: readonly (readonly SqliteClipboardCell[])[], columns?: readonly string[], includeHeaders = false): SqliteClipboardContent {
   if (Array.isArray(input) && input.length > sqliteClipboardLimits.copyRows) throw Error(text.copyRowLimit);

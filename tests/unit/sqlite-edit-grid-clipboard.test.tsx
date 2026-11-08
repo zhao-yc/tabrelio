@@ -5,6 +5,7 @@ import type { SqliteDraftRow } from '../../src/renderer/sqliteTableEditor';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
 import { readSqliteClipboard, sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard';
 import { sqliteTableRangePasteZh as rangeText } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
+import { gridJsonClipboardZh as jsonText } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 
 interface GridPort { rows: SqliteDraftRow[]; columns: { key: string }[]; selectedRows: ReadonlySet<string>; isRowSelectionDisabled(row: SqliteDraftRow): boolean; onSelectedRowsChange(ids: Set<string>): void; onCellCopy(args: { row: SqliteDraftRow; column: { key: string } }, event: ClipboardEvent<HTMLDivElement>): void; onCellClick(args: { row: SqliteDraftRow; column?: { key: string } }): void; onActivePositionChange(args: { row?: SqliteDraftRow; column?: { key: string } }): void; }
@@ -30,6 +31,25 @@ async function mount() { const value=source(),onSelect=vi.fn(),onEdit=vi.fn(),on
 /** 新区域入口必须先经真实RDG位置端口选择准确数据格，不从当前行反推。 */
 async function activate(row:SqliteDraftRow,key='c0'){await act(async()=>port.props!.onCellClick({row,column:{key}}));}
 async function copy(grid:GridPort,row:SqliteDraftRow,key:string,data=transfer()){const value=event(data);await act(async()=>grid.onCellCopy({row,column:{key}},value.event));return value;}
+it('SQLite 草稿复制 JSON 使用可见列，省略默认字段并保留 NULL、字节和原整数', async () => {
+  const fixture = await mount();
+  const draft = { ...fixture.rows[0], values: [...fixture.rows[0].values] };
+  draft.values[5] = undefined;
+  await fixture.render({ rows: [draft], projection: [5, 4, 3, 0].map(index => ({ index, frozen: false })) });
+  await activate(draft, 'c4');
+  const button = document.querySelectorAll('button').find(node => node.textContent === jsonText.action)!;
+  const data = transfer(), copyEvent = Object.assign(new MemoryEvent('copy'), {
+    clipboardData: data, stopImmediatePropagation(this: MemoryEvent) { this.stopPropagation(); },
+  });
+  const execute = vi.fn(() => { document.dispatchEvent(copyEvent); return true; });
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: execute });
+  try {
+    await act(async () => button.dispatchEvent(new MemoryEvent('click')));
+    expect(execute).toHaveBeenCalledExactlyOnceWith('copy');
+    expect([...data.values.keys()]).toEqual(['text/plain']);
+    expect(JSON.parse(data.values.get('text/plain')!)).toEqual([{ bits: { type: 'binary', base64: 'AP8=' }, nil: null, n: '9223372036854775807' }]);
+  } finally { Reflect.deleteProperty(document, 'execCommand'); }
+});
 it('隐藏和重排后整行copy只含可见原字段，paste锚点带准确显示映射，旧布局回调拒绝', async () => {
   const f = await mount(); await f.render({ projection: [{ index: 4, frozen: false }, { index: 0, frozen: false }, { index: 2, frozen: false }] });
   await act(async () => port.props!.onSelectedRowsChange(new Set(['r0', 'r1']))); const copied = await copy(port.props!, f.rows[0], 'c4');

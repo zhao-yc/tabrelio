@@ -12,6 +12,7 @@ import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryRe
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { validateResultExportData } from '../../src/shared/resultExport';
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
+import { gridJsonClipboardZh as jsonText } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 const grids=vi.hoisted(()=>({all:[] as any[]}));
@@ -70,6 +71,26 @@ async function conditionField(label: string, value: string) {
   expect(node).not.toBeNull();
   await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent(node.tagName === 'SELECT' ? 'change' : 'input')); });
 }
+
+it('复制 JSON 使用当前可见列及勾选行，改选后旧动作不可重放', async () => {
+  await mount();
+  const port = clipboardPort();
+  await layout();
+  await act(async () => mainGrid().onSelectedRowsChange(new Set([1, 0])));
+  const stale = callback(button(jsonText.action));
+  await click(jsonText.action);
+  expect([...port.writes[0].keys()]).toEqual(['text/plain']);
+  expect(JSON.parse(port.writes[0].get('text/plain')!)).toEqual([
+    { 字节: { type: 'binary', base64: 'AP8=' }, 同名: '18446744073709551615', '同名 [3]': '0.12345678901234567890', 空值: '' },
+    { 字节: { type: 'binary', base64: '' }, 同名: '', '同名 [3]': '1.00000000000000000001', 空值: null },
+  ]);
+  await act(async () => mainGrid().onSelectedRowsChange(new Set([1])));
+  await act(async () => stale());
+  expect(port.writes).toHaveLength(1);
+  await click(jsonText.action);
+  expect(JSON.parse(port.writes[1].get('text/plain')!)).toHaveLength(1);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
 
 it.each(['clear', 'excluded'] as const)('筛选后多列排序的含列名复制使用同一可见矩阵，%s撤销旧动作', async mode => {
   await mount(true); const port = clipboardPort(), before = structuredClone(original); await layout();

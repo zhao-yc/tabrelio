@@ -4,7 +4,7 @@ import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableEditZh as text } from '../locales/sqliteTableEdit.zh-CN';
 import { sqliteTableClipboardZh as clipboardText } from '../locales/sqliteTableClipboard.zh-CN';
-import { encodeSqliteClipboard, writeSqliteClipboardData } from '../sqliteTableClipboard';
+import { encodeSqliteClipboard, sqliteClipboardProtocolCell, writeSqliteClipboardData } from '../sqliteTableClipboard';
 import { sqliteTableRangePasteZh as rangeText } from '../locales/sqliteTableRangePaste.zh-CN';
 import type { SqlitePasteAnchor } from '../sqliteTableRangePaste';
 import type { SqliteCheckedRows } from '../sqliteTableSelection';
@@ -13,7 +13,8 @@ import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.
 import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
-import { writeTableClipboardEvent } from '../gridClipboard';
+import { encodeGridJson, writeTableClipboardEvent } from '../gridClipboard';
+import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
 import { primaryKeyCopyZh as keyCopyText } from '../locales/primaryKeyCopy.zh-CN';
@@ -153,14 +154,26 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
       if (!current(row) || !noModal()) return; writeSqliteClipboardData(event.clipboardData, content); setError('');
     } catch (reason) { try { event.clipboardData.clearData(); } catch { /* 仅原事件可清理，不借系统剪贴板重试。 */ } if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
   }
-  /** 当前列与含表头复制都只读本页，并共用 SQLite 类型化剪贴板。 */
-  function copyFromGrid(mode: 'headers' | 'column') {
+  /** 复制只读本页；JSON 取当前记录的全部可见列。 */
+  function copyFromGrid(mode: 'headers' | 'column' | 'json') {
     const allowed = () => !disabled && current() && noModal();
     if (!allowed()) return;
     try {
       const checked = rows.filter(item => selectedRows.has(item.id) && !item.deleted);
       const cell = activeCell.current.position;
       if (selectedRows.size && !checked.length) throw Error(headerCopyText.stale);
+      if (mode === 'json') {
+        const records = selectedRows.size ? checked :
+          cell && !cell.row.deleted && order.some(index => cell.key === 'c' + index) ? [cell.row] : [];
+        if (selectedRows.size && checked.length !== selectedRows.size ||
+            records.some(row => row.values.length !== page.columns.length)) throw Error(jsonCopyText.invalid);
+        const columns = order.map(index => ({ key: String(index), name: page.columns[index].name }));
+        const json = encodeGridJson(columns, records, (row, key) => sqliteClipboardProtocolCell(row.values[Number(key)]));
+        writeTableClipboardEvent(allowed, data => data.setData('text/plain', json));
+        setError('');
+        useWorkspace.getState().notify(jsonCopyText.copied);
+        return;
+      }
       let content;
       if (mode === 'column') {
         const index = cell ? order.find(index => cell.key === 'c' + index) : undefined;
@@ -230,6 +243,8 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
   }
 
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+    <button type="button" title={jsonCopyText.hint} disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
+      onClick={() => copyFromGrid('json')}>{jsonCopyText.action}</button>
     {page.insertCopy && <CopyInsertSqlButtons disabled={disabled} current={hasActiveDataColumn}
       selected={!!selectedRows.size} onCopy={checked => handleTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied)}/>}
     {!!page.primaryKey?.length && <button type="button" title={keyCopyText.hint}

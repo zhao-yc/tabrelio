@@ -4,6 +4,8 @@ import type { DraftRow } from './dataChanges';
 import { cellText } from './lib';
 import { binaryByteLength } from './binaryCell';
 import { tableHeaderCopyZh } from './locales/tableHeaderCopy.zh-CN';
+import { resultExportColumns, resultExportLimits } from '../shared/resultExport';
+import { gridJsonClipboardZh } from './locales/gridJsonClipboard.zh-CN';
 
 export const cellClipboardType = 'application/x-dbark-cells';
 /** undefined 仅表示新增行尚未填写的 DEFAULT，不能编码成实际 NULL。 */
@@ -122,6 +124,64 @@ export function encodeClipboard(values: ClipboardCell[][], headers?: readonly st
   const text = headers ? headers.map(quote).join('\t') + '\n' + body : body;
   if (text.length > maxClipboardCharacters) throw new Error(zh.clipboard.copySizeLimit);
   return { text, typed };
+}
+
+/** JSON 使用与文件导出相同的列名映射。按格校验和计量，完整编码后才允许写剪贴板。 */
+export function encodeGridJson<Row>(columns: readonly { key: string; name: string }[], rows: readonly Row[],
+  read: (row: Row, key: string) => ClipboardCell): string {
+  if (!columns.length || columns.length > resultExportLimits.columns || !rows.length) throw Error(gridJsonClipboardZh.invalid);
+  if (columns.length * rows.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
+  if (columns.some(column => typeof column.name !== 'string' || column.name.length > 1024 ||
+      typeof column.key !== 'string' || !column.key) || new Set(columns.map(column => column.key)).size !== columns.length)
+    throw Error(gridJsonClipboardZh.invalid);
+  const names = resultExportColumns(columns.map(({ key, name }) => ({ key, name })))
+    .map(({ key, exportName }) => ({ key, label: JSON.stringify(exportName) + ': ' }));
+  const parts: string[] = [];
+  let units = 0;
+  function append(part: string) {
+    units += part.length;
+    if (units > maxClipboardCharacters) throw Error(zh.clipboard.copySizeLimit);
+    parts.push(part);
+  }
+  function encode(value: CellValue): string {
+    const available = maxClipboardCharacters - units;
+    if (typeof value === 'string') {
+      measureClipboardString(value, Infinity, available);
+      return JSON.stringify(value);
+    }
+    if (value === null || typeof value === 'boolean' ||
+        typeof value === 'number' && Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value)))
+      return JSON.stringify(value);
+    if (value && typeof value === 'object') {
+      const type = Object.getOwnPropertyDescriptor(value, 'type')?.value;
+      const base64 = Object.getOwnPropertyDescriptor(value, 'base64')?.value;
+      if (type === 'binary' && typeof base64 === 'string' && Reflect.ownKeys(value).length === 2) {
+        if (base64.length + clipboardBinaryOverhead > available) throw Error(zh.clipboard.copySizeLimit);
+        const padding = base64.indexOf('=');
+        if (base64.length % 4 === 0 && !/[^A-Za-z0-9+/=]/.test(base64) &&
+            (padding < 0 || padding >= base64.length - 2 && /^={1,2}$/.test(base64.slice(padding))))
+          return JSON.stringify({ type, base64 });
+      }
+    }
+    throw Error(gridJsonClipboardZh.invalid);
+  }
+  append('[\n');
+  rows.forEach((row, index) => {
+    append(index ? ',\n  {' : '  {');
+    let first = true;
+    for (const { key, label } of names) {
+      const value = read(row, key);
+      // 编辑草稿的 DEFAULT 没有实际值，省略属性以区别于显式 NULL。
+      if (value === undefined) continue;
+      if (!first) append(', ');
+      first = false;
+      append(label);
+      append(encode(value));
+    }
+    append('}');
+  });
+  append('\n]');
+  return parts.join('');
 }
 
 /** 从显式复制入口同步写当前事件，不读取剪贴板，也不重试过期的操作。 */
