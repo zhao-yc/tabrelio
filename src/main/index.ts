@@ -1910,6 +1910,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (shuttingDown) throw Error('客户端正在退出，不能读取保存查询正文');
     return savedQuerySearches.readText(input);
   }
+  // 只把原记录的完整正文写入系统剪贴板，不接收渲染进程提供的 SQL。
+  if (command === 'queries.copySql' || command === 'history.copySql') {
+    columnsMain.assertCapturedOwner(columns);
+    if (shuttingDown) throw Error('客户端正在退出，不能复制 SQL');
+    const sql = command === 'history.copySql' ? historyPages.readSql(input).sql : savedQuerySearches.readText(input).query.sql;
+    columnsMain.assertCapturedOwner(columns);
+    return clipboard.writeText(sql);
+  }
   // 文件路径仅来自原生对话框。领取目标占用后按原摘要读取本地快照，再原子保存。
   if (command === 'queries.exportSql' || command === 'history.exportSql') {
     const fromHistory = command === 'history.exportSql';
@@ -3591,7 +3599,7 @@ else {
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command === 'cellFiles.saveText' || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.copySql' || payload.command === 'history.copySql' || payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || payload.command === 'sqlite.tableExport' || payload.command === 'sqlite.queryExport' || payload.command === 'sqlite.workbookExport' || payload.command === 'postgres.workbookExport' || payload.command === 'mysql.workbookExport' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -3629,6 +3637,7 @@ else {
           if (payload.command === 'sqlite.relationships') { if (!columns?.sqliteRelationshipsPublication) throw Error('SQLite关系图缺少原窗口发布门'); columns.sqliteRelationshipsPublication(); }
           if (payload.command === 'sqlite.valueOptions') { if (!columns?.sqliteValueOptionsPublication) throw Error('SQLite不同值缺少原窗口发布门'); columns.sqliteValueOptionsPublication(); }
           if (payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript' || payload.command === 'sqlite.view.inspectQuery' || payload.command === 'sqlite.view.dependencies') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }
+          if (payload.command === 'queries.copySql' || payload.command === 'history.copySql') columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
           if (payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);

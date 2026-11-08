@@ -227,6 +227,7 @@ export interface CommandMap {
   'queries.readText':{input:import('./savedQuerySearch').SavedQueryReadTextInput;output:import('./savedQuerySearch').SavedQueryReadTextResult};
   'queries.exportSql':{input:import('./savedQuerySearch').SavedQueryReadTextInput;output:import('./savedQuerySearch').SavedQueryExportSqlResult};
   'queries.exportSqlArchive':{input:import('./savedQuerySearch').SavedQueryExportSqlArchiveInput;output:import('./savedQuerySearch').SavedQueryExportSqlArchiveResult};
+  'queries.copySql': { input: import('./savedQuerySearch').SavedQueryReadTextInput; output: void };
   'queries.importSql':{input:{encoding:QueryFileEncoding};output:import('./savedQuerySearch').SavedQueryImportSqlResult};
   'queries.page':{input:SavedQueryPageInput;output:SavedQueryPage};
   'queries.organizationGet': { input: Record<string, never>; output: SavedQueryOrganizationSnapshot };
@@ -586,6 +587,7 @@ export interface CommandMap {
   'history.readError':{input:{id:string;digest:string};output:{error:string}};
   'history.readSql':{input:{id:string;digest:string};output:{sql:string}};
   'history.exportSql': { input: import('./historyPages').HistoryExportSqlInput; output: import('./historyPages').HistoryExportSqlResult };
+  'history.copySql': { input: import('./historyPages').HistoryRecordReference; output: void };
   'history.exportSqlArchive': { input: import('./historyPages').HistoryExportSqlArchiveInput; output: import('./savedQuerySearch').SavedQueryExportSqlArchiveResult };
   'history.saveQuery': { input: import('./historyPages').HistorySaveQueryInput; output: { name: string } };
   'history.deletePreview': { input: HistoryDeletePreviewInput; output: HistoryDeletePreviewOutput };

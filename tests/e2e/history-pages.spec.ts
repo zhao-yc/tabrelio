@@ -170,6 +170,75 @@ test('从历史离线保存完整查询，保留执行上下文或解除绑定',
  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(2);
 });
 
+test('历史和保存查询直接复制完整正文，记录失效不覆盖剪贴板端口', async () => {
+ const historySql = 'SELECT 9007199254740993;\r\n-- ' + '历'.repeat(70000) + '😀历史尾部';
+ const savedSql = 'SELECT 9007199254740994;\r\n-- ' + '存'.repeat(70000) + '😀保存尾部';
+ await seed(store => {
+  store.addHistory(entry({ id: 'copy-history', connectionId: 'deleted', sql: historySql }));
+  store.saveQuery({ id: 'copy-saved', name: '待复制查询', sql: savedSql, updatedAt: '2026-10-15T00:00:00Z' });
+ });
+ await desktop.evaluate(({ ipcMain, clipboard }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args:any[]) => unknown> })._invokeHandlers;
+  const previous = handlers.get('dbark:request'); if (!previous) throw Error('缺少原历史 IPC 入口');
+  const state = { writes: [] as string[], commands: [] as string[], denied: 0 };
+  Object.assign(globalThis, { __sqlCopyFixture: state });
+  // 只观察 Electron Main 的写入参数，不读写测试电脑的系统剪贴板。
+  const write = (sql: string) => { state.writes.push(sql); };
+  Object.defineProperty(clipboard, 'writeText', { value: write, configurable: true, writable: true });
+  if (clipboard.writeText !== write) throw Error('未隔离系统剪贴板');
+  handlers.set('dbark:request', async (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command) ||
+       command === 'history.readSql' || command === 'queries.readText') {
+    state.denied++;
+    throw Error('直接复制不能执行 SQL 或把完整正文传回界面');
+   }
+   if (command !== 'history.copySql' && command !== 'queries.copySql') return previous(event, payload);
+   if (clipboard.writeText !== write) throw Error('系统剪贴板隔离已失效');
+   const { id, digest } = payload.input;
+   if (Object.keys(payload.input).length !== 2 || !/^[a-f0-9]{64}$/.test(digest) ||
+       id !== (command === 'history.copySql' ? 'copy-history' : 'copy-saved')) throw Error('复制未使用原记录引用');
+   if (state.commands.includes(command)) {
+    if (command === 'queries.copySql') {
+     const result = await previous(event, { command: 'queries.delete', input: { id } }) as { ok: boolean };
+     if (!result.ok) throw Error('未删除原保存查询');
+    } else {
+     const preview = await previous(event, { command: 'history.deletePreview', input: { taskId: crypto.randomUUID(), scope: { kind: 'selected', records: [{ id, digest }] } } }) as { ok: boolean; result?: { previewToken: string } };
+     if (!preview.ok || !preview.result) throw Error('未取得历史删除预览');
+     const result = await previous(event, { command: 'history.deleteApply', input: { previewToken: preview.result.previewToken } }) as { ok: boolean; result?: { deleted: number } };
+     if (!result.ok || result.result?.deleted !== 1) throw Error('未删除原历史');
+    }
+   }
+   state.commands.push(command);
+   const result = await previous(event, payload) as { ok: boolean; result?: unknown };
+   if (result.ok && result.result !== undefined) throw Error('复制不应返回 SQL 正文');
+   return result;
+  });
+ });
+ const before = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+ await open();
+ const button = dialog().getByRole('button', { name: text.sqlCopy, exact: true });
+ const copied = dialog().getByText(text.sqlCopied, { exact: true });
+ await button.click();
+ await expect(copied).toBeVisible();
+ await button.click();
+ await expect(dialog().getByRole('alert')).toContainText('执行历史已移除');
+ await expect(copied).toHaveCount(0);
+ await dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click();
+ await expect(dialog().getByText('待复制查询', { exact: true })).toBeVisible();
+ await button.click();
+ await expect(copied).toBeVisible();
+ await button.click();
+ await expect(dialog().getByRole('alert')).toContainText('保存查询已删除');
+ await expect(copied).toHaveCount(0);
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __sqlCopyFixture: unknown }).__sqlCopyFixture)).toEqual({
+  writes: [historySql, savedSql], commands: ['history.copySql', 'history.copySql', 'queries.copySql', 'queries.copySql'], denied: 0,
+ });
+ expect(await page.evaluate(() => window.dbark.invoke('settings.get', {}))).toEqual(before);
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('跨批次导出历史 ZIP，保留原文和已有目标文件', async () => {
  const sql = (id: number) => `SELECT ${id};\r\n-- ${'中'.repeat(600)}😀`;
  await seed(store => {

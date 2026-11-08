@@ -12,6 +12,7 @@ export const historyPagesZh={
  pending:'筛选已改变，请重新搜索。',summary:'第{0}批 · 已检查{1}条 · 匹配{2}条 · 读取失败{3}条',failedStop:'遇到记录错误，已停止。',more:'还有下一批记录。',done:'已读取完毕。',
  choose:'选择打开历史的连接',connection:'打开历史的连接：{0}',sourceMissing:'来源连接不存在',preview:'SQL 共 {0} 个 UTF-16 单元，可分段查看完整正文。',
  sqlFull:'查看完整 SQL',sqlTitle:'完整历史 SQL',sqlClose:'收起完整 SQL',sqlPart:'第 {0} / {1} 段',sqlPrevious:'上一段 SQL',sqlNext:'下一段 SQL',
+ sqlCopy:'复制完整 SQL', sqlCopied:'已复制完整 SQL',
  sqlChanged:'原历史摘要已变化，请刷新后查看。',
  sqlExport:'另存历史 SQL', sqlExportEncoding:'历史 SQL 导出编码',
  sqlExportHint:'保存该条历史的完整 SQL 正文，保留原换行。可以在离线状态下另存。',
