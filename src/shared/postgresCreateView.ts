@@ -20,6 +20,12 @@ export const postgresEditViewPreviewSchema = postgresStructureInputSchema.extend
   stamp: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export type PostgresEditViewInput = z.infer<typeof postgresEditViewPreviewSchema>;
+export const postgresViewQueryInspectSchema = postgresCreateTableSchemasSchema.extend({
+  definition: definitionSchema,
+  mode: z.enum(['rows', 'explain']),
+}).strict();
+export type PostgresViewQueryInspectInput = z.infer<typeof postgresViewQueryInspectSchema>;
+export const postgresViewQuerySampleRows = 100;
 
 const viewManageTarget = postgresStructureInputSchema.extend({
   stamp: z.string().regex(/^[a-f0-9]{64}$/),

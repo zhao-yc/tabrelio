@@ -7,6 +7,7 @@ import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { PostgresViewQueryInspect } from './PostgresViewQueryInspect';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import './PostgresCreateTableDialog.css';
 
@@ -140,6 +141,8 @@ export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreate
             apply={sql => edit('definition', sql)}/>
           {materialized && <label><input type="checkbox" checked={draft.populate}
             onChange={event => edit('populate', event.target.checked)} /> {text.populate}</label>}
+          <PostgresViewQueryInspect target={target} owner={draft} definition={draft.definition}
+            disabled={busy || loading || unknown || !schemas.length} current={importCurrent}/>
         </fieldset>}
     </div>
     <footer className="modal-footer">

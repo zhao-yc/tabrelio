@@ -5,6 +5,7 @@ import { postgresViewEditZh as text } from '../locales/postgresViewEdit.zh-CN';
 import { ErrorBox } from './ui';
 import { usePostgresStructureEdit, type PostgresStructureEditProps } from './usePostgresStructureEdit';
 import { ViewSqlFileImport } from './ViewSqlFileImport';
+import { PostgresViewQueryInspect } from './PostgresViewQueryInspect';
 import { viewSqlFileZh } from '../locales/viewSqlFile.zh-CN';
 import { useWorkspace } from '../store';
 
@@ -51,6 +52,8 @@ export function PostgresViewEditPanel(props: PostgresStructureEditProps) {
         value={definition} disabled={busy || unknown} onChange={event => changeDefinition(event.target.value)}/></label>
       <ViewSqlFileImport owner={importOwner} value={definition} disabled={busy || unknown}
         hint={viewSqlFileZh.postgresHint} current={importCurrent} prepare={preparePostgresViewDefinition} apply={changeDefinition}/>
+      <PostgresViewQueryInspect target={target} owner={importOwner} definition={definition}
+        disabled={busy || unknown} current={importCurrent}/>
     </>}
     <div className="pg-column-edit-actions">
       {preview ? <>

@@ -30,6 +30,7 @@ import {
 import { PostgresConnection } from './connection';
 import { readRelation, PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
+import { inspectPostgresViewQuery } from './viewQueryInspect';
 import { postgresSchemaCatalog } from './schemaManage';
 import { readPostgresStorage, readPostgresStorageDetail } from './storage';
 import { postgresStorageDetailSchema, postgresStorageReadSchema } from '../../shared/postgresStorage';
@@ -1266,6 +1267,7 @@ export class PostgresEngine {
       case 'postgres.createTable.copy.apply':
       case 'postgres.createView.preview':
       case 'postgres.createView.apply':
+      case 'postgres.createView.inspectQuery':
       case 'postgres.editView.preview':
       case 'postgres.editView.apply':
       case 'postgres.tableManage.preview':
@@ -1347,6 +1349,10 @@ export class PostgresEngine {
         if (command === 'postgres.createTable.copy.apply' && input.confirmed !== true)
           throw Error('请明确确认 PostgreSQL 表复制');
         if (command === 'postgres.createView.preview') return this.creations.prepareView(input as Parameters<PostgresCreateTableWorkspace['prepareView']>[0], connect);
+        if (command === 'postgres.createView.inspectQuery') {
+          const { profile: _profile, owner: _owner, connectionRevision: _revision, ...request } = input;
+          return connect(connection => inspectPostgresViewQuery(connection, request));
+        }
         if (command === 'postgres.editView.preview') return this.creations.prepareViewEdit(input as Parameters<PostgresCreateTableWorkspace['prepareViewEdit']>[0], connect);
         if (command === 'postgres.tableManage.preview' || command === 'postgres.tableManage.apply') {
           const { profile: _profile, ...draft } = input;

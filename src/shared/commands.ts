@@ -31,6 +31,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.createTable.schemas': true, 'postgres.createTable.preview': true, 'postgres.createTable.apply': true,
   'postgres.createTable.copy.preview': true, 'postgres.createTable.copy.apply': true,
   'postgres.createView.preview': true, 'postgres.createView.apply': true,
+  'postgres.createView.inspectQuery': true,
   'postgres.editView.preview': true, 'postgres.editView.apply': true,
   'postgres.tableManage.preview': true, 'postgres.tableManage.apply': true,
   'postgres.viewManage.preview': true, 'postgres.viewManage.apply': true,
