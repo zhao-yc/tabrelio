@@ -1,3 +1,4 @@
+import { tableApplyShortcut } from '../tableApplyShortcut';
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { FilterGroup, FilterMode, FilterRule } from '../../shared/contracts';
 import { FILTER_LIMITS, copyFilterRules, validateFilterGroup } from '../../shared/filtering';
@@ -107,7 +108,8 @@ export function TableFilterGroupsDialog({ filters, mode, initial, presentation, 
   /** 输入法拥有的按键及已消费事件不触发应用/取消，也不会穿透至底层表页。 */
   function keyDown(event: KeyboardEvent<HTMLElement>): void {
     if (event.defaultPrevented || event.nativeEvent?.defaultPrevented || event.nativeEvent?.isComposing || event.keyCode === 229 || composition.current || event.repeat) return;
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); apply(); }
+    if (tableApplyShortcut(event)) apply();
+    else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); apply(); }
     else if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); cancel(); }
   }
   const groups: { group: Group; path: string; depth: number }[] = [];

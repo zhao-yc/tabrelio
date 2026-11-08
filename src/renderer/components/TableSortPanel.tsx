@@ -1,3 +1,4 @@
+import { tableApplyShortcut } from '../tableApplyShortcut';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { SortRule } from '../../shared/contracts';
 import { tableSortZh as text } from '../locales/tableSort.zh-CN';
@@ -46,7 +47,9 @@ export function TableSortPanel({ columns, initial, hint = text.hint, isCurrent, 
     catch (reason) { consumed.current = false; setError(errorMessage(reason)); }
   }
   const disabled = invalid.current || consumed.current, available = columns.filter(column => !draft.some(item => item.rule.column === column));
-  return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title}>
+  return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title} onKeyDown={event => {
+    if (!disabled && tableApplyShortcut(event)) apply();
+  }}>
     <strong>{text.title}</strong><UsageHelp><p>{hint}</p><p>{text.ties}</p></UsageHelp>
     {!draft.length && <p>{text.empty}</p>}
     {draft.map(({ id, rule }, index) => <div className="filter-inputs" key={id}>

@@ -118,6 +118,19 @@ describe('表条件分组的真实内联面板', () => {
     const escape = key({ key: 'Escape', ctrlKey: false }); await act(async () => handler(escape)); expect(f.onClose).toHaveBeenCalledOnce(); expect(escape.stopPropagation).toHaveBeenCalledOnce();
   });
 
+  it('Ctrl+R 只应用焦点所在的分组，不接管面板外按键', async () => {
+    const f = await mount(), region = node(text.title), handler = reactProps(region).onKeyDown;
+    const outside = key({ key: 'r', currentTarget: region, target: document.body });
+    const inside = key({ key: 'r', currentTarget: region, target: button(text.apply) });
+    await act(async () => handler(outside));
+    expect(outside.preventDefault).not.toHaveBeenCalled();
+    expect(f.onApply).not.toHaveBeenCalled();
+    await act(async () => handler(inside));
+    expect(inside.preventDefault).toHaveBeenCalledOnce();
+    expect(inside.stopPropagation).toHaveBeenCalledOnce();
+    expect(f.onApply).toHaveBeenCalledOnce();
+  });
+
   it('已消费按钮及选择事件不改变树，也不能应用或取消', async () => {
     const f = await mount(), apply = reactProps(button(text.apply)).onClick, cancel = reactProps(button(text.cancel)).onClick, add = reactProps(button(text.addGroup())).onClick;
     await act(async () => { apply({ defaultPrevented: true }); cancel({ nativeEvent: { defaultPrevented: true } }); add({ defaultPrevented: true }); reactProps(node(text.groupMode())).onChange({ defaultPrevented: true, target: { value: 'any' } }); });

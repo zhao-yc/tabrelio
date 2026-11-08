@@ -1,3 +1,4 @@
+import { tableApplyShortcut } from '../tableApplyShortcut';
 import { useState } from 'react';
 import type { FilterGroup, FilterMode, FilterRule } from '../../shared/contracts';
 import { postgresAdvancedTableFilterSchema, type PostgresAdvancedTableFilter } from '../../shared/postgresTable';
@@ -29,12 +30,20 @@ export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onS
   const [grouping, setGrouping] = useState(false);
   const [error, setError] = useState('');
 
-  function apply() {
-    if (!rules.length) { onApply(); return; }
-    const result = postgresAdvancedTableFilterSchema.safeParse({ rules, mode, group });
-    if (!result.success) { setError(result.error.issues[0]?.message ?? text.invalidFilter); return; }
+  function apply(next = rules): boolean {
+    if (disabled || grouping || selected || values) return false;
+    const nextGroup = next === rules ? group : tableFilterGroupAfterChange(rules, next, group, mode);
+    if (!next.length) { onApply(); return true; }
+    const result = postgresAdvancedTableFilterSchema.safeParse({ rules: next, mode, group: nextGroup });
+    if (!result.success) { setError(result.error.issues[0]?.message ?? text.invalidFilter); return false; }
+    if (next !== rules) {
+      setRules(next);
+      setGroup(nextGroup);
+      if (next.length > rules.length && seed) onSeedAdded?.();
+    }
     setError('');
     onApply(result.data);
+    return true;
   }
 
   function addValues(column: string, selected: readonly (string | null)[], exclude: boolean) {
@@ -70,8 +79,10 @@ export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onS
         <button type="button" onClick={onCloseSelected}>{selectedText.cancel}</button>
       </div>
     </fieldset>}
-    <div className="pg-filter-editor" hidden={!!selected}>
-      <TableFilterPanel columns={columns} filters={rules} mode={mode} disabled={disabled || grouping}
+    <div className="pg-filter-editor" hidden={!!selected} onKeyDown={event => {
+      if (!disabled && !grouping && !values && !selected && tableApplyShortcut(event)) apply();
+    }}>
+      <TableFilterPanel columns={columns} filters={rules} mode={mode} disabled={disabled || grouping || !!values} applyShortcut={apply}
         seed={seed} seedNotice={tableCellFilterZh.postgresStaged} multilineScalar
         onFiltersChange={next => {
           setGroup(tableFilterGroupAfterChange(rules, next, group, mode));
@@ -88,7 +99,7 @@ export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onS
         <button type="button" disabled={disabled || grouping || !canReadValues} onClick={onOpenValues}>{text.valueOptions.open}</button>
         <button disabled={disabled || grouping || !rules.length} onClick={() => setGrouping(true)}>{text.filterGroups}</button>
         {group && <span className="muted small" title={tableFilterGroupSummary(group)}>{text.filterGrouped}</span>}
-        <button className="primary" disabled={disabled || grouping} onClick={apply}>{text.applyAdvancedFilter}</button>
+        <button className="primary" disabled={disabled || grouping} onClick={() => apply()}>{text.applyAdvancedFilter}</button>
       </div>
     </div>
     <ErrorBox message={error}/>

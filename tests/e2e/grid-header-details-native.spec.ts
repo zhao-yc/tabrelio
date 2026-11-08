@@ -7,15 +7,20 @@ import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridHeaderDetailsZh as text } from '../../src/renderer/locales/gridHeaderDetails.zh-CN';
 import { sqliteTableBrowseZh as sqlite } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { postgresTableZh as postgres } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
 const taskIds = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
+const applyKey = process.platform === 'darwin' ? 'Meta+r' : 'Control+r';
+const rowLabels = (grid: Locator) => grid.getByRole('gridcell').filter({ hasText: /row [ABC]$/ });
 
 /** 从真实数据格与列标题分别操作，并核对结果行而非只读排序图标。 */
 async function sortFromGrid(grid: Locator, last: string): Promise<void> {
   const header = grid.getByRole('columnheader').filter({ hasText: /^label/ });
-  const labels = grid.getByRole('gridcell').filter({ hasText: /row [ABC]$/ });
+  const labels = rowLabels(grid);
   await labels.filter({ hasText: /row A$/ }).click({ timeout: 5000 });
   await page.keyboard.press('Meta+ArrowDown');
   await expect(labels.first()).toHaveText(new RegExp(last + '$'));
@@ -75,6 +80,26 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(header('label').locator('.column-type')).toHaveCount(0);
     await expect(header('label')).toHaveAttribute('aria-sort', 'ascending');
     if (process.platform === 'darwin') await sortFromGrid(tab, 'row B');
+    await (await navigationMenuItem(tab, { name: sqlite.conditions, exact: true })).click();
+    await tab.getByRole('button', { name: sqlite.addFilter, exact: true }).click();
+    await tab.getByLabel(sqlite.filterColumn(1), { exact: true }).selectOption('label');
+    const filter = tab.getByLabel(sqlite.filterValue(1), { exact: true });
+    await filter.fill('row B');
+    await expect(rowLabels(tab)).toHaveCount(2);
+    await filter.dispatchEvent('keydown', {
+      key: 'r', isComposing: true, ctrlKey: process.platform !== 'darwin', metaKey: process.platform === 'darwin',
+    });
+    await expect(rowLabels(tab)).toHaveCount(2);
+    await filter.press(applyKey);
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    await tab.getByRole('button', { name: sqlite.removeFilter(1), exact: true }).click();
+    const direction = tab.getByLabel(sqlite.sortDirection(1), { exact: true });
+    await direction.selectOption('desc');
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await direction.press(applyKey);
+    await expect(rowLabels(tab)).toHaveCount(2);
+    await expect(rowLabels(tab).first()).toHaveText(/row B$/);
     await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
     await expect(header('label')).toBeVisible();
     await toggle(text.showType);
@@ -144,6 +169,45 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     await expect(header).toHaveText('label');
     expect(await taskIds()).toEqual(before);
     if (process.platform === 'darwin') await sortFromGrid(tab, 'row C');
+
+    await (await navigationMenuItem(tab, { name: sort.entry, exact: true })).click();
+    const sortPanel = tab.getByRole('region', { name: sort.title, exact: true });
+    const direction = sortPanel.getByLabel(sort.direction(1), { exact: true });
+    if (process.platform !== 'darwin') {
+      await sortPanel.getByRole('button', { name: sort.add, exact: true }).click();
+      await sortPanel.getByLabel(sort.field(1), { exact: true }).selectOption('label');
+    }
+    await direction.selectOption('DESC');
+    await direction.press(applyKey);
+    await expect(sortPanel).toBeHidden();
+    await expect(rowLabels(tab).first()).toHaveText(/row C$/);
+
+    if (dialect === 'postgresql') {
+      await tab.getByLabel(postgres.filterColumn, { exact: true }).selectOption('label');
+      const quick = tab.getByLabel(postgres.filterText, { exact: true });
+      await quick.fill('row B');
+      await quick.press(applyKey);
+      await expect(rowLabels(tab)).toHaveCount(1);
+      await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+      await tab.getByRole('button', { name: postgres.clearFilter, exact: true }).click();
+      await expect(rowLabels(tab)).toHaveCount(3);
+      await tab.getByRole('button', { name: postgres.advancedFilter, exact: true }).click();
+    } else {
+      await (await navigationMenuItem(tab, { name: zh.table.text006, exact: true })).click();
+    }
+    const form = tab.locator('.filter-rule-form'), field = form.getByLabel(zh.table.text009, { exact: true });
+    const value = form.getByLabel(zh.table.text011, { exact: true });
+    if (dialect === 'postgresql') {
+      await field.selectOption('scope');
+      await value.fill('B');
+      await form.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    }
+    await field.selectOption('label');
+    await value.fill('row C');
+    await expect(rowLabels(tab)).toHaveCount(3);
+    await value.press(applyKey);
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await expect(rowLabels(tab).first()).toHaveText(/row C$/);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
