@@ -4,7 +4,7 @@ import { isAbsolute } from 'node:path';
 import { Readable } from 'node:stream';
 import { firstPostgresFileStatement, IncompletePostgresSql, isBarePostgresFileControl, postgresIdentifier,
   isPostgresInlineCopy, skipPostgresTrivia, type PostgresStatement } from '../../shared/postgresSql';
-import { postgresSqlFileLimits as limits, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
+import { postgresSqlFileLimits as limits, type PostgresSqlFileInspection, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
 import type { PostgresConnection } from './connection';
 
 export interface PostgresSqlFileSource { path: string; version: string; bytes: number }
@@ -54,6 +54,13 @@ async function assertVersion(source: PostgresSqlFileSource, file: FileHandle) {
 export async function assertPostgresSqlFileSource(source: PostgresSqlFileSource) {
   if (!isAbsolute(source.path) || version(await lstat(source.path, { bigint: true })) !== source.version)
     throw new FileFailure('file');
+}
+
+async function openPostgresSqlFile(source: PostgresSqlFileSource) {
+  await assertPostgresSqlFileSource(source);
+  const file = await open(source.path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
+  try { await assertVersion(source, file); return file; }
+  catch (reason) { await file.close(); throw reason; }
 }
 
 const databaseBudget = () => ({ rows: 1, bytes: 2048 });
@@ -204,12 +211,108 @@ export interface PostgresSqlFileControl {
   progress(statements: number): void;
 }
 
+type FileAction = { kind: 'skip' } | { kind: 'copy' } | { kind: 'sql'; largeObject?: ReturnType<typeof largeObjectStep> };
+
+/** 文件检查和执行共用事务外壳、限制标记、COPY 和指令准入规则。 */
+class FilePolicy {
+  private wrapped = false;
+  private wrapperEnded = false;
+  private restrictionKey?: string;
+  private restrictionEnded = false;
+  private largeObject?: LargeObjectState;
+
+  accept(part: FilePart, standardStrings: boolean, completed: number): FileAction {
+    if ('directive' in part) {
+      if (this.largeObject) throw new FileFailure('command');
+      if (part.directive === 'restrict' && !this.restrictionKey && !completed && !this.wrapped) this.restrictionKey = part.key;
+      else if (part.directive === 'unrestrict' && this.restrictionKey && this.restrictionKey === part.key &&
+          !this.restrictionEnded && completed && this.wrapped === this.wrapperEnded) this.restrictionEnded = true;
+      else throw new FileFailure('command');
+      return { kind: 'skip' };
+    }
+    if (this.restrictionEnded || this.wrapperEnded) throw new FileFailure('command');
+    if (!this.largeObject && part.keyword === 'BEGIN' && isBarePostgresFileControl(part.sql, 'BEGIN')) {
+      if (!completed && !this.wrapped) this.wrapped = true;
+      else this.largeObject = 'empty';
+      return { kind: 'skip' };
+    }
+    if (part.keyword === 'COMMIT' && isBarePostgresFileControl(part.sql, 'COMMIT')) {
+      if (this.largeObject === 'closed') this.largeObject = undefined;
+      else if (!this.largeObject && this.wrapped && completed) this.wrapperEnded = true;
+      else throw new FileFailure('command');
+      return { kind: 'skip' };
+    }
+    const largeObject = this.largeObject && largeObjectStep(part.sql, this.largeObject, standardStrings);
+    const copy = part.keyword === 'COPY';
+    if (part.parameters.length || !(copy ? isPostgresInlineCopy(part.sql, standardStrings) : allowed.has(part.keyword)))
+      throw new FileFailure('command');
+    if (completed >= limits.statements) throw new FileFailure('budget');
+    if (largeObject) this.largeObject = largeObject.next;
+    return copy ? { kind: 'copy' } : { kind: 'sql', ...(largeObject ? { largeObject } : {}) };
+  }
+
+  finish(completed: number) {
+    if (!completed || this.wrapped !== this.wrapperEnded || Boolean(this.restrictionKey) !== this.restrictionEnded || this.largeObject)
+      throw new FileFailure('command');
+  }
+}
+
+const structureKeywords = new Set(['CREATE', 'ALTER', 'DROP', 'COMMENT', 'GRANT', 'REVOKE', 'SECURITY']);
+const changeKeywords = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE']);
+const inspectionReasons = ['file', 'encoding', 'syntax', 'budget', 'command'] as const;
+
+/** 离线扫描假定默认标准字符串开启，跟踪常见的显式 SET 和 RESET。服务器语义仍由实际恢复判断。 */
+function inspectionStringMode(part: PostgresStatement, previous: boolean) {
+  if (part.keyword !== 'SET' && part.keyword !== 'RESET') return previous;
+  const sql = part.sql.slice(skipPostgresTrivia(part.sql)).trimEnd();
+  if (/^RESET\s+(?:ALL|"standard_conforming_strings"|standard_conforming_strings)$/i.test(sql)) return true;
+  const match = /^SET\s+(?:(?:LOCAL|SESSION)\s+)?(?:"standard_conforming_strings"|standard_conforming_strings)\s*(?:=\s*|\bTO\s+)('(?:on|off|true|false|1|0)'|on|off|true|false|1|0|default)$/i.exec(sql);
+  if (!match) return previous;
+  return !/^(?:off|false|0)$/i.test(match[1].replaceAll("'", ''));
+}
+
+/** 逐块读取文件及 COPY 数据，只返回类别、计数和问题序号，不调用数据库或返回文件正文。 */
+export async function inspectPostgresRestoreSql(source: PostgresSqlFileSource, signal: AbortSignal,
+  check: () => void): Promise<PostgresSqlFileInspection> {
+  const report: PostgresSqlFileInspection = { statements: 0, structure: 0, changes: 0, copyBlocks: 0, copyBytes: 0, other: 0 };
+  const policy = new FilePolicy();
+  let file: FileHandle | undefined, standardStrings = true;
+  try {
+    check();
+    file = await openPostgresSqlFile(source);
+    const reader = new FileStatements(file, source.bytes, check);
+    for (;;) {
+      const part = await reader.next(standardStrings);
+      if (!part) break;
+      const action = policy.accept(part, standardStrings, report.statements);
+      if (action.kind === 'skip' || 'directive' in part) continue;
+      if (action.kind === 'copy') {
+        let bytes = 0;
+        for await (const chunk of reader.copyData()) bytes += chunk.length;
+        report.copyBlocks++;
+        report.copyBytes += bytes;
+      } else if (structureKeywords.has(part.keyword)) report.structure++;
+      else if (changeKeywords.has(part.keyword)) report.changes++;
+      else report.other++;
+      report.statements++;
+      standardStrings = inspectionStringMode(part, standardStrings);
+    }
+    policy.finish(report.statements);
+    await assertVersion(source, file);
+    check();
+  } catch (failure) {
+    const reason = signal.aborted ? 'cancelled' :
+      inspectionReasons.find(reason => failure instanceof FileFailure && reason === failure.reason) ?? 'file';
+    report.issue = { reason, nextStatement: report.statements + 1 };
+  } finally { await file?.close(); }
+  return report;
+}
+
 /** 只用专用连接执行。文件事务外壳由客户端托管，读到尾部并复核源文件后才发送真实 COMMIT。 */
 export async function executePostgresSqlFile(connection: PostgresConnection, source: PostgresSqlFileSource,
   control: PostgresSqlFileControl): Promise<PostgresSqlFileResult> {
-  let file: FileHandle | undefined, opened = false, sent = false, commitSent = false, completed = 0, wrapped = false, wrapperEnded = false;
-  let restrictionKey: string | undefined, restrictionEnded = false;
-  let largeObject: LargeObjectState | undefined;
+  let file: FileHandle | undefined, opened = false, sent = false, commitSent = false, completed = 0;
+  const policy = new FilePolicy();
   let failure: Failure = { reason: 'file' };
   const query = async (sql: string, readResult = false) => {
     control.active(true);
@@ -221,9 +324,7 @@ export async function executePostgresSqlFile(connection: PostgresConnection, sou
   const state = () => connection.state();
   try {
     control.check();
-    await assertPostgresSqlFileSource(source);
-    file = await open(source.path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
-    await assertVersion(source, file);
+    file = await openPostgresSqlFile(source);
     const statements = new FileStatements(file, source.bytes, () => control.check());
     control.check();
     failure = { reason: 'transaction' };
@@ -235,35 +336,12 @@ export async function executePostgresSqlFile(connection: PostgresConnection, sou
       const part = await statements.next(connection.standardStrings);
       if (!part) break;
       failure = { reason: 'command', statement: completed + 1 };
-      if ('directive' in part) {
-        if (largeObject) throw new FileFailure('command');
-        if (part.directive === 'restrict' && !restrictionKey && !completed && !wrapped) restrictionKey = part.key;
-        else if (part.directive === 'unrestrict' && restrictionKey && restrictionKey === part.key &&
-            !restrictionEnded && completed && wrapped === wrapperEnded) restrictionEnded = true;
-        else throw new FileFailure('command');
-        continue;
-      }
-      if (restrictionEnded || wrapperEnded) throw new FileFailure('command');
-      if (!largeObject && part.keyword === 'BEGIN' && isBarePostgresFileControl(part.sql, 'BEGIN')) {
-        if (!completed && !wrapped) wrapped = true;
-        else largeObject = 'empty';
-        continue;
-      }
-      if (part.keyword === 'COMMIT' && isBarePostgresFileControl(part.sql, 'COMMIT')) {
-        if (largeObject === 'closed') { largeObject = undefined; continue; }
-        if (!largeObject && wrapped && completed) { wrapperEnded = true; continue; }
-        throw new FileFailure('command');
-      }
-      const lo = largeObject && largeObjectStep(part.sql, largeObject, connection.standardStrings);
-      const copy = part.keyword === 'COPY';
-      if (part.parameters.length ||
-          !(copy ? isPostgresInlineCopy(part.sql, connection.standardStrings) : allowed.has(part.keyword)))
-        throw new FileFailure('command');
-      if (completed >= limits.statements) throw new FileFailure('budget');
+      const action = policy.accept(part, connection.standardStrings, completed);
+      if (action.kind === 'skip' || 'directive' in part) continue;
       control.check();
       failure = { reason: 'server', statement: completed + 1 };
       sent = true;
-      if (copy) {
+      if (action.kind === 'copy') {
         control.active(true);
         try {
           await connection.copyIn(part.sql, Readable.from(statements.copyData(), { objectMode: false }));
@@ -275,18 +353,17 @@ export async function executePostgresSqlFile(connection: PostgresConnection, sou
           throw new FileFailure('server');
         } finally { control.active(false); }
       } else {
+        const lo = action.largeObject;
         const result = await query(part.sql, Boolean(lo));
         if (lo) {
           if (result.postgresCommand !== 'SELECT' || result.rows[0]?.c0 !== lo.result) throw new FileFailure('transaction');
-          largeObject = lo.next;
         }
       }
       if (!state().transactionKnown || !state().transactionOpen || state().transactionFailed)
         throw new FileFailure('transaction');
       if (++completed % 128 === 0) control.progress(completed);
     }
-    if (!completed || wrapped !== wrapperEnded || Boolean(restrictionKey) !== restrictionEnded || largeObject)
-      throw new FileFailure('command');
+    policy.finish(completed);
     failure = { reason: 'file' };
     await assertVersion(source, file);
     await file.close(); file = undefined;

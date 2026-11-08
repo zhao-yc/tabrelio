@@ -386,8 +386,10 @@ export interface CommandMap {
   'mysql.backup.database': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupInput; output: import('./mysqlDatabaseBackup').MysqlDatabaseBackupResult };
   'mysql.sqlFile.choose': { input: import('./mysqlSqlFile').MysqlSqlFileChooseInput; output: import('./mysqlSqlFile').MysqlSqlFileChoice | null };
   'mysql.sqlFile.execute': { input: import('./mysqlSqlFile').MysqlSqlFileExecuteInput; output: import('./sqlFileImport').FileImportResult };
-  'postgres.sqlFile.choose': { input: import('./postgresSqlFile').PostgresSqlFileChooseInput; output: import('./postgresSqlFile').PostgresSqlFileChoice | null };
+  'postgres.sqlFile.choose': { input: import('./postgresSqlFile').PostgresSqlFilePickInput; output: import('./postgresSqlFile').PostgresSqlFileChoice | null };
   'postgres.sqlFile.target': { input: import('./postgresSqlFile').PostgresSqlFileChooseInput; output: import('./postgresSqlFile').PostgresRestoreTargetPreview };
+  'postgres.sqlFile.inspect': { input: { operationId: string; fileToken: string }; output: import('./postgresSqlFile').PostgresSqlFileInspection };
+  'postgres.sqlFile.cancelInspection': { input: { operationId: string }; output: void };
   'postgres.sqlFile.execute': { input: import('./postgresSqlFile').PostgresSqlFileExecuteInput; output: import('./postgresSqlFile').PostgresSqlFileResult };
   'postgres.table.importChoose': { input: import('./postgresTable').PostgresTableImportChooseInput; output: import('./postgresTable').PostgresTableImportChoice | null };
   'postgres.table.import': { input: import('./postgresTable').PostgresTableImportInput; output: import('./postgresTable').PostgresTableOutcome };
@@ -523,6 +525,7 @@ export interface CommandMap {
   'postgres.archive.choose': { input: { kind: 'tool' | 'source' }; output: FileChoice | null };
   'postgres.archive.list': { input: import('./postgresArchive').PostgresArchiveListInput; output: import('./postgresArchive').PostgresArchiveListing };
   'postgres.archive.exportSql': { input: import('./postgresArchive').PostgresArchiveExportInput; output: import('./postgresArchive').PostgresArchiveSqlExport | null };
+  'postgres.archive.inspectSql': { input: import('./postgresArchive').PostgresArchiveExportInput; output: import('./postgresSqlFile').PostgresSqlFileInspection };
   'postgres.archive.cancel': { input: { operationId: string }; output: void };
   'files.createSqlite': { input: { connectionId: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };

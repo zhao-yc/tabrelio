@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { postgresRestoreDatabaseName, type PostgresRestoreTargetPreview, type PostgresSqlFileChoice,
-  type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
+  type PostgresSqlFileInspection, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
 import type { PostgresArchiveRestoreChoice } from '../../shared/postgresArchive';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresSqlFileZh as text } from '../locales/postgresSqlFile.zh-CN';
 import { postgresArchiveZh as archiveText } from '../locales/postgresArchive.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
+import { PostgresSqlInspectionReport } from './PostgresSqlInspectionReport';
 import '../databaseBackup.css';
 
 export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated, archive }: {
@@ -23,12 +24,14 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
   const [catalogueVersion, setCatalogueVersion] = useState(0);
   const [file, setFile] = useState<PostgresSqlFileChoice | null>(null);
   const [result, setResult] = useState<PostgresSqlFileResult>();
+  const [inspection, setInspection] = useState<PostgresSqlFileInspection>();
+  const [inspectionId, setInspectionId] = useState<string>();
   const [targetAttempt, setTargetAttempt] = useState(0);
   const [targetCheck, setTargetCheck] = useState<{ key: string; preview?: PostgresRestoreTargetPreview; error?: string }>();
   const [choosing, setChoosing] = useState(false), [task, setTask] = useState<string>();
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
   const occupied = useRef(false);
-  const locked = choosing || !!task;
+  const locked = choosing || !!task || !!inspectionId;
   const validName = !create || postgresRestoreDatabaseName.safeParse(newDatabase).success;
   const archiveReady = !!archive && !error && result?.outcome !== 'committed' &&
     result?.outcome !== 'unknown' && result?.databaseCreation !== 'unknown';
@@ -63,14 +66,23 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
   function changeDatabase(value: string) {
     setDatabase(value); resetFile();
   }
-  function resetFile() { setFile(null); setResult(undefined); setError(''); setTargetCheck(undefined); }
+  function resetFile() { setFile(null); setResult(undefined); setInspection(undefined); setError(''); setTargetCheck(undefined); }
   async function choose() {
-    if (occupied.current || !database || !validName) return;
+    if (occupied.current) return;
     occupied.current = true;
-    setChoosing(true); setFile(null); setError(''); setResult(undefined);
-    try { setFile(await invoke('postgres.sqlFile.choose', target)); }
+    setChoosing(true); setFile(null); setError(''); setResult(undefined); setInspection(undefined);
+    try { setFile(await invoke('postgres.sqlFile.choose', validTarget ? target : {})); }
     catch (reason) { setError(errorMessage(reason)); }
     finally { occupied.current = false; setChoosing(false); }
+  }
+  async function inspect() {
+    if (occupied.current || !file) return;
+    occupied.current = true;
+    const operationId = uid();
+    setInspectionId(operationId); setInspection(undefined); setError('');
+    try { setInspection(await invoke('postgres.sqlFile.inspect', { operationId, fileToken: file.token })); }
+    catch (reason) { setError(errorMessage(reason)); }
+    finally { setInspectionId(undefined); setCancelling(false); occupied.current = false; }
   }
   async function execute() {
     if (occupied.current || !ready || !targetToken) return;
@@ -93,9 +105,12 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
     finally { setTask(undefined); setCancelling(false); occupied.current = false; }
   }
   async function cancel() {
-    if (!task || cancelling) return;
+    if ((!task && !inspectionId) || cancelling) return;
     setCancelling(true);
-    try { await invoke('query.cancel', { taskId: task }); }
+    try {
+      if (inspectionId) await invoke('postgres.sqlFile.cancelInspection', { operationId: inspectionId });
+      else if (task) await invoke('query.cancel', { taskId: task });
+    }
     catch (reason) { setError(errorMessage(reason)); }
   }
   const close = () => { if (!occupied.current) onClose(); };
@@ -138,6 +153,9 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
           </>}
       </section>}
       {file && <p>{file.name} · {file.bytes.toLocaleString('zh-CN')} B</p>}
+      {!archive && !validTarget && <p>{text.inspectionOffline}</p>}
+      {inspectionId && <p role="status">{cancelling ? text.inspectionCancelling : text.inspectionRunning}</p>}
+      {inspection && <PostgresSqlInspectionReport inspection={inspection}/>}
       {task && <p role="status">{cancelling ? text.cancelling : archive ? text.archiveRunning : text.running}</p>}
       {result && <section className="database-backup-plan" role="status">
         {result.databaseCreation && <p>{text.databaseCreation[result.databaseCreation]}</p>}
@@ -151,8 +169,9 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated,
       <ErrorBox message={error}/>
     </div>
     <footer className="modal-footer">
-      {!archive && <button disabled={locked || !database || !validName} onClick={() => void choose()}>{text.choose}</button>}
-      {task ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
+      {!archive && <><button disabled={locked} onClick={() => void choose()}>{text.choose}</button>
+        <button disabled={locked || !file} onClick={() => void inspect()}>{text.inspect}</button></>}
+      {task || inspectionId ? <button disabled={cancelling} onClick={() => void cancel()}>{inspectionId ? text.inspectionCancel : text.cancel}</button> :
         <button className="primary" disabled={locked || !ready} onClick={() => void execute()}>
           {create ? text.createAndExecute : archive ? text.archiveExecute : text.execute}
         </button>}

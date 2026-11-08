@@ -38,6 +38,13 @@ export const postgresSqlFileZh = {
     createdb: '当前角色缺少 CREATEDB 权限。', 'name-bytes': '名称超过服务器允许的标识符字节长度。',
   },
   choose: '选择 SQL 文件', execute: '确认并执行文件', cancel: '取消执行', close: '关闭',
+  inspect: '离线检查 SQL', inspectionTitle: '离线检查结果', inspectionRunning: '正在逐块检查 SQL 文件',
+  inspectionCancel: '取消检查', inspectionCancelling: '正在等待文件检查结束',
+  inspectionOffline: '可先选择文件进行离线检查。需要执行时，请选择目标后重新选择文件。',
+  inspectionScope: '检查采用 PostgreSQL 默认标准字符串模式并识别常见 SET 和 RESET。SQL 语义、权限及目标依赖由实际执行判断。',
+  inspectionComplete: '文件结构检查完成。', inspectionStopped: '检查停止在下一条语句或文件结束标记。',
+  inspectionSummary: (statements: number, structure: number, changes: number, copies: number, bytes: number, other: number) =>
+    `已检查 ${statements} 条 · 结构 ${structure} · 数据变更 ${changes} · 内联 COPY ${copies}（${bytes.toLocaleString('zh-CN')} B）· 其他 ${other}`,
   running: '正在流式执行 SQL 文件', cancelling: '正在等待原执行任务结束',
   scope: '按 UTF-8 流式读取并在目标库的独立事务中执行。支持回放 tabrelio 的 PostgreSQL 备份和含内联 COPY FROM STDIN 的 pg_dump 纯文本 SQL。请确认文件可信、目标库正确且依赖已准备。',
   limits: '文件最多 10 GiB，单条 SQL 最多 64 MiB。支持外层 BEGIN / COMMIT、pg_dump 的成对限制标记，以及文本或 CSV 的内联 COPY。含换库、外部文件、二进制 COPY 或其他 psql 指令的备份需用 PostgreSQL 原生客户端。',

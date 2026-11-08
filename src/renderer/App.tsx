@@ -1135,7 +1135,7 @@ function WorkspaceApp() {
     'postgres-sql-file': handler(() => {
       if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setPostgresSqlFile(true);
-    }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
+    }),
     'postgres-database-backup': handler(() => {
       if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setPostgresDatabaseBackup(true);

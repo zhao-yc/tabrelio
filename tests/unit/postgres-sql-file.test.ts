@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
-import { executePostgresSqlFile, inspectPostgresSqlFile, postgresRestoreDatabaseCommand,
+import { executePostgresSqlFile, inspectPostgresRestoreSql, inspectPostgresSqlFile, postgresRestoreDatabaseCommand,
   readPostgresRestoreDatabaseOid } from '../../src/engine/postgres/sqlFile';
 import { readPostgresRestoreTarget } from '../../src/engine/postgres/restoreTarget';
 import { postgresRestoreDatabaseName, postgresSqlFileExecuteSchema } from '../../src/shared/postgresSqlFile';
@@ -17,6 +17,46 @@ async function fixture(sql: string | Buffer, action: (path: string) => Promise<v
     await action(path);
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
+
+describe('PostgreSQL 恢复文件离线检查', () => {
+  const scan = async (sql: string | Buffer) => {
+    let result: Awaited<ReturnType<typeof inspectPostgresRestoreSql>> | undefined;
+    const signal = new AbortController().signal;
+    await fixture(sql, async path => { result = await inspectPostgresRestoreSql(await inspectPostgresSqlFile(path), signal, () => {}); });
+    return result;
+  };
+
+  it('统计外壳内的语句和跨块 COPY，并识别直接设置的字符串模式', async () => {
+    const data = '长' + 'x'.repeat(150_000) + '\n';
+    const sql = '\\restrict sample\nBEGIN;\nSET standard_conforming_strings = off;\n' +
+      "SELECT 'a\\'b';\nRESET standard_conforming_strings;\nCREATE TABLE t(id text);\nCOPY t FROM STDIN;\n" +
+      data + '\\.\nUPDATE t SET id=NULL;\nCOMMIT;\n\\unrestrict sample\n';
+    await expect(scan(sql)).resolves.toEqual({ statements: 6, structure: 1, changes: 1, copyBlocks: 1, copyBytes: Buffer.byteLength(data), other: 3 });
+  });
+
+  it('发现换库、缺失 COPY 结束标记、非 UTF-8 和不成对外壳', async () => {
+    for (const [sql, reason, nextStatement] of [
+      ['SELECT 1;\n\\connect another\n', 'command', 2],
+      ['SELECT 1;\nCOPY t FROM STDIN;\n1\n', 'syntax', 2],
+      [Buffer.from([0xff, 0xfe]), 'encoding', 1],
+      ['BEGIN; SELECT 1;', 'command', 2],
+      ['COPY t FROM PROGRAM \'cmd\';', 'command', 1],
+    ] as const) await expect(scan(sql)).resolves.toMatchObject({ issue: { reason, nextStatement } });
+  });
+
+  it('观察到取消和文件替换时按授权的原文件结束检查', async () => {
+    await fixture('SELECT 1;', async path => {
+      const source = await inspectPostgresSqlFile(path);
+      const controller = new AbortController();
+      controller.abort();
+      await expect(inspectPostgresRestoreSql(source, controller.signal, () => controller.signal.throwIfAborted()))
+        .resolves.toMatchObject({ statements: 0, issue: { reason: 'cancelled' } });
+      await writeFile(path, 'SELECT 22;');
+      await expect(inspectPostgresRestoreSql(source, new AbortController().signal, () => {}))
+        .resolves.toMatchObject({ statements: 0, issue: { reason: 'file' } });
+    });
+  });
+});
 
 function connection(onQuery?: (sql: string) => Promise<void>, loResult?: (sql: string) => string | undefined) {
   const calls: string[] = [];

@@ -10,6 +10,10 @@ export const postgresSqlFileLimits = { bytes: 10 * 1024 ** 3, statementBytes: po
 export const postgresSqlFileChooseSchema = z.object({
   connectionId: identity, database: identity, newDatabase: postgresRestoreDatabaseName.optional(),
 }).strict();
+export const postgresSqlFilePickSchema = postgresSqlFileChooseSchema.or(z.object({}).strict());
+export type PostgresSqlFilePickInput = z.infer<typeof postgresSqlFilePickSchema>;
+export const postgresSqlFileInspectionCancelSchema = z.object({ operationId: z.uuid() }).strict();
+export const postgresSqlFileInspectionSchema = postgresSqlFileInspectionCancelSchema.extend({ fileToken: z.uuid() }).strict();
 const execution = postgresSqlFileChooseSchema.extend({ taskId: identity, targetToken: z.uuid() });
 export const postgresSqlFileExecuteSchema = z.union([
   execution.extend({ fileToken: z.uuid() }).strict(),
@@ -19,6 +23,15 @@ export const postgresSqlFileExecuteSchema = z.union([
 export type PostgresSqlFileExecuteInput = z.infer<typeof postgresSqlFileExecuteSchema>;
 export type PostgresSqlFileChooseInput = z.infer<typeof postgresSqlFileChooseSchema>;
 export interface PostgresSqlFileChoice { token: string; name: string; bytes: number; }
+export interface PostgresSqlFileInspection {
+  statements: number;
+  structure: number;
+  changes: number;
+  copyBlocks: number;
+  copyBytes: number;
+  other: number;
+  issue?: { reason: 'file' | 'encoding' | 'syntax' | 'budget' | 'command' | 'cancelled'; nextStatement: number };
+}
 export type PostgresRestoreTargetIssue = 'read-only' | 'template' | 'database-exists' | 'createdb' | 'name-bytes';
 export interface PostgresRestoreTargetPreview {
   token?: string;

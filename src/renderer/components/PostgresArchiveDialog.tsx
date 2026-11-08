@@ -2,9 +2,12 @@ import { useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import { postgresArchiveEntryLimit, type PostgresArchiveExportInput, type PostgresArchiveListing,
   type PostgresArchiveRestoreChoice, type PostgresArchiveSqlExport } from '../../shared/postgresArchive';
+import type { PostgresSqlFileInspection } from '../../shared/postgresSqlFile';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresArchiveZh as text } from '../locales/postgresArchive.zh-CN';
+import { postgresSqlFileZh as inspectionText } from '../locales/postgresSqlFile.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
+import { PostgresSqlInspectionReport } from './PostgresSqlInspectionReport';
 import '../databaseBackup.css';
 
 const entriesPerPage = 40;
@@ -17,6 +20,7 @@ export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
   const [source, setSource] = useState<FileChoice | null>(null), [tool, setTool] = useState<FileChoice | null>(null);
   const [listing, setListing] = useState<PostgresArchiveListing>();
   const [exported, setExported] = useState<PostgresArchiveSqlExport | null>(null);
+  const [inspection, setInspection] = useState<PostgresSqlFileInspection>();
   const [content, setContent] = useState<PostgresArchiveExportInput['content']>('all');
   const [portable, setPortable] = useState(false);
   const [entryMode, setEntryMode] = useState(false);
@@ -34,8 +38,9 @@ export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
   const matchingSelection = new Set(selected);
   const selectionOptions = { content: entryMode ? 'all' as const : content, portable, ...(entryMode ? { entryIds: selected } : {}) };
 
+  function resetOutputs() { setExported(null); setInspection(undefined); }
   function clearListing() {
-    setListing(undefined); setEntryMode(false); setSelected([]); setFilter(''); setPage(0); setExported(null);
+    setListing(undefined); setEntryMode(false); setSelected([]); setFilter(''); setPage(0); resetOutputs();
   }
 
   async function choose(kind: 'tool' | 'source') {
@@ -49,8 +54,8 @@ export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
     finally { setChoosing(false); active.current = false; }
   }
 
-  async function run(action: 'list' | 'export') {
-    if (active.current || !source || !tool || action === 'export' && !ready) return;
+  async function run(action: 'list' | 'export' | 'inspect') {
+    if (active.current || !source || !tool || action !== 'list' && !ready) return;
     active.current = true;
     const operationId = uid();
     const input = { operationId, sourceToken: source.token, toolToken: tool.token };
@@ -59,6 +64,9 @@ export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
       if (action === 'list') {
         clearListing();
         setListing(await invoke('postgres.archive.list', input));
+      } else if (action === 'inspect') {
+        setInspection(undefined);
+        setInspection(await invoke('postgres.archive.inspectSql', { ...input, ...selectionOptions }));
       } else {
         setExported(null);
         setExported(await invoke('postgres.archive.exportSql', { ...input, ...selectionOptions }));
@@ -89,17 +97,17 @@ export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
       </div>
       <fieldset disabled={locked}>
         <Field label={text.content}><select aria-label={text.content} value={selectionOptions.content} disabled={entryMode} onChange={event => {
-          setContent(event.target.value as PostgresArchiveExportInput['content']); setExported(null);
+          setContent(event.target.value as PostgresArchiveExportInput['content']); resetOutputs();
         }}><option value="all">{text.all}</option><option value="schema">{text.schema}</option><option value="data">{text.data}</option></select></Field>
       </fieldset>
       <label className="check"><input type="checkbox" disabled={locked} checked={portable} onChange={event => {
-        setPortable(event.target.checked); setExported(null);
+        setPortable(event.target.checked); resetOutputs();
       }}/>{text.portable}</label>
       {operation && <p role="status">{cancelling ? text.cancelling : text.running}</p>}
       {listing && <section className="database-backup-plan">
         <p>{text.directory} · pg_restore {listing.toolVersion}</p>
         {!!listing.entries.length && <label className="check"><input type="checkbox" disabled={locked} checked={entryMode} onChange={event => {
-          setEntryMode(event.target.checked); setExported(null);
+          setEntryMode(event.target.checked); resetOutputs();
         }}/>{text.selectEntries}</label>}
         {entryMode ? <fieldset className="database-backup-table-picker" disabled={locked}>
           <p>{text.entryScope}</p>
@@ -107,13 +115,13 @@ export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
           <p>{text.entryCount(selected.length, matches.length)}</p>
           <div>
             <button disabled={!matches.length || selected.length + matches.reduce((count, entry) => count + Number(!matchingSelection.has(entry.id)), 0) > postgresArchiveEntryLimit}
-              onClick={() => { setSelected([...new Set([...selected, ...matches.map(entry => entry.id)])]); setExported(null); }}>{text.selectMatches}</button>
-            <button disabled={!selected.length} onClick={() => { setSelected([]); setExported(null); }}>{text.clearEntries}</button>
+              onClick={() => { setSelected([...new Set([...selected, ...matches.map(entry => entry.id)])]); resetOutputs(); }}>{text.selectMatches}</button>
+            <button disabled={!selected.length} onClick={() => { setSelected([]); resetOutputs(); }}>{text.clearEntries}</button>
           </div>
           <div className="database-backup-table-list">
             {matches.slice(page * entriesPerPage, (page + 1) * entriesPerPage).map(entry => <label className="check" key={entry.id}>
               <input type="checkbox" checked={matchingSelection.has(entry.id)} disabled={!matchingSelection.has(entry.id) && selected.length >= postgresArchiveEntryLimit}
-                onChange={event => { setSelected(event.target.checked ? [...selected, entry.id] : selected.filter(id => id !== entry.id)); setExported(null); }}/>
+                onChange={event => { setSelected(event.target.checked ? [...selected, entry.id] : selected.filter(id => id !== entry.id)); resetOutputs(); }}/>
               {entry.id} · {entry.label}
             </label>)}
           </div>
@@ -129,12 +137,14 @@ export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
         <p>{text.done(exported.name, exported.bytes)}</p>
         {exported.warning && <p>{text.warnings} · {exported.warning}</p>}
       </section>}
+      {inspection && <PostgresSqlInspectionReport inspection={inspection}/>}
       <ErrorBox message={error}/>
     </div>
     <footer className="modal-footer">
       <button disabled={!available} onClick={() => void run('list')}>{text.list}</button>
       {operation ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
         <>
+          <button disabled={!ready} onClick={() => void run('inspect')}>{inspectionText.inspect}</button>
           <button disabled={!ready} onClick={() => void run('export')}>{text.export}</button>
           {onRestore && <button className="primary" disabled={!ready} onClick={() => {
             if (!active.current && ready && source && tool)

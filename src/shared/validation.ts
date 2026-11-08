@@ -23,7 +23,7 @@ import { postgresQueryTimeoutRead, postgresQueryTimeoutApply } from './postgresQ
 import { mysqlBackupTablesSchema, mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
 import { mysqlSqlFileChooseSchema, mysqlSqlFileExecuteSchema } from './mysqlSqlFile';
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
-import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema } from './postgresSqlFile';
+import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema, postgresSqlFileInspectionCancelSchema, postgresSqlFileInspectionSchema, postgresSqlFilePickSchema } from './postgresSqlFile';
 import { postgresDatabaseBackupChooseSchema, postgresDatabaseBackupExecuteSchema, postgresDatabaseBackupToolSchema } from './postgresDatabaseBackup';
 import { postgresArchiveCancelSchema, postgresArchiveChooseSchema, postgresArchiveExportSchema, postgresArchiveListSchema } from './postgresArchive';
 import { postgresDataCompareCatalogueSchema, postgresDataCompareSchema, postgresDataSyncPreviewSchema, postgresDataSyncApplySchema } from './postgresDataCompare';
@@ -368,8 +368,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'mysql.backup.database': mysqlDatabaseBackupExecuteSchema,
   'mysql.backup.tables': mysqlBackupTablesSchema,
   'mysql.sqlFile.choose': mysqlSqlFileChooseSchema, 'mysql.sqlFile.execute': mysqlSqlFileExecuteSchema,
-  'postgres.sqlFile.choose': postgresSqlFileChooseSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
+  'postgres.sqlFile.choose': postgresSqlFilePickSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
   'postgres.sqlFile.target': postgresSqlFileChooseSchema,
+  'postgres.sqlFile.inspect': postgresSqlFileInspectionSchema, 'postgres.sqlFile.cancelInspection': postgresSqlFileInspectionCancelSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.draft.save': postgresTablePreviewSchema,
@@ -665,6 +666,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.archive.choose': postgresArchiveChooseSchema,
   'postgres.archive.list': postgresArchiveListSchema,
   'postgres.archive.exportSql': postgresArchiveExportSchema,
+  'postgres.archive.inspectSql': postgresArchiveExportSchema,
   'postgres.archive.cancel': postgresArchiveCancelSchema,
   'files.createSqlite': z.object({ connectionId: id }).strict(),
   'files.path': z.object({ token: id }).strict(),

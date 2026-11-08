@@ -103,6 +103,11 @@ test('按归档条目导出与恢复，保留原顺序并在缺少依赖时整�
     expect((await restored.query("SELECT to_regnamespace('entry_scope') AS schema")).rows).toEqual([{ schema: null }]);
     await omitted.uncheck();
     await filter.fill('entry_scope kept');
+    await button(restore.inspect).click();
+    const inspection = archive.getByRole('region', { name: restore.inspectionTitle });
+    await expect(inspection).toContainText(restore.inspectionComplete);
+    await expect(inspection).toContainText('内联 COPY 1');
+    expect((await restored.query("SELECT to_regnamespace('entry_scope') AS schema")).rows).toEqual([{ schema: null }]);
     await archive.screenshot({ path: info.outputPath('PostgreSQL 归档条目勾选.png') });
     await button(text.export).click();
     await expect(archive.getByRole('status')).toContainText('已导出');

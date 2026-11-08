@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import { exportPostgresArchiveSql, inspectPostgresArchive, listPostgresArchive,
+import { exportPostgresArchiveSql, inspectPostgresArchive, listPostgresArchive, withPostgresArchiveSql,
   type PostgresArchiveRestoreSource, type PostgresArchiveSource } from '../engine/postgres/customArchive';
 import { inspectPostgresNativeTool, type PostgresNativeTool } from '../engine/postgres/nativeTool';
+import { inspectPostgresRestoreSql } from '../engine/postgres/sqlFile';
 import type { PostgresArchiveExportInput, PostgresArchiveListInput, PostgresArchiveRestoreInput } from '../shared/postgresArchive';
 
 type PickKind = 'tool' | 'source' | 'export';
@@ -85,6 +86,14 @@ export class PostgresArchiveFiles<Owner> {
         check();
         return await exportPostgresArchiveSql(source, tool, target, { ...input, entryIds }, signal, check, publishing);
       } finally { release(); }
+    });
+  }
+
+  inspectSql(owner: Owner, input: PostgresArchiveExportInput) {
+    return this.run(owner, input, (tool, source, signal, check, _publishing, selected) => {
+      const entryIds = this.resolveEntries(selected, input);
+      return withPostgresArchiveSql({ source, tool, content: input.content, portable: input.portable, entryIds }, signal, check,
+        sql => inspectPostgresRestoreSql(sql, signal, check));
     });
   }
 
