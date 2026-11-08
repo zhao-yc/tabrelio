@@ -103,6 +103,7 @@ export const sqliteTablePageSchema = z.object({
 export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;
 export type SqliteTablePageInput = z.infer<typeof sqliteTablePageSchema>;
 export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
+export interface SqliteTablePrimaryKey { name: string; collation: 'BINARY' | 'NOCASE' | 'RTRIM'; }
 export interface SqliteTablePage {
   /** 已核验的固定关联范围，派生读取不能丢失，也不能由普通OR筛选扩大。 */
   relation?: SqliteTableRelation;
@@ -110,6 +111,8 @@ export interface SqliteTablePage {
   storageTypes?: string[];
   /** 目录确认当前来源是普通表，允许用已载入原值生成 INSERT 文本。 */
   insertCopy?: true;
+  /** 真实主键索引的顺序与比较规则。INTEGER PRIMARY KEY 别名没有独立索引。 */
+  primaryKey?: SqliteTablePrimaryKey[];
   /** 仅显式可编辑页请求签发，任意SQL结果和原只读页不获得写入能力。 */
   edit?: import('./sqliteTableEdit').SqliteTableEditPage;
   /** 原目录定义及完整列事实摘要，导出前须在准确只读快照重新核对。 */

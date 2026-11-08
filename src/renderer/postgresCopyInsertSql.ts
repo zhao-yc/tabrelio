@@ -4,7 +4,7 @@ import { postgresDdlLiteral, postgresNewIdentifier } from '../shared/postgresCre
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
 import { isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTablePage } from '../shared/postgresTable';
 import type { PostgresDraftEntry } from '../shared/postgresTableDraft';
-import { postgresPrimaryKeyCopyZh as keyText } from './locales/postgresPrimaryKeyCopy.zh-CN';
+import { primaryKeyCopyZh as keyText } from './locales/primaryKeyCopy.zh-CN';
 import { cellText, ownCell } from './lib';
 
 const utf8 = new TextEncoder();

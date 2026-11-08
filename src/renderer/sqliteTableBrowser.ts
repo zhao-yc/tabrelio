@@ -41,6 +41,16 @@ export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTableP
   validateResultExportData(resultExportData(page.result));
   assertSqliteStorageTypes(page);
   if (page.insertCopy !== undefined && (page.insertCopy !== true || page.target.kind !== 'table' || !page.storageTypes)) throw Error(text.invalidPage);
+  if (page.primaryKey !== undefined) {
+    if (page.insertCopy !== true || !Array.isArray(page.primaryKey) || !page.primaryKey.length ||
+        page.primaryKey.length > page.columns.length) throw Error(text.invalidPage);
+    const names = new Set<string>();
+    for (const key of page.primaryKey) {
+      if (!key || names.has(key.name) || !page.columns.some(column => column.name === key.name && !column.generated) ||
+          !['BINARY', 'NOCASE', 'RTRIM'].includes(key.collation)) throw Error(text.invalidPage);
+      names.add(key.name);
+    }
+  }
 }
 /** 请求串行持有准确 busy 租约；替换先取消旧 task 并等原 Promise 终态，绝不借取消响应猜读取已结束。 */
 export class SqliteTableBrowser {

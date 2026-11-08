@@ -1,4 +1,4 @@
-export const postgresPrimaryKeyCopyZh = {
+export const primaryKeyCopyZh = {
   action: '复制原主键查询 SQL',
   hint: '有勾选时按勾选行生成 SELECT，否则使用当前行。使用本页载入的原主键，不执行 SQL。',
   copied: '原主键查询 SQL 已复制。',

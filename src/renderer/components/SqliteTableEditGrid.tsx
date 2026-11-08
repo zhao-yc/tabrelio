@@ -16,7 +16,8 @@ import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeigh
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
-import { sqliteCopyInsertDraftRows } from '../sqliteCopyInsertSql';
+import { primaryKeyCopyZh as keyCopyText } from '../locales/primaryKeyCopy.zh-CN';
+import { sqliteCopyInsertDraftRows, sqliteCopyPrimaryKeyDraftRows } from '../sqliteCopyInsertSql';
 import { useWorkspace } from '../store';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
@@ -177,17 +178,17 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : headerCopyText.unavailable); }
   }
   /** 只从本次勾选或活动数据格取得原行，草稿失败不会进入原生复制事件。 */
-  function copyRowsAsInsert(checked: boolean) {
+  function copyTableSql(build: typeof sqliteCopyInsertDraftRows, checked: boolean, copied: string) {
     const allowed = () => !disabled && current() && noModal();
     if (!allowed()) return;
     try {
       const cell = activeCell.current.position;
       const records = checked ? rows.filter(row => selectedRows.has(row.id)) : cell ? [cell.row] : [];
       if (checked && records.length !== selectedRows.size) throw Error(insertCopyText.selection);
-      const sql = sqliteCopyInsertDraftRows(page, records);
+      const sql = build(page, records);
       writeTableClipboardEvent(allowed, data => data.setData('text/plain', sql));
       setError('');
-      useWorkspace.getState().notify(insertCopyText.copied);
+      useWorkspace.getState().notify(copied);
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : insertCopyText.invalid); }
   }
   const hasActiveDataColumn = order.some(index => activeCell.current.position?.key === 'c' + index);
@@ -223,7 +224,10 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
 
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
     {page.insertCopy && <CopyInsertSqlButtons disabled={disabled} current={hasActiveDataColumn}
-      selected={!!selectedRows.size} onCopy={copyRowsAsInsert}/>}
+      selected={!!selectedRows.size} onCopy={checked => copyTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied)}/>}
+    {!!page.primaryKey?.length && <button type="button" title={keyCopyText.hint}
+      disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
+      onClick={() => copyTableSql(sqliteCopyPrimaryKeyDraftRows, selectedRows.size > 0, keyCopyText.copied)}>{keyCopyText.action}</button>}
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={row => row.deleted ? undefined : row.id}
       isCurrent={() => baseCurrent() && selection.current.revision === selectionTicket && noModal()}

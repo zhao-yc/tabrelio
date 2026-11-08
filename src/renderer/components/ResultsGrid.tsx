@@ -20,7 +20,7 @@ import { GridRowJump } from './GridRowJump';
 import { encodeQueryResultColumn, encodeQueryResultWithHeaders, encodeTableGridCopy, writeQueryResultClipboard, type QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { queryResultCopyZh as copyText } from '../locales/queryResultCopy.zh-CN';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
-import { postgresPrimaryKeyCopyZh as keyCopyText } from '../locales/postgresPrimaryKeyCopy.zh-CN';
+import { primaryKeyCopyZh as keyCopyText } from '../locales/primaryKeyCopy.zh-CN';
 import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { tableHeaderCopyZh as tableCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import '../queryResultCopy.css';

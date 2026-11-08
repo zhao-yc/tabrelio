@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
-import { sqliteCopyInsertDraftRows, sqliteCopyInsertSql } from '../../src/renderer/sqliteCopyInsertSql';
+import { sqliteCopyInsertDraftRows, sqliteCopyInsertSql, sqliteCopyPrimaryKeyDraftRows, sqliteCopyPrimaryKeyQuery } from '../../src/renderer/sqliteCopyInsertSql';
 
 const columns = ['id', 'v"a', 'raw', 'g'].map((name, index) => ({ name, declaredType: '', ...(index === 3 ? { generated: true } : {}) }));
 const page: SqliteTablePage = {
@@ -40,4 +41,40 @@ it('编辑页仅接受与原存储类型和值一致的原行，新增、删除�
   expect(() => sqliteCopyInsertDraftRows(page, [{ ...row, deleted: true }])).toThrow('草稿');
   row.values[1] = { kind: 'text', value: '-0' };
   expect(() => sqliteCopyInsertDraftRows(page, [row])).toThrow('草稿');
+});
+
+it('原主键查询保留目录顺序和比较规则，复合值分别成组，使用原快照而非草稿', () => {
+  const source: SqliteTablePage = { ...page, primaryKey: [{ name: 'v"a', collation: 'NOCASE' }, { name: 'id', collation: 'BINARY' }] };
+  expect(sqliteCopyPrimaryKeyQuery(source, new Set([1, 0]))).toBe([
+    'SELECT * FROM "main"."表""名"',
+    `WHERE ("v""a" COLLATE NOCASE = -0.0 AND "id" COLLATE BINARY = 9223372036854775807)`,
+    `   OR ("v""a" COLLATE NOCASE = '0''🙂' AND "id" COLLATE BINARY = 2);`,
+  ].join('\n'));
+  expect(sqliteCopyPrimaryKeyDraftRows(source, [{ id: 'original-0', index: 0, deleted: false, values: [{ kind: 'text', value: '修改' }] }]))
+    .toBe(sqliteCopyPrimaryKeyQuery(source, new Set([0])));
+  expect(() => sqliteCopyPrimaryKeyDraftRows(source, [{ id: 'local', deleted: false, values: [] }])).toThrow('有效行');
+});
+
+it('不复制可空主键上的 NULL，也拒绝无主键或不受支持的排序规则', () => {
+  expect(() => sqliteCopyPrimaryKeyQuery({ ...page, primaryKey: [{ name: 'raw', collation: 'BINARY' }] }, new Set([0, 1])))
+    .toThrow('缺少原主键值');
+  expect(() => sqliteCopyPrimaryKeyQuery(page, new Set([0]))).toThrow('主键目录');
+  expect(() => sqliteCopyPrimaryKeyQuery({ ...page, primaryKey: [{ name: 'unknown', collation: 'BINARY' }] }, new Set([0])))
+    .toThrow('主键目录');
+});
+
+it('勾满 1000 行的原主键查询可在 SQLite 默认表达式深度内执行', () => {
+  const column = { name: 'id', declaredType: 'INTEGER' };
+  const rows = Array.from({ length: 1000 }, (_, index) => ({ c0: String(index + 1) }));
+  const source: SqliteTablePage = { ...page, columns: [column], limit: 1000,
+    primaryKey: [{ name: 'id', collation: 'BINARY' }], storageTypes: rows.map(() => 'i'),
+    result: { ...page.result, columns: [{ key: 'c0', name: 'id', type: 'SQLITE' }], rows },
+  };
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE "表""名"(id INTEGER PRIMARY KEY); WITH RECURSIVE n(i) AS ' +
+      '(VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1001) INSERT INTO "表""名" SELECT i FROM n');
+    const sql = sqliteCopyPrimaryKeyQuery(source, new Set(rows.keys()));
+    expect(db.prepare(sql).all().map(row => row.id).sort((a, b) => Number(a) - Number(b))).toEqual(rows.map(row => Number(row.c0)));
+  } finally { db.close(); }
 });

@@ -110,6 +110,32 @@ export async function readSqliteTableCatalogue(driver: SqliteDriverSession, tabl
   return { kind: objects[0][1] as 'table' | 'view', columns, schemaSql: objects[0][2], schemaKey: sqliteTableSchemaKey(objects[0][2], catalogue), xinfo: catalogue };
 }
 
+/** 显式主键查询使用索引排序规则，字段声明的排序规则可能与主键索引不同。 */
+async function readSqliteBrowsePrimaryKey(driver: SqliteDriverSession, table: string, catalogue: SqliteTableCatalogue,
+  control: SqliteTableBrowseControl): Promise<SqliteTablePage['primaryKey']> {
+  const fields = catalogue.xinfo.flatMap(row => {
+    const rank = row[5];
+    return rank && typeof rank === 'object' && rank.type === 'integer' && rank.value !== '0'
+      ? [{ rank: Number(rank.value), name: row[1], type: row[2] }] : [];
+  }).sort((left, right) => left.rank - right.rank);
+  if (!fields.length || fields.some((field, index) => field.rank !== index + 1 || typeof field.name !== 'string' ||
+      !catalogue.columns.some(column => column.name === field.name))) return;
+  const parts = await rows(driver, "SELECT part.name, part.coll FROM pragma_index_list(?, 'main') AS idx " +
+    "LEFT JOIN pragma_index_xinfo(idx.name, 'main') AS part ON part.key=1 WHERE idx.origin='pk' ORDER BY part.seqno LIMIT ?",
+  [table, { type: 'integer', value: String(fields.length + 1) }], fields.length + 1, control);
+  if (!parts.length && fields.length === 1 && String(fields[0].type).toUpperCase() === 'INTEGER')
+    return [{ name: fields[0].name as string, collation: 'BINARY' }];
+  if (parts.length !== fields.length) return;
+  const keys: NonNullable<SqliteTablePage['primaryKey']> = [];
+  for (const [index, [name, rawCollation]] of parts.entries()) {
+    const collation = typeof rawCollation === 'string' ? rawCollation.toUpperCase() : undefined;
+    if (typeof name !== 'string' || name !== fields[index].name ||
+        (collation !== 'BINARY' && collation !== 'NOCASE' && collation !== 'RTRIM')) return;
+    keys.push({ name, collation });
+  }
+  return keys;
+}
+
 /** BEGIN后的首个目录读取固定本页快照；元数据、筛选排序和行读取全部使用同一个只读物理连接。 */
 export async function readSqliteTablePage(driver: SqliteDriverSession, source: SqliteTablePageInput, control: SqliteTableBrowseControl): Promise<SqliteTablePage> {
   const requested = sqliteTablePageSchema.parse(source), started = performance.now();
@@ -123,6 +149,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
       ? await rows(driver, "SELECT type FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY LIMIT 2", [requested.table], 2, control)
       : [];
     const insertCopy = relationType.length === 1 && relationType[0].length === 1 && relationType[0][0] === 'table';
+    const primaryKey = insertCopy ? await readSqliteBrowsePrimaryKey(driver, requested.table, catalogue, control) : undefined;
     const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control) : undefined;
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
@@ -152,7 +179,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     };
     // 每格一个协议类型码，不新增SQL；与去掉编辑定位列后的本页原值一一对应。
     const storageTypes = originalRows.map(row => row.slice(extra).map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join(''));
-    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, ...(insertCopy ? { insertCopy: true } : {}), offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }), ...(input.relation ? { relation: input.relation } : {}) };
+    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, ...(insertCopy ? { insertCopy: true } : {}), ...(primaryKey ? { primaryKey } : {}), offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }), ...(input.relation ? { relation: input.relation } : {}) };
   } catch (reason) { failed = true; failure = reason; }
   // 即使边界取消也只回滚本次独立只读快照，绝不借用户查询标签的事务。
   control.beginCleanup();

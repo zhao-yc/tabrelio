@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。SQLite 有主键的普通表可把当前行或勾选行复制为原主键查询 SQL，沿实际主键索引的顺序和排序规则比较。D02 和 R02 仍为部分覆盖。[SQLite 原主键查询复制](development/sqlite-primary-key-query-20261108.md)
+
 2026-11-08 源码增量。PostgreSQL 有主键的普通表和分区表可把当前行或勾选行复制为原主键查询 SQL，复合主键按记录组合。D02 和 R01 仍为部分覆盖。[PostgreSQL 原主键查询复制](development/postgres-primary-key-query-20261108.md)
 
 2026-11-08 源码增量。SQLite 普通表页可从当前行或勾选的原始行复制 INSERT SQL，按实际存储类型生成字面量。D02 和 R02 仍为部分覆盖。[SQLite 表页复制 INSERT](development/sqlite-copy-insert-sql-20261108.md)

@@ -282,6 +282,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
       const expected = observer.prepare('SELECT ' + fields + ' AS codes FROM "' + table + '" ORDER BY id').all().map(row => row.codes);
       expect(actual.storageTypes).toEqual(expected); expect(actual.storageTypes?.every(row => row.length === actual.columns.length)).toBe(true);
       expect(actual.insertCopy).toBe(table === 'mix' ? true : undefined);
+      expect(actual.primaryKey).toEqual(table === 'mix' ? [{ name: 'id', collation: 'BINARY' }] : undefined);
     } finally { observer.close(); }
     for (const record of processes) await closedRead(record);
   });

@@ -1,6 +1,6 @@
 import { Client } from 'pg';
 import { expect, page, test, confirmOwnedDesktopExit, retainOwnedDesktopResources, pageErrors } from './desktop-fixture';
-import { postgresPrimaryKeyCopyZh as text } from '../../src/renderer/locales/postgresPrimaryKeyCopy.zh-CN';
+import { primaryKeyCopyZh as text } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { postgresTableZh as table } from '../../src/renderer/locales/postgresTable.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
