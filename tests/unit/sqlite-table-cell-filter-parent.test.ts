@@ -13,8 +13,20 @@ function fixture() {
   const setFilters = vi.fn(), setConditions = vi.fn(), setValidation = vi.fn(), setCellFilterOwner = vi.fn(), notify = vi.fn(), request = vi.fn(() => { throw Error('加入条件不得请求数据库'); });
   const context: any = createContext({ page, editRender: { current: token }, editRenderTicket: token, cellFilterRef: { current: owner }, cellFilterOwner: owner, available: () => state.current, view: { busy: false }, externalBusy: false, filters, limit: 7, mode: 'or', sort: [{ id: 'sort', column: 'v', direction: 'desc' }], tab: { connectionId: 'source', database: 'main', table: 'subject' }, uid: () => 'new', sqliteTableDraft, setFilters, setConditions, setValidation, setCellFilterOwner, useWorkspace: { getState: () => ({ notify, selection: { connectionId: 'other', database: 'other' } }) }, cellFilterText: { added: '已加入草稿' }, errorMessage: (error: Error) => error.message, invoke: request });
   runInContext(ts.transpileModule(method + '\nglobalThis.api={appendCellFilter};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
-  return { context, filters, owner, state, draft, setFilters, setConditions, setValidation, setCellFilterOwner, notify, request, append: context.api.appendCellFilter as (exclude: boolean) => void };
+  return { context, filters, owner, state, draft, setFilters, setConditions, setValidation, setCellFilterOwner, notify, request, append: context.api.appendCellFilter as (exclude: boolean, source?: typeof owner.source) => void };
 }
+it('右键明确传入另一格时使用捕获的原值，失效后不能回退到活动格', () => {
+  const f = fixture(), current = vi.fn(() => true);
+  const draft = vi.fn((exclude: boolean, id: string): SqliteFilterDraft => ({ id, column: 'other', operator: exclude ? 'notNull' : 'isNull', kind: 'text', value: '' }));
+  f.append(true, { current, draft });
+  expect(f.setFilters).toHaveBeenCalledExactlyOnceWith([...f.filters, { id: 'new', column: 'other', operator: 'notNull', kind: 'text', value: '' }]);
+  current.mockReturnValue(false);
+  f.context.cellFilterRef.current = f.owner;
+  f.append(false, { current, draft });
+  expect(f.setFilters).toHaveBeenCalledOnce();
+  expect(f.draft).not.toHaveBeenCalled();
+  expect(f.request).not.toHaveBeenCalled();
+});
 it.each([false, true])('等值/排除=%s仅追加准确typed草稿，保既有停用条件/OR/排序，零请求且单次消费', exclude => {
   const f = fixture(); f.append(exclude);
   expect(f.setFilters).toHaveBeenCalledExactlyOnceWith([...f.filters, { id: 'new', column: 'v', operator: exclude ? 'ne' : 'eq', kind: 'integer', value: '9223372036854775807' }]);

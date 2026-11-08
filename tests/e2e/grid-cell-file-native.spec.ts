@@ -7,6 +7,9 @@ import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, re
 import { gridCellFileZh as text } from '../../src/renderer/locales/gridCellFile.zh-CN';
 import { binaryCellFileText, textCellFileTitle } from '../../src/shared/binaryCellFiles';
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
+import { sqliteTableCellFilterZh } from '../../src/renderer/locales/sqliteTableCellFilter.zh-CN';
+import { sqliteTableBrowseZh } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
@@ -63,7 +66,7 @@ test('从 SQLite 表格、只读视图及查询结果另存活动格原值', asy
       await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'file-table', tabs: [
         { id: 'file-table', kind: 'table', title: 'cells', table: 'cells', ...target },
         { id: 'file-view', kind: 'table', title: 'cells_view', table: 'cells_view', ...target },
-        { id: 'file-query', kind: 'query', title: '文件验收查询', sql: 'SELECT id FROM cells', ...target },
+        { id: 'file-query', kind: 'query', title: '文件验收查询', sql: 'SELECT id FROM cells UNION ALL SELECT 7', ...target },
       ] });
     });
     await page.reload();
@@ -95,6 +98,9 @@ test('从 SQLite 表格、只读视图及查询结果另存活动格原值', asy
     await cell(5).click();
     await openSave(textCellFileTitle, 'cell.txt', emptyPath);
     await expect.poll(() => readFile(emptyPath).catch(() => undefined)).toEqual(Buffer.alloc(0));
+    await cell(6).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: sqliteTableCellFilterZh.equal, exact: true }).click();
+    await expect(editable.getByLabel(sqliteTableBrowseZh.filterOperator(1), { exact: true })).toHaveValue('isNull');
     step = '打开并执行查询';
     await selectTab('file-query');
     const query = page.locator('.query-tab:visible');
@@ -104,7 +110,8 @@ test('从 SQLite 表格、只读视图及查询结果另存活动格原值', asy
     step = '打开查询菜单';
     await resultCell.click({ button: 'right' });
     await expect(menu).toBeVisible();
-    await expect(menu.getByRole('menuitem')).toHaveCount(1);
+    await expect(menu.getByRole('menuitem', { name: gridQuickValueZh.uuid, exact: true })).toHaveCount(0);
+    await expect(menu.getByRole('menuitem', { name: queryResultFilterZh.cellEquals, exact: true })).toBeVisible();
     step = '从查询切到视图';
     await selectTab('file-view');
     await expect(menu).toBeHidden();
@@ -119,6 +126,19 @@ test('从 SQLite 表格、只读视图及查询结果另存活动格原值', asy
     await mockSaveDialog(textCellFileTitle, 'cell.txt', numericPath);
     await menu.getByRole('menuitem', { name: text.action, exact: true }).click();
     await expect.poll(() => readFile(numericPath, 'utf8').catch(() => undefined)).toBe('9007199254740993');
+    step = '仅筛选当前查询结果';
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const before = await history();
+    const otherResult = query.getByRole('gridcell', { name: '7', exact: true });
+    await resultCell.click({ button: 'right' });
+    await menu.getByRole('menuitem', { name: queryResultFilterZh.cellEquals, exact: true }).click();
+    const filter = query.getByRole('region', { name: queryResultFilterZh.title, exact: true });
+    await expect(filter.getByLabel(queryResultFilterZh.input + ' 1', { exact: true })).toHaveValue('9007199254740993');
+    await expect(otherResult).toBeVisible();
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(otherResult).toBeHidden();
+    await expect(resultCell).toBeVisible();
+    expect(await history()).toEqual(before);
     expect(await readFile(database)).toEqual(baseline);
     expect(failures).toEqual([]);
     expect(pageErrors).toEqual([]);

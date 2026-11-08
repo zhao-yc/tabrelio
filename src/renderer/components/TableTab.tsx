@@ -1013,15 +1013,18 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     }
     setFilters(next.filters);setFilterMode(next.filterMode);setFilterGroup(next.filterGroup);setSort(next.sort);setPageIndex(1);return applied;
   }
-  let cellFilterAvailable = !blocked && !externalStale && !gridEditing && !record.dirty && !record.pending && !changes.length && !!info && !!page && !!selection;
+  const canSeedCellFilter = !blocked && !externalStale && !gridEditing && !record.dirty && !record.pending && !changes.length && !!info && !!page;
+  let cellFilterAvailable = canSeedCellFilter && !!selection;
   if (cellFilterAvailable) { try { tableCellFilterDraft(info!.columns, rows, visibleKeys, selection); } catch { cellFilterAvailable = false; } }
   /** 快捷入口只预填手工条件；既有添加条件仍负责丢稿确认和服务器分页，不自动查询或提交。 */
-  function stageCellFilter(exclude: boolean): void {
+  function stageCellFilter(exclude: boolean, fromMenu?: { row: DraftRow; key: string }): void {
     const state = useWorkspace.getState(), current = state.settings.tabs.find(item => item.id === tab.id);
-    if (tableReadAction.current !== tableReadRender || !mounted.current || !cellFilterAvailable || selectionRef.current !== selection || reloadBlocked() || activeGridEditor.current || record.hasInput() || collectChanges(rowsRef.current).length || state.settings.activeTabId !== tab.id || current?.connectionId !== tab.connectionId || current?.database !== tab.database || current?.table !== tab.table || (state.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion) return;
-    try { setCellFilterSeed(tableCellFilterDraft(info!.columns, rowsRef.current, visibleKeys, selection, exclude)); setShowFilter(true); }
+    if (tableReadAction.current !== tableReadRender || !mounted.current || !canSeedCellFilter ||
+        (fromMenu ? !cellActionCurrent(fromMenu.row) : !cellFilterAvailable || selectionRef.current !== selection) || reloadBlocked() || activeGridEditor.current || record.hasInput() || collectChanges(rowsRef.current).length || state.settings.activeTabId !== tab.id || current?.connectionId !== tab.connectionId || current?.database !== tab.database || current?.table !== tab.table || (state.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion) return;
+    try { setCellFilterSeed(tableCellFilterDraft(info!.columns, rowsRef.current, visibleKeys, fromMenu ? { rowId: fromMenu.row.id, key: fromMenu.key } : selection, exclude)); setShowFilter(true); }
     catch (reason) { setError(errorMessage(reason)); }
   }
+  const stageMenuCellFilter = useRef(stageCellFilter); stageMenuCellFilter.current = stageCellFilter;
   const selectedFilterAvailable = !blocked && !externalStale && !gridEditing && !record.dirty && !record.pending && !!info && !!page && !!selection && visibleKeys.includes(selection.key) && selectedRows.size > 0 && !selectedFilter;
   /** 只冻结当前列的原勾选值及完整旧条件；预览不确认丢稿，也不读取服务器。 */
   function openSelectedFilter(exclude: boolean): void {
@@ -1935,7 +1938,14 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   function openCellActions(row: DraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     if (!row || key === undefined || !visibleKeys.includes(key) || !cellActionCurrent(row)) return false;
+    const filters = [];
+    if (canSeedCellFilter && info) try {
+      tableCellFilterDraft(info.columns, rows, visibleKeys, { rowId: row.id, key });
+      filters.push({ label: cellFilterText.equal, run: () => stageMenuCellFilter.current(false, { row, key }) },
+        { label: cellFilterText.exclude, run: () => stageMenuCellFilter.current(true, { row, key }) });
+    } catch { /* 未经原值校验的格不提供筛选项。 */ }
     return cellActionMenu.open(target, grid.current?.element, { title: key, current: () => cellActionCurrent(row), actions: [
+      ...filters,
       ...gridQuickValueKinds.map(kind => ({ label: quickValueText[kind], disabled: !canSetQuickValue(kind, row, key), run: () => setQuickValueAt(row, key, kind) })),
       { label: gridCellFileZh.action, disabled: ownCell(row.data, key) == null,
         run: () => { void saveGridCell(() => ownCell(row.data, key), () => cellActionCurrent(row)); } },

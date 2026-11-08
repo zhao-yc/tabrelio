@@ -10,6 +10,8 @@ import { sqliteTableEditZh as sqliteText } from '../../src/renderer/locales/sqli
 import { draftHistoryZh } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { sqliteTableCellFilterZh } from '../../src/renderer/locales/sqliteTableCellFilter.zh-CN';
+import { sqliteTableBrowseZh } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -71,9 +73,29 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     const clickAction = async (name: string) => (await action(name)).click();
     const undo = local ? sqliteText.undo : draftHistoryZh.undo;
     const jobs = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
-    const before = await jobs();
     const menu = page.getByRole('menu', { name: /^(单元格操作|单元格筛选)$/ });
     const item = (name: string) => menu.getByRole('menuitem', { name, exact: true });
+    if (dialect !== 'postgresql') {
+      const beforeFilter = await jobs();
+      await other.click();
+      await cell.click({ button: 'right' });
+      await page.screenshot({ path: info.outputPath('右键按原值筛选.png') });
+      await item(local ? sqliteTableCellFilterZh.exclude : tableCellFilterZh.exclude).click();
+      const input = tab.getByLabel(local ? sqliteTableBrowseZh.filterValue(1) : zh.table.text011, { exact: true });
+      await expect(input).toHaveValue('row A');
+      await expect(label).toBeVisible();
+      expect(await jobs()).toEqual(beforeFilter);
+      await clickAction(local ? sqliteTableBrowseZh.apply : zh.table.text013);
+      await expect(label).toBeHidden();
+      await expect(other).toBeVisible();
+      if (local) {
+        await clickAction(sqliteTableBrowseZh.clearFilterDraft);
+        await clickAction(sqliteTableBrowseZh.apply);
+      } else await clickAction(zh.table.filterRemoveCondition.replace('{0}', '1'));
+      await expect(label).toBeVisible();
+      await clickAction(local ? sqliteTableBrowseZh.conditions : zh.table.text006);
+    }
+    const before = await jobs();
     await other.locator('..').getByRole('checkbox').check();
     if (local) {
       await grid.getByRole('gridcell').getByText('INTEGER · 17', { exact: true }).click();
