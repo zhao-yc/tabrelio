@@ -13,7 +13,7 @@ import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
-import { sqliteCheckedExportZh as collectText } from '../../src/renderer/locales/sqliteCheckedExport.zh-CN';
+import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';

@@ -1,4 +1,4 @@
-import { sqliteCheckedExportZh as checkedExportText } from '../locales/sqliteCheckedExport.zh-CN';
+import { tableCheckedExportZh as checkedExportText } from '../locales/tableCheckedExport.zh-CN';
 import { csvImportColumnName } from '../../shared/csvImport';
 import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema, txtExportZh } from '../../shared/txtExport';
 import { TxtExportFields } from './TxtExportFields';

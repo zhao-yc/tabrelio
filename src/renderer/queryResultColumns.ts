@@ -55,7 +55,7 @@ export function moveQueryResultColumn(layout: QueryResultColumnLayout, key: stri
   return {order,visible:layout.visible,...(frozenThrough === undefined ? {} : {frozenThrough}),...(layout.widths ? {widths:layout.widths} : {}),...(layout.rowHeight === undefined ? {} : {rowHeight:layout.rowHeight})};
 }
 /** 在打开导出或接纳行选择时才投影；逐行计量，超预算即停，绝不复制隐藏单元格。 */
-export function projectQueryResultRows(result: QueryResult, columns: ResultColumn[], indices?: readonly number[]): ResultExportData {
+export function projectQueryResultRows(result: Pick<QueryResult, 'columns' | 'rows' | 'truncated'>, columns: ResultColumn[], indices?: readonly number[]): ResultExportData {
   queryResultColumnKeys(result.columns);
   const keys=queryResultColumnKeys(columns), source=new Map(result.columns.map(column=>[column.key,column]));
   if (columns.some(column=>source.get(column.key)!==column)) throw Error('可见列不属于准确原结果');

@@ -1,5 +1,5 @@
-export const sqliteCheckedExportZh = {
-  region: 'SQLite 跨页勾选导出',
+export const tableCheckedExportZh = {
+  region: '跨页勾选导出',
   collect: '收集本页勾选',
   replace: '更新本页收集',
   export: '导出已收集记录',

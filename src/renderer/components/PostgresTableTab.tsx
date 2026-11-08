@@ -86,6 +86,11 @@ import type { TableQueryTemplateKind, TableQueryTemplateOptions } from '../table
 import { tableQueryTemplateZh as sqlTemplateText } from '../locales/tableQueryTemplate.zh-CN';
 import { tableFilteredSelectZh as filteredSelectText } from '../locales/tableFilteredSelect.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
+import { useTableCheckedExport } from '../tableCheckedExport';
+import { projectQueryResultRows } from '../queryResultColumns';
+import { TableCheckedExportActions } from './TableCheckedExportActions';
+import { ResultExportDialog } from './ResultExportDialog';
+import type { ResultExportData } from '../../shared/contracts';
 import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
@@ -124,6 +129,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
   const [pageConnectionVersion, setPageConnectionVersion] = useState<number>();
+  const [collectedDialog, setCollectedDialog] = useState<ResultExportData>();
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
   const [importPage, setImportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
@@ -304,6 +310,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
     if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
+    if (!keepDraft) checkedExport.clear();
     const pins = keepDraft ? history.pins() : {};
     void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
   }
@@ -407,6 +414,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         if (preview.filteredUpdate && page) setFilteredUpdate({ page, fields: preview.filteredUpdate.fields });
         return;
       }
+      checkedExport.clear();
       issued.current = undefined;
       history.reset(draftRef.current);
       setRequiresRefresh(true);
@@ -419,6 +427,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     }, () => {
       setPreview(undefined);
       if (!issued.current) return;
+      checkedExport.clear();
       history.reset(draftRef.current);
       setRequiresRefresh(true);
       setMessage(text.unknown);
@@ -427,7 +436,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -563,6 +572,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     };
   }, [page?.columns, columnNames, layoutView.preferences]);
 
+  const collectQuery = JSON.stringify([options.limit, options.filter, options.sort]);
+  const collectScope = useMemo(() => ({}), [tab, layoutKey, collectQuery, requiresRefresh]);
+  const collectSignature = page ? JSON.stringify([page.relationKind,
+    page.columns.map(({ key, name, type }) => [key, name, type]), gridLayout.columns.map(({ key }) => key)]) : undefined;
+  const checkedExport = useTableCheckedExport(collectScope, collectSignature);
   const cellScope = useMemo(() => ({}), [page, gridLayout.columns, connectionVersion]);
   const cellMenuEnabled = active && !frozenPage && !requiresRefresh && pageConnectionVersion === connectionVersion && !!page?.exportToken;
   const selectedFilterColumn = findAnchor.current?.scope === cellScope
@@ -695,6 +709,21 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     return canFind && !!lifetime.current && latestFindScope.current === findScope && draftRef.current === draft &&
       issued.current === page?.exportToken && layoutScope.current.current() && !lease.current && !inlineOwner.current && !pasteOwner.current &&
       !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+
+  /** 收集只从当前原页与当前勾选快照投影，草稿值及后来页面不能进入文件。 */
+  function checkedExportCurrent(): boolean {
+    return checkedExport.current() && findIsCurrent() && !draftRef.current.length && !recordInput.current;
+  }
+
+  function collectCheckedPage(selected: ReadonlySet<number>, current: () => boolean): void {
+    if (!page || !checkedExportCurrent() || !current()) return;
+    try {
+      const snapshot = selected.size ? structuredClone(projectQueryResultRows(page, gridLayout.columns,
+        [...selected].sort((left, right) => left - right))) : undefined;
+      checkedExport.replace(options.offset, snapshot);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
   function openFind(replace: boolean) {
@@ -1274,6 +1303,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             <button type="button" title={selectedFilterText.postgresUnsupported}
               disabled={!cellMenuEnabled || !selected.size || !selectedFilterColumn}
               onClick={() => openSelectedFilter(selected, current)}>{selectedFilterText.entry}</button>
+            <TableCheckedExportActions collection={checkedExport.value} position={options.offset} selected={selected.size}
+              ready={canFind && !draft.length} hasDrafts={!!draft.length}
+              onCollect={() => collectCheckedPage(selected, current)}
+              onExport={() => { if (checkedExport.value && checkedExportCurrent()) setCollectedDialog(checkedExport.value.result); }}
+              onClear={() => { if (checkedExportCurrent()) checkedExport.clear(); }}/>
             {!!selected.size && <span>{fillText.count(selected.size)}</span>}
           </div>}
         onActiveRowIndexChange={recordView ? undefined : setRow}
@@ -1366,6 +1400,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <footer className="modal-footer"><button disabled={busy} onClick={() => setDraftFile(undefined)}>{text.cancel}</button>
         <button className="primary" disabled={busy} onClick={transferDraftFile}>{draftFile === 'save' ? draftFilesText.chooseSave : draftFilesText.chooseRestore}</button></footer>
     </Modal>}
+    {collectedDialog && <ResultExportDialog result={collectedDialog} tabId={tab.id} scope="collected" allowSql={false}
+      onClose={() => setCollectedDialog(undefined)}/>}
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
       isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&
         !recordDirty.current} onClose={() => setExportPage(undefined)}/>}
@@ -1401,6 +1437,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         !recordDirty.current} onClose={() => setImportPage(undefined)}
       onOutcome={(outcome, committed) => {
         if (!lifetime.current || issued.current !== importPage.exportToken) return;
+        checkedExport.clear();
         history.reset(draftRef.current);
         setImportPage(undefined); setRequiresRefresh(true); setMessage(outcome);
         if (committed) void run(isCurrent => read(options, isCurrent));

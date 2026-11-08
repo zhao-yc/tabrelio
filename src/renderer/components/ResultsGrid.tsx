@@ -343,8 +343,9 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
   const grid = onCellPaste ? <div style={{ display: 'contents' }} onPasteCapture={pasteGrid}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。
-  const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current?.scope === scope &&
-    selectedRowsRef.current.indices === selectedRows;
+  const selectionBefore = selectedRowsRef.current;
+  const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&
+    (selectionBefore?.scope === scope ? selectionBefore.indices === selectedRows : !selectedRows.size);
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
   const jump = rowJump ? <GridRowJump grid={gridRef} scope={scope} count={rows.length}
     disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/> : undefined;
@@ -356,7 +357,6 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     <button type="button" title={copyLabels.columnHint} disabled={!copyEnabled || !activeCopyCell?.column}
       onClick={() => copyResult('column')}>{copyLabels.column}</button>
   </>;
-  const selectionBefore = selectedRowsRef.current;
   const selectionTools = !onActiveRowChange && (rowJump || hasResultTools) ?
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={tableCopy?.enabled === false}
       keyFor={(row, index) => skipRowInInversion?.(row) ? undefined : index}

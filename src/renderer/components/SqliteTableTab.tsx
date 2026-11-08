@@ -91,8 +91,9 @@ import { SqliteTableExportDialog } from './SqliteTableExportDialog';
 import { SqliteTableExportIntent } from '../sqliteTableExportUi';
 import { sqliteTableExportZh as exportText } from '../locales/sqliteTableExport.zh-CN';
 import { ResultExportDialog } from './ResultExportDialog';
-import { collectSqliteCheckedExport, sqliteCheckedExportSignature, type SqliteCheckedExport } from '../sqliteCheckedExport';
-import { sqliteCheckedExportZh as checkedExportText } from '../locales/sqliteCheckedExport.zh-CN';
+import { sqliteCheckedExportSignature, snapshotSqliteCheckedExport } from '../sqliteCheckedExport';
+import { useTableCheckedExport } from '../tableCheckedExport';
+import { TableCheckedExportActions } from './TableCheckedExportActions';
 import { Empty, ErrorBox, Spinner } from './ui';
 import { SqliteTableEditor, type SqliteEditView, type SqliteDraftRow } from '../sqliteTableEditor';
 import { SqliteTableEditGrid, type SqliteTableFindGridHit } from './SqliteTableEditGrid';
@@ -161,15 +162,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const [cellFilterOwner, setCellFilterOwner] = useState<{ id: string; page: SqliteTablePage; row: unknown; column: number; source: SqliteCellFilterSource }>(), cellFilterRef = useRef<typeof cellFilterOwner>(undefined);
   const [cellFilterReason, setCellFilterReason] = useState('');
   const [exportData, setExportData] = useState<{ result: ResultExportData; scope: 'table' | 'collected' } | null>(null);
-  const [collected, setCollected] = useState<SqliteCheckedExport>();
-  const collectedRef = useRef<SqliteCheckedExport | undefined>(undefined);
   const applied = useRef(initialQuery());
-  /** 同步撤销上一份收集，避免快速重复点击使用已经替换的页。 */
-  function publishCollected(next?: SqliteCheckedExport) {
-    if (collectedRef.current === next) return;
-    collectedRef.current = next;
-    setCollected(next);
-  }
   const [fullExport, setFullExport] = useState<FullExportOwner | null>(null), fullExportRef = useRef<FullExportOwner | null>(null);
   const [tableImport, setTableImport] = useState<ImportOwner | null>(null), importRef = useRef<ImportOwner | null>(null);
   const editorRef = useRef<SqliteTableEditor | null>(null), [editView, setEditView] = useState<SqliteEditView | null>(null);
@@ -285,7 +278,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         changed: next => { if (editorRef.current === editor) setEditView(next); updateDrafts(value => value + 1); }, dirty: () => syncDraftDirty(),
         batch: () => drafts.batch(editor), settled: outcome => drafts.settled(editor, outcome),
         preview: input => invoke('sqlite.tableEdit.preview', input), apply: input => invoke('sqlite.tableEdit.apply', input), release: input => invoke('sqlite.tableEdit.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
-        committed: () => { publishCollected(); useWorkspace.getState().notify(editor.view.message); if (editorRef.current === editor) { const offset = editor.page.offset; dropEditor(); if (latest.current.active) void controller.load(applied.current, offset); } },
+        committed: () => { checkedExport.clear(); useWorkspace.getState().notify(editor.view.message); if (editorRef.current === editor) { const offset = editor.page.offset; dropEditor(); if (latest.current.active) void controller.load(applied.current, offset); } },
       }, restored);
     return editor;
   }
@@ -366,10 +359,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const displayColumns = useMemo(() => page ? projection.map(column => page.result.columns[column.index]) : [], [page, projection]);
   const collectScope = useMemo(() => ({}), [tab, profile, version, refreshVersion, applied.current, related]);
   const collectSignature = page ? sqliteCheckedExportSignature(page, displayColumns) : undefined;
-  const collectedCurrent = collected?.scope === collectScope && (collectSignature === undefined || collected.signature === collectSignature) ? collected : undefined;
-  useLayoutEffect(() => {
-    if (collectedRef.current === collected && collected && !collectedCurrent) publishCollected();
-  }, [collected, collectedCurrent]);
+  const checkedExport = useTableCheckedExport(collectScope, collectSignature);
+  const collectedCurrent = checkedExport.value;
   const displayWidths = useMemo(() => new Map(projection.flatMap(column => column.width === undefined || !page ? [] : [[page.result.columns[column.index].key, column.width] as const])), [projection, page]);
   const displayFrozen = useMemo(() => page ? projection.filter(column => column.frozen).map(column => page.result.columns[column.index].key) : [], [projection, page]);
   /** 显示可用状态只核当前来源；渲染阶段不能用尚未提交的事件票据禁用所有控件。 */
@@ -536,7 +527,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     catch (reason) { setValidation(errorMessage(reason)); }
   }
   /** 翻页和刷新沿原已应用配置，不把尚未应用的条件带入请求。 */
-  function read(offset: number) { if (available() && prepareRead()) { publishCollected(); setValidation(''); void controller.load(applied.current, offset); } }
+  function read(offset: number) { if (available() && prepareRead()) { checkedExport.clear(); setValidation(''); void controller.load(applied.current, offset); } }
   /** 分页和列头都绑定准确展示页；模态、导入导出、输入和结构失效时不允许重读。 */
   function browseNavigationCurrent(): boolean {
     if (restoredDraftRef.current || editRender.current !== editRenderTicket || !page || !available() || view.busy || latest.current.refreshVersion !== refreshVersion || inputRef.current || previewRef.current || pasteRef.current || rangeRef.current || importRef.current || fullExportRef.current || exportData || findRef.current?.preview) return false;
@@ -706,7 +697,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   function imported(owner: ImportOwner, output: SqliteTableEditOutcome, changed: boolean): void {
     if (output.outcome !== 'committed' || !output.fact.commitAcknowledged) return;
     const current = importRef.current === owner && !changed && owner.source.current(); useWorkspace.getState().notify(current ? importText.committed(output.fact.appliedRows) : importText.committedStale, !current);
-    if (current && !owner.refreshed) { owner.refreshed = true; publishCollected(); importDirty(owner, false); dropEditor(); void controller.load(applied.current, 0); }
+    if (current && !owner.refreshed) { owner.refreshed = true; checkedExport.clear(); importDirty(owner, false); dropEditor(); void controller.load(applied.current, 0); }
   }
   function closeImport(owner: ImportOwner): void { owner.source.invalidate(); if (importRef.current !== owner) return; importDirty(owner, false); importRef.current = null; setTableImport(null); }
   /** 选择来源按原页、连接版本和完整行身份持有，不受左树后续选择影响。 */
@@ -984,11 +975,11 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       for (const index of read.selection.indices) indices.add(index);
     }
     if (!indices.size && !collectedCurrent?.pages.has(page.offset)) return;
-    try { publishCollected(collectSqliteCheckedExport(collectScope, collectedCurrent, page, displayColumns, indices)); setValidation(''); }
+    try { checkedExport.replace(page.offset, snapshotSqliteCheckedExport(page, displayColumns, indices)); setValidation(''); }
     catch (reason) { setValidation(errorMessage(reason)); }
   }
   function checkedExportCurrent() {
-    return !!page && collectedRef.current === collected && browseNavigationCurrent() && controller.pageCurrent(page)
+    return !!page && checkedExport.current() && browseNavigationCurrent() && controller.pageCurrent(page)
       && !drafts.protected && !drafts.busy && !drafts.unknown;
   }
   /** 一次确认后整批暂存；系统确认期间同步观察workspace，回到原目标也不复活旧意图。 */
@@ -1318,7 +1309,6 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const checkedFilterReady = cellFilterReady && (renderedEditor ? !!checkedCount : !!checkedReadRows && checkedReadRows.selection.scope === page && checkedReadRows.selection.columns === displayColumns && !!checkedReadRows.selection.indices.size);
   const exportChecksReady = !!page && active && !view.busy && !externalBusy && !drafts.protected && !drafts.busy
     && !drafts.unknown && !cellInput && !exportData && controller.pageCurrent(page);
-  const collectedPage = !!page && !!collectedCurrent?.pages.has(page.offset);
   const readCheckedCount = checkedReadRows && checkedReadRows.selection.scope === page && checkedReadRows.selection.columns === displayColumns ? checkedReadRows.selection.indices.size : 0;
   return <div className="workspace-tab table-tab sqlite-table-tab" onKeyDownCapture={findKey} aria-label={text.title} data-readonly={editView ? 'false' : 'true'}>
     {related && <p role="status">{related.current() ? relatedText.scope(related.relation.parentTable, related.relation.childColumns) : relatedText.expired}</p>}{related?.current() && <p>{relatedText.keys(related.relation.parentColumns, related.relation.values)}</p>}
@@ -1360,16 +1350,11 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         onClose={current => { if (rowDetailsCurrent(current.binding) && rowDetails.close(current)) setRowDetail(null); }}/>}
       </div> : <Empty title={text.noPage}/>}</div>
     {editView && <div className="table-action-bar"><span role="status">{editText.counts(counts.insert, counts.update, counts.delete)}</span><button aria-label={editText.add} disabled={editBlocked} onClick={addRow}>{editText.add}</button><button aria-label={recordTemplatesZh.open} disabled={editBlocked || !!templateDialog} onClick={openRecordTemplates}>{recordTemplatesZh.open}</button><button aria-label={editText.editRow} disabled={editBlocked || !selectedRow || editRows.find(row => row.id === selectedRow)?.deleted} onClick={() => { const row = editRows.find(row => row.id === selectedRow); if (row) editRow(row); }}>{editText.editRow}</button><button aria-label={editText.remove} disabled={editBlocked || !selectedRow || editRows.find(row => row.id === selectedRow)?.deleted} onClick={removeRow}>{editText.remove}</button><button aria-label={editText.undo} disabled={editBlocked || !editView.undo} onClick={undoEdit}>{editText.undo}</button><button aria-label={editText.redo} disabled={editBlocked || !editView.redo} onClick={redoEdit}>{editText.redo}</button><button aria-label={editText.discard} disabled={editView.busy || !editView.dirty} onClick={discardEdit}>{editText.discard}</button><button aria-label={draftFileText.save} disabled={editBlocked || !drafts.changes || !!draftFile} onClick={() => openDraftFile('save')}>{draftFileText.save}</button><button aria-label={draftFileText.restore} disabled={editBlocked || drafts.protected || !!draftFile} onClick={() => openDraftFile('restore')}>{draftFileText.restore}</button><button className="primary" aria-label={editText.preview} disabled={editBlocked || !drafts.changes} onClick={previewChanges}>{editText.preview}</button></div>}
-    {(page || collectedCurrent) && <div className="query-row-details-actions" role="group" aria-label={checkedExportText.region}
-      title={drafts.protected ? checkedExportText.clean : checkedExportText.hint}>
-      <button type="button" disabled={!exportChecksReady || !collectedPage && !(renderedEditor ? checkedCount : readCheckedCount)}
-        onClick={collectCheckedPage}>{collectedPage ? checkedExportText.replace : checkedExportText.collect}</button>
-      <button type="button" disabled={!exportChecksReady || !collectedCurrent}
-        onClick={() => { if (collectedCurrent && checkedExportCurrent()) setExportData({ result: collectedCurrent.result, scope: 'collected' }); }}>{checkedExportText.export}</button>
-      <button type="button" disabled={!exportChecksReady || !collectedCurrent}
-        onClick={() => { if (checkedExportCurrent()) publishCollected(); }}>{checkedExportText.clear}</button>
-      {collectedCurrent && <span role="status">{checkedExportText.summary(collectedCurrent.pages.size, collectedCurrent.result.rows.length)}</span>}
-    </div>}
+    {(page || collectedCurrent) && <TableCheckedExportActions collection={collectedCurrent}
+      position={page?.offset ?? -1} selected={renderedEditor ? checkedCount : readCheckedCount}
+      ready={exportChecksReady} hasDrafts={drafts.protected} onCollect={collectCheckedPage}
+      onExport={() => { if (collectedCurrent && checkedExportCurrent()) setExportData({ result: collectedCurrent.result, scope: 'collected' }); }}
+      onClear={() => { if (checkedExportCurrent()) checkedExport.clear(); }}/>}
     {detailPageNotice && <p role="status" className="sqlite-browse-hint">{detailPageNotice}</p>}
     {recordPageNotice && <p role="status" className="sqlite-browse-hint">{recordPageNotice}</p>}
     {templateNotice && <p role="status" className="sqlite-browse-hint">{templateNotice}</p>}

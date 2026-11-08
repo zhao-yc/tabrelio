@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
-import { collectSqliteCheckedExport } from '../../src/renderer/sqliteCheckedExport';
+import { snapshotSqliteCheckedExport, sqliteCheckedExportSignature } from '../../src/renderer/sqliteCheckedExport';
+import { replaceTableCheckedExport, type TableCheckedExport } from '../../src/renderer/tableCheckedExport';
+import type { ResultColumn } from '../../src/shared/contracts';
+
+function collectSqliteCheckedExport(scope: object, current: TableCheckedExport | undefined, page: SqliteTablePage, columns: ResultColumn[], indices: ReadonlySet<number>) {
+  return replaceTableCheckedExport(scope, sqliteCheckedExportSignature(page, columns), current, page.offset, snapshotSqliteCheckedExport(page, columns, indices));
+}
 
 function fixture(offset: number): SqliteTablePage {
   return {
