@@ -2,6 +2,7 @@ import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import { expect, page, test, confirmOwnedDesktopExit, retainOwnedDesktopResources, pageErrors } from './desktop-fixture';
 import { primaryKeyCopyZh as text } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
+import { expectPrimaryKeyQueryDraft } from './primary-key-query-draft';
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -49,6 +50,7 @@ test('MySQL 和 MariaDB 复制精确复合原主键并跨时区回放', async ({
     const check = (name: string) => cell(name).locator('..').getByRole('checkbox');
     const button = () => navigationMenuItem(tab, { name: text.action, exact: true });
     const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     async function captureCount(count: number) {
       await expect.poll(async () => ({
         count: (await captured()).length,
@@ -58,6 +60,7 @@ test('MySQL 和 MariaDB 复制精确复合原主键并跨时区回放', async ({
 
     await cell('目标甲').click();
     const before = await tasks();
+    const historyBefore = await history();
     await (await button()).click();
     await captureCount(1);
     const [single] = await captured();
@@ -78,9 +81,15 @@ test('MySQL 和 MariaDB 复制精确复合原主键并跨时区回放', async ({
     const [, batch] = await captured();
     expect(batch.formats).toEqual(['text/plain']);
     expect(await read(batch.text)).toEqual(['目标乙', '目标甲']);
+    await (await navigationMenuItem(tab, { name: text.open, exact: true })).click();
+    await expectPrimaryKeyQueryDraft('primary-key-copy', batch.text);
+    await page.screenshot({ path: info.outputPath('原主键查询草稿-' + dialect + '.png') });
+    await page.locator('[data-workspace-tab-id="primary-key-copy"]').getByRole('button', { name: '原主键查询', exact: true }).click();
     await expect(check('目标甲')).toBeChecked();
     await expect(check('目标乙')).toBeChecked();
     expect(await tasks()).toEqual(before);
+    expect(await history()).toEqual(historyBefore);
+    await captureCount(2);
     expect(await read('SELECT note FROM key_rows')).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

@@ -74,6 +74,7 @@ import { TableSortPanel } from './TableSortPanel';
 import { tableSortZh as sortText } from '../locales/tableSort.zh-CN';
 import { validateTableSort, tableSortFromGrid } from '../tableSort';
 import { queryDatabasePatch } from '../../shared/queryContext';
+import { openPrimaryKeyQueryDraft } from '../openPrimaryKeyQueryDraft';
 import { TablePresetPanel } from './TablePresetPanel';
 import { createPresetDialogGuard } from '../tablePresetDialogs';
 import { validateTablePresetColumns, type TablePresetConfiguration } from '../../shared/tablePresets';
@@ -1635,8 +1636,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       void invoke('table.copyInsertSql', input).then(() => { if (mounted.current && copyEnvironment.current === environment) setDuplicateNotice(copyInsertSqlZh.copied); }, reason => { if (mounted.current && copyEnvironment.current === environment) setError(errorMessage(reason)); });
     } catch (reason) { setError(errorMessage(reason)); }
   }
-  /** 复制主键查询与表格原生复制共用一次写入，活动页或勾选变更时撤销旧入口。 */
-  function copyPrimaryKeyQuery() {
+  /** 两个入口共享同一个原主键快照。活动页或勾选变更时撤销旧入口。 */
+  function handlePrimaryKeyQuery(destination: 'clipboard' | 'draft') {
     const current = () => tableToolbarCurrent() && !insertCopyBlockedRef.current && !restoredDraftView &&
       !externalStaleRef.current && !activeGridEditor.current && !record.hasInput() &&
       rowsRef.current === rows && selectedRowsRef.current === selectedRows && selectionRef.current === selection &&
@@ -1644,12 +1645,21 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (!current()) return;
     try {
       const ids = selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
-      const sql = prepareCopyPrimaryKeyQuery(getRecordContext(), copyPage.current, page, rows, ids);
+      const context = getRecordContext();
+      const sql = prepareCopyPrimaryKeyQuery(context, copyPage.current, page, rows, ids);
+      if (destination === 'draft') {
+        if (onOpenGeneratedQuery && current()) {
+          openPrimaryKeyQueryDraft(context.target, sql, onOpenGeneratedQuery);
+          setError('');
+        }
+        return;
+      }
       writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
       setError('');
       setDuplicateNotice(primaryKeyCopyZh.copied);
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
   }
+  const primaryKeyQueryDisabled = insertCopyBlockedRef.current || restoredDraftView || !!copyMetadataReason || (!selection && !selectedRows.size);
   // 捕获本次勾选和页面身份；观察过的页/目标变化即使恢复原值，也不能复活旧按钮。
   const batchDuplicateScope = { rows, selectedRows, page, source: page?.copySource, metadata: page?.copyMetadataKey, environment: copyEnvironment.current, revision: recordPages.revision };
   /** 批量复制只接受完整当前页，先整批验证，再一次发布历史和新增键保护。 */
@@ -1951,9 +1961,12 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={filteredSelectText.entry} title={filteredSelectText.hint} disabled={!filteredSelectAvailable} onClick={openFilteredSelect}>{filteredSelectText.entry}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selection} onClick={() => copyRowsAsInsert(false)}>{copyInsertSqlZh.current}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selectedRows.size} onClick={() => copyRowsAsInsert(true)}>{copyInsertSqlZh.selected}</button>
-{info?.objectKind === 'table' && !!info.primaryKey.length && <button title={primaryKeyCopyZh.hint}
-  disabled={insertCopyBlockedRef.current || restoredDraftView || !!copyMetadataReason || (!selection && !selectedRows.size)}
-  onClick={copyPrimaryKeyQuery}>{primaryKeyCopyZh.action}</button>}</ActionMenuSection>
+{info?.objectKind === 'table' && !!info.primaryKey.length && <>
+  <button title={primaryKeyCopyZh.hint} disabled={primaryKeyQueryDisabled}
+    onClick={() => handlePrimaryKeyQuery('clipboard')}>{primaryKeyCopyZh.action}</button>
+  {onOpenGeneratedQuery && <button title={primaryKeyCopyZh.openHint} disabled={primaryKeyQueryDisabled}
+    onClick={() => handlePrimaryKeyQuery('draft')}>{primaryKeyCopyZh.open}</button>}
+</>}</ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.transfer}><button title={headerCopyText.hint} disabled={blocked || externalStale || gridEditing || record.hasInput() || (!selection && !selectedRows.size)} onClick={() => copyTableData('headers')}>{headerCopyText.action}</button>
 <button title={headerCopyText.columnHint} disabled={blocked || externalStale || gridEditing || record.hasInput() || !visibleColumns.some(column => column.key === selection?.key)} onClick={() => copyTableData('column')}>{headerCopyText.column}</button>
 {onTableCopyData && <button title={tableCopyDataZh.title} aria-label={tableCopyDataZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableCopyData(); }}>{tableCopyDataZh.title}</button>}

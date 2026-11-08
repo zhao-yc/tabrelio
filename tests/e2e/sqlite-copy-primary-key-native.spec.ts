@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { desktop, page, dataDir, expect, test, confirmOwnedDesktopExit, retainOwnedDesktopResources, pageErrors } from './desktop-fixture';
 import { primaryKeyCopyZh as copy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { sqliteTableEditZh as edit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
+import { expectPrimaryKeyQueryDraft } from './primary-key-query-draft';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_SQLITE_COPY_PRIMARY_KEY_NATIVE_TEST !== '1', '需要显式启用离线 SQLite 专项');
@@ -76,11 +77,13 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     const cell = (name: string) => tab.getByRole('gridcell', { name, exact: true });
     const check = (note: string) => cell('TEXT · ' + note).locator('..').getByRole('checkbox');
     const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     const open = (id: string, title: string) =>
       page.locator('[data-workspace-tab-id="' + id + '"]').getByRole('button', { name: title, exact: true }).click();
     await expect(cell('TEXT · 目标甲')).toBeVisible();
     await expect(button(copy.action)).toBeDisabled();
     const before = await tasks();
+    const historyBefore = await history();
     await cell('TEXT · 目标甲').click();
     await button(copy.action).click();
     const [first] = await captured();
@@ -97,11 +100,21 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     const [, batch] = await captured();
     expect(batch.formats).toEqual(['text/plain']);
     expect(read(batch.text)).toEqual(['目标乙', '目标甲']);
-    await check('空键甲').check();
-    await button(copy.action).click();
-    await expect(tab.getByRole('alert').filter({ hasText: copy.incomplete })).toBeVisible();
-    expect(await captured()).toHaveLength(2);
+    await button(copy.open).click();
+    await expectPrimaryKeyQueryDraft('copy', batch.text);
+    await page.screenshot({ path: info.outputPath('SQLite原主键查询草稿.png') });
     expect(await tasks()).toEqual(before);
+    await open('copy', '原主键查询');
+    // SQLite 的干净表页重新激活时按原规则重读，基于新页重新勾选来验证拒绝分支。
+    await check('目标甲').check();
+    await check('目标乙').check();
+    const beforeInvalid = await tasks();
+    await check('空键甲').check();
+    await button(copy.open).click();
+    await expect(tab.getByRole('alert').filter({ hasText: copy.incomplete })).toBeVisible();
+    await expect(page.locator('.tab-strip [data-workspace-tab-id]')).toHaveCount(4);
+    expect(await captured()).toHaveLength(2);
+    expect(await tasks()).toEqual(beforeInvalid);
 
     await check('空键甲').uncheck();
     await check('目标甲').uncheck();
@@ -113,6 +126,12 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     await cell('TEXT · 仅本地新键').click();
     await button(copy.action).click();
     expect((await captured()).at(-1)).toEqual(first);
+    const beforeDirty = await tasks();
+    await button(copy.open).click();
+    await expectPrimaryKeyQueryDraft('copy', first.text);
+    expect(await tasks()).toEqual(beforeDirty);
+    await open('copy', '原主键查询');
+    await expect(cell('TEXT · 仅本地新键')).toBeVisible();
     expect(read('SELECT note FROM ' + target)).toEqual(baseline);
     await button(edit.undo).click();
 
@@ -120,9 +139,14 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     await cell('目标甲').click();
     await button(copy.action).click();
     expect((await captured()).at(-1)).toEqual(first);
+    await button(copy.open).click();
+    await expectPrimaryKeyQueryDraft('copy-readonly', first.text);
+    expect(await captured()).toHaveLength(4);
+    expect(await history()).toEqual(historyBefore);
     await open('copy-view', '只读视图');
     await expect(cell('目标甲')).toBeVisible();
     await expect(button(copy.action)).toHaveCount(0);
+    await expect(button(copy.open)).toHaveCount(0);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

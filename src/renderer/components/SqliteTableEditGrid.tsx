@@ -22,9 +22,9 @@ import { useWorkspace } from '../store';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
+interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenPrimaryKeyQuery?(sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, initialCheckedRows, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, rowHeight }: Props) {
+export function SqliteTableEditGrid({ page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenPrimaryKeyQuery, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize, rowHeight }: Props) {
   const height = readGridRowHeight(rowHeight);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
@@ -177,8 +177,8 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
       setError('');
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : headerCopyText.unavailable); }
   }
-  /** 只从本次勾选或活动数据格取得原行，草稿失败不会进入原生复制事件。 */
-  function copyTableSql(build: typeof sqliteCopyInsertDraftRows, checked: boolean, copied: string) {
+  /** 只从本次勾选或活动数据格取得原行，生成失败时不产生副作用。 */
+  function handleTableSql(build: typeof sqliteCopyInsertDraftRows, checked: boolean, destination: string | ((sql: string) => void)) {
     const allowed = () => !disabled && current() && noModal();
     if (!allowed()) return;
     try {
@@ -186,9 +186,16 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
       const records = checked ? rows.filter(row => selectedRows.has(row.id)) : cell ? [cell.row] : [];
       if (checked && records.length !== selectedRows.size) throw Error(insertCopyText.selection);
       const sql = build(page, records);
+      if (typeof destination === 'function') {
+        if (allowed()) {
+          destination(sql);
+          setError('');
+        }
+        return;
+      }
       writeTableClipboardEvent(allowed, data => data.setData('text/plain', sql));
       setError('');
-      useWorkspace.getState().notify(copied);
+      useWorkspace.getState().notify(destination);
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : insertCopyText.invalid); }
   }
   const hasActiveDataColumn = order.some(index => activeCell.current.position?.key === 'c' + index);
@@ -224,10 +231,13 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, initialChe
 
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
     {page.insertCopy && <CopyInsertSqlButtons disabled={disabled} current={hasActiveDataColumn}
-      selected={!!selectedRows.size} onCopy={checked => copyTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied)}/>}
+      selected={!!selectedRows.size} onCopy={checked => handleTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied)}/>}
     {!!page.primaryKey?.length && <button type="button" title={keyCopyText.hint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
-      onClick={() => copyTableSql(sqliteCopyPrimaryKeyDraftRows, selectedRows.size > 0, keyCopyText.copied)}>{keyCopyText.action}</button>}
+      onClick={() => handleTableSql(sqliteCopyPrimaryKeyDraftRows, selectedRows.size > 0, keyCopyText.copied)}>{keyCopyText.action}</button>}
+    {!!page.primaryKey?.length && onOpenPrimaryKeyQuery && <button type="button" title={keyCopyText.openHint}
+      disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
+      onClick={() => handleTableSql(sqliteCopyPrimaryKeyDraftRows, selectedRows.size > 0, onOpenPrimaryKeyQuery)}>{keyCopyText.open}</button>}
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={row => row.deleted ? undefined : row.id}
       isCurrent={() => baseCurrent() && selection.current.revision === selectionTicket && noModal()}

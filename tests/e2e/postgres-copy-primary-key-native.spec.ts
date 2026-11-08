@@ -1,6 +1,7 @@
 import { Client } from 'pg';
 import { expect, page, test, confirmOwnedDesktopExit, retainOwnedDesktopResources, pageErrors } from './desktop-fixture';
 import { primaryKeyCopyZh as text } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
+import { expectPrimaryKeyQueryDraft } from './primary-key-query-draft';
 import { postgresTableZh as table } from '../../src/renderer/locales/postgresTable.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -67,13 +68,17 @@ test('PostgreSQL 按复合原主键复制查询，精确匹配继承父表及分
     const cell = (name: string) => grid.getByRole('gridcell', { name, exact: true });
     const check = (name: string) => cell(name).locator('..').getByRole('checkbox');
     const button = tab.getByRole('button', { name: text.action, exact: true });
+    const draftButton = tab.getByRole('button', { name: text.open, exact: true });
     const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     const open = (id: string, title: string) =>
       page.locator('[data-workspace-tab-id="' + id + '"]').getByRole('button', { name: title, exact: true }).click();
     await expect(cell('目标甲')).toBeVisible();
     await expect(cell('继承重号')).toHaveCount(0);
     await expect(button).toBeDisabled();
+    await expect(draftButton).toBeDisabled();
     const before = await tasks();
+    const historyBefore = await history();
     await cell('目标甲').click();
     await button.click();
     const [single] = await captured();
@@ -105,6 +110,14 @@ test('PostgreSQL 按复合原主键复制查询，精确匹配继承父表及分
     await cell('本地草稿').click();
     await button.click();
     expect((await captured()).at(-1)).toEqual(single);
+    await draftButton.click();
+    await expectPrimaryKeyQueryDraft('original', single.text);
+    await page.screenshot({ path: info.outputPath('PostgreSQL原主键查询草稿.png') });
+    await open('original', '复合主键');
+    await expect(cell('本地草稿')).toBeVisible();
+    expect(await captured()).toHaveLength(3);
+    expect(await tasks()).toEqual(before);
+    expect(await history()).toEqual(historyBefore);
     await tab.getByRole('button', { name: table.discard, exact: true }).click();
 
     await open('partition', '分区主键');
@@ -117,9 +130,11 @@ test('PostgreSQL 按复合原主键复制查询，精确匹配继承父表及分
     await open('view', '只读视图');
     await expect(cell('继承重号')).toBeVisible();
     await expect(button).toHaveCount(0);
+    await expect(draftButton).toHaveCount(0);
     await open('keyless', '无主键');
     await expect(cell('没有主键')).toBeVisible();
     await expect(button).toHaveCount(0);
+    await expect(draftButton).toHaveCount(0);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
