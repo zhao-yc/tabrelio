@@ -50,6 +50,7 @@ import { postgresCurrentQueryExportSource } from '../../shared/postgresQueryExpo
 import { postgresQueryExportZh as fullExportText } from '../locales/postgresQueryExport.zh-CN';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
+import { QueryResultKeyword, useQueryResultKeyword } from './QueryResultKeyword';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
@@ -1021,7 +1022,9 @@ export function PostgresQueryTab({
   const sortView = resultSorter.view(sortBinding);
   const historyBinding = resultHistory.bind(resultSource, visibleColumns ?? [], resultContext,
     filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
-  const displayResult = sortView?.result ?? filterView?.result ?? result;
+  const organizedResult = sortView?.result ?? filterView?.result ?? result;
+  const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext, organizedResult);
+  const displayResult = keywordFilter.result;
   const dataResult = !busy && resultSource ? displayResult : undefined;
   const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
     resultContext, visibleColumns);
@@ -1890,7 +1893,7 @@ export function PostgresQueryTab({
                   onClick={() => openResultFilter()}>{filterText.open}</button>
                 {!!filterView?.rules.length && <>
                   <button disabled={locked} onClick={() => applyResultFilter({ mode: 'AND', children: [] })}>{filterText.clear}</button>
-                  <span role="status">{filterText.counts(resultSource!.rows.length, dataResult.rows.length)}</span>
+                  <span role="status">{filterText.counts(resultSource!.rows.length, organizedResult!.rows.length)}</span>
                 </>}
                 <button disabled={locked || !sortView || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
                   onClick={() => {
@@ -1927,6 +1930,11 @@ export function PostgresQueryTab({
             <button disabled={locked || !resultLocationAvailable}
               title={resultLocationAvailable ? text.locateResult : text.locateResultUnavailable} onClick={locateResultSource}>{text.locateResult}</button>
           </div>}
+          {filterBinding && organizedResult && displayResult && <QueryResultKeyword key={keywordFilter.generation}
+            keyword={keywordFilter.keyword} total={organizedResult.rows.length} matched={displayResult.rows.length}
+            disabled={locked || !binding}
+            onApply={keyword => resultCurrent() && filterCurrent() && !document.querySelector(appModalSelector) &&
+              keywordFilter.apply(keyword, () => resultSelection.invalidate())} />}
           <div className="result-body">
             {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
               !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (

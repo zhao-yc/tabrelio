@@ -1,0 +1,14 @@
+.query-result-keyword {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11px;
+}
+
+.query-result-keyword > input { width: 196px; max-width: 100%; min-width: 0; height: 26px; }
+.query-result-keyword > button { min-height: 25px; padding: 2px 7px; font-size: 10px; }
