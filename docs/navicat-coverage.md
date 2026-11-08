@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。SQLite 表和视图可按页收集勾选记录，更新或移除已收集的单页，并按页序导出原值。D02、F01、R02 仍为部分覆盖。[SQLite 跨页勾选导出](development/sqlite-checked-export-20261108.md)
+
 2026-11-08 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的表格与查询结果可反选或清空当前网格的勾选，包含虚拟滚动尚未渲染的行。D02、D04、Q05、R01、R02 仍为部分覆盖。[本页勾选操作](development/grid-row-selection-20261108.md)
 
 2026-11-08 源码增量。PostgreSQL 单文件原生 CSV 可在导入前完整检查编码、引号和列数，并保留列映射。写入沿已核对的字节范围并核对记录数。F01、R01 仍为部分覆盖。[原生 CSV 整文件检查](development/postgres-copy-csv-preflight-20261108.md)

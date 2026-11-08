@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
 import { LocalStore } from '../../src/main/storage';
@@ -12,6 +12,9 @@ import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sq
 import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
+import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { sqliteCheckedExportZh as collectText } from '../../src/renderer/locales/sqliteCheckedExport.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
@@ -251,4 +254,70 @@ test('SQLite 可编辑网格支持含列名及当前列复制，内部 MIME 保�
   } finally {
     await restore();
   }
+});
+
+test('SQLite 跨页收集可替换单页并导出真实文件，刷新清除原收集', async ({}, info) => {
+  await seed();
+  const openTab = (id: string, name: string) => page.locator(`[data-workspace-tab-id="${id}"]`).getByRole('button', { name, exact: true }).click();
+  const pane = page.locator('.sqlite-table-tab:visible'), group = pane.getByRole('group', { name: collectText.region, exact: true });
+  const button = (name: string) => group.getByRole('button', { name, exact: true });
+  const rowCheck = (name: string) => pane.getByRole('gridcell', { name, exact: true }).locator('..').getByRole('checkbox');
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const dbPath = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(dbPath);
+
+  await openTab('t-jump', '表格定位');
+  await rowCheck('INTEGER · 1').check();
+  await button(collectText.collect).click();
+  await expect(group.getByRole('status')).toHaveText(collectText.summary(1, 1));
+
+  await openTab('v-jump', '视图定位');
+  await expect(button(collectText.export)).toBeDisabled();
+  await pane.getByRole('button', { name: browseText.next, exact: true }).click();
+  await rowCheck('101').check();
+  await button(collectText.collect).click();
+  await expect(group.getByRole('status')).toHaveText(collectText.summary(1, 1));
+  await pane.getByRole('button', { name: browseText.first, exact: true }).click();
+  await rowCheck('1').check();
+  await button(collectText.collect).click();
+  await expect(group.getByRole('status')).toHaveText(collectText.summary(2, 2));
+  await rowCheck('1').uncheck();
+  await rowCheck('2').check();
+  await button(collectText.replace).click();
+  await expect(group.getByRole('status')).toHaveText(collectText.summary(2, 2));
+  await page.screenshot({ path: info.outputPath('SQLite跨页勾选导出.png') });
+
+  const beforeDialog = await tasks();
+  const output = join(dataDir, '跨页勾选.json');
+  // 仅替换本例保存位置选择，原授权、后台写入和磁盘结果仍走正式路径。
+  await desktop.evaluate(({ dialog, BrowserWindow }, output) => {
+    const original = dialog.showSaveDialog;
+    dialog.showSaveDialog = (async (...args: unknown[]) => {
+      dialog.showSaveDialog = original;
+      if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes('json'))
+        throw Error('仅允许本例 JSON 保存选择');
+      return { canceled: false, filePath: output };
+    }) as typeof original;
+  }, output);
+  await button(collectText.export).click();
+  const modal = page.getByRole('dialog', { name: collectText.export, exact: true });
+  await expect(modal.getByText(collectText.exportRows(2), { exact: true })).toBeVisible();
+  await expect(modal.getByRole('gridcell', { name: '记录 1', exact: true })).toHaveCount(0);
+  await expect(modal.getByRole('gridcell', { name: '记录 2', exact: true })).toBeVisible();
+  await expect(modal.getByRole('gridcell', { name: '记录 101', exact: true })).toBeVisible();
+  expect(await tasks()).toEqual(beforeDialog);
+  await modal.getByLabel(zh.resultExport.format, { exact: true }).selectOption('json');
+  await modal.getByRole('button', { name: new RegExp(zh.resultExport.chooseFile) }).click();
+  await modal.getByRole('button', { name: zh.resultExport.start, exact: true }).click();
+  await modal.getByRole('button', { name: zh.common.done, exact: true }).click();
+  expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual([{ id: '2', name: '记录 2' }, { id: '101', name: '记录 101' }]);
+  expect(readFileSync(dbPath)).toEqual(before);
+
+  await rowCheck('2').uncheck();
+  await button(collectText.replace).click();
+  await expect(group.getByRole('status')).toHaveText(collectText.summary(1, 1));
+  await (await navigationMenuItem(pane.locator('.toolbar'), { name: browseText.refresh, exact: true })).click();
+  await expect(rowCheck('1')).toBeVisible();
+  await expect(button(collectText.export)).toBeDisabled();
+  await expect(group.getByRole('status')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
 });
