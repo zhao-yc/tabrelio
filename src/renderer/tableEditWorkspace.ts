@@ -7,6 +7,8 @@ import { tableEditWorkspaceZh as text } from './locales/tableEditWorkspace.zh-CN
 import { parseTableDraftDocument, type TableDraftDocument, type TableDraftWorkspace } from '../shared/tableDraft';
 import { restoreTableDraftRows } from './tableDraft';
 import { assertCopiedRecordKeys } from './recordDuplicate';
+import { BatchFillIntent, prepareBatchFill, type BatchFillAssignment } from './recordBatchFill';
+import { recordReadonlyReason, recordTargetKey, type RecordContext } from './recordViews';
 
 export const tableEditWorkspaceLimits = { pages: 16, bytes: 64 * 1024 * 1024, cells: 100000, changes: 5000, changedCells: 50000, inputBytes: 1024 * 1024 } as const;
 export interface TableEditPage {
@@ -19,6 +21,16 @@ export interface TableCheckedDeletion {
   readonly pages: readonly { index: number; count: number }[];
   current(): boolean;
   stage(): DraftRow[];
+}
+
+export interface TableCheckedFill {
+  readonly context: RecordContext;
+  readonly count: number;
+  readonly groups: TableCheckedDeletion['pages'];
+  readonly invalidated: boolean;
+  invalidate(): void;
+  reason(rows: DraftRow[], selected: ReadonlySet<string>, context: RecordContext): string;
+  stage(assignments: readonly BatchFillAssignment[], rows: DraftRow[], selected: ReadonlySet<string>, context: RecordContext): { rows: DraftRow[]; changed: number };
 }
 
 /** 活动页使用实时勾选，后台页使用离页时登记的准确 UUID。 */
@@ -153,41 +165,49 @@ export class TableEditWorkspace {
   update(before:DraftRow[],after:DraftRow[]):void{if(!this.active||this.active.rows!==before||before===after)return;if(this.dead||this.pending)throw Error(text.stale);if(this.entries.size>1)this.budget(this.pages.map(page=>({rows:page===this.active?after:page.rows})));this.active.rows=after;this.publish();}
   /** 精确记住UI选择及复制标记；UUID属于原页，不按主键猜另一页的焦点。 */
   remember(rows:DraftRow[],selected:ReadonlySet<string>,selection:TableEditPage['selection'],copied:Set<string>):void{if(this.active?.rows!==rows)return;this.active.selected=selected;this.active.selection=selection;this.active.copied=copied;}
-  /** 先校验全部修改和各页撤销预算，再一次发布；同一原定位不能跨页重复暂存。 */
-  planCheckedDeletion(current: DraftRow[], activeSelected: ReadonlySet<string>): TableCheckedDeletion {
+  /** 两种跨页操作均绑定原页、勾选及历史代次，任何页变化都会撤销整组计划。 */
+  private captureChecked(current: DraftRow[], activeSelected: ReadonlySet<string>) {
     const active = this.active, epoch = this.epoch, revision = this.revision;
     if (!active || active.rows !== current || this.dead || this.pending || this.restoredValue) throw Error(text.stale);
-    const source = this.pages.map(page => ({ page, rows: page.rows, history: page.history.generation,
-      checked: page.selected, signature: this.signature(page) }));
-    if (source.some(item => item.signature !== this.signatures.get(item.page))) throw Error(text.stale);
-    const plans = source.flatMap(item => {
-      const selected = item.page === active ? activeSelected : item.checked;
-      if (!selected.size) return [];
-      const ids = new Set(item.rows.map(row => row.id));
-      if (ids.size !== item.rows.length || [...selected].some(id => !ids.has(id))) throw Error(text.stale);
+    const source = this.pages.map(page => {
+      const selected = page === active ? activeSelected : page.selected;
+      const ids = new Set(page.rows.map(row => row.id));
+      if (selected.size && (ids.size !== page.rows.length || [...selected].some(id => !ids.has(id)))) throw Error(text.stale);
+      const signature = this.signature(page);
+      if (signature !== this.signatures.get(page)) throw Error(text.stale);
+      return { page, rows: page.rows, history: page.history.generation, checked: page.selected, selected, ids: new Set(selected),
+        signature, selectedRows: tableCheckedPageRows(page, active, activeSelected) };
+    });
+    const groups = source.filter(item => item.selectedRows.length);
+    const stillChecked = (item: typeof source[number]) => {
       const rows = tableCheckedPageRows(item.page, active, activeSelected);
-      if (!rows.length) return [];
-      const targets = new Set(rows), next = item.rows.map(row => targets.has(row) ? { ...row, deleted: true } : row);
+      return rows.length === item.selectedRows.length && rows.every((row, index) => row === item.selectedRows[index]);
+    };
+    const isCurrent = () => !this.dead && !this.pending && this.epoch === epoch && this.revision === revision &&
+      this.active === active && source.every(item => this.entries.get(item.page.index) === item.page &&
+        item.page.rows === item.rows && item.page.history.generation === item.history && item.page.selected === item.checked &&
+        this.signature(item.page) === item.signature && item.selected.size === item.ids.size && [...item.selected].every(id => item.ids.has(id)) &&
+        stillChecked(item));
+    return { active, source, groups, isCurrent, counts: groups.map(item => ({ index: item.page.index, count: item.selectedRows.length })) };
+  }
+  /** 先校验全部修改和各页撤销预算，再一次发布；同一原定位不能跨页重复暂存。 */
+  planCheckedDeletion(current: DraftRow[], activeSelected: ReadonlySet<string>): TableCheckedDeletion {
+    const { active, source, groups, isCurrent, counts } = this.captureChecked(current, activeSelected);
+    if (!groups.some(item => item.page !== active)) throw Error(text.deleteNone);
+    const plans = groups.map(item => {
+      const targets = new Set(item.selectedRows);
+      const next = item.rows.map(row => targets.has(row) ? { ...row, deleted: true } : row);
       let bytes = 128;
       for (const [index, row] of item.rows.entries()) {
         if (row !== next[index]) bytes += changedDraftHistoryBytes(row, next[index], draftHistoryLimits.bytes);
         if (bytes > draftHistoryLimits.bytes) throw Error(text.deleteHistoryLimit);
       }
-      return [{ ...item, next, selectedRows: rows, count: rows.length }];
+      return { ...item, next };
     });
-    if (!plans.some(item => item.page !== active)) throw Error(text.deleteNone);
     const changed = new Map(plans.map(item => [item.page, item.next]));
     this.validateChanges(source.flatMap(item => changed.get(item.page) ?? item.rows), active.info.editableKey);
-    const isCurrent = () => !this.dead && !this.pending && this.epoch === epoch && this.revision === revision &&
-      this.active === active && source.every(item => this.entries.get(item.page.index) === item.page &&
-        item.page.rows === item.rows && item.page.history.generation === item.history &&
-        item.page.selected === item.checked && this.signature(item.page) === item.signature) &&
-      plans.every(item => {
-        const rows = tableCheckedPageRows(item.page, active, activeSelected);
-        return rows.length === item.count && rows.every((row, index) => row === item.selectedRows[index]);
-      });
     return {
-      pages: plans.map(({ page, count }) => ({ index: page.index, count })),
+      pages: counts,
       current: isCurrent,
       stage: () => {
         if (!isCurrent()) throw Error(text.stale);
@@ -198,6 +218,60 @@ export class TableEditWorkspace {
         }
         this.publish();
         return active.rows;
+      },
+    };
+  }
+  /** 复用原批量填充输入及完整值校验，整个选区只暂存一次，各页分别记录撤销。 */
+  planCheckedFill(current: DraftRow[], activeSelected: ReadonlySet<string>, context: RecordContext): TableCheckedFill {
+    const { active, source, groups, isCurrent, counts } = this.captureChecked(current, activeSelected);
+    if (!groups.some(item => item.page !== active)) throw Error(text.fillNone);
+    const target = recordTargetKey(context.target), budget = { rows: 0, cells: 0, bytes: 2 };
+    if (context.info !== active.info) throw Error(text.stale);
+    const pages = groups.map(item => new BatchFillIntent(item.rows, item.selected, { ...context, info: item.page.info },
+      { page: item.page.page, target, connectionVersion: context.connectionVersion, generation: context.generation }, item.page.page, budget));
+    const chosen = groups.flatMap(item => item.selectedRows), ids = new Set(chosen.map(row => row.id));
+    if (ids.size !== chosen.length) throw Error(text.stale);
+    let stopped = false;
+    const reason: TableCheckedFill['reason'] = (rows, selected, live) => {
+      if (stopped) return text.stale;
+      if (rows !== current || selected !== activeSelected || !isCurrent() || recordReadonlyReason(live) ||
+        live.info !== active.info || live.connectionVersion !== context.connectionVersion || live.generation !== context.generation ||
+        recordTargetKey(live.target) !== target) {
+        stopped = true;
+        return text.stale;
+      }
+      for (const intent of pages) {
+        const invalid = intent.reason(intent.rows, intent.selected, intent.context, intent.binding, intent.page);
+        if (invalid) { stopped = true; return invalid; }
+      }
+      return '';
+    };
+    return {
+      context, groups: counts, count: chosen.length,
+      get invalidated() { return stopped; },
+      invalidate: () => { stopped = true; },
+      reason,
+      stage: (assignments, rows, selected, live) => {
+        const invalid = reason(rows, selected, live);
+        if (invalid) throw Error(invalid);
+        const filled = prepareBatchFill(assignments, chosen, ids, live);
+        const replacements = new Map<DraftRow, DraftRow>();
+        for (const [index, row] of chosen.entries()) if (filled[index] !== row) replacements.set(row, filled[index]);
+        const plans = groups.flatMap(item => {
+          if (!item.selectedRows.some(row => replacements.has(row))) return [];
+          return [{ ...item, next: item.rows.map(row => replacements.get(row) ?? row) }];
+        });
+        const byPage = new Map(plans.map(item => [item.page, item.next]));
+        const updated = source.map(item => ({ rows: byPage.get(item.page) ?? item.rows }));
+        this.validateChanges(updated.flatMap(item => item.rows), active.info.editableKey);
+        this.budget(updated);
+        stopped = true;
+        for (const { page, rows, next } of plans) {
+          page.history.record(rows, next);
+          page.rows = next;
+        }
+        if (plans.length) this.publish();
+        return { rows: active.rows, changed: replacements.size };
       },
     };
   }

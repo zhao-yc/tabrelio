@@ -5,11 +5,13 @@ import { TableEditWorkspace, tableEditWorkspaceLimits } from '../../src/renderer
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 
 /** 仅RAM原页及精确标量，不代替实库事务或GUI。 */
-function fixture() {
+function fixture(complete = false) {
   const info: TableInfo={database:'db',name:'t',engine:'InnoDB',objectKind:'table',ddl:'',primaryKey:['id'],editableKey:['id'],indexes:[],foreignKeys:[],columns:[{name:'id',type:'bigint unsigned',nullable:false,generated:false,extra:'',defaultValue:null,comment:''},{name:'value',type:'text',nullable:true,generated:false,extra:'',defaultValue:null,comment:''}]};
   const profile={},scope='同一原查询',changed=vi.fn(),edits=new TableEditWorkspace(changed);
   const data=(id:number)=>({id:String(id),value:'{"n":9007199254740993,"n":-0}\0中文🚢',bytes:{type:'binary' as const,base64:'AP+A'},empty:'',nullable:null});
-  function read(index:number,id=index) {const original=data(id),rows:DraftRow[]=[{id:'页'+index,data:structuredClone(original),original:structuredClone(original),inserted:false,deleted:false}],page:TablePage={page:index,pageSize:50,hasMore:true,columns:info.columns.map(c=>({name:c.name,key:c.name,type:c.type})),rows:[original],copyMetadataKey:tableCopyMetadataKey(info)};return {rows,page};}
+  function read(index:number,id=index) {const original=data(id);
+    const values = complete ? { id: original.id, value: original.value } : original;
+    const rows:DraftRow[]=[{id:'页'+index,data:structuredClone(values),original:structuredClone(values),inserted:false,deleted:false}],page:TablePage={page:index,pageSize:50,hasMore:true,columns:info.columns.map(c=>({name:c.name,key:c.name,type:c.type})),rows:[values],copyMetadataKey:tableCopyMetadataKey(info)};return {rows,page};}
   function add(index:number,id=index) {const incoming=read(index,id),ticket=edits.selected?edits.navigate(index,scope):undefined;return edits.adopt(scope,profile,info,incoming.page,incoming.rows,ticket);}
   function change(value:string){const before=edits.selected!.rows,after=before.map(row=>({...row,data:{...row.data,value}}));edits.update(before,after);edits.history.record(before,after);return after;}
   const first=add(1);return{edits,scope,profile,changed,info,read,add,change,first};
@@ -77,4 +79,67 @@ it('其它干净页可淘汰，已经勾选的页不会静默淘汰', () => {
   expect(edits.pages).toHaveLength(16);
   expect(edits.pages).toContain(first);
   expect(edits.pages.some(page => page.index === 2)).toBe(false);
+});
+
+
+function fillContext(info: TableInfo) {
+  return { target: { connectionId: '连接', database: info.database, table: info.name }, info, loaded: true, busy: false, stale: false, connectionVersion: 1, generation: 2 };
+}
+
+it('仅后台有勾选也能填充，非法输入可修正，重复填充值不新增历史', () => {
+  const { edits, first, add, info, changed } = fixture(true);
+  const firstRows = first.rows;
+  edits.remember(firstRows, new Set(['页1']), undefined, new Set());
+  const second = add(2), selected = new Set<string>(), context = fillContext(info);
+  const intent = edits.planCheckedFill(second.rows, selected, context);
+  expect(intent.groups).toEqual([{ index: 1, count: 1 }]);
+  const fill = [{ column: 'value', input: { mode: 'text' as const, text: '统一值' } }];
+  changed.mockClear();
+  expect(() => intent.stage([...fill, { column: 'id', input: { mode: 'text', text: '3' } }], second.rows, selected, context)).toThrow();
+  expect(first.rows).toBe(firstRows);
+  expect(changed).not.toHaveBeenCalled();
+  expect(intent.stage(fill, second.rows, selected, context)).toEqual({ rows: second.rows, changed: 1 });
+  expect(first.rows[0].data.value).toBe('统一值');
+  expect(first.selected.has('页1')).toBe(true);
+  expect(first.history.status.undo).toBe(1);
+  expect(second.history.status.undo).toBe(0);
+  expect(changed).toHaveBeenCalledOnce();
+  expect(() => intent.stage(fill, second.rows, selected, context)).toThrow();
+  expect(edits.planCheckedFill(second.rows, selected, context).stage(fill, second.rows, selected, context).changed).toBe(0);
+  expect(first.history.status.undo).toBe(1);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it('跨页填充遇到重叠定位、合计字节超限或勾选变动时不发布任一页', () => {
+  for (const failure of ['overlap', 'budget', 'selection']) {
+    const { edits, first, add, info, changed } = fixture(true);
+    const checked = new Set(['页1']);
+    edits.remember(first.rows, checked, undefined, new Set());
+    const second = add(2, failure === 'overlap' ? 1 : 2), selected = new Set(['页2']), context = fillContext(info);
+    const firstRows = first.rows, secondRows = second.rows;
+    const intent = edits.planCheckedFill(secondRows, selected, context);
+    if (failure === 'selection') checked.clear();
+    changed.mockClear();
+    // 二进制或文本值的线路预算作用于合计写入，不能把大值拆到各页分别暂存。
+    const large = 'x'.repeat(175000);
+    const assignments = [{ column: 'value', input: { mode: 'text' as const, text: failure === 'budget' ? large : '统一值' } }];
+    if (failure === 'budget') {
+      // 多页都能独立接收此值，扩到七页后合计超限。
+      for (let index = 3; index <= 7; index++) {
+        edits.remember(edits.selected!.rows, new Set(['页' + (index - 1)]), undefined, new Set());
+        add(index);
+      }
+      changed.mockClear();
+      const active = edits.selected!, checks = new Set(['页7']);
+      const across = edits.planCheckedFill(active.rows, checks, context);
+      expect(() => across.stage(assignments, active.rows, checks, context)).toThrow(/预算/);
+    } else {
+      expect(() => intent.stage(assignments, secondRows, selected, context)).toThrow(failure === 'overlap' ? /同一条原记录/ : /已变化/);
+    }
+    expect(first.rows).toBe(firstRows);
+    expect(second.rows).toBe(secondRows);
+    expect(edits.changeCount).toBe(0);
+    expect(edits.pages.every(page => page.history.status.undo === 0)).toBe(true);
+    expect(changed).not.toHaveBeenCalled();
+  }
 });

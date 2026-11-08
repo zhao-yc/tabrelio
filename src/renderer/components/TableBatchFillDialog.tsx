@@ -3,13 +3,15 @@ import type { RecordInput } from '../recordViews';
 import { recordInputLimits } from '../recordViews';
 import { batchFillColumns, type BatchFillAssignment, type BatchFillIntent } from '../recordBatchFill';
 import { recordBatchFillZh as text } from '../locales/recordBatchFill.zh-CN';
+import type { TableCheckedFill } from '../tableEditWorkspace';
+import { tableEditWorkspaceZh as workspaceText } from '../locales/tableEditWorkspace.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
 import { errorMessage } from '../lib';
 import { ErrorBox, Modal } from './ui';
 import { RecordValueEditor } from './RecordValueEditor';
 
 /** 值输入复用原类型编辑器，只暂存本机草稿；没有读取系统剪贴板或数据库的动作。 */
-export function TableBatchFillDialog(props: { intent: BatchFillIntent; initialColumn?: string; invalidReason: string; onStage(assignments: readonly BatchFillAssignment[]): void; onClose(): void }) {
+export function TableBatchFillDialog(props: { intent: BatchFillIntent | TableCheckedFill; initialColumn?: string; invalidReason: string; onStage(assignments: readonly BatchFillAssignment[]): void; onClose(): void }) {
   const columns = batchFillColumns(props.intent.context), initial = columns.find(column => column.name === props.initialColumn) ?? columns[0];
   const blank = (name: string): RecordInput => ({ mode: /^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(columns.find(column => column.name === name)?.type ?? '') ? 'binary' : /json/i.test(columns.find(column => column.name === name)?.type ?? '') ? 'json' : 'text', text: '' });
   const sequence = useRef(1), owner = useRef(props.intent).current;
@@ -42,7 +44,11 @@ export function TableBatchFillDialog(props: { intent: BatchFillIntent; initialCo
   /** 关闭可用于失效窗口，但原窗口卸载后的迟到关闭不能触碰新窗口。 */
   function close(): void { if (render.current !== ticket || consumed.current || lock.current) return; consumed.current = true; latest.current.onClose(); }
   const overBudget = draft.some(item => item.input.text.length > recordInputLimits.field), disabled = !!invalidReason || consumed.current;
-  return <Modal title={text.title} wide onClose={close}><div className="modal-content"><p>{text.notice}</p><p>{formatText(text.count, owner.selected.size)}</p>{draft.map((item, index) => {
+  const groups = 'groups' in owner ? owner.groups : undefined;
+  const count = 'count' in owner ? owner.count : owner.selected.size;
+  return <Modal title={text.title} wide onClose={close}><div className="modal-content"><p>{groups ? workspaceText.fillNotice : text.notice}</p>
+    {groups && <ul>{groups.map(group => <li key={group.index}>{workspaceText.fillGroup(group.index, group.count)}</li>)}</ul>}
+    <p>{formatText(text.count, count)}</p>{draft.map((item, index) => {
     const column = columns.find(column => column.name === item.column), label = index ? text.fieldAt(index + 1) : text.field;
     return <fieldset key={item.id} aria-label={text.assignment(index + 1)}><legend>{text.assignment(index + 1)}</legend><label>{label}<select aria-label={label} value={item.column} disabled={disabled} onChange={event => changeColumn(item.id, event.target.value)}>{columns.map(column => <option key={column.name} value={column.name} disabled={draft.some(other => other.id !== item.id && other.column === column.name)}>{column.name} · {column.type}</option>)}</select></label>{column && <RecordValueEditor key={`${item.id}:${item.column}`} column={column} input={item.input} inserted={false} reason={invalidReason} focus={index === 0} onChange={input => edit(draft.map(other => other.id === item.id ? { ...other, input } : other))}/>}<button type="button" disabled={disabled || draft.length === 1} onClick={() => remove(item.id)}>{text.remove(item.column)}</button></fieldset>;
   })}<button type="button" disabled={disabled || draft.length >= columns.length} onClick={add}>{text.add}</button><ErrorBox message={invalidReason || error || (overBudget ? text.budget : '')}/></div><footer className="modal-footer"><button onClick={close}>{zh.common.cancel}</button><button className="primary" disabled={disabled || !draft.length || draft.some(item => !columns.some(column => column.name === item.column)) || overBudget} onClick={stage}>{text.stage}</button></footer></Modal>;
