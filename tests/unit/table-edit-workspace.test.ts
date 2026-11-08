@@ -27,3 +27,54 @@ it('末页读回已保留页时保留原页／历史，不用新读值覆盖旧�
 it('全组原值预算超限拒绝第二页采用，当前草稿和来源不变',()=>{const f=fixture();f.change('保留');const incoming=f.read(2);incoming.rows[0].data.value='x'.repeat(tableEditWorkspaceLimits.bytes/2);const ticket=f.edits.navigate(2,f.scope);expect(()=>f.edits.adopt(f.scope,f.profile,f.info,incoming.page,incoming.rows,ticket)).toThrow(/64 MiB/);expect(f.edits.pages).toHaveLength(1);expect(f.edits.selected).toBe(f.first);expect(f.first.rows[0].data.value).toBe('保留');});
 it('整组新输入超过原1MiB线路预算时拒绝预览，不截断或提交部分页',()=>{const f=fixture();f.change('x'.repeat(600000));f.add(2);f.change('y'.repeat(600000));expect(()=>f.edits.batch(f.edits.selected!.rows)).toThrow();expect(f.edits.pages).toHaveLength(2);expect(f.edits.changeCount).toBe(2);});
 it('当前页明确放弃返回另一原缓存，后台页放弃不影响当前页，最后一页清空来源',()=>{const f=fixture();f.change('第一');const second=f.add(2);f.change('第二');expect(f.edits.discard(second)).toBe(true);expect(f.edits.selected).toBe(f.first);expect(f.edits.changeCount).toBe(1);expect(f.edits.discard(second)).toBe(false);expect(f.edits.discard(f.first)).toBe(true);expect(f.edits.pages).toHaveLength(0);expect(f.edits.stale).toBe(false);});
+
+it('跨页勾选删除一次暂存并清除已处理的勾选，各页独立撤销', () => {
+  const { edits, first, add, changed, scope } = fixture();
+  const firstRows = first.rows;
+  edits.remember(firstRows, new Set([firstRows[0].id]), undefined, new Set());
+  const second = add(2), secondRows = second.rows;
+  const plan = edits.planCheckedDeletion(secondRows, new Set([secondRows[0].id]));
+  expect(plan.pages).toEqual([{ index: 1, count: 1 }, { index: 2, count: 1 }]);
+  expect(edits.changeCount).toBe(0);
+  changed.mockClear();
+  const next = plan.stage();
+  expect(changed).toHaveBeenCalledOnce();
+  expect(next).toBe(second.rows);
+  expect(edits.pages.map(page => page.selected.size)).toEqual([0, 0]);
+  expect(collectChanges(edits.batch(next)!.rows)).toEqual([
+    { kind: 'delete', before: firstRows[0].original },
+    { kind: 'delete', before: secondRows[0].original },
+  ]);
+  expect(() => plan.stage()).toThrow();
+  const ticket = edits.navigate(1, scope);
+  edits.select(ticket, first);
+  edits.update(first.rows, edits.history.move(first.rows, 'undo')!);
+  expect(first.rows[0].deleted).toBe(false);
+  expect(second.rows[0].deleted).toBe(true);
+});
+
+it('原定位跨页重复、勾选修订或原页变化时拒绝整批', () => {
+  const duplicate = fixture();
+  duplicate.edits.remember(duplicate.first.rows, new Set(['页1']), undefined, new Set());
+  const repeated = duplicate.add(2, 1);
+  expect(() => duplicate.edits.planCheckedDeletion(repeated.rows, new Set(['页2']))).toThrow(/同一条原记录/);
+  expect(duplicate.edits.changeCount).toBe(0);
+
+  const { edits, first, add } = fixture();
+  edits.remember(first.rows, new Set(['页1']), undefined, new Set());
+  const second = add(2), checks = new Set(['页2']);
+  const plan = edits.planCheckedDeletion(second.rows, checks);
+  checks.clear();
+  expect(() => plan.stage()).toThrow();
+  expect(edits.changeCount).toBe(0);
+  expect(first.history.status.undo).toBe(0);
+});
+
+it('其它干净页可淘汰，已经勾选的页不会静默淘汰', () => {
+  const { edits, first, add } = fixture();
+  edits.remember(first.rows, new Set(['页1']), undefined, new Set());
+  for (let index = 2; index <= 17; index++) add(index);
+  expect(edits.pages).toHaveLength(16);
+  expect(edits.pages).toContain(first);
+  expect(edits.pages.some(page => page.index === 2)).toBe(false);
+});

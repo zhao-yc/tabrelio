@@ -1,7 +1,7 @@
 import type { TableInfo, TablePage } from '../shared/contracts';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import { collectChanges, type DraftRow } from './dataChanges';
-import { DraftHistory } from './draftHistory';
+import { changedDraftHistoryBytes, DraftHistory, draftHistoryLimits } from './draftHistory';
 import { recordBatchCellBytes, assertRecordBatchFields } from './recordDuplicateBatch';
 import { tableEditWorkspaceZh as text } from './locales/tableEditWorkspace.zh-CN';
 import { parseTableDraftDocument, type TableDraftDocument, type TableDraftWorkspace } from '../shared/tableDraft';
@@ -15,6 +15,17 @@ export interface TableEditPage {
 }
 export interface TableEditNavigation { readonly epoch: object; readonly from: TableEditPage; readonly target: number | 'last'; readonly scope: string; }
 export interface TableEditBatch { readonly rows: DraftRow[]; readonly pages: number; current(): boolean; }
+export interface TableCheckedDeletion {
+  readonly pages: readonly { index: number; count: number }[];
+  current(): boolean;
+  stage(): DraftRow[];
+}
+
+/** 活动页使用实时勾选，后台页使用离页时登记的准确 UUID。 */
+export function tableCheckedPageRows(page: TableEditPage, active: TableEditPage | undefined, activeSelected: ReadonlySet<string>): DraftRow[] {
+  const checked = page === active ? activeSelected : page.selected;
+  return checked.size ? page.rows.filter(row => checked.has(row.id) && !row.deleted) : [];
+}
 /** 不克隆原行或BLOB；原页、独立历史和准确页码只在本标签内存内保持。 */
 export class TableEditWorkspace {
   private entries = new Map<number, TableEditPage>();
@@ -94,7 +105,7 @@ export class TableEditWorkspace {
   invalidate(): void { if (this.entries.size) { this.dead = true; this.epoch = {}; this.revision++; } this.pending = undefined; }
   private signature(entry: TableEditPage): string { return JSON.stringify([entry.index,entry.page.page,entry.page.pageSize,tableCopyMetadataKey(entry.info),entry.page.copyMetadataKey]); }
   private publish(): void { this.revision++; this.changed(); }
-  private disposable(entry: TableEditPage): boolean { return !collectChanges(entry.rows).length && !entry.history.status.undo && !entry.history.status.redo; }
+  private disposable(entry: TableEditPage): boolean { return !entry.selected.size && !collectChanges(entry.rows).length && !entry.history.status.undo && !entry.history.status.redo; }
   /** 原值预算按现有包装计内存，不先编码或深拷贝大字段；历史各页沿原8 MiB上限。 */
   private budget(pages: readonly { rows: DraftRow[] }[]): void {
     let bytes = 0, cells = 0;
@@ -142,23 +153,75 @@ export class TableEditWorkspace {
   update(before:DraftRow[],after:DraftRow[]):void{if(!this.active||this.active.rows!==before||before===after)return;if(this.dead||this.pending)throw Error(text.stale);if(this.entries.size>1)this.budget(this.pages.map(page=>({rows:page===this.active?after:page.rows})));this.active.rows=after;this.publish();}
   /** 精确记住UI选择及复制标记；UUID属于原页，不按主键猜另一页的焦点。 */
   remember(rows:DraftRow[],selected:ReadonlySet<string>,selection:TableEditPage['selection'],copied:Set<string>):void{if(this.active?.rows!==rows)return;this.active.selected=selected;this.active.selection=selection;this.active.copied=copied;}
+  /** 先校验全部修改和各页撤销预算，再一次发布；同一原定位不能跨页重复暂存。 */
+  planCheckedDeletion(current: DraftRow[], activeSelected: ReadonlySet<string>): TableCheckedDeletion {
+    const active = this.active, epoch = this.epoch, revision = this.revision;
+    if (!active || active.rows !== current || this.dead || this.pending || this.restoredValue) throw Error(text.stale);
+    const source = this.pages.map(page => ({ page, rows: page.rows, history: page.history.generation,
+      checked: page.selected, signature: this.signature(page) }));
+    if (source.some(item => item.signature !== this.signatures.get(item.page))) throw Error(text.stale);
+    const plans = source.flatMap(item => {
+      const selected = item.page === active ? activeSelected : item.checked;
+      if (!selected.size) return [];
+      const ids = new Set(item.rows.map(row => row.id));
+      if (ids.size !== item.rows.length || [...selected].some(id => !ids.has(id))) throw Error(text.stale);
+      const rows = tableCheckedPageRows(item.page, active, activeSelected);
+      if (!rows.length) return [];
+      const targets = new Set(rows), next = item.rows.map(row => targets.has(row) ? { ...row, deleted: true } : row);
+      let bytes = 128;
+      for (const [index, row] of item.rows.entries()) {
+        if (row !== next[index]) bytes += changedDraftHistoryBytes(row, next[index], draftHistoryLimits.bytes);
+        if (bytes > draftHistoryLimits.bytes) throw Error(text.deleteHistoryLimit);
+      }
+      return [{ ...item, next, selectedRows: rows, count: rows.length }];
+    });
+    if (!plans.some(item => item.page !== active)) throw Error(text.deleteNone);
+    const changed = new Map(plans.map(item => [item.page, item.next]));
+    this.validateChanges(source.flatMap(item => changed.get(item.page) ?? item.rows), active.info.editableKey);
+    const isCurrent = () => !this.dead && !this.pending && this.epoch === epoch && this.revision === revision &&
+      this.active === active && source.every(item => this.entries.get(item.page.index) === item.page &&
+        item.page.rows === item.rows && item.page.history.generation === item.history &&
+        item.page.selected === item.checked && this.signature(item.page) === item.signature) &&
+      plans.every(item => {
+        const rows = tableCheckedPageRows(item.page, active, activeSelected);
+        return rows.length === item.count && rows.every((row, index) => row === item.selectedRows[index]);
+      });
+    return {
+      pages: plans.map(({ page, count }) => ({ index: page.index, count })),
+      current: isCurrent,
+      stage: () => {
+        if (!isCurrent()) throw Error(text.stale);
+        for (const { page, rows, next } of plans) {
+          page.history.record(rows, next);
+          page.rows = next;
+          page.selected = new Set();
+        }
+        this.publish();
+        return active.rows;
+      },
+    };
+  }
   /** 多页只聚合变化，原始行仍属于各自缓存；同一原定位出现两次必须拒绝。 */
   batch(current:DraftRow[]):TableEditBatch|undefined{
     if(this.dead)throw Error(text.stale);
     if(this.pages.length<2)return;
     if(this.dead||this.pending||this.active?.rows!==current)throw Error(text.stale);
     const entries=this.pages,captured=entries.map(page=>({page,rows:page.rows,history:page.history.generation,signature:this.signature(page)})),epoch=this.epoch,active=this.active;
-    const rows=entries.flatMap(page=>page.rows),changes=collectChanges(rows);if(!changes.length)return;
+    const rows=entries.flatMap(page=>page.rows);if(!this.validateChanges(rows,this.active.info.editableKey))return;
+    return{rows,pages:entries.filter(page=>collectChanges(page.rows).length).length,current:()=>!this.dead&&!this.pending&&this.epoch===epoch&&this.active===active&&this.entries.size===captured.length&&captured.every(item=>this.entries.get(item.page.index)===item.page&&item.page.rows===item.rows&&item.page.history.generation===item.history&&this.signature(item.page)===item.signature)};
+  }
+  private validateChanges(rows: DraftRow[], editableKey: readonly string[]): number {
+    const changes = collectChanges(rows);
     if(changes.length>tableEditWorkspaceLimits.changes)throw Error(text.limit);
     let cells=0,bytes=2;const identities=new Set<string>();
     for(const change of changes){
       if(change.kind!=='insert'){
-        const key=JSON.stringify(this.active.info.editableKey.map(name=>{const value=change.before[name];if(value===undefined||value===null)throw Error(text.stale);return value;}));
+        const key=JSON.stringify(editableKey.map(name=>{const value=change.before[name];if(value===undefined||value===null)throw Error(text.stale);return value;}));
         if(identities.has(key))throw Error(text.overlap);identities.add(key);
       }
       if(change.kind!=='delete'){assertRecordBatchFields(change.values);for(const[key,value]of Object.entries(change.values)){if(++cells>tableEditWorkspaceLimits.changedCells)throw Error(text.limit);bytes+=recordBatchCellBytes(key)+recordBatchCellBytes(value)+4;if(bytes>tableEditWorkspaceLimits.inputBytes)throw Error(text.limit);}}
     }
-    return{rows,pages:entries.filter(page=>collectChanges(page.rows).length).length,current:()=>!this.dead&&!this.pending&&this.epoch===epoch&&this.active===active&&this.entries.size===captured.length&&captured.every(item=>this.entries.get(item.page.index)===item.page&&item.page.rows===item.rows&&item.page.history.generation===item.history&&this.signature(item.page)===item.signature)};
+    return changes.length;
   }
   /** 投递开始清除全部页历史，回滚留草稿、未知由父提交保护锁全组。 */
   clearHistory():void{for(const page of this.pages)page.history.clear();this.fallback.clear();}

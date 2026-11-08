@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-08 源码增量。MySQL 和 MariaDB 可从保留页的勾选生成跨页删除草稿，逐页撤销或合并预览后一次提交。D02 和 D04 仍为部分覆盖。[跨页勾选删除](development/workspace-checked-delete-20261108.md)
+
 2026-11-08 源码增量。MySQL、MariaDB 和 PostgreSQL 表页可跨页收集勾选记录，并按页序导出已收集的可见字段与原值。D02、F01、R01 仍为部分覆盖。[网络数据库跨页勾选导出](development/network-checked-export-20261108.md)
 
 2026-11-08 源码增量。SQLite 表和视图可按页收集勾选记录，更新或移除已收集的单页，并按页序导出原值。D02、F01、R02 仍为部分覆盖。[SQLite 跨页勾选导出](development/sqlite-checked-export-20261108.md)

@@ -12,6 +12,13 @@ export const tableEditWorkspaceZh = {
   stale: '保留页的目标、连接、条件或结构已变化，原草稿保持。请核对后明确放弃全部并重新读取。',
   input: '请先暂存当前记录输入，再切换保留页；非法输入会保留在当前页。',
   overlap: '多个保留页修改了同一条原记录，请先修正或放弃重复页，不能重复提交同一原值定位。',
+  checked: (count: number) => '勾选 ' + count + ' 条',
+  deleteChecked: '删除保留页勾选记录',
+  deleteNone: '请先在其它保留页勾选记录。',
+  deleteHistoryLimit: '至少一页的勾选超过可撤销预算，请减少该页勾选。',
+  deleteConfirm: (groups: readonly { index: number; count: number }[]) =>
+    '将这些勾选记录标为待删除？\n' + groups.map(({ index, count }) => '第 ' + index + ' 页 · ' + count + ' 条').join('\n') +
+    '\n可以回到各页撤销。预览 SQL 并明确提交后才会修改数据库。',
   preview: (pages: number) => `本次统一预览 ${pages} 个原页的修改；任一记录冲突将整批回滚。`,
   stagePrevious: '暂存并查看上一页末条', stageNext: '暂存并查看下一页首条',
 };
