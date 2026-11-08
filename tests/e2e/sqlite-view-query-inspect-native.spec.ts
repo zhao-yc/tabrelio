@@ -106,11 +106,11 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
       await expect(modal.getByText(kind === 'create' ? objects.absent : objects.exists, { exact: true })).toBeVisible();
       return modal;
     }
-    async function apply(modal: Locator, kind: 'create' | 'replace') {
+    async function apply(modal: Locator, kind: 'create' | 'replace', targetName = view) {
       await modal.getByRole('button', { name: objects.preview, exact: true }).click();
-      await expect(modal.getByLabel(objects.previewTitle)).toContainText(quoted);
+      await expect(modal.getByLabel(objects.previewTitle)).toContainText('"' + targetName.replaceAll('"', '""') + '"');
       for (const item of await modal.getByRole('region', { name: objects.acknowledgements }).getByRole('checkbox').all()) await item.check();
-      await modal.getByLabel(objects.confirmation, { exact: true }).fill('main.' + view);
+      await modal.getByLabel(objects.confirmation, { exact: true }).fill('main.' + targetName);
       await modal.getByRole('button', { name: objects.apply[kind], exact: true }).click();
       await expect(modal.getByText(objects.committed, { exact: true })).toBeVisible();
       await modal.getByRole('button', { name: objects.close, exact: true }).click();
@@ -207,6 +207,43 @@ SELECT id, '替换样本' AS marker FROM main.sample_source WHERE id = 900719925
     await apply(replacement, 'replace');
     expect(readView()).toMatchObject({ 展示编号: 9007199254740993n, '更新"结果': '替换样本' });
     expect(attachedTrigger()).toBe(trigger);
+    const originalState = readView();
+    const beforeCopy = await readFile(database);
+    const targetName = '副本.带"引号🚢';
+    const targetSql = 'main."副本.带""引号🚢"';
+    await clickSidebarAction(node.locator('.object-row').filter({ hasText: view }),
+      { name: objects.copyView + ' ' + view, exact: true });
+    const copy = page.getByRole('dialog', { name: objects.copyView, exact: true });
+    const copyName = copy.getByLabel(objects.name, { exact: true });
+    const readCopy = copy.getByRole('button', { name: objects.read, exact: true });
+    await expect(copy.getByText(objects.copySource(view), { exact: true })).toBeVisible();
+    await copyName.fill('SAMPLE_SOURCE');
+    await readCopy.click();
+    await expect(copy.getByRole('alert')).toContainText('名称已被占用');
+    await copyName.fill(targetName + '草案');
+    await readCopy.click();
+    await expect(copy.locator('.monaco-editor .view-lines')).toContainText('CREATE VIEW main."副本.带""引号🚢草案"');
+    await copy.getByRole('button', { name: objects.preview, exact: true }).click();
+    await expect(copy.getByLabel(objects.previewTitle)).toContainText('"副本.带""引号🚢草案"');
+    expect(await readFile(database)).toEqual(beforeCopy);
+    await copyName.fill(targetName);
+    await expect(copy.getByLabel(objects.previewTitle)).toHaveCount(0);
+    await readCopy.click();
+    await expect(copy.locator('.monaco-editor .view-lines')).toContainText('CREATE VIEW ' + targetSql);
+    await action(copy, inspect.rows);
+    await expect(region(copy).getByRole('gridcell', { name: '9007199254740993', exact: true })).toBeVisible();
+    expect(await readFile(database)).toEqual(beforeCopy);
+    await apply(copy, 'create', targetName);
+    const copied = new DatabaseSync(database, { readOnly: true });
+    try {
+      const statement = copied.prepare('SELECT * FROM ' + targetSql);
+      statement.setReadBigInts(true);
+      expect(statement.get()).toEqual(originalState);
+      expect(copied.prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?").all(targetName)).toEqual([]);
+    } finally { copied.close(); }
+    expect(attachedTrigger()).toBe(trigger);
+    expect(readView()).toEqual(originalState);
+    expect((await catalog()).some(item => item.name === targetName + '草案')).toBe(false);
     expect(await history()).toEqual(beforeHistory);
     expect((await readFile(source)).toString()).toBe(next);
     expect(pageErrors).toEqual([]);

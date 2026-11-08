@@ -3,6 +3,10 @@ import type { SqliteObjectsAction } from '../../shared/sqliteObjects';
 /** SQLite对象定义采用原文编辑；预览不执行写入，也不假设后续DML已获验证。 */
 export const sqliteObjectsZh = {
   createView: '新建 SQLite 视图', createTrigger: '新建 SQLite 触发器', editDefinition: '编辑 SQLite 对象定义', dropView: '删除 SQLite 视图', dropTrigger: '删除 SQLite 触发器',
+  copyView: '复制 SQLite 视图',
+  copySource: (name: string) => `原视图 main / ${name}`,
+  copyHint: '填写新名称并读取目录，编辑区会填入原视图已保存的定义。附属触发器保留在原视图上。预览后按新建流程确认。',
+  copyMissing: '目录中已找不到原视图的定义，请核对原对象后重试。',
   kinds: {view:'视图',trigger:'触发器'}, title: (action: SqliteObjectsAction,kind:'view'|'trigger') => `${action==='create'?'新建':action==='replace'?'替换定义':'删除'} SQLite ${kind==='view'?'视图':'触发器'}`,
   apply: {create:'确认创建 SQLite 对象',replace:'确认替换 SQLite 对象',drop:'确认删除 SQLite 对象'}, read:'读取 SQLite 对象与目录', loading:'正在读取或处理 SQLite 对象', name:'SQLite 对象名称',
   scope: {create:'先明确对象名称并读取目录，再编辑完整 CREATE 定义；预览只核对原文、归属与目录，不试执行写入。',replace:'先读取原定义与完整目录，再编辑完整 CREATE 定义。替换在独立事务内先 DROP 再 CREATE；任一失败整批回滚。',drop:'删除准确 main 对象。删除视图时，SQLite 会一并删除该视图附属的 INSTEAD OF 触发器；其他保留依赖可能失效。'},

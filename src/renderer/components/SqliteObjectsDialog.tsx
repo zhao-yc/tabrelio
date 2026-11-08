@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TaskEvent } from '../../shared/contracts';
 import { sqliteObjectsFactMessage } from '../../shared/sqliteObjectsFact';
 import { scanSqliteStatementPositions } from '../../shared/sqliteStatementScanner';
-import { buildSqliteObjectsPlan, changeSqliteViewDraftColumns, parseSqliteObjectsCreateHeader, sqliteViewColumnNameLimit, sqliteViewDraftQuery, sqliteObjectsLimits, sqliteViewSampleRows, sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsOutcomeSchema, sqliteObjectsFactSchema, assertSqliteObjectsFactTransition, type SqliteObjectsAction, type SqliteObjectsAcknowledgement, type SqliteObjectsTarget, type SqliteObjectsInspectInput, type SqliteObjectsInspectOutput, type SqliteObjectsPreviewInput, type SqliteObjectsPreviewOutput, type SqliteObjectsApplyInput, type SqliteObjectsOutcome, type SqliteObjectsReleaseInput, type SqliteObjectsFact } from '../../shared/sqliteObjects';
+import { buildSqliteObjectsPlan, changeSqliteViewDraftColumns, copySqliteViewDefinition, parseSqliteObjectsCreateHeader, sqliteViewColumnNameLimit, sqliteViewDraftQuery, sqliteObjectsLimits, sqliteViewSampleRows, sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsOutcomeSchema, sqliteObjectsFactSchema, assertSqliteObjectsFactTransition, type SqliteObjectsAction, type SqliteObjectsAcknowledgement, type SqliteObjectsTarget, type SqliteObjectsInspectInput, type SqliteObjectsInspectOutput, type SqliteObjectsPreviewInput, type SqliteObjectsPreviewOutput, type SqliteObjectsApplyInput, type SqliteObjectsOutcome, type SqliteObjectsReleaseInput, type SqliteObjectsFact } from '../../shared/sqliteObjects';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease } from '../store';
 import { assertSqliteObjectsTargetAvailable } from '../sqliteObjectsAvailability';
 import { errorMessage, invoke, uid } from '../lib';
@@ -29,17 +29,17 @@ export const sqliteObjectsServices: SqliteObjectsServices = {
   inspect: input => invoke('sqlite.objects.inspect', input), preview: input => invoke('sqlite.objects.preview', input), apply: input => invoke('sqlite.objects.apply', input), release: input => invoke('sqlite.objects.release', input), cancel: taskId => invoke('query.cancel', { taskId }), subscribe: listener => window.dbark.onTask(listener),
 };
 export interface SqliteObjectsScope { connectionId: string; database: 'main'; kind: 'view'|'trigger'; name?: string; }
-interface Props { scope: SqliteObjectsScope; targetVersion: number; action: SqliteObjectsAction; services?: SqliteObjectsServices; onClose(): void; onDirtyChange?(dirty: boolean): void; onTargetChange?(target: SqliteObjectsTarget | undefined): void; onApplied?(outcome: SqliteObjectsOutcome, version: number): void; onExecutionUncertain?(target: SqliteObjectsTarget, action: SqliteObjectsAction): void; }
+interface Props { scope: SqliteObjectsScope; targetVersion: number; action: SqliteObjectsAction; sourceView?: string; services?: SqliteObjectsServices; onClose(): void; onDirtyChange?(dirty: boolean): void; onTargetChange?(target: SqliteObjectsTarget | undefined): void; onApplied?(outcome: SqliteObjectsOutcome, version: number): void; onExecutionUncertain?(target: SqliteObjectsTarget, action: SqliteObjectsAction): void; }
 type Draft = { catalogue?: SqliteObjectsInspectOutput; name: string; sql: string; sqlTouched: boolean; relation: string; acknowledgements: SqliteObjectsAcknowledgement[]; preview?: SqliteObjectsPreviewOutput; confirmation: string; outcome?: SqliteObjectsOutcome; fact?: SqliteObjectsFact; locked: boolean };
 type Operation = { kind: 'inspect' | 'preview' | 'apply'; id: string; draft: Draft; lifetime: object; expectedStatements?: number; target: SqliteObjectsTarget; nameEpoch: number; lease?: WorkspaceBusyLease; tableLeases: { id: string; lease: WorkspaceBusyLease }[]; acquiring: boolean; sent: boolean; cancelled: boolean; commitBoundary: boolean; resultReceived?: boolean; fact?: SqliteObjectsFact; promise?: Promise<void>; cancel?: Promise<void>; committed?: SqliteObjectsOutcome; uncertain?: boolean };
 /** 原用途与对象种类固定，名称绑定真实目录；真实ACK和后置定义核验同时成立才通知页面。 */
-export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onDirtyChange, onTargetChange, onApplied, onExecutionUncertain, services = sqliteObjectsServices }: Props) {
-  const fixed = useRef({ scope: Object.freeze({ ...scope }), inputScope: scope, version: targetVersion, action, profile: useWorkspace.getState().connections.find(value => value.id === scope.connectionId), services, onClose, onDirtyChange, onTargetChange, onApplied, onExecutionUncertain, key: 'sqlite-objects:' + uid() }).current;
+export function SqliteObjectsDialog({ scope, targetVersion, action, sourceView, onClose, onDirtyChange, onTargetChange, onApplied, onExecutionUncertain, services = sqliteObjectsServices }: Props) {
+  const fixed = useRef({ scope: Object.freeze({ ...scope }), inputScope: scope, version: targetVersion, action, sourceView, profile: useWorkspace.getState().connections.find(value => value.id === scope.connectionId), services, onClose, onDirtyChange, onTargetChange, onApplied, onExecutionUncertain, key: 'sqlite-objects:' + uid() }).current;
   const [draft, setDraft] = useState<Draft>({ name: scope.name ?? '', sql: '', sqlTouched: false, relation: '', acknowledgements: [], confirmation: '', locked: false }), live = useRef(draft); live.current = draft;
   const [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [discard, setDiscard] = useState(false), [templateConfirm,setTemplateConfirm]=useState(false), [reread, setReread] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState(''), [progress, setProgress] = useState<TaskEvent>(), [timeRevision, tick] = useState(0);
   const lifetime = useRef<object | null>(null), invalid = useRef(false), closed = useRef(false), operation = useRef<Operation | undefined>(undefined), consumed = useRef(new Set<string>()), sourceEpoch = useRef(0), nameEpoch = useRef(0);
-  const propsNow = useRef({ scope, targetVersion, action, services }); propsNow.current = { scope, targetVersion, action, services };
-  const observed = useRef({ scope, targetKey: JSON.stringify([scope.connectionId, scope.database, scope.kind, scope.name]), targetVersion, action, services, profile: fixed.profile, version: targetVersion });
+  const propsNow = useRef({ scope, targetVersion, action, sourceView, services }); propsNow.current = { scope, targetVersion, action, sourceView, services };
+  const observed = useRef({ scope, targetKey: JSON.stringify([scope.connectionId, scope.database, scope.kind, scope.name]), targetVersion, action, sourceView, services, profile: fixed.profile, version: targetVersion });
   const catalogues = useRef(new Set<string>()), previews = useRef(new Set<string>()), releasing = useRef(new Map<string, Promise<void>>());
   const ticket = {}, rendered = useRef<object | undefined>(undefined);
   const targetOf = (name = live.current.name): SqliteObjectsTarget => ({ connectionId: fixed.scope.connectionId, database: fixed.scope.database, kind: fixed.scope.kind, name });
@@ -49,8 +49,8 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
   /** 同步订阅留下永久墓碑；profile、版本、props引用或内容ABA都不能重新授权。 */
   function current(): boolean {
     const now = useWorkspace.getState(), profile = now.connections.find(value => value.id === fixed.scope.connectionId), version = now.connectionVersions[fixed.scope.connectionId] ?? 0, props = propsNow.current, before = observed.current, targetKey = JSON.stringify([props.scope.connectionId, props.scope.database, props.scope.kind, props.scope.name]);
-    if (before.scope !== props.scope || before.targetKey !== targetKey || before.targetVersion !== props.targetVersion || before.action !== props.action || before.services !== props.services || before.profile !== profile || before.version !== version) { observed.current = { ...props, targetKey, profile, version }; sourceEpoch.current++; }
-    if (props.scope !== fixed.inputScope || props.scope.connectionId !== fixed.scope.connectionId || props.scope.database !== fixed.scope.database || props.scope.kind !== fixed.scope.kind || props.scope.name !== fixed.scope.name || props.targetVersion !== fixed.version || props.action !== fixed.action || props.services !== fixed.services || profile !== fixed.profile || version !== fixed.version || fixed.profile?.dialect !== 'sqlite' || fixed.scope.database !== 'main') invalid.current = true;
+    if (before.scope !== props.scope || before.targetKey !== targetKey || before.targetVersion !== props.targetVersion || before.action !== props.action || before.sourceView !== props.sourceView || before.services !== props.services || before.profile !== profile || before.version !== version) { observed.current = { ...props, targetKey, profile, version }; sourceEpoch.current++; }
+    if (props.scope !== fixed.inputScope || props.scope.connectionId !== fixed.scope.connectionId || props.scope.database !== fixed.scope.database || props.scope.kind !== fixed.scope.kind || props.scope.name !== fixed.scope.name || props.targetVersion !== fixed.version || props.action !== fixed.action || props.sourceView !== fixed.sourceView || props.services !== fixed.services || profile !== fixed.profile || version !== fixed.version || fixed.profile?.dialect !== 'sqlite' || fixed.scope.database !== 'main') invalid.current = true;
     const op = operation.current;
     if (op?.lease && !op.acquiring && (!op.lease.owns() || op.tableLeases.some(item => !item.lease.owns()))) invalid.current = true;
     if (op && (op.nameEpoch !== nameEpoch.current || !sameTarget(op.target, targetOf()))) invalid.current = true;
@@ -104,7 +104,40 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
     if (!editable()) return; if (!confirmed && (draft.sqlTouched || draft.relation || draft.preview || draft.acknowledgements.length || draft.confirmation)) { setReread(true); return; }
     const parsed = sqliteObjectsInspectSchema.safeParse({ ...targetOf(), action: fixed.action, taskId: uid() }); if (!parsed.success) { setError(text.invalid); return; }
     const op = begin('inspect', { ...draft, catalogue: undefined, preview: undefined, acknowledgements: [], confirmation: '', outcome: undefined, fact: undefined, locked: false }); if (!op) return; fixed.onTargetChange?.(undefined); setReread(false);
-    op.promise = (async () => { try { await releaseAll(); if (!accepts(op)) return; op.sent = true; const raw = await fixed.services.inspect({ ...parsed.data, taskId: op.id }); if (typeof raw?.catalogueId === 'string') catalogues.current.add(raw.catalogueId); const value = sqliteObjectsInspectionSchema.parse(raw); if (!accepts(op)) { await releaseOne('catalogueId', value.catalogueId); return; } if (!sameTarget(value.target) || value.action !== fixed.action || value.readOnly !== (fixed.profile?.dialect === 'sqlite' && fixed.profile.sqlite.readOnly) || Date.parse(value.expiresAt) <= Date.now()) { await releaseOne('catalogueId', value.catalogueId); throw Error(text.response); } replace({ ...op.draft, catalogue: value, ...(fixed.action === 'replace' && !op.draft.sqlTouched && !op.draft.sql ? { sql: value.sourceSql ?? '' } : {}) }); fixed.onTargetChange?.(value.target); } catch (reason) { if (lifetime.current === op.lifetime && !op.cancelled) report(reason); } finally { await finish(op); } })();
+    op.promise = (async () => {
+      try {
+        await releaseAll();
+        if (!accepts(op)) return;
+        op.sent = true;
+        const raw = await fixed.services.inspect({ ...parsed.data, taskId: op.id });
+        if (typeof raw?.catalogueId === 'string') catalogues.current.add(raw.catalogueId);
+        const value = sqliteObjectsInspectionSchema.parse(raw);
+        if (!accepts(op)) { await releaseOne('catalogueId', value.catalogueId); return; }
+        if (!sameTarget(value.target) || value.action !== fixed.action ||
+            value.readOnly !== (fixed.profile?.dialect === 'sqlite' && fixed.profile.sqlite.readOnly) ||
+            Date.parse(value.expiresAt) <= Date.now()) {
+          await releaseOne('catalogueId', value.catalogueId);
+          throw Error(text.response);
+        }
+        let sql = op.draft.sql;
+        if (fixed.sourceView) {
+          // 从检查目标的同一只读快照取原定义，附属触发器不进入新建计划。
+          try {
+            const original = value.relatedObjects.find(object => object.type === 'view' && object.name === fixed.sourceView);
+            if (!original?.sql) throw Error(text.copyMissing);
+            if (!op.draft.sqlTouched) sql = copySqliteViewDefinition(original.sql, fixed.sourceView, op.target.name);
+          } catch (reason) {
+            await releaseOne('catalogueId', value.catalogueId);
+            throw reason;
+          }
+        } else if (fixed.action === 'replace' && !op.draft.sqlTouched && !sql) {
+          sql = value.sourceSql ?? '';
+        }
+        replace({ ...op.draft, catalogue: value, sql });
+        fixed.onTargetChange?.(value.target);
+      } catch (reason) { if (lifetime.current === op.lifetime && !op.cancelled) report(reason); }
+      finally { await finish(op); }
+    })();
   }
   function preview(): void {
     if (!editable() || !draft.catalogue || !catalogueUsable()) return; const parsed = sqliteObjectsPreviewSchema.safeParse({ catalogueId: draft.catalogue.catalogueId, ...(fixed.action === 'drop' ? {} : { sql: draft.sql }), taskId: uid() }); if (!parsed.success) { setError(text.designInvalid); return; }
@@ -141,6 +174,7 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
   const valid = current(), disabled = busy || closing || !valid || draft.locked, catalogue = draft.catalogue, previewed = draft.preview, catalogueExpired = !!catalogue && Date.parse(catalogue.expiresAt) <= Date.now(), previewExpired = !!previewed && Date.parse(previewed.expiresAt) <= Date.now(), renderedOperation = operation.current;
   useEffect(() => { if (!valid) stop(); }, [valid]);
   useEffect(() => { const now = Date.now(), times = [catalogue?.expiresAt, previewed?.expiresAt].filter((value): value is string => !!value).map(Date.parse).filter(value => value > now); if (!times.length) return; const timer = setTimeout(() => tick(value => value + 1), Math.max(1, Math.min(...times) - now + 1)); return () => clearTimeout(timer); }, [catalogue, previewed, timeRevision]);
+  const copyNeedsCatalogue = !!fixed.sourceView && !catalogue;
   const draftDisabled = disabled || catalogueExpired, isReadOnly = fixed.profile?.dialect === 'sqlite' && fixed.profile.sqlite.readOnly;
   const viewEditor = fixed.action !== 'drop' && fixed.scope.kind === 'view';
   const savedView = fixed.scope.kind === 'view' && fixed.action !== 'create' && catalogue?.exists;
@@ -153,11 +187,12 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
     try { return sqliteViewDraftQuery(draft.sql, draft.name).columns; } catch { return undefined; }
   }, [viewEditor, draft.name, draft.sql]);
   /** create改名同步撤销原cap和绑定，SQL原文保留；不把旧定义自动替换成新名字。 */
-  function changeName(name: string): void { if (!editable() || fixed.action !== 'create') return; nameEpoch.current++; setTemplateConfirm(false); fixed.onTargetChange?.(undefined); replace({ ...draft, name, catalogue: undefined, preview: undefined, acknowledgements: [], confirmation: '', outcome: undefined, fact: undefined, relation: '' }); void releaseAll().catch(report); setError(''); setMessage(''); }
+  function changeName(name: string): void { if (!editable() || fixed.action !== 'create') return; nameEpoch.current++; setTemplateConfirm(false); fixed.onTargetChange?.(undefined); replace({ ...draft, name, ...(fixed.sourceView && !draft.sqlTouched ? { sql: '' } : {}), catalogue: undefined, preview: undefined, acknowledgements: [], confirmation: '', outcome: undefined, fact: undefined, relation: '' }); void releaseAll().catch(report); setError(''); setMessage(''); }
   /** 正文可在同一次React提交前连续发布；按固定来源和最新草稿合并，不能用一次性按钮render票据丢弃后半输入。 */
   function changeSql(sql: string): void {
     if (!lifetime.current || closed.current || !current() || operation.current || closing || live.current.locked || fixed.action === 'drop') return;
     const latest = live.current;
+    if (fixed.sourceView && !latest.catalogue) return;
     setTemplateConfirm(false); replace({ ...latest, sql, sqlTouched: true, preview: undefined, confirmation: '', acknowledgements: [], outcome: undefined, fact: undefined });
     // 只释放被本次正文修改撤销的准确预览，不借旧render闭包释放后继草稿能力。
     if (latest.preview) void releaseOne('previewId', latest.preview.previewId).catch(report);
@@ -174,13 +209,13 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, onClose, onD
   }
   const quote = (value: string) => '"'+value.replaceAll('"','""')+'"';
   function fillTemplate(): void { if (!editable() || !catalogueUsable() || !catalogue) return; const relation=catalogue.eligibleRelations.find(value=>value.name===draft.relation); if(fixed.scope.kind==='trigger'&&!relation){setError(text.chooseRelation);return;} const sql=fixed.scope.kind==='view'?'CREATE VIEW main.'+quote(draft.name)+' AS\nSELECT 1 AS value;':'CREATE TRIGGER main.'+quote(draft.name)+'\n'+(relation!.kind==='view'?'INSTEAD OF':'AFTER')+' INSERT ON '+quote(relation!.name)+'\nBEGIN\n  SELECT 1;\nEND;'; if(draft.sql&&!templateConfirm){setTemplateConfirm(true);return;} setTemplateConfirm(false); changeSql(sql); }
-  return <Modal title={text.title(fixed.action,fixed.scope.kind)} wide onClose={() => close()}><div className="modal-content sqlite-objects" aria-busy={busy||closing}><p>{fixed.scope.connectionId} / {fixed.scope.database} / {text.kinds[fixed.scope.kind]}</p><UsageHelp><p>{text.scope[fixed.action]}</p><p>{text.dependenciesHint}</p><p>{text.futureEffects}</p></UsageHelp>{isReadOnly&&<p className="warning-text">{text.readonly}</p>}<Field label={text.name}><input aria-label={text.name} value={draft.name} readOnly={fixed.action!=='create'} disabled={disabled} onChange={event=>changeName(event.target.value)}/></Field><button type="button" disabled={disabled||!draft.name} onClick={()=>inspect()}>{text.read}</button>
+  return <Modal title={fixed.sourceView ? text.copyView : text.title(fixed.action,fixed.scope.kind)} wide onClose={() => close()}><div className="modal-content sqlite-objects" aria-busy={busy||closing}><p>{fixed.scope.connectionId} / {fixed.scope.database} / {text.kinds[fixed.scope.kind]}</p>{fixed.sourceView && <><p>{text.copySource(fixed.sourceView)}</p><p>{text.copyHint}</p></>}<UsageHelp><p>{text.scope[fixed.action]}</p><p>{text.dependenciesHint}</p><p>{text.futureEffects}</p></UsageHelp>{isReadOnly&&<p className="warning-text">{text.readonly}</p>}<Field label={text.name}><input aria-label={text.name} value={draft.name} readOnly={fixed.action!=='create'} disabled={disabled} onChange={event=>changeName(event.target.value)}/></Field><button type="button" disabled={disabled||!draft.name} onClick={()=>inspect()}>{text.read}</button>
     {catalogue&&<><p>{catalogue.exists?text.exists:text.absent}</p><details><summary>{text.sourceSql}</summary><pre aria-label={text.sourceSql}>{catalogue.sourceSql??text.noSource}</pre></details><details><summary>{text.related}</summary><p>{text.fullCatalogueHint}</p><section aria-label={text.related}>{catalogue.relatedObjects.map(object=><details key={object.type+':'+object.name}><summary>{text.objectKinds[object.type]} · {object.name} / {object.table}</summary><pre aria-label={text.relatedSql(object.type,object.name)}>{object.sql??text.noSql}</pre></details>)}</section></details><section aria-label={text.attachedTriggers}><h3>{text.attachedTriggers}</h3>{catalogue.attachedTriggers.length?catalogue.attachedTriggers.map(trigger=><details key={trigger.name}><summary>{trigger.name}</summary><pre aria-label={text.attachedSql(trigger.name)}>{trigger.sql}</pre></details>):<p>{text.noAttachedTriggers}</p>}</section></>}
     {savedView && <ViewDependenciesPanel owner={dependencyOwner} disabled={disabled} current={current} connectionId={fixed.scope.connectionId} dialect="sqlite"
       load={() => invoke('sqlite.view.dependencies', { connectionId: fixed.scope.connectionId, database: fixed.scope.database, name: draft.name })}/>}
     {/* 渲染只读只依据状态与来源；editable包含提交后才成立的事件票据，不能用于渲染属性。 */}
-    {fixed.action!=='drop'&&<section aria-label={text.editor}><h3>{text.editor}</h3><p>{text.editorHint}</p><SqlEditor value={draft.sql} onChange={changeSql} dialect="sqlite" completion={undefined} height={260} readOnly={disabled}/>
-      {fixed.scope.kind === 'view' && <ViewSqlFileImport owner={draft} name={draft.name} value={draft.sql} disabled={disabled || !draft.name}
+    {fixed.action!=='drop'&&<section aria-label={text.editor}><h3>{text.editor}</h3><p>{text.editorHint}</p><SqlEditor value={draft.sql} onChange={changeSql} dialect="sqlite" completion={undefined} height={260} readOnly={disabled || copyNeedsCatalogue}/>
+      {fixed.scope.kind === 'view' && <ViewSqlFileImport owner={draft} name={draft.name} value={draft.sql} disabled={disabled || copyNeedsCatalogue || !draft.name}
         hint={viewSqlFileZh.sqliteHint} current={editable} prepare={prepareViewFile} apply={changeSql}/>}
       {fixed.scope.kind === 'view' && <ViewQueryInspect owner={draft} hint={viewQueryInspectZh.sqliteHint(sqliteViewSampleRows)}
         disabled={disabled || !draft.name || !draft.sql.trim()} current={viewReadCurrent}

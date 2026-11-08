@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { publicCommands } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
-import { changeSqliteViewDraftColumns, sqliteViewDraftQuery, parseSqliteObjectsCreateHeader, buildSqliteObjectsPlan, getSqliteObjectsAcknowledgements, assertSqliteObjectsAcknowledgements, sqliteObjectsInspectSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsFactSchema, sqliteObjectsOutcomeSchema, sqliteObjectsLimits, type SqliteObjectsInspectOutput } from '../../src/shared/sqliteObjects';
+import { changeSqliteViewDraftColumns, copySqliteViewDefinition, sqliteViewDraftQuery, parseSqliteObjectsCreateHeader, buildSqliteObjectsPlan, getSqliteObjectsAcknowledgements, assertSqliteObjectsAcknowledgements, sqliteObjectsInspectSchema, sqliteObjectsInspectionSchema, sqliteObjectsPreviewSchema, sqliteObjectsPreviewOutputSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema, sqliteObjectsFactSchema, sqliteObjectsOutcomeSchema, sqliteObjectsLimits, type SqliteObjectsInspectOutput } from '../../src/shared/sqliteObjects';
 
 const target = { connectionId: 'owned', database: 'main' as const, kind: 'view' as const, name: 'owned_view' };
 /** 只验证固定构造的原生语义，不冒称utility授权门或真实文件验收。 */
@@ -69,6 +69,31 @@ describe('SQLite视图与触发器公开合同和前缀词法', () => {
   });
 });
 
+
+describe('SQLite 视图复制', () => {
+  it('只改写准确目标，保留 CTE、显式列名、查询原文和注释', () => {
+    const prefix = '/* 前置 */ CREATE VIEW ';
+    const body = ' ([值]) AS WITH c(x) AS (VALUES (\'原.视图;正文\')) SELECT x FROM c; -- 尾注释';
+    const source = prefix + '[main] /* 限定 */ . [原.视图]' + body;
+    const copied = copySqliteViewDefinition(source, '原.视图', '副本"🚢');
+    expect(copied).toBe(prefix + 'main."副本""🚢"' + body);
+    database(db => {
+      db.exec(source);
+      db.exec(copied);
+      expect(db.prepare('SELECT * FROM main."副本""🚢"').get()).toEqual({ 值: '原.视图;正文' });
+      expect(db.prepare('SELECT * FROM main."原.视图"').get()).toEqual({ 值: '原.视图;正文' });
+    });
+  });
+
+  it('拒绝 ASCII 同名、源身份不符、临时对象及批量 SQL', () => {
+    const source = 'CREATE VIEW owned_view AS SELECT 1';
+    expect(() => copySqliteViewDefinition(source, 'owned_view', 'OWNED_VIEW')).toThrow('不同的名称');
+    expect(() => copySqliteViewDefinition(source, 'another', 'copy')).toThrow('准确同名');
+    expect(() => copySqliteViewDefinition(source, 'owned_view', 'sqlite_system')).toThrow();
+    expect(() => copySqliteViewDefinition('CREATE TEMP VIEW owned_view AS SELECT 1', 'owned_view', 'copy')).toThrow();
+    expect(() => copySqliteViewDefinition(source + '; DROP VIEW owned_view;', 'owned_view', 'copy')).toThrow('只接受一条');
+  });
+});
 
 describe('SQLite 视图列清单编辑', () => {
   it('同数量替换只修改所选标识符，保留其余拼写、注释和查询', () => {

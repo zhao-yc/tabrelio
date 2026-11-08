@@ -123,7 +123,7 @@ function sqliteObjectsCreatePrefix(raw: string) {
   skip(); if (sql[offset] === '.') { offset++; if (fold(firstName.value) !== 'main') throw Error('SQLite对象定义只允许main schema'); nameToken = token(); }
   const parsed = sqliteObjectsTargetSchema.parse({ connectionId: 'header-only', database: 'main', kind, name: nameToken.value });
   const target = { kind, database: 'main' as const, name: parsed.name };
-  return { target, sql, token, nameEnd: nameToken.end, offset: () => offset, take(character: string) {
+  return { target, sql, token, nameStart: firstName.start, nameEnd: nameToken.end, offset: () => offset, take(character: string) {
     skip();
     if (sql[offset] !== character) return false;
     offset++;
@@ -137,7 +137,7 @@ export function parseSqliteObjectsCreateHeader(raw: string): { kind: SqliteObjec
 
 /** 从准确命名的 CREATE VIEW 提取单条查询及显式列名；正文仍由 SQLite 原生解析。 */
 function sqliteViewDraftParts(raw: string, expectedName: string) {
-  const { target, sql, token, nameEnd, offset, take } = sqliteObjectsCreatePrefix(raw);
+  const { target, sql, token, nameStart, nameEnd, offset, take } = sqliteObjectsCreatePrefix(raw);
   if (target.kind !== 'view' || target.name !== expectedName) throw Error('SQLite 视图定义须与当前对象准确同名');
   const aliases: HeaderToken[] = [];
   let list: { start: number; end: number } | undefined;
@@ -160,7 +160,7 @@ function sqliteViewDraftParts(raw: string, expectedName: string) {
   const query = sql.slice(offset(), end);
   if (!['SELECT', 'WITH', 'VALUES'].includes(sqliteLeadingKeyword(query) ?? ''))
     throw Error('SQLite 视图预览需要 SELECT、WITH 或 VALUES 查询');
-  return { query, aliases, list, nameEnd };
+  return { query, aliases, list, nameStart, nameEnd };
 }
 
 export function sqliteViewDraftQuery(raw: string, expectedName: string): { query: string; columns: string[] } {
@@ -169,6 +169,16 @@ export function sqliteViewDraftQuery(raw: string, expectedName: string): { query
 }
 
 const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
+/** 保留列清单和查询原文，只改写单条 CREATE VIEW 的准确目标。 */
+export function copySqliteViewDefinition(sql: string, sourceName: string, targetName: string): string {
+  sqliteObjectsTargetSchema.shape.name.parse(targetName);
+  if (fold(sourceName) === fold(targetName)) throw Error('SQLite 新视图须使用不同的名称');
+  const { nameStart, nameEnd } = sqliteViewDraftParts(sql, sourceName);
+  const next = sql.slice(0, nameStart) + 'main.' + quote(targetName) + sql.slice(nameEnd);
+  if (encoder.encode(next).length > sqliteObjectsLimits.ddlBytes) throw Error('SQLite 视图定义超过 2 MiB');
+  return next;
+}
+
 /** 仅替换同名视图的显式列清单，保留查询、标识符拼写和相同位置的列间注释。 */
 export function changeSqliteViewDraftColumns(sql: string, expectedName: string, names: readonly string[]): string {
   const { aliases, list, nameEnd } = sqliteViewDraftParts(sql, expectedName);
