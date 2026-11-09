@@ -2,7 +2,7 @@ import { sqliteEditValueSchema, sqliteTableEditLimits, type SqliteEditValue } fr
 import { gridRangeFillColumns, gridRangeFillSource, type GridRangeFillInput } from './gridRangeFill';
 import { gridRangeFillZh as text } from './locales/gridRangeFill.zh-CN';
 import { sqliteColumnAcceptsTransferValue } from './sqliteRecordTransfer';
-import { prepareSqliteFill } from './sqliteTableFill';
+import { prepareSqliteFill, stageSqliteIntegerSequence } from './sqliteTableFill';
 import type { SqliteTableEditor } from './sqliteTableEditor';
 
 export interface SqliteQueryRangeFill {
@@ -17,6 +17,7 @@ export function stageSqliteQueryRangeFill(editor: SqliteTableEditor, { columns, 
   if (edit?.kind !== 'editable' || !locator || !rows.length) throw Error(text.stale);
   const fields = columns.map(name => edit.columns.findIndex(field => field.name === name));
   if (fields.some(index => index < 0)) throw Error(text.stale);
+  if (input.kind === 'sequence') return stageSqliteIntegerSequence(editor, rows, fields, input);
   const side = input.kind === 'left' || input.kind === 'right' ? gridRangeFillColumns(fields, input.kind) : undefined;
   const vertical = input.kind === 'up' || input.kind === 'down'
     ? gridRangeFillSource({ rows, startRow: 0, keys: columns }, input.kind, row => row.deleted) : undefined;

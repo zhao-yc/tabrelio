@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
+import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
 import { DraftHistory } from '../../src/renderer/draftHistory';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo, TablePage } from '../../src/shared/contracts';
@@ -19,6 +19,19 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('序列按字段位宽一次生成草稿，保护选区外记录和不可编辑字段', () => {
+    const { rows, info, context } = fixture();
+    info.columns[2].type = 'SMALLINT(5) UNSIGNED';
+    const range = { startRow: 1, rows: rows.slice(1), keys: ['num'] };
+    const input = { kind: 'sequence', value: '65534', step: '1' } as const;
+    const next = prepareBatchFillSequence(range, input, rows, context);
+    expect(next[0]).toBe(rows[0]);
+    expect(next.slice(1).map(row => row.data.num)).toEqual(['65534', '65535']);
+    expect(() => prepareBatchFillSequence(range, { ...input, step: '2' }, rows, context)).toThrow(/范围/);
+    expect(() => prepareBatchFillSequence({ ...range, keys: ['id'] }, input, rows, context)).toThrow(/id/);
+    expect(() => prepareBatchFillSequence({ ...range, rows: [rows[2], rows[1]] }, input, rows, context)).toThrow();
+    expect(rows.every(row => row.data.num === row.original?.num)).toBe(true);
+  });
   it('横向填充按行使用来源草稿，字段类型或字符集不一致时整批拒绝', () => {
     const { rows, info, context } = fixture();
     info.columns.push({ ...info.columns[1], name: 'mirror' });

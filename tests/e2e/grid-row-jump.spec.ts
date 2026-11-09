@@ -1099,6 +1099,65 @@ test('SQLite JOIN 查询删除勾选主表记录在冲突或外键失败时整�
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 整数序列检查溢出、一步撤销并按查询显示顺序提交', async ({}, info) => {
+  await seed('SELECT id, qty FROM subject ORDER BY id DESC LIMIT 3;',
+    'ALTER TABLE subject ADD qty INTEGER; UPDATE subject SET qty = 1000 + id;');
+  const database = join(dataDir, 'grid-row-jump.sqlite');
+  const read = (minimum: number, maximum: number) => {
+    const db = new DatabaseSync(database, { readOnly: true });
+    try {
+      return db.prepare('SELECT id, CAST(qty AS TEXT) AS qty, typeof(qty) AS type FROM subject WHERE id BETWEEN ? AND ? ORDER BY id')
+        .all(minimum, maximum);
+    } finally { db.close(); }
+  };
+  const sequence = async (owner: Locator, first: Locator) => {
+    await first.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await owner.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    const form = owner.getByRole('region', { name: rangeFill.open, exact: true });
+    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption('sequence');
+    return form;
+  };
+  const enter = async (form: Locator, start: string, step: string) => {
+    await form.getByRole('textbox', { name: rangeFill.sequenceStart, exact: true }).fill(start);
+    await form.getByRole('textbox', { name: rangeFill.sequenceStep, exact: true }).fill(step);
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+  };
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const original = read(1, 3), tableForm = await sequence(table, table.getByRole('gridcell', { name: 'INTEGER · 1001', exact: true }));
+  const undo = table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true });
+  await enter(tableForm, '9223372036854775807', '1');
+  await expect(tableForm.getByRole('alert')).toHaveText(rangeFill.sequenceOverflow);
+  await expect(undo).toBeDisabled();
+  expect(read(1, 3)).toEqual(original);
+  await enter(tableForm, '9223372036854775807', '-2');
+  await expect(table.getByRole('gridcell', { name: 'INTEGER · 9223372036854775803', exact: true })).toBeVisible();
+  expect(read(1, 3)).toEqual(original);
+  await undo.click();
+  await expect(table.getByRole('gridcell', { name: 'INTEGER · 1003', exact: true })).toBeVisible();
+
+  await page.locator('[data-workspace-tab-id="q-jump"]').getByRole('button', { name: '查询定位', exact: true }).click();
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const previous = read(178, 180), queryForm = await sequence(query, query.getByRole('gridcell', { name: '1180', exact: true }));
+  await enter(queryForm, '-9223372036854775808', '3');
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toContainText('-9223372036854775808');
+  expect(read(178, 180)).toEqual(previous);
+  await info.attach('SQLite查询整数序列预览', { body: await page.screenshot(), contentType: 'image/png' });
+  await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+  await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  expect(read(178, 180)).toEqual([
+    { id: 178, qty: '-9223372036854775802', type: 'integer' },
+    { id: 179, qty: '-9223372036854775805', type: 'integer' },
+    { id: 180, qty: '-9223372036854775808', type: 'integer' },
+  ]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚', async ({}, info) => {
   await seed('SELECT id AS 同名, name AS 同名 FROM subject ORDER BY id DESC LIMIT 3;');
   const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');

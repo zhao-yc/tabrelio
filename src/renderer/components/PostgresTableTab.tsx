@@ -68,7 +68,7 @@ import { postgresColumnStatisticsZh } from '../locales/postgresColumnStatistics.
 import type { PostgresColumnReadSource } from '../postgresColumnRead';
 import { PostgresColumnStatisticsDialog } from './PostgresColumnStatisticsDialog';
 import { PostgresBatchFillDialog } from './PostgresBatchFillDialog';
-import { postgresBatchFillChanges, postgresRangeFillAcross, postgresRangeFillChanges, postgresRangeFillFromRow } from '../postgresBatchFill';
+import { postgresBatchFillChanges, postgresRangeFillAcross, postgresRangeFillChanges, postgresRangeFillFromRow, postgresRangeFillSequence } from '../postgresBatchFill';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, type PostgresBatchRow } from '../postgresBatchSelection';
 import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
@@ -1112,6 +1112,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (kind === 'integer' || kind === 'real') throw Error(rangeFillText.target);
     let changes;
     if (kind === 'left' || kind === 'right') changes = postgresRangeFillAcross(page, columns, range, kind, prior);
+    else if (kind === 'sequence') changes = postgresRangeFillSequence(page, columns, range, input, prior);
     else if (kind === 'down' || kind === 'up') changes = postgresRangeFillFromRow(page, columns, range, kind, prior);
     else changes = postgresRangeFillChanges(page, columns, range.startRow, range.rows.length, kind === 'null' ? null : value, prior);
     if (changes.length && !stageChanges(changes)) throw Error(rangeFillText.stale);

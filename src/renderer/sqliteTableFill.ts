@@ -1,7 +1,27 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteTableEditLimits, type SqliteOriginalValue } from '../shared/sqliteTableEdit';
-import type { SqliteDraftRow } from './sqliteTableEditor';
+import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
 import { sqliteTableEditZh as text } from './locales/sqliteTableEdit.zh-CN';
+import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
+import { gridRangeIntegerSequence, type GridRangeFillInput } from './gridRangeFill';
+import { sqliteColumnAcceptsTransferValue } from './sqliteRecordTransfer';
+
+/** 按当前显示行生成原生 INTEGER，全部值和来源通过校验后才发布一步草稿。 */
+export function stageSqliteIntegerSequence(editor: SqliteTableEditor, selected: readonly SqliteDraftRow[],
+  columns: readonly number[], input: GridRangeFillInput): number {
+  if (columns.length !== 1) throw Error(rangeText.sequenceShape);
+  const page = editor.page, edit = page.edit, [column] = columns;
+  if (edit?.kind !== 'editable' || !edit.locator) throw Error(rangeText.stale);
+  const field = edit.columns[column];
+  if (!field || field.primary || edit.locator.columns.includes(field.name)) throw Error(rangeText.target);
+  if (selected.length > sqliteTableEditLimits.changes) throw Error(rangeText.limit);
+  const valueAt = gridRangeIntegerSequence(input, selected.length);
+  if (!sqliteColumnAcceptsTransferValue(field, !!edit.strict, { kind: 'integer', value: valueAt(0) }, true))
+    throw Error(rangeText.incompatible(field.name));
+  return editor.editRecords(prepareSqliteFill(page, editor.view.rows, selected), selected.map((row, index) => ({
+    rowId: row.id, fields: [{ column, value: { kind: 'integer', value: valueAt(index) } }],
+  })));
+}
 
 export interface SqliteFillField { column: number; value: SqliteOriginalValue | undefined; }
 export interface SqliteFillSource {

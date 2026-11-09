@@ -157,7 +157,7 @@ import { tableCopyMetadataKey, type TableCopyPageSources } from '../../shared/ta
 import { PasteInsertIntent, preparePasteInsert, type PasteInsertPlan } from '../pasteInsert';
 import { PasteInsertDialog } from './PasteInsertDialog';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
-import { BatchFillIntent, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, type BatchFillAssignment } from '../recordBatchFill';
+import { BatchFillIntent, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, prepareBatchFillSequence, type BatchFillAssignment } from '../recordBatchFill';
 import type { RecordInput } from '../recordViews';
 import { TableBatchFillDialog } from './TableBatchFillDialog';
 import { recordBatchFillZh } from '../locales/recordBatchFill.zh-CN';
@@ -1865,6 +1865,12 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     const target = cellRange.capture(rectangle);
     if (!target || !editable) throw Error(rangeFillText.stale);
     const { kind, value } = input;
+    if (kind === 'sequence') {
+      const next = prepareBatchFillSequence(target, input, rows, getRecordContext());
+      if (next !== rows) setRows(next);
+      setError('');
+      return;
+    }
     if (kind === 'left' || kind === 'right') {
       const next = prepareBatchFillAcross(target, kind, rows, getRecordContext());
       if (next !== rows) setRows(next);

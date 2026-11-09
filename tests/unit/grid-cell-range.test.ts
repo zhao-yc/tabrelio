@@ -1,5 +1,18 @@
 import { expect, it, vi } from 'vitest';
 import { readGridCellRange } from '../../src/renderer/useGridCellRange';
+import { gridRangeIntegerSequence } from '../../src/renderer/gridRangeFill';
+import { gridRangeFillZh } from '../../src/renderer/locales/gridRangeFill.zh-CN';
+
+it('整数序列使用精确端点和非零步长，拒绝格式错误及越界', () => {
+  const input = { kind: 'sequence', value: '18446744073709551615', step: '-2' } as const;
+  const valueAt = gridRangeIntegerSequence(input, 3, 64, true);
+  expect([valueAt(0), valueAt(1), valueAt(2)]).toEqual(['18446744073709551615', '18446744073709551613', '18446744073709551611']);
+  expect(() => gridRangeIntegerSequence(input, 2)).toThrow(gridRangeFillZh.sequenceOverflow);
+  expect(() => gridRangeIntegerSequence({ ...input, value: '-128', step: '-1' }, 2, 8)).toThrow(gridRangeFillZh.sequenceOverflow);
+  expect(() => gridRangeIntegerSequence({ ...input, value: '0', step: '-1' }, 2, 8, true)).toThrow(gridRangeFillZh.sequenceOverflow);
+  for (const step of ['', '0', '1.0', '1e3', '0x2'])
+    expect(() => gridRangeIntegerSequence({ ...input, step }, 2)).toThrow(gridRangeFillZh.sequenceInput);
+});
 
 it('按可见列顺序读取完整行区间，排除待删除行', () => {
   const rows = [{ id: 1, text: '甲' }, { id: 2, text: '待删除' }, { id: 3, text: null }];

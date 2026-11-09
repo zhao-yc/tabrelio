@@ -4,7 +4,7 @@ import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import type { DraftRow } from './dataChanges';
 import { changedDraftHistoryBytes, draftHistoryLimits } from './draftHistory';
 import { ownCell, parseCell } from './lib';
-import { gridRangeFillColumns, type GridRangeFillSide } from './gridRangeFill';
+import { gridRangeFillColumns, gridRangeIntegerSequence, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
 import type { GridRangeTarget } from './useGridCellRange';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
 import { assertRecordBatchFields, recordBatchCellBytes, sameRecordBatchRow } from './recordDuplicateBatch';
@@ -160,6 +160,25 @@ export function prepareBatchFillAcross(range: GridRangeTarget<DraftRow>, side: G
       return [column.name, value];
     }));
   });
+}
+
+const mysqlIntegerBits = new Map([['tinyint', 8], ['smallint', 16], ['mediumint', 24], ['int', 32], ['integer', 32], ['bigint', 64]]);
+
+/** MySQL 和 MariaDB 按字段实际位宽校验，以协议字符串保留完整整数。 */
+export function prepareBatchFillSequence(range: GridRangeTarget<DraftRow>, input: GridRangeFillInput, rows: DraftRow[],
+  context: RecordContext): DraftRow[] {
+  if (range.keys.length !== 1) throw Error(rangeText.sequenceShape);
+  const [key] = range.keys;
+  const column = batchFillColumns(context).find(item => item.name === key);
+  const type = /^(\w+)(?:\(\d+\))?( unsigned)?( zerofill)?$/i.exec(column?.type.toLowerCase() ?? '');
+  const bits = type && mysqlIntegerBits.get(type[1]);
+  if (!column || !bits) throw Error(rangeText.incompatible(key));
+  if (range.rows.length > limits.rows) throw Error(rangeText.limit);
+  if (range.rows.some((row, index) => rows[range.startRow + index] !== row || row.deleted ||
+      !row.inserted && ownCell(row.data, key) === undefined)) throw Error(rangeText.target);
+  const valueAt = gridRangeIntegerSequence(input, range.rows.length, bits, !!(type?.[2] || type?.[3]));
+  const values = new Map(range.rows.map((row, index) => [row, { [key]: valueAt(index) }]));
+  return applyBatchRowPatches(rows, row => values.get(row));
 }
 
 function applyBatchRowPatches(rows: DraftRow[], patchFor: (row: DraftRow) => DataRow | undefined): DraftRow[] {

@@ -14,21 +14,27 @@ export function GridRangeFill({ rectangle, typed, onStage }: {
 }) {
   const [open, setOpen] = useState<GridCellRectangle>();
   const [kind, setKind] = useState<GridRangeFillKind>('text'), [value, setValue] = useState(''), [error, setError] = useState('');
+  const [start, setStart] = useState('1'), [step, setStep] = useState('1');
   if (open !== rectangle) return <button type="button" onClick={() => {
-    setKind('text'); setValue(''); setError(''); setOpen(rectangle);
+    setKind('text'); setValue(''); setStart('1'); setStep('1'); setError(''); setOpen(rectangle);
   }}>{text.open}</button>;
   return <section aria-label={text.open} className="grid-range-fill">
     <span>{text.scope(rectangle.bottom - rectangle.top + 1, rectangle.right - rectangle.left + 1)}</span>
     <Field label={text.kind}><select value={kind} onChange={event => setKind(event.target.value as GridRangeFillKind)}>
       <option value="text">{text.text}</option><option value="null">{text.null}</option>
       {typed && <><option value="integer">{text.integer}</option><option value="real">{text.real}</option></>}
+      {rectangle.bottom > rectangle.top && rectangle.left === rectangle.right && <option value="sequence">{text.sequence}</option>}
       {rectangle.bottom > rectangle.top && <><option value="down">{text.down}</option><option value="up">{text.up}</option></>}
       {rectangle.right > rectangle.left && <><option value="right">{text.right}</option><option value="left">{text.left}</option></>}
     </select></Field>
     {(kind === 'text' || kind === 'integer' || kind === 'real') &&
       <Field label={text.value}><textarea autoFocus value={value} onChange={event => setValue(event.target.value)}/></Field>}
+    {kind === 'sequence' && <>
+      <Field label={text.sequenceStart}><input value={start} onChange={event => setStart(event.target.value)}/></Field>
+      <Field label={text.sequenceStep}><input value={step} onChange={event => setStep(event.target.value)}/></Field>
+    </>}
     <button type="button" onClick={() => {
-      try { onStage(rectangle, { kind, value }); setOpen(undefined); }
+      try { onStage(rectangle, kind === 'sequence' ? { kind, value: start, step } : { kind, value }); setOpen(undefined); }
       catch (reason) { setError(errorMessage(reason)); }
     }}>{text.stage}</button>
     <button type="button" onClick={() => setOpen(undefined)}>{zh.common.cancel}</button>

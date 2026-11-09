@@ -89,7 +89,7 @@ import { sqliteHeaderSortFromGrid, sqliteHeaderSortToGrid, type SqliteHeaderSort
 import { parsePageJump, parseTablePageSize } from '../tableFilters';
 import { prepareSqliteDuplicate, sqliteDuplicateSourceCurrent, type SqliteDuplicateSource } from '../sqliteTableDuplicate';
 import type { SqliteCheckedRows } from '../sqliteTableSelection';
-import { prepareSqliteFill, sqliteFillSourceCurrent, type SqliteFillSource, type SqliteFillField } from '../sqliteTableFill';
+import { prepareSqliteFill, sqliteFillSourceCurrent, stageSqliteIntegerSequence, type SqliteFillSource, type SqliteFillField } from '../sqliteTableFill';
 import { SqliteTableFillDialog } from './SqliteTableFillDialog';
 import { sqliteTableFillZh as fillText } from '../locales/sqliteTableFill.zh-CN';
 import { SqliteFilteredSelectIntent, type SqliteFilteredSelectPlan } from '../sqliteFilteredSelectUi';
@@ -1387,6 +1387,11 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
           locator.columns.includes(field.name)) throw Error(rangeFillText.target);
       return { column, field };
     };
+    if (input.kind === 'sequence') {
+      stageSqliteIntegerSequence(editor, range.rows, range.keys.map(key => editableColumn(key).column), input);
+      setValidation('');
+      return;
+    }
     if (input.kind === 'left' || input.kind === 'right') {
       const plan = gridRangeFillColumns(range.keys, input.kind);
       if (range.rows.length > sqliteTableEditLimits.changes || range.rows.length * plan.targets.length > sqliteTableEditLimits.cells)

@@ -10,6 +10,7 @@ import { postgresBatchDuplicateZh as duplicateText } from '../../src/renderer/lo
 import { postgresBatchEditZh as batchText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
 import { postgresTableFindZh as findText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { primaryKeyCopyZh as keyCopy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { updateSqlCopyZh as updateCopy } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
 import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
@@ -292,19 +293,19 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
   const observer = new Client(config);
   try {
     await observer.connect();
-    await observer.query(`CREATE TABLE public.query_fill (id bigint PRIMARY KEY, note text, src bytea, dst bytea);
+    await observer.query(`CREATE TABLE public.query_fill (id bigint PRIMARY KEY, note text, src bytea, dst bytea, qty bigint);
       INSERT INTO public.query_fill VALUES
-        (2, '首行样本', decode('00FEFF','hex'), decode('BEEF','hex')),
-        (3, '首行样本', NULL, decode('CAFE','hex')),
-        (9223372036854775807, '末行原值', decode('1234','hex'), decode('CAFE','hex'))`);
-    await loadQuery(config, 'SELECT id AS 编号, note, src AS 同名, dst AS 同名 FROM public.query_fill ORDER BY id DESC;');
+        (2, '首行样本', decode('00FEFF','hex'), decode('BEEF','hex'), 15),
+        (3, '首行样本', NULL, decode('CAFE','hex'), 16),
+        (9223372036854775807, '末行原值', decode('1234','hex'), decode('CAFE','hex'), 17)`);
+    await loadQuery(config, 'SELECT id AS 编号, note, src AS 同名, dst AS 同名, qty FROM public.query_fill ORDER BY id DESC;');
     const query = page.locator('.postgres-query:visible');
     const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
     const edit = query.getByRole('button', { name: text.edit, exact: true });
     const cell = (name: string) => query.getByRole('gridcell', { name, exact: true });
     const preview = page.getByRole('dialog', { name: text.fillTitle, exact: true });
     const read = async () => (await observer.query(`SELECT id::text, note, encode(src,'hex') AS src,
-      encode(dst,'hex') AS dst, xmin::text FROM public.query_fill ORDER BY id`)).rows;
+      encode(dst,'hex') AS dst, qty::text AS qty, xmin::text FROM public.query_fill ORDER BY id`)).rows;
     const expectPreview = async () => {
       await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."query_fill"');
     };
@@ -350,6 +351,26 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     const afterRight = await read();
     expect(afterRight[0]).toEqual(before[0]);
     expect(afterRight.map(row => [row.src, row.dst])).toEqual([['00feff', 'beef'], [null, null], ['1234', '1234']]);
+    await execute.click();
+    await expect(cell('15')).toBeVisible();
+    const idHeader = query.getByRole('columnheader', { name: '编号' });
+    if (!await idHeader.getByLabel(queryResultSortZh.ascending).isVisible()) await idHeader.click();
+    await expect(cell('15').locator('..')).toHaveAttribute('aria-rowindex', '2');
+    await cell('15').click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await query.getByRole('button', { name: fillText.open, exact: true }).click();
+    const form = query.getByRole('region', { name: fillText.open, exact: true });
+    await form.getByRole('combobox', { name: fillText.kind, exact: true }).selectOption('sequence');
+    await form.getByRole('textbox', { name: fillText.sequenceStart, exact: true }).fill('-9223372036854775808');
+    await form.getByRole('textbox', { name: fillText.sequenceStep, exact: true }).fill('3');
+    await form.getByRole('button', { name: fillText.stage, exact: true }).click();
+    await expectPreview();
+    const sequence = ['-9223372036854775808', '-9223372036854775805', '-9223372036854775802'];
+    await expect(preview.locator('dd')).toHaveText(sequence);
+    expect(await read()).toEqual(afterRight);
+    await submit(3);
+    expect((await read()).map(row => row.qty)).toEqual(sequence);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

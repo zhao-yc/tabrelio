@@ -8,7 +8,7 @@ import { fitGridRangePaste, type GridPasteShape } from './gridRangePaste';
 import { ownCell } from './lib';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
 import { mysqlQueryBatchEditZh as text } from './locales/mysqlQueryBatchEdit.zh-CN';
-import { batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow } from './recordBatchFill';
+import { batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, prepareBatchFillSequence } from './recordBatchFill';
 import { recordBatchCellBytes } from './recordDuplicateBatch';
 import type { RecordContext } from './recordViews';
 import type { PageTextPatch } from './pageFindReplace';
@@ -99,6 +99,7 @@ export function mysqlQueryBatchChanges(info: TableInfo, originals: DataRow[], co
     const { kind, value } = operation.input;
     const range = { rows, keys: columns, startRow: 0 };
     if (kind === 'left' || kind === 'right') next = prepareBatchFillAcross(range, kind, rows, context);
+    else if (kind === 'sequence') next = prepareBatchFillSequence(range, operation.input, rows, context);
     else if (kind === 'up' || kind === 'down') {
       const source = gridRangeFillSource(range, kind, () => false);
       next = prepareBatchFillFromRow(columns, source.source, rows, new Set(source.rows.map(row => row.id)), context);

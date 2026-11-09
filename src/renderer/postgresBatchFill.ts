@@ -5,20 +5,40 @@ import { postgresBatchFillZh as text } from './locales/postgresBatchFill.zh-CN';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, postgresBatchValueValid } from './postgresBatchSelection';
 import { postgresClipboardFieldValue } from './postgresGridPaste';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
-import { gridRangeFillColumns, gridRangeFillSource, type GridRangeFillDirection, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
+import { gridRangeFillColumns, gridRangeFillSource, gridRangeIntegerSequence, type GridRangeFillDirection, type GridRangeFillInput, type GridRangeFillSide } from './gridRangeFill';
 import type { GridRangeTarget } from './useGridCellRange';
 
 type RecordUpdate = Extract<PostgresTableChange, { kind: 'update' }>;
 
 /** 查询范围已按显示顺序回查原行，复制从该快照取值，只给变化的目标格生成草稿。 */
 export function postgresQueryRangeFillChanges(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
-  { kind, value }: GridRangeFillInput): RecordUpdate[] {
+  input: GridRangeFillInput): RecordUpdate[] {
+  const { kind, value } = input;
   const range = { startRow: 0, rows: page.rows, keys: columns.map(column => column.key) };
   const noDraft = () => undefined;
   if (kind === 'integer' || kind === 'real') throw Error(rangeText.target);
+  if (kind === 'sequence') return postgresRangeFillSequence(page, columns, range, input, noDraft);
   if (kind === 'up' || kind === 'down') return postgresRangeFillFromRow(page, columns, range, kind, noDraft);
   if (kind === 'left' || kind === 'right') return postgresRangeFillAcross(page, columns, range, kind, noDraft);
   return postgresRangeFillChanges(page, columns, 0, page.rows.length, kind === 'null' ? null : value, noDraft);
+}
+
+const postgresIntegerBits = new Map([['smallint', 16], ['integer', 32], ['bigint', 64]]);
+
+/** 序列只写内置整数列，沿用原行版本、当前草稿和整批暂存。 */
+export function postgresRangeFillSequence(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
+  range: GridRangeTarget<DataRow>, input: GridRangeFillInput, prior: (key: string) => PostgresTableChange | undefined): RecordUpdate[] {
+  if (columns.length !== 1) throw Error(rangeText.sequenceShape);
+  const [column] = columns, bits = postgresIntegerBits.get(column.type);
+  if (!bits || !page.columns.includes(column) || !postgresBatchEditableColumn(column) ||
+      column.sequenceDefault || column.binary || !page.capabilities.update) throw Error(rangeText.incompatible(column.name));
+  if (range.rows.length > postgresTableLimits.changes) throw Error(rangeText.limit);
+  const selected = new Set(range.rows.map((_, index) => range.startRow + index));
+  const rows = postgresBatchRows(page, selected, prior), valueAt = gridRangeIntegerSequence(input, rows.length, bits);
+  return rows.flatMap(({ index: row, original, previous }, index) => {
+    const fields = postgresFilledFields(original, [{ column: column.key, value: { mode: 'text', value: valueAt(index) } }], previous);
+    return fields ? [{ kind: 'update', row, fields }] : [];
+  });
 }
 
 /** 矩形只转换一次统一值，再交给既有的原行账本和批量字段校验。 */

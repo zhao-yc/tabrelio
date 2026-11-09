@@ -4,6 +4,7 @@ import { test, expect, page, pageErrors } from './desktop-fixture';
 import { pasteGridRangeClipboard } from './grid-cell-range-clipboard';
 import { encodeClipboard } from '../../src/renderer/gridClipboard';
 import { mysqlQueryBatchEditZh as text } from '../../src/renderer/locales/mysqlQueryBatchEdit.zh-CN';
+import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -21,14 +22,14 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
   try {
     for (const sql of [
       `CREATE DATABASE ${database}`,
-      `CREATE TABLE ${table} (tenant VARCHAR(10), id BIGINT, note VARCHAR(40), qty BIGINT CHECK (qty>=0), guard VARCHAR(30),
+      `CREATE TABLE ${table} (tenant VARCHAR(10), id BIGINT, note VARCHAR(40), qty BIGINT CHECK (qty>=0), guard VARCHAR(30), rank_value BIGINT UNSIGNED,
         PRIMARY KEY(tenant,id)) ENGINE=InnoDB`,
-      `INSERT INTO ${table} VALUES ('A',9007199254740992,'原记录甲',1,'未投影甲'),('A',9007199254740993,'原记录乙',2,'未投影乙'),
-        ('A',9007199254740994,'非选区',3,'未投影丙')`,
+      `INSERT INTO ${table} VALUES ('A',9007199254740992,'原记录甲',1,'未投影甲',11),('A',9007199254740993,'原记录乙',2,'未投影乙',12),
+        ('A',9007199254740994,'非选区',3,'未投影丙',13)`,
       `CREATE USER '${user}'@'%' IDENTIFIED BY '${writerPassword}'`,
-      `GRANT SELECT, UPDATE (note,qty) ON ${table} TO '${user}'@'%'`,
+      `GRANT SELECT, UPDATE (note,qty,rank_value) ON ${table} TO '${user}'@'%'`,
     ]) await observer.query(sql);
-    const sql = `SELECT s.tenant AS 区, s.id AS 编号, s.note AS 同名, s.qty AS 同名 FROM ${table} s ORDER BY s.id DESC;`;
+    const sql = `SELECT s.tenant AS 区, s.id AS 编号, s.note AS 同名, s.qty AS 同名, s.rank_value AS 序列 FROM ${table} s ORDER BY s.id DESC;`;
     await page.evaluate(async ({ host, port, user, writerPassword, database, dialect, sql }) => {
       const connection = await window.dbark.invoke('connections.save', { id: '', host, port, user, password: writerPassword, database, dialect,
         name: '查询矩形专项', group: '', color: '#123456', rememberPassword: false });
@@ -60,7 +61,7 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
       await dialog.getByRole('checkbox', { name: text.confirm, exact: true }).check();
       await dialog.getByRole('button', { name: text.apply, exact: true }).click();
     };
-    const read = async () => (await observer.query<RowDataPacket[]>(`SELECT id,note,qty,guard FROM ${table} ORDER BY id`))[0];
+    const read = async () => (await observer.query<RowDataPacket[]>(`SELECT id,note,qty,guard,rank_value FROM ${table} ORDER BY id`))[0];
     await execute('原记录甲');
     const before = await read();
     await select('原记录甲', 2);
@@ -112,6 +113,26 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     expect(items.filter(item => item.outcome === 'committed').map(item => item.committedReportedRows).sort()).toEqual([1, 2]);
     expect(items.find(item => item.outcome === 'rolled-back')).toMatchObject({ evidence: { dmlAcknowledged: 1, rollbackAcknowledged: true } });
     expect(items.find(item => item.outcome === 'not-sent')).toMatchObject({ evidence: { dmlMayHaveBeenSent: false, rollbackAcknowledged: true } });
+    await paste.getByRole('button', { name: text.cancel, exact: true }).click();
+    await execute('粘贴甲');
+    const beforeSequence = await read();
+    await select('11', 1);
+    await query.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    const form = query.getByRole('region', { name: rangeFill.open, exact: true });
+    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption('sequence');
+    await form.getByRole('textbox', { name: rangeFill.sequenceStart, exact: true }).fill('18446744073709551615');
+    await form.getByRole('textbox', { name: rangeFill.sequenceStep, exact: true }).fill('-2');
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    await review(fill);
+    await expect(fill.getByRole('table')).toContainText('18446744073709551615');
+    expect(await read()).toEqual(beforeSequence);
+    await submit(fill);
+    await expect(fill).toBeHidden();
+    expect(await read()).toEqual([
+      { ...beforeSequence[0], rank_value: '18446744073709551615' },
+      { ...beforeSequence[1], rank_value: '18446744073709551613' },
+      beforeSequence[2],
+    ]);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
