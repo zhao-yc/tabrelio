@@ -200,7 +200,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         <button type="button" onClick={onClose}>{text.close}</button>
       </div>
       {replaceVisible && <div className="query-result-find-toolbar">
-        <input ref={replacementInput} aria-label={text.replacement} value={replacement} maxLength={pageFindLimits.replacement} disabled={!canReplace || locked}
+        <input ref={replacementInput} data-query-result-replace-input aria-label={text.replacement} value={replacement} maxLength={pageFindLimits.replacement} disabled={!canReplace || locked}
           onChange={event => { setReplacement(event.target.value); setError(''); }}/>
         {regex && <label className="check"><input type="checkbox" checked={capture} disabled={!canReplace || locked}
           onChange={event => { setCapture(event.target.checked); setError(''); }}/>{text.captures}</label>}

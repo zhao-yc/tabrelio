@@ -56,8 +56,11 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询文�
       await query.locator('.query-execute-split > button.primary').click();
       await expect(query.getByText(editText.inlineHint, { exact: true })).toBeVisible();
     };
-    const open = async (pattern: string) => {
-      await (await navigationMenuItem(query, { name: text.replaceOpen, exact: true })).click();
+    const open = async (pattern: string, shortcut = false) => {
+      if (shortcut) {
+        await query.getByRole('gridcell', { name: '9007199254740993', exact: true }).click();
+        await page.keyboard.press(process.platform === 'darwin' ? 'Alt+Meta+f' : 'Control+h');
+      } else await (await navigationMenuItem(query, { name: text.replaceOpen, exact: true })).click();
       await expect(panel).toBeVisible();
       await panel.getByRole('checkbox', { name: find.regex, exact: true }).check();
       await panel.getByRole('checkbox', { name: find.captures, exact: true }).check();
@@ -69,7 +72,7 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询文�
     const linked = async () => (await observer.query<RowDataPacket[]>(`SELECT note FROM ${database}.linked`))[0];
     const original = await read();
     await execute();
-    await open('(旧)([甲乙])');
+    await open('(旧)([甲乙])', true);
     await panel.getByLabel(find.column, { exact: true }).selectOption({ label: '正文' });
     await panel.getByRole('button', { name: find.one, exact: true }).click();
     await expect(review).toContainText(find.reviewCount(1, 1));

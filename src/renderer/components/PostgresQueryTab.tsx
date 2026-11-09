@@ -8,7 +8,7 @@ import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRec
 import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
-import { handleQueryResultShortcut } from '../queryResultShortcut';
+import { focusQueryResultReplacement, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -1344,9 +1344,11 @@ export function PostgresQueryTab({
   function replaceCurrent() {
     return !!activeReplace && resultCurrent() && !document.querySelector(appModalSelector);
   }
-  function openResultReplace() {
-    if (binding && canReplaceResult && resultCurrent() && !document.querySelector(appModalSelector))
-      setReplaceView({ binding, request: { replace: true } });
+  function openResultReplace(): boolean {
+    if (!binding || !canReplaceResult || !resultCurrent() || document.querySelector(appModalSelector)) return false;
+    if (activeReplace) { focusQueryResultReplacement(layoutRoot.current); return true; }
+    setReplaceView({ binding, request: { replace: true } });
+    return true;
   }
 
   /** 同一原列可以重复投影。整批替换只保留一份相同的原字段更新。 */
@@ -2005,7 +2007,8 @@ export function PostgresQueryTab({
     'save-query': { enabled: editable, run: openSaveQuery },
     'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },
     find: { enabled: editable, run: () => editorAction('actions.find') },
-    replace: { enabled: editable, run: () => editorAction('editor.action.startFindReplaceAction') },
+    replace: { enabled: editable || canReplaceResult,
+      run: () => runFocusedQueryReplace(layoutRoot.current, openResultReplace, () => editorAction('editor.action.startFindReplaceAction')) },
     'sql-goto-line': { enabled: editable, run: () => { if (!openFocusedGridRowJump()) return editorAction(sqlPositionActions['sql-goto-line']); } },
     'sql-toggle-comment': { enabled: editable, run: () => editorAction('editor.action.commentLine') },
     'sql-toggle-block-comment': { enabled: editable && !resultsOnly && editorSelection.single, run: toggleBlockComment },
@@ -2093,8 +2096,8 @@ export function PostgresQueryTab({
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
       onKeyDownCapture={event => {
         const focused = () => !!editor.current?.hasTextFocus();
-        if (!handleQueryExecutionShortcut(event, tab.id, focused))
-          handleQueryResultShortcut(event, focused, results.length, selectCurrentResult);
+        if (handleQueryExecutionShortcut(event, tab.id, focused) || handleQueryResultReplaceShortcut(event, openResultReplace)) return;
+        handleQueryResultShortcut(event, focused, results.length, selectCurrentResult);
       }}>
       <div className="context-bar">
         <strong>{profile?.name}</strong>

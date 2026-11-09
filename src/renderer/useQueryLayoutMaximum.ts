@@ -9,11 +9,13 @@ export function queryLayoutMaximum(height: number, chrome: number, maximum: numb
 /** 只沿本结果固定容器查找工具条及内容区，不扫描结果行或计划节点。 */
 function resultLayoutParts(children: Element[]){
   const child=(parent:Element|undefined,name:string)=>Array.from(parent?.children??[]).find(node=>node.classList.contains(name));
-  const body=children.find(node=>node.classList.contains('result-body')),details=child(body,'query-result-with-details'),holder=child(details,'query-result-grid'),copy=child(holder,'query-result-copy-region'),find=child(copy,'query-result-find-region');
+  const body=children.find(node=>node.classList.contains('result-body')),details=child(body,'query-result-with-details'),holder=child(details,'query-result-grid');
+  // PostgreSQL 用 display:contents 包裹替换区，其它查询页直接把替换区放在结果网格内。
+  const host=child(holder,'pg-find-host')??holder,replace=child(host,'pg-table-find'),copy=child(host,'query-result-copy-region'),find=child(copy,'query-result-find-region');
   const plan = child(body, 'explain-view');
   const chrome = plan ? Array.from(plan.children).filter(node => !node.classList.contains('explain-content'))
-    : [child(copy,'query-result-copy-actions'),child(find,'query-result-find-toolbar'),child(find,'query-result-find-status')].filter((node):node is Element=>!!node);
-  return { chrome, plan, grid: child(child(find,'query-result-find-grid')??holder,'results-grid') as HTMLElement|undefined };
+    : [replace,child(copy,'query-result-copy-actions'),child(find,'query-result-find-toolbar'),child(find,'query-result-find-status')].filter((node):node is Element=>!!node);
+  return { chrome, plan, grid: child(child(find,'query-result-find-grid')??host,'results-grid') as HTMLElement|undefined };
 }
 
 /** 布局包装层始终保留组件身份，测量时只展开这三层固定容器。 */

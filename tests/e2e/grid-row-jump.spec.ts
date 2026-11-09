@@ -700,6 +700,74 @@ test('SQLite 查询新增拒绝结构漂移，原执行新增能力只能暂存�
   } finally { observer.close(); }
 });
 
+test('SQLite 查询替换快捷键按当前焦点路由并保留原预览', async ({}, info) => {
+  await seed('SELECT id,name FROM subject WHERE id IN (1,2) ORDER BY id;', '', 'SELECT id,name FROM subject_view WHERE id=1;');
+  const query = page.locator('.query-tab:visible');
+  const editor = query.locator('.monaco-editor');
+  const editorReplace = editor.locator('.find-widget .replace-part textarea');
+  const panel = query.getByRole('region', { name: replaceText.title, exact: true });
+  const search = panel.getByLabel(replaceText.query, { exact: true });
+  const replacement = panel.getByLabel(replaceText.replacement, { exact: true });
+  const review = panel.getByRole('region', { name: replaceText.review, exact: true });
+  const cell = query.getByRole('gridcell', { name: '记录 1', exact: true });
+  const shortcut = process.platform === 'darwin' ? 'Alt+Meta+f' : 'Control+h';
+  const execute = () => query.locator('.query-execute-split > button.primary').click();
+  const menuReplace = async () => {
+    await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('replace')?.enabled)).toBe(true);
+    await desktop.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('replace'), [window] = BrowserWindow.getAllWindows();
+      if (!item?.enabled || !window) throw Error('没有可用的原生替换菜单');
+      item.click(item, window, {} as Electron.KeyboardEvent);
+    });
+  };
+
+  await execute();
+  await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+  await cell.click();
+  await page.keyboard.press(shortcut);
+  await expect(replacement).toBeFocused();
+  await expect(editorReplace).toBeHidden();
+  await search.fill('记录');
+  await replacement.fill('预览替换');
+  await cell.click();
+  await menuReplace();
+  await expect(replacement).toBeFocused();
+  await expect(search).toHaveValue('记录');
+  await expect(replacement).toHaveValue('预览替换');
+  await panel.getByRole('button', { name: replaceText.all, exact: true }).click();
+  await expect(review).toContainText(replaceText.reviewCount(2, 2));
+  await cell.click();
+  await page.keyboard.press(shortcut);
+  await expect(review).toBeVisible();
+  await info.attach('SQLite结果替换快捷键', { body: await page.screenshot(), contentType: 'image/png' });
+  await panel.getByRole('button', { name: replaceText.close, exact: true }).click();
+
+  await editor.locator('.view-lines').click();
+  await menuReplace();
+  await expect(editorReplace).toBeVisible();
+  await expect(panel).toBeHidden();
+  await page.keyboard.press('Escape');
+  await page.locator('[data-workspace-tab-id="q-copy-source"]').getByRole('button', { name: '复制来源', exact: true }).click();
+  await execute();
+  await cell.click();
+  const receipt = await page.evaluateHandle(() => {
+    const state = { seen: false, release: () => {} };
+    state.release = window.dbark.onCommand(command => { if (command.id === 'replace') state.seen = true; });
+    return state;
+  });
+  try {
+    await menuReplace();
+    await expect.poll(() => receipt.evaluate(state => state.seen)).toBe(true);
+    await expect(cell).toBeFocused();
+    await expect(editorReplace).toBeHidden();
+    await expect(panel).toBeHidden();
+  } finally {
+    await receipt.evaluate(state => state.release());
+    await receipt.dispose();
+  }
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite JOIN 查询替换原生文本，去重投影并回滚并发冲突', async ({}, info) => {
   await seed(`SELECT p.id AS 编号,p.note AS 正文,p.note AS 重复,p.mixed AS 混合,p.derived AS 生成,
        upper(p.note) AS 计算,l.note AS 连接

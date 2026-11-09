@@ -1,5 +1,5 @@
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
-import { handleQueryResultShortcut } from '../queryResultShortcut';
+import { focusQueryResultReplacement, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { sqliteStatementTimeoutMaximumMs, validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { appDialogSelector, appModalSelector } from '../modalSelectors';
 import { StatementNavigationController, type StatementNavigationView } from '../statementNavigationController';
@@ -1524,9 +1524,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     return !!view && sessionRef.current === view.sessionId && task.current === view.executionId &&
       resultSelectionAllowed(view.binding) && queryMenuCurrent();
   }
-  function openResultReplace(): void {
+  function openResultReplace(): boolean {
     if (!canReplaceResult || !selectionBinding || !sourceResult || !sessionRef.current ||
-        !resultSelectionAllowed(selectionBinding) || !queryMenuCurrent()) return;
+        !resultSelectionAllowed(selectionBinding) || !queryMenuCurrent()) return false;
+    if (activeReplace) { focusQueryResultReplacement(layoutRoot.current); return true; }
     setError('');
     const owner = { binding: selectionBinding, panel: { replace: true }, sessionId: sessionRef.current, executionId: task.current };
     if (sqliteReplaceColumns) {
@@ -1536,10 +1537,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         return column && keys.has(column.key) && origin?.database === 'main' && origin.table === recordEditTable
           ? [[column.key, origin.column] as const] : [];
       }));
-      if (!fields.size) { setError(originsText.replaceUnavailable); return; }
+      if (!fields.size) { setError(originsText.replaceUnavailable); return false; }
       setReplaceView({ ...owner, fields });
     } else setReplaceView({ ...owner,
       lookup: { connectionId: tab.connectionId, sessionId: owner.sessionId, executionId: owner.executionId, taskId: uid() } });
+    return true;
   }
   useEffect(() => {
     const lookup = replaceLookup?.lookup;
@@ -2588,7 +2590,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'next-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'next') },
     'syntax-check': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
-    replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
+    replace: { enabled: (!!searchEditor || canReplaceResult) && !closeRequest && !fileSource.busy,
+      run: () => runFocusedQueryReplace(layoutRoot.current, openResultReplace, () => openEditorFind(true)) },
     'sql-goto-line': {
       enabled: (!!selectionBinding || !!searchEditor?.getAction?.(sqlPositionActions['sql-goto-line'])) && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !openFocusedGridRowJump()) return openEditorPosition(); },
@@ -2624,6 +2627,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     onKeyDownCapture={event => {
       const focused = () => !!editor.current?.hasTextFocus();
       if (handleQueryExecutionShortcut(event, tab.id, focused)) return;
+      if (handleQueryResultReplaceShortcut(event, openResultReplace)) return;
       handleQueryResultShortcut(event, focused, results.length, index => {
         if (busyRef.current || fileSource.isBusy() || !queryMenuCurrent()) return false;
         if (pin || resultIndex !== index) selectCurrentResult(index);

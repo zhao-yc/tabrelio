@@ -1,7 +1,8 @@
 .query-result-with-details { display: flex; height: 100%; min-height: 0; min-width: 0; }
 .query-result-grid { flex: 1; min-width: 0; min-height: 0; }
-.query-tab .query-result-grid:has(> .pg-table-find) { display: flex; flex-direction: column; }
-.query-tab .query-result-grid:has(> .pg-table-find) > .query-result-copy-region { flex: 1; height: auto; }
+.query-tab .query-result-grid:has(> .pg-table-find, > .pg-find-host > .pg-table-find) { display: flex; flex-direction: column; }
+.query-tab .query-result-grid:has(> .pg-table-find) > .query-result-copy-region,
+.query-tab .query-result-grid > .pg-find-host:has(> .pg-table-find) > .query-result-copy-region { flex: 1; height: auto; }
 .query-row-details { width: clamp(260px, 34%, 480px); max-width: 70%; flex-shrink: 0; overflow: auto; padding: 12px; border-left: 1px solid var(--line); }
 .query-row-details header, .query-row-details footer, .query-row-details-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .query-row-details header { justify-content: space-between; }

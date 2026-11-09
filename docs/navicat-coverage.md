@@ -272,6 +272,8 @@
 
 2026-11-10 源码增量。SQLite 单表和 JOIN 主表结果支持可见范围内的原生 TEXT 替换、匹配预览及事务提交。计算列、生成列和连接表字段仍可查找。D02、Q05、R02 仍为部分覆盖。[使用说明](user-guide.md)
 
+2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询页按焦点将原生菜单及快捷键派发至结果替换或 SQL 编辑器，并保留已打开的结果替换输入和预览。D06、Q01、Q05 仍为部分覆盖。[使用说明](user-guide.md)
+
 2026-11-10 源码增量。MySQL 和 MariaDB 的可编辑 INNER JOIN、LEFT JOIN 结果可批量删除勾选的主表原记录，沿用原行、权限和事务回执校验。D02、Q05 仍为部分覆盖。[使用说明](user-guide.md)
 
 2026-11-10 源码增量。PostgreSQL 普通表的可核验 INNER JOIN、LEFT JOIN 结果支持按显示行号和完整主键预览并删除勾选的主表原记录。截断结果不开放该操作。D02、Q05、R01 仍为部分覆盖。[使用说明](user-guide.md)
