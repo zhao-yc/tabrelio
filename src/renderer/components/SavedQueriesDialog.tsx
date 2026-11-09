@@ -35,7 +35,6 @@ interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; cri
 interface DeleteEdit { items: readonly SelectedSavedQuery[]; selection: ReadonlyMap<string, SelectedSavedQuery>; epoch: number; }
 interface OpenSelection extends SelectedSavedQuery { connectionId?: string; }
 interface OpenBatch { selection: ReadonlyMap<string, OpenSelection>; targets: ReadonlyMap<string, string>; epoch: number; }
-interface ExternalEdit { queryId: string; session: SavedQueryExternalSession; }
 const selectQuery = ({ query, digest }: SavedQueryPageEntry): OpenSelection => ({ id: query.id, digest, name: query.name, connectionId: query.connectionId });
 const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database,
@@ -58,7 +57,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
   const [deleting, setDeleting] = useState<DeleteEdit>(), deleteRef = useRef<DeleteEdit | undefined>(undefined);
   const [opening, setOpening] = useState<OpenBatch>(), openRef = useRef<OpenBatch | undefined>(undefined);
-  const [external, setExternal] = useState<ExternalEdit>(), externalRef = useRef<ExternalEdit | true | undefined>(undefined);
+  const [external, setExternal] = useState<SavedQueryExternalSession>(), externalRef = useRef<SavedQueryExternalSession | true | undefined>(undefined);
   const openBatchTrigger = useRef<HTMLButtonElement>(null);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group, scope, sort }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
@@ -130,9 +129,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     void Promise.resolve(pending.current).then(() => { if (owns(ticket)) void load(false, criteriaRef.current, ticket); });
     return () => {
       alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; renameRef.current = undefined; deleteRef.current = undefined;
-      const activeEdit = externalRef.current;
       externalRef.current = undefined;
-      if (activeEdit && activeEdit !== true) void io.request('queries.externalKeep', { sessionId: activeEdit.session.sessionId }).catch(() => {});
       void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true));
     };
   }, []);
@@ -310,20 +307,23 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       && !pageView.current.needsRefresh && criteriaKey(criteriaRef.current) === applied && reply?.items.includes(item) === true;
   }
   /** 编辑副本以原卡片编号和摘要启动，列表在确认保留、丢弃或写回前保持原选择。 */
-  function beginExternal(item: SavedQueryPageEntry): void {
-    if (!editable() || !currentCard(item)) return;
+  function beginExternal(item?: SavedQueryPageEntry): void {
+    if (!editable() || item && !currentCard(item)) return;
     externalRef.current = true;
     const work = run(async ticket => {
-      const session = await io.request('queries.externalStart', { id: item.query.id, digest: item.digest });
-      if (!owns(ticket)) { await io.request('queries.externalKeep', { sessionId: session.sessionId }); return; }
-      const edit = { queryId: item.query.id, session };
-      externalRef.current = edit;
-      setExternal(edit);
+      const session = item
+        ? await io.request('queries.externalStart', { id: item.query.id, digest: item.digest })
+        : await io.request('queries.externalResume', {});
+      if (!owns(ticket)) return;
+      if (!session) { setNotice(externalText.noRecovery); return; }
+      externalRef.current = session;
+      setExternal(session);
+      if (!item && !session.committed) setNotice(externalText.recovered);
     });
     if (work) void work.finally(() => { if (externalRef.current === true) externalRef.current = undefined; });
     else externalRef.current = undefined;
   }
-  function finishExternal(edit: ExternalEdit, message: string) {
+  function finishExternal(edit: SavedQueryExternalSession, message: string) {
     if (externalRef.current !== edit) return;
     externalRef.current = undefined;
     setExternal(undefined);
@@ -453,7 +453,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           busy={busy || closing} onTarget={(id, connectionId) => changeOpenBatchTarget(opening, id, connectionId)}
           onCancel={cancelOpenBatch} onConfirm={() => applyOpenBatch(opening)}/>}
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p role="status">{notice}</p>}{busy && <Spinner/>}
-        {external && <SavedQueryExternalEditor key={external.session.sessionId} session={external.session} request={io.request} onDone={message => finishExternal(external, message)}/>}
+        {!external && <button disabled={blocked} onClick={() => beginExternal()}>{externalText.resume}</button>}
+        {external && <SavedQueryExternalEditor key={external.sessionId} session={external} request={io.request} onDone={message => finishExternal(external, message)}/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
           <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<button disabled={blocked || changed || needsRefresh} onClick={() => copySql(item)}>{sqlText.sqlCopy}</button><button disabled={blocked || changed || needsRefresh} title={t.sqlExportHint} onClick={() => exportSql(item)}>{t.sqlExport}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginExternal(item)}>{externalText.open}</button><label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>

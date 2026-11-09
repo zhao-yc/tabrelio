@@ -258,6 +258,8 @@ export interface CommandMap {
   'queries.readBatch': { input: import('./savedQuerySearch').SavedQueryReadBatchInput; output: { queries: SavedQueryOpenResult[] } };
   'queries.readText':{input:import('./savedQuerySearch').SavedQueryReadTextInput;output:import('./savedQuerySearch').SavedQueryReadTextResult};
   'queries.externalStart': { input: import('./savedQuerySearch').SavedQueryReadTextInput; output: SavedQueryExternalSession };
+  'queries.externalResume': { input: Record<string, never>; output: SavedQueryExternalSession | null };
+  'queries.externalReopen': { input: { sessionId: string }; output: void };
   'queries.externalPreview': { input: { sessionId: string }; output: SavedQueryExternalPreview };
   'queries.externalApply': { input: { sessionId: string; previewId: string }; output: SavedQueryExternalReceipt };
   'queries.externalDiscard': { input: { sessionId: string }; output: void };

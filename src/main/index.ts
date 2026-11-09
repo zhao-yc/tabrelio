@@ -1925,7 +1925,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (shuttingDown) throw Error('客户端正在退出，不能整理保存查询分组');
     return command === 'queries.organizationGet' ? store.queryOrganization() : store.applyQueryOrganization(input);
   }
-  if (command === 'queries.externalStart' || command === 'queries.externalPreview' || command === 'queries.externalApply' || command === 'queries.externalDiscard' || command === 'queries.externalKeep') {
+  if (command === 'queries.externalStart' || command === 'queries.externalPreview' || command === 'queries.externalApply' || command === 'queries.externalDiscard' || command === 'queries.externalKeep' || command === 'queries.externalResume' || command === 'queries.externalReopen') {
     const scope = { document: columns!.owner.document, assertCurrent: () => {
       columnsMain.assertCapturedOwner(columns);
       if (shuttingDown) throw Error('客户端正在退出，不能继续外部编辑');
@@ -1933,6 +1933,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     scope.assertCurrent();
     return queryFileOperation(async () => {
       if (command === 'queries.externalStart') return savedQueryExternal.start(input, scope);
+      if (command === 'queries.externalResume') return savedQueryExternal.resume(scope);
+      if (command === 'queries.externalReopen') return savedQueryExternal.reopen(input.sessionId, scope);
       if (command === 'queries.externalPreview') return savedQueryExternal.preview(input.sessionId, scope);
       if (command === 'queries.externalApply') return savedQueryExternal.apply(input.sessionId, input.previewId, scope);
       if (command === 'queries.externalKeep') return savedQueryExternal.keep(input.sessionId, scope);
@@ -3625,7 +3627,9 @@ else {
     });
     savedQueryExternal = new SavedQueryExternalEdit({
       temp: app.getPath('temp'), read: source => savedQuerySearches.readText(source).query,
-      update: (source, sql, check) => store.updateSavedQueryExternal(source, sql, check),
+      recovery: () => store.savedQueryExternalRecovery(),
+      saveRecovery: (record, check) => store.saveSavedQueryExternalRecovery(record, check),
+      update: (record, sql, check) => store.updateSavedQueryExternal(record, sql, check),
       prepare: () => externalSqlEditor.prepare(),
     });
     queryFileSources = new QueryFileSources({ store, report: taskEvent, reserve: path => exportReservations.acquire(path), prepareEditor: () => externalSqlEditor.prepare(), handoff: async (action, path) => {

@@ -169,6 +169,7 @@ export const publicCommands: Record<Command, true> = {
   'queryFileSources.handoff': true,
   'externalSqlEditor.status': true, 'externalSqlEditor.choose': true, 'externalSqlEditor.clear': true,
   'queries.externalStart': true, 'queries.externalPreview': true, 'queries.externalApply': true, 'queries.externalDiscard': true, 'queries.externalKeep': true,
+  'queries.externalResume': true, 'queries.externalReopen': true,
   'queryFileSources.cancel': true, 'queryFileSources.open': true, 'queryFileSources.save': true, 'queryFileSources.saveAs': true, 'queryFileSources.status': true, 'queryFileSources.release': true,
   'table.presets.list':true,'table.presets.save':true,'table.presets.delete':true,'table.presets.apply':true,
   'serverMonitor.read': true,

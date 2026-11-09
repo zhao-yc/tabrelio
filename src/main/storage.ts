@@ -1,6 +1,6 @@
 import { sameConnectionFamily } from '../shared/connectionDialect';
 import { savedQueryExternalZh } from '../shared/savedQueryExternalEdit';
-import type { SavedQueryReadTextInput } from '../shared/savedQuerySearch';
+import { savedQueryExternalRecordSchema, type SavedQueryExternalRecord } from './savedQueryExternalEdit';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetDocumentSchema, sqliteTablePresetLayoutsSchema, sqliteTablePresetLimits, type SqliteTablePresetTarget, type SqliteTablePresetDocument, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../shared/sqliteTablePresets';
 import { RecordTemplateStorage, readRecordTemplateDocuments } from './recordTemplateStorage';
 import type { RecordTemplateTarget, RecordTemplateSource } from '../shared/recordTemplates';
@@ -1107,8 +1107,26 @@ export class LocalStore {
     }, assertCurrent);
     this.queryRevisionValue++;
   }
-  /** 外部编辑只替换正文。旧连接、库状态、名称和分组沿用原记录，包括连接已经失效的查询。 */
-  updateSavedQueryExternal(source: SavedQueryReadTextInput, sql: string, assertCurrent: () => void): void {
+  /** 恢复记录只保存私有副本定位和原查询摘要，预览凭据与正文不写入恢复记录。 */
+  savedQueryExternalRecovery(): SavedQueryExternalRecord | undefined {
+    if (!this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='saved_query_external_recovery'").length) return undefined;
+    const [record] = this.records<unknown>('SELECT data FROM saved_query_external_recovery WHERE id=1');
+    return record === undefined ? undefined : savedQueryExternalRecordSchema.parse(record);
+  }
+
+  private writeSavedQueryExternalRecovery(record: SavedQueryExternalRecord | null): void {
+    this.db.run('CREATE TABLE IF NOT EXISTS saved_query_external_recovery (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)');
+    if (!record) this.db.run('DELETE FROM saved_query_external_recovery WHERE id=1');
+    else this.db.run('INSERT INTO saved_query_external_recovery VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(savedQueryExternalRecordSchema.parse(record))]);
+  }
+
+  saveSavedQueryExternalRecovery(record: SavedQueryExternalRecord | null, assertCurrent: () => void): void {
+    this.mutate(() => this.writeSavedQueryExternalRecovery(record), assertCurrent);
+  }
+
+  /** 正文与已写回标记同事务落盘。旧连接、库状态、名称和分组沿用原记录。 */
+  updateSavedQueryExternal(record: SavedQueryExternalRecord, sql: string, assertCurrent: () => void): void {
+    const { source } = record;
     this.mutate(() => {
       assertCurrent();
       const previous = this.querySearchRaw(source.id);
@@ -1119,6 +1137,7 @@ export class LocalStore {
       const updatedAt = new Date(Number.isFinite(old) ? Math.max(now, old + 1) : now).toISOString();
       const query = parseSavedQueryRecord(source.id, JSON.stringify({ ...current, sql, updatedAt }));
       this.db.run('UPDATE queries SET data=?,updated_at=? WHERE id=?', [JSON.stringify(query), updatedAt, source.id]);
+      this.writeSavedQueryExternalRecovery(record);
     }, assertCurrent);
     this.queryRevisionValue++;
   }

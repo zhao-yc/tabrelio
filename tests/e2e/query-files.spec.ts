@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import iconv from 'iconv-lite';
 import type { FileChoice, TaskRecord } from '../../src/shared/contracts';
 import { queryFileSourceRefSchema } from '../../src/shared/queryFileSources';
-import { test, expect, desktop, page, dataDir, pageErrors, launchDesktop, quitDesktop } from './desktop-fixture';
+import { test, expect, desktop, page, dataDir, pageErrors, launchDesktop, quitDesktop, answerDialogs, dialogCalls } from './desktop-fixture';
 import { beginQueryFileSaveObservation } from '../helpers/queryFileSaveObservation';
 
 type Encoding = 'utf8' | 'utf16le' | 'gb18030';
@@ -240,16 +240,20 @@ test.describe('离线 SQL 文件打开与另存', () => {
     await expectNoSqlExecution([{ kind: 'queryFileSources.open', status: 'completed' }]);
   });
 
-  test('从保存查询启动外部编辑，复核预览后只写回该查询', async ({}, testInfo) => {
+  test('从保存查询启动外部编辑，重启恢复副本后只写回该查询', async ({}, testInfo) => {
     test.skip(process.platform !== 'darwin', '该用例使用 macOS LaunchServices 和 AppleScript 夹具');
     const { appPath, receipt } = compileSqlEditorFixture(await realpath(dataDir), '保存查询外部编辑器');
     await chooseNativeFile('open', appPath);
     expect((await page.evaluate(() => window.dbark.invoke('externalSqlEditor.choose', {}))).path).toBe(appPath);
     const query = { id: 'external-query-fixture', name: '外部编辑的保存查询', sql: 'SELECT 1;\r\n-- 原文', database: '遗留库', updatedAt: '' };
     await page.evaluate(query => window.dbark.invoke('queries.save', query), query);
-    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '已保存查询', exact: true })).click();
-    const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true });
-    await dialog.getByRole('button', { name: '保存的查询', exact: true }).click();
+    async function openLibrary() {
+      await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '已保存查询', exact: true })).click();
+      const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true });
+      await dialog.getByRole('button', { name: '保存的查询', exact: true }).click();
+      return dialog;
+    }
+    const dialog = await openLibrary();
     const card = dialog.locator('.history-card').filter({ hasText: query.name });
     await card.getByRole('button', { name: '用外部编辑器编辑', exact: true }).click();
     const panel = dialog.getByRole('region', { name: '保存查询的外部编辑', exact: true });
@@ -268,11 +272,27 @@ test.describe('离线 SQL 文件打开与另存', () => {
     const persisted = () => page.evaluate(() => window.dbark.invoke('queries.list', {}));
     expect(await persisted()).toEqual([{ ...query, updatedAt: expect.any(String) }]);
     await read.click();
-    await expect(panel.getByLabel('外部编辑后的片段')).toContainText('新版精确尾部 🚢');
-    await page.screenshot({ path: testInfo.outputPath('saved-query-external-preview.png') });
-    await apply.click();
-    await expect(panel).toBeHidden();
-    await expect(card.locator('pre')).toContainText('新版精确尾部 🚢');
+    await expect(apply).toBeEnabled();
+    await answerDialogs([1]);
+    await quitDesktop();
+    expect(dialogCalls).toContainEqual(expect.objectContaining({ title: '仍有待完成的工作', response: 1 }));
+    await launchDesktop();
+    expect(await persisted()).toEqual([{ ...query, updatedAt: expect.any(String) }]);
+    const restartedLibrary = await openLibrary();
+    await restartedLibrary.getByRole('button', { name: '继续外部编辑', exact: true }).click();
+    const resumed = restartedLibrary.getByRole('region', { name: '保存查询的外部编辑', exact: true });
+    await expect(resumed.getByLabel('编辑副本路径')).toHaveValue(path);
+    const confirm = resumed.getByRole('button', { name: '写回原保存查询', exact: true });
+    await expect(confirm).toBeDisabled();
+    await writeFile(receipt, '');
+    await resumed.getByRole('button', { name: '重新打开编辑副本', exact: true }).click();
+    await expect.poll(() => readFile(receipt, 'utf8').catch(() => '')).toBe(path);
+    await resumed.getByRole('button', { name: '读取外部改动', exact: true }).click();
+    await expect(resumed.getByLabel('外部编辑后的片段')).toContainText('新版精确尾部 🚢');
+    await resumed.screenshot({ path: testInfo.outputPath('saved-query-external-recovery.png') });
+    await confirm.click();
+    await expect(resumed).toBeHidden();
+    await expect(restartedLibrary.locator('.history-card').filter({ hasText: query.name }).locator('pre')).toContainText('新版精确尾部 🚢');
     expect(await persisted()).toEqual([{ ...query, sql: latest, updatedAt: expect.any(String) }]);
     await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
     await expectNoSqlExecution();

@@ -6,7 +6,7 @@ import { ErrorBox, Field, Spinner } from './ui';
 /** 面板只持会话和预览编号，确认时不从渲染进程发送 SQL 或路径。 */
 export function SavedQueryExternalEditor({ session, request, onDone }: { session: SavedQueryExternalSession; request: typeof invoke; onDone(message: string): void }) {
   const [preview, setPreview] = useState<SavedQueryExternalPreview>();
-  const [committed, setCommitted] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [committed, setCommitted] = useState(session.committed), [error, setError] = useState(session.launchFailed ? text.reopenFailed : ''), [busy, setBusy] = useState(false);
   const active = useRef(false);
   const input = { sessionId: session.sessionId };
   async function run(action: () => Promise<void>) {
@@ -42,6 +42,7 @@ export function SavedQueryExternalEditor({ session, request, onDone }: { session
     </>}
     <ErrorBox message={error}/>
     <div className="inline-field">
+      {!committed && <button disabled={busy} onClick={() => void run(() => request('queries.externalReopen', input))}>{text.reopen}</button>}
       {!committed && <button disabled={busy} onClick={read}>{text.read}</button>}
       {!committed && <button className="primary" disabled={busy || !preview?.changed} onClick={save}>{text.apply}</button>}
       <button disabled={busy} onClick={() => void run(async () => { await request('queries.externalDiscard', input); onDone(committed ? text.saved : ''); })}>{committed ? text.retryCleanup : text.discard}</button>
