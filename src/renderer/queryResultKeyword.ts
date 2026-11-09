@@ -33,12 +33,13 @@ export function matchQueryResultKeyword(source: QueryResult, columns: readonly R
 }
 
 /** 在已整理行中保持顺序和原行引用，同步投影 SQLite 逐格存储类型。 */
+export function projectQueryResultRows(result: QueryResult, indices: readonly number[]): QueryResult {
+  const rows = indices.map(index => result.rows[index]);
+  return Object.freeze({ ...result, rows: Object.freeze(rows) as QueryResult['rows'], ...projectSqliteResultStorage(result, indices) });
+}
+
 export function projectQueryResultKeyword(result: QueryResult, matches: ReadonlySet<DataRow>): QueryResult {
   const indices: number[] = [];
-  const rows = result.rows.filter((row, index) => {
-    if (!matches.has(row)) return false;
-    indices.push(index);
-    return true;
-  });
-  return Object.freeze({ ...result, rows: Object.freeze(rows) as QueryResult['rows'], ...projectSqliteResultStorage(result, indices) });
+  result.rows.forEach((row, index) => { if (matches.has(row)) indices.push(index); });
+  return projectQueryResultRows(result, indices);
 }

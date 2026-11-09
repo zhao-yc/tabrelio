@@ -14,6 +14,8 @@ import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
+import { queryResultSortZh as resultSort } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
@@ -142,6 +144,49 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
     }
     expect(await tasks()).toEqual(originalTasks);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('查询结果只显示匹配行可保留排序和筛选并恢复原范围', async () => {
+  await seed();
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^id/i });
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  const keyword = query.getByRole('searchbox', { name: keywordText.input, exact: true });
+  await keyword.fill('记录 1');
+  await keyword.press('Enter');
+  const keywordStatus = query.getByRole('search', { name: keywordText.input }).getByRole('status');
+  await expect(keywordStatus).toHaveText(keywordText.counts(92, 180));
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const before = await history();
+  async function showMatches(pattern: string, count: number) {
+    await query.getByRole('button', { name: resultFind.open, exact: true }).click();
+    await query.getByRole('combobox', { name: resultFind.mode, exact: true }).selectOption({ label: resultFind.modes.regex });
+    await query.getByRole('textbox', { name: resultFind.input, exact: true }).fill(pattern);
+    await expect(query.locator('.query-result-find-status').getByRole('status')).toHaveText(count ? resultFind.count(count, -1) : resultFind.noMatch);
+    await query.getByRole('button', { name: resultFind.showMatchingRows, exact: true }).click();
+    await expect(query.getByText(resultFind.matchViewCount(count, 92), { exact: true })).toBeVisible();
+  }
+  await showMatches('^记录 (?:1|180)$', 2);
+  await expect(grid.getByRole('gridcell').filter({ hasText: /^记录 / })).toHaveText(['记录 1', '记录 180']);
+  await expect(keywordStatus).toHaveText(keywordText.counts(92, 180));
+  await (await navigationMenuItem(query, { name: zh.resultExport.title, exact: true })).click();
+  const dialog = page.getByRole('dialog', { name: zh.resultExport.title, exact: true });
+  await expect(dialog.getByText('已返回 2 行', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: zh.common.close, exact: true }).click();
+  const clear = query.getByRole('button', { name: resultFind.clearMatchView, exact: true });
+  await clear.click();
+  await expect(clear).toHaveCount(0);
+  await expect(grid.getByRole('gridcell', { name: '记录 10', exact: true })).toBeVisible();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  await showMatches('^不存在$', 0);
+  await expect(grid.getByRole('gridcell')).toHaveCount(0);
+  await query.getByRole('button', { name: keywordText.clear, exact: true }).click();
+  await expect(clear).toHaveCount(0);
+  await expect(grid.getByRole('gridcell', { name: '记录 2', exact: true })).toBeVisible();
+  expect(await history()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

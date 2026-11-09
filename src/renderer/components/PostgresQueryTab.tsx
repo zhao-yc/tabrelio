@@ -53,6 +53,7 @@ import { postgresQueryExportZh as fullExportText } from '../locales/postgresQuer
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultKeyword, useQueryResultKeyword } from './QueryResultKeyword';
+import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
@@ -1032,7 +1033,8 @@ export function PostgresQueryTab({
     filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
   const organizedResult = sortView?.result ?? filterView?.result ?? result;
   const keywordFilter = useQueryResultKeyword(filterBinding?.source, visibleColumns, resultContext, organizedResult);
-  const displayResult = keywordFilter.result;
+  const matchView = useQueryResultMatchView(keywordFilter.result, visibleColumns, resultContext);
+  const displayResult = matchView.result;
   const dataResult = !busy && resultSource ? displayResult : undefined;
   const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
     resultContext, visibleColumns);
@@ -1527,6 +1529,19 @@ export function PostgresQueryTab({
       return false;
     }
   }
+  function changeMatchView(indices?: ReadonlySet<number>): void {
+    if (!resultCurrent() || document.querySelector(appModalSelector)) return;
+    const invalidate = () => {
+      resultSelection.invalidate();
+      rowDetails.invalidate();
+      setRowDetail(undefined);
+      setActiveDetailRow(undefined);
+    };
+    try {
+      if (indices) matchView.apply(indices, invalidate);
+      else matchView.clear(invalidate);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
 
   /** 打开时冻结导出内容，不通过会话、SQL 或数据库连接再次读取。 */
   function openResultExport(selectedOnly: boolean) {
@@ -2013,11 +2028,13 @@ export function PostgresQueryTab({
             <button disabled={locked || !resultLocationAvailable}
               title={resultLocationAvailable ? text.locateResult : text.locateResultUnavailable} onClick={locateResultSource}>{text.locateResult}</button>
           </div>}
-          {filterBinding && organizedResult && displayResult && <QueryResultKeyword key={keywordFilter.generation}
-            keyword={keywordFilter.keyword} total={organizedResult.rows.length} matched={displayResult.rows.length}
+          {filterBinding && organizedResult && keywordFilter.result && <QueryResultKeyword key={keywordFilter.generation}
+            keyword={keywordFilter.keyword} total={organizedResult.rows.length} matched={keywordFilter.result.rows.length}
             disabled={locked || !binding}
             onApply={keyword => resultCurrent() && filterCurrent() && !document.querySelector(appModalSelector) &&
               keywordFilter.apply(keyword, () => resultSelection.invalidate())} />}
+          {matchView.active && <QueryResultMatchView active={matchView.active} disabled={locked || !binding}
+            onClear={() => changeMatchView()}/>}
           <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>
             {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
               !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
@@ -2027,6 +2044,7 @@ export function PostgresQueryTab({
                     <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
                       frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
                       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
+                      onShowMatchingRows={binding ? changeMatchView : undefined}
                       onExportRange={binding ? result => {
                         if (!resultCurrent() || document.querySelector(appModalSelector)) return;
                         exportOpen.current = true;
