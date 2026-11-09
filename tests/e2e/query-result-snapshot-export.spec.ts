@@ -9,6 +9,7 @@ import { queryResultFilterZh as filter } from '../../src/renderer/locales/queryR
 import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { gridRangeExportZh as rangeText } from '../../src/renderer/locales/gridRangeExport.zh-CN';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
+import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { queryResultSnapshotFileMessages as filesText } from '../../src/main/queryResultSnapshotFiles';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
@@ -204,11 +205,19 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
       await dialog.getByRole('button', { name: zh.common.done, exact: true }).click();
       await expect(viewer).toBeVisible();
     };
+    const manageColumns = viewer.getByRole('button', { name: columnText.open, exact: true });
+    const columnsDialog = page.getByRole('dialog', { name: columnText.title, exact: true });
+    const payloadColumn = columnsDialog.getByRole('checkbox', { name: columnText.visible(3), exact: true });
+    await manageColumns.click();
+    await payloadColumn.uncheck();
+    await columnsDialog.getByRole('button', { name: columnText.apply, exact: true }).click();
+    await expect(viewer.getByText(text.visibleColumns(2, 3), { exact: true })).toBeVisible();
+    await expect(viewer.getByRole('columnheader').filter({ hasText: '字节' })).toHaveCount(0);
     await shown.click();
     await save(text.exportShown, 'csv', 2, '匹配行.csv');
     await expect(shown).toBeFocused();
     expect((await readFile(csv, 'utf8')).replace(/^\uFEFF/, '')).toBe(
-      '内容,金额,字节\r\n匹配丙,9007199254740993.0002,\\N\r\n匹配甲,9007199254740993.0002,\\N\r\n');
+      '内容,金额\r\n匹配丙,9007199254740993.0002\r\n匹配甲,9007199254740993.0002\r\n');
     await labels.first().click();
     await page.keyboard.press('Shift+ArrowDown');
     await page.keyboard.press('Shift+ArrowRight');
@@ -230,6 +239,10 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await expect(labels).toHaveText(['匹配丙', '匹配甲', '匹配乙']);
     await viewer.getByRole('button', { name: find.clearMatchView, exact: true }).click();
     await expect(labels).toHaveText(['范围外', '匹配丙', '匹配甲', '匹配乙', '勾选行']);
+    await manageColumns.click();
+    await payloadColumn.check();
+    await columnsDialog.getByRole('button', { name: columnText.apply, exact: true }).click();
+    await expect(viewer.getByRole('columnheader').filter({ hasText: '字节' })).toBeVisible();
     const rowCheck = viewer.getByRole('row').filter({ hasText: '勾选行' }).getByRole('checkbox');
     await rowCheck.check();
     await checked.click();

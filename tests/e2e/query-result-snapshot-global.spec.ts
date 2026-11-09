@@ -27,6 +27,7 @@ function register(): void {
   const { queryResultHistoryZh: historyText } = require('../../src/renderer/locales/queryResultHistory.zh-CN') as typeof import('../../src/renderer/locales/queryResultHistory.zh-CN');
   const { queryRowDetailsZh: detailText } = require('../../src/renderer/locales/queryRowDetails.zh-CN') as typeof import('../../src/renderer/locales/queryRowDetails.zh-CN');
   const { queryReadonlyRecordZh: recordText } = require('../../src/renderer/locales/queryReadonlyRecord.zh-CN') as typeof import('../../src/renderer/locales/queryReadonlyRecord.zh-CN');
+  const { queryResultColumnsZh: columnText } = require('../../src/renderer/locales/queryResultColumns.zh-CN') as typeof import('../../src/renderer/locales/queryResultColumns.zh-CN');
   const { queryResultComparisonZh: comparisonText } = require('../../src/renderer/locales/queryResultComparison.zh-CN') as typeof import('../../src/renderer/locales/queryResultComparison.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
@@ -391,6 +392,19 @@ function register(): void {
         await step(() => comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click());
         await step(() => expect(compare).toBeFocused());
         await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
+        await step(() => viewer.getByRole('button', { name: columnText.open, exact: true }).click());
+        const columns = page.getByRole('dialog', { name: columnText.title, exact: true });
+        await step(() => columns.getByRole('checkbox', { name: columnText.visible(3), exact: true }).uncheck());
+        await step(() => columns.getByRole('button', { name: columnText.up(2), exact: true }).click());
+        await step(() => columns.getByRole('button', { name: columnText.freezeThrough(2), exact: true }).click());
+        await step(() => columns.getByRole('textbox', { name: columnText.width(2), exact: true }).fill('220'));
+        await step(async () => info.attach('离线快照列布局', { body: await page.screenshot(), contentType: 'image/png' }));
+        await step(() => columns.getByRole('button', { name: columnText.apply, exact: true }).click());
+        await step(() => expect(viewer.getByText(text.visibleColumns(9, 10), { exact: true })).toBeVisible());
+        await step(() => expect(big).toHaveCount(0));
+        await step(() => expect(match).toHaveAttribute('aria-colindex', '2'));
+        await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
+        await step(() => expect(viewer.getByRole('button', { name: sortText.clear, exact: true })).toBeVisible());
         await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('save'))); await step(async () => (await navigationMenuItem(viewer, { name: text.save, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.getByText(text.saved(basename(savedPath)), { exact: true })).toBeVisible());
         const saved = await step(() => readFile(savedPath)); savedSha256 = hash(saved); const independent = JSON.parse(saved.toString('utf8'));
         expect(Object.keys(independent).sort()).toEqual(['kind', 'name', 'result', 'version']); expect(independent.name).toBe(expectedWire.name); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);

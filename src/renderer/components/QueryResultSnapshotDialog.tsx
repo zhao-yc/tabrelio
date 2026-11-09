@@ -1,11 +1,13 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ColumnWidths } from 'react-data-grid';
 import type { QueryResult, ResultColumn } from '../../shared/contracts';
 import { parseQueryResultSnapshot, type QueryResultSnapshotDocument } from '../../shared/queryResultSnapshot';
 import { queryResultSnapshotViewerZh as text } from '../locales/queryResultSnapshotViewer.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
-import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
+import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, type QueryResultColumnLayout } from '../queryResultColumns';
 import type { GridRangeExportData } from '../gridRangeExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView, type SortDialect } from '../queryResultSort';
 import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterRule, type QueryResultFilterView } from '../queryResultFilter';
@@ -19,6 +21,7 @@ import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN'
 import { queryResultStatisticsZh as statisticsText } from '../locales/queryResultStatistics.zh-CN';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
 import { queryRowDetailsZh as detailText } from '../locales/queryRowDetails.zh-CN';
+import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
@@ -26,6 +29,7 @@ import { QueryResultComparisonDialog, type QueryResultComparisonSource } from '.
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
+import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
 import { escapeTargetsQueryResultFind } from './QueryResultFind';
 import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
 import { SqlEditor } from './SqlEditor';
@@ -47,7 +51,8 @@ type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initi
 type SnapshotComparison = { kind: 'compare'; owner: string; source: Loaded; files: readonly QueryResultComparisonSource[]; dialect?: SortDialect };
 type SnapshotStatistics = { kind: 'statistics'; owner: string; source: Loaded; result: QueryResult; column: ResultColumn; indices: ReadonlySet<number> };
 type SnapshotRowDetail = { kind: 'row-detail'; source: Loaded; view: QueryRowDetailsView };
-type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison | SnapshotStatistics | SnapshotRowDetail |
+type SnapshotColumns = { kind: 'columns'; owner: string; binding: ResultSelectionBinding; initial: QueryResultColumnLayout };
+type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison | SnapshotStatistics | SnapshotRowDetail | SnapshotColumns |
   { kind: 'export'; scope: 'snapshot' | 'rectangle'; result: GridRangeExportData; selected: boolean };
 
 /** 全局查看只持有文件内容，不创建查询、连接或会话；原文件Promise包括主进程清理。 */
@@ -59,6 +64,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const [history] = useState(() => new QueryResultHistory());
   const [rowDetails] = useState(() => new QueryRowDetails());
   const [activeDetail, setActiveDetail] = useState<{ scope: object; result: QueryResult; index: number }>();
+  const [columnLayout, setColumnLayout] = useState<{ layout: QueryResultColumnLayout; columns: ResultColumn[] }>();
   const [, refreshSelection] = useState(0);
   const returnFocus = useRef<HTMLElement | null>(null);
   const exportTrigger = useRef<HTMLButtonElement | null>(null);
@@ -79,10 +85,13 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     { expression: filterView.expression, sort: sortView.rules }) : undefined;
   const matches = useQueryResultMatchView(sortView?.result ?? filterView?.result ?? sourceResult, sourceResult?.columns, [loaded?.scope]);
   const displayed = matches.result;
+  const visibleColumns = columnLayout?.columns ?? displayed?.columns;
+  const frozenKeys = useMemo(() => displayed && columnLayout ? frozenQueryResultKeys(displayed.columns, columnLayout.layout) : undefined,
+    [displayed, columnLayout]);
   const detailBinding = rowDetails.bind(displayed, [loaded?.scope]);
   const detailIndex = loaded && displayed && detailBinding && activeDetail?.scope === loaded.scope && activeDetail.result === displayed
     ? activeDetail.index : undefined;
-  const binding = exportSelection.bind(displayed, [loaded?.scope]);
+  const binding = exportSelection.bind(displayed, [loaded?.scope], visibleColumns);
   const checkedCount = exportSelection.count(binding);
   useLayoutEffect(() => { alive.current = true; lifetime.current++; return () => { alive.current = false; lifetime.current++; }; }, []);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = null; }; });
@@ -209,6 +218,45 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     return alive.current && overlayRef.current === draft && loadedRef.current === draft.source &&
       displayed === draft.view.binding.result && !operation.current;
   }
+  /** 列布局只改变网格投影，原结果仍用于筛选、排序、详情和完整另存。 */
+  function openColumns(trigger: HTMLButtonElement): void {
+    if (!editable() || !binding || !exportSelection.current(binding)) return;
+    try {
+      const keys = queryResultColumnKeys(binding.columns);
+      openOverlay({ kind: 'columns', owner: uid(), binding, initial: columnLayout?.layout ?? { order: keys, visible: keys } }, trigger);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  function columnsCurrent(draft: SnapshotColumns): boolean {
+    if (!alive.current || overlayRef.current !== draft || !exportSelection.current(draft.binding) || operation.current) return false;
+    const viewer = ownDialog();
+    const owned = document.querySelector(`[data-query-columns-owner="${draft.owner}"]`)?.querySelector(appModalSelector);
+    return !!viewer && Array.from(document.querySelectorAll(appModalSelector)).every(dialog => dialog === viewer || dialog === owned);
+  }
+  /** 仅列身份或顺序变化才清空网格勾选，宽度和行高不会改动选择。 */
+  function applyColumns(draft: SnapshotColumns, layout: QueryResultColumnLayout): void {
+    if (!columnsCurrent(draft)) return;
+    const columns = queryResultVisibleColumns(draft.binding.columns, layout), previous = draft.binding.visibleColumns;
+    const changed = columns.length !== previous.length || columns.some((column, index) => column !== previous[index]);
+    if (changed) exportSelection.invalidate();
+    setColumnLayout({ layout, columns: changed ? columns : previous });
+    closeOverlay(draft);
+  }
+  /** 拖动只更新已显示列的像素值，保留当前显示行、列序及勾选。 */
+  function resizeColumns(sizes: ColumnWidths): void {
+    if (!loaded || !displayed || !visibleColumns || !gridCurrent(loaded, interaction, false)) return;
+    const widths = new Map(columnLayout?.layout.widths);
+    let changed = false;
+    for (const { key } of visibleColumns) {
+      const size = sizes.get(key);
+      if (size?.type !== 'resized' || !Number.isFinite(size.width)) continue;
+      const width = Math.max(queryResultColumnWidth.min, Math.min(queryResultColumnWidth.max, Math.round(size.width)));
+      if (width === widths.get(key)) continue;
+      widths.set(key, width); changed = true;
+    }
+    if (!changed) return;
+    const keys = displayed.columns.map(column => column.key);
+    setColumnLayout({ layout: { ...(columnLayout?.layout ?? { order: keys, visible: keys }), widths }, columns: visibleColumns });
+  }
   function sortDraftCurrent(draft: SnapshotSort): boolean {
     return alive.current && overlayRef.current === draft && sorter.view(draft.binding) === draft.initial;
   }
@@ -245,19 +293,19 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   /** 用显示投影里的原格构造条件，SQLite 仍以投影后的逐格存储类型为准。 */
   function openCellFilter(cell: QueryResultCopyCell, operator: CellFilterOperator): void {
-    if (!editable() || !displayed || !filterView || !filterTrigger.current) return;
+    if (!editable() || !displayed || !visibleColumns || !filterView || !filterTrigger.current) return;
     try {
-      const capture = captureQueryResultCellFilter(displayed.columns, displayed.rows, cell,
+      const capture = captureQueryResultCellFilter(visibleColumns, displayed.rows, cell,
         displayed.sqliteStorage ? displayed : undefined, dialect);
       openFilter(filterTrigger.current, appendQueryResultFilterNode(filterView.expression, queryResultCellFilterNode(capture, operator)));
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 选区和勾选各核自己的显示范围，草稿追加到完整快照的既有条件。 */
   function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false): void {
-    if (!loaded || !displayed || !filterBinding || !filterView || !filterTrigger.current) return;
+    if (!loaded || !displayed || !visibleColumns || !filterBinding || !filterView || !filterTrigger.current) return;
     const current = () => editable() && loadedRef.current === loaded && filter.view(filterBinding) === filterView &&
       (rangeCurrent ? rangeCurrent() : exportSelection.matchesIndices(binding, capture.indices)) &&
-      currentQueryResultSelectedFilter(capture, displayed.columns, displayed.rows, displayed);
+      currentQueryResultSelectedFilter(capture, visibleColumns, displayed.rows, displayed);
     if (!current()) return;
     try {
       const seed = appendQueryResultFilterNode(filterView.expression, queryResultSelectedFilterNode(capture, exclude));
@@ -354,7 +402,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
         } else {
           const next = { name: selected.name, snapshot, scope: {} }; loadedRef.current = next;
           history.invalidate();
-          setLoaded(next); setOrganization(undefined); setShowSql(false); setMessage('');
+          setLoaded(next); setOrganization(undefined); setColumnLayout(undefined); setShowSql(false); setMessage('');
         }
       } else {
         const saved = await port.save(active.source!.snapshot);
@@ -381,6 +429,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button ref={exportTrigger} disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
       <button ref={filterTrigger} disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
+      <button disabled={!!busy || !binding} onClick={event => openColumns(event.currentTarget)}>{columnText.open}</button>
       <button disabled={!!busy || detailIndex === undefined} title={detailText.choose}
         onClick={event => openRowDetail(event.currentTarget)}>{detailText.open}</button>
       <button disabled={!!busy || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
@@ -394,9 +443,10 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button>
     </div>
     <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : busy === 'compare' ? text.comparingFile : text.saving}/>} {message && <p role="status">{message}</p>}
-    {loaded && displayed ? <>
+    {loaded && displayed && visibleColumns ? <>
       <p role="status">{text.opened(loaded.name)}</p>
       <p>{text.count(loaded.snapshot.result.rows.length, displayed.columns.length)}</p>
+      {visibleColumns.length < displayed.columns.length && <p>{text.visibleColumns(visibleColumns.length, displayed.columns.length)}</p>}
       {loaded.snapshot.result.truncated && <p className="warning-text">{text.truncated}</p>}
       {!!filterView?.rules.length && <div className="query-result-keyword">
         <span role="status">{filterText.counts(loaded.snapshot.result.rows.length, filterView.result.rows.length)}</span>
@@ -404,7 +454,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       </div>}
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
-        <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
+        <ResultsGrid columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
+          frozenKeys={frozenKeys} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
+          onColumnWidthsChange={binding ? resizeColumns : undefined}
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
           ownDialog={ownDialog} filterDialect={dialect} onFilterSelected={filterView ? openSelectedFilter : undefined}
@@ -431,6 +483,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     </Modal>}
     {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} pins={overlay.files} dialect={overlay.dialect}
       isCurrent={() => comparisonCurrent(overlay)} onClose={() => closeOverlay(overlay)}/>}
+    {overlay?.kind === 'columns' && <QueryResultColumnsDialog binding={overlay.binding} initial={overlay.initial} owner={overlay.owner}
+      isCurrent={() => columnsCurrent(overlay)} onApply={layout => applyColumns(overlay, layout)} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'statistics' && <QueryResultStatisticsDialog owner={overlay.owner} columns={overlay.result.columns}
       rows={overlay.result.rows} initialColumn={overlay.column} selectedIndices={overlay.indices} truncated={overlay.result.truncated}
       sqliteSource={overlay.result.sqliteStorage ? overlay.result : undefined} dialect={dialect}
