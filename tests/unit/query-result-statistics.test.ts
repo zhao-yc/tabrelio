@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DataRow, ResultColumn } from '../../src/shared/contracts';
-import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultQualityOverviewScan, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
+import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilters, QueryResultQualityOverviewScan, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import type { SortDialect } from '../../src/renderer/queryResultSort';
 
@@ -41,7 +41,7 @@ describe('PostgreSQL 当前结果列统计', () => {
     expect(result.standardDeviation).toBeUndefined();
     const frequency = result.frequency!;
     expect(frequency.entries[0]).toMatchObject({ label: 'NaN', count: 2 });
-    expect(queryResultFrequencyFilter(frequency, frequency.entries[0])).toMatchObject({ operator: 'eq', value: 'NaN' });
+    expect(queryResultFrequencyFilters(frequency, [frequency.entries[0]])).toMatchObject({ operator: 'eq', value: 'NaN' });
   });
 
   it('浮点使用有界有限比较值，布尔值可以分布但不做数值合计', () => {
@@ -53,7 +53,7 @@ describe('PostgreSQL 当前结果列统计', () => {
       { label: 'f', kind: 'boolean', count: 2 }, { label: 't', kind: 'boolean', count: 1 },
     ] } });
     expect(result.sum).toBeUndefined();
-    expect(queryResultFrequencyFilter(result.frequency!, result.frequency!.entries[0])).toMatchObject({ operator: 'eq', value: 'f' });
+    expect(queryResultFrequencyFilters(result.frequency!, [result.frequency!.entries[0]])).toMatchObject({ operator: 'eq', value: 'f' });
   });
 });
 
@@ -64,12 +64,19 @@ describe('当前已返回行的常见值分布', () => {
     const frequency = finish(new QueryResultStatisticsScan(f.capture, true)).frequency!;
     const [first, second] = frequency.entries;
     expect(first.label).toBe(second.label);
-    expect(queryResultFrequencyFilter(frequency, first)).toMatchObject({ column: 'k', operator: 'eq', value: prefix + '乙' });
-    expect(queryResultFrequencyFilter(frequency, second)).toMatchObject({ column: 'k', operator: 'eq', value: prefix + '丙' });
-    expect(queryResultFrequencyFilter(frequency, null)).toEqual({ column: 'k', operator: 'null', value: '' });
-    expect(() => queryResultFrequencyFilter(frequency, { ...first })).toThrow(text.stale);
+    expect(queryResultFrequencyFilters(frequency, [first])).toMatchObject({ column: 'k', operator: 'eq', value: prefix + '乙' });
+    expect(queryResultFrequencyFilters(frequency, [second])).toMatchObject({ column: 'k', operator: 'eq', value: prefix + '丙' });
+    expect(queryResultFrequencyFilters(frequency, [null])).toEqual({ column: 'k', operator: 'null', value: '' });
+    expect(queryResultFrequencyFilters(frequency, [second, null, first])).toEqual({ mode: 'OR', children: [
+      { column: 'k', operator: 'eq', value: prefix + '丙' },
+      { column: 'k', operator: 'null', value: '' },
+      { column: 'k', operator: 'eq', value: prefix + '乙' },
+    ] });
+    expect(() => queryResultFrequencyFilters(frequency, [first, { ...second }])).toThrow(text.stale);
+    expect(() => queryResultFrequencyFilters(frequency, [first, first])).toThrow(text.stale);
+    expect(() => queryResultFrequencyFilters(frequency, [{ ...first }])).toThrow(text.stale);
     f.rows[0].k = prefix + '丁';
-    expect(() => queryResultFrequencyFilter(frequency, first)).toThrow(text.stale);
+    expect(() => queryResultFrequencyFilters(frequency, [first])).toThrow(text.stale);
   });
   it('按完整范围计数再取前十，后出现高频值与同次数原顺序、其余和NULL均对齐', () => {
     const values = [...Array.from({ length: 12 }, (_, index) => `值${index + 1}`), ...Array(520).fill('后来'), '值3', '值3', null];

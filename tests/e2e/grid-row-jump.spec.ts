@@ -17,6 +17,7 @@ import { queryResultFindZh as resultFind } from '../../src/renderer/locales/quer
 import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
 import { queryResultSortZh as resultSort } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
@@ -145,6 +146,54 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
     }
     expect(await tasks()).toEqual(originalTasks);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('查询结果数据质量和多个分布值可进入同一结果的筛选草稿', async ({}, info) => {
+  await seed(`SELECT id, CASE id WHEN 1 THEN NULL WHEN 2 THEN '' WHEN 3 THEN '2'
+    WHEN 4 THEN 2 WHEN 5 THEN 2.0 ELSE X'' END AS quality_value
+    FROM subject WHERE id <= 6 ORDER BY id;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(query.getByText(filterText.counts(6, 6), { exact: true })).toBeVisible();
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const before = await tasks();
+  const dialog = page.getByRole('dialog', { name: statisticsText.title, exact: true });
+  const filtering = query.getByRole('region', { name: filterText.title, exact: true });
+  const openStatistics = () => query.getByRole('button', { name: statisticsText.open, exact: true }).click();
+  const idPosition = await grid.getByRole('columnheader', { name: /^id\b/ }).getAttribute('aria-colindex');
+  expect(idPosition).not.toBeNull();
+  const ids = () => grid.locator(`[role="gridcell"][aria-colindex="${idPosition}"]`);
+  await openStatistics();
+  await dialog.getByRole('button', { name: statisticsText.overview, exact: true }).click();
+  const empty = statisticsText.qualityFilterColumn(statisticsText.qualityFilter.empty, 'quality_value · c1');
+  await dialog.getByRole('button', { name: empty, exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(filtering.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('empty');
+  await expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text');
+  await expect(query.getByText(filterText.counts(6, 6), { exact: true })).toBeVisible();
+  await filtering.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids()).toHaveText(['2']);
+  await (await navigationMenuItem(query, { name: filterText.clear, exact: true })).click();
+  await expect(query.getByText(filterText.counts(6, 6), { exact: true })).toBeVisible();
+
+  await openStatistics();
+  await dialog.getByLabel(statisticsText.column, { exact: true }).selectOption('c1');
+  await dialog.getByRole('button', { name: statisticsText.frequency, exact: true }).click();
+  const addChecked = dialog.getByRole('button', { name: statisticsText.frequencyFilterChecked, exact: true });
+  await expect(addChecked).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: statisticsText.frequencyCheck('2', statisticsText.frequencyKinds.number), exact: true }).check();
+  await dialog.getByRole('checkbox', { name: statisticsText.frequencyCheck('NULL'), exact: true }).check();
+  await info.attach('SQLite查询结果勾选分布值', { body: await page.screenshot(), contentType: 'image/png' });
+  await addChecked.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('integer');
+  await expect(filtering.getByLabel(filterText.sqliteType(2), { exact: true })).toHaveValue('real');
+  await expect(filtering.getByLabel(filterText.operator + ' 3', { exact: true })).toHaveValue('null');
+  await expect(query.getByText(filterText.counts(6, 6), { exact: true })).toBeVisible();
+  await filtering.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids()).toHaveText(['1', '4', '5']);
+  expect(await tasks()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

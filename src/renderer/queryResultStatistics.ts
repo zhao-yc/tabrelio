@@ -5,7 +5,7 @@ import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from '
 import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultComparisonKey } from './sqliteResultCompare';
 import { QueryResultFrequencyCounter, queryResultFrequencyRow, type QueryResultFrequency, type QueryResultFrequencyEntry, type QueryResultFrequencyKind } from './queryResultFrequency';
 import { captureQueryResultCellFilter, queryResultCellFilterRule } from './queryResultCellFilter';
-import { queryResultFilterLimits, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
+import { queryResultFilterLimits, queryResultFilterOperators, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
 import { sqliteResultCellMatches } from '../shared/sqliteResultStorage';
 import { QueryResultHistogramCounter, type QueryResultHistogram, type QueryResultHistogramBins } from './queryResultHistogram';
 
@@ -263,33 +263,49 @@ function compareKeys(left: Key, right: Key): number {
   return compareQueryResultFilterKeys(left, right);
 }
 
-/** 还原分布项的完整原值。SQLite 等值数值可跨 INTEGER／REAL，只有精确往返才追加另一种类型。 */
-export function queryResultFrequencyFilter(frequency: QueryResultFrequency, entry: QueryResultFrequencyEntry | null): QueryResultFilterRule | QueryResultFilterGroup {
+/** 选择项须来自同一次完整分布；先核定全部条件，再按 OR 作为一个草稿节点交接。 */
+export function queryResultFrequencyFilters(frequency: QueryResultFrequency, entries: readonly (QueryResultFrequencyEntry | null)[]): QueryResultFilterRule | QueryResultFilterGroup {
   const owner = frequencyOwners.get(frequency);
   const binding = owner && bindings.get(owner.capture);
   if (!owner || !binding || !currentQueryResultStatistics(owner.capture, binding.columns, binding.rows)) throw Error(text.stale);
   const column = binding.columnRefs.find(item => item.key === owner.capture.column.key)!;
-  if (entry === null && owner.hasNull) return { column: column.key, operator: 'null', value: '' };
+  if (!entries.length || entries.length > frequency.entries.length + Number(owner.hasNull) || new Set(entries).size !== entries.length) throw Error(text.stale);
+  const conditions = entries.flatMap(entry => frequencyFilterRules(frequency, entry, column, binding, owner.hasNull));
+  return conditions.length === 1 ? conditions[0] : { mode: 'OR', children: conditions };
+}
+
+/** 还原分布项的完整原值。SQLite 等值数值可跨 INTEGER／REAL，只有精确往返才追加另一种类型。 */
+function frequencyFilterRules(frequency: QueryResultFrequency, entry: QueryResultFrequencyEntry | null, column: ResultColumn, binding: Binding, hasNull: boolean): QueryResultFilterRule[] {
+  if (entry === null && hasNull) return [{ column: column.key, operator: 'null', value: '' }];
   const index = entry && frequency.entries.includes(entry) ? queryResultFrequencyRow(entry) : undefined;
   if (index === undefined) throw Error(text.stale);
 
   if (!binding.sqlite) {
     const cell = captureQueryResultCellFilter(binding.columns, binding.rows, { index, row: binding.rows[index], column }, undefined, binding.dialect);
-    return queryResultCellFilterRule(cell, 'eq');
+    return [queryResultCellFilterRule(cell, 'eq')];
   }
 
   const { literal, sqliteType } = binding.sqlite.literal(index, column.key);
   if (!sqliteType || literal.length > queryResultFilterLimits.valueUnits) throw Error(text.frequencyFilterUnavailable);
   const rule: QueryResultFilterRule = { column: column.key, operator: 'eq', value: literal, sqliteType };
-  if (sqliteType !== 'integer' && sqliteType !== 'real') return rule;
+  if (sqliteType !== 'integer' && sqliteType !== 'real') return [rule];
 
   const real = Number(literal);
-  if (!Number.isInteger(real)) return rule;
+  if (!Number.isInteger(real)) return [rule];
   const integer = BigInt(real);
   const counterpart = sqliteType === 'integer'
     ? (integer === BigInt(literal) ? { sqliteType: 'real' as const, value: String(real) } : undefined)
     : (sqliteResultCellMatches('i', String(integer)) ? { sqliteType: 'integer' as const, value: String(integer) } : undefined);
-  return counterpart ? { mode: 'OR', children: [rule, { ...rule, ...counterpart }] } : rule;
+  return counterpart ? [rule, { ...rule, ...counterpart }] : [rule];
+}
+
+export type QueryResultQualityFilter = 'null' | 'empty';
+
+/** 统计所有者完成原值复核后才调用；SQLite 空字符串必须限定为原生 TEXT。 */
+export function queryResultQualityFilterRule(column: ResultColumn, operator: QueryResultQualityFilter, dialect?: SortDialect): QueryResultFilterRule {
+  const sqliteType = operator === 'empty' && column.type === 'SQLITE' ? 'text' : undefined;
+  if (!queryResultFilterOperators(column, sqliteType, dialect).includes(operator)) throw Error(text.stale);
+  return { column: column.key, operator, value: '', ...(sqliteType ? { sqliteType } : {}) };
 }
 
 export class QueryResultStatisticsScan {

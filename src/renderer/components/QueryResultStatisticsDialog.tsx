@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
-import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, queryResultPercentage, QueryResultStatisticsScan, type QueryResultStatisticsCapture, type QueryResultStatisticsResult } from '../queryResultStatistics';
+import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilters, queryResultPercentage, queryResultQualityFilterRule, QueryResultStatisticsScan, type QueryResultQualityFilter, type QueryResultStatisticsCapture, type QueryResultStatisticsResult } from '../queryResultStatistics';
 import type { QueryResultFrequencyEntry } from '../queryResultFrequency';
 import type { QueryResultFilterGroup, QueryResultFilterRule } from '../queryResultFilter';
 import type { SortDialect } from '../queryResultSort';
@@ -19,7 +19,7 @@ interface Props {
   sqliteSource?: QueryResult;
   dialect?: SortDialect;
   isCurrent(): boolean; onClose(): void;
-  onFrequencyFilter?(node: QueryResultFilterRule | QueryResultFilterGroup): void;
+  onFilter?(node: QueryResultFilterRule | QueryResultFilterGroup): void;
 }
 const modes = ['summary', 'frequency', 'histogram', 'overview'] as const;
 type Request = { column: string; scope: 'all' | 'selected'; mode: typeof modes[number]; bins: QueryResultHistogramBins };
@@ -27,7 +27,7 @@ type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan
 type View = { request: Request; processed: number; total: number; binning?: true; result?: QueryResultStatisticsResult; error?: string };
 
 /** 仅统计当前已返回快照；分批让出界面线程，切列、取消和来源变化永久撤销旧计算。 */
-export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, sqliteSource, dialect, isCurrent, onClose, onFrequencyFilter }: Props) {
+export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, sqliteSource, dialect, isCurrent, onClose, onFilter }: Props) {
   const origin = useRef({ columns, rows, initialColumn, owner, sqliteSource, dialect }).current;
   const latest = useRef({ columns, rows, initialColumn, owner, sqliteSource, dialect, isCurrent }); latest.current = { columns, rows, initialColumn, owner, sqliteSource, dialect, isCurrent };
   const [prepared] = useState(() => {
@@ -121,14 +121,28 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     frequency: text.scanningFrequency,
     histogram: view.binning ? text.binningHistogram : text.scanningHistogram,
   };
-  /** 只允许当前已发布的图表交接原值条件，过期按钮无法开启筛选。 */
-  function filterFrequency(entry: QueryResultFrequencyEntry | null): void {
-    if (committed.current !== ticket || requestRef.current !== request || !environment() || !result?.frequency || !onFrequencyFilter) return;
+  /** 过期按钮无法开启筛选；追加失败保留当前统计与已有草稿。 */
+  function applyStatisticsFilter(build: () => QueryResultFilterRule | QueryResultFilterGroup): void {
+    if (committed.current !== ticket || requestRef.current !== request || !environment() || !onFilter) return;
     try {
-      onFrequencyFilter(queryResultFrequencyFilter(result.frequency, entry));
+      onFilter(build());
     } catch (reason) {
-      setView({ ...view, error: errorMessage(reason) });
+      setView(previous => ({
+        ...(previous.request === request ? previous : { request, processed: 0, total: 0 }),
+        error: errorMessage(reason),
+      }));
     }
+  }
+  function filterFrequency(entries: readonly (QueryResultFrequencyEntry | null)[]): void {
+    const frequency = result?.frequency;
+    if (frequency) applyStatisticsFilter(() => queryResultFrequencyFilters(frequency, entries));
+  }
+  function filterSummary(operator: QueryResultQualityFilter): void {
+    applyStatisticsFilter(() => {
+      const capture = lastCapture.current;
+      if (!capture || capture.column.key !== request.column || !currentQueryResultStatistics(capture, columns, rows)) throw Error(text.stale);
+      return queryResultQualityFilterRule(capture.column, operator, dialect);
+    });
   }
   const labels = ['count', 'nonNull', 'nulls', 'distinct', 'min', 'max', 'sum', 'average', 'standardDeviation'] as const;
   const qualityMetrics = result && [
@@ -141,7 +155,8 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
   return <div data-query-result-statistics-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
     <p>{text.notice}</p><UsageHelp>
       {request.mode === 'histogram' && <p>{text.histogramHint}</p>}
-      {request.mode === 'frequency' && <><p>{text.frequencyHint}</p>{onFrequencyFilter && <p>{text.frequencyFilterHint}</p>}</>}
+      {request.mode === 'frequency' && <><p>{text.frequencyHint}</p>{onFilter && <p>{text.frequencyFilterHint}</p>}</>}
+      {onFilter && request.mode !== 'histogram' && <p>{text.qualityFilterHint}</p>}
       {request.mode === 'summary' && <><p>{sqliteSource ? text.sqliteHint : dialect === 'postgresql' ? text.postgresHint : text.hint}</p><p>{text.qualityHint}</p><p>{text.standardDeviationHint}</p></>}
     </UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs">{request.mode !== 'overview' && <label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>}
@@ -157,13 +172,18 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     {valid && current && request.mode !== 'overview' && !view.result && !view.error && <p role="status">{scanning[request.mode]} {text.progress(view.processed, view.total)}</p>}
     {valid && request.mode === 'overview' && <QueryResultQualityOverview key={request.scope} columns={origin.columns} rows={origin.rows}
       indices={request.scope === 'selected' ? prepared.indices : undefined} sqliteSource={origin.sqliteSource} dialect={origin.dialect}
-      isCurrent={environment} onOpenColumn={column => change({ ...request, mode: 'summary', column })}/>}
+      isCurrent={environment} onOpenColumn={column => change({ ...request, mode: 'summary', column })}
+      onFilter={onFilter ? (column, operator) => applyStatisticsFilter(() => queryResultQualityFilterRule(column, operator, dialect)) : undefined}/>}
     {request.mode === 'summary' && qualityMetrics && <section className="query-result-quality" aria-label={text.quality}>
       <h3>{text.quality}</h3>
       <dl>{qualityMetrics.map(([label, value]) => <div key={label}><dt>{label}</dt><dd aria-label={label}>{value ?? text.unavailable}</dd></div>)}</dl>
+      {onFilter && result && <div className="query-result-quality-actions">
+        {result.nulls > 0 && <button type="button" onClick={() => filterSummary('null')}>{text.qualityFilter.null}</button>}
+        {(result.quality?.emptyText ?? 0) > 0 && <button type="button" onClick={() => filterSummary('empty')}>{text.qualityFilter.empty}</button>}
+      </div>}
     </section>}
     {result && request.mode === 'histogram' && (result.histogram ? <TableHistogramChart histogram={result.histogram}/> : <p>{text.histogramUnavailable} {result.reason}</p>)}
-    {result && request.mode === 'frequency' && <>{result.frequency ? <QueryResultFrequencyChart frequency={result.frequency} count={result.count} nulls={result.nulls} onFilter={onFrequencyFilter ? filterFrequency : undefined}/> : <p>{text.frequencyUnavailable} {result.reason}</p>}{result.floatInput && <p>{text.floatInput}</p>}</>}
+    {result && request.mode === 'frequency' && <>{result.frequency ? <QueryResultFrequencyChart frequency={result.frequency} count={result.count} nulls={result.nulls} onFilter={onFilter ? filterFrequency : undefined}/> : <p>{text.frequencyUnavailable} {result.reason}</p>}{result.floatInput && <p>{text.floatInput}</p>}</>}
     {result && request.mode === 'summary' && <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.standardDeviationRounded && <p title={text.standardDeviationHint}>{text.standardDeviationRounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>}
   </div><footer className="modal-footer"><span className="grow"/><button onClick={close}>{result || request.mode === 'overview' ? text.close : text.cancel}</button></footer></Modal></div>;
 }

@@ -2090,7 +2090,7 @@ export function PostgresQueryTab({
         columns={statisticsDraft.binding.visibleColumns} rows={statisticsDraft.binding.rows} dialect="postgresql"
         initialColumn={statisticsDraft.column} selectedIndices={statisticsDraft.indices} truncated={statisticsDraft.binding.truncated}
         isCurrent={() => statisticsCurrent(statisticsDraft)} onClose={() => closeResultStatistics(statisticsDraft)}
-        onFrequencyFilter={filterBinding && sortView ? node => filterFromStatistics(statisticsDraft, node) : undefined} />}
+        onFilter={filterBinding && sortView ? node => filterFromStatistics(statisticsDraft, node) : undefined} />}
       {presetDraft && <QueryResultPresetsDialog key={presetDraft.owner} connectionId={tab.connectionId}
         value={presetDraft.value} owner={presetDraft.owner} isCurrent={() => presetCurrent(presetDraft)}
         matches={value => !!visibleColumns && queryResultMemoryMatches(value, resultSource, visibleColumns)}

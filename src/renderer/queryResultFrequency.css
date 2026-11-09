@@ -5,7 +5,11 @@
 .query-result-frequency th, .query-result-frequency td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .query-result-frequency thead th:first-child { width: 50%; }
 .query-result-frequency-actions thead th:first-child { width: 40%; }
-.query-result-frequency-actions thead th:last-child { width: 8rem; }
+.query-result-frequency-actions thead th:last-child { width: 9rem; }
+.query-result-frequency-toolbar, .query-result-frequency-row-actions { display: flex; align-items: center; gap: 8px; }
+.query-result-frequency-toolbar { justify-content: space-between; flex-wrap: wrap; }
+.query-result-quality-actions { display: flex; gap: 6px; margin: 0 0 8px; flex-wrap: wrap; }
+.query-result-overview .query-result-quality-filter { padding: 2px 7px; min-width: 2rem; }
 .query-result-frequency tbody th { font-weight: normal; overflow-wrap: anywhere; }
 .query-result-frequency tbody code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .query-result-frequency tbody th span { display: block; margin-top: 2px; }

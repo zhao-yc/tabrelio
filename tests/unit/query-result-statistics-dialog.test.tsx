@@ -73,6 +73,21 @@ async function finish() { await act(async () => { vi.runAllTimers(); }); }
 async function batch() { await act(async () => { vi.advanceTimersToNextTimer(); }); }
 
 describe('查询结果列统计的真实对话框', () => {
+  it('摘要和多列概览交接原列的 NULL／空文本条件，已漂移的概览不能再交接', async () => {
+    const onFilter = vi.fn(), f = await mount({ onFilter });
+    await finish();
+    await act(async () => button(text.qualityFilter.null).dispatchEvent(new MemoryEvent('click')));
+    expect(onFilter).toHaveBeenLastCalledWith({ column: 'n', operator: 'null', value: '' });
+    await act(async () => button(text.overview).dispatchEvent(new MemoryEvent('click')));
+    await finish();
+    const empty = node(text.qualityFilterColumn(text.qualityFilter.empty, '文本 · word'));
+    await act(async () => empty.dispatchEvent(new MemoryEvent('click')));
+    expect(onFilter).toHaveBeenLastCalledWith({ column: 'word', operator: 'empty', value: '' });
+    f.props.rows[0].word = '变化';
+    await act(async () => empty.dispatchEvent(new MemoryEvent('click')));
+    expect(onFilter).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain(text.stale);
+  });
   it('多列概览按勾选范围完成后一次发布，可下钻到同名列的准确统计', async () => {
     await mount({ selectedIndices: new Set([0, 2]) });
     await finish();
