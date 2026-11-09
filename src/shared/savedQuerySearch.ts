@@ -14,6 +14,12 @@ export const savedQuerySearchInputSchema=z.object({taskId:z.string().uuid(),scop
 export const savedQuerySearchNextSchema=z.object({taskId:z.string().uuid(),cursor:z.string().uuid()}).strict();
 export const savedQuerySearchReleaseSchema=z.object({cursor:z.string().uuid()}).strict();
 export const savedQueryReadSchema=z.object({id,digest:z.string().regex(/^[a-f0-9]{64}$/),connectionId:id}).strict();
+export const savedQueryOpenBatchLimits = { queries: 20, bytes: 32 * 1024 * 1024 } as const;
+export const savedQueryReadBatchSchema = z.object({
+  items: z.array(savedQueryReadSchema).min(1).max(savedQueryOpenBatchLimits.queries)
+    .refine(items => new Set(items.map(item => item.id)).size === items.length, '选中的查询不能重复'),
+}).strict();
+export type SavedQueryReadBatchInput = z.infer<typeof savedQueryReadBatchSchema>;
 /** 插入正文只消费原摘要；不接受或授予连接、会话与来源绑定。 */
 export const savedQueryReadTextSchema=savedQueryReadSchema.omit({connectionId:true}).strict();
 export type SavedQueryReadTextInput=z.infer<typeof savedQueryReadTextSchema>;

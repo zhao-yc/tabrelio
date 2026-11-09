@@ -17,6 +17,7 @@ import { editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } fr
 import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { zh } from './locales/zh-CN';
+import { queryDuplicateZh } from './locales/queryDuplicate.zh-CN';
 import { sqliteWriteFactMessage, sqliteWriteFactSchema } from '../shared/sqliteWriteFact';
 import { sqliteImportWriteFactSchema, assertSqliteImportWriteFactTransition } from '../shared/sqliteTableImport';
 import { sqliteImportFactMessage, sqliteImportTaskMessage } from '../shared/sqliteTableImportFact';
@@ -158,6 +159,15 @@ export async function flushSettings(): Promise<void> {
   clearTimeout(saveTimer);
   saveTimer = undefined;
   await invoke('settings.save', useWorkspace.getState().settings);
+}
+
+/** 一次发布整批查询标签和焦点；超过工作区容量时不打开任何一个。 */
+export function openQueryTabBatch(drafts: readonly Omit<WorkspaceTab, 'id'>[]): void {
+  if (!drafts.length) return;
+  const workspace = useWorkspace.getState(), original = workspace.settings.tabs;
+  if (original.length + drafts.length > 100) throw Error(queryDuplicateZh.batchCapacity);
+  const tabs = drafts.map(draft => ({ ...draft, id: uid() }));
+  workspace.updateSettings({ tabs: [...original, ...tabs], activeTabId: tabs[0].id });
 }
 
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */

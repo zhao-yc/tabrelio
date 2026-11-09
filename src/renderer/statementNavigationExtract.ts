@@ -3,9 +3,8 @@ import { savedQueryOriginContext } from '../shared/queryBinding';
 import type { SavedQueryGroupTarget } from '../shared/savedQueryOrganization';
 import type { NavigableStatement } from '../shared/statementNavigation';
 import { writeTableClipboardEvent } from './gridClipboard';
-import { errorMessage, invoke, uid } from './lib';
+import { errorMessage, invoke } from './lib';
 import { statementNavigationZh as text } from './locales/statementNavigation.zh-CN';
-import { queryDuplicateZh } from './locales/queryDuplicate.zh-CN';
 import { statementDraftSql } from './queryDuplicateIntent';
 import type { StatementNavigationController } from './statementNavigationController';
 import { useWorkspace, type WorkspaceTab } from './store';
@@ -34,14 +33,7 @@ export function extractStatementSelection(controller: StatementNavigationControl
   return result;
 }
 
-/** 一次提交整批标签与焦点，容量不足时不发布任何新标签。 */
-export function openStatementDraftBatch(drafts: readonly Omit<WorkspaceTab, 'id'>[]): void {
-  if (!drafts.length) return;
-  const workspace = useWorkspace.getState(), original = workspace.settings.tabs;
-  if (original.length + drafts.length > 100) throw Error(queryDuplicateZh.batchCapacity);
-  const tabs = drafts.map(draft => ({ ...draft, id: uid() }));
-  workspace.updateSettings({ tabs: [...original, ...tabs], activeTabId: tabs[0].id });
-}
+export { openQueryTabBatch as openStatementDraftBatch } from './store';
 
 /** 只新建查询库条目，不接管或修改原编辑器的文件与查询来源。 */
 export async function saveStatementQuery(candidate: Omit<WorkspaceTab, 'id'>, name: string, group?: SavedQueryGroupTarget): Promise<void> {

@@ -169,6 +169,73 @@ test('保存查询按名称和更新时间跨批次排序，保留已勾选项',
  expect(pageErrors).toEqual([]);
 });
 
+test('跨批次勾选保存查询，分别选连接后一次打开独立标签', async ({}, info) => {
+ const sql = 'SELECT 9007199254740993;\r\n-- ' + '中'.repeat(900) + '😀尾部';
+ await seed(store => {
+  source(store);
+  source(store, 'replacement');
+  store.saveSettings({ ...store.settings(), activeTabId: 'existing', tabs: [
+   { id: 'existing', kind: 'query', title: '保留原草稿', connectionId: 'source', sql: 'SELECT 42' },
+  ] });
+  store.saveQuery({ id: 'first-query', name: '第一条原来源', connectionId: 'source', sql,
+   updatedAt: '2026-10-16T00:00:00Z', databaseContext: { state: 'known', database: null } });
+  for (let i = 0; i < 24; i++) store.saveQuery({ id: 'filler-' + i, name: '夹具 ' + i, sql: 'SELECT 2', updatedAt: '2026-10-15T00:00:00Z' });
+  store.saveQuery({ id: 'second-query', name: '第二条失效来源', connectionId: 'removed', database: '旧库', sql: 'SELECT 3',
+   updatedAt: '2026-10-14T00:00:00Z' });
+ });
+ await desktop.evaluate(({ ipcMain }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args: any[]) => unknown> })._invokeHandlers;
+  const original = handlers.get('dbark:request');
+  if (!original) throw Error('缺少原批量打开 IPC');
+  const audit = { reads: [] as unknown[], denied: 0 };
+  Object.assign(globalThis, { __savedQueryOpenBatch: audit });
+  handlers.set('dbark:request', (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'queries.readBatch') audit.reads.push(payload.input);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+    audit.denied++;
+    throw Error('本例禁止数据库请求');
+   }
+   return original(event, payload);
+  });
+ });
+ await open();
+ await dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click();
+ await dialog().getByRole('checkbox', { name: savedOrganizationText.select('第一条原来源'), exact: true }).check();
+ await dialog().getByRole('button', { name: savedText.next, exact: true }).click();
+ await dialog().getByRole('checkbox', { name: savedOrganizationText.select('第二条失效来源'), exact: true }).check();
+ const trigger = dialog().getByRole('button', { name: savedText.openBatch, exact: true });
+ await trigger.click();
+ const preview = dialog().getByRole('group', { name: savedText.openBatchTitle, exact: true });
+ const confirm = preview.getByRole('button', { name: savedText.openBatchConfirm(2), exact: true });
+ await expect(confirm).toBeDisabled();
+ await expect(preview.getByRole('combobox', { name: '打开查询的连接：第一条原来源', exact: true })).toHaveValue('source');
+ await page.keyboard.press('Escape');
+ await expect(preview).toBeHidden();
+ await trigger.click();
+ await preview.getByRole('combobox', { name: '打开查询的连接：第二条失效来源', exact: true }).selectOption('replacement');
+ await expect(confirm).toBeEnabled();
+ await page.screenshot({ path: info.outputPath('批量打开保存查询.png') });
+ await confirm.click();
+ await expect(dialog()).toBeHidden();
+ await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}).then(settings => settings.tabs.length))).toBe(3);
+ const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+ const [old, first, second] = settings.tabs;
+ expect(old).toMatchObject({ id: 'existing', sql: 'SELECT 42' });
+ expect(first).toMatchObject({ title: '第一条原来源', connectionId: 'source', sql,
+  databaseContext: { state: 'known', database: null }, sourceBinding: { id: 'first-query' } });
+ expect(second).toMatchObject({ title: '第二条失效来源', connectionId: 'replacement', sql: 'SELECT 3',
+  databaseContext: { state: 'unknown' }, sourceBinding: { id: 'second-query' } });
+ expect(second.database).toBeUndefined();
+ expect(settings.activeTabId).toBe(first.id);
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __savedQueryOpenBatch?: unknown }).__savedQueryOpenBatch)).toEqual({
+  denied: 0, reads: [{ items: [{ id: 'first-query', connectionId: 'source' }, { id: 'second-query', connectionId: 'replacement' }]
+    .map(item => ({ ...item, digest: expect.stringMatching(/^[a-f0-9]{64}$/) })) }],
+ });
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('从历史离线保存完整查询，保留执行上下文或解除绑定', async () => {
  const sql = 'UPDATE offline_fixture SET n=9007199254740993;\r\n-- ' + '中'.repeat(1024) + '😀历史尾部';
  let groupId: string;

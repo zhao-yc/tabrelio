@@ -1,5 +1,5 @@
 import{randomUUID,createHash}from'node:crypto';
-import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQueryReadTextSchema,savedQuerySearchLimits as limits,type SavedQuerySearchInput,type SavedQuerySearchPage,type SavedQueryOpenResult,type SavedQueryReadTextResult}from'../shared/savedQuerySearch';
+import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQueryReadBatchSchema,savedQueryOpenBatchLimits,savedQueryReadTextSchema,savedQuerySearchLimits as limits,type SavedQuerySearchInput,type SavedQuerySearchPage,type SavedQueryOpenResult,type SavedQueryReadTextResult}from'../shared/savedQuerySearch';
 import type{TaskEvent}from'../shared/contracts';
 import{SavedQueryMatcher}from'./savedQueryMatcher';
 import{parseSavedQueryRecord}from'./savedQuerySearchMatch';
@@ -37,6 +37,17 @@ export class SavedQuerySearches{
  }
  /** 原摘要再校验后才读取完整正文；替代连接必须明确提供，并变成默认库未知的新查询。 */
  read(raw:unknown):SavedQueryOpenResult{const input=savedQueryReadSchema.parse(raw),query=this.readRecord(input);if(!this.store.queryConnectionExists(input.connectionId))throw Error('所选连接不存在，请明确选择有效连接');const contextChanged=query.connectionId!==input.connectionId;return{query,connectionId:input.connectionId,...(contextChanged?{databaseContext:{state:'unknown' as const}}:{database:query.databaseContext?query.databaseContext.state==='known'?query.databaseContext.database??undefined:undefined:query.database,databaseContext:query.databaseContext}),contextChanged};}
+ /** 一批原文必须在同一同步读取中全部通过摘要、连接和正文预算核对。 */
+ readBatch(raw: unknown): SavedQueryOpenResult[] {
+  const { items } = savedQueryReadBatchSchema.parse(raw);
+  let bytes = 0;
+  return items.map(item => {
+   const opened = this.read(item);
+   bytes += Buffer.byteLength(opened.query.sql, 'utf8');
+   if (bytes > savedQueryOpenBatchLimits.bytes) throw Error('所选查询 SQL 合计超过 32 MiB，请缩小打开范围');
+   return opened;
+  });
+ }
  /** 插入只返回完整原文及原记录元数据，既不检查源连接，也不生成保存来源授权。 */
  readText(raw:unknown):SavedQueryReadTextResult{const input=savedQueryReadTextSchema.parse(raw);return{query:this.readRecord(input)};}
  /** 每页最多25条记录，发布前等待线程结束，失败/超时从不算作无命中。 */

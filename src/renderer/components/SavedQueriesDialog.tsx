@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
 import type { SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
-import type { SavedQueryOpenResult, SavedQueryScope } from '../../shared/savedQuerySearch';
+import { savedQueryOpenBatchLimits, type SavedQueryOpenResult, type SavedQueryScope } from '../../shared/savedQuerySearch';
 import type { QueryFileEncoding } from '../../shared/contracts';
 import { zh, formatText } from '../locales/zh-CN';
 import { queryContextZh } from '../locales/queryContext.zh-CN';
@@ -11,7 +11,7 @@ import { historyPagesZh as sqlText } from '../locales/historyPages.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
-import { useWorkspace } from '../store';
+import { openQueryTabBatch, useWorkspace, type WorkspaceTab } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { SavedQueryRenameEditor, type SavedQueryRenameOrigin } from './SavedQueryRenameEditor';
@@ -30,6 +30,13 @@ const services: Services = { request: invoke, id: uid };
 interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; scope: SavedQueryScope; sort: SavedQueryPageSort; }
 interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; criteria: string; epoch: number; duplicateRevision?: string; }
 interface DeleteEdit { items: readonly SelectedSavedQuery[]; selection: ReadonlyMap<string, SelectedSavedQuery>; epoch: number; }
+interface OpenSelection extends SelectedSavedQuery { connectionId?: string; }
+interface OpenBatch { selection: ReadonlyMap<string, OpenSelection>; targets: ReadonlyMap<string, string>; epoch: number; }
+const selectQuery = ({ query, digest }: SavedQueryPageEntry): OpenSelection => ({ id: query.id, digest, name: query.name, connectionId: query.connectionId });
+const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
+  kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database,
+  databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding,
+});
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.sort]);
 interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 
@@ -43,9 +50,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
-  const [selected, setSelected] = useState<ReadonlyMap<string, SelectedSavedQuery>>(new Map()), selectedRef = useRef(selected), [editing, setEditing] = useState<Edit>(), editRef = useRef(editing), [needsRefresh, setNeedsRefresh] = useState(false), [targets, setTargets] = useState(new Map<string, string>());
+  const [selected, setSelected] = useState<ReadonlyMap<string, OpenSelection>>(new Map()), selectedRef = useRef(selected), [editing, setEditing] = useState<Edit>(), editRef = useRef(editing), [needsRefresh, setNeedsRefresh] = useState(false), [targets, setTargets] = useState(new Map<string, string>());
   const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
   const [deleting, setDeleting] = useState<DeleteEdit>(), deleteRef = useRef<DeleteEdit | undefined>(undefined);
+  const [opening, setOpening] = useState<OpenBatch>(), openRef = useRef<OpenBatch | undefined>(undefined);
+  const openBatchSection = useRef<HTMLElement>(null), openBatchTrigger = useRef<HTMLButtonElement>(null);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group, scope, sort }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
@@ -62,8 +71,14 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     const sync = () => setInsertAvailable(insertion?.current() ?? false);
     const off = insertion?.subscribe(sync); sync(); return () => { off?.(); };
   }, [insertion]);
+  useLayoutEffect(() => {
+    if (opening) {
+      openBatchSection.current?.focus();
+      openBatchSection.current?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [opening?.selection]);
   const owns = (ticket: number) => alive.current && !closed.current && epoch.current === ticket;
-  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current && !deleteRef.current;
+  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current && !deleteRef.current && !openRef.current;
   /** 原句柄仅在成功释放后遗忘；迟到新页也精确回收。 */
   async function release() { const value = cursor.current; if (value) { await io.request('queries.pageRelease', { cursor: value }); if (cursor.current === value) cursor.current = undefined; } }
   /** 取消失败仍等原Promise终态并释放，不能让观察超时或按钮点击提前放行。 */
@@ -74,7 +89,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     if (closed.current) return;
     closed.current = true; insertionClosing.current = keepInsertion; cancelledInsertion.current = false;
     if (!keepInsertion) epoch.current++;
-    editRef.current = undefined; setEditing(undefined); renameRef.current = undefined; setRenaming(undefined); deleteRef.current = undefined; setDeleting(undefined); setClosing(true);
+    editRef.current = undefined; setEditing(undefined); renameRef.current = undefined; setRenaming(undefined); deleteRef.current = undefined; setDeleting(undefined);
+    openRef.current = undefined; setOpening(undefined); setClosing(true);
     try { await cleanup(); if (!alive.current) return; if (keepInsertion && cancelledInsertion.current) onClose(); else after(); }
     catch (reason) { if (alive.current) { closed.current = false; setClosing(false); setError(errorMessage(reason)); } }
     finally { insertionClosing.current = false; }
@@ -107,7 +123,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     finally { if (active.current === taskId) active.current = undefined; }
   }
   /** 显式第一页重新读取组织版本，沿用全文、分组、来源和错误策略。 */
-  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current || deleteRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
+  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current || deleteRef.current || openRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
   useEffect(() => {
     alive.current = true; closed.current = false; const ticket = epoch.current;
     // StrictMode的旧setup尚未投递时只留本轮启动权；cleanup不消费父传入的子权限。
@@ -135,9 +151,9 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     criteriaRef.current = { ...criteriaRef.current, scope: next };
     void load(false, criteriaRef.current);
   }
-  function choose(item: SavedQueryPageEntry, checked: boolean) { if (!editable()) return; const next = new Map(selectedRef.current); if (checked) { if (!next.has(item.query.id) && next.size >= 100) { setError(text.selectionLimit); return; } next.set(item.query.id, { id: item.query.id, digest: item.digest, name: item.query.name }); } else next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
+  function choose(item: SavedQueryPageEntry, checked: boolean) { if (!editable()) return; const next = new Map(selectedRef.current); if (checked) { if (!next.has(item.query.id) && next.size >= 100) { setError(text.selectionLimit); return; } next.set(item.query.id, selectQuery(item)); } else next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
   /** 当前页选择先计算完整并集再发布，超100条整批拒绝；取消本页保留隐藏选择。 */
-  function choosePage(checked: boolean) { if (!editable() || !reply?.items.length) return; const next = new Map(selectedRef.current); if (checked) { const ids = new Set([...next.keys(), ...reply.items.map(item => item.query.id)]); if (ids.size > 100) { setError(text.selectionLimit); return; } for (const item of reply.items) next.set(item.query.id, { id: item.query.id, digest: item.digest, name: item.query.name }); } else for (const item of reply.items) next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
+  function choosePage(checked: boolean) { if (!editable() || !reply?.items.length) return; const next = new Map(selectedRef.current); if (checked) { const ids = new Set([...next.keys(), ...reply.items.map(item => item.query.id)]); if (ids.size > 100) { setError(text.selectionLimit); return; } for (const item of reply.items) next.set(item.query.id, selectQuery(item)); } else for (const item of reply.items) next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
   function clearSelection() { if (!editable()) return; epoch.current++; selectedRef.current = new Map(); setSelected(selectedRef.current); }
   /** 原树对象、原选择和代次一起捕获，外来快照或旧回调不能换目标。 */
   function edit(value: SavedQueryOrganizationEdit) { if (!editable() || !organizationRef.current || needsRefresh) return; const next = { value, snapshot: organizationRef.current, selected: Object.freeze([...selectedRef.current.values()].map(item => Object.freeze({ ...item }))), epoch: ++epoch.current }; editRef.current = next; setEditing(next); setError(''); }
@@ -188,11 +204,75 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   /** 跨页选择完整复制为只含名称和引用的预览，不因当前页或搜索隐藏而缩减删除范围。 */
   function beginDeleteSelected(): void {
     if (!editable() || needsRefresh || !selectedRef.current.size) return;
-    const items = Object.freeze([...selectedRef.current.values()].map(item => Object.freeze({ ...item })));
+    const items = Object.freeze([...selectedRef.current.values()].map(({ id, digest, name }) => Object.freeze({ id, digest, name })));
     const parsed = savedQueryDeleteSelectedSchema.safeParse({ queries: items.map(({ id, digest }) => ({ id, digest })) });
     if (!parsed.success) { setError(deleteText.invalid); return; }
     const origin: DeleteEdit = { items, selection: selectedRef.current, epoch: ++epoch.current };
     deleteRef.current = origin; setDeleting(origin); setError(''); setNotice('');
+  }
+  /** 预览仅持有跨页摘要与目标连接，确认前不读取正文。 */
+  function beginOpenBatch(): void {
+    const selection = selectedRef.current;
+    if (!editable() || needsRefresh || !selection.size || selection.size > savedQueryOpenBatchLimits.queries) return;
+    const batchTargets = new Map<string, string>();
+    for (const item of selection.values()) {
+      const connectionId = targets.get(item.id) ?? item.connectionId;
+      if (connectionId && connections.some(profile => profile.id === connectionId)) batchTargets.set(item.id, connectionId);
+    }
+    const next = { selection, targets: batchTargets, epoch: ++epoch.current };
+    openRef.current = next; setOpening(next); setError(''); setNotice('');
+  }
+  function changeOpenBatchTarget(origin: OpenBatch, id: string, connectionId: string): void {
+    if (openRef.current !== origin || locked.current || !owns(origin.epoch)) return;
+    const next = { ...origin, targets: new Map(origin.targets).set(id, connectionId) };
+    openRef.current = next; setOpening(next);
+  }
+  function cancelOpenBatch(): void {
+    if (!openRef.current || locked.current) return;
+    epoch.current++; openRef.current = undefined; setOpening(undefined);
+    openBatchTrigger.current?.focus();
+  }
+  /** 回包和游标收尾都结束后再原子发布；等待期间任一目标连接变动永久撤销。 */
+  function applyOpenBatch(origin: OpenBatch): void {
+    if (locked.current || openRef.current !== origin || !owns(origin.epoch) || selectedRef.current !== origin.selection) return;
+    const items = [...origin.selection.values()].map(({ id, digest }) => ({ id, digest, connectionId: origin.targets.get(id) ?? '' }));
+    let opened = false;
+    const work = run(async ticket => {
+      const workspace = useWorkspace.getState();
+      const profiles = new Map(items.map(({ connectionId }) => [connectionId, workspace.connections.find(profile => profile.id === connectionId)]));
+      if ([...profiles.values()].some(profile => !profile)) throw Error(t.choose);
+      let valid = true;
+      const check = () => {
+        const current = useWorkspace.getState();
+        for (const [id, profile] of profiles) {
+          if (current.connections.find(value => value.id === id) !== profile || current.connectionVersions[id] !== workspace.connectionVersions[id]) valid = false;
+        }
+      };
+      const unsubscribe = useWorkspace.subscribe(check);
+      try {
+        const result = await io.request('queries.readBatch', { items });
+        if (!owns(ticket)) return;
+        if (result.queries.length !== items.length || result.queries.some((query, index) =>
+          query.query.id !== items[index].id || query.connectionId !== items[index].connectionId || query.sourceBinding?.digest !== items[index].digest))
+          throw Error(t.openBatchStale);
+        if (cursor.current) {
+          await release();
+          if (owns(ticket)) setReply(page => page ? { ...page, cursor: undefined } : page);
+        }
+        if (!owns(ticket)) return;
+        check();
+        if (!valid || selectedRef.current !== origin.selection || openRef.current !== origin) throw Error(t.openBatchStale);
+        openQueryTabBatch(result.queries.map(queryTab));
+        opened = true;
+      } finally { unsubscribe(); }
+    }, origin.epoch);
+    if (work) void work.then(() => {
+      if (opened && !closed.current) void close();
+      else if (openRef.current === origin && !closed.current) {
+        const next = { ...origin, epoch: epoch.current };
+        openRef.current = next; setOpening(next);
+      }
+    });
   }
   /** 取消只撤销所见批量预览，不能消费新选择或后来打开的面板。 */
   function cancelDeleteSelected(origin: DeleteEdit): void {
@@ -227,7 +307,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function open(item: SavedQueryPageEntry) {
     if (!editable()) return; const connectionId = target(item); if (!connectionId) { setError(t.choose); return; }
     let opened: SavedQueryOpenResult | undefined; const work = run(async ticket => { const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId }); if (owns(ticket)) opened = result; });
-    if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => { useWorkspace.getState().openTab({ id: io.id(), kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database, databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding }); onClose(); }); } });
+    if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => { useWorkspace.getState().openTab({ id: io.id(), ...queryTab(result) }); onClose(); }); } });
   }
   /** 只有已应用范围内的原卡片可以读取或导出，旧页事件不能复用。 */
   function currentCard(item: SavedQueryPageEntry): boolean {
@@ -313,9 +393,9 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
-  const blocked = busy || closing || !!editing || !!renaming || !!deleting, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
+  const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
-  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else void close(); }}
+  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else void close(); }}
     onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
     <div className="dialog-tabs"><button disabled={closing} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><UsageHelp><p>{text.metadataOnly}</p><p>{insertionText.hint}</p><p>{t.hint}</p><p>{t.openHint}</p></UsageHelp><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
@@ -346,7 +426,22 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           <option value="name-asc">{t.sortNameAsc}</option><option value="name-desc">{t.sortNameDesc}</option>
         </select></label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
-        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        {selected.size > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
+        {opening && <section ref={openBatchSection} tabIndex={-1} className="saved-query-organization-editor" role="group" aria-label={t.openBatchTitle}>
+          <h3>{t.openBatchTitle}</h3><p>{t.openBatchHint}</p>
+          <ol>{[...opening.selection.values()].map(item => <li key={item.id}>
+            <label className="inline-field">{item.name} <select aria-label={formatText(t.connection, item.name)} disabled={busy || closing}
+              value={opening.targets.get(item.id) ?? ''} onChange={event => changeOpenBatchTarget(opening, item.id, event.target.value)}>
+              <option value="">{t.choose}</option>
+              {connections.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+            </select></label>
+          </li>)}</ol>
+          <footer><button disabled={busy || closing} onClick={cancelOpenBatch}>{zh.common.cancel}</button><span className="grow"/>
+            <button className="primary" disabled={busy || closing || [...opening.selection.keys()].some(id =>
+              !connections.some(profile => profile.id === opening.targets.get(id)))} onClick={() => applyOpenBatch(opening)}>{t.openBatchConfirm(opening.selection.size)}</button>
+          </footer>
+        </section>}
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p role="status">{notice}</p>}{busy && <Spinner/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
