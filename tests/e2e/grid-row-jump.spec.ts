@@ -151,7 +151,7 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
   expect(pageErrors).toEqual([]);
 });
 
-test('批量导出已返回结果写入 ZIP 且不会重跑 SQL', async ({}, info) => {
+test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async ({}, info) => {
   await seed(`/* NAME: 精确原值 */ SELECT 9223372036854775807 AS v, X'00ff' AS v;
     /* NAME: 不导出 */ SELECT '跳过';
     /* NAME: 空结果 */ SELECT name FROM subject WHERE id = 0;`);
@@ -166,15 +166,18 @@ test('批量导出已返回结果写入 ZIP 且不会重跑 SQL', async ({}, inf
   await modal.getByRole('checkbox', { name: /结果 2 · 不导出/ }).uncheck();
   await info.attach('SQLite批量导出已返回结果', { body: await page.screenshot(), contentType: 'image/png' });
   const output = join(dataDir, '多结果.zip');
-  await desktop.evaluate(({ dialog, BrowserWindow }, path) => {
-    const original = dialog.showSaveDialog;
-    dialog.showSaveDialog = (async (...args: unknown[]) => {
-      dialog.showSaveDialog = original;
-      if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes('zip'))
-        throw Error('仅允许本例 ZIP 保存选择');
-      return { canceled: false, filePath: path };
-    }) as typeof original;
-  }, output);
+  async function chooseDestination(path: string, format: 'zip' | 'xlsx') {
+    await desktop.evaluate(({ dialog, BrowserWindow }, { path, format }) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        dialog.showSaveDialog = original;
+        if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes(format))
+          throw Error('仅允许本例对应格式的保存选择');
+        return { canceled: false, filePath: path };
+      }) as typeof original;
+    }, { path, format });
+  }
+  await chooseDestination(output, 'zip');
   await modal.getByRole('button', { name: archiveText.start, exact: true }).click();
   await expect(modal.getByRole('status')).toHaveText(archiveText.done(2, 1));
   const files = decodeQueryCsvZip(readFileSync(output));
@@ -186,6 +189,24 @@ test('批量导出已返回结果写入 ZIP 且不会重跑 SQL', async ({}, inf
     { sourceOrdinal: 1, label: '精确原值', rowsWritten: 1, truncated: false },
     { sourceOrdinal: 3, label: '空结果', rowsWritten: 0, truncated: false },
   ] });
+  await modal.getByLabel(archiveText.format, { exact: true }).selectOption('xlsx');
+  await expect(modal.getByLabel(archiveText.encoding, { exact: true })).toHaveCount(0);
+  await expect(modal.getByRole('checkbox', { name: /结果 2 · 不导出/ })).not.toBeChecked();
+  await info.attach('SQLite批量导出结果工作簿', { body: await page.screenshot(), contentType: 'image/png' });
+  const xlsx = join(dataDir, '多结果.xlsx');
+  await chooseDestination(xlsx, 'xlsx');
+  await modal.getByRole('button', { name: archiveText.startExcel, exact: true }).click();
+  await expect(modal.getByRole('status')).toHaveText(archiveText.done(2, 1));
+  const ExcelJS = (await import('exceljs')).default;
+  const book = new ExcelJS.Workbook();
+  await book.xlsx.readFile(xlsx);
+  expect(book.worksheets.map(sheet => sheet.name)).toEqual(['结果清单', '精确原值', '空结果']);
+  expect(book.worksheets[0].getCell('A3').text).toBe('3');
+  expect(book.worksheets[1].getCell('A2').text).toBe('9223372036854775807');
+  expect(book.worksheets[1].getCell('A2').type).toBe(ExcelJS.ValueType.RichText);
+  expect(book.worksheets[1].getCell('B2').text).toBe('\\B:AP8=');
+  expect(book.worksheets[2].rowCount).toBe(1);
+  expect(book.worksheets[2].getCell('A1').text).toBe('name');
   expect(await executions()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });

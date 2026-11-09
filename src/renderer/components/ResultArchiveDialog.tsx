@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { QueryFileEncoding, QueryOutcome } from '../../shared/contracts';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
-import { validateResultArchive } from '../../shared/resultExport';
+import { validateResultArchiveOptions } from '../../shared/resultExcel';
+import { resultExcelZh } from '../../shared/resultExcel.zh-CN';
+import type { ResultArchiveFormat } from '../../shared/resultExport';
 import { queryResultTitle, validQueryResultTitle } from '../../shared/queryResultTitle';
 import { errorMessage, invoke, uid } from '../lib';
 import { resultArchiveZh as text } from '../locales/resultArchive.zh-CN';
@@ -27,6 +29,7 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, isCurrent, onClos
     return [{ sourceOrdinal: index + 1, label: validQueryResultTitle(title) ? title : undefined, result }];
   }));
   const [selected, setSelected] = useState(() => new Set(choices.map(choice => choice.sourceOrdinal)));
+  const [format, setFormat] = useState<ResultArchiveFormat>('zip');
   const [encoding, setEncoding] = useState<QueryFileEncoding>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [phase, setPhase] = useState<'idle' | 'picking' | 'writing' | 'cancelling'>('idle');
@@ -64,14 +67,15 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, isCurrent, onClos
       const entries = choices.filter(choice => selected.has(choice.sourceOrdinal)).map(choice => ({
         sourceOrdinal: choice.sourceOrdinal, ...(choice.label ? { label: choice.label } : {}), result: resultExportData(choice.result),
       }));
-      validateResultArchive(entries);
+      const options = format === 'xlsx' ? { format, encoding: 'utf8' as const } : { format, encoding, ...csvExportOptions('csv', delimiter) };
+      validateResultArchiveOptions({ ...options, entries });
       const snapshot = structuredClone(entries);
-      const file = await invoke('files.choose', { purpose: 'export', format: 'zip', suggestedName: text.fileName });
+      const file = await invoke('files.choose', { purpose: 'export', format, suggestedName: format === 'xlsx' ? text.excelFileName : text.fileName });
       if (!file) return;
       if (!current() || !lease.owns()) throw Error(text.stale);
       const taskId = task.current = uid();
       setPhase('writing');
-      const output = await invoke('files.exportResultArchive', { fileToken: file.token, taskId, encoding, ...csvExportOptions('csv', delimiter), entries: snapshot });
+      const output = await invoke('files.exportResultArchive', { fileToken: file.token, taskId, ...options, entries: snapshot });
       if (alive.current) setDone(output);
     } catch (reason) {
       if (alive.current) setError(errorMessage(reason));
@@ -95,7 +99,7 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, isCurrent, onClos
   const close = () => { if (!occupied.current) onClose(); };
   return <Modal title={text.title} onClose={close} wide>
     <div className="modal-content">
-      <p>{text.notice}</p><p>{text.scope}</p>
+      <p>{format === 'xlsx' ? text.excelNotice : text.notice}</p><p>{text.scope}</p>
       <fieldset disabled={busy || invalid}><legend>{text.selection}</legend>
         <div className="inline-field"><button type="button" onClick={() => setSelected(new Set(choices.map(choice => choice.sourceOrdinal)))}>{text.selectAll}</button>
           <button type="button" onClick={() => setSelected(new Set())}>{text.clear}</button></div>
@@ -107,18 +111,23 @@ export function ResultArchiveDialog({ outcome, tabId, dialect, isCurrent, onClos
         </label>)}
       </fieldset>
       <div className="form-grid">
-        <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={busy || invalid} onChange={event => setEncoding(event.target.value as QueryFileEncoding)}>
+        <Field label={text.format}><select aria-label={text.format} value={format} disabled={busy || invalid} onChange={event => {
+          const value = event.target.value;
+          if (value === 'zip' || value === 'xlsx') { setFormat(value); setError(''); setDone(undefined); }
+        }}><option value="zip">{text.zip}</option><option value="xlsx">{text.xlsx}</option></select></Field>
+        {format === 'zip' && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={busy || invalid} onChange={event => setEncoding(event.target.value as QueryFileEncoding)}>
           <option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option>
-        </select></Field>
-        <CsvExportDelimiterField value={delimiter} disabled={busy || invalid} onChange={setDelimiter}/>
+        </select></Field>}
+        {format === 'zip' && <CsvExportDelimiterField value={delimiter} disabled={busy || invalid} onChange={setDelimiter}/>}
       </div>
+      {format === 'xlsx' && <p>{resultExcelZh.numbers}</p>}
       <ErrorBox message={error || (invalid ? text.stale : undefined)}/>
       {done && <p role="status">{text.done(done.sets, done.rows)}</p>}
     </div>
     <footer className="modal-footer"><span className="grow"/>
       {(phase === 'writing' || phase === 'cancelling') && <button type="button" disabled={phase === 'cancelling'} onClick={() => void cancel()}>{phase === 'cancelling' ? text.cancelling : text.cancel}</button>}
       <button type="button" disabled={busy} onClick={close}>{zh.common.close}</button>
-      <button type="button" className="primary" disabled={busy || invalid || !selected.size} onClick={() => void save()}>{phase === 'writing' || phase === 'cancelling' ? text.saving : text.start}</button>
+      <button type="button" className="primary" disabled={busy || invalid || !selected.size} onClick={() => void save()}>{phase === 'writing' || phase === 'cancelling' ? text.saving : format === 'xlsx' ? text.startExcel : text.start}</button>
     </footer>
   </Modal>;
 }

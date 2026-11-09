@@ -1,15 +1,15 @@
 import type { ResultExportOptions, TaskEvent } from '../shared/contracts';
-import { resultExportColumns, validateResultArchive, validateResultExportData, type ResultArchiveOptions } from '../shared/resultExport';
+import { resultExportColumns, validateResultExportData, type ResultArchiveOptions } from '../shared/resultExport';
 import { csvCell, csvHeader, encodingName } from './files';
-import { AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from './atomicFile';
+import { assertRegularExportTarget, AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from './atomicFile';
 import { assertResultSqlData, assertResultSqlEncoding, resultSqlHeader, resultSqlLimits, resultSqlSelectionSchema, type ResultSqlTarget } from '../shared/resultSql';
 import type { SqliteResultStorage } from '../shared/sqliteResultStorage';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { resultSqlRowWriter } from './resultSql';
 import { csvExportDelimiter } from '../shared/csvExport';
-import { assertResultExcelData } from '../shared/resultExcel';
+import { assertResultExcelData, validateResultArchiveOptions } from '../shared/resultExcel';
 import { resultExcelZh } from '../shared/resultExcel.zh-CN';
-import { exportResultExcelFile } from './resultExcelFile';
+import { exportResultExcelArchive, exportResultExcelFile } from './resultExcelFile';
 import { dataFileWriter } from './dataMarkupExport';
 import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
 import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
@@ -43,14 +43,25 @@ export class ResultFileTasks {
   }
   /** 批量保存的是已返回快照，沿用同一取消通道及原子文件提交。 */
   async runArchive(input: ResultArchiveOptions & { filePath: string }): Promise<{ rows: number; sets: number }> {
-    const total = validateResultArchive(input.entries), delimiter = csvExportDelimiter('csv', input.csvDelimiter);
+    const total = validateResultArchiveOptions(input), delimiter = csvExportDelimiter('csv', input.csvDelimiter);
     const encoding = encodingName(input.encoding);
     const task = this.begin(input.taskId);
     let file: AtomicFile | undefined, rows = 0;
     const check = () => { if (task.cancelled) throw Error('结果包导出已取消，原目标文件保持不变'); };
+    const onCommitStart = () => { task.committing = true; };
+    const onProgress = (count: number) => {
+      rows = count;
+      this.emit({ taskId: input.taskId, status: 'running', progress: Math.floor(rows / Math.max(1, total) * 98), rows, message: `已写入 ${rows}/${total} 行` });
+    };
     try {
+      if (input.format === 'xlsx') {
+        await assertRegularExportTarget(input.filePath);
+        rows = await exportResultExcelArchive({ filePath: input.filePath, entries: input.entries, checkCancelled: check, onCommitStart, onProgress, io: this.io });
+        this.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows, message: `已导出 ${input.entries.length} 个结果集` });
+        return { rows, sets: input.entries.length };
+      }
       await prepareQueryCsvZip(input.filePath, check);
-      file = await AtomicFile.create(input.filePath, encoding, check, () => { task.committing = true; }, this.io, queryStreamExportLimits.fileBytes);
+      file = await AtomicFile.create(input.filePath, encoding, check, onCommitStart, this.io, queryStreamExportLimits.fileBytes);
       const archive = new QueryCsvArchive(file, input.encoding, check, delimiter, 'returned');
       for (const [index, { sourceOrdinal, label, result }] of input.entries.entries()) {
         const ordinal = index + 1;
@@ -60,7 +71,7 @@ export class ResultFileTasks {
         for (const row of result.rows) {
           await archive.text(columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n');
           rows++;
-          if (rows % 250 === 0) this.emit({ taskId: input.taskId, status: 'running', progress: Math.floor(rows / Math.max(1, total) * 98), rows, message: `已写入 ${rows}/${total} 行` });
+          if (rows % 250 === 0) onProgress(rows);
         }
         await archive.end(result.rows.length);
       }

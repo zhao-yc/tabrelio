@@ -55,7 +55,8 @@ export function validateResultExportData(value: unknown): asserts value is Resul
 
 export const resultArchiveMaxSets = 200;
 export interface ResultArchiveEntry { sourceOrdinal: number; label?: string; result: ResultExportData }
-export interface ResultArchiveOptions { fileToken: string; taskId: string; encoding: QueryFileEncoding; csvDelimiter?: CsvExportDelimiter; entries: ResultArchiveEntry[] }
+export type ResultArchiveFormat = 'zip' | 'xlsx';
+export interface ResultArchiveOptions { fileToken: string; taskId: string; format?: ResultArchiveFormat; encoding: QueryFileEncoding; csvDelimiter?: CsvExportDelimiter; entries: ResultArchiveEntry[] }
 
 /** 批量入口沿用单结果类型校验，并对全部选中结果合计计量。原序号只作清单元数据。 */
 export function validateResultArchive(entries: unknown): number {

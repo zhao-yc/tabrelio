@@ -3039,9 +3039,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
     case 'files.exportResultArchive': {
       if (shuttingDown) throw Error('客户端正在退出，不能导出结果包');
-      const filePath = resolveFileToken(files, input.fileToken, 'export', 'zip');
+      const format = input.format ?? 'zip';
+      const filePath = resolveFileToken(files, input.fileToken, 'export', format);
       files.delete(input.fileToken);
-      if (extname(filePath).toLowerCase() !== '.zip') throw Error('请选择 .zip 格式的目标文件');
+      if (extname(filePath).toLowerCase() !== '.' + format) throw Error(`请选择 .${format} 格式的目标文件`);
       input = { ...input, filePath };
       break;
     }

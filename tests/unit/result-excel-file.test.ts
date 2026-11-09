@@ -31,6 +31,32 @@ function disk(overrides: Partial<AtomicFileIO> = {}): AtomicFileIO { return { ..
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 
 describe('已返回结果的真实流式XLSX写出', () => {
+  it('批量工作簿保留原结果、清单、重名与空集，原值不转成数值或公式', async () => {
+    const path = await destination(), result = data();
+    const entries = [
+      { sourceOrdinal: 2, label: '结果清单', result },
+      { sourceOrdinal: 5, label: '结果清单', result: { ...result, truncated: false, rows: [] } },
+    ];
+    const task = new ResultFileTasks(() => {});
+    await expect(task.runArchive({ filePath: path, fileToken: '选定路径', taskId: 'batch', format: 'xlsx', encoding: 'utf8', entries })).resolves.toEqual({ sets: 2, rows: 1 });
+    const book = await workbook(path);
+    expect(book.worksheets.map(sheet => sheet.name)).toEqual(['结果清单', '结果清单 (2)', '结果清单 (3)']);
+    const index = book.worksheets[0];
+    expect([1, 2, 3, 4, 5].map(column => index.getCell(2, column).text)).toEqual(['2', '结果清单', '结果清单 (2)', '1', '是']);
+    expect([1, 2, 3, 4, 5].map(column => index.getCell(3, column).text)).toEqual(['5', '结果清单', '结果清单 (3)', '0', '否']);
+    expect(book.worksheets[1].getCell('H2').text).toBe('18446744073709551615');
+    expect(book.worksheets[1].getCell('G2').formula).toBeUndefined();
+    expect(book.worksheets[2].rowCount).toBe(1);
+  });
+  it('第二张结果包含不支持的内容时在开文件前拒绝，保留原目标', async () => {
+    const path = await destination(), opened = vi.fn(nativeAtomicFileIO.open), first = data(), second = data();
+    second.rows[0].k16 = { type: 'binary', base64: 'AB==' };
+    const tasks = new ResultFileTasks(() => {}, disk({ open: opened }));
+    await expect(tasks.runArchive({ filePath: path, fileToken: '选定路径', taskId: 'batch', format: 'xlsx', encoding: 'utf8',
+      entries: [first, second].map((result, index) => ({ sourceOrdinal: index + 1, result })) })).rejects.toThrow('无效二进制');
+    expect(opened).not.toHaveBeenCalled();
+    expect(await readFile(path, 'utf8')).toBe('原目标');
+  });
   it('真实文件保留唯一标题、列顺序、精度/日期/公式原文和dbark-v1协议', async () => {
     const path = await destination(), value = data(), events: TaskEvent[] = [];
     await expect(new ResultFileTasks(event => events.push(event)).run(input(path, value))).resolves.toEqual({ rows: 1 });

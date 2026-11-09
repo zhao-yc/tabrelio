@@ -26,6 +26,15 @@ describe('已返回结果导出的可信边界', () => {
     expect(validateResultArchive([{ sourceOrdinal: 1, result: large }])).toBe(180);
     expect(() => validateResultArchive([1, 2].map(sourceOrdinal => ({ sourceOrdinal, result: large })))).toThrow('32 MiB');
   });
+  it('结果包 XLSX 固定编码，预留一张清单页且拒绝 CSV 配置', () => {
+    const empty = { ...resultExportData(result()), rows: [] };
+    const entries = Array.from({ length: 64 }, (_, index) => ({ sourceOrdinal: index + 1, result: empty }));
+    const request = { fileToken: 'xlsx', taskId: 'archive', format: 'xlsx', encoding: 'utf8', entries: entries.slice(0, 63) };
+    expect(validateCommand('files.exportResultArchive', request)).toEqual(request);
+    expect(() => validateCommand('files.exportResultArchive', { ...request, entries })).toThrow('63');
+    expect(() => validateCommand('files.exportResultArchive', { ...request, encoding: 'utf16le' })).toThrow();
+    expect(() => validateCommand('files.exportResultArchive', { ...request, csvDelimiter: ',' })).toThrow();
+  });
   it('校验保留数据引用，且导出请求不包含 SQL、连接或路径', () => {
     const query = result(); const value = input(resultExportData(query));
     const parsed = validateCommand('files.exportResult', value) as ResultExportOptions;

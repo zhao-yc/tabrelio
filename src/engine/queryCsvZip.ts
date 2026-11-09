@@ -1,6 +1,5 @@
-import { lstat } from 'node:fs/promises';
 import iconv from 'iconv-lite';
-import { AtomicFile } from './atomicFile';
+import { assertRegularExportTarget, AtomicFile } from './atomicFile';
 import { encodingName } from './files';
 import { queryCsvResultFile, queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame } from '../shared/queryStreamExport';
 import type { QueryFileEncoding } from '../shared/contracts';
@@ -31,8 +30,7 @@ export function queryZipEnd(count: number, directoryOffset: number, directoryByt
 export async function prepareQueryCsvZip(target: string, checkCancelled: () => void): Promise<void> {
   checkCancelled(); const names = ['manifest.json', ...Array.from({ length: limits.results }, (_, index) => queryCsvResultFile(index + 1))];
   if (new Set(names.map(name => name.toLowerCase())).size !== names.length || names.some(name => !/^(?:manifest\.json|results\/rows-\d{3}\.csv)$/.test(name))) throw new Error('CSV容器文件名不安全或重复');
-  try { const status = await lstat(target); if (!status.isFile() || status.isSymbolicLink()) throw new Error('CSV容器目标必须是普通文件，不能是目录或链接'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  await assertRegularExportTarget(target);
   checkCancelled();
 }
 

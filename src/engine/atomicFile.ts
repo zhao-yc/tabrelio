@@ -93,6 +93,16 @@ export async function exportTargetKey(target: string): Promise<string> {
   return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
 }
 
+/** 结果包只接受新路径或已有普通文件，不能用目录和链接作为归档目标。 */
+export async function assertRegularExportTarget(target: string): Promise<void> {
+  try {
+    const status = await lstat(target);
+    if (!status.isFile() || status.isSymbolicLink()) throw Error('导出目标必须是普通文件，不能是目录或链接');
+  } catch (reason) {
+    if ((reason as NodeJS.ErrnoException).code !== 'ENOENT') throw reason;
+  }
+}
+
 /** 同目录独占临时文件、无损编码、短写消费和明确的不可取消替换边界。 */
 export class AtomicFile {
   private file?: WritableFile;

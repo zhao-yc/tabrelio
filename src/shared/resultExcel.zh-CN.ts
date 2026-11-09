@@ -12,4 +12,5 @@ export const resultExcelZh = {
   characters: '结果包含 XLSX 无法无损表示的 XML 字符，请改用 JSON 导出。',
   rowBytes: 'Excel 标题或数据行的输出文本超过 1 MiB，请减少导出列或改用 JSON。',
   invalid: 'XLSX 结果导出数据或请求无效。',
+  binaryInvalid: 'XLSX 结果包含无效二进制值，不能无损导出。',
 } as const;
