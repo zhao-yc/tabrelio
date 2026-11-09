@@ -73,6 +73,23 @@ async function finish() { await act(async () => { vi.runAllTimers(); }); }
 async function batch() { await act(async () => { vi.advanceTimersToNextTimer(); }); }
 
 describe('查询结果列统计的真实对话框', () => {
+  it('多列概览按勾选范围完成后一次发布，可下钻到同名列的准确统计', async () => {
+    await mount({ selectedIndices: new Set([0, 2]) });
+    await finish();
+    await act(async () => button(text.overview).dispatchEvent(new MemoryEvent('click')));
+    await batch();
+    expect(document.querySelectorAll('caption')).toHaveLength(0);
+    await finish();
+    expect(document.querySelectorAll('caption')[0].textContent).toBe(text.overview);
+    const overviewRows = document.querySelector('tbody')!.querySelectorAll('tr');
+    expect(overviewRows).toHaveLength(6);
+    expect(overviewRows[0].querySelectorAll('td').map(cell => cell.textContent).slice(0, 5)).toEqual(['BIGINT', '2', '1', '50.00%', '0']);
+    await act(async () => node(text.overviewOpenColumn('重复名称 · d')).dispatchEvent(new MemoryEvent('click')));
+    await finish();
+    expect(node(text.column).value).toBe('d');
+    expect(node(text.scope).value).toBe('selected');
+    expect(metric(text.sum)).toBe('0.40');
+  });
   it('切到直方图后选择区间数和范围，重新计算前不保留旧图', async () => {
     await mount({ selectedIndices: new Set([0, 2]) });
     await finish();

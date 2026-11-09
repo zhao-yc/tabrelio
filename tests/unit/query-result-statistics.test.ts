@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DataRow, ResultColumn } from '../../src/shared/contracts';
-import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
+import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultQualityOverviewScan, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import type { SortDialect } from '../../src/renderer/queryResultSort';
 
@@ -136,6 +136,35 @@ describe('当前已返回行的数值直方图', () => {
     expect(scan.step().done).toBe(false);
     expect(() => scan.step()).toThrow(text.stale);
     expect(scan.result()).toBeUndefined();
+  });
+});
+
+describe('查询结果多列概览', () => {
+  it('按列身份和当前范围原子发布，保留同名列及空值差异', () => {
+    const { columns, rows } = fixture('TEXT', ['', '', '其他', null]);
+    const scan = new QueryResultQualityOverviewScan([...columns].reverse(), rows, new Set([0, 1, 3]));
+    expect(scan.step()).toEqual({ processed: 1, done: false });
+    expect(scan.result()).toBeUndefined();
+    expect(scan.step()).toEqual({ processed: 2, done: true });
+    expect(scan.result()).toMatchObject([
+      { column: { key: 'other' }, count: 3, nulls: 0, distinct: 3, emptyText: 0, singletonRows: 3, repeatedRows: 0 },
+      { column: { key: 'k' }, count: 3, nulls: 1, distinct: 1, emptyText: 2, singletonRows: 0, repeatedRows: 2 },
+    ]);
+    rows[0].other = '已变化';
+    expect(scan.result()).toBeUndefined();
+    rows[0].other = '0';
+    expect(scan.result()).toBeUndefined();
+  });
+  it('尚未扫描的列也在入口核定原值，超出总原文预算时整批拒绝', () => {
+    const { columns, rows } = fixture('TEXT', ['原值']);
+    const scan = new QueryResultQualityOverviewScan(columns, rows);
+    expect(scan.step().done).toBe(false);
+    rows[0].other = '不能接纳新值';
+    expect(() => scan.step()).toThrow(text.stale);
+    expect(scan.result()).toBeUndefined();
+    const value = '甲'.repeat(4096);
+    const large = Array.from({ length: 1025 }, () => ({ k: value, other: value }));
+    expect(() => new QueryResultQualityOverviewScan(columns, large)).toThrow(text.overviewBudget);
   });
 });
 

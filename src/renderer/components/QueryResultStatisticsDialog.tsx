@@ -9,6 +9,7 @@ import { errorMessage } from '../lib';
 import { UsageHelp, ErrorBox, Modal  } from './ui';
 import { QueryResultFrequencyChart } from './QueryResultFrequencyChart';
 import { TableHistogramChart } from './TableHistogramChart';
+import { QueryResultQualityOverview } from './QueryResultQualityOverview';
 import { queryResultHistogramBins, type QueryResultHistogramBins } from '../queryResultHistogram';
 import { tableHistogramZh as histogramText } from '../locales/tableHistogram.zh-CN';
 
@@ -20,7 +21,7 @@ interface Props {
   isCurrent(): boolean; onClose(): void;
   onFrequencyFilter?(node: QueryResultFilterRule | QueryResultFilterGroup): void;
 }
-const modes = ['summary', 'frequency', 'histogram'] as const;
+const modes = ['summary', 'frequency', 'histogram', 'overview'] as const;
 type Request = { column: string; scope: 'all' | 'selected'; mode: typeof modes[number]; bins: QueryResultHistogramBins };
 type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan: QueryResultStatisticsScan; timer?: ReturnType<typeof setTimeout> };
 type View = { request: Request; processed: number; total: number; binning?: true; result?: QueryResultStatisticsResult; error?: string };
@@ -64,7 +65,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
 
   useEffect(() => {
     stop();
-    if (!prepared.capture || !environment()) return;
+    if (!prepared.capture || !environment() || request.mode === 'overview') return;
     let active: Operation;
     try {
       const column = origin.columns.find(value => Object.getOwnPropertyDescriptor(value, 'key')?.value === request.column);
@@ -143,7 +144,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
       {request.mode === 'frequency' && <><p>{text.frequencyHint}</p>{onFrequencyFilter && <p>{text.frequencyFilterHint}</p>}</>}
       {request.mode === 'summary' && <><p>{sqliteSource ? text.sqliteHint : dialect === 'postgresql' ? text.postgresHint : text.hint}</p><p>{text.qualityHint}</p><p>{text.standardDeviationHint}</p></>}
     </UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
-    <div className="filter-inputs"><label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>
+    <div className="filter-inputs">{request.mode !== 'overview' && <label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>}
       <label>{text.scope}<select aria-label={text.scope} value={request.scope} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (event.target.value === 'all' || event.target.value === 'selected')) change({ ...request, scope: event.target.value }); }}><option value="all">{text.all}</option><option value="selected" disabled={!prepared.indices.size}>{text.selected}</option></select></label></div>
     <div className="query-result-frequency-modes" role="group" aria-label={text.mode}>{modes.map(mode => <button key={mode} type="button" aria-pressed={mode === request.mode} className={mode === request.mode ? 'selected' : ''} disabled={!valid || !prepared.capture} onClick={() => change({ ...request, mode })}>{text[mode]}</button>)}</div>
     {request.mode === 'histogram' && <div className="filter-inputs"><label>{histogramText.bins}
@@ -153,7 +154,10 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
       }}>{queryResultHistogramBins.map(bins => <option key={bins} value={bins}>{bins}</option>)}</select>
     </label></div>}
     {!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={current ? view.error : undefined}/>
-    {valid && current && !view.result && !view.error && <p role="status">{scanning[request.mode]} {text.progress(view.processed, view.total)}</p>}
+    {valid && current && request.mode !== 'overview' && !view.result && !view.error && <p role="status">{scanning[request.mode]} {text.progress(view.processed, view.total)}</p>}
+    {valid && request.mode === 'overview' && <QueryResultQualityOverview key={request.scope} columns={origin.columns} rows={origin.rows}
+      indices={request.scope === 'selected' ? prepared.indices : undefined} sqliteSource={origin.sqliteSource} dialect={origin.dialect}
+      isCurrent={environment} onOpenColumn={column => change({ ...request, mode: 'summary', column })}/>}
     {request.mode === 'summary' && qualityMetrics && <section className="query-result-quality" aria-label={text.quality}>
       <h3>{text.quality}</h3>
       <dl>{qualityMetrics.map(([label, value]) => <div key={label}><dt>{label}</dt><dd aria-label={label}>{value ?? text.unavailable}</dd></div>)}</dl>
@@ -161,5 +165,5 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     {result && request.mode === 'histogram' && (result.histogram ? <TableHistogramChart histogram={result.histogram}/> : <p>{text.histogramUnavailable} {result.reason}</p>)}
     {result && request.mode === 'frequency' && <>{result.frequency ? <QueryResultFrequencyChart frequency={result.frequency} count={result.count} nulls={result.nulls} onFilter={onFrequencyFilter ? filterFrequency : undefined}/> : <p>{text.frequencyUnavailable} {result.reason}</p>}{result.floatInput && <p>{text.floatInput}</p>}</>}
     {result && request.mode === 'summary' && <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.standardDeviationRounded && <p title={text.standardDeviationHint}>{text.standardDeviationRounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>}
-  </div><footer className="modal-footer"><span className="grow"/><button onClick={close}>{result ? text.close : text.cancel}</button></footer></Modal></div>;
+  </div><footer className="modal-footer"><span className="grow"/><button onClick={close}>{result || request.mode === 'overview' ? text.close : text.cancel}</button></footer></Modal></div>;
 }

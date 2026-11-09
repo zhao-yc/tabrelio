@@ -27,12 +27,13 @@ export interface QueryResultStatisticsResult {
 type OrdinaryKey = ReturnType<typeof queryResultFilterKey>;
 type Key = OrdinaryKey | SqliteResultComparisonKey;
 interface ValueStamp { value: unknown; units: number; prototype?: object | null; fields?: readonly (readonly [PropertyKey, unknown])[]; }
-interface Binding {
+interface StatisticsSource {
   columns: readonly ResultColumn[]; rows: readonly DataRow[]; columnRefs: readonly ResultColumn[]; metadata: readonly ResultColumn[];
-  rowRefs: readonly DataRow[]; indices: readonly number[]; selection?: ReadonlySet<number>; values: readonly ValueStamp[]; invalid: boolean;
+  rowRefs: readonly DataRow[]; indices: readonly number[]; selection?: ReadonlySet<number>;
   sqlite?: SqliteResultFilterSource;
   dialect?: SortDialect;
 }
+interface Binding extends StatisticsSource { values: readonly ValueStamp[]; invalid: boolean; }
 const bindings = new WeakMap<QueryResultStatisticsCapture, Binding>();
 const frequencyOwners = new WeakMap<QueryResultFrequency, { capture: QueryResultStatisticsCapture; hasNull: boolean }>();
 const setSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size')!.get!;
@@ -106,25 +107,47 @@ function sameValue(value: unknown, before: ValueStamp): boolean {
   return Object.getPrototypeOf(value) === before.prototype && keys.length === before.fields.length && before.fields.every(([key, field], index) => keys[index] === key && Object.is(own(value, key), field));
 }
 
+/** 多列扫描共享原行列身份、选择及 SQLite 存储代码，避免为每列重复保存元数据。 */
+function statisticsSource(columns: readonly ResultColumn[], rows: readonly DataRow[], indices?: ReadonlySet<number>, sqliteSource?: QueryResult, dialect?: SortDialect): StatisticsSource {
+  const columnRefs = array(columns, queryResultSortLimits.columns, 1), rowRefs = array(rows, queryResultSortLimits.rows);
+  const descriptions = columnRefs.map(metadata);
+  if (new Set(descriptions.map(item => item.key)).size !== columnRefs.length || new Set(rowRefs).size !== rowRefs.length || rowRefs.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw Error(text.invalid);
+  return {
+    columns, rows, columnRefs, metadata: descriptions, rowRefs,
+    indices: indices === undefined ? rowRefs.map((_, index) => index) : positions(indices, rowRefs.length),
+    selection: indices, sqlite: sqliteSource ? captureSqliteResultFilterSource(sqliteSource, columns, rows) : undefined, dialect,
+  };
+}
+/** 按值核算原文预算；概览为全部列共用同一个预算。 */
+function statisticsBudget(message: string) {
+  let units = 0;
+  return (length: number) => {
+    if (length > queryResultSortLimits.valueUnits) throw Error(message);
+    units += length;
+    if (units > queryResultSortLimits.units) throw Error(message);
+  };
+}
+
+function captureStatisticsColumn(source: StatisticsSource, columnIndex: number, charge: (units: number) => void): QueryResultStatisticsCapture {
+  const column = source.metadata[columnIndex];
+  if (!column) throw Error(text.invalid);
+  const values = source.indices.map(index => stamp(own(source.rowRefs[index], column.key), charge));
+  const capture = Object.freeze({ column, rowCount: values.length, selected: source.selection !== undefined });
+  bindings.set(capture, { ...source, values, invalid: false });
+  return capture;
+}
+
 /** 捕获原行列与当前范围；只冻结自有快照，不克隆或冻结来源。 */
 export function captureQueryResultStatistics(columns: readonly ResultColumn[], rows: readonly DataRow[], column: ResultColumn, indices?: ReadonlySet<number>, sqliteSource?: QueryResult, dialect?: SortDialect): QueryResultStatisticsCapture {
-  const columnRefs = array(columns, queryResultSortLimits.columns, 1), rowRefs = array(rows, queryResultSortLimits.rows);
-  const descriptions = columnRefs.map(metadata), columnIndex = columnRefs.indexOf(column);
-  if (columnIndex < 0 || new Set(descriptions.map(item => item.key)).size !== columnRefs.length || new Set(rowRefs).size !== rowRefs.length || rowRefs.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw Error(text.invalid);
-  const positionsInScope = indices === undefined ? rowRefs.map((_, index) => index) : positions(indices, rowRefs.length), admitted = descriptions[columnIndex];
-  let units = 0;
-  const charge = (length: number) => { if (length > queryResultSortLimits.valueUnits) throw Error(text.budget); units += length; if (units > queryResultSortLimits.units) throw Error(text.budget); };
-  const values = positionsInScope.map(index => stamp(own(rowRefs[index], admitted.key), charge));
-  const sqlite = sqliteSource ? captureSqliteResultFilterSource(sqliteSource, columns, rows) : undefined;
-  const capture = Object.freeze({ column: admitted, rowCount: positionsInScope.length, selected: indices !== undefined });
-  bindings.set(capture, { columns, rows, columnRefs, metadata: descriptions, rowRefs, indices: positionsInScope, selection: indices, values, invalid: false, sqlite, dialect });
+  const source = statisticsSource(columns, rows, indices, sqliteSource, dialect);
+  const capture = captureStatisticsColumn(source, source.columnRefs.indexOf(column), statisticsBudget(text.budget));
   if (!currentQueryResultStatistics(capture, columns, rows)) throw Error(text.stale);
   return capture;
 }
 
 /** 分批阶段仅检查固定大小结构及本批原格；避免每512行重复全表检查造成平方扫描。 */
-function currentStructure(binding: Binding): boolean {
-  if (binding.invalid || own(binding.columns, 'length') !== binding.columnRefs.length || own(binding.rows, 'length') !== binding.rowRefs.length) return false;
+function currentStructure(binding: StatisticsSource): boolean {
+  if (own(binding.columns, 'length') !== binding.columnRefs.length || own(binding.rows, 'length') !== binding.rowRefs.length) return false;
   if (binding.selection && setSize.call(binding.selection) !== binding.indices.length) return false;
   for (let index = 0; index < binding.columnRefs.length; index++) {
     const column = own(binding.columns, String(index)) as ResultColumn, before = binding.metadata[index];
@@ -134,18 +157,23 @@ function currentStructure(binding: Binding): boolean {
   }
   return true;
 }
+/** 完整核验共享来源，每列的原格快照可以独立复核。 */
+function currentStatisticsSource(source: StatisticsSource): boolean {
+  if (!currentStructure(source) || source.sqlite && !source.sqlite.current()) return false;
+  for (let index = 0; index < source.rowRefs.length; index++) if (own(source.rows, String(index)) !== source.rowRefs[index]) return false;
+  if (!source.selection) return true;
+  return positions(source.selection, source.rowRefs.length).every((index, position) => index === source.indices[position]);
+}
+function currentColumnValues(binding: Binding, key: string): boolean {
+  if (binding.invalid) return false;
+  return binding.indices.every((index, position) => sameValue(own(binding.rowRefs[index], key), binding.values[position]));
+}
 /** 完整核源时，任何已经观测到的数组、元数据、选择和原值漂移均永久失效。 */
 export function currentQueryResultStatistics(capture: QueryResultStatisticsCapture, columns: readonly ResultColumn[], rows: readonly DataRow[]): boolean {
   const binding = bindings.get(capture);
   if (!binding || binding.invalid) return false;
   try {
-    if (columns !== binding.columns || rows !== binding.rows || !currentStructure(binding) || binding.sqlite && !binding.sqlite.current()) throw Error(text.stale);
-    for (let index = 0; index < binding.rowRefs.length; index++) if (own(rows, String(index)) !== binding.rowRefs[index]) throw Error(text.stale);
-    if (binding.selection) {
-      const selected = positions(binding.selection, binding.rowRefs.length);
-      if (selected.some((index, position) => index !== binding.indices[position])) throw Error(text.stale);
-    }
-    for (let position = 0; position < binding.indices.length; position++) if (!sameValue(own(binding.rowRefs[binding.indices[position]], capture.column.key), binding.values[position])) throw Error(text.stale);
+    if (columns !== binding.columns || rows !== binding.rows || !currentStatisticsSource(binding) || !currentColumnValues(binding, capture.column.key)) throw Error(text.stale);
     return true;
   } catch { binding.invalid = true; return false; }
 }
@@ -279,6 +307,7 @@ export class QueryResultStatisticsScan {
   private readonly frequency?: QueryResultFrequencyCounter;
   private readonly histogram?: QueryResultHistogramCounter;
   private readonly histogramBins?: QueryResultHistogramBins;
+  private readonly qualityOnly: boolean;
   private minimum?: { key: Key; literal: string };
   private maximum?: { key: Key; literal: string };
   private sum: Decimal = { coefficient: 0n, scale: 0 };
@@ -291,7 +320,7 @@ export class QueryResultStatisticsScan {
   private readonly numericColumn: boolean;
   private readonly floatingColumn: boolean;
   /** 私有WeakMap拒绝伪造capture；声明为字节的列即使返回字符串也不参加值聚合。 */
-  constructor(capture: QueryResultStatisticsCapture, mode: boolean | { histogram: QueryResultHistogramBins } = false) {
+  constructor(capture: QueryResultStatisticsCapture, mode: boolean | 'quality' | { histogram: QueryResultHistogramBins } = false) {
     const binding = bindings.get(capture);
     if (!binding || !currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
     this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type, binding.dialect);
@@ -299,6 +328,7 @@ export class QueryResultStatisticsScan {
     this.numericColumn = this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'postgresNumeric' || this.floatingColumn;
     const histogramBins = typeof mode === 'object' ? mode.histogram : undefined;
     this.histogramBins = histogramBins;
+    this.qualityOnly = mode === 'quality';
     if (mode === true) this.frequency = new QueryResultFrequencyCounter();
     if (histogramBins && (binding.sqlite || this.numericColumn)) this.histogram = new QueryResultHistogramCounter(histogramBins);
     if (binding.sqlite) this.sqliteTypes = { integer: 0, real: 0, text: 0, blob: 0, null: 0 };
@@ -343,7 +373,7 @@ export class QueryResultStatisticsScan {
     const total = this.total, binding = this.binding, capture = this.capture;
     if (this.cancelled) return { processed: this.processed, total, done: true };
     try {
-      if (!binding || !capture || !currentStructure(binding)) throw Error(text.stale);
+      if (!binding || binding.invalid || !capture || !currentStructure(binding)) throw Error(text.stale);
       const end = Math.min(total, this.processed + 512);
       let units = 0;
       for (; this.processed < end; this.processed++) {
@@ -385,6 +415,7 @@ export class QueryResultStatisticsScan {
             if (numeric) this.histogram?.add(decimal(numericValue));
             continue;
           }
+          if (this.qualityOnly) continue;
           if (!this.minimum || compareKeys(key, this.minimum.key) < 0) this.minimum = { key, literal };
           if (!this.maximum || compareKeys(key, this.maximum.key) > 0) this.maximum = { key, literal };
           if (numeric) {
@@ -443,7 +474,7 @@ export class QueryResultStatisticsScan {
     if (this.reason) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: false, floatInput: false, averageRounded: false, reason: this.reason }); return; }
     let sum: string | undefined, average: string | undefined, averageRounded = false;
     let deviation: ReturnType<typeof populationDeviation> = {};
-    if (this.finiteNumbers && (this.sqliteTypes ? this.numericOnly : this.numericColumn)) {
+    if (!this.qualityOnly && this.finiteNumbers && (this.sqliteTypes ? this.numericOnly : this.numericColumn)) {
       sum = display(this.sum.coefficient, this.sum.scale);
       if (!this.frequency) deviation = populationDeviation(this.sum, this.sumOfSquares, nonNull);
       const finite = exactAverage(this.sum, nonNull);
@@ -469,5 +500,68 @@ export class QueryResultStatisticsScan {
     if (this.cancelled || !this.completed || !capture || !binding) return;
     if (!currentQueryResultStatistics(capture, binding.columns, binding.rows)) { this.cancel(); return; }
     return this.published;
+  }
+}
+
+export interface QueryResultQualityColumn {
+  column: Readonly<ResultColumn>;
+  count: number;
+  nulls: number;
+  distinct?: number;
+  emptyText?: number;
+  singletonRows?: number;
+  repeatedRows?: number;
+}
+
+/** 逐列分批扫描，只在所有列和原始来源都通过复核后一次发布。 */
+export class QueryResultQualityOverviewScan {
+  private readonly source: StatisticsSource;
+  private readonly captures: QueryResultStatisticsCapture[];
+  private readonly columns: QueryResultQualityColumn[] = [];
+  private active?: QueryResultStatisticsScan;
+  private cancelled = false;
+
+  constructor(columns: readonly ResultColumn[], rows: readonly DataRow[], indices?: ReadonlySet<number>, sqliteSource?: QueryResult, dialect?: SortDialect) {
+    this.source = statisticsSource(columns, rows, indices, sqliteSource, dialect);
+    // 两个预算分别约束选中原格和共享坐标复核；超限时不能静默取前几列。
+    if (this.total * this.source.indices.length > 200000 || this.total * rows.length > 1000000) throw Error(text.overviewBudget);
+    const charge = statisticsBudget(text.overviewBudget);
+    this.captures = this.source.columnRefs.map((_, index) => captureStatisticsColumn(this.source, index, charge));
+  }
+
+  get total(): number { return this.source.columnRefs.length; }
+
+  step(): { processed: number; done: boolean } {
+    const index = this.columns.length;
+    if (this.cancelled || index === this.total) return { processed: index, done: true };
+    this.active ??= new QueryResultStatisticsScan(this.captures[index], 'quality');
+    if (!this.active.step().done) return { processed: index, done: false };
+    const result = this.active.result();
+    if (!result) throw Error(text.stale);
+    const { count, nulls, nonNull, distinct, quality } = result;
+    this.columns.push(Object.freeze({
+      column: this.source.metadata[index], count, nulls, distinct,
+      emptyText: quality?.emptyText, singletonRows: quality?.singletons,
+      repeatedRows: quality && nonNull - quality.singletons,
+    }));
+    this.active = undefined;
+    if (index + 1 === this.total) Object.freeze(this.columns);
+    return { processed: index + 1, done: index + 1 === this.total };
+  }
+
+  /** 点击下钻前也复核此前所有列，来源漂移后不能重用旧概览。 */
+  result(): readonly QueryResultQualityColumn[] | undefined {
+    if (this.cancelled || this.columns.length !== this.total) return;
+    try {
+      if (currentStatisticsSource(this.source) && this.captures.every(capture => currentColumnValues(bindings.get(capture)!, capture.column.key))) return this.columns;
+    } catch {}
+    this.cancel();
+  }
+
+  cancel(): void {
+    this.cancelled = true;
+    this.active?.cancel();
+    this.active = undefined;
+    this.captures.length = 0;
   }
 }

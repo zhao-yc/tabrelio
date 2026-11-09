@@ -342,8 +342,14 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(histogram().locator('tbody th').first()).toHaveText('[-9223372036854775808, -5534023222112865485)'));
     await step(() => expect(histogram().locator('tbody th').last()).toHaveText('[5534023222112865484, 9223372036854775807]'));
     await step(async () => info.attach('SQLite查询结果数值直方图', { body: await page.screenshot(), contentType: 'image/png' }));
-    await step(() => statistics().getByRole('button', { name: statisticsText.summary, exact: true }).click());
-    await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c4'));
+    await step(() => statistics().getByRole('button', { name: statisticsText.overview, exact: true }).click());
+    const overview = () => statistics().getByRole('table', { name: statisticsText.overview, exact: true });
+    await step(() => expect(overview().locator('tbody th')).toHaveText(['exact_int · c0', 'note · c1', 'nullable · c2', 'payload · c3', 'mixed · c4']));
+    const nullColumn = () => overview().getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'nullable · c2', exact: true }) });
+    await step(() => expect(nullColumn().getByRole('cell', { name: '100.00%', exact: true })).toBeVisible());
+    await step(async () => info.attach('SQLite查询结果多列概览', { body: await page.screenshot(), contentType: 'image/png' }));
+    await step(() => overview().getByRole('button', { name: statisticsText.overviewOpenColumn('mixed · c4'), exact: true }).click());
+    await step(() => expect(statistics().getByLabel(statisticsText.column, { exact: true })).toHaveValue('c4'));
     await step(() => expect(statistics().getByLabel(statisticsText.distinct, { exact: true })).toHaveText('2'));
     await step(() => expect(statistics().getByLabel(statisticsText.sum, { exact: true })).toHaveText(statisticsText.unavailable));
     await step(() => expect(statistics().getByLabel(statisticsText.standardDeviation, { exact: true })).toHaveText(statisticsText.unavailable));

@@ -15,3 +15,11 @@
 .query-result-quality h3 { margin: 0 0 6px; }
 .query-result-quality dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 6px 12px; margin: 0 0 12px; }
 .query-result-quality dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+.query-result-overview { overflow: auto; max-height: min(52vh, 500px); }
+.query-result-overview table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.query-result-overview caption { text-align: left; font-weight: 650; padding-bottom: 6px; }
+.query-result-overview th, .query-result-overview td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); }
+.query-result-overview thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); min-width: 3rem; }
+.query-result-overview tbody th, .query-result-overview tbody td:nth-child(2) { min-width: 6rem; max-width: 16rem; overflow-wrap: anywhere; }
+.query-result-overview tbody td { font-variant-numeric: tabular-nums; }
+.query-result-overview button { white-space: nowrap; }
