@@ -46,6 +46,19 @@ async function clickFileMenu(id: string) {
   }, id);
 }
 
+/** 夹具只记录 LaunchServices 的文档事件，无命令拼接或用户数据。 */
+function compileSqlEditorFixture(directory: string, name: string) {
+  const receipt = join(directory, name + '收件.txt'), appPath = join(directory, name + '.app');
+  execFileSync('/usr/bin/osacompile', ['-o', appPath, '-e', `on open itemsToOpen
+  set receipt to POSIX file ${JSON.stringify(receipt)}
+  set fd to open for access receipt with write permission
+  set eof fd to 0
+  write (POSIX path of item 1 of itemsToOpen) to fd as «class utf8»
+  close access fd
+end open`]);
+  return { receipt, appPath };
+}
+
 /** 原生选择也用于 IPC 负例，不能绕过真实令牌生成直接传绝对路径。 */
 async function authorizeFile(path: string, purpose: 'query' | 'import' | 'export', format = 'sql'): Promise<FileChoice> {
   await chooseNativeFile(purpose === 'export' ? 'save' : 'open', path);
@@ -180,17 +193,8 @@ test.describe('离线 SQL 文件打开与另存', () => {
     test.skip(process.platform !== 'darwin', '该用例使用 macOS LaunchServices 和 AppleScript 夹具');
     await openOfflineQuery();
     const directory = await realpath(dataDir);
-    const receipt = join(directory, '外部应用收件.txt');
-    const appPath = join(directory, '测试 SQL 编辑器.app');
+    const { receipt, appPath } = compileSqlEditorFixture(directory, '测试 SQL 编辑器');
     const filePath = join(directory, "脚本 '空 格' & ;.sql");
-    // 夹具只将 LaunchServices 的文档事件写到自己的隔离目录，无命令拼接或用户数据。
-    execFileSync('/usr/bin/osacompile', ['-o', appPath, '-e', `on open itemsToOpen
-  set receipt to POSIX file ${JSON.stringify(receipt)}
-  set fd to open for access receipt with write permission
-  set eof fd to 0
-  write (POSIX path of item 1 of itemsToOpen) to fd as «class utf8»
-  close access fd
-end open`]);
     await writeFile(filePath, source);
     await chooseNativeFile('open', filePath);
     const file = await fileDialog('open', 'utf8');
@@ -234,6 +238,44 @@ end open`]);
     await clickFileMenu('edit-bound-sql-external');
     await expect(page.getByText('请先在「文件 → 外部 SQL 编辑器」选择应用。', { exact: true })).toBeVisible();
     await expectNoSqlExecution([{ kind: 'queryFileSources.open', status: 'completed' }]);
+  });
+
+  test('从保存查询启动外部编辑，复核预览后只写回该查询', async ({}, testInfo) => {
+    test.skip(process.platform !== 'darwin', '该用例使用 macOS LaunchServices 和 AppleScript 夹具');
+    const { appPath, receipt } = compileSqlEditorFixture(await realpath(dataDir), '保存查询外部编辑器');
+    await chooseNativeFile('open', appPath);
+    expect((await page.evaluate(() => window.dbark.invoke('externalSqlEditor.choose', {}))).path).toBe(appPath);
+    const query = { id: 'external-query-fixture', name: '外部编辑的保存查询', sql: 'SELECT 1;\r\n-- 原文', database: '遗留库', updatedAt: '' };
+    await page.evaluate(query => window.dbark.invoke('queries.save', query), query);
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '已保存查询', exact: true })).click();
+    const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true });
+    await dialog.getByRole('button', { name: '保存的查询', exact: true }).click();
+    const card = dialog.locator('.history-card').filter({ hasText: query.name });
+    await card.getByRole('button', { name: '用外部编辑器编辑', exact: true }).click();
+    const panel = dialog.getByRole('region', { name: '保存查询的外部编辑', exact: true });
+    const path = await panel.getByLabel('编辑副本路径').inputValue();
+    await expect.poll(() => readFile(receipt, 'utf8').catch(() => '')).toBe(path);
+    expect(await readFile(path, 'utf8')).toBe(query.sql);
+    const read = panel.getByRole('button', { name: '读取外部改动', exact: true });
+    const apply = panel.getByRole('button', { name: '写回原保存查询', exact: true });
+    const latest = 'SELECT 3;\r\n-- 新版精确尾部 🚢';
+    await writeFile(path, 'SELECT 2;\r\n-- 第一次预览');
+    await read.click();
+    await expect(panel.getByLabel('外部编辑后的片段')).toContainText('第一次预览');
+    await writeFile(path, latest);
+    await apply.click();
+    await expect(panel.getByRole('alert')).toContainText('预览后发生变化');
+    const persisted = () => page.evaluate(() => window.dbark.invoke('queries.list', {}));
+    expect(await persisted()).toEqual([{ ...query, updatedAt: expect.any(String) }]);
+    await read.click();
+    await expect(panel.getByLabel('外部编辑后的片段')).toContainText('新版精确尾部 🚢');
+    await page.screenshot({ path: testInfo.outputPath('saved-query-external-preview.png') });
+    await apply.click();
+    await expect(panel).toBeHidden();
+    await expect(card.locator('pre')).toContainText('新版精确尾部 🚢');
+    expect(await persisted()).toEqual([{ ...query, sql: latest, updatedAt: expect.any(String) }]);
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expectNoSqlExecution();
   });
 
   test('UTF BOM 和 GB18030 文件打开为独立标签，取消不覆盖原查询且不执行 SQL', async ({}, testInfo) => {

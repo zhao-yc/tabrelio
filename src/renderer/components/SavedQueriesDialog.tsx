@@ -21,6 +21,8 @@ import { SavedQueryDeleteSelectedPreview } from './SavedQueryDeleteSelectedPrevi
 import { savedQueryDeleteSelectedSchema, readSavedQueryDeleteSelectedResult, savedQueryDeleteSelectedZh as deleteText } from '../../shared/savedQueryDeleteSelected';
 import { Empty, ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import { SqlTextPreview } from './SqlTextPreview';
+import { SavedQueryExternalEditor } from './SavedQueryExternalEditor';
+import { savedQueryExternalZh as externalText, type SavedQueryExternalSession } from '../../shared/savedQueryExternalEdit';
 import { QueryBatchOpenPreview } from './QueryBatchOpenPreview';
 import type { HistoryInsertionTarget } from '../historyInsertion';
 import { savedQueryInsertionZh as insertionText } from '../locales/savedQueryInsertion.zh-CN';
@@ -33,6 +35,7 @@ interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; cri
 interface DeleteEdit { items: readonly SelectedSavedQuery[]; selection: ReadonlyMap<string, SelectedSavedQuery>; epoch: number; }
 interface OpenSelection extends SelectedSavedQuery { connectionId?: string; }
 interface OpenBatch { selection: ReadonlyMap<string, OpenSelection>; targets: ReadonlyMap<string, string>; epoch: number; }
+interface ExternalEdit { queryId: string; session: SavedQueryExternalSession; }
 const selectQuery = ({ query, digest }: SavedQueryPageEntry): OpenSelection => ({ id: query.id, digest, name: query.name, connectionId: query.connectionId });
 const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database,
@@ -55,6 +58,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
   const [deleting, setDeleting] = useState<DeleteEdit>(), deleteRef = useRef<DeleteEdit | undefined>(undefined);
   const [opening, setOpening] = useState<OpenBatch>(), openRef = useRef<OpenBatch | undefined>(undefined);
+  const [external, setExternal] = useState<ExternalEdit>(), externalRef = useRef<ExternalEdit | true | undefined>(undefined);
   const openBatchTrigger = useRef<HTMLButtonElement>(null);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group, scope, sort }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
@@ -73,12 +77,13 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     const off = insertion?.subscribe(sync); sync(); return () => { off?.(); };
   }, [insertion]);
   const owns = (ticket: number) => alive.current && !closed.current && epoch.current === ticket;
-  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current && !deleteRef.current && !openRef.current;
+  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current && !deleteRef.current && !openRef.current && !externalRef.current;
   /** 原句柄仅在成功释放后遗忘；迟到新页也精确回收。 */
   async function release() { const value = cursor.current; if (value) { await io.request('queries.pageRelease', { cursor: value }); if (cursor.current === value) cursor.current = undefined; } }
   /** 取消失败仍等原Promise终态并释放，不能让观察超时或按钮点击提前放行。 */
   async function cleanup() { let failure: unknown; if (active.current) try { await io.request('query.cancel', { taskId: active.current }); } catch (reason) { failure = reason; } await pending.current?.catch(() => {}); await release(); if (failure) throw failure; }
   async function close(after = onClose, keepInsertion = false) {
+    if (externalRef.current) return;
     // Escape在读取或释放期间仍撤销插入，不能因原close正在等待而忽略关闭意图。
     if (!keepInsertion) { insertionRef.current?.dispose(); if (insertionClosing.current) cancelledInsertion.current = true; }
     if (closed.current) return;
@@ -118,12 +123,18 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     finally { if (active.current === taskId) active.current = undefined; }
   }
   /** 显式第一页重新读取组织版本，沿用全文、分组、来源和错误策略。 */
-  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current || deleteRef.current || openRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
+  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current || deleteRef.current || openRef.current || externalRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
   useEffect(() => {
     alive.current = true; closed.current = false; const ticket = epoch.current;
     // StrictMode的旧setup尚未投递时只留本轮启动权；cleanup不消费父传入的子权限。
     void Promise.resolve(pending.current).then(() => { if (owns(ticket)) void load(false, criteriaRef.current, ticket); });
-    return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; renameRef.current = undefined; deleteRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); };
+    return () => {
+      alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; renameRef.current = undefined; deleteRef.current = undefined;
+      const activeEdit = externalRef.current;
+      externalRef.current = undefined;
+      if (activeEdit && activeEdit !== true) void io.request('queries.externalKeep', { sessionId: activeEdit.session.sessionId }).catch(() => {});
+      void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true));
+    };
   }, []);
   /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
   function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
@@ -298,6 +309,32 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     return pageView.current.reply === reply && pageView.current.applied === applied
       && !pageView.current.needsRefresh && criteriaKey(criteriaRef.current) === applied && reply?.items.includes(item) === true;
   }
+  /** 编辑副本以原卡片编号和摘要启动，列表在确认保留、丢弃或写回前保持原选择。 */
+  function beginExternal(item: SavedQueryPageEntry): void {
+    if (!editable() || !currentCard(item)) return;
+    externalRef.current = true;
+    const work = run(async ticket => {
+      const session = await io.request('queries.externalStart', { id: item.query.id, digest: item.digest });
+      if (!owns(ticket)) { await io.request('queries.externalKeep', { sessionId: session.sessionId }); return; }
+      const edit = { queryId: item.query.id, session };
+      externalRef.current = edit;
+      setExternal(edit);
+    });
+    if (work) void work.finally(() => { if (externalRef.current === true) externalRef.current = undefined; });
+    else externalRef.current = undefined;
+  }
+  function finishExternal(edit: ExternalEdit, message: string) {
+    if (externalRef.current !== edit) return;
+    externalRef.current = undefined;
+    setExternal(undefined);
+    const next = new Map(selectedRef.current);
+    next.delete(edit.queryId);
+    selectedRef.current = next;
+    setSelected(next);
+    if (message) useWorkspace.getState().notify(message);
+    setNeedsRefresh(true);
+    void load();
+  }
   /** 按原卡片编号和摘要读取本地正文，连接是否可用不参与预览。 */
   function showSql(item: SavedQueryPageEntry): void {
     if (!editable() || !currentCard(item)) return;
@@ -377,11 +414,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
-  const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
+  const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening || !!external, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
   return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else void close(); }}
     onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
-    <div className="dialog-tabs"><button disabled={closing} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
+    <div className="dialog-tabs"><button disabled={closing || !!external} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><UsageHelp><p>{text.metadataOnly}</p><p>{insertionText.hint}</p><p>{t.hint}</p><p>{t.openHint}</p></UsageHelp><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
       <details className="saved-query-organization-tree" open><summary>{text.title}</summary><nav aria-label={text.tree}>
         <button disabled={blocked} aria-label={text.all} aria-current={group.kind === 'all' ? 'true' : undefined} onClick={() => selectScope({ kind: 'all' })}>{text.all} ({organization?.totalCount ?? 0})</button>
@@ -416,14 +453,15 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           busy={busy || closing} onTarget={(id, connectionId) => changeOpenBatchTarget(opening, id, connectionId)}
           onCancel={cancelOpenBatch} onConfirm={() => applyOpenBatch(opening)}/>}
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p role="status">{notice}</p>}{busy && <Spinner/>}
+        {external && <SavedQueryExternalEditor key={external.session.sessionId} session={external.session} request={io.request} onDone={message => finishExternal(external, message)}/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
-          <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<button disabled={blocked || changed || needsRefresh} onClick={() => copySql(item)}>{sqlText.sqlCopy}</button><button disabled={blocked || changed || needsRefresh} title={t.sqlExportHint} onClick={() => exportSql(item)}>{t.sqlExport}</button><label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
+          <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<button disabled={blocked || changed || needsRefresh} onClick={() => copySql(item)}>{sqlText.sqlCopy}</button><button disabled={blocked || changed || needsRefresh} title={t.sqlExportHint} onClick={() => exportSql(item)}>{t.sqlExport}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginExternal(item)}>{externalText.open}</button><label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
           <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}
       </div>
     </div>{deleting && <SavedQueryDeleteSelectedPreview key={deleting.epoch} items={deleting.items} busy={busy || closing} onCancel={() => cancelDeleteSelected(deleting)} onConfirm={() => applyDeleteSelected(deleting)}/>}{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} mode={renaming.duplicateRevision ? 'duplicate' : 'rename'} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>}</div>
-    <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={() => void close()}>{zh.common.close}</button></footer>
+    <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing || !!external} onClick={() => void close()}>{zh.common.close}</button></footer>
   </Modal>;
 }

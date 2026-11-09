@@ -1,4 +1,6 @@
 import { sameConnectionFamily } from '../shared/connectionDialect';
+import { savedQueryExternalZh } from '../shared/savedQueryExternalEdit';
+import type { SavedQueryReadTextInput } from '../shared/savedQuerySearch';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetDocumentSchema, sqliteTablePresetLayoutsSchema, sqliteTablePresetLimits, type SqliteTablePresetTarget, type SqliteTablePresetDocument, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../shared/sqliteTablePresets';
 import { RecordTemplateStorage, readRecordTemplateDocuments } from './recordTemplateStorage';
 import type { RecordTemplateTarget, RecordTemplateSource } from '../shared/recordTemplates';
@@ -1102,6 +1104,21 @@ export class LocalStore {
     assertCurrent();
     this.mutate(() => {
       for (const record of records) this.db.run('INSERT INTO queries VALUES (?,?,?)', [record.id, JSON.stringify(record), record.updatedAt]);
+    }, assertCurrent);
+    this.queryRevisionValue++;
+  }
+  /** 外部编辑只替换正文。旧连接、库状态、名称和分组沿用原记录，包括连接已经失效的查询。 */
+  updateSavedQueryExternal(source: SavedQueryReadTextInput, sql: string, assertCurrent: () => void): void {
+    this.mutate(() => {
+      assertCurrent();
+      const previous = this.querySearchRaw(source.id);
+      if (previous === undefined) throw Error(savedQueryExternalZh.missing);
+      if (createHash('sha256').update(previous).digest('hex') !== source.digest) throw Error(savedQueryExternalZh.stale);
+      const current = parseSavedQueryRecord(source.id, previous);
+      const now = Date.now(), old = Date.parse(current.updatedAt);
+      const updatedAt = new Date(Number.isFinite(old) ? Math.max(now, old + 1) : now).toISOString();
+      const query = parseSavedQueryRecord(source.id, JSON.stringify({ ...current, sql, updatedAt }));
+      this.db.run('UPDATE queries SET data=?,updated_at=? WHERE id=?', [JSON.stringify(query), updatedAt, source.id]);
     }, assertCurrent);
     this.queryRevisionValue++;
   }

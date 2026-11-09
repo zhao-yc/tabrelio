@@ -9,6 +9,7 @@ import type { UiCommandInvocation, UiMenuState, ObjectCategory } from './uiComma
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
 import type { QueryRecentFileView, QueryFileSourceHandoffInput, QueryFileSourceHandoffResult } from './queryFileSources';
 import type { ExternalSqlEditorView } from './externalSqlEditor';
+import type { SavedQueryExternalSession, SavedQueryExternalPreview, SavedQueryExternalReceipt } from './savedQueryExternalEdit';
 import type { SnippetTransferDecision, SnippetTransferPreview, SnippetTransferResult } from './snippetTransfer';
 import type { TableCopyDataGetInput, TableCopyDataGetOutput, TableCopyDataPreviewInput, TableCopyDataPreviewOutput, TableCopyDataApplyInput, TableCopyDataApplyOutput, TableCopyDataReleaseInput } from './tableCopyData';
 import type { TableCreateGetInput, TableCreateGetOutput, TableCreatePreviewInput, TableCreatePreviewOutput, TableCreateApplyInput, TableCreateApplyOutput, TableCreateReleaseInput } from './tableCreate';
@@ -256,6 +257,11 @@ export interface CommandMap {
   'queries.read':{input:{id:string;digest:string;connectionId:string};output:SavedQueryOpenResult};
   'queries.readBatch': { input: import('./savedQuerySearch').SavedQueryReadBatchInput; output: { queries: SavedQueryOpenResult[] } };
   'queries.readText':{input:import('./savedQuerySearch').SavedQueryReadTextInput;output:import('./savedQuerySearch').SavedQueryReadTextResult};
+  'queries.externalStart': { input: import('./savedQuerySearch').SavedQueryReadTextInput; output: SavedQueryExternalSession };
+  'queries.externalPreview': { input: { sessionId: string }; output: SavedQueryExternalPreview };
+  'queries.externalApply': { input: { sessionId: string; previewId: string }; output: SavedQueryExternalReceipt };
+  'queries.externalDiscard': { input: { sessionId: string }; output: void };
+  'queries.externalKeep': { input: { sessionId: string }; output: void };
   'queries.exportSql':{input:import('./savedQuerySearch').SavedQueryExportSqlInput;output:import('./savedQuerySearch').SavedQueryExportSqlResult};
   'queries.exportSqlArchive':{input:import('./savedQuerySearch').SavedQueryExportSqlArchiveInput;output:import('./savedQuerySearch').SavedQueryExportSqlArchiveResult};
   'queries.copySql': { input: import('./savedQuerySearch').SavedQueryReadTextInput; output: void };

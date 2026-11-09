@@ -55,6 +55,8 @@ import type { DatabaseDropTarget, DatabaseDropCounts } from '../shared/databaseD
 import { QueryFileSources } from './queryFileSources';
 import { ExternalSqlEditor } from './externalSqlEditor';
 import { externalSqlEditorZh } from '../shared/externalSqlEditor';
+import { SavedQueryExternalEdit } from './savedQueryExternalEdit';
+import { savedQueryExternalZh } from '../shared/savedQueryExternalEdit';
 import { DatabaseDefaultEncodingOwners, type DatabaseEncodingOwnerCommand } from './databaseDefaultEncodingOwners';
 import { ExplainSnapshotFiles } from './explainSnapshotFiles';
 import { QueryResultSnapshotFiles, queryResultSnapshotFileMessages } from './queryResultSnapshotFiles';
@@ -165,6 +167,7 @@ let connectionTransfer: ConnectionTransfer;
 let snippetTransfers: SnippetTransfers;
 let queryFileSources: QueryFileSources;
 let externalSqlEditor: ExternalSqlEditor;
+let savedQueryExternal: SavedQueryExternalEdit;
 let explainSnapshotFiles: ExplainSnapshotFiles;
 let queryResultSnapshotFiles: QueryResultSnapshotFiles;
 let tableDraftFiles: TableDraftFiles;
@@ -1922,6 +1925,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (shuttingDown) throw Error('客户端正在退出，不能整理保存查询分组');
     return command === 'queries.organizationGet' ? store.queryOrganization() : store.applyQueryOrganization(input);
   }
+  if (command === 'queries.externalStart' || command === 'queries.externalPreview' || command === 'queries.externalApply' || command === 'queries.externalDiscard' || command === 'queries.externalKeep') {
+    const scope = { document: columns!.owner.document, assertCurrent: () => {
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown) throw Error('客户端正在退出，不能继续外部编辑');
+    } };
+    scope.assertCurrent();
+    return queryFileOperation(async () => {
+      if (command === 'queries.externalStart') return savedQueryExternal.start(input, scope);
+      if (command === 'queries.externalPreview') return savedQueryExternal.preview(input.sessionId, scope);
+      if (command === 'queries.externalApply') return savedQueryExternal.apply(input.sessionId, input.previewId, scope);
+      if (command === 'queries.externalKeep') return savedQueryExternal.keep(input.sessionId, scope);
+      return savedQueryExternal.discard(input.sessionId, scope);
+    });
+  }
   // 插入保存查询正文只读本地原记录，不领取来源绑定、连接配置锁或数据库任务。
   if (command === 'queries.readText') {
     columnsMain.assertCapturedOwner(columns);
@@ -3439,6 +3456,9 @@ async function createWindow(): Promise<void> {
   window.webContents.on('did-navigate', () => queryFileSources.invalidate());
   window.webContents.on('render-process-gone', () => queryFileSources.invalidate());
   window.webContents.on('destroyed', () => queryFileSources.invalidate());
+  window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) savedQueryExternal.orphan(); });
+  window.webContents.on('render-process-gone', () => savedQueryExternal.orphan());
+  window.webContents.on('destroyed', () => savedQueryExternal.orphan());
   window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument)invalidateTablePresetSources();});
   window.webContents.on('did-navigate',invalidateTablePresetSources);
   window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) importBatchGrant = undefined; });
@@ -3462,8 +3482,8 @@ app.on('before-quit', event => {
   shuttingDown = true;
   applicationMenu?.invalidate();
   void (async () => {
-    if ((hasPendingEdits || [...tasks.values()].some(t => t.status === 'running')) && window) {
-      const answer = await dialog.showMessageBox(window, { type: 'warning', title: '仍有待完成的工作', message: '退出会放弃尚未提交的表格修改、断开数据库连接并回滚未提交事务。已提交的操作不会撤销。', buttons: ['继续工作','退出客户端'], defaultId: 0, cancelId: 0 });
+    if ((hasPendingEdits || savedQueryExternal?.hasSession() || [...tasks.values()].some(t => t.status === 'running')) && window) {
+      const answer = await dialog.showMessageBox(window, { type: 'warning', title: '仍有待完成的工作', message: '退出会放弃尚未提交的表格修改、断开数据库连接并回滚未提交事务。已提交的操作不会撤销。', ...(savedQueryExternal?.hasSession() ? { detail: savedQueryExternalZh.exit } : {}), buttons: ['继续工作','退出客户端'], defaultId: 0, cancelId: 0 });
       if (answer.response === 0) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); return; }
     }
     // 先让界面把防抖队列里的最新编辑落盘，再关闭配置库。
@@ -3603,6 +3623,11 @@ else {
       });
       return result.canceled ? undefined : result.filePaths[0];
     });
+    savedQueryExternal = new SavedQueryExternalEdit({
+      temp: app.getPath('temp'), read: source => savedQuerySearches.readText(source).query,
+      update: (source, sql, check) => store.updateSavedQueryExternal(source, sql, check),
+      prepare: () => externalSqlEditor.prepare(),
+    });
     queryFileSources = new QueryFileSources({ store, report: taskEvent, reserve: path => exportReservations.acquire(path), prepareEditor: () => externalSqlEditor.prepare(), handoff: async (action, path) => {
       if (action === 'open') return (await shell.openPath(path)) === '';
       shell.showItemInFolder(path);
@@ -3685,6 +3710,7 @@ else {
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
         if (payload.command.startsWith('externalSqlEditor.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('queries.external')) columns = columnsMain.capture(event);
         const sqliteImportRequest = payload.command.startsWith('sqlite.tableImport.') || payload.command.startsWith('sqlite.importSource.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && (!!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableImport.') || tasks.get(payload.input.taskId)?.kind === 'sqlite.importSource.inspect') && sqliteTableImports.owns(payload.input.taskId);
         if (sqliteImportRequest) columns = columnsMain.capture(event);
         const sqliteObjectsRequest = payload.command.startsWith('sqlite.objects.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && !!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.objects.') && sqliteObjects.owns(payload.input.taskId);
@@ -3759,6 +3785,7 @@ else {
           if (payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript' || payload.command === 'sqlite.view.inspectQuery' || payload.command === 'sqlite.view.dependencies') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }
           if (payload.command === 'queries.readBatch' || payload.command === 'history.readBatch' || payload.command === 'queries.copySql' || payload.command === 'history.copySql') columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
+          if (payload.command.startsWith('queries.external')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'history.saveQueryBatch' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'table.filteredUpdate.preview') {

@@ -125,7 +125,7 @@ function harness() {
     queryInsertExports: { has: () => false }, tableApplyReceipts: { confirmed: () => undefined, interrupt: vi.fn() },
     resultInserts: owners(), filteredUpdates: owners(), filteredDeletes: owners(), tableFilteredExports: { has: () => false, observe: vi.fn() },
     tableChecksMain: { hasUnpublished: () => false }, connectionConfig: { assertAvailable: vi.fn() },
-    savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined,
+    savedQueryExternal: undefined, savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined,
     persistAuxiliary: (action: () => void) => action(), SavedQuerySearchCancelled: class extends Error {},
     externalObjectUris: { close: vi.fn() }, app: { quit: vi.fn() }, dialog: { showMessageBox: vi.fn(async () => ({ response: 1 })), showErrorBox: vi.fn() },
   });
