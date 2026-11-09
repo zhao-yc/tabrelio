@@ -5,6 +5,8 @@ import { SqliteTableEditor, type SqliteEditView } from '../sqliteTableEditor';
 import { sqliteResultOriginsZh as queryText } from '../locales/sqliteResultOrigins.zh-CN';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { SqliteTablePreviewDialog, SqliteTableValueDialog } from './SqliteTableEditDialog';
+import type { SqliteOriginalValue } from '../../shared/sqliteTableEdit';
+import { SqliteQueryInlineCellEditor, type SqliteQueryInlineCell } from './SqliteQueryInlineCellEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
 
 interface BaseProps {
@@ -17,11 +19,13 @@ interface BaseProps {
 
 type QueryRecord = NonNullable<import('../../shared/sqliteTableBrowse').SqliteTablePageInput['queryRecord']>;
 type Props = BaseProps & ({ recordRef: string; queryRecord?: never; isCurrent?: never } |
-  { recordRef?: never; queryRecord: QueryRecord; isCurrent(): boolean });
+  { recordRef?: never; queryRecord: QueryRecord; isCurrent(): boolean; cell?: SqliteQueryInlineCell; visible?: boolean });
 
 /** 只编辑已核验的原行，沿用表页签发的编辑快照和原有预览提交链。 */
 export function SqliteSearchRecordEditDialog(props: Props) {
   const { connectionId, table, recordRef, queryRecord, focusColumn } = props;
+  const cell = props.queryRecord ? props.cell : undefined;
+  const typedConsumed = useRef(false);
   const labels = queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
     : { title: text.edit, hint: text.editHint, discard: text.editDiscard, back: text.editBack, stale: text.editStale };
   const callbacks = useRef(props); callbacks.current = props;
@@ -119,6 +123,17 @@ export function SqliteSearchRecordEditDialog(props: Props) {
   }
 
   const instance = editor.current;
+  function stage(values: (SqliteOriginalValue | undefined)[]): boolean {
+    const row = view?.rows[0];
+    if (!instance || !row || !instance.canEdit()) return false;
+    instance.save(row.id, values);
+    saved.current = true;
+    typedConsumed.current = true;
+    if (instance.changes.length) { setPreview(true); void instance.preview(); }
+    else close();
+    return true;
+  }
+
   if (view && instance && preview) return <SqliteTablePreviewDialog key={view.preview?.previewId ?? 'pending'} ticket={ticket} view={view}
     current={() => editor.current === instance && !closingRef.current}
     onApply={() => void instance.apply()} onStop={() => instance.stop()}
@@ -126,18 +141,27 @@ export function SqliteSearchRecordEditDialog(props: Props) {
       if (!instance.view.valid || instance.view.unknown) { close(); return; }
       instance.closePreview(); instance.inputOpen(true); saved.current = false; setPreview(false);
     }}/>;
+  if (cell) {
+    const columns = view?.page.edit?.kind === 'editable' ? view.page.edit.columns : [];
+    const index = columns.findIndex(column => column.name === cell.column);
+    const field = columns[index], row = view?.rows[0];
+    const initial = field && !field.generated ? row?.values[index] : undefined;
+    return <SqliteQueryInlineCellEditor cell={typedConsumed.current ? { ...cell, typed: undefined } : cell}
+      initial={initial} nullable={field?.nullable ?? false} loading={loading || closing}
+      error={error || (!loading && !initial ? queryText.inlineUnavailable : '')} visible={props.queryRecord ? props.visible !== false : false}
+      onCancel={close} onStage={value => {
+        if (!row || !initial || !cell.findAnchor()?.getClientRects().length) throw Error(labels.stale);
+        // 只替换当前字段，未投影列及其原存储类继续使用独立读取的完整快照。
+        const values = [...row.values];
+        values[index] = value;
+        if (!stage(values)) throw Error(labels.stale);
+      }}/>;
+  }
   if (view && instance && view.rows[0]) {
     const row = view.rows[0];
     return <SqliteTableValueDialog ticket={ticket} page={view.page} row={row} initialFocus={focusColumn}
       current={() => editor.current === instance && !closingRef.current && instance.canEdit()}
-      onSave={values => {
-        if (!instance.canEdit()) return false;
-        instance.save(row.id, values);
-        saved.current = true;
-        if (instance.changes.length) { setPreview(true); void instance.preview(); }
-        else close();
-        return true;
-      }}
+      onSave={stage}
       onClose={() => { if (!saved.current) close(); }}/>;
   }
   return <Modal title={labels.title} onClose={close} wide>

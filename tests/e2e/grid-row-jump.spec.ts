@@ -226,6 +226,67 @@ test('SQLite 查询从排序后的结果编辑正确原行并拒绝陈旧行', a
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询网格原位编辑重名列并保留精确字段与确认', async ({}, info) => {
+  await seed('SELECT id AS 同名, name AS 同名 FROM subject ORDER BY id DESC LIMIT 3;');
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(grid.getByRole('gridcell', { name: '记录 178', exact: true })).toBeVisible();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^同名/ }).first();
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  await expect(grid.getByRole('gridcell').filter({ hasText: /^记录 / })).toHaveText(['记录 178', '记录 179', '记录 180']);
+  const target = grid.getByRole('gridcell', { name: '记录 178', exact: true });
+  const form = page.getByRole('region', { name: originsText.inlineLabel('同名'), exact: true });
+  const field = form.getByLabel('SQLite 字段 name 值', { exact: true });
+  await target.click();
+  await target.press('F2');
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue('记录 178');
+  await field.fill('取消后不写入');
+  await field.press('Escape');
+  await expect(form).toHaveCount(0);
+  await expect(target).toBeFocused();
+  await target.press('A');
+  await expect(field).toHaveValue('A');
+  await field.press('Escape');
+  await expect(target).toBeFocused();
+
+  await target.dblclick();
+  await expect(field).toBeFocused();
+  const anchor = await query.locator('[role="gridcell"]').filter({ hasText: /^记录 178$/ }).boundingBox();
+  const position = await form.boundingBox();
+  const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  if (!anchor || !position) throw Error('原格或行内输入框没有可见坐标');
+  await info.attach('SQLite查询网格锚点', { body: JSON.stringify({ anchor, position, viewport }), contentType: 'application/json' });
+  expect(Math.abs(Math.max(8, Math.min(anchor.x, viewport.width - position.width - 8)) - position.x), '行内输入框横向锚点').toBeLessThanOrEqual(2);
+  expect(Math.abs(Math.max(8, Math.min(anchor.y, viewport.height - position.height - 8)) - position.y), '行内输入框纵向锚点').toBeLessThanOrEqual(2);
+  await field.fill('网格内更新');
+  await info.attach('SQLite查询网格原位编辑', { body: await page.screenshot(), contentType: 'image/png' });
+  await field.press('Enter');
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toContainText('SET "name"=');
+  await expect(preview.getByRole('button', { name: '提交 SQLite 修改', exact: true })).toBeDisabled();
+  const disk = () => {
+    const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+    try { return db.prepare('SELECT id,name FROM subject WHERE id BETWEEN 178 AND 180 ORDER BY id').all(); } finally { db.close(); }
+  };
+  expect(disk()[0]).toEqual({ id: 178, name: '记录 178' });
+  await preview.getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click();
+  await expect(field).toHaveValue('网格内更新');
+  await field.press('Enter');
+  await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+  await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  expect(disk()).toEqual([{ id: 178, name: '网格内更新' }, { id: 179, name: '记录 179' }, { id: 180, name: '记录 180' }]);
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  await expect(grid.getByRole('gridcell').filter({ hasText: /^记录 / })).toHaveText(['记录 178', '记录 179', '记录 180']);
+  await expect(target).toBeFocused();
+  const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  expect(tasks.filter(task => task.kind === 'query.execute')).toHaveLength(1);
+  expect(tasks.filter(task => task.kind === 'sqlite.tableEdit.apply')).toHaveLength(1);
+  expect(pageErrors).toEqual([]);
+});
+
 test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async ({}, info) => {
   await seed(`/* NAME: 精确原值 */ SELECT 9223372036854775807 AS v, X'00ff' AS v;
     /* NAME: 不导出 */ SELECT '跳过';
