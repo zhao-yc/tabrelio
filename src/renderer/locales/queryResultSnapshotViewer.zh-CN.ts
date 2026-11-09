@@ -8,6 +8,9 @@ export const queryResultSnapshotViewerZh = {
   waiting: '原文件操作尚未结束，请等待文件选择、读写和清理完成后再关闭。', cancelled: '本次文件选择已取消，当前内容保持不变。',
   opened: (name: string) => `已打开：${name}`, saved: (name: string) => `已另存：${name}`,
   count: (rows: number, columns: number) => `${rows} 行 · ${columns} 列 · 只读`,
+  exportShown: '导出快照当前显示行', exportChecked: '导出快照勾选行',
+  exportCount: (rows: number, selected: boolean) => `本次导出快照${selected ? '勾选' : '当前显示'}的 ${rows} 行`,
+  exportScope: '文件仅包含打开本窗口时选定的行和原列，不读取数据库，也不导出来源 SQL。',
   stale: '原查看窗口或显示来源已变化，本次回包未接纳。',
   lateSave: '快照文件可能已保存，但原查看窗口已失效，请核对目标文件；不会自动重试。',
 } as const;

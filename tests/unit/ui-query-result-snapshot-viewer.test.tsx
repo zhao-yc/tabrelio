@@ -27,7 +27,15 @@ let Dialog: typeof import('../../src/renderer/components/QueryResultSnapshotDial
 const bridge = vi.fn(), globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
 beforeAll(async () => {
   document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ ActionMenu, ActionMenuSection } = await import('../../src/renderer/components/ActionMenu')); ({ errorMessage } = await import('../../src/renderer/lib')); Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true }); const create = document.createElement.bind(document);
-  document.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); if (name === 'input') node.type = 'text'; node.setAttribute = (key, value) => { set(key, value); if (key === 'disabled') node.disabled = true; if (key === 'type') node.type = value; }; node.removeAttribute = key => { remove(key); if (key === 'disabled') node.disabled = false; }; return node; };
+  document.createElement = name => {
+    const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node);
+    if (name === 'input') node.type = 'text';
+    if (name === 'select') Object.defineProperty(node, 'options', { get: () => node.querySelectorAll('option') });
+    if (name === 'option') Object.defineProperty(node, 'value', { get: () => node.getAttribute('value') ?? node.textContent });
+    node.setAttribute = (key, value) => { set(key, value); if (key === 'disabled') node.disabled = true; if (key === 'type') node.type = value; };
+    node.removeAttribute = key => { remove(key); if (key === 'disabled') node.disabled = false; };
+    return node;
+  };
   ({ createRoot } = await import('react-dom/client')); ({ QueryResultSnapshotDialog: Dialog } = await import('../../src/renderer/components/QueryResultSnapshotDialog')); ({ useWorkspace: store } = await import('../../src/renderer/store'));
 });
 beforeEach(() => { bridge.mockReset(); (window as any).dbark = { invoke: bridge }; store.setState({ connections: [], settings: { ...store.getState().settings, tabs: [], activeTabId: undefined }, notice: undefined, activeJobs: {} }); });
@@ -109,6 +117,35 @@ it('离线匹配投影保留 SQLite 逐格类型、拒绝旧回调，另存与�
   await click(text.choose);
   expect(parent().sqliteSource).toBeUndefined();
   expect(parent().rows).toHaveLength(1);
+});
+it('离线导出冻结勾选并锁住原查看器，关闭后保留勾选，换文件拒绝旧回执', async () => {
+  const close = vi.fn();
+  await mount(<Dialog onClose={close}/>);
+  bridge.mockResolvedValueOnce(opened());
+  await click(text.choose);
+  const grid = parent();
+  const selection = { scope: grid.selectionScope, rows: grid.rows, columns: grid.columns, indices: new Set([0]) };
+  const oldChoose = props(button(text.choose)).onClick;
+  const oldClose = props(button(text.close)).onClick;
+  expect(button(text.exportChecked).disabled).toBe(true);
+  await act(async () => { expect(grid.onSelectionChange(selection)).toBe(true); });
+  await click(text.exportChecked);
+  expect(document.body.textContent).toContain(text.exportCount(1, true));
+  expect(panel().parentNode?.parentNode?.parentNode?.getAttribute('hidden')).not.toBeNull();
+  await act(async () => { oldChoose(); oldClose(); expect(grid.onSelectionChange(selection)).toBe(false); });
+  expect(close).not.toHaveBeenCalled();
+  expect(bridge.mock.calls.map(call => call[0])).toEqual(['resultSnapshotFiles.open']);
+  await act(async () => { document.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' })); });
+  expect(document.body.textContent).not.toContain(text.exportCount(1, true));
+  expect(button(text.exportChecked).disabled).toBe(false);
+  expect(close).not.toHaveBeenCalled();
+  bridge.mockResolvedValueOnce(opened('替换后的快照'));
+  await click(text.choose);
+  await act(async () => { expect(grid.onSelectionChange(selection)).toBe(false); });
+  expect(button(text.exportChecked).disabled).toBe(true);
+  const next = parent();
+  await act(async () => { expect(next.onSelectionChange({ scope: next.selectionScope, rows: next.rows, columns: next.columns, indices: new Set([0]) })).toBe(true); });
+  expect(button(text.exportChecked).disabled).toBe(false);
 });
 it('BLOB纯查看内层Escape只关闭内层，原外层header也不能穿透，下一Escape才关外层', async () => {
   const close = vi.fn(); await mount(<Dialog onClose={close}/>); bridge.mockResolvedValueOnce(opened()); await click(text.choose); const grid = rendered.grids.at(-1);

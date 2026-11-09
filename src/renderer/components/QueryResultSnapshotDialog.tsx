@@ -1,10 +1,13 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { QueryResult } from '../../shared/contracts';
 import { parseQueryResultSnapshot, type QueryResultSnapshotDocument } from '../../shared/queryResultSnapshot';
 import { queryResultSnapshotViewerZh as text } from '../locales/queryResultSnapshotViewer.zh-CN';
 import { errorMessage, invoke } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
+import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
 import { ResultsGrid } from './ResultsGrid';
+import { ResultExportDialog } from './ResultExportDialog';
 import { escapeTargetsQueryResultFind } from './QueryResultFind';
 import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
 import { SqlEditor } from './SqlEditor';
@@ -20,19 +23,32 @@ export const queryResultSnapshotViewerServices: QueryResultSnapshotViewerService
 };
 interface Loaded { name: string; snapshot: QueryResultSnapshotDocument; scope: object; }
 interface Operation { mode: 'open' | 'save'; epoch: number; source: Loaded | undefined; }
+interface SnapshotExport { result: QueryResult; selected: boolean; }
 
 /** 全局查看只持有文件内容，不创建查询、连接或会话；原文件Promise包括主进程清理。 */
 export function QueryResultSnapshotDialog({ onClose, services = queryResultSnapshotViewerServices }: { onClose(): void; services?: QueryResultSnapshotViewerServices }) {
   const [loaded, setLoaded] = useState<Loaded>(), loadedRef = useRef(loaded);
   const [busy, setBusy] = useState<'open' | 'save'>(), [error, setError] = useState(''), [message, setMessage] = useState(''), [showSql, setShowSql] = useState(false);
+  const [exportView, setExportView] = useState<SnapshotExport>(), exportRef = useRef<SnapshotExport | undefined>(undefined);
+  const exportSelection = useMemo(() => new ResultExportSelection(), []);
+  const [, refreshSelection] = useState(0);
+  const returnFocus = useRef<HTMLButtonElement | null>(null);
   const [interaction, setInteraction] = useState(0), interactionRef = useRef(0), operation = useRef<Operation | null>(null);
   const alive = useRef(false), lifetime = useRef(0), committed = useRef<object | null>(null), host = useRef<HTMLDivElement | null>(null), ticket = {};
   const callbacks = useRef({ onClose, services }); callbacks.current = { onClose, services };
   const sourceResult = loaded?.snapshot.result;
   const matches = useQueryResultMatchView(sourceResult, sourceResult?.columns, [loaded?.scope]);
   const displayed = matches.result;
+  const binding = exportSelection.bind(displayed, [loaded?.scope]);
+  const checkedCount = exportSelection.count(binding);
   useLayoutEffect(() => { alive.current = true; lifetime.current++; return () => { alive.current = false; lifetime.current++; }; }, []);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = null; }; });
+  useLayoutEffect(() => {
+    if (!exportView && returnFocus.current) {
+      returnFocus.current.focus({ preventScroll: true });
+      returnFocus.current = null;
+    }
+  }, [exportView]);
   /** 逐级核可见性和真实挂载；内存测试不需要伪造浏览器几何。 */
   function visible(): boolean {
     const element = host.current; if (!element || !document.body.contains(element)) return false;
@@ -46,19 +62,19 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   /** 只有当前最上层模态可以关闭或领文件，alertdialog同样阻止穿透。 */
   function topmost(): boolean { const dialogs = document.querySelectorAll(appModalSelector); return !!ownDialog() && dialogs[dialogs.length - 1] === ownDialog(); }
   /** 已提交DOM、可见窗口与同步IO槽必须同时有效，旧按钮不能领取新操作。 */
-  function editable(): boolean { return alive.current && committed.current === ticket && !operation.current && visible() && topmost(); }
+  function editable(): boolean { return alive.current && committed.current === ticket && !operation.current && !exportRef.current && visible() && topmost(); }
   /** 开始和结束都推进网格回调代次；同一文件selectionScope保持稳定，旧回调永不复活。 */
   function advance(): void { interactionRef.current++; if (alive.current) setInteraction(interactionRef.current); }
   /** 普通网格拒绝任何其它模态；纯字节显示只认可本查看器内部的嵌套窗口。 */
   function gridCurrent(source: Loaded, epoch: number, binary: boolean): boolean {
-    if (!alive.current || operation.current || loadedRef.current !== source || interactionRef.current !== epoch || !visible()) return false;
+    if (!alive.current || operation.current || exportRef.current || loadedRef.current !== source || interactionRef.current !== epoch || !visible()) return false;
     const own = ownDialog(), dialogs = Array.from(document.querySelectorAll(appModalSelector));
     return !!own && dialogs.every(dialog => dialog === own || binary && !!host.current?.contains(dialog));
   }
   const binaryIdentity = useMemo(() => loaded ? [loaded.scope, interaction] : [], [loaded, interaction]);
   /** Header、footer和Escape共用原IO门；嵌套字节窗口的Escape不能穿透关闭外层。 */
   function close(): void {
-    if (!alive.current || committed.current !== ticket || !visible() || !topmost()) return;
+    if (!alive.current || committed.current !== ticket || exportRef.current || !visible() || !topmost()) return;
     if (operation.current) { setMessage(text.waiting); return; }
     callbacks.current.onClose();
   }
@@ -78,6 +94,35 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       if (indices) matches.apply(indices, invalidate);
       else matches.clear(invalidate);
     } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 勾选回执绑定当前显示顺序，筛看或重开文件后不能把旧索引交给新结果。 */
+  function selectRows(selection: ResultGridSelection): boolean {
+    if (!loaded || !gridCurrent(loaded, interaction, false)) return false;
+    try {
+      if (!exportSelection.select(binding, selection)) return false;
+      refreshSelection(value => value + 1);
+      return true;
+    } catch (reason) {
+      exportSelection.invalidate();
+      refreshSelection(value => value + 1); setError(errorMessage(reason));
+      return false;
+    }
+  }
+  /** 打开导出时冻结数据并暂时隐藏查看器，避免两个模态同时接管焦点。 */
+  function openExport(selected: boolean, trigger: HTMLButtonElement): void {
+    if (!editable() || !loaded || loadedRef.current !== loaded || !binding) return;
+    try {
+      const result = selected ? exportSelection.snapshot(binding) : exportSelection.allSnapshot(binding);
+      const view = { result, selected };
+      returnFocus.current = trigger;
+      exportRef.current = view;
+      advance(); setExportView(view); setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  function closeExport(view: SnapshotExport): void {
+    if (!alive.current || exportRef.current !== view) return;
+    exportRef.current = undefined;
+    advance(); setExportView(undefined);
   }
   /** 只有准确原操作能更新显示；失效保存仍报告已写可能性或原Main错误。 */
   async function file(mode: 'open' | 'save'): Promise<void> {
@@ -108,8 +153,16 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   /** SQL只控制本窗口只读显隐，不设置编辑器正文或提供任何执行回调。 */
   function toggleSql(): void { if (editable() && loaded && loadedRef.current === loaded) setShowSql(value => !value); }
-  return <Modal title={text.title} wide onClose={close} onEscape={escape}><div ref={host} className="query-result-snapshot-viewer" aria-busy={!!busy}>
-    <p>{text.notice}</p><UsageHelp><p>{text.scope}</p></UsageHelp><div className="query-result-snapshot-viewer-actions"><button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button><button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button><button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button><span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button></div>
+  return <><div hidden={!!exportView}><Modal title={text.title} wide onClose={close} onEscape={escape}><div ref={host} className="query-result-snapshot-viewer" aria-busy={!!busy}>
+    <p>{text.notice}</p><UsageHelp><p>{text.scope}</p></UsageHelp>
+    <div className="query-result-snapshot-viewer-actions">
+      <button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button>
+      <button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button>
+      <button disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
+      <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
+      <button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button>
+      <span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button>
+    </div>
     <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : text.saving}/>} {message && <p role="status">{message}</p>}
     {loaded && displayed ? <>
       <p role="status">{text.opened(loaded.name)}</p>
@@ -117,7 +170,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       {loaded.snapshot.result.truncated && <p className="warning-text">{text.truncated}</p>}
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
-        <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={loaded.scope}
+        <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
+          onSelectionChange={binding ? selectRows : undefined}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>
@@ -126,5 +180,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
         <p>{text.sourceTitle}</p><SqlEditor value={loaded.snapshot.result.statement} dialect={loaded.snapshot.version === 3 ? 'postgresql' : undefined} readOnly height={180}/>
       </section>}
     </> : <p>{text.empty}</p>}
-  </div></Modal>;
+  </div></Modal></div>
+    {exportView && <ResultExportDialog scope="snapshot" result={exportView.result} selected={exportView.selected} onClose={() => closeExport(exportView)}/>}
+  </>;
 }
