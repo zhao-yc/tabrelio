@@ -34,7 +34,7 @@ import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill } from './GridRangeFill';
-import type { GridRangeFillInput } from '../gridRangeFill';
+import { gridRangeFillActions, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import type { QueryResultFindScan } from '../queryResultFind';
 import { appModalSelector } from '../modalSelectors';
@@ -341,8 +341,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     onFillRange(range, input);
   }
 
-  function clearGridRange(rectangle: GridCellRectangle): void {
-    try { stageGridRangeFill(rectangle, { kind: 'null', value: '' }); }
+  function applyGridRangeFill(rectangle: GridCellRectangle, kind: GridRangeFillKind): void {
+    try { stageGridRangeFill(rectangle, { kind, value: '' }); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
 
@@ -393,7 +393,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       }));
     }
-    if (rectangle && onFillRange) actions.push({ label: rangeFillText.clear, run: () => clearGridRange(rectangle) });
+    if (rectangle && onFillRange) actions.push(...gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)));
     if (rectangle && onExportRange) actions.push({ label: rangeExportText.action, run: () => {
       try {
         const range = cellRange.capture(rectangle, null);
@@ -449,7 +449,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   function cellKeyDown(args:CellKeyDownArgs<DataRow>,event:CellKeyboardEvent):void{
     const {row,column}=args,key=event.key.toLowerCase();
     if (args.mode === 'ACTIVE' && cellRange.key(args, event)) return;
-    if (args.mode === 'ACTIVE' && onFillRange && cellRange.clearValueKey(args, event, clearGridRange)) return;
+    if (args.mode === 'ACTIVE' && onFillRange && cellRange.fillValueKey(args, event, applyGridRangeFill)) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => canSelectRows && !!row && rows[args.rowIdx] === row && !!column && columns.some(item => item.key === column.key) && rowSelectionCurrent(),
       () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;

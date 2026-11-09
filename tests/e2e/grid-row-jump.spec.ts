@@ -1110,16 +1110,21 @@ test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚'
     try { return db.prepare(sql).all(); } finally { db.close(); }
   };
   const values = () => disk('SELECT name FROM subject WHERE id BETWEEN 177 AND 180 ORDER BY id').map(row => row.name);
-  const fill = async (target: Locator, direction?: string) => {
+  const fill = async (target: Locator, useShortcut = false) => {
     await target.click();
     await page.keyboard.press('Shift+ArrowDown');
     await page.keyboard.press('Shift+ArrowDown');
-    await query.getByRole('button', { name: rangeFill.open, exact: true }).click();
-    const form = query.getByRole('region', { name: rangeFill.open, exact: true });
-    await expect(form).toBeVisible();
-    if (direction) await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
-    else await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('整批不可落盘');
-    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    if (useShortcut) {
+      await target.click({ button: 'right' });
+      await expect(page.getByRole('menuitem', { name: rangeFill.down, exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d');
+    } else {
+      await query.getByRole('button', { name: rangeFill.open, exact: true }).click();
+      const form = query.getByRole('region', { name: rangeFill.open, exact: true });
+      await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('整批不可落盘');
+      await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    }
     await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toBeVisible();
   };
   const submit = async () => {
@@ -1130,7 +1135,7 @@ test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚'
   await expect(grid.getByRole('gridcell', { name: '记录 178', exact: true })).toBeVisible();
   await header.click();
   await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
-  await fill(grid.getByRole('gridcell', { name: '记录 178', exact: true }), 'down');
+  await fill(grid.getByRole('gridcell', { name: '记录 178', exact: true }), true);
   const sql = await preview.getByLabel('SQLite 修改 SQL 预览', { exact: true }).textContent();
   expect(sql?.match(/UPDATE /g)).toHaveLength(2);
   expect(sql).toContain('SET "name"=');
@@ -2306,7 +2311,7 @@ test('SQLite 可用 Backspace 和菜单将选区设为 NULL，定位键使整块
   expect(pageErrors).toEqual([]);
 });
 
-test('SQLite 横向填充逐行保留原值，亲和性不兼容时整块拒绝', async () => {
+test('SQLite 横向填充逐行保留原值，亲和性不兼容时整块拒绝', async ({}, info) => {
   await seed(undefined, 'ALTER TABLE subject ADD COLUMN mirror TEXT;' +
     'ALTER TABLE subject ADD COLUMN numeric_target INTEGER;' +
     "UPDATE subject SET name='000123', mirror='甲', numeric_target=1 WHERE id=1;" +
@@ -2339,7 +2344,13 @@ test('SQLite 横向填充逐行保留原值，亲和性不兼容时整块拒绝'
     [{ kind: 'null' }, { kind: 'text', value: '乙' }],
   ]);
   for (const [direction, index] of [['right', 0], ['left', 1]] as const) {
-    await stage(direction);
+    await first.locator('[role="gridcell"][aria-colindex="' + column + '"]').click({ button: 'right' });
+    const action = page.getByRole('menuitem', { name: rangeFill[direction], exact: true });
+    await expect(action).toBeVisible();
+    if (direction === 'right') {
+      await info.attach('SQLite四向填充选区菜单', { body: await page.screenshot(), contentType: 'image/png' });
+    }
+    await action.click();
     expect(await select()).toEqual(original.map((row: unknown[]) => [row[index], row[index]]));
     await undo.click();
     expect(await select()).toEqual(original);
@@ -2362,30 +2373,42 @@ test('SQLite 向下和向上填充保留整数、文本、字节与 NULL，可�
   await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
   const table = page.locator('.sqlite-table-tab:visible');
   const first = table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true }).locator('..');
-  const form = table.getByRole('region', { name: rangeFill.open, exact: true });
   const header = table.getByRole('columnheader').filter({
     has: page.locator('.grid-header-detail-name').filter({ hasText: /^name$/ }),
   });
   const column = await header.getAttribute('aria-colindex');
   expect(column).toMatch(/^\d+$/);
+  const start = first.locator('[role="gridcell"][aria-colindex="' + column + '"]');
+  const undo = table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true });
+  const shortcut = process.platform === 'darwin' ? 'Meta+d' : 'Control+d';
   async function select() {
-    await first.locator('[role="gridcell"][aria-colindex="' + column + '"]').click();
+    await start.click();
     for (const key of ['Right', 'Right', 'Down', 'Down']) await page.keyboard.press('Shift+Arrow' + key);
     await expect(table.locator('.grid-cell-in-range')).toHaveCount(9);
   }
   const read = async () => JSON.parse((await readGridRangeClipboard(page)).sqlite).rows;
+  await start.click();
+  await page.keyboard.press(shortcut);
+  await expect(undo).toBeDisabled();
+  await page.keyboard.press('Shift+ArrowDown');
+  await start.click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: rangeFill.down, exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: rangeFill.right, exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await select();
   const original = await read();
   expect(original[0]).toEqual([{ kind: 'text', value: '000123' }, { kind: 'integer', value: '9223372036854775807' }, { kind: 'blob', value: '00ff' }]);
   expect(original[2]).toEqual([{ kind: 'null' }, { kind: 'integer', value: '-9223372036854775808' }, { kind: 'blob', value: 'ab' }]);
   for (const [direction, index] of [['down', 0], ['up', 2]] as const) {
-    await table.getByRole('button', { name: rangeFill.open, exact: true }).click();
-    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
-    await expect(form.getByRole('textbox', { name: rangeFill.value, exact: true })).toHaveCount(0);
-    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    if (direction === 'down') {
+      await page.keyboard.press(shortcut);
+    } else {
+      await start.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: rangeFill.up, exact: true }).click();
+    }
     await select();
     expect(await read()).toEqual(Array(3).fill(original[index]));
-    await table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true }).click();
+    await undo.click();
     await select();
     expect(await read()).toEqual(original);
   }

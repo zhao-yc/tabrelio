@@ -10,7 +10,7 @@ import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeE
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
 import { GridRangeFill } from './GridRangeFill';
-import type { GridRangeFillInput } from '../gridRangeFill';
+import { gridRangeFillActions, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { errorMessage } from '../lib';
 import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
@@ -283,8 +283,8 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     onFillRange(range, input);
   }
 
-  function clearGridRange(rectangle: GridCellRectangle): void {
-    try { stageGridRangeFill(rectangle, { kind: 'null', value: '' }); setError(''); }
+  function applyGridRangeFill(rectangle: GridCellRectangle, kind: GridRangeFillKind): void {
+    try { stageGridRangeFill(rectangle, { kind, value: '' }); setError(''); }
     catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -325,7 +325,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
           if (current()) onExportRange(result);
         } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeExportText.stale); }
       } }] : []),
-      ...(rectangle && onFillRange ? [{ label: rangeFillText.clear, run: () => clearGridRange(rectangle) }] : []),
+      ...(rectangle && onFillRange ? gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)) : []),
       { label: quickValueText.copyCell, run: () => {
         try {
           const content = clipboardContent([], row, key);
@@ -444,7 +444,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     onCellKeyDown={(args, event) => {
       const { row, rowIdx, column, mode } = args;
       if (mode === 'ACTIVE' && cellRange.key(args, event)) return;
-      if (mode === 'ACTIVE' && onFillRange && cellRange.clearValueKey(args, event, clearGridRange)) return;
+      if (mode === 'ACTIVE' && onFillRange && cellRange.fillValueKey(args, event, applyGridRangeFill)) return;
       if (mode === 'ACTIVE' && handleGridSelectAllKey(event,
         () => !!row && rows[rowIdx] === row && !!column && order.some(index => column.key === 'c' + index) && rowSelectionCurrent(),
         () => changeCheckedRows(gridRowKeys(rows, rowSelectionKey)))) return;

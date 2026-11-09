@@ -177,9 +177,12 @@ test('MySQL 表页按矩形填充字面值，只暂存且可一步撤销', async
   for (const [direction, expected] of [['down', ['😀old前old后old', 'OLD']], ['up', ['', '无匹配']]] as const) {
     await start.click();
     await end.click({ modifiers: ['Shift'] });
-    await page.getByRole('button', { name: rangeFill.open, exact: true }).click();
-    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
-    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    if (direction === 'down') {
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d');
+    } else {
+      await start.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: rangeFill.up, exact: true }).click();
+    }
     for (const row of [2, 3]) {
       await expect(await cell('note', row)).toHaveText(expected[0]);
       await expect(await cell('other', row)).toHaveText(expected[1]);

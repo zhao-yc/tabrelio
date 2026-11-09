@@ -3,7 +3,6 @@ import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, pageErrors } from './desktop-fixture';
 import { pasteGridRangeClipboard } from './grid-cell-range-clipboard';
 import { encodeClipboard } from '../../src/renderer/gridClipboard';
-import { gridRangeFillZh as fillText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { mysqlQueryBatchEditZh as text } from '../../src/renderer/locales/mysqlQueryBatchEdit.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 
@@ -62,14 +61,6 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
       await dialog.getByRole('button', { name: text.apply, exact: true }).click();
     };
     const read = async () => (await observer.query<RowDataPacket[]>(`SELECT id,note,qty,guard FROM ${table} ORDER BY id`))[0];
-    const fillFromFirst = async () => {
-      await query.getByRole('button', { name: fillText.open, exact: true }).click();
-      const panel = query.getByRole('region', { name: fillText.open, exact: true });
-      await panel.getByRole('combobox', { name: fillText.kind, exact: true }).selectOption('down');
-      await panel.getByRole('button', { name: fillText.stage, exact: true }).click();
-      await review(fill);
-    };
-
     await execute('原记录甲');
     const before = await read();
     await select('原记录甲', 2);
@@ -92,8 +83,10 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
 
     await execute('粘贴甲');
     await select('粘贴甲', 1);
-    await fillFromFirst();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d');
+    await review(fill);
     await expect(fill.getByRole('table')).toContainText('粘贴甲');
+    expect(await read()).toEqual(pasted);
     await submit(fill);
     await expect(fill).toBeHidden();
     const filled = [{ ...pasted[0] }, { ...pasted[1], note: '粘贴甲' }, pasted[2]];

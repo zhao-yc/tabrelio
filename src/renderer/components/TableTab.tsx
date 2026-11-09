@@ -21,7 +21,7 @@ import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill } from './GridRangeFill';
-import { gridRangeFillSource, type GridRangeFillInput } from '../gridRangeFill';
+import { gridRangeFillActions, gridRangeFillSource, type GridRangeFillInput, type GridRangeFillKind } from '../gridRangeFill';
 import { fitGridRangePaste } from '../gridRangePaste';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
@@ -1887,8 +1887,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     setError('');
   }
 
-  function clearGridRange(rectangle: GridCellRectangle): void {
-    try { fillGridRange(rectangle, { kind: 'null', value: '' }); }
+  function applyGridRangeFill(rectangle: GridCellRectangle, kind: GridRangeFillKind): void {
+    try { fillGridRange(rectangle, { kind, value: '' }); }
     catch (reason) { setError(errorMessage(reason)); }
   }
   const headerCopyLayoutRevision = layoutRevision.current;
@@ -2048,7 +2048,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
           setPageExport(lease);
         } catch (reason) { if (current()) setError(errorMessage(reason)); }
       } }] : []),
-      ...(rectangle && editable ? [{ label: rangeFillText.clear, run: () => clearGridRange(rectangle) }] : []),
+      ...(rectangle && editable ? gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)) : []),
       { label: quickValueText.copyCell, run: () => {
         try { copyGridCellValue(ownCell(row.data, key), current); }
         catch (reason) { if (current()) setError(errorMessage(reason)); }
@@ -2275,9 +2275,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
   }} onCellKeyDown={(args, event) => {
     if (args.mode === 'ACTIVE' && cellRange.key(args, event)) return;
-    if (args.mode === 'ACTIVE' && editable && cellRange.clearValueKey(args, event, rectangle => {
+    if (args.mode === 'ACTIVE' && editable && cellRange.fillValueKey(args, event, (rectangle, kind) => {
       recordPages.cancel();
-      clearGridRange(rectangle);
+      applyGridRangeFill(rectangle, kind);
     })) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => !!args.row && rows[args.rowIdx] === args.row && !!args.column && visibleKeys.includes(args.column.key) && rowSelectionCurrent(),

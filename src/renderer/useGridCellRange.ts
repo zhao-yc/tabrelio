@@ -5,6 +5,7 @@ import { maxClipboardCells } from './gridClipboard';
 import { zh } from './locales/zh-CN';
 import { gridRangePasteZh as pasteText } from './locales/gridRangePaste.zh-CN';
 import { startGridCellRangeDrag, type GridRangePoint as Point } from './gridCellRangeDrag';
+import type { GridRangeFillKind } from './gridRangeFill';
 
 export interface GridCellRectangle { top: number; bottom: number; left: number; right: number; }
 export interface GridRangeTarget<Row> { startRow: number; rows: readonly Row[]; keys: readonly string[]; }
@@ -134,17 +135,20 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return true;
   }
 
-  /** 矩形内阻止清空键降级为单格编辑，仅普通按键可暂存。 */
-  function clearValueKey(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent,
-    apply: (selected: GridCellRectangle) => void): boolean {
-    if ((event.key !== 'Delete' && event.key !== 'Backspace') || !allowed(event) || args.row === undefined) return false;
+  /** 仅当前数据格所在矩形可批量填充；清空键仍禁止降级为单格编辑。 */
+  function fillValueKey(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent,
+    apply: (selected: GridCellRectangle, kind: GridRangeFillKind) => void): boolean {
+    const clear = event.key === 'Delete' || event.key === 'Backspace';
+    const down = event.key.toLowerCase() === 'd' && !event.altKey && !event.shiftKey && event.ctrlKey !== event.metaKey &&
+      !event.nativeEvent.isComposing && event.keyCode !== 229;
+    if ((!clear && !down) || !allowed(event) || args.row === undefined) return false;
     const selected = at(args.row, args.rowIdx, args.column?.key ?? '');
-    if (!selected) return false;
+    if (!selected || down && selected.top === selected.bottom) return false;
     event.preventGridDefault();
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return true;
+    if (clear && (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229)) return true;
     event.preventDefault();
     event.stopPropagation();
-    if (!event.repeat) apply(selected);
+    if (!event.repeat) apply(selected, down ? 'down' : 'null');
     return true;
   }
 
@@ -200,7 +204,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return grid.current?.element?.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? undefined;
   }
 
-  return { rectangle, mouse, key, clearValueKey, move, copy, copyTarget, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
+  return { rectangle, mouse, key, fillValueKey, move, copy, copyTarget, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
 }
 
 const arrowDirections = new Map<string, Point>([

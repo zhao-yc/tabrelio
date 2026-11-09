@@ -305,11 +305,7 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     const preview = page.getByRole('dialog', { name: text.fillTitle, exact: true });
     const read = async () => (await observer.query(`SELECT id::text, note, encode(src,'hex') AS src,
       encode(dst,'hex') AS dst, xmin::text FROM public.query_fill ORDER BY id`)).rows;
-    const stage = async (direction: 'down' | 'right') => {
-      await query.getByRole('button', { name: fillText.open, exact: true }).click();
-      const panel = query.getByRole('region', { name: fillText.open, exact: true });
-      await panel.getByRole('combobox').selectOption(direction);
-      await panel.getByRole('button', { name: fillText.stage, exact: true }).click();
+    const expectPreview = async () => {
       await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."query_fill"');
     };
     const submit = async (rows: number) => {
@@ -328,7 +324,8 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     await cell('首行样本').first().click();
     await page.keyboard.press('Shift+ArrowDown');
     await page.keyboard.press('Shift+ArrowDown');
-    await stage('down');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d');
+    await expectPreview();
     await expect(preview.locator('strong')).toHaveText(text.rangeRow(3));
     await expect(preview.locator('dd')).toHaveText('首行样本');
     expect(await read()).toEqual(before);
@@ -342,7 +339,9 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     await cell('0x1234').click();
     await page.keyboard.press('Shift+ArrowRight');
     await page.keyboard.press('Shift+ArrowDown');
-    await stage('right');
+    await cell('0x1234').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: fillText.right, exact: true }).click();
+    await expectPreview();
     await expect(preview.locator('dt')).toHaveText(['dst', 'dst']);
     await expect(preview.locator('dd')).toHaveText(['1234', 'NULL']);
     expect(await read()).toEqual(afterDown);
