@@ -43,6 +43,7 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(windows.find('sql-goto-line')).toMatchObject({ label: '跳到行／行列', accelerator: 'Ctrl+G' });
     expect(fixture('darwin').find('sql-goto-line')?.accelerator).toBe('Ctrl+G');
     expect(windows.find('select-current-statement')).toMatchObject({ label: '选中当前语句', enabled: false });
+    expect(windows.find('open-current-statement-query')).toMatchObject({ label: '在新查询中打开当前语句', enabled: false });
     expect(windows.find('next-tab')?.accelerator).toBe('Control+Tab');
     expect(windows.find('previous-tab')?.accelerator).toBe('Control+Shift+Tab');
     const mac = fixture('darwin');

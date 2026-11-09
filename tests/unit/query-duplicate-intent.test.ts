@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ContentEditorPort, ContentModelPort } from './editor-content-test-ports';
 import { editorContentBridge, flushEditorContent } from '../../src/renderer/editorContentBridge';
 import { QueryDuplicateIntent, type QueryDuplicateScope } from '../../src/renderer/queryDuplicateIntent';
+import { analyzeStatementNavigation } from '../../src/shared/statementNavigation';
+import { SqlScriptScanner } from '../../src/shared/sqlScriptScanner';
 
 /** 真实正文桥与复制控制器，Monaco只用RAM公开端口；无store、IPC或系统剪贴板。 */
 function fixture() {
@@ -39,6 +41,39 @@ function selectionFixture() {
 }
 
 describe('查询复制意图与既有正文桥', () => {
+  it.each([true, false])('把 MySQL 例程复制成可独立分段的草稿，原分隔符结尾存在=%s', async terminated => {
+    const f = selectionFixture();
+    const body = "CREATE PROCEDURE p() BEGIN SELECT ';', '__dbark_0!'; SELECT 2; END";
+    const script = 'SELECT 0;\nDELIMITER $$\n' + body + (terminated ? '$$\nDELIMITER ;\nSELECT 3;' : '');
+    f.editor.nativeInput(script);
+    f.change({ connection: { id: 'c', dialect: 'mysql', name: '离线 MySQL', color: '', group: '',
+      host: '127.0.0.1', port: 1, user: 'offline' } });
+    f.select([1, 1]);
+    const analysis = analyzeStatementNavigation(script, 'mysql');
+    if (analysis.status !== 'ready') throw Error('例程语句定位失败');
+    await new QueryDuplicateIntent(f.ports, 'statement', analysis.statements[1]).run();
+    const draft = f.open.mock.calls[0][0];
+    expect(draft.title).toBe('已保存查询（当前语句）');
+    if (terminated) expect(draft.sql).toBe('DELIMITER $$\n' + body + '$$\nDELIMITER ;');
+    expect(new SqlScriptScanner().push(draft.sql, true)).toEqual([body]);
+    expect(f.model.value).toBe(script);
+    expect(f.editor.edits).toEqual([]);
+    f.close();
+  });
+  it('读取库上下文期间移动光标再移回，当前语句副本仍失效', async () => {
+    const f = selectionFixture(), gate = deferred<{ state: 'known'; database: null }>();
+    const end = f.model.value.length - 1;
+    f.select([2, 2]);
+    const intent = new QueryDuplicateIntent({ ...f.ports, database: () => gate.promise }, 'statement',
+      { start: 0, end, delimiterStart: end, delimiterEnd: end + 1 });
+    const result = intent.run();
+    f.select([3, 3]);
+    f.select([2, 2]);
+    gate.resolve({ state: 'known', database: null });
+    await expect(result).rejects.toThrow('已变化');
+    expect(f.open).not.toHaveBeenCalled();
+    f.close();
+  });
   it('选区原文独立建草稿，仍刷新原全文且保留原来源和版本', async () => {
     const f = selectionFixture(), before = f.getScope().tab, version = f.model.version;
     f.select([7, 10]);

@@ -1,5 +1,7 @@
 import type * as monaco from 'monaco-editor';
 import type { ConnectionProfile } from '../shared/contracts';
+import { SqlScriptScanner } from '../shared/sqlScriptScanner';
+import type { NavigableStatement } from '../shared/statementNavigation';
 import { queryDatabasePatch, type QueryDatabaseContext } from '../shared/queryContext';
 import type { WorkspaceTab } from './store';
 import { queryDuplicateZh as text } from './locales/queryDuplicate.zh-CN';
@@ -18,7 +20,7 @@ export interface QueryDuplicatePorts {
   chooseTarget?(draft: QueryTargetDraft): void;
 }
 export interface QueryTargetDraft { sourceTabId: string; title: string; sql: string }
-export type QueryDuplicateMode = 'all' | 'selection' | 'target';
+export type QueryDuplicateMode = 'all' | 'selection' | 'target' | 'statement';
 const contextKey = (tab?: WorkspaceTab) => JSON.stringify([tab?.database ?? null, tab?.databaseContext?.state ?? 'legacy', tab?.databaseContext?.state === 'known' ? tab.databaseContext.database : null]);
 /** 标题保留Unicode字符边界，符合既有settings保存的256单元限制。 */
 function copyTitle(title: string, suffix: string): string {
@@ -31,6 +33,28 @@ function copyTitle(title: string, suffix: string): string {
 }
 function selectionKey(range: monaco.IRange): string {
   return [range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn].join(':');
+}
+
+/** 客户端分隔符随独立草稿保留，避免例程中的分号在新标签中被拆成多条。 */
+function statementDraft(source: string, range: NavigableStatement | undefined, dialect: ConnectionProfile['dialect']): string {
+  if (!range || ![range.start, range.end, range.delimiterStart, range.delimiterEnd].every(Number.isSafeInteger) ||
+      range.start < 0 || range.start >= range.end || range.end > range.delimiterStart ||
+      range.delimiterStart > range.delimiterEnd || range.delimiterEnd > source.length) throw Error(text.changed);
+  const original = source.slice(range.start, range.delimiterStart === range.delimiterEnd ? range.end : range.delimiterEnd);
+  if (dialect !== 'mysql' && dialect !== 'mariadb') return original;
+  const delimiter = source.slice(range.delimiterStart, range.delimiterEnd);
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  if (delimiter && delimiter !== ';') return ['DELIMITER ' + delimiter, original, 'DELIMITER ;'].join(eol);
+  if (delimiter || !original.includes(';')) return original;
+  // 未终止的末条语句也可能沿用非标准分隔符。默认分段有歧义时补一个正文未使用的标记。
+  try {
+    const parts = new SqlScriptScanner(false, false, false, false).push(original, true, 2);
+    if (parts.length === 1 && parts[0] === original.trim()) return original;
+  } catch { /* 原语句由现有导航会话确定，此处只测试能否省略分隔符声明。 */ }
+  const used = new Set(original.match(/__dbark_\d+!/g));
+  let index = 0, marker = '__dbark_0!';
+  while (used.has(marker)) marker = '__dbark_' + ++index + '!';
+  return ['DELIMITER ' + marker, original, marker, 'DELIMITER ;'].join(eol);
 }
 
 /** 一次复制只借用原模型读取权；任何失效永久撤销，创建目标时严格挑选草稿字段。 */
@@ -48,16 +72,16 @@ export class QueryDuplicateIntent {
   #valid = true;
   #started = false;
   #flushing = true;
-  constructor(private readonly ports: QueryDuplicatePorts, private readonly mode: QueryDuplicateMode = 'all') {
+  constructor(private readonly ports: QueryDuplicatePorts, private readonly mode: QueryDuplicateMode = 'all', statement?: NavigableStatement) {
     const editor = ports.editor(), model = editor?.getModel(), scope = ports.scope();
     if (!editor || !model || model.isDisposed() || editor.getRawOptions().readOnly || !scope.tab || scope.tab.kind !== 'query' || !scope.connection || !scope.present || !scope.active || scope.blocked) throw Error(text.unavailable);
     this.#editor = editor; this.#model = model; this.#version = model.getVersionId(); this.#sql = model.getValue(); this.#scope = scope; this.#source = { ...scope.tab }; this.#context = contextKey(scope.tab); this.#draft = scope.tab.sql ?? '';
     if (this.#sql.length > 20_000_000) throw Error(text.tooLarge);
-    if (mode === 'selection') {
+    if (mode === 'selection' || mode === 'statement') {
       const ranges = editor.getSelections();
       const range = ranges?.[0];
-      if (ranges?.length !== 1 || !range || range.isEmpty()) throw Error(text.selectionRequired);
-      const sql = model.getValueInRange(range);
+      if (ranges?.length !== 1 || !range || mode === 'selection' && range.isEmpty()) throw Error(text.selectionRequired);
+      const sql = mode === 'statement' ? statementDraft(this.#sql, statement, scope.connection.dialect) : model.getValueInRange(range);
       if (!sql.trim()) throw Error(text.selectionRequired);
       this.#selected = { key: selectionKey(range), sql };
     }
@@ -104,7 +128,8 @@ export class QueryDuplicateIntent {
       }
       const context = await this.ports.database(this.#scope); this.#assert();
       if (context.state !== 'known') throw Error(text.contextUnknown);
-      const candidate: Omit<WorkspaceTab, 'id'> = { kind: 'query', title: copyTitle(this.#source.title, this.#selected ? text.selectionSuffix : text.suffix),
+      const suffix = this.mode === 'statement' ? text.statementSuffix : this.#selected ? text.selectionSuffix : text.suffix;
+      const candidate: Omit<WorkspaceTab, 'id'> = { kind: 'query', title: copyTitle(this.#source.title, suffix),
         connectionId: this.#source.connectionId, sql: this.#selected?.sql ?? sql, ...queryDatabasePatch({ state: 'known', database: context.database }) };
       this.#assert(); this.ports.open(candidate);
     } finally { this.dispose(); }

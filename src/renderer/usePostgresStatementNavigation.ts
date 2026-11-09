@@ -20,7 +20,7 @@ interface Owner extends Target {
   controller?: StatementNavigationController;
   ranges?: NavigableStatement[];
 }
-type Action = 'panel' | 'select' | 'previous' | 'next';
+type Action = 'panel' | 'select' | 'previous' | 'next' | 'duplicate';
 interface Navigation {
   open(action?: Action): void;
   panel?: StatementNavigationPanelProps;
@@ -28,7 +28,8 @@ interface Navigation {
 }
 
 /** 目录和单次导航都绑定原编辑器与会话。清理先撤权，迟到线程无法移动继任草稿的光标。 */
-export function usePostgresStatementNavigation(capture: () => Target | undefined): Navigation {
+export function usePostgresStatementNavigation(capture: () => Target | undefined,
+  openDraft: (instance: Target['instance'], range: NavigableStatement) => void): Navigation {
   const owner = useRef<Owner | undefined>(undefined);
   const [view, setView] = useState<StatementNavigationView>();
   const [busy, setBusy] = useState(false);
@@ -71,7 +72,8 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
       const range = direction
         ? adjacentNavigableStatement(original.source, ranges, offset, direction, 'postgresql')
         : ranges[currentNavigableStatement(original.source, ranges, offset, 'postgresql')];
-      if (range) apply(original, range, action === 'select');
+      if (range && action === 'duplicate') openDraft(original.instance, range);
+      else if (range) apply(original, range, action === 'select');
       else useWorkspace.getState().notify(direction === -1 ? text.noPrevious : direction === 1 ? text.noNext : text.noCurrent);
     }
     const previous = owner.current;

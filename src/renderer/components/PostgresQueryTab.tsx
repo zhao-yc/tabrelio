@@ -99,6 +99,7 @@ import { openFocusedGridRowJump } from './GridRowJump';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
 import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
+import type { NavigableStatement } from '../../shared/statementNavigation';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
 import { QueryLayoutSplitter, queryEditorVisualHeight } from './QueryLayoutSplitter';
 import { beginWorkspaceQueryLayout, queryLayoutActiveTab, queryLayoutTarget } from '../queryLayoutWorkspace';
@@ -1643,8 +1644,8 @@ export function PostgresQueryTab({
     }, 0);
   }
   /** 复制只读取原草稿和固定数据库上下文，沿既有意图保护新建未绑定的独立查询。 */
-  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current) {
-    if (duplicateIntent.current || expectedEditor !== editor.current || mode === 'selection' && resultsOnly || !commandEditor()) return;
+  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statement?: NavigableStatement) {
+    if (duplicateIntent.current || expectedEditor !== editor.current || (mode === 'selection' || mode === 'statement') && resultsOnly || !commandEditor()) return;
     let intent: QueryDuplicateIntent | undefined;
     try {
       intent = new QueryDuplicateIntent({
@@ -1689,7 +1690,7 @@ export function PostgresQueryTab({
           workspace.openTab(candidate);
         },
         chooseTarget: onChooseQueryTarget,
-      }, mode);
+      }, mode, statement);
       duplicateIntent.current = intent;
       setDuplicating(true);
       await intent.run();
@@ -1715,8 +1716,9 @@ export function PostgresQueryTab({
     return { ...target, sessionId: original?.id, current: () =>
       available() && !files.isBusy() && currentTab() === draft && session.current === original &&
       editor.current === target.instance && !target.instance.getRawOptions().readOnly };
-  });
+  }, (instance, range) => { void duplicateQuery('statement', instance, range); });
   const canNavigate = editable && !navigation.busy;
+  const canOpenStatementQuery = canNavigate && canDuplicateQuery && !resultsOnly;
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
     execute: { enabled: canRun, run: () => run() },
     'execute-selection': { enabled: canRun && editorSelection.single, run: () => run('selection') },
@@ -1724,6 +1726,7 @@ export function PostgresQueryTab({
     'execute-all': { enabled: canRun, run: () => run('all') },
     'statement-navigation': { enabled: canNavigate, run: () => navigation.open() },
     'select-current-statement': { enabled: canNavigate, run: () => navigation.open('select') },
+    'open-current-statement-query': { enabled: canOpenStatementQuery, run: () => navigation.open('duplicate') },
     'previous-statement': { enabled: canNavigate, run: () => navigation.open('previous') },
     'next-statement': { enabled: canNavigate, run: () => navigation.open('next') },
     stop: { enabled: canStop, run: stop },
@@ -1761,8 +1764,13 @@ export function PostgresQueryTab({
       contextMenuGroupId: 'modification', contextMenuOrder: 7,
       run: () => { if (active) return duplicateQuery('selection', editorInstance); },
     });
-    return () => { active = false; action.dispose(); selectionQuery.dispose(); };
-  }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version]);
+    const statementQuery = editorInstance.addAction({
+      id: `dbark-postgres-open-current-statement-query:${uid()}`, label: uiCommandLabels['open-current-statement-query'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
+      run: () => { if (active && canOpenStatementQuery) navigation.open('duplicate'); },
+    });
+    return () => { active = false; action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
+  }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery]);
   return (
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
       onKeyDownCapture={event => {
@@ -1819,6 +1827,8 @@ export function PostgresQueryTab({
               onClick={() => void duplicateQuery()}>{queryDuplicateZh.action}</button>
             <button disabled={!canDuplicateQuery || !editorSelection.single || resultsOnly} title={queryDuplicateZh.selectionHint}
               onClick={() => void duplicateQuery('selection')}>{queryDuplicateZh.selection}</button>
+            <button disabled={!canOpenStatementQuery} title={queryDuplicateZh.statementHint}
+              onClick={() => navigation.open('duplicate')}>{uiCommandLabels['open-current-statement-query']}</button>
             {onChooseQueryTarget && <button disabled={!canDuplicateQuery} title={queryDuplicateZh.targetHint}
               onClick={() => void duplicateQuery('target')}>{queryDuplicateZh.targetAction}</button>}
             <button disabled={locked} onClick={onHistory}>

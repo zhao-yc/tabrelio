@@ -1909,6 +1909,15 @@ test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑
   await expect(panel.getByRole('status')).toHaveText(navigationText.reasons.mode);
   await panel.getByRole('button', {name: navigationText.close}).click();
   await expect(panel).toHaveCount(0);
+  await replaceDraft(sql);
+  await modelSelection(2, 8);
+  await command('open-current-statement-query');
+  await expect(page.locator('[data-workspace-tab-id]').filter({hasText: queryDuplicateZh.statementSuffix})).toHaveCount(1);
+  await expect.poll(async () => (await inspectModel()).sql.replaceAll('\r\n', '\n')).toBe(sql.slice(0, sql.indexOf(';\n--第二条') + 1));
+  await expect.poll(() => page.evaluate(async () => {
+    const settings = await window.dbark.invoke('settings.get', {});
+    return settings.tabs.find(item => item.id === settings.activeTabId);
+  })).toMatchObject({ database: 'offline_db', kind: 'query' });
   await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);

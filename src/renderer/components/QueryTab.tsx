@@ -528,8 +528,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制仅占本地意图，不占SQL任务、不清结果；关闭/换连/新作业会永久撤销等待中的复制。 */
-  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current) {
-    if (duplicateIntent.current || expectedEditor !== editor.current || mode === 'selection' && resultsOnly) return;
+  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statement?: NavigableStatement) {
+    if (duplicateIntent.current || expectedEditor !== editor.current || (mode === 'selection' || mode === 'statement') && resultsOnly) return;
     let intent: QueryDuplicateIntent | undefined;
     try {
       const scope = () => {
@@ -550,7 +550,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         database: async initial => initial.sessionId ? queryDatabaseFromSession(await invoke('query.completionState', { sessionId: initial.sessionId })) : resolveQueryDatabase(initial.tab?.database, initial.tab?.databaseContext, connectionDatabase(initial.connection)),
         open: candidate => { const workspace = useWorkspace.getState(); if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany); workspace.openTab(candidate); },
         chooseTarget: onChooseQueryTarget,
-      }, mode);
+      }, mode, statement);
       duplicateIntent.current = intent; setDuplicating(true); await intent.run();
     } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
     finally { intent?.dispose(); if (duplicateIntent.current === intent) { duplicateIntent.current = null; if (alive.current) setDuplicating(false); } }
@@ -1772,7 +1772,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && !closeRequestRef.current;
   }
   /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
-  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' = 'panel'): void {
+  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' | 'duplicate' = 'panel'): void {
     if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || navigationIntent.current?.controller.busy) return;
     const model = instance.getModel(); if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
     const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' ? 1 : undefined;
@@ -1821,7 +1821,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         const range = result.status === 'ready' && current()
           ? direction ? adjacentNavigableStatement(binding.source, result.statements, offset, direction) : result.statements[currentNavigableStatement(binding.source, result.statements, offset)] : undefined;
         closeStatementNavigation();
-        if (range) applyStatementRange(binding, range, action === 'select');
+        if (range && action === 'duplicate') void duplicateQuery('statement', binding.instance, range);
+        else if (range) applyStatementRange(binding, range, action === 'select');
         else if (result.status === 'ready') useWorkspace.getState().notify(noTarget);
         else if (result.reason !== 'stale') useWorkspace.getState().notify(navigationText.reasons[result.reason] ?? navigationText.unavailable, true);
       },
@@ -2058,11 +2059,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const select = searchEditor.addAction({ id: 'dbark-select-current-statement:' + uid(), label: uiCommandLabels['select-current-statement'], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.65,
       run: () => { if (active) openStatementNavigation(searchEditor, 'select'); },
     });
+    const duplicate = searchEditor.addAction({ id: 'dbark-open-current-statement-query:' + uid(), label: uiCommandLabels['open-current-statement-query'],
+      precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
+      run: () => { if (active) openStatementNavigation(searchEditor, 'duplicate'); },
+    });
     const adjacent = (['previous', 'next'] as const).map((direction, index) => searchEditor.addAction({
       id: `dbark-${direction}-statement:${uid()}`, label: uiCommandLabels[`${direction}-statement`], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.66 + index / 100,
       run: () => { if (active) openStatementNavigation(searchEditor, direction); },
     }));
-    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); adjacent.forEach(item => item.dispose()); };
+    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); duplicate.dispose(); adjacent.forEach(item => item.dispose()); };
   }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
@@ -2116,6 +2121,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     find: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind() },
     'statement-navigation': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy, run: () => openStatementNavigation() },
     'select-current-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'select') },
+    'open-current-statement-query': { enabled: canNavigateFromCursor && canDuplicateQuery, run: () => openStatementNavigation(editor.current, 'duplicate') },
     'previous-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'previous') },
     'next-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'next') },
     'syntax-check': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
@@ -2194,6 +2200,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         <ActionMenuSection label={menuText.library}><button disabled={!canDuplicateQuery} title={queryDuplicateZh.hint} aria-label={queryDuplicateZh.action} onClick={() => void duplicateQuery()}><Copy size={14}/>{queryDuplicateZh.action}</button>
 <button disabled={!canDuplicateQuery || !hasSingleSelection || resultsOnly || fileSource.busy}
   title={queryDuplicateZh.selectionHint} onClick={() => void duplicateQuery('selection')}>{queryDuplicateZh.selection}</button>
+<button disabled={!canDuplicateQuery || !canNavigateFromCursor} title={queryDuplicateZh.statementHint}
+  onClick={() => openStatementNavigation(editor.current, 'duplicate')}>{uiCommandLabels['open-current-statement-query']}</button>
 {onChooseQueryTarget && <button disabled={!canDuplicateQuery || fileSource.busy}
   title={queryDuplicateZh.targetHint} onClick={() => void duplicateQuery('target')}>{queryDuplicateZh.targetAction}</button>}
 <button title={zh.snippets.title} aria-label={zh.snippets.title} onClick={openSnippets}><BookOpen size={15}/></button>

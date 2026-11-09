@@ -2,6 +2,7 @@ import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { statementNavigationZh as text } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
+import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { validStatementNavigationResult, type StatementNavigationResult } from '../../src/shared/statementNavigation';
 
@@ -427,6 +428,29 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     const displayAudit = await audit();
     expect(displayAudit.denied).toEqual([]);
     expect(displayAudit.commands.filter(command => /^(?:metadata|sessions|query|table|schema|sqlite|serverMonitor)\./.test(command))).toEqual([]);
+    stage = '从原生菜单只复制光标所在复合语句，保留原模型和光标';
+    await gotoLine();
+    await step(() => quickInput.fill(dialect === 'mysql' ? ':5:5' : ':4:5'));
+    await step(() => quickInput.press('Enter'));
+    await step(() => expect(quickInput).toBeHidden());
+    const sourceBeforeDuplicate = await model();
+    const sourceId = await page.locator('[data-workspace-tab-id]').getAttribute('data-workspace-tab-id');
+    await expect.poll(() => step(() => application.evaluate(({ Menu }) =>
+      Menu.getApplicationMenu()?.getMenuItemById('open-current-statement-query')?.enabled === true))).toBe(true);
+    await step(() => application.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('open-current-statement-query'), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('当前语句原生命令不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }));
+    const copy = page.locator('[data-workspace-tab-id]').filter({ hasText: queryDuplicateZh.statementSuffix });
+    await step(() => expect(copy).toHaveCount(1));
+    await expect.poll(async () => (await model()).source.replaceAll('\r\n', '\n')).toBe(compound);
+    await step(() => copy.locator('.tab-close').click());
+    await step(() => page.getByRole('dialog', { name: queryCloseZh.title, exact: true })
+      .getByRole('button', { name: queryCloseZh.discard, exact: true }).click());
+    await step(() => expect(page.locator('[data-workspace-tab-id]')).toHaveCount(1));
+    await step(() => expect(page.locator('[data-workspace-tab-id]')).toHaveAttribute('data-workspace-tab-id', sourceId!));
+    expect(await model()).toEqual(sourceBeforeDuplicate);
     stage = '保留草稿后通过原生窗口菜单重开，明确放弃后不可重开';
     const tabButton = page.locator('[data-workspace-tab-id]');
     const oldTabId = await step(() => tabButton.getAttribute('data-workspace-tab-id'));
