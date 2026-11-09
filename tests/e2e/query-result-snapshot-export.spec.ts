@@ -5,6 +5,7 @@ import { navigationMenuItem } from './navigation-menu';
 import { queryResultSnapshotViewerZh as text } from '../../src/renderer/locales/queryResultSnapshotViewer.zh-CN';
 import { queryResultFindZh as find } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultSortZh as sort } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultFilterZh as filter } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSnapshotFileMessages as filesText } from '../../src/main/queryResultSnapshotFiles';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
@@ -24,7 +25,7 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
         { label: '勾选行', amount: '9007199254740993', payload: { type: 'binary', base64: 'AP8=' } },
         { label: '匹配乙', amount: '9007199254740993.0001', payload: null },
         { label: '匹配丙', amount: '9007199254740993.0002', payload: null },
-        { label: '范围外', amount: '0', payload: null },
+        { label: '范围外', amount: '9007199254740993.0003', payload: null },
       ],
       truncated: true, elapsedMs: { type: 'number', text: '1' }, statement: 'SELECT secret_sql_marker;',
     },
@@ -115,6 +116,39 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
     await expect(matched).toBeVisible();
     await expect(amount.getByLabel(sort.descending)).toBeVisible();
 
+    const filterButton = viewer.getByRole('button', { name: filter.open, exact: true });
+    const filterDialog = page.getByRole('dialog', { name: filter.title, exact: true });
+    await filterButton.click();
+    await filterDialog.getByRole('button', { name: filter.add, exact: true }).click();
+    const condition = (index: number) => filterDialog.locator(`[aria-label="${filter.condition(index)}"]`);
+    await condition(1).getByLabel(filter.column + ' 1', { exact: true }).selectOption('amount');
+    await condition(1).getByLabel(filter.operator + ' 1', { exact: true }).selectOption('gte');
+    const lower = condition(1).getByRole('textbox', { name: filter.input + ' 1', exact: true });
+    await lower.fill('无效数字');
+    await filterDialog.getByRole('button', { name: filter.apply, exact: true }).click();
+    await expect(filterDialog.getByRole('alert')).toBeVisible();
+    await expect(lower).toHaveValue('无效数字');
+    await lower.fill('9007199254740993.0002');
+    await filterDialog.getByRole('button', { name: filter.addGroup, exact: true }).click();
+    await filterDialog.getByRole('button', { name: filter.addInGroup('1'), exact: true }).click();
+    for (const [index, label] of [[2, '匹配甲'], [3, '匹配丙']] as const) {
+      await condition(index).getByLabel(filter.operator + ' ' + index, { exact: true }).selectOption('eq');
+      await condition(index).getByRole('textbox', { name: filter.input + ' ' + index, exact: true }).fill(label);
+    }
+    await filterDialog.getByRole('button', { name: filter.apply, exact: true }).click();
+    await expect(filterButton).toBeFocused();
+    await expect(labels).toHaveText(['匹配丙', '匹配甲']);
+    const filtered = viewer.getByText(filter.counts(5, 2), { exact: true });
+    await expect(filtered).toBeVisible();
+    await expect(viewer.getByText(find.matchViewCount(2, 2), { exact: true })).toBeVisible();
+    await info.attach('离线快照组合筛选', { body: await page.screenshot(), contentType: 'image/png' });
+    await filterButton.click();
+    await expect(lower).toHaveValue('9007199254740993.0002');
+    await lower.fill('0');
+    await lower.press('Escape');
+    await expect(filterButton).toBeFocused();
+    await expect(filtered).toBeVisible();
+
     const save = async (title: string, format: 'csv' | 'json', rows: number) => {
       const dialog = page.getByRole('dialog', { name: title, exact: true });
       await expect(dialog).toBeVisible();
@@ -131,13 +165,16 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
       await expect(viewer).toBeVisible();
     };
     await shown.click();
-    await save(text.exportShown, 'csv', 3);
+    await save(text.exportShown, 'csv', 2);
     await expect(shown).toBeFocused();
     expect((await readFile(csv, 'utf8')).replace(/^\uFEFF/, '')).toBe(
-      '内容,金额,字节\r\n匹配丙,9007199254740993.0002,\\N\r\n匹配甲,9007199254740993.0002,\\N\r\n匹配乙,9007199254740993.0001,\\N\r\n');
+      '内容,金额,字节\r\n匹配丙,9007199254740993.0002,\\N\r\n匹配甲,9007199254740993.0002,\\N\r\n');
+    await expect(filtered).toBeVisible();
+    await viewer.getByRole('button', { name: filter.clear, exact: true }).click();
     await expect(matched).toBeVisible();
+    await expect(labels).toHaveText(['匹配丙', '匹配甲', '匹配乙']);
     await viewer.getByRole('button', { name: find.clearMatchView, exact: true }).click();
-    await expect(labels).toHaveText(['匹配丙', '匹配甲', '匹配乙', '勾选行', '范围外']);
+    await expect(labels).toHaveText(['范围外', '匹配丙', '匹配甲', '匹配乙', '勾选行']);
     const rowCheck = viewer.getByRole('row').filter({ hasText: '勾选行' }).getByRole('checkbox');
     await rowCheck.check();
     await checked.click();

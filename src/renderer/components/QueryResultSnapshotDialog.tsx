@@ -7,10 +7,14 @@ import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
+import { QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
+import { prepareQueryResultOrganization } from '../queryResultHistory';
+import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
+import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { escapeTargetsQueryResultFind } from './QueryResultFind';
 import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
 import { SqlEditor } from './SqlEditor';
@@ -27,7 +31,8 @@ export const queryResultSnapshotViewerServices: QueryResultSnapshotViewerService
 interface Loaded { name: string; snapshot: QueryResultSnapshotDocument; scope: object; }
 interface Operation { mode: 'open' | 'save'; epoch: number; source: Loaded | undefined; }
 type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: QueryResultSortView };
-type SnapshotOverlay = SnapshotSort | { kind: 'export'; result: QueryResult; selected: boolean };
+type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView };
+type SnapshotOverlay = SnapshotSort | SnapshotFilter | { kind: 'export'; result: QueryResult; selected: boolean };
 
 /** 全局查看只持有文件内容，不创建查询、连接或会话；原文件Promise包括主进程清理。 */
 export function QueryResultSnapshotDialog({ onClose, services = queryResultSnapshotViewerServices }: { onClose(): void; services?: QueryResultSnapshotViewerServices }) {
@@ -42,10 +47,14 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const callbacks = useRef({ onClose, services }); callbacks.current = { onClose, services };
   const sourceResult = loaded?.snapshot.result;
   const dialect = loaded?.snapshot.version === 3 ? 'postgresql' : undefined;
-  const sorter = useMemo(() => new QueryResultSort(dialect), [dialect]);
-  const sortBinding = sorter.bind(sourceResult, [loaded?.scope]);
+  const initial = useMemo(() => ({ filter: new QueryResultFilter(dialect), sorter: new QueryResultSort(dialect) }), [dialect]);
+  const [organization, setOrganization] = useState<typeof initial>();
+  const { filter, sorter } = organization ?? initial;
+  const filterBinding = filter.bind(sourceResult, [loaded?.scope]);
+  const filterView = filter.view(filterBinding);
+  const sortBinding = sorter.bind(filterView?.result ?? sourceResult, [loaded?.scope]);
   const sortView = sorter.view(sortBinding);
-  const matches = useQueryResultMatchView(sortView?.result ?? sourceResult, sourceResult?.columns, [loaded?.scope]);
+  const matches = useQueryResultMatchView(sortView?.result ?? filterView?.result ?? sourceResult, sourceResult?.columns, [loaded?.scope]);
   const displayed = matches.result;
   const binding = exportSelection.bind(displayed, [loaded?.scope]);
   const checkedCount = exportSelection.count(binding);
@@ -140,7 +149,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   /** 只重排内存中的原行，匹配范围跟随行身份；文件和完整快照仍保留原序。 */
   function publishSort(binding: QueryResultSortBinding, initial: QueryResultSortView, rules: QueryResultSortRule[]): void {
     const next = sorter.apply(binding, initial, rules);
-    matches.reorder(next.result);
+    matches.reproject(next.result);
     exportSelection.invalidate();
     advance(); setError('');
   }
@@ -159,6 +168,32 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     closeOverlay(draft);
     return true;
   }
+  function filterDraftCurrent(draft: SnapshotFilter): boolean {
+    return alive.current && overlayRef.current === draft && filter.view(draft.binding) === draft.initial;
+  }
+  function openFilter(trigger: HTMLButtonElement): void {
+    if (!editable() || !filterBinding || !filterView || filter.view(filterBinding) !== filterView) return;
+    openOverlay({ kind: 'filter', binding: filterBinding, initial: filterView }, trigger);
+  }
+  /** 在独立控制器完整验证筛选和现有排序，失败时原网格和条件草稿均保持。 */
+  function publishFilter(expression: QueryResultFilterGroup): boolean {
+    if (!loaded || !sourceResult) return false;
+    try {
+      const next = prepareQueryResultOrganization(sourceResult, [loaded.scope], sourceResult.columns,
+        { expression, sort: sortView?.rules ?? [] }, dialect);
+      matches.reproject(next.sorter.view(next.sortBinding)!.result);
+      filter.invalidate(); sorter.invalidate(); exportSelection.invalidate();
+      setOrganization(next);
+      advance(); setError('');
+      return true;
+    } catch (reason) { setError(errorMessage(reason)); return false; }
+  }
+  function applyFilter(draft: SnapshotFilter, expression: QueryResultFilterGroup): void {
+    if (filterDraftCurrent(draft) && publishFilter(expression)) closeOverlay(draft);
+  }
+  function clearFilter(): void {
+    if (loaded && gridCurrent(loaded, interaction, false)) publishFilter({ mode: 'AND', children: [] });
+  }
   /** 只有准确原操作能更新显示；失效保存仍报告已写可能性或原Main错误。 */
   async function file(mode: 'open' | 'save'): Promise<void> {
     if (!editable() || mode === 'save' && (!loaded || loadedRef.current !== loaded)) return;
@@ -171,7 +206,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
         if (!current()) return;
         if (selected === null) { setMessage(text.cancelled); return; }
         const snapshot = parseQueryResultSnapshot(selected.snapshot); if (!current()) return;
-        const next = { name: selected.name, snapshot, scope: {} }; loadedRef.current = next; setLoaded(next); setShowSql(false); setMessage('');
+        const next = { name: selected.name, snapshot, scope: {} }; loadedRef.current = next;
+        setLoaded(next); setOrganization(undefined); setShowSql(false); setMessage('');
       } else {
         const saved = await port.save(active.source!.snapshot);
         if (saved === null) { if (current()) setMessage(text.cancelled); return; }
@@ -195,6 +231,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button>
       <button disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
+      <button disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
       <button disabled={!!busy || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
         onClick={event => openSort(event.currentTarget)}>{sortText.panelTitle}</button>
       {sortView && sortView.rules.length > 0 && <button disabled={!!busy} onClick={() => sortGrid([])}>{sortText.clear}</button>}
@@ -206,6 +243,10 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <p role="status">{text.opened(loaded.name)}</p>
       <p>{text.count(loaded.snapshot.result.rows.length, displayed.columns.length)}</p>
       {loaded.snapshot.result.truncated && <p className="warning-text">{text.truncated}</p>}
+      {!!filterView?.rules.length && <div className="query-result-keyword">
+        <span role="status">{filterText.counts(loaded.snapshot.result.rows.length, filterView.result.rows.length)}</span>
+        <button type="button" disabled={!!busy} onClick={clearFilter}>{filterText.clear}</button>
+      </div>}
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
         <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
@@ -224,6 +265,16 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     {overlay?.kind === 'sort' && <Modal title={sortText.panelTitle} wide onClose={() => closeOverlay(overlay)}>
       <QueryResultSortPanel offline binding={overlay.binding} initial={overlay.initial} isCurrent={() => sortDraftCurrent(overlay)}
         onApply={rules => applySort(overlay, rules)} onClose={() => closeOverlay(overlay)}/>
+    </Modal>}
+    {overlay?.kind === 'filter' && <Modal title={filterText.title} wide onClose={() => closeOverlay(overlay)} onEscape={event => {
+      // 面板内的 Escape 由条件草稿或候选值选择器优先处理。
+      if (event.target instanceof Element && event.target.closest('.query-result-filter-panel')) return;
+      event.stopPropagation();
+      closeOverlay(overlay);
+    }}>
+      <QueryResultFilterPanel offline binding={overlay.binding} initial={overlay.initial} isCurrent={() => filterDraftCurrent(overlay)}
+        onApply={expression => applyFilter(overlay, expression)} onClose={() => closeOverlay(overlay)}/>
+      <ErrorBox message={error}/>
     </Modal>}
   </>;
 }

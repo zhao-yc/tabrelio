@@ -21,6 +21,7 @@ function register(): void {
   const { queryResultSnapshotViewerZh: text } = require('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN');
   const { queryResultFindZh: findText } = require('../../src/renderer/locales/queryResultFind.zh-CN') as typeof import('../../src/renderer/locales/queryResultFind.zh-CN');
   const { queryResultSortZh: sortText } = require('../../src/renderer/locales/queryResultSort.zh-CN') as typeof import('../../src/renderer/locales/queryResultSort.zh-CN');
+  const { queryResultFilterZh: filterText } = require('../../src/renderer/locales/queryResultFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultFilter.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
   const { binaryCellFilesZh } = require('../../src/renderer/locales/binaryCellFiles.zh-CN') as typeof import('../../src/renderer/locales/binaryCellFiles.zh-CN');
@@ -199,12 +200,21 @@ function register(): void {
       await step(() => expect(binary).toBeVisible()); await step(() => expect(binary.getByRole('textbox', { name: binaryCellZh.hexLabel, exact: true })).toHaveValue(/00.*ff.*00/i));
       await step(async () => expect((await navigationMenuItem(binary, { name: binaryCellFilesZh.save, exact: true }, () => clock.assertCurrent()))).toHaveCount(0));
       await step(() => page.keyboard.press('Escape')); await step(() => expect(binary).toBeHidden()); await step(() => expect(viewer).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: filterText.open, exact: true }).click());
+      const filter = page.getByRole('dialog', { name: filterText.title, exact: true });
+      await step(() => filter.getByRole('button', { name: filterText.add, exact: true }).click());
+      await step(() => filter.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('big'));
+      await step(() => filter.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('eq'));
+      await step(() => filter.getByRole('textbox', { name: filterText.input + ' 1', exact: true }).fill('18446744073709551615'));
+      await step(() => filter.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
       if (mode === 'save') {
         await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('save'))); await step(async () => (await navigationMenuItem(viewer, { name: text.save, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.getByText(text.saved(basename(savedPath)), { exact: true })).toBeVisible());
         const saved = await step(() => readFile(savedPath)); savedSha256 = hash(saved); const independent = JSON.parse(saved.toString('utf8'));
         expect(Object.keys(independent).sort()).toEqual(['kind', 'name', 'result', 'version']); expect(independent.name).toBe(expectedWire.name); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);
         expect(Object.hasOwn(independent.result.rows[0], '__proto__')).toBe(true); expect(independent.result.rows[0].negativeZero).toEqual({ type: 'number', text: '-0' });
       }
+      await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       await step(() => expect(viewer.getByText(findText.matchViewCount(1, 2), { exact: true })).toBeVisible());
       await step(() => viewer.getByRole('button', { name: findText.clearMatchView, exact: true }).click());
       await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));

@@ -6,6 +6,7 @@ export const queryResultFilterZh = {
   sqliteUnknown: '此SQLite结果缺少原存储类型，只能判断NULL；请重新执行查询后再按类型筛选。',
   postgresHint: '整数和 NUMERIC 按原值比较，浮点接受科学计数法。布尔值可填 true 或 false。文本按本地规则匹配，日期时间、二进制和未知类型可判断 NULL。',
   open: '筛选已返回结果', title: '本地条件筛选', scope: '仅筛选当前已返回快照，不重发 SQL。筛选先于排序；应用或清除保留多列排序，重置勾选、查找及行详情。',
+  offlineScope: '条件针对快照中的全部原始行。应用或清除条件时保留排序及匹配范围，重置旧勾选和查找位置。完整快照仍按原样另存。',
   truncated: '原结果已截断，筛选不包含未返回记录。',
   counts: (source: number, matched: number) => `原返回 ${source} 行，筛选后 ${matched} 行`,
   mode: '条件组合', and: '全部满足（AND）', or: '任一满足（OR）', column: '筛选字段', operator: '比较方式', input: '条件原值',

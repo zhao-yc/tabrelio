@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { QueryResult, ResultColumn } from '../../shared/contracts';
+import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
 import { projectQueryResultKeyword, projectQueryResultRows } from '../queryResultKeyword';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
 import '../queryResultKeyword.css';
@@ -9,6 +9,7 @@ interface Projection {
   result: QueryResult;
   columns: readonly ResultColumn[] | undefined;
   context: readonly unknown[];
+  members?: ReadonlySet<DataRow>;
 }
 
 /** 匹配视图只属于已经整理好的结果；切换任一来源后，不沿用旧行号。 */
@@ -34,12 +35,14 @@ export function useQueryResultMatchView(source: QueryResult | undefined, columns
     invalidate();
     setProjection(undefined);
   }
-  /** 同一批原行重排时沿用匹配成员，使用新顺序重新投影 SQLite 逐格类型。 */
-  function reorder(sorted: QueryResult): void {
-    if (active) setProjection({ source: sorted, columns, context,
-      result: projectQueryResultKeyword(sorted, new Set(active.result.rows)) });
+  /** 同一来源重新筛选或排序时保留原匹配成员，包括暂时被条件隐藏的行。 */
+  function reproject(organized: QueryResult): void {
+    if (!active) return;
+    const members = active.members ?? new Set(active.result.rows);
+    setProjection({ source: organized, columns, context, members,
+      result: projectQueryResultKeyword(organized, members) });
   }
-  return { result, active, apply, clear, reorder };
+  return { result, active, apply, clear, reproject };
 }
 
 export function QueryResultMatchView({ active, disabled, onClear }: { active: Projection; disabled: boolean; onClear(): void }) {
