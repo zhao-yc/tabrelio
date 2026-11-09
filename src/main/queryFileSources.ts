@@ -15,6 +15,7 @@ import { readReloadableQueryFile as readQueryFileSnapshot, queryFileParent, same
 import { queryFileReloadSchemas, queryFileReloadLimits, queryFileTextDifference, type QueryFileCheckInput, type QueryFileCheckResult, type QueryFileReloadInput, type QueryFileReloadResult, type QueryFileDiscardInput } from '../shared/queryFileReload';
 import { queryFileReloadZh as reloadText } from '../shared/queryFileReload.zh-CN';
 import { sameQueryFileVersion } from './queryFileSourceFiles';
+import { externalSqlEditorZh } from '../shared/externalSqlEditor';
 
 type SourceStore = Pick<LocalStore, 'queryFileSource' | 'queryFileDocument' | 'queryFileSourceRecords' | 'commitQueryFileSource' | 'releaseQueryFileSource' | 'queryRecentFiles' | 'queryRecentFile' | 'forgetRecentFile'>;
 /** scope必须由真实Main IPC文档捕获，不能由renderer或缺省true构造。 */
@@ -24,7 +25,8 @@ export interface QueryFileSourceHost {
   choose(mode: 'open' | 'save', name?: string): Promise<string | undefined>;
   reserve(path: string): Promise<() => void>;
   report(event: TaskEvent): void;
-  handoff?(action: QueryFileSourceHandoffInput['action'], path: string): Promise<boolean>;
+  handoff?(action: 'open' | 'reveal', path: string): Promise<boolean>;
+  prepareEditor?(): Promise<(path: string) => Promise<boolean>>;
 }
 interface Active { cancelled: boolean; source?: QueryFileSourceRef; tabId: string; taskId: string; document: object; context?: Context; phase: QueryFileSourceProgress['phase']; done: Promise<void>; finish(): void; }
 interface Context { expected?: PrivateQueryFileSource; previousSql: string; connectionId: string; wrote: 'no' | 'yes' | 'unknown'; check(): void; report(phase: QueryFileSourceProgress['phase'], bytes?: number, total?: number): void; }
@@ -265,9 +267,11 @@ export class QueryFileSources {
       };
       check();
       const name = basename(source.path);
-      if (action === 'open' && (!canOpenBoundSqlFile(name) || process.platform === 'win32' && name.includes(':'))) {
-        throw new QueryFileSourceFailure('permission', '只能用默认应用打开扩展名为 .sql 的文件');
+      if (action !== 'reveal' && (!canOpenBoundSqlFile(name) || process.platform === 'win32' && name.includes(':'))) {
+        throw new QueryFileSourceFailure('permission', '系统应用只能打开扩展名为 .sql 的文件');
       }
+      const editor = action === 'edit' ? await this.host.prepareEditor?.() : undefined;
+      check();
       const parent = await queryFileParent(source.path, check);
       if (source.parent && !sameQueryFileParent(source.parent, parent)) throw new QueryFileSourceFailure('identity-changed', reloadText.identity);
       const canonical = await realpath(source.path); check();
@@ -279,7 +283,11 @@ export class QueryFileSources {
         throw new QueryFileSourceFailure('identity-changed', reloadText.identity);
       }
       // 从最后一次身份复核直接交给系统。系统接口接收路径，外部进程仍可在此后移动文件。
-      if (!await this.host.handoff?.(action, source.path)) throw new QueryFileSourceFailure('io', action === 'open' ? '系统未能用默认应用打开 SQL 文件，请检查文件关联' : '系统未能定位 SQL 文件');
+      if (action === 'edit') {
+        if (!await editor?.(source.path)) throw new QueryFileSourceFailure('io', externalSqlEditorZh.launchFailed);
+      } else if (!await this.host.handoff?.(action, source.path)) {
+        throw new QueryFileSourceFailure('io', action === 'open' ? '系统未能用默认应用打开 SQL 文件，请检查文件关联' : '系统未能定位 SQL 文件');
+      }
       return { state: 'requested' };
     } catch (error) { return this.failure(error, 'no', true); }
     finally { this.handoffs.delete(tabId); }

@@ -2,7 +2,7 @@ import { QueryFileReloadDialog } from './QueryFileReloadDialog';
 import { queryFileReloadZh } from '../../shared/queryFileReload.zh-CN';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ExternalLink, FileDown, FolderOpen, LocateFixed } from 'lucide-react';
+import { ExternalLink, FileDown, FilePenLine, FolderOpen, LocateFixed } from 'lucide-react';
 import type { QueryFileEncoding } from '../../shared/contracts';
 import type { QueryFileBom, QueryFileEolPolicy } from '../../shared/queryFileSources';
 import { canOpenBoundSqlFile } from '../../shared/queryFileSources';
@@ -70,12 +70,14 @@ export function QueryFileActions({ tab, files, renderActions }: { tab: Workspace
     'save-sql-file': { enabled: !files.busy, run: () => chooseMode('save') },
     'recent-sql-file': { enabled: !files.busy, run: () => chooseMode('recent') },
     'open-bound-sql-external': { enabled: canOpenExternal, run: () => void files.handoff('open') },
+    'edit-bound-sql-external': { enabled: canOpenExternal, run: () => void files.handoff('edit') },
     'reveal-bound-sql-file': { enabled: canReveal, run: () => void files.handoff('reveal') },
   }, { active: activeTabId === tab.id, contextKey: JSON.stringify([tab.connectionId, connectionVersion, tab.fileSourceBinding?.id, tab.fileSourceBinding?.revision, !!mode, files.busy]) });
   useEffect(() => { if (files.problem) setMode(null); }, [files.problem]);
   const problem = files.problem;
   const actions = <>{tab.fileSourceBinding && <>
     <button disabled={files.busy} onClick={() => void files.checkExternal()}>{queryFileReloadZh.check}</button>
+    <button disabled={!canOpenExternal} title={text.externalEditorHint} aria-label={uiCommandLabels['edit-bound-sql-external']} onClick={() => void files.handoff('edit')}><FilePenLine size={15}/></button>
     <button disabled={!canOpenExternal} title={text.externalOpenHint} aria-label={uiCommandLabels['open-bound-sql-external']} onClick={() => void files.handoff('open')}><ExternalLink size={15}/></button>
     <button disabled={!canReveal} title={text.revealHint} aria-label={uiCommandLabels['reveal-bound-sql-file']} onClick={() => void files.handoff('reveal')}><LocateFixed size={15}/></button>
   </>}<button disabled={files.busy} title={text.open} aria-label={text.open} onClick={() => chooseMode('open')}><FolderOpen size={15}/></button><button disabled={files.busy} title={text.recent} aria-label={text.recent} onClick={() => chooseMode('recent')}>{text.recent}</button><button disabled={files.busy} title={text.saveAs} aria-label={text.saveAs} onClick={() => chooseMode('save')}><FileDown size={15}/></button></>;

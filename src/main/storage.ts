@@ -1359,6 +1359,22 @@ export class LocalStore {
     });
     return current.map(({ name, revision }) => ({ name, revision }));
   }
+  /** 外部应用授权属于本机配置库，工作区设置、连接导出与标签持久化均不携带它。 */
+  externalSqlEditorPath(): string | null {
+    if (!this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_sql_editor'").length) return null;
+    const path = this.db.exec('SELECT path FROM external_sql_editor WHERE id=1')[0]?.values[0]?.[0];
+    return typeof path === 'string' ? path : null;
+  }
+
+  /** 随实际选择惰性创建表，失败时恢复原偏好，兼容无此设置的旧配置库。 */
+  setExternalSqlEditorPath(path: string | null, assertCurrent: () => void): void {
+    this.mutate(() => {
+      this.db.run('CREATE TABLE IF NOT EXISTS external_sql_editor (id INTEGER PRIMARY KEY CHECK(id=1), path TEXT NOT NULL)');
+      if (path === null) this.db.run('DELETE FROM external_sql_editor WHERE id=1');
+      else this.db.run('INSERT INTO external_sql_editor VALUES (1,?) ON CONFLICT(id) DO UPDATE SET path=excluded.path', [path]);
+    }, assertCurrent);
+  }
+
   /** 合并默认偏好，兼容缺少新增配置字段的旧记录。 */
   settings(): AppSettings {
     const stored = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];

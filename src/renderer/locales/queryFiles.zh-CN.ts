@@ -5,6 +5,7 @@ export const queryFilesZh = {
   recentHint: '最多保留20个最近成功使用的SQL文件。这里只显示本机记录，不检查文件或读取正文。请选择文件及编码后明确打开；失效路径可从列表移除或重新选择文件。',
   open: '打开 SQL 文件',
   externalOpenHint: '用系统默认应用打开磁盘版本，保留当前标签中的草稿',
+  externalEditorHint: '用已配置的外部编辑器打开磁盘版本，保留当前标签中的草稿',
   revealHint: '在访达或文件资源管理器中定位关联的磁盘文件',
   externalOpenRequested: '已请求系统用默认应用打开 SQL 文件。',
   revealRequested: '已请求系统定位 SQL 文件。',

@@ -41,7 +41,7 @@ export const queryFileSourceSaveSchema = z.object({ tabId, taskId, source: query
 export const queryFileSourceSaveAsSchema = z.object({ tabId, taskId, source: queryFileSourceRefSchema.optional(), sql, encoding, bom: z.enum(['none', 'utf8', 'utf16le']), eol }).strict().refine(value => value.bom === 'none' || value.bom === value.encoding, 'BOM与编码不匹配');
 export const queryFileSourceStatusSchema = z.object({ tabId, source: queryFileSourceRefSchema.optional() }).strict();
 export const queryFileSourceReleaseSchema = z.object({ tabId, source: queryFileSourceRefSchema }).strict();
-export const queryFileSourceHandoffSchema = queryFileSourceReleaseSchema.extend({ action: z.enum(['open', 'reveal']) });
+export const queryFileSourceHandoffSchema = queryFileSourceReleaseSchema.extend({ action: z.enum(['open', 'reveal', 'edit']) });
 export type QueryFileSourceHandoffInput = z.infer<typeof queryFileSourceHandoffSchema>;
 export type QueryFileSourceHandoffResult = { state: 'requested' } | QueryFileSourceBlocked;
 

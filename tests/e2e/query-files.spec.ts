@@ -1,4 +1,5 @@
 import { mkdir, open, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { basename, join } from 'node:path';
 import iconv from 'iconv-lite';
 import type { FileChoice, TaskRecord } from '../../src/shared/contracts';
@@ -33,6 +34,16 @@ async function chooseNativeFile(mode: 'open' | 'save', path?: string) {
       }) as typeof dialog.showSaveDialog;
     }
   }, { mode, path });
+}
+
+/** 按原生菜单的当前版本派发命令；在真实窗口检查菜单可用性。 */
+async function clickFileMenu(id: string) {
+  await expect.poll(() => desktop.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled, id)).toBe(true);
+  await desktop.evaluate(({ Menu, BrowserWindow }, id) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById(id), [window] = BrowserWindow.getAllWindows();
+    if (!item?.enabled || !window) throw Error('文件菜单命令所属窗口失效');
+    item.click(item, window, {} as Electron.KeyboardEvent);
+  }, id);
 }
 
 /** 原生选择也用于 IPC 负例，不能绕过真实令牌生成直接传绝对路径。 */
@@ -146,13 +157,7 @@ test.describe('离线 SQL 文件打开与另存', () => {
     await page.screenshot({ path: testInfo.outputPath('bound-query-file-actions.png') });
     await openDisk.click();
     await expect(page.getByText('已请求系统用默认应用打开 SQL 文件。', { exact: true })).toBeVisible();
-    await expect.poll(() => menuState('reveal-bound-sql-file')).toBe(true);
-    await desktop.evaluate(({ Menu, BrowserWindow }) => {
-      const item = Menu.getApplicationMenu()?.getMenuItemById('reveal-bound-sql-file');
-      const windows = BrowserWindow.getAllWindows();
-      if (!item?.enabled || windows.length !== 1) throw Error('定位命令所属窗口失效');
-      item.click(item, windows[0], {} as Electron.KeyboardEvent);
-    });
+    await clickFileMenu('reveal-bound-sql-file');
     await expect(page.getByText('已请求系统定位 SQL 文件。', { exact: true })).toBeVisible();
     const dispatched = [{ action: 'open', path: canonical }, { action: 'reveal', path: canonical }];
     expect(await calls()).toEqual(dispatched);
@@ -168,6 +173,66 @@ test.describe('离线 SQL 文件打开与另存', () => {
     expect(await calls()).toEqual(dispatched);
     expect(await readFile(path, 'utf8')).toBe(replacement);
     expect(await storedTabs(2)).toEqual(tabs);
+    await expectNoSqlExecution([{ kind: 'queryFileSources.open', status: 'completed' }]);
+  });
+
+  test('外部编辑器偏好跨重启保留并向 macOS 应用传递原磁盘文件', async ({}, testInfo) => {
+    test.skip(process.platform !== 'darwin', '该用例使用 macOS LaunchServices 和 AppleScript 夹具');
+    await openOfflineQuery();
+    const directory = await realpath(dataDir);
+    const receipt = join(directory, '外部应用收件.txt');
+    const appPath = join(directory, '测试 SQL 编辑器.app');
+    const filePath = join(directory, "脚本 '空 格' & ;.sql");
+    // 夹具只将 LaunchServices 的文档事件写到自己的隔离目录，无命令拼接或用户数据。
+    execFileSync('/usr/bin/osacompile', ['-o', appPath, '-e', `on open itemsToOpen
+  set receipt to POSIX file ${JSON.stringify(receipt)}
+  set fd to open for access receipt with write permission
+  set eof fd to 0
+  write (POSIX path of item 1 of itemsToOpen) to fd as «class utf8»
+  close access fd
+end open`]);
+    await writeFile(filePath, source);
+    await chooseNativeFile('open', filePath);
+    const file = await fileDialog('open', 'utf8');
+    await (await navigationMenuItem(file, { name: '选择并打开 SQL 文件', exact: true })).click();
+    await expect(file).toBeHidden();
+    await storedTabs(2);
+    await clickFileMenu('edit-bound-sql-external');
+    await expect(page.getByText('请先在「文件 → 外部 SQL 编辑器」选择应用。', { exact: true })).toBeVisible();
+
+    await clickFileMenu('external-sql-editor-preferences');
+    const settings = page.getByRole('dialog', { name: '外部 SQL 编辑器', exact: true });
+    const choose = settings.getByRole('button', { name: '选择外部编辑器', exact: true });
+    const close = settings.getByRole('button', { name: '关闭', exact: true }).last();
+    await chooseNativeFile('open', appPath);
+    await choose.click();
+    await expect(settings.getByRole('status')).toHaveText(appPath);
+    await page.screenshot({ path: testInfo.outputPath('external-sql-editor-preferences.png') });
+    await chooseNativeFile('open');
+    await choose.click();
+    await expect(choose).toBeEnabled();
+    await expect(settings.getByRole('status')).toHaveText(appPath);
+    await close.click();
+    await quitDesktop();
+    await launchDesktop();
+    expect(await page.evaluate(() => window.dbark.invoke('externalSqlEditor.status', {}))).toEqual({ supported: true, path: appPath });
+
+    const draft = 'SELECT 99 AS unsaved_draft;';
+    await writeEditor(draft);
+    const before = await storedTabs(2);
+    await clickFileMenu('edit-bound-sql-external');
+    await expect(page.getByText('已请求外部编辑器打开 SQL 文件。', { exact: true })).toBeVisible();
+    await expect.poll(() => readFile(receipt, 'utf8').catch(() => '')).toBe(filePath);
+    expect(await readFile(filePath, 'utf8')).toBe(source);
+    expect(await storedTabs(2)).toEqual(before);
+
+    await clickFileMenu('external-sql-editor-preferences');
+    const restartedSettings = page.getByRole('dialog', { name: '外部 SQL 编辑器', exact: true });
+    await restartedSettings.getByRole('button', { name: '清除外部编辑器', exact: true }).click();
+    await expect(restartedSettings.getByRole('status')).toHaveText('尚未配置外部 SQL 编辑器。');
+    await restartedSettings.getByRole('button', { name: '关闭', exact: true }).last().click();
+    await clickFileMenu('edit-bound-sql-external');
+    await expect(page.getByText('请先在「文件 → 外部 SQL 编辑器」选择应用。', { exact: true })).toBeVisible();
     await expectNoSqlExecution([{ kind: 'queryFileSources.open', status: 'completed' }]);
   });
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { QueryFileEncoding } from '../shared/contracts';
 import type { QueryFileBom, QueryFileEolPolicy, QueryFileSourceBlocked, QueryFileSourceHandoffInput, QueryFileSourceView } from '../shared/queryFileSources';
+import { externalSqlEditorZh } from '../shared/externalSqlEditor';
 import { queryFileSourceHasChanges, sameQueryFileSource } from '../shared/queryFileSources';
 import { QueryFileTaskOperation, type QueryFileTaskState } from './queryFileTasks';
 import { acquireWorkspaceBusy, beginQueryFileOpen, flushSettings, useWorkspace, type WorkspaceTab, type QueryFileOpenLease } from './store';
@@ -245,7 +246,7 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
       const result = await invoke('queryFileSources.handoff', { tabId: tab.id, source, action });
       if (!lease.current()) return;
       if (result.state === 'blocked') useWorkspace.getState().notify(result.message, true);
-      else useWorkspace.getState().notify(action === 'open' ? text.externalOpenRequested : text.revealRequested);
+      else useWorkspace.getState().notify({ open: text.externalOpenRequested, reveal: text.revealRequested, edit: externalSqlEditorZh.requested }[action]);
     } catch {
       if (lease.current()) useWorkspace.getState().notify(text.handoffUnavailable, true);
     } finally {

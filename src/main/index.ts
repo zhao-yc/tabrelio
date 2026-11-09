@@ -53,6 +53,8 @@ import { binaryCellFileText, textCellFileTitle } from '../shared/binaryCellFiles
 import { databaseDropAcknowledgements, databaseDropIdentifier } from '../shared/databaseDrop';
 import type { DatabaseDropTarget, DatabaseDropCounts } from '../shared/databaseDrop';
 import { QueryFileSources } from './queryFileSources';
+import { ExternalSqlEditor } from './externalSqlEditor';
+import { externalSqlEditorZh } from '../shared/externalSqlEditor';
 import { DatabaseDefaultEncodingOwners, type DatabaseEncodingOwnerCommand } from './databaseDefaultEncodingOwners';
 import { ExplainSnapshotFiles } from './explainSnapshotFiles';
 import { QueryResultSnapshotFiles, queryResultSnapshotFileMessages } from './queryResultSnapshotFiles';
@@ -162,6 +164,7 @@ let connectionConfig: ConnectionConfigManager;
 let connectionTransfer: ConnectionTransfer;
 let snippetTransfers: SnippetTransfers;
 let queryFileSources: QueryFileSources;
+let externalSqlEditor: ExternalSqlEditor;
 let explainSnapshotFiles: ExplainSnapshotFiles;
 let queryResultSnapshotFiles: QueryResultSnapshotFiles;
 let tableDraftFiles: TableDraftFiles;
@@ -2111,6 +2114,16 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'table.copySourceRelease' || command === 'files.releaseExportColumns') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
   if(command==='search.dataNext'||command==='search.dataRelease'||command==='search.recordsRelease')return broker.request(command,input);
+  if (command === 'externalSqlEditor.status' || command === 'externalSqlEditor.choose' || command === 'externalSqlEditor.clear') {
+    const assertCurrent = () => {
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown) throw Error('客户端正在退出，不能修改外部编辑器设置');
+    };
+    assertCurrent();
+    if (command === 'externalSqlEditor.status') return externalSqlEditor.status();
+    if (command === 'externalSqlEditor.clear') return externalSqlEditor.clear(assertCurrent);
+    return queryFileOperation(() => externalSqlEditor.choose(assertCurrent));
+  }
   // 文件来源独立使用Main授权，不经过数据库broker或连接配置保存。
   if (command.startsWith('queryFileSources.')) {
     const releasing = command === 'queryFileSources.release' || command === 'queryFileSources.cancel' || command === 'queryFileSources.discardReload';
@@ -3582,7 +3595,15 @@ else {
         for (const [token, value] of structureTokens) if (ids.includes(value.connectionId)) structureTokens.delete(token);
       },
     });
-    queryFileSources = new QueryFileSources({ store, report: taskEvent, reserve: path => exportReservations.acquire(path), handoff: async (action, path) => {
+    externalSqlEditor = new ExternalSqlEditor(store, async platform => {
+      if (!window) throw Error(externalSqlEditorZh.invalid);
+      const result = await dialog.showOpenDialog(window, {
+        title: externalSqlEditorZh.picker, properties: ['openFile'],
+        filters: [{ name: externalSqlEditorZh.title, extensions: [platform === 'darwin' ? 'app' : 'exe'] }],
+      });
+      return result.canceled ? undefined : result.filePaths[0];
+    });
+    queryFileSources = new QueryFileSources({ store, report: taskEvent, reserve: path => exportReservations.acquire(path), prepareEditor: () => externalSqlEditor.prepare(), handoff: async (action, path) => {
       if (action === 'open') return (await shell.openPath(path)) === '';
       shell.showItemInFolder(path);
       return true;
@@ -3663,6 +3684,7 @@ else {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
+        if (payload.command.startsWith('externalSqlEditor.')) columns = columnsMain.capture(event);
         const sqliteImportRequest = payload.command.startsWith('sqlite.tableImport.') || payload.command.startsWith('sqlite.importSource.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && (!!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableImport.') || tasks.get(payload.input.taskId)?.kind === 'sqlite.importSource.inspect') && sqliteTableImports.owns(payload.input.taskId);
         if (sqliteImportRequest) columns = columnsMain.capture(event);
         const sqliteObjectsRequest = payload.command.startsWith('sqlite.objects.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && !!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.objects.') && sqliteObjects.owns(payload.input.taskId);
@@ -3766,7 +3788,7 @@ else {
             try { columnsMain.assertReply(columns); }
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
-          if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
+          if (payload.command.startsWith('queryFileSources.') || payload.command.startsWith('externalSqlEditor.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'postgres.table.draft.save' || payload.command === 'postgres.table.draft.restore') {
             try { columnsMain.assertCapturedOwner(columns); }
             catch (error) {
