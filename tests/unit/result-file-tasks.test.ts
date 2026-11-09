@@ -6,6 +6,7 @@ import iconv from 'iconv-lite';
 import { parse } from 'csv-parse/sync';
 import type { ResultExportOptions, TaskEvent } from '../../src/shared/contracts';
 import { ResultFileTasks, type ResultFileIO } from '../../src/engine/resultFileTasks';
+import { decodeQueryCsvZip } from '../helpers/queryCsvZip';
 
 const folders: string[] = [];
 /** 只清理由测试创建的文件与空文件夹，不递归删除外部目录。 */
@@ -32,6 +33,36 @@ function deferred() {
 }
 
 describe('独立结果文件任务', () => {
+  it('批量 ZIP 保留原结果序号、截断状态和空集标题，保留原值协议', async () => {
+    const path = await destination();
+    const { result } = options(path);
+    const entries = [
+      { sourceOrdinal: 1, label: '精确值', result },
+      { sourceOrdinal: 3, result: { ...result, rows: [], truncated: false } },
+    ];
+    await expect(new ResultFileTasks(() => {}).runArchive({ filePath: path, fileToken: 'selected', taskId: 'archive', encoding: 'utf16le', entries })).resolves.toEqual({ rows: 1, sets: 2 });
+    const zip = decodeQueryCsvZip(await readFile(path));
+    expect([...zip.keys()]).toEqual(['results/rows-001.csv', 'results/rows-002.csv', 'manifest.json']);
+    const manifest = JSON.parse(zip.get('manifest.json')!.toString('utf8'));
+    expect(manifest).toMatchObject({ scope: 'returned', results: [
+      { sourceOrdinal: 1, label: '精确值', rowsWritten: 1, truncated: true },
+      { sourceOrdinal: 3, rowsWritten: 0, truncated: false },
+    ] });
+    expect(manifest.results[0]).not.toHaveProperty('statementOrdinal');
+    const first = parse(iconv.decode(zip.get('results/rows-001.csv')!, 'utf16le'), { bom: true });
+    const empty = parse(iconv.decode(zip.get('results/rows-002.csv')!, 'utf16le'), { bom: true });
+    expect(empty).toEqual([first[0]]);
+    expect(first[1]).toEqual(expect.arrayContaining(['18446744073709551615', 'base64:AAH/', '\\N', '']));
+  });
+  it('批量 ZIP 后一个结果写入失败时仍保留旧目标', async () => {
+    const path = await destination();
+    const { result } = options(path);
+    const bad = { ...result, rows: [{ ...result.rows[0], c1: '\uD800' }] };
+    const entries = [{ sourceOrdinal: 1, result }, { sourceOrdinal: 2, result: bad }];
+    await expect(new ResultFileTasks(() => {}).runArchive({ filePath: path, fileToken: 'selected', taskId: 'archive', encoding: 'utf8', entries })).rejects.toThrow('无法无损');
+    expect(await readFile(path, 'utf8')).toBe('原文件');
+    expect(await readdir(folders.at(-1)!)).toEqual(['result']);
+  });
   it.each(['utf8', 'utf16le', 'gb18030'] as const)('CSV %s 保留列序、重复列、NULL/空串、大数与二进制协议', async encoding => {
     const path = await destination(); const events: TaskEvent[] = [];
     await new ResultFileTasks(event => events.push(event)).run(options(path, 'csv', encoding));

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { QueryResult, ResultExportData, ResultExportOptions } from '../../src/shared/contracts';
-import { resultExportColumns, validateResultExportData } from '../../src/shared/resultExport';
+import { resultExportColumns, validateResultArchive, validateResultExportData } from '../../src/shared/resultExport';
 import { validateCommand } from '../../src/shared/validation';
 import { resolveFileToken } from '../../src/main/fileTokens';
 import { exportableQueryResult, resultExportData, ResultExportSelection } from '../../src/renderer/resultExport';
@@ -15,6 +15,17 @@ function input(data: ResultExportData = resultExportData(result())): ResultExpor
   return { fileToken: 'export-token', format: 'json', encoding: 'utf8', taskId: 'result-export', result: data };
 }
 describe('已返回结果导出的可信边界', () => {
+  it('结果包只接收有序已返回数据，拒绝 SQL、路径和累计超限', () => {
+    const first = { sourceOrdinal: 1, label: '原结果', result: resultExportData(result()) };
+    const options = { fileToken: 'zip', taskId: 'archive', encoding: 'utf8', entries: [first] };
+    expect(validateCommand('files.exportResultArchive', options)).toEqual(options);
+    for (const extra of [{ sql: 'SELECT 1' }, { filePath: '/tmp/elsewhere' }, { entries: [first, first] }, { entries: [{ ...first, label: '\n' }] }]) {
+      expect(() => validateCommand('files.exportResultArchive', { ...options, ...extra })).toThrow();
+    }
+    const large = { columns: [{ key: 'v', name: 'v' }], truncated: false, rows: Array(180).fill({ v: 'x'.repeat(100000) }) };
+    expect(validateResultArchive([{ sourceOrdinal: 1, result: large }])).toBe(180);
+    expect(() => validateResultArchive([1, 2].map(sourceOrdinal => ({ sourceOrdinal, result: large })))).toThrow('32 MiB');
+  });
   it('校验保留数据引用，且导出请求不包含 SQL、连接或路径', () => {
     const query = result(); const value = input(resultExportData(query));
     const parsed = validateCommand('files.exportResult', value) as ResultExportOptions;

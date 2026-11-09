@@ -565,6 +565,7 @@ export interface CommandMap {
   'files.releaseExportColumns': { input: { catalogId: string }; output: void };
   'files.export': { input: ExportOptions; output: { rows: number } };
   'files.exportResult': { input: ResultExportOptions; output: { rows: number } };
+  'files.exportResultArchive': { input: import('./resultExport').ResultArchiveOptions; output: { rows: number; sets: number } };
   'files.previewResultSql': { input: import('./resultSql').ResultSqlPreviewInput; output: import('./resultSql').ResultSqlPreview };
   'result.renderInsertSql': { input: import('./resultSql').ResultSqlRenderInput; output: string };
   'files.releaseResultSql': { input: { previewId: string }; output: void };

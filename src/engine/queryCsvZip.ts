@@ -61,7 +61,9 @@ class QueryZipWriter {
   async complete(): Promise<void> { if (this.active) throw new Error('CSV容器文件尚未结束'); const at = this.offset; for (const entry of this.entries) await this.emit(queryZipDirectory(entry)); await this.emit(queryZipEnd(this.entries.length, at, this.offset - at)); }
 }
 
-type RowManifest = { kind: 'rows'; resultOrdinal: number; statementOrdinal: number; rowResultOrdinal: number; file: string; columns: Omit<QueryExportColumn, 'key'>[]; rowsWritten: number; bytes: number; warningCount?: number };
+interface ReturnedResultMetadata { sourceOrdinal: number; label?: string; truncated: boolean }
+type ArchiveColumn = Omit<QueryExportColumn, 'type'> & { type?: string };
+type RowManifest = { kind: 'rows'; resultOrdinal: number; statementOrdinal?: number; rowResultOrdinal: number; file: string; columns: Omit<ArchiveColumn, 'key'>[]; rowsWritten: number; bytes: number; warningCount?: number } & Partial<ReturnedResultMetadata>;
 type StatusFrame = Extract<QueryExportFrame, { kind: 'status' }>;
 /** 清单只持有有界结构和计数；CSV复用既有NULL、反斜线、Base64及精度字符串约定。 */
 export class QueryCsvArchive {
@@ -69,7 +71,7 @@ export class QueryCsvArchive {
   private readonly results: (RowManifest | StatusFrame)[] = [];
   private active?: RowManifest;
   private metadataBytes = 1024;
-  constructor(file: AtomicFile, private readonly encoding: QueryFileEncoding, private readonly checkCancelled: () => void, private readonly delimiter: CsvExportDelimiter = ',') { encodingName(encoding); csvExportDelimiter('csv', delimiter); this.zip = new QueryZipWriter(file, checkCancelled); }
+  constructor(file: AtomicFile, private readonly encoding: QueryFileEncoding, private readonly checkCancelled: () => void, private readonly delimiter: CsvExportDelimiter = ',', private readonly scope?: 'returned') { encodingName(encoding); csvExportDelimiter('csv', delimiter); this.zip = new QueryZipWriter(file, checkCancelled); }
   /** 每个CSV独立编码，UTF-16LE逐文件写BOM；包本身与清单不受CSV编码影响。 */
   async text(text: string): Promise<void> {
     this.checkCancelled(); const bytes = iconv.encode(text, this.encoding);
@@ -80,9 +82,9 @@ export class QueryCsvArchive {
   /** 结构预算在保留列描述之前检查，行数据从不加入清单。 */
   private retain(result: RowManifest | StatusFrame): void { const size = Buffer.byteLength(JSON.stringify(result)) + 128; if (this.results.length >= limits.results || this.metadataBytes + size > limits.archiveManifestBytes) throw new Error('CSV容器清单超过8MiB或200个结果，原目标文件保持不变'); this.metadataBytes += size; this.results.push(result); }
   /** 仅使用已经验证的位置列与有界序号，开始当前CSV并独立处理BOM。 */
-  async start(frame: Extract<QueryExportFrame, { kind: 'rows-start' }>, columns: QueryExportColumn[]): Promise<void> {
-    if (this.active) throw new Error('CSV容器上一个行集尚未结束');
-    const result: RowManifest = { kind: 'rows', resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, rowResultOrdinal: frame.rowResultOrdinal, file: queryCsvResultFile(frame.rowResultOrdinal), columns: columns.map(({ key: _key, ...column }) => column), rowsWritten: 0, bytes: 0 };
+  async start(frame: Pick<Extract<QueryExportFrame, { kind: 'rows-start' }>, 'resultOrdinal' | 'rowResultOrdinal'> & { statementOrdinal?: number }, columns: ArchiveColumn[], returned?: ReturnedResultMetadata): Promise<void> {
+    if (this.active || (this.scope === 'returned') !== !!returned) throw new Error('CSV容器结果范围或边界无效');
+    const result: RowManifest = { kind: 'rows', resultOrdinal: frame.resultOrdinal, ...(returned ?? { statementOrdinal: frame.statementOrdinal }), rowResultOrdinal: frame.rowResultOrdinal, file: queryCsvResultFile(frame.rowResultOrdinal), columns: columns.map(({ key: _key, ...column }) => column), rowsWritten: 0, bytes: 0 };
     this.retain(result); this.active = result; await this.zip.start(result.file); if (this.encoding === 'utf16le') await this.text('\uFEFF');
   }
   /** 空集也已写入标题；最终行数、字节数及警告归属当前行集。 */
@@ -92,7 +94,7 @@ export class QueryCsvArchive {
   /** 完整执行后追加UTF-8清单并封闭ZIP；不缓存、压缩或重新读取任何结果行。 */
   async complete(): Promise<void> {
     if (this.active) throw new Error('CSV容器行集尚未结束');
-    const manifest = JSON.stringify({ format: 'DBArk-query-csv-archive', version: 1, encoding: this.encoding, csv: { delimiter: this.delimiter, recordDelimiter: '\r\n', null: '\\N', leadingBackslash: 'double', binary: 'base64:', header: 'exportName', columnOrder: 'position' }, results: this.results }) + '\n';
+    const manifest = JSON.stringify({ format: 'DBArk-query-csv-archive', version: 1, ...(this.scope ? { scope: this.scope } : {}), encoding: this.encoding, csv: { delimiter: this.delimiter, recordDelimiter: '\r\n', null: '\\N', leadingBackslash: 'double', binary: 'base64:', header: 'exportName', columnOrder: 'position' }, results: this.results }) + '\n';
     if (Buffer.byteLength(manifest) > limits.archiveManifestBytes) throw new Error('CSV容器清单超过8MiB，原目标文件保持不变');
     await this.zip.start('manifest.json'); await this.zip.write(Buffer.from(manifest, 'utf8')); await this.zip.end(); await this.zip.complete();
   }

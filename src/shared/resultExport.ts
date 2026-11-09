@@ -1,4 +1,6 @@
-import type { ResultExportData } from './contracts';
+import type { QueryFileEncoding, ResultExportData } from './contracts';
+import type { CsvExportDelimiter } from './csvExport';
+import { validQueryResultTitle } from './queryResultTitle';
 
 export const resultExportLimits = { rows: 100000, columns: 1024, cells: 2000000, fieldBytes: 256 * 1024, rowBytes: 1024 * 1024, bytes: 32 * 1024 * 1024 } as const;
 const encoder = new TextEncoder();
@@ -12,7 +14,7 @@ function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   const actual = Object.keys(value); return actual.length === keys.length && keys.every(key => Object.hasOwn(value, key));
 }
 /** 逐字段计量序列化预算，不构造第二份完整结果或整表 JSON 字符串。 */
-export function validateResultExportData(value: unknown): asserts value is ResultExportData {
+function measureResultExportData(value: unknown): { bytes: number; rows: number; cells: number } {
   if (!record(value) || !exactKeys(value, ['columns', 'rows', 'truncated']) || typeof value.truncated !== 'boolean' || !Array.isArray(value.columns) || !Array.isArray(value.rows)) throw new Error('结果导出数据格式无效');
   if (!value.columns.length || value.columns.length > resultExportLimits.columns) throw new Error('结果导出需要 1～1024 列');
   if (value.rows.length > resultExportLimits.rows || value.rows.length * value.columns.length > resultExportLimits.cells) throw new Error('结果导出不能超过 100000 行或 2000000 个单元格');
@@ -43,6 +45,36 @@ export function validateResultExportData(value: unknown): asserts value is Resul
     bytes += rowBytes;
     if (bytes > resultExportLimits.bytes) throw new Error('已返回结果超过 32 MiB 导出预算，请减少查询返回的数据');
   }
+  if (bytes > resultExportLimits.bytes) throw new Error('已返回结果超过 32 MiB 导出预算，请减少查询返回的数据');
+  return { bytes, rows: value.rows.length, cells: value.rows.length * value.columns.length };
+}
+
+export function validateResultExportData(value: unknown): asserts value is ResultExportData {
+  measureResultExportData(value);
+}
+
+export const resultArchiveMaxSets = 200;
+export interface ResultArchiveEntry { sourceOrdinal: number; label?: string; result: ResultExportData }
+export interface ResultArchiveOptions { fileToken: string; taskId: string; encoding: QueryFileEncoding; csvDelimiter?: CsvExportDelimiter; entries: ResultArchiveEntry[] }
+
+/** 批量入口沿用单结果类型校验，并对全部选中结果合计计量。原序号只作清单元数据。 */
+export function validateResultArchive(entries: unknown): number {
+  if (!Array.isArray(entries) || entries.length < 1 || entries.length > resultArchiveMaxSets) throw Error('请选择 1～200 个已返回结果集');
+  let rows = 0, cells = 0, bytes = 0, previous = 0;
+  for (const entry of entries) {
+    if (!record(entry) || !exactKeys(entry, Object.hasOwn(entry, 'label') ? ['sourceOrdinal', 'label', 'result'] : ['sourceOrdinal', 'result'])
+      || typeof entry.sourceOrdinal !== 'number' || !Number.isSafeInteger(entry.sourceOrdinal) || entry.sourceOrdinal <= previous
+      || Object.hasOwn(entry, 'label') && !validQueryResultTitle(entry.label)) {
+      throw Error('已返回结果集顺序或名称无效');
+    }
+    previous = entry.sourceOrdinal;
+    const measure = measureResultExportData(entry.result);
+    bytes += measure.bytes;
+    rows += measure.rows;
+    cells += measure.cells;
+    if (rows > resultExportLimits.rows || cells > resultExportLimits.cells || bytes > resultExportLimits.bytes) throw Error('所选结果合计超过 100000 行、2000000 个单元格或 32 MiB');
+  }
+  return rows;
 }
 
 /** 保留首个非空标题；重名或空名使用列位置后缀，并避开所有原始标题及已分配标题。 */

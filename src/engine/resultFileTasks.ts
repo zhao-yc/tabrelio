@@ -1,5 +1,5 @@
 import type { ResultExportOptions, TaskEvent } from '../shared/contracts';
-import { resultExportColumns, validateResultExportData } from '../shared/resultExport';
+import { resultExportColumns, validateResultArchive, validateResultExportData, type ResultArchiveOptions } from '../shared/resultExport';
 import { csvCell, csvHeader, encodingName } from './files';
 import { AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from './atomicFile';
 import { assertResultSqlData, assertResultSqlEncoding, resultSqlHeader, resultSqlLimits, resultSqlSelectionSchema, type ResultSqlTarget } from '../shared/resultSql';
@@ -12,6 +12,8 @@ import { resultExcelZh } from '../shared/resultExcel.zh-CN';
 import { exportResultExcelFile } from './resultExcelFile';
 import { dataFileWriter } from './dataMarkupExport';
 import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
+import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
+import { queryStreamExportLimits } from '../shared/queryStreamExport';
 
 export type ResultFileIO = AtomicFileIO;
 interface FileTask { cancelled: boolean; committing: boolean; done: Promise<void>; finish(): void; }
@@ -30,6 +32,49 @@ export class ResultFileTasks {
   async closeAll(): Promise<void> {
     this.closing = true; const active = [...this.tasks.entries()];
     active.forEach(([id]) => this.cancel(id)); await Promise.all(active.map(([, task]) => task.done));
+  }
+  private begin(id: string): FileTask {
+    if (this.closing || !id || this.has(id)) throw Error('客户端正在退出或结果导出任务编号已使用');
+    let finish!: () => void;
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    const task: FileTask = { cancelled: false, committing: false, done, finish };
+    this.tasks.set(id, task);
+    return task;
+  }
+  /** 批量保存的是已返回快照，沿用同一取消通道及原子文件提交。 */
+  async runArchive(input: ResultArchiveOptions & { filePath: string }): Promise<{ rows: number; sets: number }> {
+    const total = validateResultArchive(input.entries), delimiter = csvExportDelimiter('csv', input.csvDelimiter);
+    const encoding = encodingName(input.encoding);
+    const task = this.begin(input.taskId);
+    let file: AtomicFile | undefined, rows = 0;
+    const check = () => { if (task.cancelled) throw Error('结果包导出已取消，原目标文件保持不变'); };
+    try {
+      await prepareQueryCsvZip(input.filePath, check);
+      file = await AtomicFile.create(input.filePath, encoding, check, () => { task.committing = true; }, this.io, queryStreamExportLimits.fileBytes);
+      const archive = new QueryCsvArchive(file, input.encoding, check, delimiter, 'returned');
+      for (const [index, { sourceOrdinal, label, result }] of input.entries.entries()) {
+        const ordinal = index + 1;
+        const columns = resultExportColumns(result.columns).map((column, position) => ({ ...column, position: position + 1 }));
+        await archive.start({ resultOrdinal: ordinal, rowResultOrdinal: ordinal }, columns, { sourceOrdinal, label, truncated: result.truncated });
+        await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
+        for (const row of result.rows) {
+          await archive.text(columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n');
+          rows++;
+          if (rows % 250 === 0) this.emit({ taskId: input.taskId, status: 'running', progress: Math.floor(rows / Math.max(1, total) * 98), rows, message: `已写入 ${rows}/${total} 行` });
+        }
+        await archive.end(result.rows.length);
+      }
+      await archive.complete();
+      await file.commit();
+      this.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows, message: `已导出 ${input.entries.length} 个结果集` });
+      return { rows, sets: input.entries.length };
+    } catch (error) {
+      this.emit({ taskId: input.taskId, status: task.cancelled ? 'cancelled' : 'failed', progress: 0, rows, message: error instanceof Error ? error.message : '结果包导出失败' });
+      throw error;
+    } finally {
+      try { await file?.dispose(); }
+      finally { this.tasks.delete(input.taskId); task.finish(); }
+    }
   }
   /** 仅写出传入的已返回行，永远不解析或重新执行原 SQL。 */
   async run(input: ResultExportOptions & { filePath: string }): Promise<{ rows: number }> {
@@ -54,8 +99,7 @@ export class ResultFileTasks {
       assertResultExcelData(input.result);
     }
     const sqlRow = sqlTarget ? resultSqlRowWriter(sqlTarget, sqlStorage) : undefined;
-    let finish!: () => void; const done = new Promise<void>(resolve => { finish = resolve; });
-    const task: FileTask = { cancelled: false, committing: false, done, finish }; this.tasks.set(input.taskId, task);
+    const task = this.begin(input.taskId);
     const columns = resultExportColumns(input.result.columns);
     let file: AtomicFile | undefined; let count = 0;
     /** 每批写入和原子替换前均检查取消，不能在已取消时替换用户原文件。 */

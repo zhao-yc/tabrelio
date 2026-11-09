@@ -18,6 +18,8 @@ import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/
 import { queryResultSortZh as resultSort } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
+import { decodeQueryCsvZip } from '../helpers/queryCsvZip';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
@@ -146,6 +148,45 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
     }
     expect(await tasks()).toEqual(originalTasks);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('批量导出已返回结果写入 ZIP 且不会重跑 SQL', async ({}, info) => {
+  await seed(`/* NAME: 精确原值 */ SELECT 9223372036854775807 AS v, X'00ff' AS v;
+    /* NAME: 不导出 */ SELECT '跳过';
+    /* NAME: 空结果 */ SELECT name FROM subject WHERE id = 0;`);
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(query.getByRole('button', { name: '结果 3 · 空结果', exact: true })).toBeVisible();
+  const executions = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'query.execute'));
+  await expect.poll(async () => (await executions()).map(task => task.status)).toEqual(['completed']);
+  const before = await executions();
+  await (await navigationMenuItem(query, { name: archiveText.open, exact: true })).click();
+  const modal = page.getByRole('dialog', { name: archiveText.title, exact: true });
+  await modal.getByRole('checkbox', { name: /结果 2 · 不导出/ }).uncheck();
+  await info.attach('SQLite批量导出已返回结果', { body: await page.screenshot(), contentType: 'image/png' });
+  const output = join(dataDir, '多结果.zip');
+  await desktop.evaluate(({ dialog, BrowserWindow }, path) => {
+    const original = dialog.showSaveDialog;
+    dialog.showSaveDialog = (async (...args: unknown[]) => {
+      dialog.showSaveDialog = original;
+      if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes('zip'))
+        throw Error('仅允许本例 ZIP 保存选择');
+      return { canceled: false, filePath: path };
+    }) as typeof original;
+  }, output);
+  await modal.getByRole('button', { name: archiveText.start, exact: true }).click();
+  await expect(modal.getByRole('status')).toHaveText(archiveText.done(2, 1));
+  const files = decodeQueryCsvZip(readFileSync(output));
+  expect([...files.keys()]).toEqual(['results/rows-001.csv', 'results/rows-002.csv', 'manifest.json']);
+  expect(files.get('results/rows-001.csv')!.toString()).toBe('v,v [2]\r\n9223372036854775807,base64:AP8=\r\n');
+  expect(files.get('results/rows-002.csv')!.toString()).toBe('name\r\n');
+  const manifest = JSON.parse(files.get('manifest.json')!.toString());
+  expect(manifest).toMatchObject({ scope: 'returned', results: [
+    { sourceOrdinal: 1, label: '精确原值', rowsWritten: 1, truncated: false },
+    { sourceOrdinal: 3, label: '空结果', rowsWritten: 0, truncated: false },
+  ] });
+  expect(await executions()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

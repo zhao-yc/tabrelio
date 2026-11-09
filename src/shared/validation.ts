@@ -138,7 +138,7 @@ import { connectionFileRequirements, connectionImportApplySchema, connectionImpo
 import { connectionOrganizationGetSchema, connectionOrganizationApplySchema } from './connectionOrganization';
 import { savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
 import type { Command, ResultExportData } from './contracts';
-import { validateResultExportData } from './resultExport';
+import { resultArchiveMaxSets, validateResultArchive, validateResultExportData } from './resultExport';
 import { assertResultExcelData } from './resultExcel';
 import { resultExcelZh } from './resultExcel.zh-CN';
 import { assertResultSqlData, assertResultSqlEncoding, resultSqlTargetSchema, resultSqlSelectionSchema, resultSqlStorageSchema } from './resultSql';
@@ -723,6 +723,13 @@ export const commandSchemas: Record<Command, z.ZodType> = {
       if (Object.hasOwn(value, 'sql')) context.addIssue({ code: 'custom', message: resultExcelZh.invalid });
       try { assertResultExcelData(value.result); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : resultExcelZh.invalid }); }
     }
+  }),
+  'files.exportResultArchive': z.object({
+    fileToken: id, taskId: id, encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+    entries: z.array(z.object({ sourceOrdinal: z.number().int().positive(), label: z.string().max(80).optional(), result: z.custom<ResultExportData>() }).strict()).min(1).max(resultArchiveMaxSets),
+  }).strict().superRefine((value, context) => {
+    try { validateResultArchive(value.entries); }
+    catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '已返回结果包无效' }); }
   }),
   'files.previewResultSql': z.object({ result: resultExportData, target: resultSqlTargetSchema, sqliteStorage: resultSqlStorageSchema.optional(), encoding: z.enum(['utf8','utf16le','gb18030']) }).strict().superRefine((value, context) => { try { assertResultSqlData(value.result, value.target, value.sqliteStorage); assertResultSqlEncoding(value.target, value.encoding); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'INSERT结果无效' }); } }),
   'result.renderInsertSql': z.object({ result: resultExportData, target: resultSqlTargetSchema, sqliteStorage: resultSqlStorageSchema.optional() }).strict(),

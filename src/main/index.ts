@@ -71,7 +71,7 @@ import { assertQueryDatabaseSwitchOutput, queryDatabaseSwitchMessages } from '..
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
 import { ApplicationMenu, isApplicationMenuDocument } from './applicationMenu';
 import { copyInsertSql } from './copyInsertSql';
-import { join, basename } from 'node:path';
+import { join, basename, extname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -3037,6 +3037,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'table.exportFiltered':
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format), profile: store.resolveConnection(input.connectionId), connectionRevision: tableFilteredExportRevision }; break;
     case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
+    case 'files.exportResultArchive': {
+      if (shuttingDown) throw Error('客户端正在退出，不能导出结果包');
+      const filePath = resolveFileToken(files, input.fileToken, 'export', 'zip');
+      files.delete(input.fileToken);
+      if (extname(filePath).toLowerCase() !== '.zip') throw Error('请选择 .zip 格式的目标文件');
+      input = { ...input, filePath };
+      break;
+    }
     case 'query.exportStream': if(input.format==='sql')columnsMain.assertCapturedOwner(columns);else input = { ...input, filePath: resolveFileToken(files,input.fileToken,'export',input.format==='csv-zip'?'zip':input.format) }; break;
     case 'excel.sheets':
     case 'excel.preview':
@@ -3107,7 +3115,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     if (tableFilteredExport) filteredExportLease = tableFilteredExports.begin(taskId!, columns!, assertTableFilteredExportCurrent);
     if(command==='query.exportStream'&&input.format==='sql')input={...input,filePath:queryInsertExports.begin(input,columns)};
-    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || command === 'postgres.query.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'files.exportResultArchive' || command === 'excel.export' || command === 'postgres.query.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'files.exportResultArchive') {
+      await assertSqliteExportDestination(input.filePath, store.connections());
+      if (shuttingDown) throw Error('客户端正在退出，不能导出结果包');
+    }
     if (command === 'query.exportStream' && input.format === 'xlsx') {
       await assertSqliteExportDestination(input.filePath, store.connections());
       if (shuttingDown || !session || sessions.get(input.sessionId) !== session) throw Error('查询的原会话已变化，请重新打开导出窗口');

@@ -1032,6 +1032,11 @@ export class Engine {
         if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
         return this.resultFiles.run(input as Parameters<ResultFileTasks['run']>[0]);
       }
+      case 'files.exportResultArchive': {
+        this.assertFile(input);
+        if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
+        return this.resultFiles.runArchive(input as Parameters<ResultFileTasks['runArchive']>[0]);
+      }
       default: throw new Error(`数据库进程不支持命令：${command}`);
     }
   }

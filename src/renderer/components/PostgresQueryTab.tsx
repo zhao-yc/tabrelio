@@ -9,6 +9,8 @@ import { formatSqlEditor } from '../sqlFormatting';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import type { PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
+import { ResultArchiveDialog } from './ResultArchiveDialog';
+import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
 import { postgresTableLimits } from '../../shared/postgresTable';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
@@ -277,6 +279,7 @@ export function PostgresQueryTab({
   const statisticsDraftRef = useRef<StatisticsDraft | undefined>(undefined);
   const [presetDraft, setPresetDraft] = useState<PresetDraft>();
   const presetDraftRef = useRef<PresetDraft | undefined>(undefined);
+  const [archiveOutcome, setArchiveOutcome] = useState<QueryOutcome>();
   const [exportView, setExportView] = useState<{ result: ResultExportData; selected: boolean; scope?: 'rectangle' }>();
   const [fullExport, setFullExport] = useState<FullQueryExportSource>();
   const exportOpen = useRef(false);
@@ -960,9 +963,11 @@ export function PostgresQueryTab({
   const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
-    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!resultSql,
+    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
+  const archiveAvailable = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
+    && results.filter(item => item.columns.length).length > 1;
   const resultSources = outcome?.postgresResultSources;
   const receiptSource = pin ? undefined : resultSources?.[selected];
   const receiptOrdinal = receiptSource?.statementOrdinal;
@@ -1980,6 +1985,9 @@ export function PostgresQueryTab({
                 onChange={event => selectCurrentResult(Number(event.target.value))}>
                 {results.map((r, i) => <option key={i} value={i}>{text.result(resultSources?.[i]?.statementOrdinal ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
+              {archiveAvailable && <button disabled={locked} onClick={() => {
+                if (outcome && resultScopeCurrent() && !document.querySelector(appModalSelector)) setArchiveOutcome(outcome);
+              }}>{archiveText.open}</button>}
               {dataResult && <>
                 {!pin && results.length === 1 && resultNames[selected] && <strong className="postgres-result-name">{resultNames[selected]}</strong>}
                 {pin ? <button disabled={locked || !pin.result.statement.trim()} onClick={openResultSql}>{zh.query.pinnedStatement}</button> :
@@ -2113,6 +2121,9 @@ export function PostgresQueryTab({
           isCurrent={() => sortCurrent(sortDraft)} onApply={rules => applyResultSort(rules, sortDraft)}
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
+      {archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect="postgresql"
+        isCurrent={() => archiveAvailable && archiveOutcome === outcome && !closeRef.current && same(scope)}
+        onClose={() => setArchiveOutcome(undefined)} />}
       {exportView && <ResultExportDialog result={exportView.result} tabId={tab.id} selected={exportView.selected} scope={exportView.scope}
         allowSql sqlDialect="postgresql" onClose={() => {
           exportOpen.current = false;
@@ -2166,7 +2177,7 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {closeRequest && !sessionSetting && !save && !snippets && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !resultSql && !comparisonDraft && (
+      {closeRequest && !sessionSetting && !save && !snippets && !exportView && !archiveOutcome && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !resultSql && !comparisonDraft && (
         <QueryCloseDialog
           title={tab.title}
           onCancel={() => finishClose(false)}
