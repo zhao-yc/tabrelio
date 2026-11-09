@@ -84,6 +84,7 @@ import {queryConnectionDatabase,queryDatabaseFromSession,queryDatabasePatch,reso
 import {queryContextZh} from '../locales/queryContext.zh-CN';
 import { isResultBinaryCell, ResultsGrid, type GridFindTarget } from './ResultsGrid';
 import { openFocusedGridRowJump } from './GridRowJump';
+import { openFocusedQueryResultFind } from './QueryResultFind';
 import { ExplainPlanView } from './ExplainPlanView';
 import { SqliteExplainPlanView } from './SqliteExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
@@ -2582,7 +2583,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     analyze: { enabled: !sqlite && !busy && !!connection && !closeRequest, run: () => { void openAnalyze(); } },
     'transaction-settings': { enabled: !sqlite && !busy && !!connection && !closeRequest, run: openTransactionSettings },
     'save-query': { enabled: !busy && !closeRequest && !fileSource.busy, run: saveCurrentSource },
-    find: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind() },
+    find: { enabled: (!!searchEditor || !!selectionBinding) && !closeRequest && !fileSource.busy,
+      run: () => { if (queryMenuCurrent() && !openFocusedQueryResultFind(layoutRoot.current)) openEditorFind(); } },
     'statement-navigation': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy, run: () => openStatementNavigation() },
     'select-current-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'select') },
     'open-current-statement-query': { enabled: canNavigateFromCursor && canDuplicateQuery, run: () => openStatementNavigation(editor.current, 'duplicate') },

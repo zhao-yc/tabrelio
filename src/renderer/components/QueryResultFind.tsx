@@ -5,17 +5,31 @@ import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type 
 import { QueryResultRegexWorkerClient } from '../queryResultRegexWorkerClient';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
 import { gridFindDirection } from '../gridFindKeys';
+import { appModalSelector } from '../modalSelectors';
+import { queryResultHost } from '../queryResultShortcut';
 import '../queryResultFind.css';
 
 interface Run { owner: object; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
 interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; children: ReactNode; }
 const regexErrors: Partial<Record<QueryResultFindPhase, string>> = text.regexErrors;
+const findOpeners = new WeakMap<Element, (target: HTMLElement) => boolean>();
 
-/** 查找栏与快捷键仅包住当前结果Grid；私有代次负责取消，绝不注册全局快捷键。 */
+/** 原生菜单只派给当前查询结果的查找栏。结果内其它控件保留焦点。 */
+export function openFocusedQueryResultFind(root: HTMLElement | null): boolean {
+  const target = document.activeElement;
+  const host = queryResultHost(root, target);
+  if (!host || !(target instanceof HTMLElement)) return false;
+  const region = target.closest('.query-result-find-region');
+  if (region && host.contains(region)) findOpeners.get(region)?.(target);
+  return true;
+}
+
+/** 查找栏与快捷键仅包住当前结果网格；私有代次负责取消。 */
 export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
+  const region = useRef<HTMLDivElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const modeSelect = useRef<HTMLSelectElement>(null);
   const panel = useRef<object | undefined>(undefined), mountOwner = useRef<object | undefined>({});
@@ -64,10 +78,29 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     };
     if (progress.phase === 'searching') next.timer = setTimeout(advance, 0);
   }
-  function open() {
-    if (!own() || !grid.current) return;
+  /** 菜单、按键和按钮共用入口。再次打开保留原扫描、条件与命中位置。 */
+  function open(): boolean {
+    if (!own() || !grid.current || document.querySelector(appModalSelector)) return false;
+    if (panelCurrent()) {
+      (usesText ? input.current : modeSelect.current)?.focus({ preventScroll: true });
+      return true;
+    }
     cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(undefined); setMode('contains');
+    return true;
   }
+  function openFromFocus(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    const host = grid.current?.element;
+    const fromGrid = host === target || host?.contains(target) && !target.isContentEditable &&
+      !target.closest('input, textarea, select, [role="textbox"], [role="combobox"]');
+    return !!(fromGrid || toolbar.current?.contains(target)) && open();
+  }
+  useLayoutEffect(() => {
+    const element = region.current;
+    if (!element) return;
+    findOpeners.set(element, openFromFocus);
+    return () => { findOpeners.delete(element); };
+  });
   function close() { if (!alive.current || latest.current.owner !== owner || !visible || panel.current !== opened?.token || run.current !== view?.run) return; cancel(); panel.current = undefined; setOpened(undefined); setView(undefined); onHit(undefined); }
   /** 只滚动并标记坐标，不调用setActivePosition或行选择，不改变复制/导出所选行。 */
   function navigate(direction: -1 | 1, keepGridFocus = false) {
@@ -88,10 +121,11 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   }
   /** 快捷键只在本包围元素中冒泡；输入法、Alt组合及其它按键均交还原控件。 */
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.nativeEvent.isComposing || event.altKey || !own()) return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || !own()) return;
     const direction = visible && !event.defaultPrevented && gridFindDirection(event.nativeEvent, event.currentTarget, toolbar.current);
     if (direction) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) navigate(direction, !toolbar.current?.contains(event.target as Node)); return; }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); if (panelCurrent()) (usesText ? input.current : modeSelect.current)?.focus(); else open(); }
+    if (!event.defaultPrevented && !event.repeat && !event.shiftKey && !!event.ctrlKey !== !!event.metaKey &&
+        event.key.toLowerCase() === 'f' && openFromFocus(event.target)) { event.preventDefault(); event.stopPropagation(); }
     else if (visible && event.key === 'Escape' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); close(); }
     else if (visible && event.target === input.current && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); navigate(event.shiftKey ? -1 : 1); }
   }
@@ -101,7 +135,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
       (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
-  return <div className="query-result-find-region" onKeyDown={keyDown}>
+  return <div ref={region} className="query-result-find-region" onKeyDown={keyDown}>
     <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
       {visible && <>
         <select ref={modeSelect} aria-label={text.mode} value={mode} disabled={!available}

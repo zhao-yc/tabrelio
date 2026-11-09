@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Client } from 'pg';
-import { answerDialogs, test, expect, page, pageErrors } from './desktop-fixture';
+import { answerDialogs, clickNativeFind, test, expect, page, pageErrors } from './desktop-fixture';
 import { postgresResultOriginsZh as text } from '../../src/renderer/locales/postgresResultOrigins.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { dataSearchRecordsZh as recordText } from '../../src/renderer/locales/dataSearchRecords.zh-CN';
@@ -9,6 +9,7 @@ import { gridRangeFillZh as fillText } from '../../src/renderer/locales/gridRang
 import { postgresBatchDuplicateZh as duplicateText } from '../../src/renderer/locales/postgresBatchDuplicate.zh-CN';
 import { postgresBatchEditZh as batchText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
 import { postgresTableFindZh as findText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
+import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { primaryKeyCopyZh as keyCopy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { updateSqlCopyZh as updateCopy } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
 import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
@@ -818,7 +819,16 @@ test('PostgreSQL 查询文本替换按原字段去重，保留计算列和查询
     const replace = query.getByRole('button', { name: text.replace, exact: true });
     await expect(replace).toBeEnabled();
     await query.getByRole('columnheader', { name: 'id' }).click();
-    await query.getByRole('gridcell', { name: '1', exact: true }).click();
+    const cell = query.getByRole('gridcell', { name: '1', exact: true });
+    await cell.click();
+    await clickNativeFind();
+    const search = query.getByRole('textbox', { name: resultFind.input, exact: true });
+    await expect(search).toBeFocused();
+    await query.getByRole('combobox', { name: resultFind.columns, exact: true }).selectOption({ label: resultFind.columnOption('同名', 2) });
+    await search.fill('旧甲');
+    await expect(query.locator('.query-result-find-status').getByRole('status')).toHaveText(resultFind.count(1, -1));
+    await query.getByRole('button', { name: resultFind.close, exact: true }).click();
+    await cell.click();
     const shortcut = process.platform === 'darwin' ? 'Alt+Meta+f' : 'Control+h';
     await page.keyboard.press(shortcut);
     const panel = query.getByRole('region', { name: findText.title, exact: true });

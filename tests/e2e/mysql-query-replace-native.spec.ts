@@ -1,12 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { createConnection, type RowDataPacket } from 'mysql2/promise';
-import { test, expect, page, pageErrors } from './desktop-fixture';
+import { clickNativeFind, test, expect, page, pageErrors } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { mysqlQueryBatchEditZh as text } from '../../src/renderer/locales/mysqlQueryBatchEdit.zh-CN';
 import { mysqlQueryRecordEditZh as editText } from '../../src/renderer/locales/mysqlQueryRecordEdit.zh-CN';
 import { postgresTableFindZh as find } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_MYSQL_QUERY_RELATION_NATIVE !== '1', '仅使用本轮隔离网络实库');
@@ -72,6 +73,14 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询文�
     const linked = async () => (await observer.query<RowDataPacket[]>(`SELECT note FROM ${database}.linked`))[0];
     const original = await read();
     await execute();
+    await query.getByRole('gridcell', { name: '9007199254740993', exact: true }).click();
+    await clickNativeFind();
+    const search = query.getByRole('textbox', { name: resultFind.input, exact: true });
+    await expect(search).toBeFocused();
+    await query.getByRole('combobox', { name: resultFind.columns, exact: true }).selectOption({ label: resultFind.columnOption('正文', 2) });
+    await search.fill('旧乙');
+    await expect(query.locator('.query-result-find-status').getByRole('status')).toHaveText(resultFind.count(1, -1));
+    await query.getByRole('button', { name: resultFind.close, exact: true }).click();
     await open('(旧)([甲乙])', true);
     await panel.getByLabel(find.column, { exact: true }).selectOption({ label: '正文' });
     await panel.getByRole('button', { name: find.one, exact: true }).click();

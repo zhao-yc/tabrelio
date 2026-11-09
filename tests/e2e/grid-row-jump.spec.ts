@@ -15,6 +15,7 @@ import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
 import { queryResultSortZh as resultSort } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
@@ -46,7 +47,7 @@ import { resultSqlZh as sqlText } from '../../src/shared/resultSql.zh-CN';
 import { gridQuickValueZh as cellCopy } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 import { sqliteTableRangePasteZh as sqlitePaste } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
-import { answerDialogs, dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
+import { answerDialogs, clickNativeFind, dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
@@ -1481,6 +1482,60 @@ test('查询结果只显示匹配行可保留排序和筛选并恢复原范围',
   await expect(clear).toHaveCount(0);
   await expect(grid.getByRole('gridcell', { name: '记录 2', exact: true })).toBeVisible();
   expect(await history()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 只读查询结果按焦点接收查找菜单并保留查找条件', async ({}, info) => {
+  await seed('SELECT id,name FROM subject_view WHERE id < 3;', '', undefined, true);
+  const query = page.locator('.query-tab:visible');
+  const editor = query.locator('.monaco-editor');
+  const editorFind = editor.locator('.find-widget');
+  const cell = query.getByRole('gridcell', { name: '记录 1', exact: true });
+  const input = query.getByRole('textbox', { name: resultFind.input, exact: true });
+  const mode = query.getByRole('combobox', { name: resultFind.mode, exact: true });
+  const columns = query.getByRole('combobox', { name: resultFind.columns, exact: true });
+  const status = query.locator('.query-result-find-status').getByRole('status');
+  const shortcut = process.platform === 'darwin' ? 'Meta+f' : 'Control+f';
+
+  await query.locator('.query-execute-split > button.primary').click();
+  await cell.click();
+  await clickNativeFind();
+  await expect(input).toBeFocused();
+  await expect(editorFind).toBeHidden();
+  await columns.selectOption({ label: resultFind.columnOption('name', 2) });
+  await input.fill('记录');
+  await expect(status).toHaveText(resultFind.count(2, -1));
+  await input.press('Enter');
+  await expect(status).toHaveText(resultFind.count(2, 0));
+  await cell.click();
+  await page.keyboard.press(shortcut);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('记录');
+  await expect(status).toHaveText(resultFind.count(2, 0));
+  await expect(query.locator('.query-result-find-hit')).toHaveCount(1);
+  await info.attach('SQLite结果查找菜单', { body: await page.screenshot(), contentType: 'image/png' });
+  await mode.selectOption({ label: resultFind.modes.null });
+  await cell.click();
+  await clickNativeFind();
+  await expect(mode).toBeFocused();
+  await expect(mode).toHaveValue('null');
+  await expect(columns.locator('option:checked')).toHaveText(resultFind.columnOption('name', 2));
+  await expect(input).toBeDisabled();
+
+  await query.getByRole('button', { name: resultFind.close, exact: true }).click();
+  await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
+  await page.getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).click();
+  await expect(editor).toBeHidden();
+  await cell.click();
+  await clickNativeFind();
+  await expect(input).toBeFocused();
+  await query.getByRole('button', { name: resultFind.close, exact: true }).click();
+  await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
+  await page.getByRole('menuitem', { name: queryLayoutZh.below, exact: true }).click();
+  await editor.locator('.view-lines').click();
+  await clickNativeFind();
+  await expect(editorFind).toBeVisible();
+  await expect(input).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 

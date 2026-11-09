@@ -19,6 +19,16 @@ export let dataDir: string;
 export let closed = true;
 export let pageErrors: string[];
 export let dialogCalls: RecordedDialog[] = [];
+
+/** 调用当前 Electron 菜单项，保留产品自身的菜单修订及焦点派发。 */
+export async function clickNativeFind(): Promise<void> {
+  await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('find')?.enabled)).toBe(true);
+  await desktop.evaluate(({ Menu, BrowserWindow }) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById('find'), [window] = BrowserWindow.getAllWindows();
+    if (!item?.enabled || !window) throw Error('没有可用的原生查找菜单');
+    item.click(item, window, {} as Electron.KeyboardEvent);
+  });
+}
 let quitReady:Promise<void>;
 export let snippetsDiagnostics: SnippetsNativeDiagnostics | undefined;
 let snippetsDiagnosticsArmed = false;

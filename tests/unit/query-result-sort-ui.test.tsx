@@ -1,6 +1,6 @@
 import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuObservedMutationPort } from '../helpers/navigationMenuRamPort';
 let restoreNavigationMenuPort: () => void = () => {};
-import { act } from 'react';
+import { act, Children, isValidElement } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -1386,9 +1386,18 @@ it.each(['selection','column'] as const)('列统计：%s变化后旧按钮不能
   expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.sum)).toBe(mode==='selection'?'9007199254740993':'0.12345678901234567891');
 });
 it('列统计：伪造父选择回执拒绝，空集合也不能覆盖已有勾选',async()=>{
-  await mount();await act(async()=>grid().onSelectedRowsChange(new Set([0,2])));const container=document.querySelectorAll('div').find(node=>reactProps(node)?.className==='query-result-grid')!,component=(reactProps(container).children as any).props;
-  await act(async()=>component.onStatistics(original.columns[0],new Set([1])));expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();
-  await act(async()=>component.onStatistics(original.columns[0],new Set()));expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();expect(grid().selectedRows.size).toBe(2);
+  await mount();
+  await act(async () => grid().onSelectedRowsChange(new Set([0, 2])));
+  const container = document.querySelectorAll('div').find(node => reactProps(node)?.className === 'query-result-grid')!;
+  // 替换栏按需渲染，取实际挂载的网格组件以保留对父层回执的直接检验。
+  const [component] = Children.toArray(reactProps(container).children);
+  if (!isValidElement<{ onStatistics(column: QueryResult['columns'][number], indices: ReadonlySet<number>): void }>(component))
+    throw Error('缺少结果网格');
+  await act(async () => component.props.onStatistics(original.columns[0], new Set([1])));
+  expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();
+  await act(async () => component.props.onStatistics(original.columns[0], new Set()));
+  expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();
+  expect(grid().selectedRows.size).toBe(2);
 });
 it.each(['标签ABA','连接ABA','忙态ABA','新查询','新结果','外来模态'] as const)('列统计：%s撤销原窗口，旧关闭不能影响后来窗口',async mode=>{
   await mount();await click(statisticsText.open);await statisticsReady();const close=reactProps(button(zh.common.close)).onClick,saved=store.getState().settings;

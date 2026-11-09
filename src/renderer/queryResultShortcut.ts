@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react';
 
-function resultReplaceHost(root: HTMLElement | null, target: EventTarget | null): HTMLElement | undefined {
+export function queryResultHost(root: HTMLElement | null, target: EventTarget | null): HTMLElement | undefined {
   if (!(target instanceof HTMLElement) || !root?.contains(target)) return;
   const host = target.closest<HTMLElement>('.query-result-grid');
   if (host && root.contains(host)) return host;
@@ -16,7 +16,7 @@ function resultReplaceTarget(target: HTMLElement): boolean {
 /** 原生编辑菜单按当前焦点派发；只读结果内也不回退到 SQL 编辑器。 */
 export function runFocusedQueryReplace(root: HTMLElement | null, replaceResult: () => boolean, replaceSql: () => void | Promise<void>) {
   const target = document.activeElement;
-  if (!resultReplaceHost(root, target)) return replaceSql();
+  if (!queryResultHost(root, target)) return replaceSql();
   if (target instanceof HTMLElement && resultReplaceTarget(target)) replaceResult();
 }
 
@@ -35,7 +35,7 @@ export function handleQueryResultReplaceShortcut(event: KeyboardEvent<HTMLDivEle
     ? event.metaKey && event.altKey && !event.ctrlKey && (key === 'f' || event.code === 'KeyF')
     : event.ctrlKey && !event.altKey && !event.metaKey && key === 'h';
   const target = event.target;
-  if (!matches || !(target instanceof HTMLElement) || !resultReplaceHost(event.currentTarget, target) ||
+  if (!matches || !(target instanceof HTMLElement) || !queryResultHost(event.currentTarget, target) ||
       !resultReplaceTarget(target) || !replace()) return false;
   event.preventDefault();
   event.stopPropagation();

@@ -118,6 +118,7 @@ import { bracketCommands, sqlPositionActions, sqlTextActions } from '../sqlEdito
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { editSqlBlockComment } from '../sqlBlockComment';
 import { openFocusedGridRowJump } from './GridRowJump';
+import { openFocusedQueryResultFind } from './QueryResultFind';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
 import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
@@ -2006,7 +2007,8 @@ export function PostgresQueryTab({
     format: { enabled: editable, run: formatQuery },
     'save-query': { enabled: editable, run: openSaveQuery },
     'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },
-    find: { enabled: editable, run: () => editorAction('actions.find') },
+    find: { enabled: (editable || !!binding) && !locked,
+      run: () => { if (!openFocusedQueryResultFind(layoutRoot.current)) return editorAction('actions.find'); } },
     replace: { enabled: editable || canReplaceResult,
       run: () => runFocusedQueryReplace(layoutRoot.current, openResultReplace, () => editorAction('editor.action.startFindReplaceAction')) },
     'sql-goto-line': { enabled: editable, run: () => { if (!openFocusedGridRowJump()) return editorAction(sqlPositionActions['sql-goto-line']); } },
