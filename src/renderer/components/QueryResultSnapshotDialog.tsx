@@ -3,7 +3,10 @@ import { parseQueryResultSnapshot, type QueryResultSnapshotDocument } from '../.
 import { queryResultSnapshotViewerZh as text } from '../locales/queryResultSnapshotViewer.zh-CN';
 import { errorMessage, invoke } from '../lib';
 import { useWorkspace } from '../store';
+import { appModalSelector } from '../modalSelectors';
 import { ResultsGrid } from './ResultsGrid';
+import { escapeTargetsQueryResultFind } from './QueryResultFind';
+import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
 import { SqlEditor } from './SqlEditor';
 import { UsageHelp, ErrorBox, Modal, Spinner  } from './ui';
 import '../queryResultSnapshotViewer.css';
@@ -25,6 +28,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const [interaction, setInteraction] = useState(0), interactionRef = useRef(0), operation = useRef<Operation | null>(null);
   const alive = useRef(false), lifetime = useRef(0), committed = useRef<object | null>(null), host = useRef<HTMLDivElement | null>(null), ticket = {};
   const callbacks = useRef({ onClose, services }); callbacks.current = { onClose, services };
+  const sourceResult = loaded?.snapshot.result;
+  const matches = useQueryResultMatchView(sourceResult, sourceResult?.columns, [loaded?.scope]);
+  const displayed = matches.result;
   useLayoutEffect(() => { alive.current = true; lifetime.current++; return () => { alive.current = false; lifetime.current++; }; }, []);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = null; }; });
   /** 逐级核可见性和真实挂载；内存测试不需要伪造浏览器几何。 */
@@ -38,7 +44,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   /** 等价于host.closest(dialog)，不依赖测试DOM的CSS class选择器或几何实现。 */
   function ownDialog(): Element | undefined { for (let node: HTMLElement | null = host.current; node && node.nodeType === 1; node = node.parentNode as HTMLElement | null) if (node.getAttribute('role') === 'dialog') return node; return undefined; }
   /** 只有当前最上层模态可以关闭或领文件，alertdialog同样阻止穿透。 */
-  function topmost(): boolean { const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]'); return !!ownDialog() && dialogs[dialogs.length - 1] === ownDialog(); }
+  function topmost(): boolean { const dialogs = document.querySelectorAll(appModalSelector); return !!ownDialog() && dialogs[dialogs.length - 1] === ownDialog(); }
   /** 已提交DOM、可见窗口与同步IO槽必须同时有效，旧按钮不能领取新操作。 */
   function editable(): boolean { return alive.current && committed.current === ticket && !operation.current && visible() && topmost(); }
   /** 开始和结束都推进网格回调代次；同一文件selectionScope保持稳定，旧回调永不复活。 */
@@ -46,7 +52,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   /** 普通网格拒绝任何其它模态；纯字节显示只认可本查看器内部的嵌套窗口。 */
   function gridCurrent(source: Loaded, epoch: number, binary: boolean): boolean {
     if (!alive.current || operation.current || loadedRef.current !== source || interactionRef.current !== epoch || !visible()) return false;
-    const own = ownDialog(), dialogs = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]'));
+    const own = ownDialog(), dialogs = Array.from(document.querySelectorAll(appModalSelector));
     return !!own && dialogs.every(dialog => dialog === own || binary && !!host.current?.contains(dialog));
   }
   const binaryIdentity = useMemo(() => loaded ? [loaded.scope, interaction] : [], [loaded, interaction]);
@@ -55,6 +61,23 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     if (!alive.current || committed.current !== ticket || !visible() || !topmost()) return;
     if (operation.current) { setMessage(text.waiting); return; }
     callbacks.current.onClose();
+  }
+  function escape(event: KeyboardEvent): void {
+    if (!topmost() || escapeTargetsQueryResultFind(event, host.current)) return;
+    event.stopPropagation();
+    close();
+  }
+  /** 匹配筛看只改变当前网格，另存始终读取完整文件。换行视图时同步撤销旧网格回调。 */
+  function changeMatchView(indices?: ReadonlySet<number>): void {
+    if (!loaded || !gridCurrent(loaded, interaction, false)) return;
+    const invalidate = () => {
+      advance();
+      host.current?.querySelector<HTMLElement>('.query-result-snapshot-viewer-grid [role="grid"]')?.focus({ preventScroll: true });
+    };
+    try {
+      if (indices) matches.apply(indices, invalidate);
+      else matches.clear(invalidate);
+    } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 只有准确原操作能更新显示；失效保存仍报告已写可能性或原Main错误。 */
   async function file(mode: 'open' | 'save'): Promise<void> {
@@ -85,9 +108,23 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   /** SQL只控制本窗口只读显隐，不设置编辑器正文或提供任何执行回调。 */
   function toggleSql(): void { if (editable() && loaded && loadedRef.current === loaded) setShowSql(value => !value); }
-  return <Modal title={text.title} wide onClose={close}><div ref={host} className="query-result-snapshot-viewer" aria-busy={!!busy}>
+  return <Modal title={text.title} wide onClose={close} onEscape={escape}><div ref={host} className="query-result-snapshot-viewer" aria-busy={!!busy}>
     <p>{text.notice}</p><UsageHelp><p>{text.scope}</p></UsageHelp><div className="query-result-snapshot-viewer-actions"><button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button><button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button><button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button><span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button></div>
     <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : text.saving}/>} {message && <p role="status">{message}</p>}
-    {loaded ? <><p role="status">{text.opened(loaded.name)}</p><p>{text.count(loaded.snapshot.result.rows.length, loaded.snapshot.result.columns.length)}</p>{loaded.snapshot.result.truncated && <p className="warning-text">{text.truncated}</p>}<div className="query-result-snapshot-viewer-grid"><ResultsGrid columns={loaded.snapshot.result.columns} rows={loaded.snapshot.result.rows} selectionScope={loaded.scope} isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity} binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/></div>{showSql && <section className="query-result-snapshot-viewer-sql" aria-label={text.sourceTitle}><p>{text.sourceTitle}</p><SqlEditor value={loaded.snapshot.result.statement} dialect={loaded.snapshot.version === 3 ? 'postgresql' : undefined} readOnly height={180}/></section>}</> : <p>{text.empty}</p>}
+    {loaded && displayed ? <>
+      <p role="status">{text.opened(loaded.name)}</p>
+      <p>{text.count(loaded.snapshot.result.rows.length, displayed.columns.length)}</p>
+      {loaded.snapshot.result.truncated && <p className="warning-text">{text.truncated}</p>}
+      {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
+      <div className="query-result-snapshot-viewer-grid">
+        <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={loaded.scope}
+          sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
+          isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
+          binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>
+      </div>
+      {showSql && <section className="query-result-snapshot-viewer-sql" aria-label={text.sourceTitle}>
+        <p>{text.sourceTitle}</p><SqlEditor value={loaded.snapshot.result.statement} dialect={loaded.snapshot.version === 3 ? 'postgresql' : undefined} readOnly height={180}/>
+      </section>}
+    </> : <p>{text.empty}</p>}
   </div></Modal>;
 }

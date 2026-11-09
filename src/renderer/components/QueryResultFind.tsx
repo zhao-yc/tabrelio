@@ -1,11 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DataGridHandle } from 'react-data-grid';
 import type { DataRow, ResultColumn } from '../../shared/contracts';
 import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindMode, type QueryResultFindPhase, type QueryResultFindProgress } from '../queryResultFind';
 import { QueryResultRegexWorkerClient } from '../queryResultRegexWorkerClient';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
-import { gridFindDirection } from '../gridFindKeys';
-import { appModalSelector } from '../modalSelectors';
+import { gridFindDirection, gridFindModalBlocked } from '../gridFindKeys';
 import { queryResultHost } from '../queryResultShortcut';
 import '../queryResultFind.css';
 
@@ -23,6 +22,14 @@ export function openFocusedQueryResultFind(root: HTMLElement | null): boolean {
   const region = target.closest('.query-result-find-region');
   if (region && host.contains(region)) findOpeners.get(region)?.(target);
   return true;
+}
+
+/** 对话框捕获 Escape 时，把它留给当前结果已展开的查找栏。 */
+export function escapeTargetsQueryResultFind(event: KeyboardEvent, root: HTMLElement | null): boolean {
+  const target = event.target;
+  if (event.ctrlKey || event.metaKey || event.altKey || !(target instanceof HTMLElement) || !root?.contains(target)) return false;
+  const region = target.closest<HTMLElement>('[data-query-result-find-open]');
+  return !!region && root.contains(region) && !gridFindModalBlocked(region, true);
 }
 
 /** 查找栏与快捷键仅包住当前结果网格；私有代次负责取消。 */
@@ -80,7 +87,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   }
   /** 菜单、按键和按钮共用入口。再次打开保留原扫描、条件与命中位置。 */
   function open(): boolean {
-    if (!own() || !grid.current || document.querySelector(appModalSelector)) return false;
+    if (!own() || !grid.current || !region.current || gridFindModalBlocked(region.current, true)) return false;
     if (panelCurrent()) {
       (usesText ? input.current : modeSelect.current)?.focus({ preventScroll: true });
       return true;
@@ -101,7 +108,12 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     findOpeners.set(element, openFromFocus);
     return () => { findOpeners.delete(element); };
   });
-  function close() { if (!alive.current || latest.current.owner !== owner || !visible || panel.current !== opened?.token || run.current !== view?.run) return; cancel(); panel.current = undefined; setOpened(undefined); setView(undefined); onHit(undefined); }
+  /** 关闭时把即将卸载的查找控件焦点还给网格。 */
+  function close() {
+    if (!alive.current || latest.current.owner !== owner || !visible || panel.current !== opened?.token || run.current !== view?.run) return;
+    if (toolbar.current?.contains(document.activeElement)) grid.current?.element?.focus({ preventScroll: true });
+    cancel(); panel.current = undefined; setOpened(undefined); setView(undefined); onHit(undefined);
+  }
   /** 只滚动并标记坐标，不调用setActivePosition或行选择，不改变复制/导出所选行。 */
   function navigate(direction: -1 | 1, keepGridFocus = false) {
     if (!panelCurrent() || !active || run.current !== active.run || !active.run.scan.current()) return;
@@ -120,9 +132,9 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     if (indices) apply(indices);
   }
   /** 快捷键只在本包围元素中冒泡；输入法、Alt组合及其它按键均交还原控件。 */
-  function keyDown(event: KeyboardEvent<HTMLDivElement>) {
+  function keyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || !own()) return;
-    const direction = visible && !event.defaultPrevented && gridFindDirection(event.nativeEvent, event.currentTarget, toolbar.current);
+    const direction = visible && !event.defaultPrevented && gridFindDirection(event.nativeEvent, event.currentTarget, toolbar.current, true);
     if (direction) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) navigate(direction, !toolbar.current?.contains(event.target as Node)); return; }
     if (!event.defaultPrevented && !event.repeat && !event.shiftKey && !!event.ctrlKey !== !!event.metaKey &&
         event.key.toLowerCase() === 'f' && openFromFocus(event.target)) { event.preventDefault(); event.stopPropagation(); }
@@ -135,7 +147,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
       (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
-  return <div ref={region} className="query-result-find-region" onKeyDown={keyDown}>
+  return <div ref={region} className="query-result-find-region" data-query-result-find-open={visible ? '' : undefined} onKeyDown={keyDown}>
     <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
       {visible && <>
         <select ref={modeSelect} aria-label={text.mode} value={mode} disabled={!available}

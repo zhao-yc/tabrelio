@@ -2,6 +2,7 @@ import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helper
 import { workspaceToolCommandSource } from '../helpers/workspaceToolCommandSource';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 import { readEditorWordWrap } from '../../src/shared/editorWordWrap';
 let errorMessage: typeof import('../../src/renderer/lib')['errorMessage'];
 let restoreNavigationMenuPort: () => void = () => {};
@@ -80,6 +81,35 @@ it('新source立即拒绝旧网格，隐藏及其它dialog/alertdialog同步禁�
   for (const role of ['dialog', 'alertdialog']) { const other = document.createElement('div'); other.setAttribute('role', role); document.body.appendChild(other); expect(source.isCurrent()).toBe(false); expect(source.binaryIsCurrent()).toBe(false); document.body.removeChild(other); }
   expect(parent().isCurrent()).toBe(true);
 });
+it('离线匹配投影保留 SQLite 逐格类型、拒绝旧回调，另存与取消继续使用完整文件', async () => {
+  const value = opened('SQLite 原快照', createQueryResultSnapshot({
+    columns: [{ key: 'value', name: '值', type: 'SQLITE' }],
+    rows: [{ value: '2' }, { value: '2' }, { value: null }],
+    sqliteStorage: { version: 1, rows: ['i', 't', 'n'] },
+    elapsedMs: 0, truncated: false, statement: 'SELECT value FROM source;',
+  }));
+  await mount();
+  bridge.mockResolvedValueOnce(value);
+  await click(text.choose);
+  const original = parent();
+  await act(async () => original.onShowMatchingRows(new Set([2, 1])));
+  expect(parent().rows).toEqual([{ value: '2' }, { value: null }]);
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'n']);
+  await act(async () => original.onShowMatchingRows(new Set([0])));
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'n']);
+
+  bridge.mockResolvedValueOnce(null);
+  await click(text.choose);
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'n']);
+  bridge.mockResolvedValueOnce({ name: '副本.json' });
+  await click(text.save);
+  expect(bridge.mock.calls.at(-1)).toEqual(['resultSnapshotFiles.save', { snapshot: value.snapshot }]);
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'n']);
+  bridge.mockResolvedValueOnce(opened('另一文件'));
+  await click(text.choose);
+  expect(parent().sqliteSource).toBeUndefined();
+  expect(parent().rows).toHaveLength(1);
+});
 it('BLOB纯查看内层Escape只关闭内层，原外层header也不能穿透，下一Escape才关外层', async () => {
   const close = vi.fn(); await mount(<Dialog onClose={close}/>); bridge.mockResolvedValueOnce(opened()); await click(text.choose); const grid = rendered.grids.at(-1);
   await act(async () => { grid.onCellDoubleClick({ row: grid.rows[0], column: { key: 'bytes' } }); }); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2); expect(parent().isCurrent()).toBe(false); expect(parent().binaryIsCurrent()).toBe(true);
@@ -110,7 +140,7 @@ function appEntry(invalidate: () => void) {
   }
   visit(app); expect([declaration, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
   const menu = workspaceToolCommandSource(source, readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), 'result-snapshot');
-  const context: any = createContext({ exports: {}, useState, document, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, QueryResultSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  const context: any = createContext({ exports: {}, useState, document, appDialogSelector, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, QueryResultSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
   runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}
 ${methods.join('\n')}
 ${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu>${modal ? '{' + modal + '}' : ''}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);

@@ -19,13 +19,15 @@ function register(): void {
   const { promisify } = require('node:util') as typeof import('node:util');
   const executeFile = promisify(execFile);
   const { queryResultSnapshotViewerZh: text } = require('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN');
+  const { queryResultFindZh: findText } = require('../../src/renderer/locales/queryResultFind.zh-CN') as typeof import('../../src/renderer/locales/queryResultFind.zh-CN');
+  const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
   const { binaryCellFilesZh } = require('../../src/renderer/locales/binaryCellFiles.zh-CN') as typeof import('../../src/renderer/locales/binaryCellFiles.zh-CN');
   const { queryResultSnapshotFileMessages: filesText } = require('../../src/main/queryResultSnapshotFiles') as typeof import('../../src/main/queryResultSnapshotFiles');
   const executable = require('electron') as string;
   const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
   // 独立固定wire：不调用产品codec创建输入；数字使用协议的原始十进制文本。
-  const wire = String.raw`{"kind":"dbark.query-result-snapshot","version":1,"name":"离线合成结果","result":{"columns":[{"key":"__proto__","name":"重复列","type":"VAR_STRING"},{"key":"constructor","name":"重复列","type":"VAR_STRING"},{"key":"big","name":"BIGINT","type":"LONGLONG"},{"key":"decimal","name":"DECIMAL","type":"NEWDECIMAL"},{"key":"date","name":"日期","type":"DATETIME"},{"key":"nullable","name":"NULL","type":"NULL"},{"key":"empty","name":"空串","type":"VAR_STRING"},{"key":"blob","name":"BLOB","type":"BLOB"},{"key":"emptyBlob","name":"空BLOB","type":"BLOB"},{"key":"negativeZero","name":"负零","type":"DOUBLE"}],"rows":[{"__proto__":"原型键安全","constructor":"构造键安全","big":"18446744073709551615","decimal":"12345678901234567890.1234567890","date":"2026-10-28 12:34:56.123456","nullable":null,"empty":"","blob":{"type":"binary","base64":"AP8A"},"emptyBlob":{"type":"binary","base64":""},"negativeZero":{"type":"number","text":"-0"}}],"truncated":true,"elapsedMs":{"type":"number","text":"0.5"},"statement":"SELECT '仅快照SQL'; -- offline-snapshot-source"}}`;
+  const wire = String.raw`{"kind":"dbark.query-result-snapshot","version":1,"name":"离线合成结果","result":{"columns":[{"key":"__proto__","name":"重复列","type":"VAR_STRING"},{"key":"constructor","name":"重复列","type":"VAR_STRING"},{"key":"big","name":"BIGINT","type":"LONGLONG"},{"key":"decimal","name":"DECIMAL","type":"NEWDECIMAL"},{"key":"date","name":"日期","type":"DATETIME"},{"key":"nullable","name":"NULL","type":"NULL"},{"key":"empty","name":"空串","type":"VAR_STRING"},{"key":"blob","name":"BLOB","type":"BLOB"},{"key":"emptyBlob","name":"空BLOB","type":"BLOB"},{"key":"negativeZero","name":"负零","type":"DOUBLE"}],"rows":[{"__proto__":"原型键安全","constructor":"构造键安全","big":"18446744073709551615","decimal":"12345678901234567890.1234567890","date":"2026-10-28 12:34:56.123456","nullable":null,"empty":"","blob":{"type":"binary","base64":"AP8A"},"emptyBlob":{"type":"binary","base64":""},"negativeZero":{"type":"number","text":"-0"}},{"__proto__":"另一行","constructor":"不同内容","big":"2","decimal":"2.00","date":"2026-10-29 01:00:00.000000","nullable":null,"empty":"","blob":{"type":"binary","base64":"AQ=="},"emptyBlob":{"type":"binary","base64":""},"negativeZero":{"type":"number","text":"0"}}],"truncated":true,"elapsedMs":{"type":"number","text":"0.5"},"statement":"SELECT '仅快照SQL'; -- offline-snapshot-source"}}`;
   const expectedWire = JSON.parse(wire);
   let halted = false, firstComplete = false, outputRemoved = false, output = '', sourcePath = '', savedPath = '', savedSha256 = '', firstPid = 0, firstProfile = '';
   let outputIdentity: { dev: number; ino: number } | undefined;
@@ -91,7 +93,8 @@ function register(): void {
         const choose = (mode: 'open' | 'save', args: unknown[]) => { check(); const file = state.file, options = args[1] as { title?: string }; if (!state.frame || !file || file.mode !== mode || file.chosen || state.reading !== file || args[0] !== window || options?.title !== (mode === 'open' ? input.openTitle : input.saveTitle)) throw Error('结果快照原生选择不属于当前原操作'); file.chosen = true; state.chooserCalls++; return file.path; };
         const open = (async (...args: unknown[]) => ({ canceled: false, filePaths: [choose('open', args)] })) as typeof dialog.showOpenDialog;
         const save = (async (...args: unknown[]) => ({ canceled: false, filePath: choose('save', args) })) as typeof dialog.showSaveDialog;
-        const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'workbench.get', 'workbench.save', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish', 'resultSnapshotFiles.open', 'resultSnapshotFiles.save']);
+        // 原生菜单可用性由真实 Main 核验，数据库请求和引擎启动仍全部拒绝。
+        const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.save', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish', 'resultSnapshotFiles.open', 'resultSnapshotFiles.save']);
         const wrapped = async (event: any, payload: any) => {
           check(); if (event.sender !== contents || event.senderFrame !== (state.frame ?? contents.mainFrame)) throw Error('结果快照IPC不是原窗口当前文档');
           const command = String(payload?.command), value = payload?.input, fact = { command, ok: false }; state.calls.push(fact);
@@ -124,7 +127,7 @@ function register(): void {
       const baseline = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(baseline.tabs).toEqual([]);
       await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.bind()));
       expect(await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]);
-      await step(async () => (await navigationMenuItem(page, { name: text.entry, exact: true }, () => clock.assertCurrent())).click());
+      await step(async () => (await navigationMenuItem(page, { name: uiCommandLabels['result-snapshot'], exact: true }, () => clock.assertCurrent())).click());
       const viewer = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => expect(viewer).toBeVisible());
       // 打开查看器本身不触发任何文件或数据库操作，选文件仍属于第二次明确动作。
       expect((await step(audit)).opened).toBe(0);
@@ -151,6 +154,36 @@ function register(): void {
         expect(found).toBe(true); await step(() => expect(grid.getByRole('gridcell').filter({ hasText: value })).toContainText(value));
       }
       await step(async () => (await navigationMenuItem(viewer, { name: text.sourceShow, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.locator('.monaco-editor .view-lines')).toContainText('仅快照SQL')); await step(() => expect(viewer.getByRole('textbox')).toHaveAttribute('aria-autocomplete', 'none')); await step(async () => (await navigationMenuItem(viewer, { name: text.sourceHide, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.locator('.monaco-editor')).toHaveCount(0));
+
+      const input = viewer.getByRole('textbox', { name: findText.input, exact: true });
+      const status = viewer.locator('.query-result-find-status').getByRole('status');
+      const match = grid.getByRole('gridcell', { name: '构造键安全', exact: true });
+      const other = grid.getByRole('gridcell', { name: '不同内容', exact: true });
+      const applySearch = async () => {
+        await step(() => viewer.getByRole('combobox', { name: findText.columns, exact: true }).selectOption({ label: findText.columnOption('重复列', 2) }));
+        await step(() => input.fill('构造键安全'));
+        await step(() => expect(status).toHaveText(findText.count(1, -1)));
+      };
+      await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
+      await step(() => match.click());
+      await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+f' : 'Control+f'));
+      await step(() => expect(input).toBeFocused());
+      await applySearch();
+      await step(() => input.press('F3'));
+      await step(() => expect(status).toHaveText(findText.count(1, 0)));
+      await step(() => expect(match).toHaveClass(/query-result-find-hit/));
+      await step(() => input.press('Escape'));
+      await step(() => expect(input).toBeHidden());
+      await step(() => expect(viewer).toBeVisible());
+      await step(() => expect(grid).toBeFocused());
+      await step(() => viewer.getByRole('button', { name: findText.open, exact: true }).click());
+      await applySearch();
+      await step(() => viewer.getByRole('button', { name: findText.showMatchingRows, exact: true }).click());
+      await step(() => expect(viewer.getByText(findText.matchViewCount(1, 2), { exact: true })).toBeVisible());
+      await step(() => expect(match).toBeVisible());
+      await step(() => expect(other).toHaveCount(0));
+      if (mode === 'save') await step(async () => info.attach('离线结果快照匹配视图', { body: await page.screenshot(), contentType: 'image/png' }));
+
       // 全局BLOB只读展示，不暴露依赖查询会话的独立原字节文件操作；Esc只关闭最内层。
       await step(() => grid.evaluate(element => { element.scrollLeft = element.scrollWidth; }));
       const blob = grid.getByRole('gridcell').filter({ hasText: /^0x00FF00$/i });
@@ -165,6 +198,10 @@ function register(): void {
         expect(Object.keys(independent).sort()).toEqual(['kind', 'name', 'result', 'version']); expect(independent.name).toBe(expectedWire.name); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);
         expect(Object.hasOwn(independent.result.rows[0], '__proto__')).toBe(true); expect(independent.result.rows[0].negativeZero).toEqual({ type: 'number', text: '-0' });
       }
+      await step(() => expect(viewer.getByText(findText.matchViewCount(1, 2), { exact: true })).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: findText.clearMatchView, exact: true }).click());
+      await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
+      await step(() => expect(other).toBeVisible());
       await step(async () => (await navigationMenuItem(viewer, { name: text.close, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer).toBeHidden()); await step(() => expect(page.locator('.welcome-tab')).toBeVisible());
       expect(await step(() => page.locator('.query-tab').count())).toBe(0);
       const after = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(after).toEqual(baseline); expect(JSON.stringify(after)).not.toContain('offline-snapshot-source'); expect(JSON.stringify(after)).not.toContain('18446744073709551615');
