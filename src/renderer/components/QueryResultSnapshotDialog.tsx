@@ -1,7 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ColumnWidths } from 'react-data-grid';
 import type { QueryResult, ResultColumn } from '../../shared/contracts';
-import { parseQueryResultSnapshot, type QueryResultSnapshotDocument } from '../../shared/queryResultSnapshot';
+import { createDisplayedQueryResultSnapshot, parseQueryResultSnapshot, type QueryResultSnapshotDocument } from '../../shared/queryResultSnapshot';
+import { queryResultSnapshotUiZh as snapshotText } from '../locales/queryResultSnapshot.zh-CN';
 import { queryResultSnapshotViewerZh as text } from '../locales/queryResultSnapshotViewer.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
@@ -44,7 +45,7 @@ export const queryResultSnapshotViewerServices: QueryResultSnapshotViewerService
   open: () => invoke('resultSnapshotFiles.open', {}), save: snapshot => invoke('resultSnapshotFiles.save', { snapshot }),
 };
 interface Loaded { name: string; snapshot: QueryResultSnapshotDocument; scope: object; }
-type FileMode = 'open' | 'save' | 'compare';
+type FileMode = 'open' | 'save' | 'saveShown' | 'compare';
 interface Operation { mode: FileMode; epoch: number; source: Loaded | undefined; }
 type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: QueryResultSortView };
 type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView; seed?: QueryResultFilterGroup };
@@ -388,12 +389,14 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   /** 只有准确原操作能更新显示；失效保存仍报告已写可能性或原Main错误。 */
   async function file(mode: FileMode, trigger?: HTMLButtonElement): Promise<void> {
     if (!editable() || mode !== 'open' && (!loaded || loadedRef.current !== loaded) ||
-        mode === 'compare' && (!trigger || !sourceResult?.columns.length)) return;
+        mode === 'compare' && (!trigger || !sourceResult?.columns.length) ||
+        mode === 'saveShown' && (!displayed || !visibleColumns?.length)) return;
+    const saving = mode === 'save' || mode === 'saveShown';
     const port = callbacks.current.services, active: Operation = { mode, epoch: lifetime.current, source: loadedRef.current };
     operation.current = active; advance(); setBusy(mode); setError(''); setMessage('');
     const current = () => alive.current && lifetime.current === active.epoch && operation.current === active && callbacks.current.services === port && loadedRef.current === active.source && visible() && topmost();
     try {
-      if (mode !== 'save') {
+      if (!saving) {
         const selected = await port.open();
         if (!current()) return;
         if (selected === null) { setMessage(text.cancelled); return; }
@@ -412,14 +415,16 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           setLoaded(next); setOrganization(undefined); setColumnLayout(undefined); setShowSql(false); setMessage('');
         }
       } else {
-        const saved = await port.save(active.source!.snapshot);
+        const original = active.source!.snapshot;
+        const snapshot = mode === 'saveShown' ? createDisplayedQueryResultSnapshot(original.result, displayed!, visibleColumns!, original.name) : original;
+        const saved = await port.save(snapshot);
         if (saved === null) { if (current()) setMessage(text.cancelled); return; }
         if (current()) setMessage(text.saved(saved.name));
         else useWorkspace.getState().notify(text.lateSave, true);
       }
     } catch (reason) {
       const original = errorMessage(reason);
-      if (current()) setError(original); else if (mode === 'save') useWorkspace.getState().notify(original, true);
+      if (current()) setError(original); else if (saving) useWorkspace.getState().notify(original, true);
     } finally {
       // StrictMode/lifetime迟到不发布内容；原槽仍相同才在真实终态解除UI占用。
       if (operation.current === active) { operation.current = null; if (alive.current) { advance(); setBusy(undefined); } }
@@ -432,6 +437,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     <div className="query-result-snapshot-viewer-actions">
       <button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button>
       <button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button>
+      <button disabled={!!busy || !displayed || !visibleColumns?.length} title={snapshotText.shownScope} onClick={() => void file('saveShown')}>{snapshotText.saveShown}</button>
       <button disabled={!!busy || !sourceResult?.columns.length} onClick={event => void file('compare', event.currentTarget)}>{text.compare}</button>
       <button ref={exportTrigger} disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
@@ -449,7 +455,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button>
       <span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button>
     </div>
-    <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : busy === 'compare' ? text.comparingFile : text.saving}/>} {message && <p role="status">{message}</p>}
+    <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : busy === 'compare' ? text.comparingFile : busy === 'saveShown' ? text.savingShown : text.saving}/>} {message && <p role="status">{message}</p>}
     {loaded && displayed && visibleColumns ? <>
       <p role="status">{text.opened(loaded.name)}</p>
       <p>{text.count(loaded.snapshot.result.rows.length, displayed.columns.length)}</p>

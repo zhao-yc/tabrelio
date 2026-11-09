@@ -197,6 +197,28 @@ export function createQueryResultSnapshot(value: QueryResult, name?: string): Qu
     value && typeof value === 'object' && Object.hasOwn(value, 'sqliteStorage') ? 2 : 1;
   return document({ kind: 'dbark.query-result-snapshot', version, ...(name === undefined ? {} : { name }), result: value }, false);
 }
+
+/** 按网格已排好的行和可见列生成独立文件内容，继续使用快照自身的预算与精度校验。 */
+export function createDisplayedQueryResultSnapshot(source: QueryResult, displayed: QueryResult, columns: ResultColumn[], name?: string): QueryResultSnapshotDocument {
+  const positions = new Map(displayed.columns.map((column, index) => [column, index]));
+  const indices = columns.map(column => positions.get(column) ?? -1);
+  if (!indices.length || indices.includes(-1)) return invalid();
+  if (columns.length > queryResultSnapshotLimits.columns || displayed.rows.length > queryResultSnapshotLimits.rows ||
+      columns.length * displayed.rows.length > queryResultSnapshotLimits.cells) return large();
+
+  const rows = displayed.rows.map(row => {
+    const projected = Object.create(null) as DataRow;
+    for (const { key } of columns) projected[key] = own(row, key) as CellValue;
+    return projected;
+  });
+  const storage = displayed.sqliteStorage;
+  // 类型序列已随显示行排序，这里只投影列位置，不能按单元格文本重新推断类型。
+  const sqliteStorage = storage && { version: storage.version, rows: storage.rows.map(codes => indices.map(index => codes[index]).join('')) };
+  return createQueryResultSnapshot({
+    ...source, columns, rows, truncated: source.truncated || displayed.truncated || rows.length < source.rows.length,
+    ...(sqliteStorage ? { sqliteStorage } : {}),
+  }, name);
+}
 /** 内存文档同样严格检查，返回独立副本，保存失败不改源固定结果。 */
 export function parseQueryResultSnapshot(value: unknown): QueryResultSnapshotDocument { return document(value, false); }
 

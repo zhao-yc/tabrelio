@@ -65,7 +65,7 @@ it('快照动作移入按需菜单后，菜单关闭仍保留原IO占用及正�
   let finish!: (value: { name: string }) => void; const waiting = new Promise<{ name: string }>(resolve => { finish = resolve; });
   const owner: QueryResultSnapshotOperation = { result: { statement: 'SELECT 仅来源', columns: [{ key: 'id', name: 'id', type: 'BIGINT' }], rows: [{ id: '9007199254740993' }], truncated: false, elapsedMs: 1 }, current: () => true, invalidate: vi.fn(), finish: vi.fn(), adopt: vi.fn(), uncertain: vi.fn(), reportError: vi.fn() };
   const save = vi.fn(() => waiting), begin = vi.fn(() => owner);
-  await mount(<QueryResultSnapshotActions result={owner.result} disabled={false} begin={begin} services={{ open: vi.fn(async () => null), save }} renderActions={actions => <ActionMenu label="更多"><ActionMenuSection label="快照">{actions}</ActionMenuSection></ActionMenu>}/>);
+  await mount(<QueryResultSnapshotActions result={owner.result} canSaveShown={true} disabled={false} begin={begin} services={{ open: vi.fn(async () => null), save }} renderActions={actions => <ActionMenu label="更多"><ActionMenuSection label="快照">{actions}</ActionMenuSection></ActionMenu>}/>);
   await click(text.save); expect(save).toHaveBeenCalledOnce(); expect(document.body.querySelector('[role="menu"]')).toBeNull(); expect(owner.invalidate).not.toHaveBeenCalled(); expect(owner.finish).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain(text.working); expect(button(text.cancel)).toBeDefined();
   await act(async () => finish({ name: '仅RAM.json' })); expect(owner.finish).toHaveBeenCalledOnce(); expect(owner.uncertain).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(text.saved);

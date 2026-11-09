@@ -165,6 +165,13 @@ it('离线排序保留匹配成员和 SQLite 逐格类型，撤销旧网格回�
   await act(async () => beforeSort.onSortChange([{ column: 'value', direction: 'ASC', nulls: 'LAST' }]));
   expect(parent().rows.map((row: { value: unknown }) => row.value)).toEqual(['2', '10', '2']);
   expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['i', 'i', 't']);
+  bridge.mockResolvedValueOnce({ name: '显示范围副本' });
+  await click('保存当前显示为快照');
+  expect(bridge.mock.calls.at(-1)).toEqual(['resultSnapshotFiles.save', { snapshot: {
+    ...value.snapshot, result: { ...value.snapshot.result, rows: [{ value: '2' }, { value: '10' }, { value: '2' }],
+      sqliteStorage: { version: 1, rows: ['i', 'i', 't'] }, truncated: true },
+  } }]);
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['i', 'i', 't']);
   await act(async () => beforeSort.onSortChange([{ column: 'value', direction: 'DESC' }]));
   expect(parent().sort).toEqual([{ column: 'value', direction: 'ASC', nulls: 'LAST' }]);
 

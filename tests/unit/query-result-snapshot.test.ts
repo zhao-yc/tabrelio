@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CellValue, QueryResult } from '../../src/shared/contracts';
-import { createQueryResultSnapshot, decodeQueryResultSnapshot, encodeQueryResultSnapshot, parseQueryResultSnapshot, queryResultSnapshotLimits as limits } from '../../src/shared/queryResultSnapshot';
+import { createDisplayedQueryResultSnapshot, createQueryResultSnapshot, decodeQueryResultSnapshot, encodeQueryResultSnapshot, parseQueryResultSnapshot, queryResultSnapshotLimits as limits } from '../../src/shared/queryResultSnapshot';
 import { queryResultSnapshotZh as text } from '../../src/shared/queryResultSnapshot.zh-CN';
 
 /** 源结果包含真实合同全部字段；SQL只作为来源文字，不持有任何连接能力。 */
@@ -14,6 +14,25 @@ function wire(): any { return JSON.parse(encodeQueryResultSnapshot(document()));
 function decoded(value: unknown) { return decodeQueryResultSnapshot(JSON.stringify(value)); }
 
 describe('已返回结果快照的版本化无损合同', () => {
+  it('显示范围允许保存零行，保留 PostgreSQL 第三版、原命令、SQL 和可见列顺序', () => {
+    const source = { ...result(['9223372036854775807', -0, '隐藏值']), postgresCommand: 'SELECT 1', truncated: false };
+    const columns = [source.columns[1], source.columns[0]];
+    const captured = createDisplayedQueryResultSnapshot(source, { ...source, rows: [] }, columns, '空视图');
+    expect(captured.version).toBe(3);
+    expect(decodeQueryResultSnapshot(encodeQueryResultSnapshot(captured))).toEqual({
+      kind: 'dbark.query-result-snapshot', version: 3, name: '空视图', result: { ...source, columns, rows: [], truncated: true },
+    });
+    expect(source.rows).toHaveLength(1);
+  });
+  it('显示范围沿用快照文件预算，保留大字段及负零，重排列不会标记丢行', () => {
+    const source = { ...result([-0, 'x'.repeat(300000)]), truncated: false };
+    const columns = [...source.columns].reverse();
+    const saved = createDisplayedQueryResultSnapshot(source, source, columns);
+    expect(saved.result.columns).toEqual(columns);
+    expect(saved.result.rows).toEqual(source.rows);
+    expect(saved.result.truncated).toBe(false);
+    expect(Object.is(saved.result.rows[0].k0, -0)).toBe(true);
+  });
   it('第三版保留 PostgreSQL 原命令和精确值，版本与方言字段严格对应', () => {
     const source = { ...result(['9223372036854775807', 'NaN', { type: 'binary' as const, base64: 'AP8=' }]),
       postgresCommand: 'SELECT 1' };

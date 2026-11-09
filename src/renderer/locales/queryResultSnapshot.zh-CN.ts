@@ -1,7 +1,8 @@
 export const queryResultSnapshotUiZh = {
-  save: '保存结果快照', open: '打开结果快照',
+  save: '保存结果快照', saveShown: '保存当前显示为快照', open: '打开结果快照',
+  shownScope: '保存当前显示范围的行、可见列和来源 SQL，沿用显示顺序，不重新查询数据库。',
   scope: '保存已返回的全部原始行列和来源 SQL，不继承筛选或排序，不重新查询数据库。',
-  truncated: '原结果已截断：快照只含已返回范围，无法代表完整查询结果。',
+  truncated: '当前结果只包含部分行，无法代表完整查询结果。',
   offline: '打开为固定结果，可离线查看、整理和对比；保留当前查询和事务。',
   working: '正在处理快照文件…',
   cancel: '撤销本次回包', cancelling: '已撤销本次回包，仍在等待原文件操作完整结束；未取消磁盘读写。',

@@ -15,6 +15,7 @@ export const queryResultSnapshotServices: QueryResultSnapshotServices = {
 };
 export interface QueryResultSnapshotOperation {
   readonly result?: QueryResult; readonly name?: string;
+  readonly snapshot?: QueryResultSnapshotDocument;
   current(): boolean; invalidate(): void; finish(): void;
   adopt(snapshot: QueryResultSnapshotDocument, name: string): void;
   uncertain(message: string): void;
@@ -23,8 +24,8 @@ export interface QueryResultSnapshotOperation {
 type Operation = { owner: QueryResultSnapshotOperation; mode: 'open' | 'save'; cancelled: boolean; reported: boolean };
 
 /** 原生选择器即用户的明确动作；取消仅废弃本地发布，原Promise收尾前保持原作业占用。 */
-export function QueryResultSnapshotActions({ result, disabled, begin, services = queryResultSnapshotServices, renderActions }: {
-  result?: QueryResult; disabled: boolean; begin(mode: 'open' | 'save'): QueryResultSnapshotOperation; services?: QueryResultSnapshotServices; renderActions?(actions: ReactNode): ReactNode;
+export function QueryResultSnapshotActions({ result, canSaveShown, disabled, begin, services = queryResultSnapshotServices, renderActions }: {
+  result?: QueryResult; canSaveShown: boolean; disabled: boolean; begin(mode: 'open' | 'save', shown?: boolean): QueryResultSnapshotOperation; services?: QueryResultSnapshotServices; renderActions?(actions: ReactNode): ReactNode;
 }) {
   const [working, setWorking] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('');
   const active = useRef<Operation | null>(null), alive = useRef(true), committed = useRef<object | null>(null), ticket = {};
@@ -37,18 +38,20 @@ export function QueryResultSnapshotActions({ result, disabled, begin, services =
     operation.owner.uncertain(text.uncertain);
   }
   /** 同轮连点只领取一个原owner，完整文件回包及其cleanup都经同一finally释放。 */
-  function start(mode: 'open' | 'save'): void {
-    if (!alive.current || committed.current !== ticket || active.current || disabled) return;
+  function start(mode: 'open' | 'save', shown = false): void {
+    if (!alive.current || committed.current !== ticket || active.current || disabled || shown && !canSaveShown) return;
     let owner: QueryResultSnapshotOperation;
-    try { owner = begin(mode); } catch (reason) { setError(errorMessage(reason)); return; }
+    try { owner = begin(mode, shown); } catch (reason) { setError(errorMessage(reason)); return; }
     const operation: Operation = { owner, mode, cancelled: false, reported: false }; active.current = operation;
     setWorking(true); setError(''); setMessage('');
     void (async () => {
       try {
         if (!owner.current()) throw Error(text.stale);
         if (mode === 'save') {
-          if (!owner.result) throw Error(text.unavailable);
-          const snapshot = createQueryResultSnapshot(owner.result, owner.name); if (!owner.current()) throw Error(text.stale);
+          // 当前显示范围失效时拒绝保存，不能回退成可能包含隐藏数据的完整结果。
+          const snapshot = shown ? owner.snapshot : owner.result && createQueryResultSnapshot(owner.result, owner.name);
+          if (!snapshot) throw Error(text.unavailable);
+          if (!owner.current()) throw Error(text.stale);
           const saved = await services.save(snapshot);
           if (saved === null) { if (alive.current) setMessage(text.cancelled); return; }
           if (!owner.current() || operation.cancelled || !alive.current) { uncertain(operation); return; }
@@ -71,7 +74,11 @@ export function QueryResultSnapshotActions({ result, disabled, begin, services =
   }
   /** 只是撤销本轮回包，不声称取消原生选择器、已提交写入或主进程清理。 */
   function cancel(): void { const operation = active.current; if (!operation || operation.cancelled || committed.current !== ticket) return; operation.cancelled = true; operation.owner.invalidate(); setMessage(text.cancelling); }
-  const actions = <><button disabled={disabled || working || !result?.columns.length} title={text.scope} onClick={() => start('save')}>{text.save}</button><button disabled={disabled || working} title={text.offline} onClick={() => start('open')}>{text.open}</button></>;
+  const actions = <>
+    <button disabled={disabled || working || !result?.columns.length} title={text.scope} onClick={() => start('save')}>{text.save}</button>
+    <button disabled={disabled || working || !canSaveShown} title={text.shownScope} onClick={() => start('save', true)}>{text.saveShown}</button>
+    <button disabled={disabled || working} title={text.offline} onClick={() => start('open')}>{text.open}</button>
+  </>;
   const status = <>{result?.truncated && <strong className="warning-text">{text.truncated}</strong>}{working && <><Spinner text={text.working}/><button disabled={!!active.current?.cancelled} onClick={cancel}>{text.cancel}</button></>}{message && <span role="status">{message}</span>}<ErrorBox message={error}/></>;
   // 展示端口只迁移按钮，原作业与取消/不确定性状态始终常驻于此组件。
   return renderActions ? <>{renderActions(actions)}<div className="query-result-snapshot-status">{status}</div></> : <div className="query-result-snapshot-actions">{actions}{status}</div>;

@@ -43,6 +43,7 @@ import { postgresZh as text } from '../locales/postgres.zh-CN';
 import { formatText, zh } from '../locales/zh-CN';
 import { pinLimits, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
 import { QueryResultSnapshotIntent } from '../queryResultSnapshotIntent';
+import { createDisplayedQueryResultSnapshot } from '../../shared/queryResultSnapshot';
 import { queryResultSnapshotUiZh as snapshotText } from '../locales/queryResultSnapshot.zh-CN';
 import { postgresRecordTransferZh as transferText } from '../locales/postgresRecordTransfer.zh-CN';
 import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
@@ -1151,10 +1152,13 @@ export function PostgresQueryTab({
   }
 
   /** 文件回包只归原标签及作业，打开时校验 PostgreSQL 格式和固定快照容量。 */
-  function beginResultSnapshot(mode: 'open' | 'save'): QueryResultSnapshotOperation {
+  function beginResultSnapshot(mode: 'open' | 'save', shown = false): QueryResultSnapshotOperation {
     if (!pinNavigationCurrent() || currentTab() !== tab) throw Error(snapshotText.unavailable);
     if (mode === 'save' && !resultSource?.columns.length) throw Error(zh.query.pinRequiresRows);
     if (mode === 'open' && pinState.items.length >= pinLimits.count) throw Error(zh.query.pinCountLimit);
+    if (shown && (!resultSource || !displayResult || !visibleColumns?.length || !resultScopeCurrent())) throw Error(snapshotText.stale);
+    const snapshot = shown && resultSource && displayResult && visibleColumns
+      ? createDisplayedQueryResultSnapshot(resultSource, displayResult, visibleColumns) : undefined;
     const job = acquireWorkspaceBusy(tab.id);
     const intent: QueryResultSnapshotIntent = new QueryResultSnapshotIntent(snapshotIdentity, () =>
       snapshotOperation.current === intent && same(scope) && currentTab() === tab &&
@@ -1165,7 +1169,7 @@ export function PostgresQueryTab({
     let finished = false;
     const notify = (message: string) => useWorkspace.getState().notify(message, true);
     return {
-      result: resultSource,
+      result: resultSource, snapshot,
       current: () => intent.current(),
       invalidate: () => intent.invalidate(),
       /** 完成方言和容量检查后一次性加入固定列表。 */
@@ -2118,7 +2122,7 @@ export function PostgresQueryTab({
         <label className="check" title={text.continueHint}><input type="checkbox" checked={continueOnError} disabled={locked}
           onChange={event => setContinueOnError(event.target.checked)} />{continueText.option}</label>
       </div>
-      <QueryResultSnapshotActions result={resultSource} disabled={locked} begin={beginResultSnapshot}
+      <QueryResultSnapshotActions result={resultSource} canSaveShown={!!dataResult && !!visibleColumns?.length} disabled={locked} begin={beginResultSnapshot}
         renderActions={snapshotActions => <QueryFileActions
         tab={tab}
         files={files}

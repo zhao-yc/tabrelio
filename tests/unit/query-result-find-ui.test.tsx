@@ -7,6 +7,8 @@ import type { DataRow, QueryResult, ResultColumn } from '../../src/shared/contra
 import { queryResultFindZh as text } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { postgresTableFindZh as checkedText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { queryResultSnapshotUiZh as snapshotText } from '../../src/renderer/locales/queryResultSnapshot.zh-CN';
+import type { QueryResultSnapshotDocument } from '../../src/shared/queryResultSnapshot';
 import { zh } from '../../src/renderer/locales/zh-CN';
 const ports = vi.hoisted(() => ({ grids: [] as any[], scroll: vi.fn(), activate: vi.fn(), hostKey: 0 }));
 // 仅替换虚拟布局与Monaco端口，真实Grid/查找栏/QueryTab/store/导出窗口全部运行。
@@ -22,6 +24,7 @@ let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'
 let store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let original: QueryResult, commands: string[], exports: any[], observers: Set<Function>;
+let snapshots: QueryResultSnapshotDocument[];
 const globals = ['window','document','navigator','IS_REACT_ACT_ENVIRONMENT','MutationObserver','Element'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
   document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); (document as any).oninput = null; Object.assign(window, { setTimeout, clearTimeout, confirm: () => true });
@@ -170,7 +173,7 @@ it('查找转筛选只接纳活动单列条件，旧按钮不会重放', async (
 
 /** 原查询端口只返回合成常量；选择/导出/设置全部走RAM原UI命令，不实际执行SQL或文件。 */
 async function mountQuery() {
-  commands = []; exports = [];
+  commands = []; exports = []; snapshots = [];
   original = { columns: [...cols, { key: 'n', name: '空值', type: 'TEXT' }, { key: 'bytes', name: '字节', type: 'BLOB' }], rows: [{ a: 'hit', b: '18446744073709551615', n: null, bytes: { type: 'binary', base64: 'AP8=' } }, { a: 'hit', b: '0.12345678901234567890', n: '', bytes: { type: 'binary', base64: '' } }], elapsedMs: 1, truncated: true, statement: 'SELECT RAM' };
   (window as any).dbark = { onTask: () => () => {}, onMenu: () => () => {}, invoke: async (command: string, input: any) => {
     commands.push(command); if (['settings.save','connections.open','sessions.close'].includes(command)) return;
@@ -179,6 +182,7 @@ async function mountQuery() {
     if (command === 'query.execute') return { results: [original, { ...original, columns: [{ key: 'new', name: '新列', type: 'TEXT' }], rows: [{ new: 'hit' }] }], elapsedMs: 1, transactionOpen: false };
     if (command === 'files.choose') return { token: 'ram-file', name: '内存文件' };
     if (command === 'files.exportResult') { exports.push(input); return { rows: input.result.rows.length }; }
+    if (command === 'resultSnapshotFiles.save') { snapshots.push(input.snapshot); return { name: '内存快照' }; }
     throw Error('禁止真实命令：' + command);
   } };
   store.setState({ settings: { theme: 'light', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 'q', tabs: [{ id: 'q', kind: 'query', connectionId: 'c', title: '查询', sql: 'SELECT RAM', databaseContext: { state: 'known', database: null } }] }, connections: [{ id: 'c', name: 'RAM', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'ram' }], connectionVersions: { c: 1 }, activeJobs: {}, dirtyTabs: {} });
@@ -186,6 +190,23 @@ async function mountQuery() {
   container(); await act(async () => root!.render(<Harness/>)); await click(zh.query.text010);
   vi.useFakeTimers({ toFake: ['setTimeout','clearTimeout'] });
 }
+
+it('查询页按当前临时行视图和列顺序保存独立快照，完整保存保留原结果', async () => {
+  await mountQuery();
+  await click(columnText.open);
+  await click(columnText.up(2));
+  await click(columnText.apply);
+  await act(async () => latestGrid().onSelectedRowsChange(new Set([1])));
+  await click(text.showCheckedRows);
+  await click(snapshotText.saveShown);
+  await click(snapshotText.save);
+  expect(snapshots.map(snapshot => snapshot.result)).toEqual([
+    { ...original, columns: [original.columns[1], original.columns[0], ...original.columns.slice(2)], rows: [original.rows[1]] },
+    original,
+  ]);
+  expect(latestGrid().rows).toEqual([original.rows[1]]);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
 
 it('真实QueryTab查找不再执行SQL，Monaco快捷键不被接管；当前导出仍是全部已返回行和原精确值', async () => {
   await mountQuery(); const grid = latestGrid(); await act(async () => grid.onSelectedRowsChange(new Set([1]))); const copied = copy();

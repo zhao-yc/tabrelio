@@ -28,6 +28,7 @@ function register(): void {
   const { queryResultHistoryZh: historyText } = require('../../src/renderer/locales/queryResultHistory.zh-CN') as typeof import('../../src/renderer/locales/queryResultHistory.zh-CN');
   const { queryRowDetailsZh: detailText } = require('../../src/renderer/locales/queryRowDetails.zh-CN') as typeof import('../../src/renderer/locales/queryRowDetails.zh-CN');
   const { queryReadonlyRecordZh: recordText } = require('../../src/renderer/locales/queryReadonlyRecord.zh-CN') as typeof import('../../src/renderer/locales/queryReadonlyRecord.zh-CN');
+  const { queryResultSnapshotUiZh: snapshotText } = require('../../src/renderer/locales/queryResultSnapshot.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshot.zh-CN');
   const { queryResultColumnsZh: columnText } = require('../../src/renderer/locales/queryResultColumns.zh-CN') as typeof import('../../src/renderer/locales/queryResultColumns.zh-CN');
   const { gridRowJumpZh: rowJumpText } = require('../../src/renderer/locales/gridRowJump.zh-CN') as typeof import('../../src/renderer/locales/gridRowJump.zh-CN');
   const { gridColumnJumpZh: columnJumpText } = require('../../src/renderer/locales/gridColumnJump.zh-CN') as typeof import('../../src/renderer/locales/gridColumnJump.zh-CN');
@@ -46,7 +47,7 @@ function register(): void {
     expectedWire.result.rows[1],
     { ...expectedWire.result.rows[1], big: '18446744073709551614' },
   ] } });
-  let halted = false, firstComplete = false, outputRemoved = false, output = '', sourcePath = '', rightPath = '', savedPath = '', savedSha256 = '', firstPid = 0, firstProfile = '';
+  let halted = false, firstComplete = false, outputRemoved = false, output = '', sourcePath = '', rightPath = '', savedPath = '', shownPath = '', savedSha256 = '', shownSha256 = '', firstPid = 0, firstProfile = '';
   let outputIdentity: { dev: number; ino: number } | undefined;
   const cases = new Map<object, { complete: boolean; check(): void }>();
   /** 专用双门只控制本例；不读取或消费数据库认证参数。 */
@@ -92,10 +93,10 @@ function register(): void {
       } else expect(actual.pid).toBe(launcherPid);
       if (mode === 'save') {
         firstPid = actual.pid; firstProfile = profileDirectory;
-        output = await step(() => mkdtemp(join(tmpdir(), 'dbark-result-snapshot-global-'))); sourcePath = join(output, '合成输入.dbark-result.json'); savedPath = join(output, '真实保存.dbark-result.json'); rightPath = join(output, '第二份输入.dbark-result.json');
+        output = await step(() => mkdtemp(join(tmpdir(), 'dbark-result-snapshot-global-'))); sourcePath = join(output, '合成输入.dbark-result.json'); savedPath = join(output, '真实保存.dbark-result.json'); rightPath = join(output, '第二份输入.dbark-result.json'); shownPath = join(output, '当前显示.dbark-result.json');
         expect(dirname(resolve(output))).toBe(resolve(tmpdir())); expect(basename(output)).toMatch(/^dbark-result-snapshot-global-/);
         const stat = await step(() => lstat(output)); expect(stat.isDirectory() && !stat.isSymbolicLink()).toBe(true); outputIdentity = { dev: stat.dev, ino: stat.ino };
-        await step(() => info.attach('结果快照原临时文件归属', { body: JSON.stringify({ kind: 'dbark.result-snapshot-files', output, sourcePath, savedPath, outputIdentity }), contentType: 'application/json' }));
+        await step(() => info.attach('结果快照原临时文件归属', { body: JSON.stringify({ kind: 'dbark.result-snapshot-files', output, sourcePath, savedPath, shownPath, outputIdentity }), contentType: 'application/json' }));
         await step(() => writeFile(sourcePath, wire, { flag: 'wx', mode: 0o600 }));
         await step(() => writeFile(rightPath, rightWire, { flag: 'wx', mode: 0o600 }));
       } else { expect(firstComplete).toBe(true); expect(actual.pid).not.toBe(firstPid); expect(profileDirectory).not.toBe(firstProfile); expect(hash(await step(() => readFile(savedPath)))).toBe(savedSha256); }
@@ -104,7 +105,7 @@ function register(): void {
         const root = globalThis as any, handlers = (ipcMain as any)._invokeHandlers, previous = handlers?.get('dbark:request'), windows = BrowserWindow.getAllWindows(), window = windows[0], contents = window?.webContents;
         const originalOpen = dialog.showOpenDialog, originalSave = dialog.showSaveDialog, originalFork = utilityProcess.fork;
         if (root.__queryResultSnapshotGlobal || typeof previous !== 'function' || windows.length !== 1 || !contents) throw Error('全局结果快照离线旁观归属未知');
-        const state = { pending: 0, engineStarts: 0, denied: [] as string[], calls: [] as { command: string; ok: boolean }[], opened: 0, saved: 0, chooserCalls: 0, originalCells: undefined as unknown, frame: undefined as Electron.WebFrameMain | undefined, file: undefined as { mode: 'open' | 'save'; path: string; chosen: boolean } | undefined, reading: undefined as unknown, check() {}, arm(_mode: 'open' | 'save' | 'compare') {}, bind() {} };
+        const state = { pending: 0, engineStarts: 0, denied: [] as string[], calls: [] as { command: string; ok: boolean }[], opened: 0, saved: 0, chooserCalls: 0, originalCells: undefined as unknown, frame: undefined as Electron.WebFrameMain | undefined, file: undefined as { mode: 'open' | 'save'; path: string; chosen: boolean } | undefined, reading: undefined as unknown, check() {}, arm(_mode: 'open' | 'save' | 'saveShown' | 'compare') {}, bind() {} };
         const check = () => { if (root.__queryResultSnapshotGlobal !== state || handlers.get('dbark:request') !== wrapped || utilityProcess.fork !== blocked || dialog.showOpenDialog !== open || dialog.showSaveDialog !== save || window.isDestroyed() || contents.isDestroyed() || BrowserWindow.getAllWindows().length !== 1 || BrowserWindow.getAllWindows()[0] !== window || state.frame && contents.mainFrame !== state.frame) throw Error('全局结果快照离线原窗口/文档或适配器变化'); };
         const reject = (command: string): never => { state.denied.push(command); throw Error('全局结果快照离线禁止数据库或未声明请求：' + command); };
         const blocked = ((..._args: unknown[]) => { state.engineStarts++; return reject('utilityProcess.fork'); }) as typeof utilityProcess.fork;
@@ -137,12 +138,12 @@ function register(): void {
         state.arm = mode => {
           check();
           if (!state.frame || state.pending || state.file || state.reading || mode !== 'open' && input.mode !== 'save') throw Error('结果快照文件尚未空闲或操作未授权');
-          state.file = { mode: mode === 'compare' ? 'open' : mode, path: mode === 'compare' ? input.rightPath : mode === 'save' ? input.savedPath : input.openPath, chosen: false };
+          state.file = { mode: mode === 'compare' ? 'open' : mode === 'saveShown' ? 'save' : mode, path: mode === 'compare' ? input.rightPath : mode === 'save' ? input.savedPath : mode === 'saveShown' ? input.shownPath : input.openPath, chosen: false };
         };
         root.__queryResultSnapshotGlobal = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = open; dialog.showSaveDialog = save; utilityProcess.fork = blocked; check();
         // 原函数保留在闭包，只替chooser；原文件服务、codec与所有IPC结果仍由产品执行。
         void originalOpen; void originalSave; void originalFork;
-      }, { mode, savedPath, rightPath, openPath: mode === 'save' ? sourcePath : savedPath, openTitle: filesText.choose, saveTitle: filesText.save })); armed = true;
+      }, { mode, savedPath, shownPath, rightPath, openPath: mode === 'save' ? sourcePath : savedPath, openTitle: filesText.choose, saveTitle: filesText.save })); armed = true;
       expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]);
       // 直接使用新安装的真实空工作区；不通过settings.save注入伪查询、连接或结果。
       await step(() => expect(page.locator('.welcome-tab')).toBeVisible());
@@ -479,6 +480,19 @@ function register(): void {
         await step(() => expect(match).toHaveAttribute('aria-colindex', '2'));
         await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
         await step(() => expect(viewer.getByRole('button', { name: sortText.clear, exact: true })).toBeVisible());
+        await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('saveShown')));
+        await step(() => viewer.getByRole('button', { name: snapshotText.saveShown, exact: true }).click());
+        await step(() => expect(viewer.getByText(text.saved(basename(shownPath)), { exact: true })).toBeVisible());
+        const shown = await step(() => readFile(shownPath));
+        shownSha256 = hash(shown);
+        const projected = JSON.parse(shown.toString('utf8'));
+        const [firstColumn, secondColumn, , ...rest] = expectedWire.result.columns;
+        const { big: _hidden, ...shownRow } = expectedWire.result.rows[0];
+        expect(projected).toEqual({ ...expectedWire, result: { ...expectedWire.result,
+          columns: [secondColumn, firstColumn, ...rest], rows: [shownRow], truncated: true,
+        } });
+        expect(Object.hasOwn(projected.result.rows[0], '__proto__')).toBe(true);
+        await step(() => expect(viewer.getByText(text.visibleColumns(9, 10), { exact: true })).toBeVisible());
         await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('save'))); await step(async () => (await navigationMenuItem(viewer, { name: text.save, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.getByText(text.saved(basename(savedPath)), { exact: true })).toBeVisible());
         const saved = await step(() => readFile(savedPath)); savedSha256 = hash(saved); const independent = JSON.parse(saved.toString('utf8'));
         expect(Object.keys(independent).sort()).toEqual(['kind', 'name', 'result', 'version']); expect(independent.name).toBe(expectedWire.name); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);
@@ -512,16 +526,17 @@ function register(): void {
       expect(await step(() => page.locator('.query-tab').count())).toBe(0);
       const after = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(after).toEqual(baseline); expect(JSON.stringify(after)).not.toContain('offline-snapshot-source'); expect(JSON.stringify(after)).not.toContain('18446744073709551615');
       expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); expect(runtime.pageErrors).toEqual([]);
-      const result = await step(audit); expect(result.pending).toBe(0); expect(result.engineStarts).toBe(0); expect(result.denied).toEqual([]); expect(result.opened).toBe(mode === 'save' ? 2 : 1); expect(result.saved).toBe(mode === 'save' ? 1 : 0); expect(result.chooserCalls).toBe(mode === 'save' ? 3 : 1); expect(result.calls.every(call => call.ok)).toBe(true);
+      const result = await step(audit); expect(result.pending).toBe(0); expect(result.engineStarts).toBe(0); expect(result.denied).toEqual([]); expect(result.opened).toBe(mode === 'save' ? 2 : 1); expect(result.saved).toBe(mode === 'save' ? 2 : 0); expect(result.chooserCalls).toBe(mode === 'save' ? 4 : 1); expect(result.calls.every(call => call.ok)).toBe(true);
       expect(await step(() => readFile(rightPath, 'utf8'))).toBe(rightWire);
       expect(await step(() => readFile(sourcePath, 'utf8'))).toBe(wire); expect(hash(await step(() => readFile(savedPath)))).toBe(savedSha256);
+      expect(hash(await step(() => readFile(shownPath)))).toBe(shownSha256);
       await step(() => runtime.confirmOwnedDesktopExit(info), true); closed = true; armed = false; expect(originalProcess.exitCode).toBe(0); completion.check();
       if (mode === 'reopen') {
-        guard(); expect((await step(() => readdir(output))).sort()).toEqual([basename(sourcePath), basename(savedPath), basename(rightPath)].sort());
-        for (const path of [sourcePath, savedPath, rightPath]) { const stat = await step(() => lstat(path)); expect(stat.isFile() && !stat.isSymbolicLink()).toBe(true); expect(dirname(resolve(path))).toBe(output); await step(() => unlink(path)); }
+        guard(); expect((await step(() => readdir(output))).sort()).toEqual([basename(sourcePath), basename(savedPath), basename(rightPath), basename(shownPath)].sort());
+        for (const path of [sourcePath, savedPath, rightPath, shownPath]) { const stat = await step(() => lstat(path)); expect(stat.isFile() && !stat.isSymbolicLink()).toBe(true); expect(dirname(resolve(path))).toBe(output); await step(() => unlink(path)); }
         await step(async () => { await rmdir(output); outputRemoved = true; });
       }
-      await step(() => info.attach('全局结果快照离线真实文件-' + mode, { body: JSON.stringify({ mode, actual, launcherPid, launcherLineage, profileDirectory, firstPid, newProcess: mode === 'reopen', originalProcessExitCode: originalProcess.exitCode, fileSha256: savedSha256, pending: result.pending, engineStarts: result.engineStarts, databaseRequests: result.denied.length, opens: result.opened, saves: result.saved, chooserCalls: result.chooserCalls, originalCells: result.originalCells, initialZeroConnectionsAndZeroTabsPreserved: true, configurationContainsSnapshotData: false, clipboardCalls: 0, completeFileDirectoryRemoved: outputRemoved, observationScope: 'fixture就绪后安装旁观，至正常退出前', startupBeforeObserver: '未观察', unverified: ['已有实库结果与活动事务', '查询页高级筛选排序（既有入口另验）', '安装包', '其它平台', '取消与失败文件场景由单元测试另验'] }, null, 2), contentType: 'application/json' }), true);
+      await step(() => info.attach('全局结果快照离线真实文件-' + mode, { body: JSON.stringify({ mode, actual, launcherPid, launcherLineage, profileDirectory, firstPid, newProcess: mode === 'reopen', originalProcessExitCode: originalProcess.exitCode, fileSha256: savedSha256, displayedFileSha256: shownSha256, pending: result.pending, engineStarts: result.engineStarts, databaseRequests: result.denied.length, opens: result.opened, saves: result.saved, chooserCalls: result.chooserCalls, originalCells: result.originalCells, initialZeroConnectionsAndZeroTabsPreserved: true, configurationContainsSnapshotData: false, clipboardCalls: 0, completeFileDirectoryRemoved: outputRemoved, observationScope: 'fixture就绪后安装旁观，至正常退出前', startupBeforeObserver: '未观察', unverified: ['已有实库结果与活动事务', '查询页高级筛选排序（既有入口另验）', '安装包', '其它平台', '取消与失败文件场景由单元测试另验'] }, null, 2), contentType: 'application/json' }), true);
       completion.complete = true; if (mode === 'save') firstComplete = true;
     } catch (reason) { halted = true; clock.retain(); runtime.retainOwnedDesktopResources(info); throw reason; }
   });
