@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CellValue, QueryResult, ResultColumn } from '../../src/shared/contracts';
-import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
+import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonLimits, queryResultComparisonValues, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonRow } from '../../src/renderer/queryResultComparison';
 import { queryResultComparisonZh as text } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 
 const columns: ResultColumn[] = [{ key: 'id', name: '同名', type: 'BIGINT' }, { key: 'value', name: '同名', type: 'DECIMAL(65,20)' }, { key: 'bytes', name: '字节', type: 'BLOB' }];
@@ -46,6 +46,22 @@ describe('PostgreSQL 固定结果匹配键', () => {
 });
 
 describe('固定结果的明确键与稳定完整差异', () => {
+  it('差异报告冻结指定分类的原值、匹配键和行号，超限与撤销均拒绝', () => {
+    const left = source([['1', null, null], ['2', '2.0', null]]);
+    const right = { ...source([['1', '', { type: 'binary', base64: 'AA==' }], ['3', '9007199254740993.01', null]]), truncated: true };
+    const { capture, scan } = fixture(left, right);
+    const result = finish(scan);
+    const report = snapshotQueryResultComparisonReport(capture, result.rows.filter(row => row.kind !== 'removed'));
+    expect(report.truncated).toBe(true);
+    expect(report.rows).toHaveLength(6);
+    expect(report.rows[0]).toMatchObject({ kind: 'changed', leftRow: 1, rightRow: 1, columnKey: 'id', matchKey: true, changed: false });
+    expect(report.rows[1]).toMatchObject({ columnKey: 'value', changed: true, leftValue: null, rightValue: '', rightTruncated: true });
+    expect(report.rows[2].rightValue).toEqual({ type: 'binary', base64: 'AA==' });
+    expect(report.rows[4]).toMatchObject({ kind: 'added', leftRow: null, rightRow: 2, rightValue: '9007199254740993.01' });
+    expect(() => snapshotQueryResultComparisonReport(capture, Array(33334).fill(result.rows[0]))).toThrow(text.reportBudget);
+    scan.cancel();
+    expect(() => snapshotQueryResultComparisonReport(capture, result.rows)).toThrow(text.stale);
+  });
   it('左原序保留删除/变化/相同，再追加右侧新增原序，精确键不经Number', () => {
     const bytes = { type: 'binary' as const, base64: 'AAH/' };
     const left = source([['18446744073709551615', '9', bytes], ['0009007199254740993', '1.0', null], ['2', '2.00', bytes]]);

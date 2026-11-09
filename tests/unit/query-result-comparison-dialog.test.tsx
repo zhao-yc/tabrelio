@@ -94,6 +94,25 @@ function many(count: number) {
 }
 
 describe('两份固定查询结果的真实只读对话框', () => {
+  it('报告位置选择期间锁定范围，原来源失效后拒绝写入', async () => {
+    const f = await mount();
+    await compare();
+    let chooseFile!: (file: { token: string; name: string }) => void;
+    const pending = new Promise<{ token: string; name: string }>(resolve => { chooseFile = resolve; });
+    const invoke = vi.fn(() => pending);
+    (window as any).dbark = { invoke };
+    const old = reactProps(button(text.exportReport)).onClick;
+    await click(text.exportReport);
+    await act(async () => { old(); });
+    expect(node(text.filter).disabled).toBe(true);
+    expect(button(text.close).disabled).toBe(true);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('files.choose', { purpose: 'export', format: 'json', suggestedName: text.reportName });
+    f.invalidate();
+    await act(async () => chooseFile({ token: 'old-token', name: '旧来源.json' }));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain(text.reportWriting);
+  });
+
   it('默认首末两源，必须显式选键后开始，不自动扫描或投递SQL', async () => {
     const step = vi.spyOn(QueryResultComparisonScan.prototype, 'step'), f = await mount();
     expect(node(text.title).getAttribute('role')).toBe('dialog'); expect(document.querySelector('[data-query-result-comparison-owner="ram-comparison-owner"]')).not.toBeNull();

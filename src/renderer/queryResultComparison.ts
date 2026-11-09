@@ -1,4 +1,5 @@
-import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
+import type { CellValue, DataRow, QueryResult, ResultColumn, ResultExportData } from '../shared/contracts';
+import { resultExportLimits, validateResultExportData } from '../shared/resultExport';
 import { queryResultFilterKey, queryResultSortKind, type SortDialect } from './queryResultSort';
 import { queryResultComparisonZh as text } from './locales/queryResultComparison.zh-CN';
 import { bindSqliteResultStorage, copySqliteResultStorage, type SqliteResultStorageCode } from '../shared/sqliteResultStorage';
@@ -175,12 +176,43 @@ function key(source: Source, index: number, binding: Binding, side: 'left' | 'ri
 }
 /** 明细只接受正式发布的行身份，返回自有冻结原值，不读变化后的源对象拼接展示。 */
 export function queryResultComparisonValues(capture: QueryResultComparisonCapture, row: QueryResultComparisonRow): readonly QueryResultComparisonValue[] {
-  const binding = bindings.get(capture), owner = rowOwners.get(row);
-  if (!binding || !owner?.active || owner.capture !== capture || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
+  const binding = bindings.get(capture);
+  if (!binding || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
+  return comparisonRowValues(capture, binding, row);
+}
+function comparisonRowValues(capture: QueryResultComparisonCapture, binding: Binding, row: QueryResultComparisonRow): readonly QueryResultComparisonValue[] {
+  const owner = rowOwners.get(row);
+  if (!owner?.active || owner.capture !== capture) throw Error(text.stale);
   const changed = new Set(row.changedColumns);
   return Object.freeze(binding.metadata.map((column, index) => Object.freeze({ column: column.key, name: column.name,
     ...(row.leftIndex === undefined ? {} : { left: binding.left.values[row.leftIndex][index], ...(binding.left.sqlite ? { leftType: binding.left.sqlite.codes[row.leftIndex][index] as SqliteResultStorageCode } : {}) }),
     ...(row.rightIndex === undefined ? {} : { right: binding.right.values[row.rightIndex][index], ...(binding.right.sqlite ? { rightType: binding.right.sqlite.codes[row.rightIndex][index] as SqliteResultStorageCode } : {}) }), changed: changed.has(column.key) })));
+}
+
+/** 每格一条报告记录；原行号区分整行缺失与 SQL NULL。批量只完整复核来源一次。 */
+export function snapshotQueryResultComparisonReport(capture: QueryResultComparisonCapture, rows: readonly QueryResultComparisonRow[]): ResultExportData {
+  const binding = bindings.get(capture);
+  if (!binding || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
+  const columns = ['kind', 'leftRow', 'rightRow', 'columnKey', 'columnName', 'matchKey', 'changed',
+    'leftValue', 'rightValue', 'leftStorage', 'rightStorage', 'leftTruncated', 'rightTruncated'].map(key => ({ key, name: key }));
+  const count = rows.length * capture.columns.length;
+  if (count > resultExportLimits.rows || count * columns.length > resultExportLimits.cells) throw Error(text.reportBudget);
+  const keys = new Set(capture.keys);
+  const output: ResultExportData = {
+    columns,
+    rows: rows.flatMap(row => comparisonRowValues(capture, binding, row).map(value => ({
+      kind: row.kind,
+      leftRow: row.leftIndex === undefined ? null : row.leftIndex + 1,
+      rightRow: row.rightIndex === undefined ? null : row.rightIndex + 1,
+      columnKey: value.column, columnName: value.name, matchKey: keys.has(value.column), changed: value.changed,
+      leftValue: value.left ?? null, rightValue: value.right ?? null,
+      leftStorage: value.leftType ?? null, rightStorage: value.rightType ?? null,
+      leftTruncated: capture.leftTruncated, rightTruncated: capture.rightTruncated,
+    }))),
+    truncated: capture.leftTruncated || capture.rightTruncated,
+  };
+  validateResultExportData(output);
+  return output;
 }
 
 export class QueryResultComparisonScan {

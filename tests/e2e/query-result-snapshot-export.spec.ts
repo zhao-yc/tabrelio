@@ -6,6 +6,7 @@ import { queryResultSnapshotViewerZh as text } from '../../src/renderer/locales/
 import { queryResultFindZh as find } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultSortZh as sort } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filter } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { queryResultSnapshotFileMessages as filesText } from '../../src/main/queryResultSnapshotFiles';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
@@ -17,6 +18,7 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
   expect(process.env.DBARK_INTEGRATION_ENABLED).toBe('0');
   const source = join(dataDir, '离线源.dbark-result.json');
   const csv = join(dataDir, '匹配行.csv'), json = join(dataDir, '勾选行.json');
+  const right = join(dataDir, '对比输入.dbark-result.json'), report = join(dataDir, '对比报告.json');
   const wire = JSON.stringify({
     kind: 'dbark.query-result-snapshot', version: 1, result: {
       columns: [{ key: 'label', name: '内容', type: 'TEXT' }, { key: 'amount', name: '金额', type: 'DECIMAL' }, { key: 'payload', name: '字节', type: 'BLOB' }],
@@ -31,6 +33,13 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
     },
   });
   await writeFile(source, wire, { flag: 'wx' });
+  const snapshot = JSON.parse(wire);
+  const rightWire = JSON.stringify({ ...snapshot, result: { ...snapshot.result, rows: [
+    { ...snapshot.result.rows[0], amount: '9007199254740993.0004', payload: { type: 'binary', base64: '' } },
+    ...snapshot.result.rows.filter((_: unknown, index: number) => index !== 0 && index !== 2),
+    ...Array.from({ length: 52 }, (_, index) => ({ label: '新增 ' + index, amount: '9007199254740993.0005', payload: null })),
+  ] } });
+  await writeFile(right, rightWire, { flag: 'wx' });
 
   // 只代答文件对话框。两层白名单允许真实文件 worker，拒绝任何数据库会话或其它引擎命令。
   const observer = await desktop.evaluateHandle(({ ipcMain, dialog, BrowserWindow, utilityProcess }, paths) => {
@@ -50,15 +59,17 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
       return original(event, payload);
     });
     dialog.showOpenDialog = (async (parent: Electron.BrowserWindow, options: Electron.OpenDialogOptions) => {
-      if (parent !== window || options.title !== paths.openTitle || state.dialogs.length) reject('showOpenDialog');
-      state.dialogs.push('open');
-      return { canceled: false, filePaths: [paths.source] };
+      const compare = state.dialogs.length === 3;
+      if (parent !== window || options.title !== paths.openTitle || state.dialogs.length && !compare) reject('showOpenDialog');
+      state.dialogs.push(compare ? 'compare' : 'open');
+      return { canceled: false, filePaths: [compare ? paths.right : paths.source] };
     }) as typeof dialog.showOpenDialog;
     dialog.showSaveDialog = (async (parent: Electron.BrowserWindow, options: Electron.SaveDialogOptions) => {
       const format = state.dialogs.length === 1 ? 'csv' : 'json';
-      if (parent !== window || options.title !== '导出文件' || state.dialogs.length > 2 || !options.defaultPath?.endsWith('.' + format)) reject('showSaveDialog');
-      state.dialogs.push(format);
-      return { canceled: false, filePath: paths[format] };
+      const report = state.dialogs.length === 4 && options.defaultPath === paths.reportName;
+      if (parent !== window || options.title !== '导出文件' || state.dialogs.length > 2 && !report || !options.defaultPath?.endsWith('.' + format)) reject('showSaveDialog');
+      state.dialogs.push(report ? 'report' : format);
+      return { canceled: false, filePath: report ? paths.report : paths[format] };
     }) as typeof dialog.showSaveDialog;
     const fork = utilityProcess.fork.bind(utilityProcess);
     utilityProcess.fork = ((path: string, args: string[], options: Electron.ForkOptions) => {
@@ -67,14 +78,14 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
       const post = child.postMessage.bind(child);
       child.postMessage = ((message: { command: string; input: { connectionId?: string; sessionId?: string; filePath?: string } }) => {
         if (message.command !== '__shutdown' && (message.command !== 'files.exportResult' || message.input.connectionId ||
-            message.input.sessionId || ![paths.csv, paths.json].includes(message.input.filePath ?? ''))) reject(message.command);
+            message.input.sessionId || ![paths.csv, paths.json, paths.report].includes(message.input.filePath ?? ''))) reject(message.command);
         state.engine.push(message.command);
         post(message);
       }) as typeof child.postMessage;
       return child;
     }) as typeof utilityProcess.fork;
     return state;
-  }, { source, csv, json, openTitle: filesText.choose });
+  }, { source, csv, json, right, report, openTitle: filesText.choose, reportName: comparisonText.reportName });
 
   try {
     const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
@@ -185,6 +196,31 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
     await viewer.getByRole('button', { name: sort.clear, exact: true }).click();
     await expect(labels).toHaveText(['匹配甲', '勾选行', '匹配乙', '匹配丙', '范围外']);
     await expect(checked).toBeDisabled();
+    await viewer.getByRole('button', { name: text.compare, exact: true }).click();
+    const comparison = page.getByRole('dialog', { name: comparisonText.fileTitle, exact: true });
+    await comparison.getByRole('checkbox', { name: comparisonText.key('label'), exact: true }).check();
+    await comparison.getByRole('button', { name: comparisonText.start, exact: true }).click();
+    await expect(comparison.getByLabel(comparisonText.added, { exact: true })).toHaveText('52');
+    const range = comparison.getByLabel(comparisonText.filter, { exact: true });
+    await range.selectOption('all');
+    await range.selectOption('differences');
+    await expect(comparison.getByRole('table', { name: comparisonText.rows, exact: true }).locator('tbody tr')).toHaveCount(50);
+    await comparison.getByRole('button', { name: comparisonText.exportReport, exact: true }).click();
+    const reportSaved = comparison.getByText(comparisonText.reportSaved(162), { exact: true });
+    await expect(reportSaved).toBeVisible();
+    const entries = JSON.parse(await readFile(report, 'utf8'));
+    expect(entries).toHaveLength(162);
+    expect(entries.some((row: { kind: string }) => row.kind === 'equal')).toBe(false);
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'changed', columnKey: 'amount', leftRow: 1, rightRow: 1,
+      leftValue: '9007199254740993.0002', rightValue: '9007199254740993.0004', changed: true, leftTruncated: true }));
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'changed', columnKey: 'payload', leftValue: null, rightValue: { type: 'binary', base64: '' } }));
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'removed', columnKey: 'label', matchKey: true, leftRow: 3, rightRow: null, rightValue: null }));
+    expect(entries).toContainEqual(expect.objectContaining({ kind: 'added', columnKey: 'label', matchKey: true, leftRow: null, rightValue: '新增 51' }));
+    await reportSaved.scrollIntoViewIfNeeded();
+    await info.attach('离线快照差异报告', { body: await page.screenshot(), contentType: 'image/png' });
+    await comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click();
+    await expect(viewer).toBeVisible();
+    expect(await readFile(right, 'utf8')).toBe(rightWire);
     expect(await readFile(source, 'utf8')).toBe(wire);
     expect(await settings()).toEqual(baseline);
     expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]);
@@ -192,9 +228,9 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
     expect(pageErrors).toEqual([]);
     const audit = await observer.jsonValue();
     expect(audit.denied).toEqual([]);
-    expect(audit.dialogs).toEqual(['open', 'csv', 'json']);
-    expect(audit.engine).toEqual(['files.exportResult', 'files.exportResult']);
-    expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(2);
+    expect(audit.dialogs).toEqual(['open', 'csv', 'json', 'compare', 'report']);
+    expect(audit.engine).toEqual(['files.exportResult', 'files.exportResult', 'files.exportResult']);
+    expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(3);
   } finally {
     await observer.dispose();
   }
