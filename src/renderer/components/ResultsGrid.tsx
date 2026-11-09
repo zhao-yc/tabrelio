@@ -29,7 +29,7 @@ import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.z
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
-import { gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill } from './GridRangeFill';
@@ -199,6 +199,15 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     return presentation ? presentation.value : ownCell(row, key);
   }
 
+  /** CSV 和 JSON 交由编码器处理已暂存的 DEFAULT，缺失的查询结果字段仍视为失效。 */
+  function readTabularCopyValue(row: DataRow, key: string, invalid: string) {
+    const presentation = tableCopy && presentCell?.(row, key);
+    if (presentation) return presentation.value;
+    const descriptor = Object.getOwnPropertyDescriptor(row, key);
+    if (!descriptor || !('value' in descriptor) || descriptor.value === undefined) throw Error(invalid);
+    return descriptor.value as CellValue;
+  }
+
   /** 另存使用当前格的原值或已暂存值，不从格式化后的 DOM 读取。 */
   function saveActiveCell() {
     const cell = activeCopyCell, key = cell?.column?.key;
@@ -319,11 +328,16 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
         try { copyGridCellValue(copyValue(cell.row, key), current); }
         catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       } });
-      if (rectangle) actions.unshift(...gridRangeCopyActions(headers => {
+      if (rectangle) actions.unshift(...gridRangeCopyActions(format => {
         try {
-          const content = cellRange.copyRectangle(rectangle, copyValue, skipRowInInversion);
-          if (content?.values.length) copyGridCells(content.values, current, headers
-            ? content.columns.map(key => columns.find(column => column.key === key)!.name) : undefined);
+          const tabular = format === 'csv' || format === 'json';
+          const labels = format === 'csv' ? csvCopyText : jsonCopyText;
+          const content = cellRange.copyRectangle(rectangle, tabular
+            ? (row, key) => readTabularCopyValue(row, key, labels.invalid) : copyValue, skipRowInInversion);
+          if (!content?.values.length) return;
+          const names = content.columns.map(key => columns.find(column => column.key === key)!.name);
+          if (tabular) copyGridRangeText(names, content.values, format, current, value => value);
+          else copyGridCells(content.values, current, format === 'headers' ? names : undefined);
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       }));
     }
@@ -531,13 +545,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       if (!Number.isSafeInteger(index) || !row || skipRowInInversion?.(row)) throw Error(labels.invalid);
       return row;
     });
-    return encode(columns, selected, (row, key) => {
-      const presentation = tableCopy && presentCell?.(row, key);
-      if (presentation) return presentation.value;
-      const descriptor = Object.getOwnPropertyDescriptor(row, key);
-      if (!descriptor || !('value' in descriptor) || descriptor.value === undefined) throw Error(labels.invalid);
-      return descriptor.value;
-    });
+    return encode(columns, selected, (row, key) => readTabularCopyValue(row, key, labels.invalid));
   }
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
   const canSelectRows = !onActiveRowChange && (rowJump || hasResultTools);

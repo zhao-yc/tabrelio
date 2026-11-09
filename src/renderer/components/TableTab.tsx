@@ -17,7 +17,7 @@ import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle } from '../useGridCellRange';
-import { gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
@@ -2005,11 +2005,13 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     } catch { /* 未经原值校验的格不提供筛选项。 */ }
     const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
-      ...(rectangle ? gridRangeCopyActions(headers => {
+      ...(rectangle ? gridRangeCopyActions(format => {
         try {
           const selected = cellRange.copyRectangle(rectangle, (item, key) => ownCell(item.data, key), item => item.deleted);
-          if (selected?.values.length) copyGridCells(selected.values, current, headers
-            ? selected.columns.map(key => visibleColumns.find(column => column.key === key)!.name) : undefined);
+          if (!selected?.values.length) return;
+          const names = selected.columns.map(key => visibleColumns.find(column => column.key === key)!.name);
+          if (format === 'csv' || format === 'json') copyGridRangeText(names, selected.values, format, current, value => value);
+          else copyGridCells(selected.values, current, format === 'headers' ? names : undefined);
         } catch (reason) { if (current()) setError(errorMessage(reason)); }
       }) : []),
       ...(rectangle ? [{ label: rangeExportText.action, run: () => {

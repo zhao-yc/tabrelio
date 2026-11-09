@@ -379,6 +379,11 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   await draftStart.click();
   await page.keyboard.press('Shift+ArrowDown');
   await draftStart.click({ button: 'right' });
+  const draftJson = await readGridMenuClipboard(page, page.getByRole('menuitem', { name: rangeCopy.json, exact: true }));
+  expect(JSON.parse(draftJson.text)).toEqual([{ name: '待提交' }, { name: '待提交' }]);
+  expect(draftJson.typed).toBe('');
+  expect(draftJson.sqlite).toBe('');
+  await draftStart.click({ button: 'right' });
   await menu.click();
   await modal.getByLabel(zh.resultExport.format, { exact: true }).selectOption('sql');
   await modal.getByLabel(sqlText.sqliteDatabase, { exact: true }).fill('main');
@@ -409,6 +414,19 @@ test('SQLite 矩形 INSERT 文件在独立数据库保留原生类型和精度',
   await first.click();
   for (let column = 0; column < 4; column++) await page.keyboard.press('Shift+ArrowRight');
   await page.keyboard.press('Shift+ArrowDown');
+  await first.click({ button: 'right' });
+  const csv = await readGridMenuClipboard(page, page.getByRole('menuitem', { name: rangeCopy.csv, exact: true }));
+  expect(csv).toEqual({
+    text: 'n,t,r,b,z\r\n9223372036854775807,000123,1.5,base64:AP8=,\\N\r\n-9223372036854775808,000456,2.5,base64:qw==,\\N\r\n',
+    typed: '', sqlite: '',
+  });
+  await page.keyboard.press('Shift+F10');
+  const json = await readGridMenuClipboard(page, page.getByRole('menuitem', { name: rangeCopy.json, exact: true }));
+  expect(JSON.parse(json.text)).toEqual([
+    { n: '9223372036854775807', t: '000123', r: '1.5', b: { type: 'binary', base64: 'AP8=' }, z: null },
+    { n: '-9223372036854775808', t: '000456', r: '2.5', b: { type: 'binary', base64: 'qw==' }, z: null },
+  ]);
+  expect(json.typed).toBe('');
   await first.click({ button: 'right' });
   await menu.click();
   await expect(modal.getByText(rangeExport.summary(2, 5), { exact: true })).toBeVisible();

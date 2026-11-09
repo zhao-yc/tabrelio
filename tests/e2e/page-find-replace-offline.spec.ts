@@ -120,6 +120,13 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   expect(withHeaders.typed).toBe(payload.typed);
   await expect(to).toBeFocused();
   await from.click({ button: 'right' });
+  const csv = await readGridMenuClipboard(page, page.getByRole('menuitem', { name: rangeCopy.csv, exact: true }));
+  expect(csv).toEqual({ text: 'note,other\r\n😀old前old后old,OLD\r\n"",无匹配\r\n', typed: '', sqlite: '' });
+  await from.click({ button: 'right' });
+  const json = await readGridMenuClipboard(page, page.getByRole('menuitem', { name: rangeCopy.json, exact: true }));
+  expect(JSON.parse(json.text)).toEqual([{ note: '😀old前old后old', other: 'OLD' }, { note: '', other: '无匹配' }]);
+  expect(json.typed).toBe('');
+  await from.click({ button: 'right' });
   await page.getByRole('menuitem', { name: rangeExport.action, exact: true }).click();
   const exported = page.getByRole('dialog', { name: rangeExport.action, exact: true });
   await expect(exported.getByText(rangeExport.summary(2, 2), { exact: true })).toBeVisible();

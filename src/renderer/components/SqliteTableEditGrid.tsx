@@ -5,7 +5,7 @@ import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
-import { gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
@@ -284,11 +284,16 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal() &&
       (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: column.name, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
-      ...(rectangle ? gridRangeCopyActions(headers => {
+      ...(rectangle ? gridRangeCopyActions(format => {
         try {
           const selected = cellRange.copyRectangle(rectangle, (item, key) => item.values[Number(key.slice(1))], item => item.deleted);
           if (!selected?.values.length) return;
-          const content = encodeSqliteClipboard(selected.values, selected.columns.map(key => page.columns[Number(key.slice(1))].name), headers);
+          const names = selected.columns.map(key => page.columns[Number(key.slice(1))].name);
+          if (format === 'csv' || format === 'json') {
+            copyGridRangeText(names, selected.values, format, current, sqliteClipboardProtocolCell);
+            return;
+          }
+          const content = encodeSqliteClipboard(selected.values, names, format === 'headers');
           writeTableClipboardEvent(current, data => writeSqliteClipboardData(data, content));
         } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
       }) : []),
