@@ -2,6 +2,7 @@ import type { CellValue, QueryResult } from '../../shared/contracts';
 import type { PostgresColumnReference } from '../../shared/postgresResultOrigins';
 import { postgresIdentifier, scanPostgresEditorTokens } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
+import type { PostgresReferenceRowVersion } from './tableReferences';
 import { readPostgresResultOrigins } from './resultOrigins';
 
 type Token = NonNullable<ReturnType<typeof scanPostgresEditorTokens>>[number];
@@ -94,10 +95,10 @@ function sameCell(before: CellValue, after: CellValue): boolean {
 
 /** 主键定位后按原投影原文核对，再捕获整行的 ctid/xmin；写入沿用现有原行保护。 */
 export async function verifyPostgresQueryEdit(connection: PostgresConnection, source: PostgresQueryRecordSource,
-  rowIndex: number, resolved: Awaited<ReturnType<typeof resolvePostgresQueryRecord>>,
+  rowIndices: readonly number[], resolved: Awaited<ReturnType<typeof resolvePostgresQueryRecord>>,
   relation: { oid: string; sql: string; keys: string[] }) {
-  const row = source.result.rows[rowIndex], oid = String(source.origins[0].relation);
-  if (!row || relation.oid !== oid || relation.sql !== resolved.table || !relation.keys.length) throw blocked();
+  const oid = String(source.origins[0].relation);
+  if (relation.oid !== oid || relation.sql !== resolved.table || !relation.keys.length) throw blocked();
   const checkServer = async (current: PostgresConnection) => {
     if (current.serverIdentity !== source.server ||
         (await postgresQueryRecordIdentity(current, resolved.table, Number(oid)))?.identity !== source.identity) throw blocked();
@@ -106,16 +107,23 @@ export async function verifyPostgresQueryEdit(connection: PostgresConnection, so
   const locked = await resolvePostgresQueryRecord(connection, source);
   if (locked.table !== resolved.table || locked.columns.some((column, index) => column !== resolved.columns[index])) throw blocked();
   const fields = locked.columns.map(postgresIdentifier);
-  const params = relation.keys.map(key => {
+  const keys = relation.keys.map(key => {
     const position = resolved.columns.indexOf(key);
     if (position < 0) throw Error('PostgreSQL 查询结果需要包含原表的完整主键');
-    return parameter(row[source.result.columns[position].key]);
+    return source.result.columns[position].key;
   });
   const where = relation.keys.map((key, index) => postgresIdentifier(key) + ' = $' + (index + 1)).join(' AND ');
-  const found = await connection.query('SELECT tableoid::text, ctid::text, xmin::text, ' + fields.join(', ') +
-    ' FROM ONLY ' + relation.sql + ' WHERE ' + where + ' LIMIT 2', params, budget(), undefined, 'extended');
-  const original = found.rows[0];
-  if (found.truncated || found.rows.length !== 1 || original.c0 !== oid || typeof original.c1 !== 'string' || typeof original.c2 !== 'string' ||
-      source.result.columns.some((column, i) => !sameCell(row[column.key], original['c' + (i + 3)]))) throw blocked();
-  return { original: { tableOid: oid, tid: original.c1, version: original.c2 }, checkServer };
+  const sql = 'SELECT tableoid::text, ctid::text, xmin::text, ' + fields.join(', ') +
+    ' FROM ONLY ' + relation.sql + ' WHERE ' + where + ' LIMIT 2';
+  const originals: PostgresReferenceRowVersion[] = [];
+  for (const index of rowIndices) {
+    const row = source.result.rows[index];
+    if (!row) throw blocked();
+    const found = await connection.query(sql, keys.map(key => parameter(row[key])), budget(), undefined, 'extended');
+    const original = found.rows[0];
+    if (found.truncated || found.rows.length !== 1 || original.c0 !== oid || typeof original.c1 !== 'string' || typeof original.c2 !== 'string' ||
+        source.result.columns.some((column, i) => !sameCell(row[column.key], original['c' + (i + 3)]))) throw blocked();
+    originals.push({ tableOid: oid, tid: original.c1, version: original.c2 });
+  }
+  return { originals, checkServer };
 }

@@ -1,4 +1,5 @@
-import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit } from './PostgresSearchRecordEditDialog';
+import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryPaste,
+  type PostgresQueryRecordIntent } from './PostgresSearchRecordEditDialog';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
 import { postgresResultOriginsZh as originsText } from '../locales/postgresResultOrigins.zh-CN';
@@ -17,6 +18,9 @@ import { queryResultTitle } from '../../shared/queryResultTitle';
 import { ResultArchiveDialog } from './ResultArchiveDialog';
 import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
 import { postgresTableLimits } from '../../shared/postgresTable';
+import { postgresClipboardInput, postgresGridPasteMatrix } from '../postgresGridPaste';
+import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
+import type { GridRangeTarget } from '../useGridCellRange';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
 import type { UiCommandId } from '../../shared/uiCommands';
@@ -289,9 +293,10 @@ export function PostgresQueryTab({
   const [originsView, setOriginsView] = useState<OriginsView>();
   const originsOwner = useRef<OriginsView | undefined>(undefined);
   const [recordEdit, setRecordEdit] = useState<{
-    source: { sessionId: string; executionId: string; rowIndex: number };
+    source: PostgresQueryRecordIntent;
     result: QueryResult; scope: Scope; job: ReturnType<typeof acquireWorkspaceBusy>;
     cell?: PostgresQueryCellEdit;
+    paste?: PostgresQueryPaste;
   }>();
   const retiredRecordExecution = useRef<string | undefined>(undefined);
   useEffect(() => () => { recordEdit?.job.release(); }, [recordEdit]);
@@ -1279,13 +1284,15 @@ export function PostgresQueryTab({
   const recordExecution = !pin && state.transactionKnown && !state.transactionOpen &&
     outcome?.postgresQueryRecordExecution !== retiredRecordExecution.current ? outcome?.postgresQueryRecordExecution : undefined;
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
-  function openQueryRecord(row: DataRow, cell?: PostgresQueryCellEdit): boolean {
+  function openQueryRecords(rows: readonly DataRow[], { cell, paste }: { cell?: PostgresQueryCellEdit; paste?: PostgresQueryPaste } = {}): boolean {
     const original = session.current;
     if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding)) return false;
-    const rowIndex = result.rows.indexOf(row);
-    if (rowIndex < 0) return false;
+    const rowIndices = rows.map(row => result.rows.indexOf(row));
+    if (!rowIndices.length || rowIndices.some(index => index < 0) || new Set(rowIndices).size !== rowIndices.length) return false;
     const job = acquireWorkspaceBusy(tab.id);
-    setRecordEdit({ result, scope, job, cell, source: { sessionId: original.id, executionId: recordExecution, rowIndex } });
+    const identity = { sessionId: original.id, executionId: recordExecution };
+    const source = paste ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
+    setRecordEdit({ result, scope, job, cell, paste, source });
     return true;
   }
 
@@ -1296,7 +1303,31 @@ export function PostgresQueryTab({
     if (raw !== null && typeof raw !== 'string') return false;
     const columnIndex = result?.columns.findIndex(item => item.key === column.key) ?? -1;
     if (columnIndex < 0) return false;
-    return openQueryRecord(cell.row, { columnIndex, anchor, typed });
+    return openQueryRecords([cell.row], { cell: { columnIndex, anchor, typed } });
+  }
+
+  /** 从当前网格的矩形同步捕获剪贴板，显示行与列分别映射回原执行位置。 */
+  function pasteQueryCells(cell: QueryResultCopyCell, data: DataTransfer, selected?: GridRangeTarget<DataRow>) {
+    try {
+      if (!result || !visibleColumns || !detailBinding || !cell.column || detailBinding.rows[cell.index] !== cell.row ||
+          !rowDetailCurrent(detailBinding)) throw Error(originsText.editStale);
+      const matrix = postgresGridPasteMatrix(postgresClipboardInput(data),
+        selected ? { rows: selected.rows.length, columns: selected.keys.length } : undefined);
+      const startRow = selected?.startRow ?? cell.index;
+      const startKey = selected?.keys[0] ?? cell.column.key;
+      const startColumn = visibleColumns.findIndex(column => column.key === startKey);
+      const width = matrix[0].length;
+      if (startColumn < 0 || width > postgresTableLimits.fields || startColumn + width > visibleColumns.length ||
+          startRow + matrix.length > detailBinding.rows.length) throw Error(pasteText.bounds);
+      const rows = detailBinding.rows.slice(startRow, startRow + matrix.length);
+      const columns = visibleColumns.slice(startColumn, startColumn + width);
+      if (selected && (selected.rows.some((row, index) => row !== rows[index]) ||
+          selected.keys.some((key, index) => key !== columns[index]?.key))) throw Error(originsText.editStale);
+      const columnIndices = columns.map(column => result.columns.findIndex(origin => origin.key === column.key));
+      if (columnIndices.some(index => index < 0) || !openQueryRecords(rows, { paste: { columnIndices, matrix, startRow } }))
+        throw Error(originsText.editStale);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 侧栏翻行只访问当前显示行，旧侧栏回调必须通过同一视图校验。 */
   function moveRowDetail(view: QueryRowDetailsView, index: number) {
@@ -2065,7 +2096,7 @@ export function PostgresQueryTab({
                 {recordExecution && <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={originsText.cellHint} onClick={() => {
                     if (activeDetailRow && activeDetailRow.binding === detailBinding)
-                      openQueryRecord(activeDetailRow.binding.rows[activeDetailRow.index]);
+                      openQueryRecords([activeDetailRow.binding.rows[activeDetailRow.index]]);
                   }}>{originsText.edit}</button>}
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
                   onClick={() => openResultFilter()}>{filterText.open}</button>
@@ -2132,6 +2163,7 @@ export function PostgresQueryTab({
                       } : undefined}
                       onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
                       onCellEdit={recordExecution ? editQueryCell : undefined}
+                      onCellPaste={recordExecution ? pasteQueryCells : undefined}
                       filterDialect="postgresql"
                       onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
                       onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
@@ -2195,14 +2227,14 @@ export function PostgresQueryTab({
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
       {recordEdit && <PostgresSearchRecordEditDialog connectionId={tab.connectionId} database={recordEdit.scope.database} queryRecord={recordEdit.source}
-        cell={recordEdit.cell} visible={workspace.settings.activeTabId === tab.id}
+        cell={recordEdit.cell} paste={recordEdit.paste} visible={workspace.settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && same(recordEdit.scope) && session.current?.id === recordEdit.source.sessionId &&
           selectedResultRef.current === recordEdit.result && !closeRef.current && useWorkspace.getState().settings.activeTabId === tab.id}
         onDirty={() => { /* 原编辑窗口全程持有标签占用，放弃草稿由对话框确认。 */ }}
         onDone={committed => {
           if (committed) {
             retiredRecordExecution.current = recordEdit.source.executionId;
-            useWorkspace.getState().notify(originsText.editCommitted);
+            useWorkspace.getState().notify(recordEdit.paste ? originsText.pasteCommitted : originsText.editCommitted);
           }
           recordEdit.job.release();
           setRecordEdit(undefined);

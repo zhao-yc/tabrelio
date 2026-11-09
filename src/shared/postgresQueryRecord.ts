@@ -1,8 +1,14 @@
 import { z } from 'zod';
+import { postgresTableLimits } from './postgresTableLimits';
 
 const id = z.string().min(1).max(200);
-export const postgresQueryRecordPageSchema = z.object({
+const rowIndex = z.number().int().min(0).max(99999);
+const source = z.object({
   connectionId: id, database: id, sessionId: id, executionId: id, tabId: id,
-  rowIndex: z.number().int().min(0).max(99999),
-}).strict();
+});
+export const postgresQueryRecordPageSchema = z.union([
+  source.extend({ rowIndex }).strict(),
+  source.extend({ rowIndices: z.array(rowIndex).min(1).max(postgresTableLimits.changes)
+    .refine(indices => new Set(indices).size === indices.length) }).strict(),
+]);
 export type PostgresQueryRecordPageInput = z.infer<typeof postgresQueryRecordPageSchema>;

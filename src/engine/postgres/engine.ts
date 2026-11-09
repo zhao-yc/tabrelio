@@ -1271,6 +1271,7 @@ export class PostgresEngine {
       case 'postgres.queryRecordPage': {
         const { owner, connectionRevision, profile, ...raw } = input;
         const request = postgresQueryRecordPageSchema.parse(raw), session = this.sessions.get(request.sessionId);
+        const rowIndices = 'rowIndices' in request ? request.rowIndices : [request.rowIndex];
         const source = session?.queryRecord;
         const current = () => {
           const state = session?.managed.state();
@@ -1281,14 +1282,14 @@ export class PostgresEngine {
             throw Error('PostgreSQL 原查询结果已变化或原会话有活动事务');
         };
         current();
-        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId || !source || !source.result.rows[request.rowIndex])
+        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId || !source || rowIndices.some(index => !source.result.rows[index]))
           throw Error('PostgreSQL 原查询记录不可用');
         return this.use(profile, request.database, async connection => {
           const resolved = await resolvePostgresQueryRecord(connection, source);
           const target = { owner, connectionRevision, connectionId: request.connectionId, database: request.database,
             table: resolved.table, tabId: request.tabId };
-          const page = await this.tables.searchEdit(target, action => action(connection),
-            (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, request.rowIndex, resolved, relation), current);
+          const page = await this.tables.recordEdit(target, action => action(connection),
+            (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, rowIndices, resolved, relation), current);
           // 结果可以重复使用同一个别名，原表字段键只按已核验的来源位置返回。
           const keys = new Map(page.columns.map(column => [column.name, column.key]));
           return { table: resolved.table, page, columnKeys: resolved.columns.map(name => keys.get(name) ?? null) };
@@ -1657,8 +1658,11 @@ export class PostgresEngine {
           if (!entry.postgresIdentity || target.kind !== 'table' || target.database !== page.database || target.table !== page.table)
             throw Error('PostgreSQL 搜索记录不属于当前库表');
           const { owner, connectionRevision, connectionId, database, table, tabId } = page;
-          return this.tables.searchEdit({ owner, connectionRevision, connectionId, database, table, tabId }, connect,
-            connection => verifyPostgresSearchEdit(connection, entry), () => {
+          return this.tables.recordEdit({ owner, connectionRevision, connectionId, database, table, tabId }, connect,
+            async connection => {
+              const { original, checkServer } = await verifyPostgresSearchEdit(connection, entry);
+              return { originals: [original], checkServer };
+            }, () => {
               if (records.lookup(locator) !== entry) throw Error('原搜索记录引用已变化，请重新搜索');
             });
         }

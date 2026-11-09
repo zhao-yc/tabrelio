@@ -77,7 +77,7 @@ interface Snapshot {
   window?: Pick<PostgresTablePageInput, 'offset' | 'limit'>;
   writeEligible: boolean;
   related?: RelatedScope;
-  searchServerCheck?: (connection: PostgresConnection) => Promise<void>;
+  recordServerCheck?: (connection: PostgresConnection) => Promise<void>;
   preview?: { token: string; expires: number; writes: Write[]; filtered?: FilteredWriteMatch };
 }
 interface TableSnapshots { current: Snapshot; retained: Map<string, Snapshot>; }
@@ -309,30 +309,39 @@ export class PostgresTableWorkspace {
     return (await this.loadPage(input, connect)).page;
   }
 
-  /** 搜索详情单独持有一行的更新能力，不能替换已有表页或借此获得整表操作。 */
-  async searchEdit(input: Scoped<PostgresTableTarget>, connect: Connect, verify: (connection: PostgresConnection, relation: Relation) =>
-    Promise<{ original: PostgresReferenceRowVersion; checkServer(connection: PostgresConnection): Promise<void> }>,
+  /** 查询和搜索仅获得独立的原行更新能力，不能替换已有表页或借此获得整表操作。 */
+  async recordEdit(input: Scoped<PostgresTableTarget>, connect: Connect, verify: (connection: PostgresConnection, relation: Relation) =>
+    Promise<{ originals: PostgresReferenceRowVersion[]; checkServer(connection: PostgresConnection): Promise<void> }>,
     assertReference: () => void): Promise<PostgresTablePage> {
     const key = this.key(input);
     if (this.active.has(key) || this.snapshots.has(key) || this.related.has(key))
-      throw Error('搜索编辑需要独立的 PostgreSQL 表页');
+      throw Error('原记录编辑需要独立的 PostgreSQL 表页');
     this.active.add(key);
     try {
-      const { relation, row, original, checkServer } = await connect(async connection => {
+      const { relation, rows, originals, checkServer } = await connect(async connection => {
         await begin(connection, 'page');
         const { schema, name } = postgresRelationName(input.table);
         // 原表锁跨保存点保留，防止复核后按普通会话读取时换成同名对象。
         const locked = await connection.query('LOCK TABLE ONLY ' + postgresIdentifier(schema) + '.' + postgresIdentifier(name) +
           ' IN ACCESS SHARE MODE', undefined, small());
-        if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 搜索编辑原表锁未确认');
+        if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 原记录编辑的表锁未确认');
         const relation = await readRelation(connection, input.table, { headerComments: true });
         if (!relation.capabilities.update) throw Error('此 PostgreSQL 表没有记录更新能力');
-        const { original, checkServer } = await verify(connection, relation);
-        if (original.tableOid !== relation.oid) throw Error('PostgreSQL 搜索编辑原表已变化，请重新搜索');
-        const row = await readOriginalRow(connection, relation, original);
+        const { originals, checkServer } = await verify(connection, relation);
+        if (!originals.length || originals.length > postgresTableLimits.changes ||
+            originals.some(row => row.tableOid !== relation.oid) || new Set(originals.map(row => row.tid)).size !== originals.length)
+          throw Error('PostgreSQL 原记录身份已变化或重复，请重新读取');
+        const rows: DataRow[] = [];
+        let bytes = 0;
+        for (const original of originals) {
+          const row = await readOriginalRow(connection, relation, original);
+          if (originals.length > 1 && (bytes += Buffer.byteLength(JSON.stringify(row))) > 16 * 1024 * 1024)
+            throw Error('待编辑的 PostgreSQL 原记录超过 16 MiB，请缩小粘贴范围');
+          rows.push(row);
+        }
         if ((await connection.query('COMMIT', undefined, small())).postgresCommand !== 'COMMIT')
-          throw Error('PostgreSQL 搜索编辑读取事务未完成');
-        return { relation, row, original, checkServer };
+          throw Error('PostgreSQL 原记录编辑的读取事务未完成');
+        return { relation, rows, originals, checkServer };
       });
       assertReference();
       const now = Date.now(), pageToken = randomUUID(), capabilities = { ...noWrites, update: true };
@@ -340,11 +349,11 @@ export class PostgresTableWorkspace {
       if (this.snapshots.size >= 128) throw Error('PostgreSQL表页快照已满，请关闭空闲表标签');
       const snapshot: Snapshot = {
         scope: input, token: pageToken, expires: now + 5 * 60 * 1000, relation: { ...relation, capabilities },
-        rows: [{ ...original, digest: digest(row), key: digest(original) }], options: {}, writeEligible: true,
-        searchServerCheck: checkServer,
+        rows: originals.map((original, index) => ({ ...original, digest: digest(rows[index]), key: digest(original) })),
+        options: {}, writeEligible: true, recordServerCheck: checkServer,
       };
       this.snapshots.set(key, { current: snapshot, retained: new Map() });
-      return { pageToken, columns: relation.columns, rows: [row], order: 'primary', relationKind: relation.kind,
+      return { pageToken, columns: relation.columns, rows, order: 'primary', relationKind: relation.kind,
         hasNext: false, truncated: false, capabilities };
     } finally { this.active.delete(key); }
   }
@@ -620,7 +629,7 @@ export class PostgresTableWorkspace {
   }
 
   /** 令牌不能跨标签、库、连接修订或文档使用。 */
-  private snapshot(input: Scoped<PostgresTableReleaseInput>, writing = false, allowRetained = false, singleRowEdit = false): Snapshot {
+  private snapshot(input: Scoped<PostgresTableReleaseInput>, writing = false, allowRetained = false, scopedEdit = false): Snapshot {
     const group = this.snapshots.get(this.key(input));
     const snapshot = group?.current.token === input.pageToken ? group.current : allowRetained ? group?.retained.get(input.pageToken) : undefined;
     const scope = snapshot?.scope;
@@ -628,9 +637,9 @@ export class PostgresTableWorkspace {
         scope.connectionId !== input.connectionId || scope.connectionRevision !== input.connectionRevision ||
         scope.database !== input.database || scope.table !== input.table) throw Error('PostgreSQL表页快照已过期或来源变化，请刷新');
     if (writing && !snapshot.writeEligible) throw Error('原表页没有记录修改能力，请刷新');
-    if (snapshot.related && (!singleRowEdit || !this.relatedCurrent(snapshot.related)))
+    if (snapshot.related && (!scopedEdit || !this.relatedCurrent(snapshot.related)))
       throw Error('关联编辑令牌只可用于原记录修改');
-    if (snapshot.searchServerCheck && !singleRowEdit) throw Error('搜索编辑令牌只可用于原记录修改');
+    if (snapshot.recordServerCheck && !scopedEdit) throw Error('原记录编辑令牌只可用于原记录修改');
     return snapshot;
   }
 
@@ -917,12 +926,9 @@ export class PostgresTableWorkspace {
   private planDraft(input: Scoped<PostgresTablePreviewInput>) {
     if (this.active.has(this.key(input))) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot(input, false, false, true), relation = snapshot.relation;
-    if (snapshot.searchServerCheck) {
-      const [change] = input.changes;
-      if (input.changes.length !== 1 || change.kind !== 'update' || change.row !== 0 ||
-          (change.pageToken && change.pageToken !== input.pageToken))
-        throw Error('PostgreSQL 搜索命中只允许修改本条记录');
-    }
+    if (snapshot.recordServerCheck && input.changes.some(change => change.kind !== 'update' || !snapshot.rows[change.row] ||
+        (change.pageToken && change.pageToken !== input.pageToken)))
+      throw Error('PostgreSQL 原记录编辑只允许修改本次核验的记录');
     const counts = { insert: 0, update: 0, delete: 0 };
     const sources = new Map<string, Snapshot>();
     const keys = new Set<string>(), tids = new Set<string>();
@@ -1052,7 +1058,7 @@ export class PostgresTableWorkspace {
       try {
         await connect(async connection => {
           receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes,
-            snapshot.related, preview.filtered, undefined, snapshot.searchServerCheck);
+            snapshot.related, preview.filtered, undefined, snapshot.recordServerCheck);
         }, true);
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);

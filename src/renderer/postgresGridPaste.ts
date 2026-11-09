@@ -29,17 +29,24 @@ export function postgresClipboardFieldValue(value: ClipboardCell, column: Postgr
   return { mode: 'text', value: literal };
 }
 
+/** 类型化剪贴板和纯文本共用矩形校验，单格扩展也必须符合编码预算。 */
+export function postgresGridPasteMatrix(source: { typed?: string; plain: string }, shape?: GridPasteShape): ClipboardCell[][] {
+  const decoded = decodeClipboard(source.typed ?? '', source.plain, { maximum: postgresTableLimits.changes, message: text.rowLimit });
+  const matrix = shape ? fitGridRangePaste(decoded, shape, { rows: postgresTableLimits.changes, cells: maxClipboardCells }) : decoded;
+  if (matrix !== decoded) encodeClipboard(matrix);
+  const width = matrix[0]?.length ?? 0;
+  if (!width || matrix.some(row => row.length !== width)) throw Error(text.rectangle);
+  return matrix;
+}
+
 /** 完整计划仅使用当前页和可见列。任一越界或不可写字段导致整批拒绝。 */
 export function postgresGridPasteChanges(
   page: PostgresTablePage, columns: readonly PostgresTableColumn[], startKey: string,
   source: { typed?: string; plain: string }, startRow?: number, prior?: (key: string) => PostgresTableChange | undefined,
   shape?: GridPasteShape,
 ): PostgresTableChange[] {
-  const decoded = decodeClipboard(source.typed ?? '', source.plain, { maximum: postgresTableLimits.changes, message: text.rowLimit });
-  const matrix = shape ? fitGridRangePaste(decoded, shape, { rows: postgresTableLimits.changes, cells: maxClipboardCells }) : decoded;
-  if (matrix !== decoded) encodeClipboard(matrix);
-  const width = matrix[0]?.length ?? 0;
-  if (!width || matrix.some(row => row.length !== width)) throw Error(text.rectangle);
+  const matrix = postgresGridPasteMatrix(source, shape);
+  const width = matrix[0].length;
   const startColumn = columns.findIndex(column => column.key === startKey);
   if (startColumn < 0 || startColumn + width > columns.length ||
     (startRow !== undefined && (!Number.isSafeInteger(startRow) || startRow < 0 || startRow + matrix.length > page.rows.length))) throw Error(text.bounds);

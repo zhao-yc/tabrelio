@@ -29,4 +29,12 @@ describe('PostgreSQL 查询原记录', () => {
     for (const extra of [{ sql: 'SELECT * FROM x' }, { table: 'x' }, { rowIndex: -1 }])
       expect(postgresQueryRecordPageSchema.safeParse({ ...input, ...extra }).success).toBe(false);
   });
+
+  it('保留网格顺序，拒绝重复、越界、超量或混用两种行引用', () => {
+    const source = { connectionId: 'conn', database: 'db', sessionId: 'session', executionId: 'exec', tabId: 'tab' };
+    expect(postgresQueryRecordPageSchema.parse({ ...source, rowIndices: [91, 7] })).toEqual({ ...source, rowIndices: [91, 7] });
+    for (const rowIndices of [[], [7, 7], [100000], Array.from({ length: 101 }, (_, i) => i)])
+      expect(postgresQueryRecordPageSchema.safeParse({ ...source, rowIndices }).success).toBe(false);
+    expect(postgresQueryRecordPageSchema.safeParse({ ...source, rowIndex: 7, rowIndices: [91] }).success).toBe(false);
+  });
 });
