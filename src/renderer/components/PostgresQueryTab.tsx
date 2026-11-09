@@ -1,3 +1,4 @@
+import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryRangeEdit,
   type PostgresQueryRecordIntent } from './PostgresSearchRecordEditDialog';
 import { postgresIdentifier } from '../../shared/postgresSql';
@@ -2018,6 +2019,7 @@ export function PostgresQueryTab({
     parameters: { enabled: canRun, run: openParameters },
     format: { enabled: editable, run: formatQuery },
     'save-query': { enabled: editable, run: openSaveQuery },
+    'sql-clipboard-stack': { enabled: editable && !resultsOnly, run: () => editorAction(sqlClipboardStackAction) },
     'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },
     find: { enabled: (editable || !!binding) && !locked,
       run: () => { if (!openFocusedQueryResultFind(layoutRoot.current)) return editorAction('actions.find'); } },
@@ -2207,6 +2209,8 @@ export function PostgresQueryTab({
           <SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={editorInstance} />
           <div id={layoutEditorId} className="postgres-editor sql-editor-wrap query-editor-region" style={resultLayout === 'below' ? {height: editorHeight} : undefined}>
             <SqlEditor
+              clipboardTabId={tab.id}
+              clipboardDisabled={locked || resultsOnly || !!closeRequest}
               value={tab.sql ?? ''}
               dialect="postgresql"
               snippetCompletion

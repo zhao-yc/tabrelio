@@ -6,9 +6,12 @@ import { editorFontOptions, readEditorFontSize } from '../../shared/editorFont';
 import { editorIndentationOptions, readEditorInsertSpaces, readEditorTabSize } from '../../shared/editorIndentation';
 import { bindEditorIndentation } from '../editorIndentation';
 import { zh } from '../locales/zh-CN';
+import { captureSqlClipboardPaste, sqlClipboardStack, sqlClipboardStackAction } from '../sqlClipboardStack';
+import { sqlClipboardStackZh as clipboardText } from '../locales/sqlClipboardStack.zh-CN';
+import { ErrorBox, Modal } from './ui';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
@@ -61,7 +64,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onToggleBlockComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onToggleBlockComment?: () => void | Promise<void>; onSelectCurrent?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onToggleBlockComment, onSelectCurrent, clipboardTabId, clipboardDisabled = false }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onToggleBlockComment?: () => void | Promise<void>; onSelectCurrent?: () => void; clipboardTabId?: string; clipboardDisabled?: boolean }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
   const network = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? requestedDialect : undefined;
@@ -84,7 +87,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
-  const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat });
+  const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat, clipboardTabId, clipboardDisabled });
   const foldingScope = useRef({ dialect: requestedDialect, standardStrings: postgresStandardStrings });
   useLayoutEffect(() => { foldingScope.current = { dialect: requestedDialect, standardStrings: postgresStandardStrings }; });
   const snippetScope = useRef({ dialect: requestedDialect, postgres: postgresCompletion, standardStrings: postgresStandardStrings });
@@ -94,6 +97,52 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
   const queryEditor = !!onExecute;
+  type ClipboardRequest = { entries: readonly string[]; intent: NonNullable<ReturnType<typeof captureSqlClipboardPaste>>; unsubscribe(): void };
+  const clipboardRequest = useRef<ClipboardRequest | null>(null), clipboardHost = useRef<HTMLDivElement>(null);
+  const [clipboardDialog, setClipboardDialog] = useState<ClipboardRequest>(), [clipboardIndex, setClipboardIndex] = useState(0);
+  const [clipboardError, setClipboardError] = useState('');
+
+  /** 只接纳当前查询编辑器本次复制事件中由 Monaco 写入的文本。 */
+  function rememberSql(event: ClipboardEvent<HTMLDivElement>): void {
+    const editor = editorRef.current, tabId = propsRef.current.clipboardTabId;
+    if (!tabId || useWorkspace.getState().settings.activeTabId !== tabId || !editor?.hasTextFocus() || !contentRef.current?.ready ||
+      document.querySelector(appModalSelector) || !event.defaultPrevented || !event.clipboardData.types.includes('vscode-editor-data')) return;
+    sqlClipboardStack.remember(event.clipboardData.getData('text/plain'));
+  }
+  function disposeClipboard(): void {
+    const request = clipboardRequest.current;
+    clipboardRequest.current = null;
+    request?.unsubscribe();
+    request?.intent.dispose();
+  }
+  function closeClipboard(): void { disposeClipboard(); setClipboardDialog(undefined); }
+  /** 绑定打开时的标签、连接配置和编辑器，等待选择时不得切换目标。 */
+  function openClipboard(editor: monaco.editor.IStandaloneCodeEditor): void {
+    if (clipboardRequest.current || document.querySelector(appModalSelector)) return;
+    const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === propsRef.current.clipboardTabId);
+    if (!tab) return;
+    const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId];
+    const allowed = () => {
+      const current = useWorkspace.getState(), props = propsRef.current;
+      return aliveRef.current && editorRef.current === editor && contentRef.current?.ready === true && props.clipboardTabId === tab.id &&
+        !props.clipboardDisabled && !props.readOnly && !editor.getRawOptions().readOnly && current.settings.activeTabId === tab.id &&
+        current.settings.tabs.includes(tab) && !!profile && current.connections.includes(profile) &&
+        current.connectionVersions[tab.connectionId] === version && !current.activeJobs[tab.id] && !current.queryFileOpenings?.[tab.id];
+    };
+    if (!allowed()) return;
+    editor.focus();
+    const intent = captureSqlClipboardPaste(editor, allowed);
+    if (!intent) { workspace.notify(clipboardText.single, true); return; }
+    const request = { entries: sqlClipboardStack.snapshot(), intent, unsubscribe: useWorkspace.subscribe(intent.current) };
+    clipboardRequest.current = request;
+    setClipboardIndex(0); setClipboardError(''); setClipboardDialog(request);
+  }
+  function pasteClipboard(request: ClipboardRequest): void {
+    if (clipboardRequest.current !== request || Array.from(document.querySelectorAll(appModalSelector))
+      .some(dialog => !clipboardHost.current?.contains(dialog))) return;
+    if (!request.intent.paste(request.entries[clipboardIndex] ?? '')) { setClipboardError(clipboardText.stale); return; }
+    closeClipboard();
+  }
   useEffect(() => {
     const instance = editorRef.current;
     if (!contentReady || !instance || !queryEditor || !sqlFolding || !requestedDialect) return;
@@ -124,16 +173,17 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
   const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), lineNumbers, matchBrackets, renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
   // 只发布已提交的props；并发渲染被取消时不能把未提交回调交给旧模型。
-  useLayoutEffect(() => { propsRef.current = { value, onChange, onReady, readOnly, onFormat }; syncFormatAction(); });
+  useLayoutEffect(() => { propsRef.current = { value, onChange, onReady, readOnly, onFormat, clipboardTabId, clipboardDisabled }; syncFormatAction(); clipboardRequest.current?.intent.current(); });
   /** 外部value只能走桥接的受控编辑范围；库不再另行更新value或订阅onChange。 */
   useLayoutEffect(() => { contentRef.current?.sync(); }, [value, readOnly]);
   useLayoutEffect(() => {
     aliveRef.current = true;
+    setClipboardDialog(undefined);
     // Suspense重显会恢复layout effect但库不重发onMount；仅恢复仍存活widget的正文桥接。
     const widget = widgetRef.current;
     if (widget?.alive) { attachContent(widget.editor); syncFormatAction(); }
     else if (widget) { optionsRef.current.readOnly = true; setContentReady(false); }
-    return () => { aliveRef.current = false; contentRef.current?.dispose(); contentRef.current = null; editorRef.current = null; };
+    return () => { aliveRef.current = false; disposeClipboard(); contentRef.current?.dispose(); contentRef.current = null; editorRef.current = null; };
   }, []);
   /** 仅热更新字号/行高；不触及model、正文、撤销栈、选择、readonly或补全生命周期。 */
   useLayoutEffect(() => {
@@ -423,9 +473,29 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       keybindings: [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyA],
       run: () => toggleBlockCommentRef.current?.(),
     });
+    if (propsRef.current.clipboardTabId) editor.addAction({
+      id: sqlClipboardStackAction, label: uiCommandLabels['sql-clipboard-stack'], precondition: '!editorReadonly',
+      keybindingContext: 'editorTextFocus', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV],
+      contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 4,
+      run: () => openClipboard(editor),
+    });
     if (propsRef.current.onFormat) syncFormatAction();
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);
   };
-  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}</div>;
+  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onCopy={rememberSql} onCut={rememberSql} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}{clipboardDialog && <div ref={clipboardHost}><Modal title={clipboardText.title} onClose={closeClipboard}>
+    <div className="modal-content">
+      <p>{clipboardText.hint}</p>
+      {clipboardDialog.entries.length ? <>
+        <label>{clipboardText.choose}<select aria-label={clipboardText.choose} value={clipboardIndex} onChange={event => setClipboardIndex(Number(event.target.value))}>
+          {clipboardDialog.entries.map((entry, index) => <option value={index} key={index}>{clipboardText.item(index + 1, Array.from(entry).slice(0, 80).join('').replace(/\s+/g, ' '))}</option>)}
+        </select></label>
+        <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 220, overflow: 'auto' }}>{clipboardDialog.entries[clipboardIndex]?.slice(0, 1200)}</pre>
+      </> : <p>{clipboardText.empty}</p>}
+      <ErrorBox message={clipboardError}/>
+    </div>
+    <footer className="modal-footer"><button disabled={!clipboardDialog.entries.length} onClick={() => { sqlClipboardStack.clear(); closeClipboard(); }}>{clipboardText.clear}</button><span className="grow"/>
+      <button onClick={closeClipboard}>{zh.common.cancel}</button><button className="primary" disabled={!clipboardDialog.entries.length || !!clipboardError}
+        onClick={() => pasteClipboard(clipboardDialog)}>{clipboardText.paste}</button></footer>
+  </Modal></div>}</div>;
 }

@@ -89,3 +89,73 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     expect(pageErrors).toEqual([]);
   });
 }
+
+for (const dialect of ['mysql', 'postgresql'] as const) {
+  test(`${dialect} SQL 剪贴板栈选择早期复制、拒绝漂移选区并一步撤销`, async ({}, info) => {
+    const lines = ["SELECT '早期🚢';", "SELECT '最近';", 'SELECT 3;'];
+    const sql = lines.join('\n');
+    await seed(dialect, sql);
+    /** 仅向原 Monaco 文本输入派发内存 ClipboardEvent，不访问系统剪贴板。 */
+    async function model(command?: { line: number; text?: string; kind?: 'copy' | 'cut' }) {
+      return activeEditor().evaluate((element, command) => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const editor = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+        const original = editor?.getModel();
+        if (!editor || !original) throw Error('原模型不可用');
+        if (command) {
+          if (command.kind) editor.focus();
+          editor.setSelection({ startLineNumber: command.line, endLineNumber: command.line, startColumn: 1,
+            endColumn: (command.text?.length ?? 0) + 1 });
+          if (command.kind) {
+            const target = document.activeElement;
+            if (!target || !element.contains(target)) throw Error('复制目标不是原编辑器');
+            const data = new DataTransfer();
+            const event = new ClipboardEvent(command.kind, { bubbles: true, cancelable: true, clipboardData: data });
+            target.dispatchEvent(event);
+            if (!event.defaultPrevented || data.getData('text/plain') !== command.text) throw Error('Monaco 未写入准确的内存剪贴板');
+          }
+        }
+        return original.getValue().replaceAll('\r\n', '\n');
+      }, command);
+    }
+    const dialog = page.getByRole('dialog', { name: 'SQL 剪贴板栈', exact: true });
+    const paste = dialog.getByRole('button', { name: '粘贴所选文本', exact: true });
+    await model({ line: 1, text: lines[0], kind: 'copy' });
+    await model({ line: 2, text: lines[1], kind: 'cut' });
+    await expect.poll(() => model()).toBe([lines[0], '', lines[2]].join('\n'));
+    await model({ line: 3, text: lines[2] });
+    await activeEditor().getByRole('textbox').focus();
+    await page.keyboard.press(modifier + '+Shift+v');
+    await expect(dialog.getByRole('combobox')).toHaveValue('0');
+    await expect(dialog.locator('pre')).toHaveText(lines[1]);
+    await dialog.getByRole('combobox').selectOption('1');
+    await expect(dialog.locator('pre')).toHaveText(lines[0]);
+    if (dialect === 'mysql') await page.screenshot({ path: info.outputPath('SQL剪贴板栈.png') });
+    await model({ line: 1 });
+    await paste.click();
+    await expect(dialog.getByRole('alert')).toHaveText('原查询编辑器或选区已变化，请重新打开剪贴板栈。');
+    await page.keyboard.press('Escape');
+    await model({ line: 3, text: lines[2] });
+    await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-clipboard-stack')?.enabled)).toBe(true);
+    await desktop.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('sql-clipboard-stack'), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('剪贴板栈原生命令不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    });
+    await dialog.getByRole('combobox').selectOption('1');
+    await paste.click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => model()).toBe([lines[0], '', lines[0]].join('\n'));
+    await page.keyboard.press(modifier + '+z');
+    await expect.poll(() => model()).toBe([lines[0], '', lines[2]].join('\n'));
+    await page.keyboard.press(modifier + '+z');
+    await expect.poll(() => model()).toBe(sql);
+    await page.keyboard.press(modifier + '+Shift+v');
+    await dialog.getByRole('button', { name: '清空剪贴板栈', exact: true }).click();
+    await page.keyboard.press(modifier + '+Shift+v');
+    await expect(dialog.getByText('还没有从查询编辑器复制或剪切的文本。', { exact: true })).toBeVisible();
+    await expect(paste).toBeDisabled();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}
