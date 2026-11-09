@@ -61,7 +61,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onToggleBlockComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onToggleBlockComment?: () => void | Promise<void>; onSelectCurrent?: () => void }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
   const network = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? requestedDialect : undefined;
@@ -162,6 +162,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   // 真实卸载释放widget存活监听；单纯布局隐藏保留句柄，不能用已销毁实例恢复桥接。
   useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.disposal?.dispose(); } }, []);
   const toggleCommentRef = useRef(onToggleComment); toggleCommentRef.current = onToggleComment;
+  const toggleBlockCommentRef = useRef(onToggleBlockComment); toggleBlockCommentRef.current = onToggleBlockComment;
   const runRef = useRef(onExecute); runRef.current = onExecute;
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const selectCurrentRef = useRef(onSelectCurrent); selectCurrentRef.current = onSelectCurrent;
@@ -415,6 +416,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if (selectCurrentRef.current) editor.addAction({ id: 'dbark-select-current-statement', label: uiCommandLabels['select-current-statement'], precondition: '!editorReadonly && !editorHasMultipleSelections', keybindingContext: 'editorTextFocus', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE], run: () => selectCurrentRef.current?.() });
     // 编辑器快捷键和原生菜单走同一个方言检查，避免绕过 MySQL 双负号保护。
     if (toggleCommentRef.current) editor.addAction({ id: 'dbark-toggle-sql-comment', label: uiCommandLabels['sql-toggle-comment'], precondition: '!editorReadonly', keybindingContext: 'editorTextFocus', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash], run: () => toggleCommentRef.current?.() });
+    // 没有选区时也拦截 Monaco 的默认动作，统一由查询入口校验。
+    if (toggleBlockCommentRef.current) editor.addAction({
+      id: 'dbark-toggle-sql-block-comment', label: uiCommandLabels['sql-toggle-block-comment'],
+      precondition: '!editorReadonly', keybindingContext: 'editorTextFocus',
+      keybindings: [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyA],
+      run: () => toggleBlockCommentRef.current?.(),
+    });
     if (propsRef.current.onFormat) syncFormatAction();
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);

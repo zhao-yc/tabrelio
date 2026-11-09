@@ -95,6 +95,7 @@ import { SavedQueryMatchNavigation } from './SavedQueryMatchNavigation';
 import { useUiCommandScope, type UiCommandHandler } from '../uiCommands';
 import { bracketCommands, sqlPositionActions, sqlTextActions } from '../sqlEditorActions';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
+import { editSqlBlockComment } from '../sqlBlockComment';
 import { openFocusedGridRowJump } from './GridRowJump';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
@@ -1580,6 +1581,13 @@ export function PostgresQueryTab({
     target.instance.focus();
     await action.run();
   }
+  function toggleBlockComment() {
+    if (resultsOnly) return;
+    const target = commandEditor();
+    if (!target) return;
+    try { editSqlBlockComment(target.instance, 'postgresql'); }
+    catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+  }
   function formatQuery() {
     const target = commandEditor();
     if (!target) return;
@@ -1750,6 +1758,7 @@ export function PostgresQueryTab({
     replace: { enabled: editable, run: () => editorAction('editor.action.startFindReplaceAction') },
     'sql-goto-line': { enabled: editable, run: () => { if (!openFocusedGridRowJump()) return editorAction(sqlPositionActions['sql-goto-line']); } },
     'sql-toggle-comment': { enabled: editable, run: () => editorAction('editor.action.commentLine') },
+    'sql-toggle-block-comment': { enabled: editable && !resultsOnly && editorSelection.single, run: toggleBlockComment },
     'sql-uppercase': { enabled: editable && editorSelection.explicit, run: () => editorAction(sqlTextActions['sql-uppercase'], true) },
     'sql-lowercase': { enabled: editable && editorSelection.explicit, run: () => editorAction(sqlTextActions['sql-lowercase'], true) },
   };
@@ -1764,6 +1773,14 @@ export function PostgresQueryTab({
     let active = true;
     // 右键与原生菜单走同一编辑命令。旧右键项不能操作已切换或重建的模型。
     const menuModel = editorInstance.getModel();
+    const blockComment = editorInstance.addAction({
+      id: `dbark-postgres-block-comment:${uid()}`, label: uiCommandLabels['sql-toggle-block-comment'],
+      precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
+      contextMenuGroupId: 'modification', contextMenuOrder: 2.5,
+      run: () => {
+        if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel) toggleBlockComment();
+      },
+    });
     const editActions = (['sql-toggle-comment', 'sql-uppercase', 'sql-lowercase', ...sqlLineCommandIds] as const)
       .map((id, order) => editorInstance.addAction({
         id: `dbark-postgres-${id}:${uid()}`, label: uiCommandLabels[id],
@@ -1792,7 +1809,7 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
       run: () => { if (active && canOpenStatementQuery) navigation.open('duplicate'); },
     });
-    return () => { active = false; for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
+    return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery]);
   return (
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
@@ -1916,6 +1933,7 @@ export function PostgresQueryTab({
               onSelectCurrent={() => navigation.open('select')}
               onFormat={formatQuery}
               onToggleComment={() => editorAction('editor.action.commentLine')}
+              onToggleBlockComment={toggleBlockComment}
               onSelectionState={updateEditorSelection}
             />
             {navigation.panel && <StatementNavigationPanel {...navigation.panel} />}

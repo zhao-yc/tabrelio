@@ -62,7 +62,7 @@ export class ApplicationMenu {
         { label: text.cut, role: 'cut' }, { label: text.copy, role: 'copy' }, { label: text.paste, role: 'paste' }, { label: text.selectAll, role: 'selectAll' }, separator,
         item('find', 'CmdOrCtrl+F'), item('replace', mac ? 'Alt+Cmd+F' : 'Ctrl+H'), { ...item('sql-goto-line', 'Ctrl+G'), label: text.gotoPosition },
         item('sql-goto-bracket'), item('sql-select-bracket'), separator,
-        item('sql-toggle-comment', 'CmdOrCtrl+/'), item('sql-uppercase'), item('sql-lowercase'),
+        item('sql-toggle-comment', 'CmdOrCtrl+/'), item('sql-toggle-block-comment'), item('sql-uppercase'), item('sql-lowercase'),
         { label: text.sqlLines, enabled: sqlLineCommandIds.some(id => statuses.get(id)?.enabled === true), submenu: sqlLineCommandIds.map(id => item(id)) },
         item('sql-selection-to-snippet')
       ] },
