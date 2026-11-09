@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
 const errors: string[] = [];
@@ -88,6 +89,31 @@ test('最小窗口同格逐处导航、单处替换及整批预览仅形成草�
   await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.preview, exact: true })).click(); await expect(preview()).toBeVisible();
   await (await (await import('./navigation-menu')).navigationMenuItem(preview(), { name: text.apply, exact: true })).click(); await expect(await cell()).toHaveText('😀$1/$&前$1/$&后$1/$&');
   expect(await calls()).toEqual([]); expect(errors).toEqual([]); await page.screenshot({ path: result.outputPath('最小窗口单处与整批草稿.png') });
+});
+
+test('表页按行和字段高亮查找命中，切换列和清空查找撤销旧标记', async () => {
+  await find('old');
+  const highlight = panel().getByRole('checkbox', { name: findText.highlightAll, exact: true });
+  const note = await cell(), other = await cell('other');
+  await highlight.check();
+  await expect(note).toHaveClass(/query-result-find-match/);
+  await expect(other).not.toHaveClass(/query-result-find-match/);
+  const column = panel().getByRole('combobox', { name: text.column, exact: true });
+  await column.selectOption('');
+  await expect(other).toHaveClass(/query-result-find-match/);
+  const query = panel().getByRole('textbox', { name: text.query, exact: true });
+  await query.press('F3');
+  await expect(note).toHaveClass(/query-result-find-hit/);
+  await highlight.uncheck();
+  await expect(note).toHaveClass(/query-result-find-hit/);
+  await expect(other).not.toHaveClass(/query-result-find-match/);
+  await highlight.check();
+  await column.selectOption('other');
+  await expect(other).toHaveClass(/query-result-find-match/);
+  await expect(note).not.toHaveClass(/query-result-find-(match|hit)/);
+  await query.fill('');
+  await expect(page.locator('.query-result-find-match, .query-result-find-hit')).toHaveCount(0);
+  expect(await calls()).toEqual([]);
 });
 
 test('真实Worker正则支持Unicode零宽、整格与字面美元符号，非法语法可恢复', async () => {

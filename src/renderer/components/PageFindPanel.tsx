@@ -1,18 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as InputKeyEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as InputKeyEvent } from 'react';
 import type { TableInfo } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
 import { nextPageOccurrenceAfterReplacement, pageOccurrences, pageReplaceWritable, type PageCellMatch, type PageFindOptions, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 import { useTableFindKeys } from '../gridFindKeys';
+import { tableFindHighlights } from '../tableFindHighlights';
+import { queryResultFindZh as findText } from '../locales/queryResultFind.zh-CN';
 import { PageFindWorkerClient } from '../pageFindWorkerClient';
 import { errorMessage, ownCell } from '../lib';
 import { formatText, zh } from '../locales/zh-CN';
 import { tableGridZh as text } from '../locales/tableGrid.zh-CN';
 import { UsageHelp, ErrorBox, Field, Modal  } from './ui';
+import '../queryResultFind.css';
+
+export interface PageFindDisplay {
+  generation: number;
+  highlights?: ReadonlyMap<string, ReadonlySet<string>>;
+  current?: PageOccurrence;
+}
 
 /** 当前页查找和预览全部在线程内执行；正则模式需要明确点击，编辑模式不会自动重跑恶意表达式。 */
-export function PageFindPanel({ rows, keys, info, generation, disabled, replaceDisabled = false, focusRequest, onJump, onApply, onFilter, getSelectionToken }: { rows: DraftRow[]; keys: string[]; info: TableInfo | null; generation: number; disabled: boolean; replaceDisabled?: boolean; focusRequest: { target: 'query' | 'replacement'; generation: number }; onJump(rowId: string, key: string, focusGrid?: boolean): void; onApply(plan: PageReplacement, only?: PageOccurrence, selectionToken?: unknown): DraftRow[] | void; onFilter(): void; getSelectionToken?(): unknown }) {
+export function PageFindPanel({ rows, keys, info, generation, disabled, replaceDisabled = false, focusRequest, onJump, onApply, onFilter, getSelectionToken, onDisplay }: { rows: DraftRow[]; keys: string[]; info: TableInfo | null; generation: number; disabled: boolean; replaceDisabled?: boolean; focusRequest: { target: 'query' | 'replacement'; generation: number }; onJump(rowId: string, key: string, focusGrid?: boolean): void; onApply(plan: PageReplacement, only?: PageOccurrence, selectionToken?: unknown): DraftRow[] | void; onFilter(): void; getSelectionToken?(): unknown; onDisplay?(display: PageFindDisplay | undefined): void }) {
   const [options, setOptions] = useState<PageFindOptions>({ kind: 'text', query: '', caseSensitive: false, wholeCell: false });
+  const [highlightAll, setHighlightAll] = useState(false);
   const [replacement, setReplacement] = useState(''); const [position, setPosition] = useState(-1); const [preview, setPreview] = useState<PageReplacement | null>(null); const [error, setError] = useState(''); const applyLock = useRef(false);
   const [working, setWorking] = useState(false), [composing, setComposing] = useState(false);
   const workingRef = useRef(false), composingRef = useRef(false), singleLock = useRef(false), positionRef = useRef(-1);
@@ -32,6 +42,11 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   useEffect(() => { const target = focusRequest.target === 'replacement' ? replacementInput.current : queryInput.current; (target && !target.disabled ? target : kindSelect.current)?.focus(); }, [focusRequest]);
   const occurrences = useMemo(() => pageOccurrences(found), [foundState, snapshot]);
   const current = occurrences[position];
+  const highlights = useMemo(() => highlightAll && foundState.snapshot === snapshot && foundState.matches.length
+    ? tableFindHighlights(foundState.matches, match => match.key) : undefined, [highlightAll, foundState, snapshot]);
+  useLayoutEffect(() => {
+    onDisplay?.(!disabled && !composing && (highlights || current) ? { generation, highlights, current } : undefined);
+  }, [onDisplay, disabled, composing, generation, highlights, current]);
   const currentRow = current ? rows.findIndex(row => row.id === current.rowId) : -1;
   const currentValue = currentRow >= 0 ? ownCell(rows[currentRow].data, current.key) : undefined;
   const canReplace = !replaceDisabled && !!info && options.kind === 'text' && found.some(match => pageReplaceWritable(info, match.key) && typeof ownCell(rows.find(row => row.id === match.rowId)!.data, match.key) === 'string');
@@ -112,6 +127,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     <Field label={text.query}><input ref={queryInput} disabled={disabled || options.kind !== 'text'} maxLength={512} value={options.query} onKeyDown={event => inputKey(event, 'query')} onChange={event => changeOptions({ ...options, query: event.target.value })}/></Field>
     <Field label={text.column}><select disabled={disabled} value={options.column ?? ''} onChange={event => changeOptions({ ...options, column: event.target.value || undefined })}><option value="">{text.all}</option>{keys.map(key => <option key={key}>{key}</option>)}</select></Field>
     <label><input type="checkbox" disabled={disabled || options.kind !== 'text'} checked={options.caseSensitive} onChange={event => changeOptions({ ...options, caseSensitive: event.target.checked })}/>{text.case}</label><label><input type="checkbox" disabled={disabled || options.kind !== 'text'} checked={options.wholeCell} onChange={event => changeOptions({ ...options, wholeCell: event.target.checked })}/>{text.whole}</label><label><input type="checkbox" disabled={disabled || options.kind !== 'text'} checked={!!options.regex} onChange={event => changeOptions({ ...options, regex: event.target.checked })}/>{text.regex}</label>
+    <label><input type="checkbox" disabled={disabled} checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{findText.highlightAll}</label>
   </div><div className="page-find-actions"><span role="status">{working ? text.searching : formatText(text.matches, found.length, position < 0 ? 0 : position + 1, occurrences.length)}</span><button disabled={disabled || working || (options.kind === 'text' && !options.query)} onClick={() => void run('find')}>{text.search}</button>{working && <button onClick={() => void cancel()}>{text.cancelSearch}</button>}<button disabled={disabled || composing || !occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button disabled={disabled || composing || !occurrences.length} onClick={() => jump(1)}>{text.next}</button><span className="grow"/><button disabled={disabled} onClick={onFilter}>{text.filter}</button></div>
     {current && <div className="page-find-current" aria-live="polite"><span>{formatText(text.location, currentRow + 1, current.key, current.occurrence, current.range ? current.range.start + 1 : 1)}</span>{typeof currentValue === 'string' && current.range && <pre>{currentValue.slice(Math.max(0, current.range.start - 60), current.range.start)}<mark>{current.range.start === current.range.end ? text.zeroWidth : currentValue.slice(current.range.start, Math.min(current.range.end, current.range.start + 160))}</mark>{currentValue.slice(current.range.end, current.range.end + 60)}</pre>}</div>}
     <div className="page-find-actions"><Field label={text.replacement}><input ref={replacementInput} disabled={disabled || options.kind !== 'text'} maxLength={4096} value={replacement} onKeyDown={event => inputKey(event, 'replacement')} onChange={event => changeReplacement(event.target.value)}/></Field><label><input type="checkbox" disabled={disabled || options.kind !== 'text' || !options.regex} checked={!!options.captureReplacement} onChange={event => changeOptions({ ...options, captureReplacement: event.target.checked })}/>{text.captureReplacement}</label><button title={text.replaceOneHint} disabled={disabled || working || composing || !currentWritable} onKeyDown={event => { if ((composingRef.current || tableCellKeyIsComposing(event.nativeEvent)) && ['Enter', ' '].includes(event.key)) event.preventDefault(); }} onClick={replaceCurrent}>{text.replaceOne}</button><button disabled={disabled || working || composing || !canReplace} onClick={() => void run('preview')}>{text.preview}</button></div>{current && !currentWritable && <p className="muted small">{text.currentReadonly}</p>}<ErrorBox message={error}/>

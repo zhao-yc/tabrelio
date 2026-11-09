@@ -1,30 +1,36 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import { sqliteFindMessages, type SqliteFindOptions, type SqliteFindOccurrence } from '../sqliteTableFind';
 import { SqliteTableFindWorkerClient, sqliteTextReplacementPlanPreview, type SqliteFindReadyResult, type SqliteTextReplacementPlan } from '../sqliteTableFindWorkerClient';
 import { sqliteTableFindZh as text } from '../locales/sqliteTableFind.zh-CN';
 import { useTableFindKeys } from '../gridFindKeys';
+import { tableFindHighlights } from '../tableFindHighlights';
+import { queryResultFindZh as findText } from '../locales/queryResultFind.zh-CN';
 import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 import '../sqliteTableFind.css';
+import '../queryResultFind.css';
 
 export interface SqliteTableFindFocusRequest { id: number; mode: 'find' | 'replace'; }
-export interface SqliteTableFindSeed { options: SqliteFindOptions; replacement: string; mode: 'find' | 'replace'; }
+export interface SqliteTableFindSeed { options: SqliteFindOptions; replacement: string; mode: 'find' | 'replace'; highlightAll?: boolean; }
+export interface SqliteTableFindHighlights { owner: string; marks: ReadonlyMap<string, ReadonlySet<number>>; }
 interface Props {
   page: SqliteTablePage; rows: readonly SqliteDraftRow[]; focusRequest: SqliteTableFindFocusRequest;
   seed?: SqliteTableFindSeed; previewOwner?: string; isCurrent(): boolean;
   onJump(rowId: string, column: number, focusGrid?: boolean, range?: { start: number; end: number }): void;
   onStage(plan: SqliteTextReplacementPlan, continuation?: SqliteTableFindSeed): boolean | void;
   onPreviewChange?(open: boolean): void; onClearHit?(): void; onClose(): void;
+  onHighlights?(highlights: SqliteTableFindHighlights | undefined): void;
 }
 type Preview = { plan: SqliteTextReplacementPlan; patches: ReturnType<typeof sqliteTextReplacementPlanPreview> };
 interface Draft extends SqliteTableFindSeed { epoch: object; found?: SqliteFindReadyResult; position: number; preview?: Preview; error: string; }
 const defaultOptions: SqliteFindOptions = { kind: 'text', query: '', caseSensitive: false, wholeCell: false };
 /** 非模态当前页查找；所有正则与捕获仅交给真实有界Worker，替换只产生可核对的本地opaque计划。 */
-export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose }: Props) {
+export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onHighlights }: Props) {
   const owner = useRef({ page, rows, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose }).current;
   const invalid = useRef(false), propsInvalid = useRef(false), closed = useRef(false), mounted = useRef(false), consumed = useRef(new WeakSet<SqliteTextReplacementPlan>()), staging = useRef(false);
   const [draft, setDraft] = useState<Draft>(() => ({ options: { ...(seed?.options ?? defaultOptions) }, replacement: seed?.replacement ?? '', mode: seed?.mode ?? focusRequest.mode, epoch: {}, position: -1, error: '' })), live = useRef(draft); live.current = draft;
+  const [highlightAll, setHighlightAll] = useState(seed?.highlightAll === true);
   const client = useRef<SqliteTableFindWorkerClient | undefined>(undefined), serial = useRef(0), timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), composing = useRef(false);
   const [working, setWorking] = useState<'running' | 'stopping' | undefined>(), work = useRef<typeof working>(undefined), renderTicket = {}, committed = useRef<object | undefined>(undefined);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null), kindInput = useRef<HTMLSelectElement>(null);
@@ -107,7 +113,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
     try {
       sqliteTextReplacementPlanPreview(chosen.plan, owner.page, owner.rows);
       if (!sourceCurrent()) throw Error(text.stale);
-      const continuation: SqliteTableFindSeed = { options: { ...draft.options }, replacement: draft.replacement, mode: draft.mode };
+      const continuation: SqliteTableFindSeed = { options: { ...draft.options }, replacement: draft.replacement, mode: draft.mode, highlightAll };
       if (owner.onStage(chosen.plan, continuation) === false) throw Error(text.stale);
       // 父成功可同步卸载旧panel并创建全新source；不可再核旧rows或误清新窗口。
       if (mounted.current) previewClosed();
@@ -129,6 +135,11 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
   }
   useLayoutEffect(() => { mounted.current = true; committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; mounted.current = false; }; });
   const valid = sourceCurrent(), readonly = owner.page.edit?.kind !== 'editable', found = draft.found, current = found?.occurrences[draft.position], currentRow = current ? owner.rows.findIndex(row => row.id === current.rowId) : -1, currentValue = currentRow >= 0 && current ? owner.rows[currentRow].values[current.column] : undefined;
+  const marks = useMemo(() => highlightAll && found?.matches.length
+    ? tableFindHighlights(found.matches, match => match.column) : undefined, [highlightAll, found]);
+  useLayoutEffect(() => {
+    onHighlights?.(valid && !working && marks && previewOwner ? { owner: previewOwner, marks } : undefined);
+  }, [onHighlights, valid, working, marks, previewOwner]);
   useEffect(() => { if (!sourceCurrent()) { cancelWork(); } }, [valid]);
   useEffect(() => { if (!mounted.current || !sourceCurrent() || live.current.preview) return; pendingFocus.current = focusRequest; if (live.current.mode !== focusRequest.mode) replace({ ...live.current, mode: focusRequest.mode, epoch: {} }); }, [focusRequest.id, focusRequest.mode]);
   useEffect(() => { const request = pendingFocus.current; if (!request || !sourceCurrent() || live.current.preview || draft.mode !== request.mode) return; pendingFocus.current = undefined; const input = request.mode === 'replace' ? replacementInput.current : queryInput.current; (input && !input.disabled ? input : kindInput.current)?.focus(); }, [focusRequest.id, focusRequest.mode, draft.mode]);
@@ -140,6 +151,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
       <Field label={text.query}><input ref={queryInput} aria-label={text.query} maxLength={512} value={options.query} disabled={unavailable || options.kind !== 'text'} onChange={event => changeOptions({ query: event.target.value }, epoch)} onKeyDown={event => key(event, 'query')}/></Field>
       <Field label={text.column}><select aria-label={text.column} disabled={unavailable} value={options.column === undefined ? '' : String(options.column)} onChange={event => { if (!local()) return; const value = event.target.value, column = value === '' ? undefined : Number(value); if (column === undefined || Number.isInteger(column) && column >= 0 && column < owner.page.columns.length) changeOptions({ column }, undefined, true); }}><option value="">{text.allColumns}</option>{owner.page.columns.map((column, index) => <option key={index} value={String(index)}>{column.name}</option>)}</select></Field>
       {(['caseSensitive', 'wholeCell', 'regex'] as const).map(name => <label key={name}><input type="checkbox" aria-label={name === 'caseSensitive' ? text.sensitive : name === 'wholeCell' ? text.whole : text.regex} disabled={unavailable || options.kind !== 'text'} checked={!!options[name]} onChange={event => { if (local()) changeOptions({ [name]: event.target.checked }, undefined, true); }}/>{name === 'caseSensitive' ? text.sensitive : name === 'wholeCell' ? text.whole : text.regex}</label>)}
+      <label><input type="checkbox" checked={highlightAll} disabled={unavailable} onChange={event => { if (local()) setHighlightAll(event.target.checked); }}/>{findText.highlightAll}</label>
       <button type="button" aria-pressed={draft.mode === 'replace'} disabled={unavailable} onClick={() => { if (local() && inputCurrent()) replace({ ...draft, mode: draft.mode === 'replace' ? 'find' : 'replace', epoch: {} }); }}>{text.replaceMode}</button>
     </div><div className="sqlite-table-find-actions"><span role="status">{working === 'running' ? text.searching : working === 'stopping' ? text.stopping : text.count(found?.matches.length ?? 0, found?.occurrences.length ?? 0, draft.position)}</span>
       <button type="button" disabled={unavailable || !!working || options.kind === 'text' && !options.query} onClick={() => { if (local()) void run('find'); }}>{text.search}</button>{working && <button type="button" disabled={working === 'stopping'} onClick={() => { if (local()) { previewClosed(); cancelWork(text.stopped, true); } }}>{text.stop}</button>}
