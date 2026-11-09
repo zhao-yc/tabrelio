@@ -151,7 +151,11 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const selectedFilterErrorRef=useRef('');
   const activeCopyCell = headerCell?.scope === scope ? headerCell.cell : undefined;
   const activeJumpColumn = useRef<{ scope: typeof scope; key: string }>(undefined);
-  const rowJumpIsCurrent = () => actionCurrent() && rowJumpCurrent?.() !== false && !document.querySelector(appModalSelector);
+  const rowJumpIsCurrent = () => {
+    if (!actionCurrent() || rowJumpCurrent?.() === false) return false;
+    const element = gridRef.current?.element;
+    return ownDialog ? !!element && gridDialogCurrent(element, ownDialog) : !document.querySelector(appModalSelector);
+  };
   const columnJumpAvailable = !!isCurrent && !!selectionScope || !!rowJumpCurrent && tableCopy?.enabled === true;
   const columnJumpIsCurrent = () => columnJumpAvailable && rowJumpIsCurrent();
   /** 定位当前展示数组中的行，保留活动可见列，且不修改勾选集。 */
@@ -160,10 +164,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     if (!handle?.element?.isConnected || !rowJumpIsCurrent() || !rows[rowIdx] || !columns.length) return false;
     const key = activeJumpColumn.current?.scope === scope ? activeJumpColumn.current.key : undefined;
     const column = columns.findIndex(item => item.key === key);
-    const position = { rowIdx, idx: Math.max(0, column) + (onActiveRowChange ? 0 : 1) };
-    handle.scrollToCell(position);
-    handle.setActivePosition(position, { enableEditor: false, shouldFocus: true });
-    return true;
+    return focusGridColumn(handle, Math.max(0, column) + (onActiveRowChange ? 0 : 1), rowIdx);
   }
   /** 定位显示列时沿活动格的原行身份，不修改勾选。 */
   function jumpToGridColumn(index: number): boolean {
@@ -634,7 +635,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const rowSelectionKey = (row: DataRow, index: number) => skipRowInInversion?.(row) ? undefined : index;
   const rowSelectionCurrent = () => tableCopy?.enabled !== false && selectedRowsRef.current === selectionBefore && rowJumpIsCurrent();
   const jump = rowJump ? <>
-    <GridRowJump grid={gridRef} scope={scope} count={rows.length}
+    <GridRowJump grid={gridRef} scope={scope} count={rows.length} dialogShortcut={!!ownDialog}
       disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/>
     <GridColumnJump scope={scope} columns={columns} disabled={!columnJumpAvailable}
       isCurrent={columnJumpIsCurrent} onJump={jumpToGridColumn}/>

@@ -25,9 +25,9 @@ export function gridRowIndex(value: string, count: number): number | undefined {
 }
 
 /** 行号草稿跟随一份已载入视图，切换、排序或禁用后丢弃旧输入。 */
-export function GridRowJump({ scope, count, disabled, grid, isCurrent, onJump }: {
+export function GridRowJump({ scope, count, disabled, grid, isCurrent, onJump, dialogShortcut = false }: {
   scope: object | number; count: number; disabled?: boolean; grid: RefObject<DataGridHandle | null>;
-  isCurrent?(): boolean; onJump(index: number): boolean;
+  isCurrent?(): boolean; onJump(index: number): boolean; dialogShortcut?: boolean;
 }) {
   const [draft, setDraft] = useState<{ scope: object | number; value: string }>();
   const button = useRef<HTMLButtonElement>(null), input = useRef<HTMLInputElement>(null), restore = useRef(false);
@@ -46,8 +46,17 @@ export function GridRowJump({ scope, count, disabled, grid, isCurrent, onJump }:
       else setDraft({ scope, value: '' });
       return true;
     };
+    /** 应用菜单在模态中停用，离线网格在自身焦点内接管 Ctrl+G。 */
+    const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat ||
+          !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'g' || !open()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    if (dialogShortcut) element.addEventListener('keydown', keydown);
     focusedJump.set(element, open); focusedJump.set(control, open);
     return () => {
+      if (dialogShortcut) element.removeEventListener('keydown', keydown);
       if (focusedJump.get(element) === open) focusedJump.delete(element);
       if (focusedJump.get(control) === open) focusedJump.delete(control);
     };

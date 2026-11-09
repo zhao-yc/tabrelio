@@ -28,6 +28,8 @@ function register(): void {
   const { queryRowDetailsZh: detailText } = require('../../src/renderer/locales/queryRowDetails.zh-CN') as typeof import('../../src/renderer/locales/queryRowDetails.zh-CN');
   const { queryReadonlyRecordZh: recordText } = require('../../src/renderer/locales/queryReadonlyRecord.zh-CN') as typeof import('../../src/renderer/locales/queryReadonlyRecord.zh-CN');
   const { queryResultColumnsZh: columnText } = require('../../src/renderer/locales/queryResultColumns.zh-CN') as typeof import('../../src/renderer/locales/queryResultColumns.zh-CN');
+  const { gridRowJumpZh: rowJumpText } = require('../../src/renderer/locales/gridRowJump.zh-CN') as typeof import('../../src/renderer/locales/gridRowJump.zh-CN');
+  const { gridColumnJumpZh: columnJumpText } = require('../../src/renderer/locales/gridColumnJump.zh-CN') as typeof import('../../src/renderer/locales/gridColumnJump.zh-CN');
   const { queryResultComparisonZh: comparisonText } = require('../../src/renderer/locales/queryResultComparison.zh-CN') as typeof import('../../src/renderer/locales/queryResultComparison.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
@@ -210,6 +212,37 @@ function register(): void {
       await step(() => expect(detailButton).toBeFocused());
 
       const checked = grid.getByRole('row').filter({ hasText: '另一行' }).getByRole('checkbox');
+      const rowJump = viewer.getByRole('textbox', { name: rowJumpText.row, exact: true });
+      const columnJump = viewer.getByRole('textbox', { name: columnJumpText.search, exact: true });
+      const cellOnFirst = grid.getByRole('gridcell', { name: '不同内容', exact: true });
+      await step(() => checked.check());
+      await step(() => grid.getByRole('gridcell', { name: '构造键安全', exact: true }).click());
+      await step(() => page.keyboard.press('Control+g'));
+      await step(() => expect(rowJump).toBeFocused());
+      await step(() => rowJump.fill('3'));
+      await step(() => expect(viewer.getByRole('button', { name: rowJumpText.go, exact: true })).toBeDisabled());
+      await step(() => rowJump.press('Escape'));
+      await step(() => expect(rowJump).toBeHidden());
+      await step(() => expect(viewer).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: rowJumpText.open, exact: true }).click());
+      await step(() => rowJump.fill('1'));
+      await step(() => rowJump.press('Enter'));
+      await step(() => expect(cellOnFirst).toBeFocused());
+      await step(() => viewer.getByRole('button', { name: columnJumpText.open, exact: true }).click());
+      await step(() => columnJump.fill('#10'));
+      await step(() => columnJump.press('Enter'));
+      await step(() => expect(grid.getByRole('row').nth(1).locator('[role="gridcell"][aria-colindex="11"]')).toBeFocused());
+      await step(() => viewer.getByRole('button', { name: columnJumpText.open, exact: true }).click());
+      await step(() => columnJump.fill('重复列'));
+      const columnMatches = viewer.getByRole('combobox', { name: columnJumpText.matches, exact: true });
+      await step(() => expect(columnMatches.locator('option')).toHaveText([columnJumpText.choose, '#1 · 重复列', '#2 · 重复列']));
+      if (mode === 'save') await step(async () => info.attach('离线快照跳到列', { body: await page.screenshot(), contentType: 'image/png' }));
+      await step(() => columnMatches.selectOption('1'));
+      await step(() => columnJump.press('Enter'));
+      await step(() => expect(cellOnFirst).toBeFocused());
+      await step(() => expect(checked).toBeChecked());
+      await step(() => checked.uncheck());
+
       const includeChecked = viewer.getByRole('button', { name: selectedFilterText.open, exact: true });
       const excludeChecked = viewer.getByRole('button', { name: selectedFilterText.exclude, exact: true });
       const checkedFilter = page.getByRole('dialog', { name: filterText.title, exact: true });
@@ -402,6 +435,11 @@ function register(): void {
         await step(() => columns.getByRole('button', { name: columnText.apply, exact: true }).click());
         await step(() => expect(viewer.getByText(text.visibleColumns(9, 10), { exact: true })).toBeVisible());
         await step(() => expect(big).toHaveCount(0));
+        await step(() => viewer.getByRole('button', { name: columnJumpText.open, exact: true }).click());
+        await step(() => columnJump.fill('BIGINT'));
+        await step(() => expect(columnMatches.locator('option')).toHaveText([columnJumpText.none]));
+        await step(() => columnJump.press('Escape'));
+        await step(() => expect(columnJump).toBeHidden());
         await step(() => expect(match).toHaveAttribute('aria-colindex', '2'));
         await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
         await step(() => expect(viewer.getByRole('button', { name: sortText.clear, exact: true })).toBeVisible());

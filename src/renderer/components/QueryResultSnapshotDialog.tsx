@@ -134,9 +134,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   function escape(event: KeyboardEvent): void {
     if (!topmost() || escapeTargetsQueryResultFind(event, host.current)) return;
-    // 菜单和选区先处理 Escape，避免从捕获阶段关闭整个快照。
+    // 菜单、定位表单和选区先处理 Escape，避免从捕获阶段关闭整个快照。
     if (event.target instanceof Element && ownDialog()?.contains(event.target) &&
-        event.target.closest('[data-grid-cell-menu], [role="gridcell"].grid-cell-in-range')) return;
+        event.target.closest('[data-grid-cell-menu], .grid-row-jump, [role="gridcell"].grid-cell-in-range')) return;
     event.stopPropagation();
     close();
   }
@@ -454,7 +454,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       </div>}
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
-        <ResultsGrid columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
+        <ResultsGrid rowJump columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
           frozenKeys={frozenKeys} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
           onColumnWidthsChange={binding ? resizeColumns : undefined}
           onSelectionChange={binding ? selectRows : undefined}
