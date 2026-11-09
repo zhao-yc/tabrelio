@@ -216,7 +216,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
           <label className="check"><input type="checkbox" checked={whole} disabled={!enabled || locked} onChange={event => {
             setWhole(event.target.checked); if (event.target.checked) setEdge(undefined);
           }}/>{text.whole}</label>
-          {onStageFilter && <TableFindEdgeSelect edge={edge} disabled={!enabled || locked} onChange={next => { setEdge(next); if (next) setWhole(false); }}/>}
+          <TableFindEdgeSelect edge={edge} disabled={!enabled || locked} onChange={next => { setEdge(next); if (next) setWhole(false); }}/>
         </>}
         {mode === 'text' && <label className="check"><input type="checkbox" checked={regex} disabled={!enabled || locked}
           onChange={event => { setRegex(event.target.checked); setCapture(false); setError(''); }}/>{text.regex}</label>}

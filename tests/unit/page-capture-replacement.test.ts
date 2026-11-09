@@ -69,9 +69,9 @@ describe('Worker内显式捕获替换契约', () => {
 
 /** 在完整生产面板的既有入口配置捕获模式；不另建查找/替换入口或伪造业务结果。 */
 async function configure(h: Awaited<ReturnType<typeof pageFindPanelHarness>>, query: string, replacement: string) {
-  h.view.nodes('input')[3].props.onChange({ target: { checked: true } }); h.view.render();
-  h.view.nodes('input')[5].props.onChange({ target: { checked: true } }); h.view.render();
-  h.change(0, query); h.change(4, replacement); h.click(text.search); await h.flush(); h.workers.at(-1)!.release(); await h.flush(); h.enter(0); await h.flush();
+  h.checkbox(text.regex).props.onChange({ target: { checked: true } }); h.view.render();
+  h.checkbox(text.captureReplacement).props.onChange({ target: { checked: true } }); h.view.render();
+  h.change(text.query, query); h.change(text.replacement, replacement); h.click(text.search); await h.flush(); h.workers.at(-1)!.release(); await h.flush(); h.enter(text.query); await h.flush();
 }
 describe('既有面板捕获模式事件接线', () => {
   it.each([
@@ -79,7 +79,7 @@ describe('既有面板捕获模式事件接线', () => {
     ['aa a', '(a)(b)?', '$2', 'a a', 1, 1],
   ] as const)('单处写入%s后按实际展开长度前进', async (source, query, replacement, expected, occurrence, offset) => {
     const h = await pageFindPanelHarness(); try {
-      h.props.rows[0].data.note = source; await configure(h, query, replacement); h.enter(4); await h.flush(); h.workers.at(-1)!.release(); await h.flush();
+      h.props.rows[0].data.note = source; await configure(h, query, replacement); h.enter(text.replacement); await h.flush(); h.workers.at(-1)!.release(); await h.flush();
       expect(h.applied).toHaveLength(1); expect(h.props.rows[0].data.note).toBe(expected);
       await h.searchTimer(); h.workers.at(-1)!.release(); await h.flush();
       expect(h.view.nodes('span').some(node => node.props.children === formatText(text.location, 1, 'note', occurrence, offset))).toBe(true);
@@ -87,12 +87,12 @@ describe('既有面板捕获模式事件接线', () => {
   });
   it('整批命名捕获只在确认后形成草稿，关闭正则会同步关闭捕获模式', async () => {
     const h = await pageFindPanelHarness(); try { await configure(h, '(?<词>old)', '[$<词>]'); h.click(text.preview); await h.flush(); h.workers.at(-1)!.release(); await h.flush(); expect(h.applied).toHaveLength(0); h.click(text.apply); await h.flush(); expect(h.props.rows[0].data.note).toBe('[old] [old]'); expect(h.applied).toHaveLength(1);
-      h.view.nodes('input')[3].props.onChange({ target: { checked: false } }); h.view.render(); expect(h.view.nodes('input')[5].props.checked).toBe(false); expect(h.view.nodes('input')[5].props.disabled).toBe(true);
+      h.checkbox(text.regex).props.onChange({ target: { checked: false } }); h.view.render(); expect(h.checkbox(text.captureReplacement).props.checked).toBe(false); expect(h.checkbox(text.captureReplacement).props.disabled).toBe(true);
     } finally { await h.dispose(); }
   });
   it('捕获开关ABA撤销已经完成计算但等待终止确认的旧命令', async () => {
-    const h = await pageFindPanelHarness(); try { await configure(h, '(old)', '<$1>'); h.enter(4); await h.flush(); const worker = h.workers.at(-1)!; worker.holdTermination(); worker.release(); await h.flush();
-      h.view.nodes('input')[5].props.onChange({ target: { checked: false } }); h.view.render(); h.view.nodes('input')[5].props.onChange({ target: { checked: true } }); h.view.render(); worker.acknowledge(); await h.flush(); expect(h.applied).toHaveLength(0); expect(h.props.rows[0].data.note).toBe('old old');
+    const h = await pageFindPanelHarness(); try { await configure(h, '(old)', '<$1>'); h.enter(text.replacement); await h.flush(); const worker = h.workers.at(-1)!; worker.holdTermination(); worker.release(); await h.flush();
+      h.checkbox(text.captureReplacement).props.onChange({ target: { checked: false } }); h.view.render(); h.checkbox(text.captureReplacement).props.onChange({ target: { checked: true } }); h.view.render(); worker.acknowledge(); await h.flush(); expect(h.applied).toHaveLength(0); expect(h.props.rows[0].data.note).toBe('old old');
     } finally { await h.dispose(); }
   });
 });

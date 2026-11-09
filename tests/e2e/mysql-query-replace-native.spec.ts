@@ -8,6 +8,7 @@ import { postgresTableFindZh as find } from '../../src/renderer/locales/postgres
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { tableFindFilterZh } from '../../src/renderer/locales/tableFindFilter.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_MYSQL_QUERY_RELATION_NATIVE !== '1', '仅使用本轮隔离网络实库');
@@ -103,9 +104,10 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询文�
     await expect(panel.getByRole('status')).toContainText('共 1 处');
     await expect(panel.getByRole('button', { name: find.all, exact: true })).toBeDisabled();
     await column.selectOption('');
+    await panel.getByLabel(tableFindFilterZh.edge, { exact: true }).selectOption('end');
     await panel.getByRole('button', { name: find.all, exact: true }).click();
     await expect(review).toContainText(find.reviewCount(3, 2));
-    await expect(review).toContainText('甲新-甲新');
+    await expect(review).toContainText('旧甲-甲新');
     await stage();
     await expect(preview.locator('tbody tr td:nth-child(2)')).toHaveText(['note', 'tag', 'note']);
     expect(await read()).toEqual(original);
@@ -113,14 +115,16 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询文�
     await confirm.check();
     await apply.click();
     await expect(preview).toBeHidden();
-    const updated = [{ ...original[0], note: '甲新-甲新', tag: '甲新', auto_text: '甲新-甲新生成' },
+    const updated = [{ ...original[0], note: '旧甲-甲新', tag: '甲新', auto_text: '旧甲-甲新生成' },
       { ...original[1], note: '乙新', auto_text: '乙新生成' }, original[2]];
     expect(await read()).toEqual(updated);
     expect(await linked()).toEqual([{ note: '旧甲' }]);
 
     await execute();
-    await open('([甲乙])(新)');
-    await panel.getByLabel(find.replacement, { exact: true }).fill('$1改');
+    await open('新');
+    await panel.getByRole('checkbox', { name: find.regex, exact: true }).uncheck();
+    await panel.getByLabel(tableFindFilterZh.edge, { exact: true }).selectOption('end');
+    await panel.getByLabel(find.replacement, { exact: true }).fill('改');
     await panel.getByRole('button', { name: find.all, exact: true }).click();
     await stage();
     await expect(preview.locator('tbody')).toContainText('乙改');

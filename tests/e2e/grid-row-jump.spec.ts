@@ -832,9 +832,11 @@ test('SQLite JOIN 查询替换原生文本，去重投影并回滚并发冲突',
     await expect(review).toContainText(replaceText.reviewCount(1, 1));
     await review.getByRole('button', { name: replaceText.cancel, exact: true }).click();
     await column.selectOption('');
+    await panel.getByLabel(tableFindFilterZh.edge, { exact: true }).selectOption('end');
     await all.click();
     await expect(review).toContainText(replaceText.reviewCount(3, 2));
     expect(rows()).toEqual(before);
+    await info.attach('SQLite查询结尾替换预览', { body: await page.screenshot(), contentType: 'image/png' });
     await stage();
     await expect(sql).toContainText('UPDATE "main"."replace_subject"');
     await expect(preview.getByText(originsText.replaceRows([0, 1]), { exact: true })).toBeVisible();
@@ -852,7 +854,9 @@ test('SQLite JOIN 查询替换原生文本，去重投影并回滚并发冲突',
     expect(links()).toEqual(beforeLinks);
 
     await execute();
-    await open('(12)(新)', '$1变');
+    await open('新', '变');
+    await panel.getByRole('checkbox', { name: replaceText.regex, exact: true }).uncheck();
+    await panel.getByLabel(tableFindFilterZh.edge, { exact: true }).selectOption('end');
     await all.click();
     await stage();
     await expect(sql).toContainText('12变');

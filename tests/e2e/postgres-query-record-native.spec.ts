@@ -1336,9 +1336,10 @@ test('PostgreSQL 查询文本替换按原字段去重，保留计算列和查询
     await expect(review).toContainText('甲新-旧甲');
     await review.getByRole('button', { name: findText.cancel, exact: true }).click();
     expect(await read()).toEqual(before);
+    await panel.getByLabel(tableFindFilterZh.edge, { exact: true }).selectOption('start');
     await panel.getByRole('button', { name: findText.all, exact: true }).click();
     await expect(review).toContainText(findText.reviewCount(3, 2));
-    await expect(review).toContainText('甲新-甲新');
+    await expect(review).toContainText('甲新-旧甲');
     await review.getByRole('button', { name: tableText.stage, exact: true }).click();
     const preview = page.getByRole('dialog', { name: text.replaceTitle, exact: true });
     await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."query_replace" SET "note" = $1, "tag" = $2');
@@ -1351,7 +1352,7 @@ test('PostgreSQL 查询文本替换按原字段去重，保留计算列和查询
     await apply.click();
     await expect(preview).toBeHidden();
     expect(await read()).toEqual([
-      { id: '1', note: '甲新-甲新', tag: '甲新', auto_text: '甲新-甲新标记' },
+      { id: '1', note: '甲新-旧甲', tag: '甲新', auto_text: '甲新-旧甲标记' },
       { id: '2', note: '乙新', tag: '保留', auto_text: '乙新标记' },
       before[2],
     ]);

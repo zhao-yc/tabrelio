@@ -4,16 +4,17 @@ import { fileURLToPath } from 'node:url';
 import type { PageFindRequest, PageFindResult } from '../../src/renderer/pageFindWorkerClient';
 import type { DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo } from '../../src/shared/contracts';
+import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 
 type Node = { type: unknown; props: Record<string, any> };
 let compiled: Promise<string> | undefined;
 /** 编译完整当前生产面板；只替换React调度、展示及Worker传输端口，不摘取或复制业务处理器。 */
 function bundle() {
-  return compiled ??= build({ stdin: { contents: "export {PageFindPanel} from './src/renderer/components/PageFindPanel';export * from './src/renderer/pageFindReplace';", resolveDir: fileURLToPath(new URL('../..', import.meta.url)), loader: 'tsx' }, bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', define: { 'import.meta.url': '"file:///PageFindPanel.tsx"' }, plugins: [{ name: '页内面板纯状态端口', setup(build) {
+  return compiled ??= build({ stdin: { contents: "export {PageFindPanel} from './src/renderer/components/PageFindPanel';export * from './src/renderer/pageFindReplace';", resolveDir: fileURLToPath(new URL('../..', import.meta.url)), loader: 'tsx' }, bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.url': '"file:///PageFindPanel.tsx"' }, plugins: [{ name: '页内面板纯状态端口', setup(build) {
     build.onResolve({ filter: /^react$/ }, () => ({ path: 'hooks', namespace: 'panel' }));
     build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx', namespace: 'panel' }));
     build.onResolve({ filter: /^\.\/ui$/ }, args => args.importer.endsWith('PageFindPanel.tsx') ? { path: 'ui', namespace: 'panel' } : undefined);
-    build.onLoad({ filter: /.*/, namespace: 'panel' }, args => ({ contents: args.path === 'hooks' ? 'export const useState=(...v)=>globalThis.__hooks.state(...v),useRef=(...v)=>globalThis.__hooks.ref(...v),useMemo=(...v)=>globalThis.__hooks.memo(...v),useEffect=(...v)=>globalThis.__hooks.effect(...v);' : args.path === 'jsx' ? 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";' : 'export const Field="Field",Modal="Modal",ErrorBox="ErrorBox",UsageHelp="UsageHelp";' }));
+    build.onLoad({ filter: /.*/, namespace: 'panel' }, args => ({ contents: args.path === 'hooks' ? 'export const useState=(...v)=>globalThis.__hooks.state(...v),useRef=(...v)=>globalThis.__hooks.ref(...v),useMemo=(...v)=>globalThis.__hooks.memo(...v),useEffect=(...v)=>globalThis.__hooks.effect(...v),useLayoutEffect=useEffect;' : args.path === 'jsx' ? 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";' : 'export const Field="Field",Modal="Modal",ErrorBox="ErrorBox",UsageHelp="UsageHelp";' }));
   } }] }).then(result => result.outputFiles[0].text);
 }
 
@@ -52,10 +53,20 @@ export async function pageFindPanelHarness() {
   /** 触发实际debounce回调，启动仍走生产WorkerClient握手。 */
   async function searchTimer() { for (const [id, value] of [...timers]) if (value.delay === 120) { timers.delete(id); value.callback(); } await flush(); }
   /** 调用实际JSX注册的输入/组合/按钮处理器，验证事件接线而不复制业务逻辑。 */
-  function change(index: number, value: string) { view.nodes('input')[index].props.onChange({ target: { value } }); view.render(); }
-  function enter(index: number) { view.nodes('input')[index].props.onKeyDown({ key: 'Enter', nativeEvent: {}, preventDefault() {}, stopPropagation() {} }); view.render(); }
+  function field(label: string): Node {
+    const node = view.nodes('Field').find(node => node.props.label === label)?.props.children;
+    if (!node || node.type !== 'input') throw Error('缺少文本输入：' + label);
+    return node;
+  }
+  function checkbox(label: string): Node {
+    const node = view.nodes('label').find(node => Array.isArray(node.props.children) && node.props.children.includes(label))?.props.children[0];
+    if (!node || node.props.type !== 'checkbox') throw Error('缺少复选框：' + label);
+    return node;
+  }
+  function change(label: string, value: string) { field(label).props.onChange({ target: { value } }); view.render(); }
+  function enter(label: string) { field(label).props.onKeyDown({ key: 'Enter', nativeEvent: {}, preventDefault() {}, stopPropagation() {} }); view.render(); }
   function click(label: string) { const node = view.nodes('button').find(node => node.props.children === label); if (!node || node.props.disabled) throw Error('实际按钮不可用：' + label); node.props.onClick(); view.render(); }
-  async function initialize() { change(0, 'old'); await searchTimer(); workers.at(-1)!.release(); await flush(); enter(0); change(4, 'NEW'); await flush(); }
+  async function initialize() { change(text.query, 'old'); await searchTimer(); workers.at(-1)!.release(); await flush(); enter(text.query); change(text.replacement, 'NEW'); await flush(); }
   async function dispose() { workers.forEach(worker => worker.acknowledge()); view.slots.forEach(slot => slot?.cleanup?.()); for (let index = 0; index < 16; index++) await Promise.resolve(); timers.clear(); }
-  return { props, original, view, workers, applied, jumps, timers, change, enter, click, flush, searchTimer, initialize, dispose, selection(value: unknown) { selection = value; } };
+  return { props, original, view, workers, applied, jumps, timers, field, checkbox, change, enter, click, flush, searchTimer, initialize, dispose, selection(value: unknown) { selection = value; } };
 }
