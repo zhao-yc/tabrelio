@@ -12,6 +12,7 @@ export class QueryResultFindScan {
   private readonly rowCount: number;
   private readonly needle: string;
   private readonly matches: QueryResultFindMatch[] = [];
+  private readonly matchCells = new Set<number>();
   private cursor = 0;
   private offset = 0;
   private text: string | undefined;
@@ -29,10 +30,15 @@ export class QueryResultFindScan {
     return true;
   }
   /** 释放正在扫描的原文本及全部命中坐标，不修改源结果或业务选择。 */
-  cancel(): void { this.phase = 'stopped'; this.text = undefined; this.matches.length = 0; }
+  cancel(): void { this.phase = 'stopped'; this.text = undefined; this.matches.length = 0; this.matchCells.clear(); }
   progress(): QueryResultFindProgress { this.current(); return { phase: this.phase, count: this.matches.length, scannedCells: this.cursor, totalCells: this.rowCount * this.keys.length }; }
   /** 每格一个命中，位置只在同一活代次有效；导航不能使用已撤销快照。 */
   match(index: number): QueryResultFindMatch | undefined { return this.current() && Number.isSafeInteger(index) && index >= 0 ? this.matches[index] : undefined; }
+  /** 网格已核对扫描归属。仅按有界命中索引取样，每个渲染单元格无需重新检查列布局。 */
+  hasMatch(row: number, column: number): boolean {
+    return row >= 0 && row < this.rowCount && column >= 0 && column < this.keys.length &&
+      this.matchCells.has(row * this.keys.length + column);
+  }
   /** 文本按原值分段，跨段重叠覆盖字面查询；每批字符/单元格均有硬上限。 */
   step(): QueryResultFindProgress {
     if (!this.current() || this.phase !== 'searching') return this.progress();
@@ -54,7 +60,10 @@ export class QueryResultFindScan {
         const piece = this.text.slice(this.offset, Math.min(this.text.length, end + this.needle.length));
         units += Math.max(1, end - this.offset);
         const found = (this.caseSensitive ? piece : piece.toLowerCase()).includes(this.needle);
-        if (found) this.matches.push({ row, column });
+        if (found) {
+          this.matches.push({ row, column });
+          this.matchCells.add(this.cursor);
+        }
         if (found || end === this.text.length) { this.cursor++; cells++; this.offset = 0; this.text = undefined; }
         else this.offset = end;
         if (this.matches.length >= queryResultFindLimits.hits) { this.phase = 'limited'; this.text = undefined; break; }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent } from 'react';
 import type { DataGridHandle } from 'react-data-grid';
 import type { DataRow, ResultColumn } from '../../shared/contracts';
 import { QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindProgress } from '../queryResultFind';
@@ -8,16 +8,17 @@ import '../queryResultFind.css';
 
 interface Run { owner: object; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
-interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; children: ReactNode; }
+interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; children: ReactNode; }
 
 /** 查找栏与快捷键仅包住当前结果Grid；私有代次负责取消，绝不注册全局快捷键。 */
-export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, children }: Props) {
+export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const panel = useRef<object | undefined>(undefined), mountOwner = useRef<object | undefined>({});
   const [opened, setOpened] = useState<{ owner: object; token: object }>();
   const [query, setQuery] = useState(''), [sensitive, setSensitive] = useState(false);
+  const [highlightAll, setHighlightAll] = useState(false);
   const [view, setView] = useState<{ run: Run; progress: QueryResultFindProgress; index: number }>();
   /** 原scope或父接纳门变化时仅撤销本地查找，不改变选择或业务资源。 */
   function own(): boolean { try { return alive.current && latest.current.owner === owner && latest.current.rows === rows && latest.current.columns === columns && isCurrent(); } catch { return false; } }
@@ -31,6 +32,10 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   const available = own();
   if (view?.run.owner === owner && !available) view.run.scan.cancel();
   const panelCurrent = () => visible && panel.current === opened?.token && own();
+  const markCount = highlightAll ? active?.progress.count : undefined;
+  const markScan = markCount ? active?.run.scan : undefined;
+  // 只在有新增命中或显示开关变化时刷新网格样式，复用原扫描和原坐标。
+  useLayoutEffect(() => { onHighlights(markScan); }, [markScan, markCount, onHighlights]);
 
   /** 每次文字/大小写变化都消费新代次；旧定时器即使迟到也不能发布或导航。 */
   function start(value: string, caseSensitive: boolean) {
@@ -82,7 +87,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
   return <div className="query-result-find-region" onKeyDown={keyDown}>
     <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
-      {visible && <><input ref={input} type="text" aria-label={text.input} value={query} onChange={event => start(event.target.value, sensitive)}/><label className="check"><input type="checkbox" checked={sensitive} onChange={event => start(query, event.target.checked)}/>{text.sensitive}</label><button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button><button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button><button type="button" aria-label={text.close} onClick={close}>×</button></>}
+      {visible && <><input ref={input} type="text" aria-label={text.input} value={query} onChange={event => start(event.target.value, sensitive)}/><label className="check"><input type="checkbox" checked={sensitive} onChange={event => start(query, event.target.checked)}/>{text.sensitive}</label><label className="check"><input type="checkbox" checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{text.highlightAll}</label><button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button><button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button><button type="button" aria-label={text.close} onClick={close}>×</button></>}
     </div>
     {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{text.scope(rows.length, columns.length)}</span></div>}
     <div className="query-result-find-grid">{children}</div>

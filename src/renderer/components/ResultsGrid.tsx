@@ -4,7 +4,7 @@ import { gridQuickValueKinds, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { DataGrid, SelectColumn, type DataGridHandle, type ColumnWidths, type Column, type CellKeyDownArgs, type CellKeyboardEvent } from 'react-data-grid';
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
 import type { QueryResultSortRule, SortDialect } from '../queryResultSort';
@@ -28,6 +28,7 @@ import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboar
 import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
+import type { QueryResultFindScan } from '../queryResultFind';
 import { appModalSelector } from '../modalSelectors';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
@@ -113,6 +114,11 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   }, [findTarget, navigateTo, columns, rows]);
   const [findHit, setFindHit] = useState<{ scope: typeof scope; hit: QueryResultFindHit }>();
   const activeHit = findHit?.scope === scope && findHit.hit.scan.current() && actionCurrent() ? findHit.hit.match : undefined;
+  const [findHighlights, setFindHighlights] = useState<{ scope: typeof scope; scan: QueryResultFindScan }>();
+  const activeHighlights = findHighlights?.scope === scope && findHighlights.scan.current() && actionCurrent() ? findHighlights : undefined;
+  const showFindHighlights = useCallback((scan: QueryResultFindScan | undefined) => {
+    if (currentScope.current === scope && alive.current) setFindHighlights(scan ? { scope, scan } : undefined);
+  }, [scope]);
   const [selection, setSelection] = useState<{ scope: typeof scope; indices: ReadonlySet<number> }>();
   const selectedRows = selection?.scope === rowScope ? selection.indices : new Set<number>();
   const [headerCell, setHeaderCell] = useState<{ scope: typeof scope; cell: QueryResultCopyCell }>();
@@ -396,6 +402,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, frozen: index < frozenCount, headerCellClass: findTarget?.row === -1 && findTarget.key === column.key ? 'query-result-find-hit' : findMarks?.has('-1:' + column.key) ? 'pg-find-match' : undefined, cellClass: row => {
     const rowIndex = rowIndexes.get(row);
     if (activeHit?.row === rowIndex && activeHit?.column === index || findTarget?.row === rowIndex && findTarget?.key === column.key) return 'query-result-find-hit';
+    if (rowIndex !== undefined && activeHighlights?.scan.hasMatch(rowIndex, index)) return 'query-result-find-match';
     return findMarks?.has(rowIndex + ':' + column.key) ? 'pg-find-match' : undefined;
   }, resizable: true, minWidth: columnWidths || onColumnWidthsChange ? 64 : 110, maxWidth: onColumnWidthsChange ? 2000 : undefined, width: Number.isInteger(columnWidths?.get(column.key)) && columnWidths!.get(column.key)! >= 64 && columnWidths!.get(column.key)! <= 2000 ? columnWidths!.get(column.key)! : 170, sortable: !!onSortChange && !sortReasons?.get(column.key), renderHeaderCell: () => {
     const sortIndex = sort?.findIndex(rule => rule.column === column.key) ?? -1;
@@ -416,7 +423,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       value={value} type={column.type} source="protocol"
       className={['grid-row-preview', value === null && 'null-value', presentation?.className].filter(Boolean).join(' ')}
       title={presentation?.title ?? label}>{label}</DataTypeColor>;
-  } }))], [columns, columnWidths, headerDetails, onColumnWidthsChange, frozenCount, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, findTarget, findMarks, rowIndexes, presentCell, dataTypeColors, dataTypeColors ? selectedRows : null]);
+  } }))], [columns, columnWidths, headerDetails, onColumnWidthsChange, frozenCount, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, activeHighlights, findTarget, findMarks, rowIndexes, presentCell, dataTypeColors, dataTypeColors ? selectedRows : null]);
   const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}`} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
     if (event.defaultPrevented || !openCellActions(row, rowIdx, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
     event.preventGridDefault();
@@ -545,5 +552,5 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       onChange={setSelectedRows}/> : undefined;
   const gridTools = jump || tableCopy ? <>{jump}{tableCopy && copyTools}{selectionTools}</> : undefined;
   return <>{cellActionMenu.menu}{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : gridTools)}
-    {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{selectionTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{onFilterSelected&&<button type="button" title={selectedFilterAllowed?selectedFilterText.hint:selectedFilterErrorRef.current||selectedFilterText.unavailable} disabled={!selectedFilterAllowed} onClick={filterFromSelected}>{selectedFilterText.open}</button>}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind owner={scope} rows={rows} columns={columns} grid={gridRef} isCurrent={actionCurrent} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
+    {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{selectionTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{onFilterSelected&&<button type="button" title={selectedFilterAllowed?selectedFilterText.hint:selectedFilterErrorRef.current||selectedFilterText.unavailable} disabled={!selectedFilterAllowed} onClick={filterFromSelected}>{selectedFilterText.open}</button>}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind owner={scope} rows={rows} columns={columns} grid={gridRef} isCurrent={actionCurrent} onHighlights={showFindHighlights} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
 }

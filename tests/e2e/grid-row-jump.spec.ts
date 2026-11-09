@@ -132,12 +132,13 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
   expect(pageErrors).toEqual([]);
 });
 
-test('查找快捷键从输入和数据格循环定位，虚拟滚动后可继续且不执行数据任务', async () => {
+test('查找可标记全部命中并跨屏循环定位，保留勾选且不执行数据任务', async () => {
   await seed();
   const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
   const query = page.locator('.query-tab:visible');
   await query.locator('.query-execute-split > button.primary').click();
-  const resultCheck = query.getByRole('gridcell', { name: '记录 180', exact: true }).locator('..').getByRole('checkbox');
+  const firstResult = query.getByRole('gridcell', { name: '记录 180', exact: true });
+  const resultCheck = firstResult.locator('..').getByRole('checkbox');
   await resultCheck.check();
   const beforeQuery = await tasks();
   await query.getByRole('button', { name: resultFind.open, exact: true }).click();
@@ -145,11 +146,17 @@ test('查找快捷键从输入和数据格循环定位，虚拟滚动后可继�
   const resultStatus = query.locator('.query-result-find-status').getByRole('status');
   await input.fill('记录');
   await expect(resultStatus).toHaveText(resultFind.count(180, -1));
+  await expect(firstResult).not.toHaveClass(/query-result-find-match/);
+  const highlight = query.getByRole('checkbox', { name: resultFind.highlightAll, exact: true });
+  await highlight.check();
+  await expect(firstResult).toHaveClass(/query-result-find-match/);
   await input.press('Shift+F3');
   await expect(input).toBeFocused();
   await expect(resultStatus).toHaveText(resultFind.count(180, 179));
   const lastResult = query.getByRole('gridcell', { name: '记录 1', exact: true });
   await expect(lastResult).toBeInViewport();
+  await expect(lastResult).toHaveClass(/query-result-find-hit/);
+  await expect(query.getByRole('gridcell', { name: '记录 2', exact: true })).toHaveClass(/query-result-find-match/);
   await lastResult.click();
   await page.keyboard.press('F3');
   await expect(resultStatus).toHaveText(resultFind.count(180, 0));
@@ -158,6 +165,15 @@ test('查找快捷键从输入和数据格循环定位，虚拟滚动后可继�
   await expect(query.getByRole('grid')).toBeFocused();
   await page.keyboard.press('F3');
   await expect(resultStatus).toHaveText(resultFind.count(180, 1));
+  const secondResult = query.getByRole('gridcell', { name: '记录 179', exact: true });
+  await expect(secondResult).toHaveClass(/query-result-find-hit/);
+  await highlight.uncheck();
+  await expect(firstResult).not.toHaveClass(/query-result-find-match/);
+  await expect(secondResult).toHaveClass(/query-result-find-hit/);
+  await highlight.check();
+  await input.fill('无此结果');
+  await expect(resultStatus).toHaveText(resultFind.noMatch);
+  await expect(query.locator('.query-result-find-match, .query-result-find-hit')).toHaveCount(0);
   await expect(resultCheck).toBeChecked();
   expect(await tasks()).toEqual(beforeQuery);
 

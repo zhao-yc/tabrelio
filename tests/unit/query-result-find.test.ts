@@ -14,6 +14,10 @@ describe('已返回结果的有界字面查找', () => {
     const scan = new QueryResultFindScan(rows, columns, 'same', true, () => true);
     expect(finish(scan)).toMatchObject({ phase: 'complete', count: 3, scannedCells: 4 });
     expect(positions(scan)).toEqual([{ row: 0, column: 0 }, { row: 0, column: 1 }, { row: 1, column: 1 }]);
+    expect(scan.hasMatch(0, 0)).toBe(true);
+    expect(scan.hasMatch(0, 1)).toBe(true);
+    expect(scan.hasMatch(1, 0)).toBe(false);
+    expect(scan.hasMatch(0, 2)).toBe(false);
     expect(JSON.stringify(rows)).toBe(before); expect(clone).not.toHaveBeenCalled(); clone.mockRestore();
     const proto = new QueryResultFindScan(rows, [{ key: '__proto__', name: '原键', type: 'TEXT' }], 'same', true, () => true);
     expect(finish(proto).count).toBe(1);
@@ -51,6 +55,8 @@ describe('已返回结果的有界字面查找', () => {
     const rows: DataRow[] = Array.from({ length: limits.hits + 1 }, () => Object.defineProperty({}, 'a', { get() { read++; return 'hit'; } }));
     const scan = new QueryResultFindScan(rows, columns.slice(0, 1), 'hit', true, () => true);
     expect(finish(scan)).toMatchObject({ phase: 'limited', count: limits.hits }); expect(read).toBe(limits.hits);
+    expect(scan.hasMatch(limits.hits - 1, 0)).toBe(true);
+    expect(scan.hasMatch(limits.hits, 0)).toBe(false);
     expect(scan.match(limits.hits)).toBeUndefined();
     const invalid = new QueryResultFindScan(rows, columns, 'x'.repeat(limits.queryUnits + 1), false, () => true);
     expect(invalid.step()).toMatchObject({ phase: 'invalid', count: 0 }); expect(read).toBe(limits.hits);
@@ -61,6 +67,7 @@ describe('已返回结果的有界字面查找', () => {
     const scan = new QueryResultFindScan(rows, columns.slice(0, 1), 'hit', true, () => valid); finish(scan);
     valid = false; expect(scan.match(0)).toBeUndefined(); valid = true;
     expect(scan.step()).toMatchObject({ phase: 'stopped', count: 0 }); expect(scan.match(0)).toBeUndefined();
+    expect(scan.hasMatch(0, 0)).toBe(false);
     const structural = new QueryResultFindScan(rows, columns.slice(0, 1), 'hit', true, () => true); rows.push({ a: 'new' }); expect(structural.current()).toBe(false); rows.pop(); expect(structural.current()).toBe(false);
   });
 });
