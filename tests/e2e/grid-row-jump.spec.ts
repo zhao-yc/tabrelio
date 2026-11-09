@@ -1590,6 +1590,15 @@ test('SQLite 单列选区原值筛选区分 NULL 和空串，独立于勾选并�
   await exclude.click();
   await filtering.getByRole('button', { name: filterText.apply, exact: true }).click();
   await expect(ids).toHaveText(['3', '1']);
+  await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
+  await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  await rows('3').getByRole('checkbox').check();
+  await start.click();
+  await (await navigationMenuItem(query, { name: selectedFilterText.exclude, exact: true })).click();
+  await expect(filtering.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('notIn');
+  await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  await filtering.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['5', '4', '2', '1']);
   expect(await executions()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });

@@ -7,7 +7,8 @@ import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView, type SortDialect } from '../queryResultSort';
-import { QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
+import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
+import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
 import { prepareQueryResultOrganization } from '../queryResultHistory';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
@@ -33,7 +34,7 @@ interface Loaded { name: string; snapshot: QueryResultSnapshotDocument; scope: o
 type FileMode = 'open' | 'save' | 'compare';
 interface Operation { mode: FileMode; epoch: number; source: Loaded | undefined; }
 type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: QueryResultSortView };
-type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView };
+type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView; seed?: QueryResultFilterGroup };
 type SnapshotComparison = { kind: 'compare'; owner: string; source: Loaded; files: readonly QueryResultComparisonSource[]; dialect?: SortDialect };
 type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison | { kind: 'export'; result: QueryResult; selected: boolean };
 
@@ -45,6 +46,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const exportSelection = useMemo(() => new ResultExportSelection(), []);
   const [, refreshSelection] = useState(0);
   const returnFocus = useRef<HTMLButtonElement | null>(null);
+  const filterTrigger = useRef<HTMLButtonElement | null>(null);
   const [interaction, setInteraction] = useState(0), interactionRef = useRef(0), operation = useRef<Operation | null>(null);
   const alive = useRef(false), lifetime = useRef(0), committed = useRef<object | null>(null), host = useRef<HTMLDivElement | null>(null), ticket = {};
   const callbacks = useRef({ onClose, services }); callbacks.current = { onClose, services };
@@ -67,6 +69,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     if (!overlay && returnFocus.current) {
       returnFocus.current.focus({ preventScroll: true });
       returnFocus.current = null;
+      // 渲染阶段旧模态仍在 DOM，提交后重新核准网格工具，取消时可继续使用原勾选。
+      refreshSelection(value => value + 1);
     }
   }, [overlay]);
   /** 逐级核可见性和真实挂载；内存测试不需要伪造浏览器几何。 */
@@ -178,6 +182,18 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     if (!editable() || !filterBinding || !filterView || filter.view(filterBinding) !== filterView) return;
     openOverlay({ kind: 'filter', binding: filterBinding, initial: filterView }, trigger);
   }
+  /** 勾选绑定当前排序、筛选及查找后的显示行，草稿追加到完整快照的既有条件。 */
+  function openCheckedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false): void {
+    if (rangeCurrent || !loaded || !displayed || !filterBinding || !filterView || !filterTrigger.current) return;
+    const current = () => editable() && loadedRef.current === loaded && filter.view(filterBinding) === filterView &&
+      exportSelection.matchesIndices(binding, capture.indices) &&
+      currentQueryResultSelectedFilter(capture, displayed.columns, displayed.rows, displayed);
+    if (!current()) return;
+    try {
+      const seed = appendQueryResultFilterNode(filterView.expression, queryResultSelectedFilterNode(capture, exclude));
+      if (current() && filterTrigger.current) openOverlay({ kind: 'filter', binding: filterBinding, initial: filterView, seed }, filterTrigger.current);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   /** 在独立控制器完整验证筛选和现有排序，失败时原网格和条件草稿均保持。 */
   function publishFilter(expression: QueryResultFilterGroup): boolean {
     if (!loaded || !sourceResult) return false;
@@ -253,7 +269,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button disabled={!!busy || !sourceResult?.columns.length} onClick={event => void file('compare', event.currentTarget)}>{text.compare}</button>
       <button disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
-      <button disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
+      <button ref={filterTrigger} disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
       <button disabled={!!busy || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
         onClick={event => openSort(event.currentTarget)}>{sortText.panelTitle}</button>
       {sortView && sortView.rules.length > 0 && <button disabled={!!busy} onClick={() => sortGrid([])}>{sortText.clear}</button>}
@@ -274,6 +290,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
         <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
+          filterDialect={dialect} onFilterSelected={filterView ? openCheckedFilter : undefined}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>
@@ -296,7 +313,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       event.stopPropagation();
       closeOverlay(overlay);
     }}>
-      <QueryResultFilterPanel offline binding={overlay.binding} initial={overlay.initial} isCurrent={() => filterDraftCurrent(overlay)}
+      <QueryResultFilterPanel offline binding={overlay.binding} initial={overlay.initial} seed={overlay.seed} isCurrent={() => filterDraftCurrent(overlay)}
         onApply={expression => applyFilter(overlay, expression)} onClose={() => closeOverlay(overlay)}/>
       <ErrorBox message={error}/>
     </Modal>}

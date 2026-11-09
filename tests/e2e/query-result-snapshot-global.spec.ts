@@ -22,6 +22,7 @@ function register(): void {
   const { queryResultFindZh: findText } = require('../../src/renderer/locales/queryResultFind.zh-CN') as typeof import('../../src/renderer/locales/queryResultFind.zh-CN');
   const { queryResultSortZh: sortText } = require('../../src/renderer/locales/queryResultSort.zh-CN') as typeof import('../../src/renderer/locales/queryResultSort.zh-CN');
   const { queryResultFilterZh: filterText } = require('../../src/renderer/locales/queryResultFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultFilter.zh-CN');
+  const { queryResultSelectedFilterZh: selectedFilterText } = require('../../src/renderer/locales/queryResultSelectedFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultSelectedFilter.zh-CN');
   const { queryResultComparisonZh: comparisonText } = require('../../src/renderer/locales/queryResultComparison.zh-CN') as typeof import('../../src/renderer/locales/queryResultComparison.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
@@ -172,6 +173,29 @@ function register(): void {
       const big = grid.getByRole('columnheader').filter({ hasText: /^BIGINT/ });
       await step(() => big.click());
       await step(() => expect(big.getByLabel(sortText.ascending)).toBeVisible());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
+
+      const checked = grid.getByRole('row').filter({ hasText: '另一行' }).getByRole('checkbox');
+      const includeChecked = viewer.getByRole('button', { name: selectedFilterText.open, exact: true });
+      const excludeChecked = viewer.getByRole('button', { name: selectedFilterText.exclude, exact: true });
+      const checkedFilter = page.getByRole('dialog', { name: filterText.title, exact: true });
+      await step(() => expect(excludeChecked).toBeDisabled());
+      await step(() => checked.check());
+      await step(() => grid.getByRole('gridcell', { name: '构造键安全', exact: true }).click());
+      await step(() => includeChecked.click());
+      await step(() => expect(checkedFilter.getByLabel(filterText.column + ' 1', { exact: true })).toHaveValue('constructor'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('in'));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.cancel, exact: true }).click());
+      await step(() => expect(checked).toBeChecked());
+      await step(() => expect(excludeChecked).toBeEnabled());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
+      await step(() => excludeChecked.click());
+      await step(() => expect(checkedFilter.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('notIn'));
+      if (mode === 'save') await step(async () => info.attach('离线快照排除勾选值草稿', { body: await page.screenshot(), contentType: 'image/png' }));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['原型键安全']));
+      await step(() => expect(big.getByLabel(sortText.ascending)).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
 
       const input = viewer.getByRole('textbox', { name: findText.input, exact: true });
