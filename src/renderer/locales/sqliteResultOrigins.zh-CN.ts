@@ -15,6 +15,7 @@ export const sqliteResultOriginsZh = {
   inlineReading: '正在核验查询原记录…',
   inlinePreview: '预览修改',
   inlineUnavailable: '当前来源字段无法编辑。',
+  computedReadOnly: 'SQLite 查询计算列只读，请选择原表字段。',
   pastePosition: (firstRow: number, lastRow: number, firstColumn: number, lastColumn: number) =>
     `查询结果第 ${firstRow}～${lastRow} 行，第 ${firstColumn}～${lastColumn} 列`,
   pasteHint: '核验粘贴范围内的全部原记录，先比对新旧值，再预览 SQL 并确认提交。',

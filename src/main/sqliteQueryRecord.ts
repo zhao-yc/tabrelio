@@ -7,9 +7,17 @@ import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteFileIdentity, SqliteValue } from '../engine/sqlite/protocol';
 
 type Token = ReturnType<typeof sqliteDefinitionTokens>[number];
+type Projection = 'column' | 'wildcard' | 'expression';
 const word = (token: Token | undefined, value: string) => token?.kind === 'id' && !token.quoted && fold(token.value) === value;
 const symbol = (token: Token | undefined, value: string) => token?.kind === 'symbol' && token.value === value;
 const blocked = () => Error('SQLite 查询结果无法核验为当前原记录，请重新执行查询');
+const scalarFunctions = new Set(['abs', 'cast', 'char', 'coalesce', 'concat', 'concat_ws', 'date', 'datetime', 'format', 'hex',
+  'ifnull', 'iif', 'instr', 'json_array_length', 'json_extract', 'json_type', 'julianday', 'length', 'lower', 'ltrim',
+  'nullif', 'octet_length', 'printf', 'quote', 'replace', 'round', 'rtrim', 'strftime', 'substr', 'substring', 'time',
+  'trim', 'typeof', 'unicode', 'unixepoch', 'upper']);
+const scalarGrammar = new Set(['when', 'then', 'else', 'and', 'or', 'not', 'in', 'is']);
+const scalarLiterals = new Set(['null', 'true', 'false', 'current_date', 'current_time', 'current_timestamp']);
+const castTypes = new Set(['char', 'varchar', 'decimal', 'numeric']);
 
 export interface SqliteQueryRecordSource {
   table: string;
@@ -21,8 +29,39 @@ export interface SqliteQueryRecordSource {
   origins: readonly SqliteResultColumnOrigin[];
 }
 
-/** 原生列来源不能排除自连接、聚合、视图或复合查询。只接受单表、直接列投影和普通行过滤排序。 */
-export function sqliteQueryRecordTable(sql: string): string | undefined {
+function directProjection(tokens: Token[]): Projection {
+  let cursor = 0;
+  while (tokens[cursor]?.kind === 'id' && symbol(tokens[cursor + 1], '.')) cursor += 2;
+  if (symbol(tokens[cursor], '*') && cursor === tokens.length - 1) return 'wildcard';
+  const column = tokens[cursor], next = tokens[cursor + 1];
+  if (column?.kind !== 'id' || cursor === 0 && !column.quoted &&
+      (scalarLiterals.has(fold(column.value)) || word(column, 'x') && next?.kind === 'string' && column.end === next.start)) return 'expression';
+  const alias = (token?: Token) => token?.kind === 'id' || token?.kind === 'string';
+  const rest = tokens.length - cursor - 1;
+  return rest === 0 || rest === 1 && alias(next) || rest === 2 && word(next, 'as') && alias(tokens[cursor + 2]) ? 'column' : 'expression';
+}
+
+function queryProjection(tokens: Token[]): Projection[] | undefined {
+  if (!tokens.length || word(tokens[0], 'distinct')) return;
+  const parts: Token[][] = [];
+  let start = 0;
+  for (const [index, token] of tokens.entries()) if (token.depth === 0 && symbol(token, ',')) {
+    parts.push(tokens.slice(start, index));
+    start = index + 1;
+  }
+  parts.push(tokens.slice(start));
+  if (parts.some(part => !part.length || part.some((token, index) => {
+    if (token.kind !== 'id' || !symbol(part[index + 1], '(')) return false;
+    const name = fold(token.value);
+    return token.quoted || symbol(part[index - 1], '.') ||
+      !scalarFunctions.has(name) && !scalarGrammar.has(name) && !(word(part[index - 1], 'as') && castTypes.has(name));
+  }))) return;
+  const projection = parts.map(directProjection);
+  return projection.every(kind => kind === 'expression') ? undefined : projection;
+}
+
+/** 原生来源不区分括号列和直接列；语法证明单表基数，单独记录计算列以免参与写入和定位。 */
+export function sqliteQueryRecordTarget(sql: string): { table: string; projection: Projection[] } | undefined {
   // 原生行注释只在 LF 结束，防止孤立 CR 令补全词法看到原生未执行的令牌。
   if (/--[^\n]*\r(?!\n)/.test(sql)) return;
   let tokens: Token[];
@@ -32,11 +71,8 @@ export function sqliteQueryRecordTable(sql: string): string | undefined {
       ['select', 'union', 'intersect', 'except', 'group', 'having', 'window'].some(name => word(token, name)))) return;
   const from = tokens.findIndex((token, index) => index > 1 && token.depth === 0 && word(token, 'from'));
   if (from < 0) return;
-  const projection = tokens.slice(1, from);
-  if (word(projection[0], 'all')) projection.shift();
-  // SQLite 已执行并校验完整语法；这里排除会改变行归属或基数的投影表达式。
-  if (!projection.length || word(projection[0], 'distinct') || projection.some(token =>
-    token.kind !== 'id' && token.kind !== 'string' && !['.', '*', ','].some(value => symbol(token, value)))) return;
+  const projection = queryProjection(tokens.slice(word(tokens[1], 'all') ? 2 : 1, from));
+  if (!projection) return;
   let i = from + 1;
   if (symbol(tokens[i + 1], '.')) {
     if (tokens[i]?.kind !== 'id' || fold(tokens[i].value) !== 'main') return;
@@ -51,7 +87,21 @@ export function sqliteQueryRecordTable(sql: string): string | undefined {
   } else if (tokens[i]?.kind === 'id' && !suffix(tokens[i]) &&
       (tokens[i].quoted || !['join', 'left', 'right', 'full', 'inner', 'outer', 'cross', 'natural', 'indexed', 'not'].some(value => word(tokens[i], value)))) i++;
   if (tokens[i] && !suffix(tokens[i])) return;
-  return name.value;
+  return { table: name.value, projection };
+}
+
+/** 单表的每处通配符都展开为同样宽度，按实际结果列数计算表达式位置。 */
+export function sqliteQueryComputedPositions(projection: Projection[], width: number): number[] | undefined {
+  const wildcards = projection.filter(kind => kind === 'wildcard').length;
+  const expansion = wildcards ? 1 + (width - projection.length) / wildcards : 1;
+  if (!Number.isSafeInteger(expansion) || expansion < 1 || !wildcards && width !== projection.length) return;
+  const computed: number[] = [];
+  let index = 0;
+  for (const kind of projection) {
+    if (kind === 'expression') computed.push(index);
+    index += kind === 'wildcard' ? expansion : 1;
+  }
+  return computed;
 }
 
 /** 同时核对 main 目录修订与临时同名对象，后者可以遮蔽未限定的原表。 */
@@ -105,7 +155,8 @@ export function sqliteQueryRecordValues(source: SqliteQueryRecordSource, index: 
   if (!row || storage?.length !== result.columns.length) throw blocked();
   const values = new Map<string, SqliteValue>();
   for (const [columnIndex, origin] of origins.entries()) {
-    if (!origin || !columns.some(column => column.name === origin.column)) throw blocked();
+    if (!origin) continue;
+    if (!columns.some(column => column.name === origin.column)) throw blocked();
     const cell = row[result.columns[columnIndex].key], kind = storage[columnIndex];
     let value: SqliteValue;
     if (kind === 'n' && cell === null || kind === 't' && typeof cell === 'string') value = cell;

@@ -105,6 +105,28 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     expect(() => harness.session.queryRecord(taskId, 'subject')).toThrow(/已失效/);
   });
 
+  it('计算列按展开后的列序号保持只读，括号主键不能充当直接主键', async () => {
+    const harness = await open(fixture());
+    await execute(harness, "INSERT INTO subject VALUES (9007199254740993, '原值');");
+    const taskId = randomUUID();
+    const mixed = await execute(harness, `SELECT (s.id) AS 算键, s.*, upper(s.note) AS note, s.*,
+      CASE WHEN (s.id > 0) THEN '是' ELSE '否' END AS 条件, CAST(s.id AS DECIMAL(20,2)) AS 转换, X'00ff' AS 字节
+      FROM subject s;`, { taskId });
+    expect(mixed.sqliteQueryRecordTable).toBe('subject');
+    expect(mixed.sqliteQueryComputedColumns).toEqual([0, 3, 6, 7, 8]);
+    expect(mixed.sqliteResultOrigins?.[0]?.map(origin => origin?.column ?? null)).toEqual(
+      [null, 'id', 'note', null, 'id', 'note', null, null, null]);
+    expect(harness.session.queryRecord(taskId, 'subject').origins[0]).toBeNull();
+    const noKeyId = randomUUID();
+    const noKey = await execute(harness, 'SELECT (s.id), s.note FROM subject s', { taskId: noKeyId });
+    expect(noKey.sqliteQueryRowSql).toBe(true);
+    expect(noKey.sqliteQueryRecordTable).toBeUndefined();
+    expect(() => harness.session.queryRecord(noKeyId, 'subject')).toThrow(/已失效/);
+    for (const sql of ['SELECT id, max(note) FROM subject', 'SELECT id, row_number() OVER (ORDER BY id) FROM subject',
+      'SELECT id, (SELECT 1) FROM subject', 'SELECT id, json_group_array(note) FROM subject'])
+      expect((await execute(harness, sql)).sqliteQueryRowSql).toBeUndefined();
+  });
+
   it('原生结果来源按结果和列位置对齐，别名和计算表达式不冒充源字段', async () => {
     const harness = await open(fixture());
     const outcome = await execute(harness, `CREATE VIEW visible AS SELECT id,note FROM subject;

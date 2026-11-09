@@ -1665,6 +1665,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       throw Error(gridRangeFillZh.limit);
     return range.keys.map(key => {
       const index = sourceResult.columns.findIndex(column => column.key === key), origin = resultOrigins[index];
+      if (outcome?.sqliteQueryComputedColumns?.includes(index)) throw Error(originsText.computedReadOnly);
       if (!origin || origin.database !== 'main' || origin.table !== recordEditTable) throw Error(gridRangeFillZh.target);
       return origin.column;
     });
@@ -1726,7 +1727,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (mysqlRelationAvailable) return !mysqlComputedColumns?.includes(index) && mysqlJoinColumns?.includes(index) !== false &&
       startMysqlQueryRecord('edit', cell.row, { ...target, columnIndex: index });
     const origin = resultOrigins?.[index];
-    if (!origin || origin.database !== 'main' || origin.table !== recordEditTable) return false;
+    if (outcome?.sqliteQueryComputedColumns?.includes(index) || !origin || origin.database !== 'main' || origin.table !== recordEditTable) return false;
     return startQueryRecords([cell.row], { cell: { ...target, column: origin.column } });
   }
   function openRowDetail(): void {

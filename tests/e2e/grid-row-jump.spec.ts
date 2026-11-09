@@ -451,6 +451,71 @@ test('SQLite 查询网格原位编辑重名列并保留精确字段与确认', a
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询计算列只读且原字段按精确主键提交', async ({}, info) => {
+  const sql = `SELECT (p.id) AS 计算键,p.*,upper(p.note)||'-计算' AS note,CAST(p.id AS TEXT) AS 字串
+    FROM compute_subject p ORDER BY p.id DESC;`;
+  const noKey = 'SELECT (p.id) AS 计算键,p.note FROM compute_subject p WHERE p.id=9007199254740993;';
+  await seed(sql, `CREATE TABLE compute_subject(id INTEGER PRIMARY KEY, note TEXT, guard TEXT);
+    INSERT INTO compute_subject VALUES (9007199254740992,'原值甲','甲保护'),(9007199254740993,'原值乙','乙保护');`, noKey);
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const cell = (value: string) => grid.getByRole('gridcell', { name: value, exact: true });
+  const execute = () => query.locator('.query-execute-split > button.primary').click();
+  const inline = (name: string) => page.getByRole('region', { name: originsText.inlineLabel(name), exact: true });
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  const read = () => {
+    const disk = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+    try { return disk.prepare('SELECT CAST(id AS TEXT) AS id,note,guard FROM compute_subject ORDER BY id').all(); }
+    finally { disk.close(); }
+  };
+  const original = read();
+  await execute();
+  await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+  await (await navigationMenuItem(query, { name: originsText.open, exact: true })).click();
+  const origins = page.getByRole('dialog', { name: originsText.title, exact: true });
+  await expect(origins.locator('tbody tr').first().getByRole('cell')).toHaveText(['1', '—', '—', '—', '']);
+  await origins.getByRole('button', { name: zh.common.close, exact: true }).click();
+  const computedKey = cell('9007199254740993').and(grid.locator('[role=gridcell][aria-colindex="2"]'));
+  await computedKey.click();
+  await computedKey.press('F2');
+  await expect(inline('计算键')).toHaveCount(0);
+  const computed = cell('原值甲-计算');
+  await computed.click();
+  await computed.press('F2');
+  await expect(inline('note')).toHaveCount(0);
+  await pasteGridRangeClipboard(page, '不能写入计算列');
+  await expect(query.getByRole('alert')).toContainText(originsText.computedReadOnly);
+  expect(read()).toEqual(original);
+
+  const note = cell('原值甲');
+  await note.click();
+  await note.press('F2');
+  const input = inline('note').getByLabel('SQLite 字段 note 值', { exact: true });
+  await expect(input).toHaveValue('原值甲');
+  await input.fill('提交到原字段');
+  await input.press('Enter');
+  const sqlPreview = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+  await expect(sqlPreview).toContainText('SET "note"=');
+  expect(read()).toEqual(original);
+  await info.attach('SQLite计算列查询编辑原字段', { body: await page.screenshot(), contentType: 'image/png' });
+  await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+  await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  await expect(preview).toBeHidden();
+  expect(read()).toEqual([{ ...original[0], note: '提交到原字段' }, original[1]]);
+
+  await page.locator('[data-workspace-tab-id="q-copy-source"]').getByRole('button', { name: '复制来源', exact: true }).click();
+  await execute();
+  await expect(query.locator('.tab-status').getByText(/^本次总耗时/)).toBeVisible();
+  await cell('原值乙').click();
+  await expect(await navigationMenuItem(query, { name: originsText.editRecord, exact: true })).toHaveCount(0);
+  await (await navigationMenuItem(query, { name: rowSqlText.open, exact: true })).click();
+  const draft = page.getByRole('dialog', { name: rowSqlText.title, exact: true });
+  await expect(draft.locator('option')).toHaveText([rowSqlText.insert]);
+  await draft.getByRole('button', { name: rowSqlText.prepare, exact: true }).click();
+  await expect(draft.locator('pre')).toHaveText('INSERT INTO "main"."compute_subject" ("note") VALUES (\'原值乙\');');
+  await draft.getByRole('button', { name: rowSqlText.close, exact: true }).click();
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚', async ({}, info) => {
   await seed('SELECT id AS 同名, name AS 同名 FROM subject ORDER BY id DESC LIMIT 3;');
   const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
