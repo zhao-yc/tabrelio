@@ -105,8 +105,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   }
   const gridRef = useRef<DataGridHandle | null>(null);
   const rangeKeys = useMemo(() => columns.map(column => column.key), [columns]);
-  const cellRange = useGridCellRange(rows, rangeKeys, scope, onActiveRowChange ? 0 : 1);
   const rangeCurrent = () => !onActiveRowChange && actionCurrent() && tableCopy?.enabled !== false && tableCopy?.isCurrent() !== false;
+  const cellRange = useGridCellRange(rows, rangeKeys, scope, onActiveRowChange ? 0 : 1, gridRef, rangeCurrent);
   useLayoutEffect(() => {
     const target = findTarget ?? navigateTo;
     if (!target || !gridRef.current?.element?.isConnected || !actionCurrent()) return;
@@ -351,7 +351,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   /** 整理快捷键仅属于当前只读网格；输入框、编辑模式和旧渲染不能借此撤销正文或另一结果。 */
   function cellKeyDown(args:CellKeyDownArgs<DataRow>,event:CellKeyboardEvent):void{
     const {row,column}=args,key=event.key.toLowerCase();
-    if (args.mode === 'ACTIVE' && cellRange.key(args, event, rangeCurrent)) return;
+    if (args.mode === 'ACTIVE' && cellRange.key(args, event)) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => canSelectRows && !!row && rows[args.rowIdx] === row && !!column && columns.some(item => item.key === column.key) && rowSelectionCurrent(),
       () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;
@@ -431,7 +431,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       className={['grid-row-preview', value === null && 'null-value', presentation?.className].filter(Boolean).join(' ')}
       title={presentation?.title ?? label}>{label}</DataTypeColor>;
   } }))], [columns, columnWidths, headerDetails, onColumnWidthsChange, frozenCount, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, activeHighlights, findTarget, findMarks, cellRange.rectangle, skipRowInInversion, rowIndexes, presentCell, dataTypeColors, dataTypeColors ? selectedRows : null]);
-  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}`} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellMouseDown={(args, event) => cellRange.mouse(args, event, rangeCurrent)} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
+  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}`} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellMouseDown={(args, event) => cellRange.mouse(args, event)} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
     if (event.defaultPrevented || !openCellActions(row, rowIdx, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
     event.preventGridDefault();
     event.preventDefault();

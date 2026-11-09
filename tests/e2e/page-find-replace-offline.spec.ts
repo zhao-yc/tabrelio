@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
-import { readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridCellCenter, readGridRangeClipboard } from './grid-cell-range-clipboard';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
 const errors: string[] = [];
@@ -101,6 +101,14 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   const payload = await readGridRangeClipboard(page);
   expect(JSON.parse(payload.typed).rows).toEqual([['😀old前old后old', 'OLD'], ['', '无匹配']]);
   expect(payload.text).toBe('😀old前old后old\tOLD\n\t无匹配');
+  const start = await gridCellCenter(from), end = await gridCellCenter(to);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 6 });
+  await expect(page.locator('.grid-cell-in-range')).toHaveCount(4);
+  await page.mouse.up();
+  await expect(to).toBeFocused();
+  expect(await readGridRangeClipboard(page)).toEqual(payload);
   expect(await calls()).toEqual([]);
 });
 

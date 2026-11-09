@@ -18,13 +18,13 @@ import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sq
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
-import { readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridCellCenter, readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 /** 使用独立应用配置和合成 SQLite 数据，查询与浏览均走正式引擎。 */
-async function seed() {
+async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;') {
   await quitDesktop();
   const id = 'row-jump-offline', databasePath = join(dataDir, 'grid-row-jump.sqlite');
   const database = new DatabaseSync(databasePath);
@@ -39,7 +39,7 @@ async function seed() {
   try {
     store.saveConnection({ id, dialect: 'sqlite', name: '行号定位测试', group: '', color: '#123456', sqlite: { filePath: realpathSync(databasePath), readOnly: false, busyTimeoutMs: 1000 } });
     store.saveSettings({ ...store.settings(), pageSize: 100, activeTabId: 'q-jump', tabs: [
-      { id: 'q-jump', kind: 'query', title: '查询定位', connectionId: id, sql: 'SELECT id, name FROM subject ORDER BY id DESC;' },
+      { id: 'q-jump', kind: 'query', title: '查询定位', connectionId: id, sql },
       { id: 't-jump', kind: 'table', title: '表格定位', connectionId: id, database: 'main', table: 'subject' },
       { id: 'v-jump', kind: 'table', title: '视图定位', connectionId: id, database: 'main', table: 'subject_view' },
     ] });
@@ -263,6 +263,61 @@ test('查询结果和 SQLite 表页可选择并复制矩形区域，保留勾选
   await destination.click();
   await expect(table.locator('.grid-cell-in-range')).toHaveCount(0);
   expect((await readGridRangeClipboard(page)).text).toBe('记录 2');
+  const start = await gridCellCenter(table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true }));
+  const end = await gridCellCenter(destination);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 6 });
+  await expect(table.locator('.grid-cell-in-range')).toHaveCount(4);
+  await page.mouse.up();
+  await expect(destination).toBeFocused();
+  expect((await readGridRangeClipboard(page)).sqlite).toBe(payload.sqlite);
+  expect(pageErrors).toEqual([]);
+});
+
+test('拖选靠近底边会继续滚动，松开后可复制滚过的完整矩形', async () => {
+  await seed();
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const first = query.getByRole('gridcell', { name: '180', exact: true });
+  await expect(first).toBeVisible();
+  const start = await gridCellCenter(first);
+  const { x } = await gridCellCenter(query.getByRole('gridcell', { name: '记录 180', exact: true }));
+  const y = await grid.evaluate(element => element.getBoundingClientRect().top + element.clientTop + element.clientHeight - 5);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(x, y, { steps: 10 });
+    await expect.poll(() => grid.evaluate(element => element.scrollTop)).toBeGreaterThan(650);
+  } finally { await page.mouse.up(); }
+  const payload = await readGridRangeClipboard(page);
+  const rows = JSON.parse(payload.typed).rows;
+  expect(rows.length).toBeGreaterThan(20);
+  expect(rows).toEqual(Array.from({ length: rows.length }, (_, index) => [String(180 - index), '记录 ' + (180 - index)]));
+  const settled = await grid.evaluate(element => element.scrollTop);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(await grid.evaluate(element => element.scrollTop)).toBe(settled);
+  expect(pageErrors).toEqual([]);
+});
+
+test('拖选靠近右边缘会横向滚动并复制屏外列', async () => {
+  await seed('SELECT ' + Array.from({ length: 24 }, (_, index) => 'id AS col_' + index).join(', ') + ' FROM subject ORDER BY id DESC;');
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const first = grid.locator('[aria-rowindex="2"] [role="gridcell"][aria-colindex="2"]');
+  await expect(first).toBeVisible();
+  const start = await gridCellCenter(first);
+  const x = await grid.evaluate(element => element.getBoundingClientRect().left + element.clientLeft + element.clientWidth - 5);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(x, start.y, { steps: 10 });
+    await expect.poll(() => grid.evaluate(element => element.scrollLeft)).toBeGreaterThan(400);
+  } finally { await page.mouse.up(); }
+  const rows = JSON.parse((await readGridRangeClipboard(page)).typed).rows;
+  expect(rows).toHaveLength(1);
+  expect(rows[0].length).toBeGreaterThan(6);
+  expect(rows[0]).toEqual(Array(rows[0].length).fill('180'));
   expect(pageErrors).toEqual([]);
 });
 

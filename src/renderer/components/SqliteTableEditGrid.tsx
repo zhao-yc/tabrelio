@@ -53,8 +53,8 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
   const owner = source.current, [, selectionChanged] = useState(0), [error, setError] = useState('');
   const rangeKeys = useMemo(() => order.map(index => 'c' + index), [order]);
   const rangeRowIndex = useMemo(() => new Map(rows.map((row, index) => [row, index])), [rows]);
-  const cellRange = useGridCellRange(rows, rangeKeys, owner, 2);
   const rangeCurrent = () => !disabled && current() && noModal();
+  const cellRange = useGridCellRange(rows, rangeKeys, owner, 2, grid, rangeCurrent);
   const selection = useRef<{ owner: typeof owner; ids: ReadonlySet<string>; revision: object }>({ owner, ids: initialCheckedRows ?? new Set(), revision: {} });
   // 返回同一个缓存页时恢复准确行数组的勾选。新草稿数组不会继承原选择。
   if (selection.current?.owner !== owner) selection.current = { owner, ids: new Set(initialCheckedRows), revision: {} };
@@ -376,7 +376,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={changeCheckedRows}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}
-    onCellMouseDown={(args, event) => cellRange.mouse(args, event, rangeCurrent)}
+    onCellMouseDown={(args, event) => cellRange.mouse(args, event)}
     onCellClick={({ row, column }) => { if (baseCurrent(row)) { onSelect(row); captureCell(row, column?.key); } }}
     onCellDoubleClick={({ row, column }, event) => { event.preventGridDefault(); edit(row, column.key); }}
     onCellContextMenu={({ row, column }, event) => {
@@ -385,7 +385,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     }}
     onCellKeyDown={(args, event) => {
       const { row, rowIdx, column, mode } = args;
-      if (mode === 'ACTIVE' && cellRange.key(args, event, rangeCurrent)) return;
+      if (mode === 'ACTIVE' && cellRange.key(args, event)) return;
       if (mode === 'ACTIVE' && handleGridSelectAllKey(event,
         () => !!row && rows[rowIdx] === row && !!column && order.some(index => column.key === 'c' + index) && rowSelectionCurrent(),
         () => changeCheckedRows(gridRowKeys(rows, rowSelectionKey)))) return;

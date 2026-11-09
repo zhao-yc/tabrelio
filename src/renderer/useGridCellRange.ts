@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
-import type { CellKeyDownArgs, CellKeyboardEvent, CellMouseArgs, CellMouseEvent } from 'react-data-grid';
+import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import type { CellKeyDownArgs, CellKeyboardEvent, CellMouseArgs, CellMouseEvent, DataGridHandle } from 'react-data-grid';
 import { appModalSelector } from './modalSelectors';
 import { maxClipboardCells } from './gridClipboard';
 import { zh } from './locales/zh-CN';
+import { startGridCellRangeDrag, type GridRangePoint as Point } from './gridCellRangeDrag';
 
-interface Point { row: number; column: number; }
 interface Rectangle { top: number; bottom: number; left: number; right: number; }
 
 function samePoint(left: Point | undefined, right: Point | undefined): boolean {
@@ -26,10 +26,16 @@ export function readGridCellRange<Row, Key, Value>(rectangle: Rectangle, rows: r
 }
 
 /** 矩形只绑定当前行数组、可见字段和网格来源。虚拟化只决定绘制，不决定范围。 */
-export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly string[], source: unknown, columnOffset: number) {
+export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly string[], source: unknown, columnOffset: number,
+  grid: RefObject<DataGridHandle | null>, current: () => boolean) {
   const scope = useMemo(() => ({}), [rows, keys, source, columnOffset]);
   const live = useRef<{ scope: object; active?: Point; anchor?: Point; focus?: Point }>({ scope });
   if (live.current.scope !== scope) live.current = { scope };
+  const committedCurrent = useRef(current);
+  useLayoutEffect(() => { committedCurrent.current = current; }, [current]);
+  const drag = useRef<(() => void) | undefined>(undefined);
+  function stopDrag() { drag.current?.(); drag.current = undefined; }
+  useLayoutEffect(() => stopDrag, [scope]);
   const [shown, setShown] = useState<{ scope: object; rectangle: Rectangle }>();
   const rectangle = shown?.scope === scope ? shown.rectangle : undefined;
 
@@ -48,6 +54,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   function move(row: Row | undefined, rowIndex: number, key: string | undefined) {
     if (live.current.scope !== scope) return;
     const active = position(row, rowIndex, key);
+    if (drag.current && !samePoint(live.current.active, active)) stopDrag();
     if (!samePoint(live.current.focus, active)) clear();
     live.current.active = active;
   }
@@ -64,8 +71,9 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
       !target.closest('input,textarea,select,button,[role="textbox"]') && !target.ownerDocument.querySelector(appModalSelector);
   }
 
-  function mouse(args: CellMouseArgs<Row>, event: CellMouseEvent, current: () => boolean) {
+  function mouse(args: CellMouseArgs<Row>, event: CellMouseEvent) {
     if (live.current.scope !== scope || !current() || event.button !== 0) return;
+    stopDrag();
     const active = position(args.row, args.rowIdx, args.column.key), anchor = live.current.anchor ?? live.current.active;
     if (event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && active && anchor && allowed(event)) {
       event.preventDefault();
@@ -74,17 +82,37 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     } else {
       clear();
       live.current.active = active;
+      const element = grid.current?.element;
+      if (!event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && active && element && allowed(event)) {
+        drag.current = startGridCellRangeDrag({
+          grid: element, start: event.nativeEvent, rowCount: rows.length, columnCount: keys.length, columnOffset,
+          current: () => live.current.scope === scope && grid.current?.element === element && element.isConnected &&
+            !element.ownerDocument.querySelector(appModalSelector) && committedCurrent.current(),
+          extend: focus => {
+            if (!samePoint(live.current.focus ?? active, focus)) select(active, focus);
+          },
+          finish: cancel => {
+            drag.current = undefined;
+            if (cancel) clear();
+            else if (live.current.focus) {
+              const { row, column } = live.current.focus;
+              grid.current?.setActivePosition({ rowIdx: row, idx: column + columnOffset }, { shouldFocus: true });
+            }
+          },
+        });
+      }
     }
   }
 
-  function key(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent, current: () => boolean): boolean {
+  function key(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent): boolean {
     const direction = arrowDirections.get(event.key);
-    const cancel = event.key === 'Escape' && !!live.current.anchor;
+    const cancel = event.key === 'Escape' && (!!live.current.anchor || !!drag.current);
     if ((!event.shiftKey || !direction) && !cancel || event.altKey || event.ctrlKey || event.metaKey ||
         event.nativeEvent.isComposing || event.keyCode === 229 || !allowed(event) || !current()) return false;
     const active = position(args.row, args.rowIdx, args.column?.key);
     if (!active) return false;
     event.preventDefault(); event.preventGridDefault(); event.stopPropagation();
+    stopDrag();
     if (cancel) clear();
     else if (direction) {
       const next = { row: Math.max(0, Math.min(rows.length - 1, active.row + direction.row)),
