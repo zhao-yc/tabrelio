@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ColumnInfo, TableInfo } from './contracts';
 
 const id = z.string().min(1).max(200);
 export const mysqlQueryRelationSchema = z.object({
@@ -10,6 +11,16 @@ export const mysqlQueryRecordEditSchema = mysqlQueryRelationSchema.extend({ colu
 export type MysqlQueryRecordEditInput = z.infer<typeof mysqlQueryRecordEditSchema>;
 export const mysqlQueryBatchLimits = { rows: 100, cells: 5000, bytes: 4 * 1024 * 1024 } as const;
 const querySourceScope = mysqlQueryRelationSchema.omit({ rowIndex: true });
+export const mysqlQueryReplaceColumnsSchema = querySourceScope;
+export type MysqlQueryReplaceColumnsInput = z.infer<typeof mysqlQueryReplaceColumnsSchema>;
+export interface MysqlQueryReplaceColumn { index: number; field: string }
+
+/** 文本替换只针对普通文本字段，定位键、生成列和自增列不能纳入。 */
+export function mysqlQueryReplaceableColumn(info: Pick<TableInfo, 'editableKey' | 'primaryKey'>, column: ColumnInfo): boolean {
+  return !info.primaryKey.includes(column.name) && !info.editableKey.includes(column.name) && !column.generated &&
+    !/\bauto_increment\b/i.test(column.extra) && /^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT)\b/i.test(column.type);
+}
+
 const queryBatchScope = querySourceScope.extend({
   rowIndices: z.array(mysqlQueryRelationSchema.shape.rowIndex).min(1).max(mysqlQueryBatchLimits.rows)
     .refine(indices => new Set(indices).size === indices.length, '查询选区包含重复行'),

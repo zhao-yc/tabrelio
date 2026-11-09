@@ -1,6 +1,11 @@
 export const mysqlQueryBatchEditZh = {
   paste: '预览查询选区粘贴',
   fill: '预览查询选区填充',
+  replace: '预览查询结果文本替换',
+  replaceOpen: '替换结果文本',
+  replaceScope: '可替换当前可见结果中有更新权限的原表文本字段。计算列和连接表字段只可查找。',
+  replaceRead: '正在核对可替换的文本字段',
+  replaceUnavailable: '当前结果的可见列没有可替换的原表文本字段。',
   delete: '预览删除勾选的查询记录',
   deleteChecked: '删除勾选的查询记录',
   deleteLimit: '勾选 1 至 100 条当前结果记录。',

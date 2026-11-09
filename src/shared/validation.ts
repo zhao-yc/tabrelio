@@ -153,7 +153,7 @@ import { queryParameterTypes, validateQueryParameters } from './queryParameters'
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
-import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRelationSchema, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema } from './mysqlQueryRelation';
+import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRelationSchema, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryReplaceColumnsSchema } from './mysqlQueryRelation';
 import { mysqlResultOriginOpenSchema } from './mysqlResultOrigins';
 import { queryExcelEncodingMessage, queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
@@ -310,6 +310,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'mysql.queryRelation': mysqlQueryRelationSchema,
   'mysql.queryRecordEdit': mysqlQueryRecordEditSchema,
   'mysql.queryBatchEdit': mysqlQueryBatchEditSchema,
+  'mysql.queryReplaceColumns': mysqlQueryReplaceColumnsSchema,
   'mysql.resultOriginOpen': mysqlResultOriginOpenSchema,
   'postgres.storage.read': postgresStorageReadSchema,
   'postgres.storage.detail': postgresStorageDetailSchema,

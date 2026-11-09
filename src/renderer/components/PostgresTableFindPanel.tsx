@@ -15,9 +15,10 @@ type Mode = 'text' | 'null' | 'field';
 type Review = Pick<PostgresFindPlan, 'patches'>;
 interface Props<Column extends ResultColumn, Plan extends Review> {
   request?: PostgresFindRequest; scope: object; pageKey?: string; enabled: boolean; writable: boolean; rows: DraftRow[];
+  host?: { className: string; inert?: boolean };
   columns: Column[]; isCurrent(): boolean; anchor(): GridFindTarget | undefined;
   replaceWritable(column: Column): boolean;
-  shortcuts?: boolean; scopeDescription?: string;
+  shortcuts?: boolean; scopeDescription?: string; replaceScopeDescription?: string;
   onOpen(replace: boolean): void; onClose(): void;
   onPreview(patches: readonly PageTextPatch[]): Plan;
   onStage(scope: object, plan: Plan): void;
@@ -26,8 +27,8 @@ interface Props<Column extends ResultColumn, Plan extends Review> {
 
 /** 数据使用现有有界工作线程，字段名在本地目录中匹配。每次更换来源都撤销旧替换计划。 */
 export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends Review>(props: Props<Column, Plan>) {
-  const { request, scope, pageKey, enabled, writable, rows, columns, isCurrent, anchor, replaceWritable,
-    shortcuts = true, scopeDescription = text.scope, onOpen, onClose, onPreview, onStage, renderGrid } = props;
+  const { request, scope, pageKey, enabled, writable, rows, columns, isCurrent, anchor, replaceWritable, host,
+    shortcuts = true, scopeDescription = text.scope, replaceScopeDescription = text.replaceScope, onOpen, onClose, onPreview, onStage, renderGrid } = props;
   const [mode, setMode] = useState<Mode>('text'), [column, setColumn] = useState('');
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
   const [regex, setRegex] = useState(false), [capture, setCapture] = useState(false);
@@ -171,7 +172,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
     }
   }
 
-  return <div className="pg-find-host" onKeyDownCapture={keyDown}>
+  return <div className={host?.className ?? 'pg-find-host'} inert={host?.inert} onKeyDownCapture={keyDown}>
     {request && <section className="pg-table-find" aria-label={text.title}
       onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}>
       <div className="query-result-find-toolbar">
@@ -202,7 +203,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         <button type="button" disabled={!oneWritable || locked} onClick={() => void makePreview(hit)}>{text.one}</button>
         <button type="button" disabled={!hasWritable || locked} onClick={() => void makePreview()}>{text.all}</button>
         {pending && <button type="button" onClick={cancelPending}>{text.cancel}</button>}
-        <span className="muted small">{text.replaceScope}</span>
+        <span className="muted small">{replaceScopeDescription}</span>
       </div>}
       <div className="query-result-find-status">
         {enabled && canSearch && !composing && !found?.error && <span role="status">{pending ? text.preparing : !found ? text.searching : found.hits.length ? text.ready(found.hits.length, chosen) : text.noMatch}</span>}

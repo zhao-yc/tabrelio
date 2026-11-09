@@ -65,7 +65,7 @@ import { incomingReferenceLimits, incomingReferenceMessages, type IncomingRefere
 import { connect, execute, type ManagedConnection } from './connection';
 import { completionQuery } from './completionQuery';
 import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryKeysUnique, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
-import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
+import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, mysqlQueryReplaceableColumn, mysqlQueryReplaceColumnsSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
 import { mysqlResultOriginOpenSchema } from '../shared/mysqlResultOrigins';
 import { MysqlResultOrigins, mysqlResultOriginCatalogAllowed, readMysqlResultOrigin } from './mysqlResultOrigins';
 import * as metadata from './metadata';
@@ -693,6 +693,7 @@ export class Engine {
       case 'mysql.queryRelation': return this.readQueryRelation(input, 'relation');
       case 'mysql.queryRecordEdit': return this.readQueryRelation(input, 'record');
       case 'mysql.queryBatchEdit': return this.readQueryRelation(input, 'batch');
+      case 'mysql.queryReplaceColumns': return this.readMysqlQueryReplaceColumns(input);
       case 'mysql.resultOriginOpen': return this.openResultOrigin(input);
       case 'query.confirmInsertExport':this.insertConfirmations.confirm({taskId:input.taskId,previewToken:input.previewToken,confirmation:input.confirmation});return;
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
@@ -1935,6 +1936,33 @@ export class Engine {
     if (rows.length !== info.columns.length || rows.some((row, index) => row.name !== info.columns[index].name || typeof row.privileges !== 'string'))
       throw Error('无法确认查询原表的字段权限');
     return rows.filter((row, index) => !info.columns[index].generated && row.privileges.split(',').includes(privilege)).map(row => row.name);
+  }
+
+  /** 只在打开替换时核对原表类型、完整主键和列级权限，不给普通查询增加目录请求。 */
+  private async readMysqlQueryReplaceColumns(input: Input): Promise<CommandMap['mysql.queryReplaceColumns']['output']> {
+    const { profile, ...raw } = input, request = mysqlQueryReplaceColumnsSchema.parse(raw);
+    const { source, current } = this.queryRelationScope({ ...request, rowIndex: 0 });
+    if (source.result.truncated || !profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId)
+      throw Error('需要可核验且完整的查询结果');
+    this.copySourceProfile(input);
+    const columns = await this.withIndependentTask(request.connectionId, request.taskId, async (managed, control) => {
+      if (managed.queryRowContext !== source.context) throw Error('原查询与回查连接的服务器或会话设置已变化');
+      const read = (sql: string) => completionQuery(managed, control, sql, []);
+      await read('SET SESSION lock_wait_timeout = 5');
+      await read('START TRANSACTION READ ONLY');
+      const context = { managed, ...control }, info = await this.readQueryTableInfo(context, source);
+      const keyed = info.primaryKey.length > 0 && info.primaryKey.length === info.editableKey.length &&
+        info.primaryKey.every((key, index) => key === info.editableKey[index]) &&
+        mysqlQueryKeysUnique(source.result, info.primaryKey.map(key => source.columns.indexOf(key)));
+      if (info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' || !keyed)
+        throw Error('查询结果需要直接返回完整且唯一的原表主键');
+      const writable = new Set(await this.queryEditWritable(context, info));
+      const fields = new Set(info.columns.filter(column => writable.has(column.name) && mysqlQueryReplaceableColumn(info, column)).map(column => column.name));
+      await read('ROLLBACK');
+      return source.columns.flatMap((field, index) => field !== null && fields.has(field) ? [{ index, field }] : []);
+    }, undefined, '核对查询文本字段', true);
+    current();
+    return columns;
   }
 
   /** 由服务器核对当前角色的实际删除权限。普通 EXPLAIN 只生成计划，不执行 DELETE。 */

@@ -17,6 +17,7 @@ export const publicCommands: Record<Command, true> = {
   'mysql.queryRelation': true,
   'mysql.queryRecordEdit': true,
   'mysql.queryBatchEdit': true,
+  'mysql.queryReplaceColumns': true,
   'mysql.resultOriginOpen': true,
   'postgres.compareData.batchPreview': true, 'postgres.compareData.batchApply': true, 'postgres.compareData.syncPreview': true, 'postgres.compareData.syncApply': true,
   'mysql.compareData.batchPreview': true, 'mysql.compareData.batchApply': true,

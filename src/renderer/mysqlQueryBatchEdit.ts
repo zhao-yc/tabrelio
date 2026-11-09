@@ -1,5 +1,5 @@
-import { mysqlQueryBatchLimits } from '../shared/mysqlQueryRelation';
-import type { DataRow, TableInfo } from '../shared/contracts';
+import { mysqlQueryBatchLimits, mysqlQueryReplaceableColumn } from '../shared/mysqlQueryRelation';
+import type { DataRow, ResultColumn, TableInfo } from '../shared/contracts';
 import { isBinaryCell } from './binaryCell';
 import { collectChanges, type DraftRow } from './dataChanges';
 import { cellClipboardType, decodeClipboard, pasteCells, type ClipboardCell } from './gridClipboard';
@@ -11,8 +11,55 @@ import { mysqlQueryBatchEditZh as text } from './locales/mysqlQueryBatchEdit.zh-
 import { batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow } from './recordBatchFill';
 import { recordBatchCellBytes } from './recordDuplicateBatch';
 import type { RecordContext } from './recordViews';
+import type { PageTextPatch } from './pageFindReplace';
 
-export type MysqlQueryBatchInput = { kind: 'paste'; matrix: ClipboardCell[][] } | { kind: 'fill'; input: GridRangeFillInput } | { kind: 'delete' } | { kind: 'insert' } | { kind: 'new' };
+type ReplacePatch = { row: number; column: number; before: string; after: string };
+export type MysqlQueryBatchInput = { kind: 'paste'; matrix: ClipboardCell[][] } | { kind: 'fill'; input: GridRangeFillInput } |
+  { kind: 'replace'; patches: ReplacePatch[] } | { kind: 'delete' } | { kind: 'insert' } | { kind: 'new' };
+
+/** 重复投影按原字段去重，显示行号和列名只用于复核。 */
+export function planMysqlQueryReplace(rows: readonly DataRow[], visible: readonly ResultColumn[], fields: ReadonlyMap<string, string>, input: readonly PageTextPatch[]) {
+  const columns = new Map(visible.map(column => [column.key, column]));
+  const patches = new Map<string, { row: number; column: ResultColumn; field: string; before: string; after: string }>();
+  const targets = new Map<string, string>();
+  for (const { rowId, key, before, after } of input) {
+    const row = Number(rowId), field = fields.get(key), column = columns.get(key);
+    if (!Number.isSafeInteger(row) || String(row) !== rowId || !rows[row] || !field || !column ||
+        ownCell(rows[row], key) !== before || /[\u0000\uD800-\uDFFF]/u.test(after)) throw Error(text.stale);
+    if (before === after) continue;
+    const identity = JSON.stringify([row, field]), previous = patches.get(identity);
+    if (previous && (previous.before !== before || previous.after !== after)) throw Error(text.stale);
+    if (!previous) patches.set(identity, { row, column, field, before, after });
+    if (!targets.has(field)) targets.set(field, key);
+  }
+  if (!patches.size) throw Error(text.noChange);
+  const positions = [...new Set([...patches.values()].map(patch => patch.row))].sort((a, b) => a - b);
+  if (positions.length > mysqlQueryBatchLimits.rows || positions.length * targets.size > mysqlQueryBatchLimits.cells)
+    throw Error(rangeText.limit);
+  const rowIndex = new Map(positions.map((row, index) => [row, index]));
+  const columnIndex = new Map([...targets.keys()].map((field, index) => [field, index]));
+  return { patches: [...patches.values()], positions, keys: [...targets.values()],
+    changes: [...patches.values()].map(({ row, field, before, after }) => ({
+      row: rowIndex.get(row)!, column: columnIndex.get(field)!, before, after,
+    })) };
+}
+
+/** 每个补丁都要与重新读回的原字段值一致，仅为真正命中的单元格生成写入。 */
+function mysqlQueryReplaceChanges(info: TableInfo, originals: DataRow[], columns: string[], patches: ReplacePatch[]) {
+  const permitted = new Set(info.columns.filter(column => mysqlQueryReplaceableColumn(info, column)).map(column => column.name));
+  const byRow = originals.map(() => new Map<string, string>());
+  let bytes = 0;
+  for (const { row, column, before, after } of patches) {
+    const name = columns[column], draft = byRow[row];
+    if (!draft || !name || !permitted.has(name) || draft.has(name) ||
+        ownCell(originals[row], name) !== before || before === after || /[\u0000\uD800-\uDFFF]/u.test(after)) throw Error(text.stale);
+    bytes += recordBatchCellBytes(after);
+    if (bytes > mysqlQueryBatchLimits.bytes) throw Error(rangeText.limit);
+    draft.set(name, after);
+  }
+  if (!byRow.length || byRow.some(draft => !draft.size)) throw Error(text.noChange);
+  return byRow.map((draft, row) => ({ kind: 'update' as const, before: originals[row], values: Object.fromEntries(draft) }));
+}
 
 /** 原生粘贴的内容必须在事件内同步捕获；等尺寸选区也可重复一个值。 */
 export function mysqlQueryPasteMatrix(data: Pick<DataTransfer, 'types' | 'getData'>, shape?: GridPasteShape): ClipboardCell[][] {
@@ -27,6 +74,7 @@ export function mysqlQueryPasteMatrix(data: Pick<DataTransfer, 'types' | 'getDat
 /** 使用数据库返回的完整值作为草稿基线，方向填充也从同一已核对快照取值。 */
 export function mysqlQueryBatchChanges(info: TableInfo, originals: DataRow[], columns: string[], operation: Exclude<MysqlQueryBatchInput, { kind: 'insert' | 'new' }>) {
   if (operation.kind === 'delete') return originals.map(before => ({ kind: 'delete' as const, before }));
+  if (operation.kind === 'replace') return mysqlQueryReplaceChanges(info, originals, columns, operation.patches);
   const context: RecordContext = { target: { connectionId: '', database: info.database, table: info.name }, generation: 0,
     connectionVersion: 0, info, loaded: true, stale: false, busy: false };
   const rows = originals.map((data, index): DraftRow => ({ id: String(index), data, original: data, inserted: false, deleted: false }));
