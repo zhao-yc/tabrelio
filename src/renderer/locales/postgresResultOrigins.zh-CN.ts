@@ -1,0 +1,15 @@
+export const postgresResultOriginsZh = {
+  open: '查看结果列来源',
+  title: 'PostgreSQL 结果列来源',
+  hint: '按原结果列顺序查询当前数据库目录。表达式或已无法解析的来源显示为「—」。打开来源对象会独立读取数据库。',
+  schema: '来源模式',
+  relation: '来源对象',
+  column: '来源字段',
+  position: '序号',
+  resultColumn: '结果列名',
+  action: '操作',
+  openRelation: '打开来源对象',
+  openLabel: (name: string, position: number) => `打开来源对象 ${name}（第 ${position} 列）`,
+  invalid: '来源目录的回包与原查询列不匹配。',
+  missing: '—',
+} as const;

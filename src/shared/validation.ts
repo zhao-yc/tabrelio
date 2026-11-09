@@ -1,3 +1,4 @@
+import { postgresResultOriginsSchema } from './postgresResultOrigins';
 import { mysqlViewDependenciesSchema, sqliteViewDependenciesSchema } from './viewDependencies';
 import { mysqlViewRenameApplySchema, mysqlViewRenamePreviewSchema } from './mysqlViewRename';
 import { mysqlViewQueryInspectSchema } from './mysqlViewFile';
@@ -290,6 +291,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableLayout.get': sqliteLayoutTargetSchema, 'sqlite.tableLayout.save': sqliteLayoutSaveSchema, 'sqlite.tableLayout.reset': sqliteLayoutResetSchema,
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
   'postgres.completion': postgresCompletionSchema,
+  'postgres.resultOrigins': postgresResultOriginsSchema,
   'postgres.storage.read': postgresStorageReadSchema,
   'postgres.storage.detail': postgresStorageDetailSchema,
   'postgres.relationMaintenance.read': postgresStructureInputSchema,

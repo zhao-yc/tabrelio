@@ -1,3 +1,5 @@
+import { postgresResultOriginsSchema } from '../../shared/postgresResultOrigins';
+import { postgresColumnReferences, readPostgresResultOrigins } from './resultOrigins';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
 import { preparePostgresBatchSync } from './batchSync';
 import { requireBatchSyncSelection } from '../../shared/dataCompareBatchSync';
@@ -93,6 +95,7 @@ interface Session {
   managed: PostgresConnection;
   pending?: Promise<unknown>;
   completion?: Promise<PostgresCompletionResult>;
+  originsReading?: boolean;
   analysis?: { token: string; sql: string; expiresAt: number };
   closing?: Promise<void>;
 }
@@ -1022,6 +1025,8 @@ export class PostgresEngine {
       results: QueryResult[] = [],
       budget = { rows: input.maxRows, bytes: 16 * 1024 * 1024 };
     const resultSources: NonNullable<QueryOutcome['postgresResultSources']> = [];
+    const resultOrigins: NonNullable<QueryOutcome['postgresResultOrigins']> = [];
+    let originBytes = 0;
     const report: QueryScriptReport | undefined = input.continueOnError === true
       ? {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []} : undefined;
     const notices = new PostgresNoticeCollector(input.parameters !== undefined);
@@ -1093,6 +1098,7 @@ export class PostgresEngine {
         task.sent = true;
         const index = results.length, ordinal = count, statementRange = sourceRange;
         try {
+          let origins: ReturnType<typeof postgresColumnReferences> = [];
           const result = await session.managed.query(part.sql, parameters, budget, (batch, columns) =>
             this.emit({
               taskId: task.id,
@@ -1103,8 +1109,14 @@ export class PostgresEngine {
               columns,
               batch,
             }),
-            undefined, (notice, redact) => notices.record(ordinal, statementRange, notice, redact));
+            undefined, (notice, redact) => notices.record(ordinal, statementRange, notice, redact),
+            fields => { origins = postgresColumnReferences(fields); });
           results.push(result);
+          const size = origins.some(Boolean) ? Buffer.byteLength(JSON.stringify(origins)) : 0;
+          if (size && originBytes + size <= 256 * 1024) {
+            resultOrigins.push(origins);
+            originBytes += size;
+          } else resultOrigins.push(null);
           // 回执只与完整结果配对。遇错继续时不能用结果数组索引代替原语句编号。
           resultSources.push({statementOrdinal: ordinal, sourceRange: statementRange});
           if (report) report.statementsCompleted++;
@@ -1175,6 +1187,7 @@ export class PostgresEngine {
       ...(report ? {scriptReport: report} : {}),
       ...(postgresNotices ? {postgresNotices} : {}),
       ...(!estimate && !analysisSql ? {postgresResultSources: resultSources} : {}),
+      ...(resultOrigins.some(Boolean) ? { postgresResultOrigins: resultOrigins } : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
@@ -1229,6 +1242,20 @@ export class PostgresEngine {
         if (profile?.dialect !== 'postgresql' || profile.id !== parsed.connectionId) throw Error('缺少可信的 PostgreSQL 角色目录连接');
         return this.trackedRead(parsed.taskId, profile, '角色目录', (read, check) =>
           read(parsed.database, connection => readPostgresRoles(connection, parsed, check)));
+      }
+      case 'postgres.resultOrigins': {
+        const source = postgresResultOriginsSchema.parse(input), session = this.sessions.get(source.sessionId);
+        const current = () => !!session && this.sessions.get(source.sessionId) === session && !session.closing && !session.managed.broken &&
+          session.connectionId === source.connectionId && session.managed.database === source.database;
+        if (!session || !current()) throw Error('PostgreSQL 查询来源的原会话已变化');
+        if (session.originsReading) throw Error('该 PostgreSQL 查询会话正在读取来源目录');
+        session.originsReading = true;
+        // 仅在用户明确打开时独立读取，不干扰原查询事务或重跑用户 SQL。
+        try {
+          const origins = await this.use(session.managed.profile, source.database, connection => readPostgresResultOrigins(connection, source.columns));
+          if (!current()) throw Error('PostgreSQL 查询来源的原会话已变化');
+          return origins;
+        } finally { session.originsReading = false; }
       }
       case 'postgres.completion': {
         if (input.sessionId) return this.completeSession(input as PostgresCompletionInput);

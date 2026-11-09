@@ -282,6 +282,7 @@ export class PostgresConnection {
     onRows?: (rows: QueryResult['rows'], columns: QueryResult['columns']) => void,
     protocol?: 'extended' | 'parse',
     onNotice?: (notice: unknown, redact: (value: string) => string) => void,
+    onFields?: (fields: readonly FieldDef[]) => void,
   ): Promise<QueryResult> {
     const client = this.client;
     if (!client || this.broken)
@@ -341,6 +342,7 @@ export class PostgresConnection {
           return;
         }
         if (batch.length) onRows?.(batch, columns());
+        try { onFields?.(fields); } catch { /* 来源元数据不能影响原查询结果。 */ }
         resolve({
           columns: columns(),
           rows,

@@ -1,3 +1,7 @@
+import { postgresIdentifier } from '../../shared/postgresSql';
+import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
+import { postgresResultOriginsZh as originsText } from '../locales/postgresResultOrigins.zh-CN';
+import { PostgresResultOriginsDialog } from './PostgresResultOriginsDialog';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { handleQueryResultShortcut } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
@@ -280,6 +284,9 @@ export function PostgresQueryTab({
   const [presetDraft, setPresetDraft] = useState<PresetDraft>();
   const presetDraftRef = useRef<PresetDraft | undefined>(undefined);
   const [archiveOutcome, setArchiveOutcome] = useState<QueryOutcome>();
+  type OriginsView = { token: object; result: QueryResult; scope: Scope; sessionId: string; origins?: PostgresResultOrigin[]; error?: string };
+  const [originsView, setOriginsView] = useState<OriginsView>();
+  const originsOwner = useRef<OriginsView | undefined>(undefined);
   const [exportView, setExportView] = useState<{ result: ResultExportData; selected: boolean; scope?: 'rectangle' }>();
   const [fullExport, setFullExport] = useState<FullQueryExportSource>();
   const exportOpen = useRef(false);
@@ -958,12 +965,13 @@ export function PostgresQueryTab({
     if (closeRequest && presetDraftRef.current) closeResultPresets(presetDraftRef.current);
     if (closeRequest && comparisonDraftRef.current) closeResultComparison(comparisonDraftRef.current);
     if (closeRequest) setResultSql(undefined);
+    if (closeRequest) { originsOwner.current = undefined; setOriginsView(undefined); }
     if (closeRequest) snapshotOperation.current?.invalidate();
   }, [closeRequest]);
   const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
-    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!resultSql,
+    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
   const archiveAvailable = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
@@ -973,6 +981,33 @@ export function PostgresQueryTab({
   const receiptOrdinal = receiptSource?.statementOrdinal;
   const selectedResultRef = useRef(result);
   selectedResultRef.current = result;
+  const origins = pin ? undefined : outcome?.postgresResultOrigins?.[selected];
+  function originsCurrent(view: OriginsView): boolean {
+    return same(view.scope) && originsOwner.current === view && selectedResultRef.current === view.result &&
+      session.current?.id === view.sessionId && !phase.current && !closeRef.current &&
+      useWorkspace.getState().settings.activeTabId === tab.id;
+  }
+  function closeOrigins() { originsOwner.current = undefined; setOriginsView(undefined); }
+  useEffect(() => {
+    if (originsOwner.current && !originsCurrent(originsOwner.current)) closeOrigins();
+  }, [result, profile, version, scope.database, workspace.settings.activeTabId, closeRequest]);
+  async function openOrigins() {
+    const original = session.current;
+    if (!original || !result || !origins || origins.length !== result.columns.length || originsOwner.current ||
+        !resultScopeCurrent() || document.querySelector(appModalSelector)) return;
+    const view = { token: {}, result, scope, sessionId: original.id };
+    originsOwner.current = view;
+    setOriginsView(view);
+    try {
+      const resolved = await invoke('postgres.resultOrigins', {
+        sessionId: original.id, connectionId: tab.connectionId, database: original.scope.database, columns: origins,
+      });
+      if (resolved.length !== origins.length) throw Error(originsText.invalid);
+      if (originsCurrent(view)) setOriginsView({ ...view, origins: resolved });
+    } catch (reason) {
+      if (originsCurrent(view)) setOriginsView({ ...view, error: errorMessage(reason) });
+    }
+  }
   const resultLocationAvailable = !!receiptSource && resultRanges.current.has(receiptSource) && !!failureSource.current?.available();
   // 名称属于服务器已返回的语句，编辑草稿时仍显示原结果的名称。
   const resultNames = useMemo(() => outcome?.results.map(result => result.columns.length
@@ -1993,6 +2028,7 @@ export function PostgresQueryTab({
                 {pin ? <button disabled={locked || !pin.result.statement.trim()} onClick={openResultSql}>{zh.query.pinnedStatement}</button> :
                   <button disabled={locked || !binding} title={zh.query.pinHint} onClick={pinResult}>{zh.query.pinResult}</button>}
                 <button disabled={locked || !binding} onClick={openResultColumns}>{columnText.open}</button>
+                {origins && <button disabled={locked} onClick={() => void openOrigins()}>{originsText.open}</button>}
                 <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
@@ -2121,6 +2157,14 @@ export function PostgresQueryTab({
           isCurrent={() => sortCurrent(sortDraft)} onApply={rules => applyResultSort(rules, sortDraft)}
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
+      {originsView && <PostgresResultOriginsDialog result={originsView.result} origins={originsView.origins} error={originsView.error}
+        onClose={() => { if (originsOwner.current?.token === originsView.token) closeOrigins(); }} onOpen={index => {
+          const owner = originsOwner.current, origin = originsView.origins?.[index];
+          if (!owner || owner.token !== originsView.token || !origin?.canOpen || !originsCurrent(owner)) return;
+          closeOrigins();
+          useWorkspace.getState().openTab({ kind: 'table', connectionId: tab.connectionId, database: owner.scope.database,
+            title: origin.table, table: postgresIdentifier(origin.schema) + '.' + postgresIdentifier(origin.table) });
+        }}/>}
       {archiveOutcome && <ResultArchiveDialog outcome={archiveOutcome} tabId={tab.id} dialect="postgresql"
         isCurrent={() => archiveAvailable && archiveOutcome === outcome && !closeRef.current && same(scope)}
         onClose={() => setArchiveOutcome(undefined)} />}

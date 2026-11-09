@@ -1360,19 +1360,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   }
   if (command === 'postgres.sequence.read' || command === 'postgres.sequence.targets' || command === 'postgres.routine.read' ||
       command === 'postgres.routine.dependencies' || command === 'postgres.routine.ownerTargets' ||
-      command.startsWith('postgres.structure.') || command.startsWith('postgres.storage.') || command === 'postgres.completion') {
+      command.startsWith('postgres.structure.') || command.startsWith('postgres.storage.') || command === 'postgres.completion' || command === 'postgres.resultOrigins') {
     // 原文档、连接修订和实际会话必须一致，关闭中的会话也不再发布目录。
     const revision = store.connectionRevision();
-    const binding = command === 'postgres.completion' && input.sessionId ? sessions.get(input.sessionId) : undefined;
+    const scoped = (command === 'postgres.completion' || command === 'postgres.resultOrigins') && input.sessionId;
+    const binding = scoped ? sessions.get(input.sessionId) : undefined;
     const check = () => {
       columnsMain.assertCapturedOwner(columns);
       connectionConfig.assertAvailable(input.connectionId);
       if (shuttingDown || revision !== store.connectionRevision()) throw Error('PostgreSQL目录的原窗口或连接已变化');
-      if (command === 'postgres.completion' && input.sessionId &&
+      if (scoped &&
           (!binding?.postgres || binding.postgres.closing || sessions.get(input.sessionId) !== binding ||
             binding.connectionId !== input.connectionId || binding.postgres.database !== input.database ||
             !columnsMain.sharesDocumentOwner(binding.postgres.owner, columns!)))
-        throw Error('PostgreSQL补全的原会话与窗口或数据库不符');
+        throw Error('PostgreSQL目录的原会话与窗口或数据库不符');
     };
     check();
     if (binding) {
@@ -3637,7 +3638,7 @@ else {
             payload.command === 'query.cancel' && (postgresImportChecks.has((input as { taskId: string }).taskId) || ['postgres.table.import', 'postgres.compareData', 'mysql.compareData', 'postgres.compareData.batchPreview', 'mysql.compareData.batchPreview'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
-            payload.command === 'postgres.completion' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
+            payload.command === 'postgres.completion' || payload.command === 'postgres.resultOrigins' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && (profile.dialect === 'postgresql' || profile.dialect === 'sqlite'))) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
