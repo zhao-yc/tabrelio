@@ -310,7 +310,7 @@ export class PostgresTableWorkspace {
   }
 
   /** 搜索详情单独持有一行的更新能力，不能替换已有表页或借此获得整表操作。 */
-  async searchEdit(input: Scoped<PostgresTableTarget>, connect: Connect, verify: (connection: PostgresConnection) =>
+  async searchEdit(input: Scoped<PostgresTableTarget>, connect: Connect, verify: (connection: PostgresConnection, relation: Relation) =>
     Promise<{ original: PostgresReferenceRowVersion; checkServer(connection: PostgresConnection): Promise<void> }>,
     assertReference: () => void): Promise<PostgresTablePage> {
     const key = this.key(input);
@@ -327,7 +327,7 @@ export class PostgresTableWorkspace {
         if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 搜索编辑原表锁未确认');
         const relation = await readRelation(connection, input.table, { headerComments: true });
         if (!relation.capabilities.update) throw Error('此 PostgreSQL 表没有记录更新能力');
-        const { original, checkServer } = await verify(connection);
+        const { original, checkServer } = await verify(connection, relation);
         if (original.tableOid !== relation.oid) throw Error('PostgreSQL 搜索编辑原表已变化，请重新搜索');
         const row = await readOriginalRow(connection, relation, original);
         if ((await connection.query('COMMIT', undefined, small())).postgresCommand !== 'COMMIT')

@@ -10,6 +10,12 @@ export const postgresResultOriginsZh = {
   action: '操作',
   openRelation: '打开来源对象',
   openLabel: (name: string, position: number) => `打开来源对象 ${name}（第 ${position} 列）`,
+  edit: '编辑查询原记录',
+  editHint: '核对完整主键和查询已返回字段后读取原记录。修改需要预览并确认提交。',
+  editStale: 'PostgreSQL 原查询结果或连接已变化，请重新查询。',
+  editBack: '返回查询结果',
+  editDiscard: '放弃这条原记录的本地修改并返回查询结果？如果提交结果未确认，请先核对数据库。',
+  editCommitted: '原记录已更新。重新执行查询可查看最新结果。',
   invalid: '来源目录的回包与原查询列不匹配。',
   missing: '—',
 } as const;

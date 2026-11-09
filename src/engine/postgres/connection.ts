@@ -92,6 +92,7 @@ export class PostgresConnection {
   version = '';
   database = '';
   backendStart = '';
+  serverIdentity = '';
   standardStrings = true;
   constructor(
     readonly profile: PostgresConnectionProfile,
@@ -232,7 +233,12 @@ export class PostgresConnection {
     this.check();
     const result = await this.query(
       "SELECT pg_catalog.current_database(), pg_catalog.current_setting('server_version'), " +
-        "pg_catalog.current_setting('standard_conforming_strings'), extract(epoch FROM backend_start)::text " +
+        "pg_catalog.current_setting('standard_conforming_strings'), extract(epoch FROM backend_start)::text, " +
+        "pg_catalog.jsonb_build_array(pg_catalog.inet_server_addr(), pg_catalog.inet_server_port(), " +
+        "extract(epoch FROM pg_catalog.pg_postmaster_start_time()), " +
+        "datid, current_user, " +
+        "CASE WHEN pg_catalog.has_function_privilege('pg_catalog.pg_control_system()', 'EXECUTE') " +
+        "THEN (pg_catalog.pg_control_system()).system_identifier::text END)::text " +
         'FROM pg_catalog.pg_stat_activity WHERE pid = pg_catalog.pg_backend_pid()',
       undefined,
       { rows: 1, bytes: 65536 },
@@ -244,6 +250,7 @@ export class PostgresConnection {
     this.version = row.c1;
     this.standardStrings = row.c2 === 'on';
     this.backendStart = row.c3;
+    this.serverIdentity = typeof row.c4 === 'string' ? createHash('sha256').update(row.c4).digest('hex') : '';
   }
 
   /** 原连接和原生备份共用已经验证主机指纹的 SSH 会话，通道只能转发至连接的数据库地址。 */

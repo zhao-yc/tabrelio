@@ -1,3 +1,4 @@
+import { PostgresSearchRecordEditDialog } from './PostgresSearchRecordEditDialog';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
 import { postgresResultOriginsZh as originsText } from '../locales/postgresResultOrigins.zh-CN';
@@ -287,6 +288,13 @@ export function PostgresQueryTab({
   type OriginsView = { token: object; result: QueryResult; scope: Scope; sessionId: string; origins?: PostgresResultOrigin[]; error?: string };
   const [originsView, setOriginsView] = useState<OriginsView>();
   const originsOwner = useRef<OriginsView | undefined>(undefined);
+  const [recordEdit, setRecordEdit] = useState<{
+    source: { sessionId: string; executionId: string; rowIndex: number };
+    result: QueryResult; scope: Scope; job: ReturnType<typeof acquireWorkspaceBusy>;
+  }>();
+  const retiredRecordExecution = useRef<string | undefined>(undefined);
+  useEffect(() => () => { recordEdit?.job.release(); }, [recordEdit]);
+
   const [exportView, setExportView] = useState<{ result: ResultExportData; selected: boolean; scope?: 'rectangle' }>();
   const [fullExport, setFullExport] = useState<FullQueryExportSource>();
   const exportOpen = useRef(false);
@@ -971,7 +979,7 @@ export function PostgresQueryTab({
   const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
-    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!resultSql,
+    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!recordEdit || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
   const archiveAvailable = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
@@ -1267,6 +1275,18 @@ export function PostgresQueryTab({
     catch (reason) { setError(errorMessage(reason)); }
   }
 
+  const recordExecution = !pin && state.transactionKnown && !state.transactionOpen &&
+    outcome?.postgresQueryRecordExecution !== retiredRecordExecution.current ? outcome?.postgresQueryRecordExecution : undefined;
+  /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
+  function openQueryRecord() {
+    const original = session.current;
+    if (!recordExecution || !original || !result || !activeDetailRow || activeDetailRow.binding !== detailBinding ||
+        !rowDetailCurrent(detailBinding)) return;
+    const rowIndex = result.rows.indexOf(activeDetailRow.binding.rows[activeDetailRow.index]);
+    if (rowIndex < 0) return;
+    const job = acquireWorkspaceBusy(tab.id);
+    setRecordEdit({ result, scope, job, source: { sessionId: original.id, executionId: recordExecution, rowIndex } });
+  }
   /** 侧栏翻行只访问当前显示行，旧侧栏回调必须通过同一视图校验。 */
   function moveRowDetail(view: QueryRowDetailsView, index: number) {
     if (!rowDetailCurrent(view.binding) || !rowDetails.valid(view)) return;
@@ -2031,6 +2051,8 @@ export function PostgresQueryTab({
                 {origins && <button disabled={locked} onClick={() => void openOrigins()}>{originsText.open}</button>}
                 <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
+                {recordExecution && <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
+                  onClick={openQueryRecord}>{originsText.edit}</button>}
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
                   onClick={() => openResultFilter()}>{filterText.open}</button>
                 {!!filterView?.rules.length && <>
@@ -2157,6 +2179,18 @@ export function PostgresQueryTab({
           isCurrent={() => sortCurrent(sortDraft)} onApply={rules => applyResultSort(rules, sortDraft)}
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
+      {recordEdit && <PostgresSearchRecordEditDialog connectionId={tab.connectionId} database={recordEdit.scope.database} queryRecord={recordEdit.source}
+        isCurrent={() => recordEdit.job.owns() && same(recordEdit.scope) && session.current?.id === recordEdit.source.sessionId &&
+          selectedResultRef.current === recordEdit.result && !closeRef.current && useWorkspace.getState().settings.activeTabId === tab.id}
+        onDirty={() => { /* 原编辑窗口全程持有标签占用，放弃草稿由对话框确认。 */ }}
+        onDone={committed => {
+          if (committed) {
+            retiredRecordExecution.current = recordEdit.source.executionId;
+            useWorkspace.getState().notify(originsText.editCommitted);
+          }
+          recordEdit.job.release();
+          setRecordEdit(undefined);
+        }}/>}
       {originsView && <PostgresResultOriginsDialog result={originsView.result} origins={originsView.origins} error={originsView.error}
         onClose={() => { if (originsOwner.current?.token === originsView.token) closeOrigins(); }} onOpen={index => {
           const owner = originsOwner.current, origin = originsView.origins?.[index];

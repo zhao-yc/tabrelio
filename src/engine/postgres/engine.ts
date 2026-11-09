@@ -1,3 +1,5 @@
+import { postgresQueryRecordPageSchema } from '../../shared/postgresQueryRecord';
+import { postgresQueryRecordIdentity, postgresQueryRecordTable, resolvePostgresQueryRecord, verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
 import { postgresResultOriginsSchema } from '../../shared/postgresResultOrigins';
 import { postgresColumnReferences, readPostgresResultOrigins } from './resultOrigins';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
@@ -96,6 +98,7 @@ interface Session {
   pending?: Promise<unknown>;
   completion?: Promise<PostgresCompletionResult>;
   originsReading?: boolean;
+  queryRecord?: PostgresQueryRecordSource;
   analysis?: { token: string; sql: string; expiresAt: number };
   closing?: Promise<void>;
 }
@@ -1020,6 +1023,8 @@ export class PostgresEngine {
     if (input.collectWarnings || input.continueOnError && (estimate || analysisSql))
       throw Error('PostgreSQL计划分析不使用遇错继续，且不支持MySQL诊断采集');
     const task: Task = { id: input.taskId, session, cancelled: false, sent: false, terminal: false };
+    const originalState = session.managed.state();
+    session.queryRecord = undefined;
     this.tasks.set(task.id, task);
     const started = performance.now(),
       results: QueryResult[] = [],
@@ -1139,6 +1144,25 @@ export class PostgresEngine {
         if (offset >= source.length) break;
       }
       if (report && !report.stopReason) report.reachedEnd = true;
+      const references = resultOrigins[0], result = results[0];
+      const currentState = session.managed.state();
+      if (!estimate && !analysisSql && !report?.errors.length && !task.cancelled && count === 1 && result?.postgresCommand === 'SELECT' &&
+          result.rows.length && references?.length === result.columns.length && session.managed.serverIdentity &&
+          originalState.transactionKnown && !originalState.transactionOpen && currentState.transactionKnown && !currentState.transactionOpen &&
+          references.every(origin => origin && origin.attribute > 0 && origin.relation === references[0]?.relation)) {
+        const table = postgresQueryRecordTable(result.statement, session.managed.standardStrings);
+        if (table) {
+          const qualified = (table.schema ? postgresIdentifier(table.schema) + '.' : '') + postgresIdentifier(table.name);
+          // 目录读取失败只撤销原记录编辑能力，不改写用户已完成的查询结果。
+          const oid = references[0]!.relation;
+          const confirmed = await postgresQueryRecordIdentity(session.managed, qualified, oid).catch(() => undefined);
+          if (confirmed && !task.cancelled && !session.managed.broken &&
+              confirmed.keys.every(key => references.some(origin => origin?.attribute === key))) {
+            session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
+              identity: confirmed.identity, table, result, origins: references.filter(origin => origin !== null) };
+          }
+        }
+      }
     } catch (reason) {
       const detail = session.managed.error(reason);
       const message = postgresQueryErrorMessage(detail, !!input.parameters);
@@ -1188,6 +1212,7 @@ export class PostgresEngine {
       ...(postgresNotices ? {postgresNotices} : {}),
       ...(!estimate && !analysisSql ? {postgresResultSources: resultSources} : {}),
       ...(resultOrigins.some(Boolean) ? { postgresResultOrigins: resultOrigins } : {}),
+      ...(session.queryRecord ? { postgresQueryRecordExecution: session.queryRecord.executionId } : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
@@ -1242,6 +1267,30 @@ export class PostgresEngine {
         if (profile?.dialect !== 'postgresql' || profile.id !== parsed.connectionId) throw Error('缺少可信的 PostgreSQL 角色目录连接');
         return this.trackedRead(parsed.taskId, profile, '角色目录', (read, check) =>
           read(parsed.database, connection => readPostgresRoles(connection, parsed, check)));
+      }
+      case 'postgres.queryRecordPage': {
+        const { owner, connectionRevision, profile, ...raw } = input;
+        const request = postgresQueryRecordPageSchema.parse(raw), session = this.sessions.get(request.sessionId);
+        const source = session?.queryRecord;
+        const current = () => {
+          const state = session?.managed.state();
+          if (!session || this.sessions.get(request.sessionId) !== session || !source || session.queryRecord !== source ||
+              source.executionId !== request.executionId || session.connectionId !== request.connectionId ||
+              session.managed.database !== request.database || session.pending || session.closing ||
+              !state?.transactionKnown || state.transactionOpen)
+            throw Error('PostgreSQL 原查询结果已变化或原会话有活动事务');
+        };
+        current();
+        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId || !source || !source.result.rows[request.rowIndex])
+          throw Error('PostgreSQL 原查询记录不可用');
+        return this.use(profile, request.database, async connection => {
+          const resolved = await resolvePostgresQueryRecord(connection, source);
+          const target = { owner, connectionRevision, connectionId: request.connectionId, database: request.database,
+            table: resolved.table, tabId: request.tabId };
+          const page = await this.tables.searchEdit(target, action => action(connection),
+            (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, request.rowIndex, resolved, relation), current);
+          return { table: resolved.table, page };
+        });
       }
       case 'postgres.resultOrigins': {
         const source = postgresResultOriginsSchema.parse(input), session = this.sessions.get(source.sessionId);

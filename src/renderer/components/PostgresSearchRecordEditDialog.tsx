@@ -1,3 +1,5 @@
+import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRecord';
+import { postgresResultOriginsZh as queryText } from '../locales/postgresResultOrigins.zh-CN';
 import { useEffect, useRef, useState } from 'react';
 import { postgresTablePreviewSchema, type PostgresTablePage, type PostgresTablePreview } from '../../shared/postgresTable';
 import { errorMessage, invoke, uid } from '../lib';
@@ -7,19 +9,24 @@ import { useWorkspace } from '../store';
 import { PostgresRecordForm, type PostgresEditableRecord } from './PostgresRecordFields';
 import { ErrorBox, Modal, Spinner } from './ui';
 
-interface Props {
+interface BaseProps {
   connectionId: string;
   database: string;
-  table: string;
-  recordRef: string;
   focusColumn?: string;
   onDirty(value: boolean): void;
   onDone(committed: boolean): void;
 }
 
+type QueryRecord = Pick<PostgresQueryRecordPageInput, 'sessionId' | 'executionId' | 'rowIndex'>;
+type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: never; isCurrent?: never } |
+  { table?: never; recordRef?: never; queryRecord: QueryRecord; isCurrent(): boolean });
+
 /** 独立于工作台表页的单行编辑，迟到的快照与提交回执分别清理和报告。 */
 export function PostgresSearchRecordEditDialog(props: Props) {
-  const { connectionId, database, table, recordRef, focusColumn } = props;
+  const { connectionId, database, table: initialTable, recordRef, focusColumn, queryRecord } = props;
+  const [table, setTable] = useState(initialTable ?? '');
+  const labels = queryRecord ? { title: queryText.edit, hint: queryText.editHint, stale: queryText.editStale, back: queryText.editBack, discard: queryText.editDiscard }
+    : { title: text.edit, hint: text.postgresEditHint, stale: text.postgresEditStale, back: text.editBack, discard: text.editDiscard };
   const [tabId] = useState(uid);
   const target = { connectionId, database, table, tabId };
   const callbacks = useRef(props); callbacks.current = props;
@@ -31,17 +38,17 @@ export function PostgresSearchRecordEditDialog(props: Props) {
   const [draft, setDraft] = useState<PostgresEditableRecord>(), [preview, setPreview] = useState<PostgresTablePreview>();
   const [form, setForm] = useState(false), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [frozen, setFrozen] = useState(false), [confirmed, setConfirmed] = useState(false);
-  const live = useRef(false), pending = useRef(true), token = useRef<string | undefined>(undefined);
+  const live = useRef(false), pending = useRef(true), token = useRef<{ pageToken: string; table: string } | undefined>(undefined);
   const notify = (message: string, failure = false) => useWorkspace.getState().notify(message, failure);
 
   function current() {
     const state = useWorkspace.getState();
-    return live.current && source.profile?.dialect === 'postgresql' && state.connections.includes(source.profile) &&
+    return live.current && callbacks.current.isCurrent?.() !== false && source.profile?.dialect === 'postgresql' && state.connections.includes(source.profile) &&
       (state.connectionVersions[connectionId] ?? 0) === source.version;
   }
 
-  function release(pageToken: string) {
-    return invoke('postgres.table.release', { ...target, pageToken }).catch(reason => notify(errorMessage(reason), true));
+  function release(snapshot: { pageToken: string; table: string }) {
+    return invoke('postgres.table.release', { ...target, ...snapshot }).catch(reason => notify(errorMessage(reason), true));
   }
 
   useEffect(() => {
@@ -51,19 +58,23 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       try {
         await Promise.resolve();
         if (!active) return;
-        if (!current()) throw Error(text.postgresEditStale);
-        const result = await invoke('postgres.table.page', { ...target, searchRecordRef: recordRef, limit: 1, offset: 0 });
+        if (!current()) throw Error(labels.stale);
+        const loaded = queryRecord
+          ? await invoke('postgres.queryRecordPage', { connectionId, database, tabId, ...queryRecord })
+          : { table: initialTable!, page: await invoke('postgres.table.page', { ...target, searchRecordRef: recordRef, limit: 1, offset: 0 }) };
+        const result = loaded.page;
         if (result.pageToken && (!active || !current() || result.rows.length !== 1 ||
             result.truncated || result.hasNext || !result.capabilities.update || result.capabilities.insert || result.capabilities.delete))
-          await release(result.pageToken);
+          await release({ pageToken: result.pageToken, table: loaded.table });
         else if (result.pageToken) {
-          token.current = result.pageToken;
+          token.current = { pageToken: result.pageToken, table: loaded.table };
+          setTable(loaded.table);
           setPage({ ...result, pageToken: result.pageToken });
           setForm(true);
           callbacks.current.onDirty(true);
           return;
         }
-        throw Error(text.postgresEditStale);
+        throw Error(labels.stale);
       } catch (reason) {
         if (active) setError(errorMessage(reason));
       } finally {
@@ -75,11 +86,11 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       if (token.current) { void release(token.current); token.current = undefined; }
       callbacks.current.onDirty(false);
     };
-  }, [connectionId, database, table, recordRef, tabId]);
+  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId]);
 
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
-    if (!current()) { setError(text.postgresEditStale); return; }
+    if (!current()) { setError(labels.stale); return; }
     pending.current = true; setBusy(true); setError('');
     try { await action(); }
     catch (reason) { if (live.current) setError(errorMessage(reason)); }
@@ -87,18 +98,18 @@ export function PostgresSearchRecordEditDialog(props: Props) {
   }
 
   function close() {
-    if (pending.current || ((draft || frozen) && !window.confirm(text.editDiscard))) return;
+    if (pending.current || ((draft || frozen) && !window.confirm(labels.discard))) return;
     callbacks.current.onDone(false);
   }
 
   function stage(change: PostgresEditableRecord) {
-    if (!page || !current() || change.kind !== 'update') throw Error(text.postgresEditStale);
+    if (!page || !current() || change.kind !== 'update') throw Error(labels.stale);
     const request = { ...target, pageToken: page.pageToken, changes: [change] };
     postgresTablePreviewSchema.parse(request);
     setDraft(change); setForm(false); setConfirmed(false);
     void run(async () => {
       const next = await invoke('postgres.table.preview', request);
-      if (!current()) throw Error(text.postgresEditStale);
+      if (!current()) throw Error(labels.stale);
       setPreview(next);
     });
   }
@@ -129,9 +140,9 @@ export function PostgresSearchRecordEditDialog(props: Props) {
   if (page && form) return <PostgresRecordForm page={page} row={0} initial={draft} initialFocus={focusColumn}
     current={() => current() && !pending.current} onSave={stage} onClose={() => draft ? setForm(false) : close()}/>;
 
-  return <Modal title={draft ? tableText.preview : text.edit} onClose={close} wide>
+  return <Modal title={draft ? tableText.preview : labels.title} onClose={close} wide>
     <div className="modal-content pg-table-preview">
-      <p>{text.postgresEditHint}</p>
+      <p>{labels.hint}</p>
       {busy && <Spinner text={text.reading}/>}
       <ErrorBox message={error}/>
       {page && draft && <dl>{draft.fields.map(field => <div key={field.column}>
@@ -144,7 +155,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       </label></>}
     </div>
     <footer className="modal-footer">
-      <button disabled={busy} onClick={close}>{text.editBack}</button>
+      <button disabled={busy} onClick={close}>{labels.back}</button>
       {draft && !frozen && <button disabled={busy} onClick={() => { setPreview(undefined); setForm(true); }}>{tableText.edit}</button>}
       {preview && <button className="primary" disabled={busy || frozen || !confirmed} onClick={apply}>{tableText.apply}</button>}
     </footer>
