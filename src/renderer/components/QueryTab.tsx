@@ -1465,6 +1465,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const mysqlSourceAvailable = !pin && !transaction && transactionKnown && !queryRunning && !busy && retiredRecordTask.current !== task.current;
   const mysqlRelationAvailable = mysqlSourceAvailable && outcome?.mysqlQueryRelation === true;
   const mysqlInsertAvailable = mysqlSourceAvailable && outcome?.mysqlQueryInsert === true;
+  const mysqlJoinColumns = outcome?.mysqlQueryJoinColumns;
   /** 查询排序只改变视图次序，回查使用原执行中准确的行对象。 */
   function openMysqlRelation(direction: 'parent' | 'children' | 'edit'): void {
     if (!activeDetailRow || activeDetailRow.binding !== detailBinding) return;
@@ -1503,6 +1504,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const rowIndices = displayIndices.map(index => sourceResult.rows.indexOf(result.rows[index]));
     const columnIndices = keys.map(key => sourceResult.columns.findIndex(column => column.key === key));
     if (rowIndices.some(index => index < 0) || columnIndices.some(index => index < 0)) throw Error(mysqlBatchText.stale);
+    if (mysqlJoinColumns && columnIndices.some(index => !mysqlJoinColumns.includes(index))) throw Error(mysqlEditText.joinReadOnly);
     const job = acquireWorkspaceBusy(tab.id);
     const owner = { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current, taskId: uid(), rowIndices };
     const key = keys[0] ?? visibleColumns[0]?.key;
@@ -1622,7 +1624,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const position = captureQueryInlineCellAnchor(anchor);
     if (index < 0 || !position) return false;
     const target = { ...position, label: cell.column.name, typed, key: cell.column.key, row: cell.row };
-    if (mysqlRelationAvailable) return startMysqlQueryRecord('edit', cell.row, { ...target, columnIndex: index });
+    if (mysqlRelationAvailable) return mysqlJoinColumns?.includes(index) !== false && startMysqlQueryRecord('edit', cell.row, { ...target, columnIndex: index });
     const origin = resultOrigins?.[index];
     if (!origin || origin.database !== 'main' || origin.table !== recordEditTable) return false;
     return startQueryRecords([cell.row], { cell: { ...target, column: origin.column } });
@@ -2550,14 +2552,14 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   onClick={openQueryRecord}>{originsText.editRecord}</button>}
 {recordTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   title={rowDetailsText.choose} onClick={openQueryRelation}>{relationText.entry}</button>}
-{mysqlRelationAvailable && (['parent', 'children'] as const).map(direction => <button key={direction}
+{mysqlRelationAvailable && !mysqlJoinColumns && (['parent', 'children'] as const).map(direction => <button key={direction}
   disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   title={rowDetailsText.choose} onClick={() => openMysqlRelation(direction)}>{mysqlRelationText[direction]}</button>)}
 {mysqlRelationAvailable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
-  title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlEditText.edit}</button>}
-{mysqlRelationAvailable && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
+  title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlJoinColumns ? mysqlEditText.editJoin : mysqlEditText.edit}</button>}
+{mysqlRelationAvailable && !mysqlJoinColumns && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
   title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('delete')}>{mysqlBatchText.deleteChecked}</button>}
-{mysqlRelationAvailable && <button disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
+{mysqlRelationAvailable && !mysqlJoinColumns && <button disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
   title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('insert')}>{mysqlBatchText.insert}</button>}
 {mysqlInsertAvailable && <button disabled={resultModal} onClick={openMysqlNewRecord}>{mysqlBatchText.new}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
@@ -2627,7 +2629,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           workspace.openTab({ ...target, kind: 'table', title: target.table, connectionId: tab.connectionId });
         }} />}
       {mysqlRelation && (mysqlRelation.direction === 'edit' ?
-        <MysqlSearchRecordEditDialog connectionId={tab.connectionId} queryRecord={mysqlRelation.request} cell={mysqlRelation.cell} visible={settings.activeTabId === tab.id}
+        <MysqlSearchRecordEditDialog connectionId={tab.connectionId} queryRecord={mysqlRelation.request} cell={mysqlRelation.cell} visible={settings.activeTabId === tab.id} joined={!!mysqlJoinColumns}
           isCurrent={() => mysqlRecordCurrent(mysqlRelation)} onDirty={() => { /* 查询标签由编辑租约占用，表单自行确认丢弃。 */ }}
           onDone={committed => closeMysqlRecord(mysqlRelation, committed)} /> :
         <MysqlQueryRelationDialog request={mysqlRelation.request} direction={mysqlRelation.direction}

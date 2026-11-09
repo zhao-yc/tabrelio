@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { FieldPacket } from 'mysql2';
 import type { ManagedConnection } from '../../src/engine/connection';
 import type { QueryResult, TableInfo } from '../../src/shared/contracts';
-import { mysqlQueryEditRowDigest, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget } from '../../src/engine/mysqlQueryRelation';
+import { mysqlQueryEditRowDigest, mysqlQueryKeysUnique, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget } from '../../src/engine/mysqlQueryRelation';
 import { SessionObjects } from '../../src/engine/sessionObjects';
+import { sessionObjectAction } from '../../src/engine/sessionObjectSyntax';
 import { buildChanges } from '../../src/engine/sql';
 import { validateCommand } from '../../src/shared/validation';
 
@@ -19,10 +20,33 @@ describe('MySQL 查询关联原行', () => {
   it('只接受单表直接投影，真实来源由协议与原 SQL 共同核对', () => {
     expect(target('SELECT a.id AS 编号, a.label FROM `库.甲`.t AS a WHERE a.id=1 ORDER BY a.id'))
       .toEqual({ database: '库.甲', table: 't' });
-    for (const sql of ['SELECT DISTINCT id FROM t', 'SELECT id FROM t JOIN u USING(id)', 'SELECT id FROM t, u',
+    for (const sql of ['SELECT DISTINCT id FROM t', 'SELECT id FROM t RIGHT JOIN u USING(id)', 'SELECT id FROM t, u',
       'SELECT id FROM t UNION SELECT id FROM u', 'SELECT id+1 AS id FROM t', 'SELECT id FROM t /*! FOR UPDATE */',
       'SELECT id FROM t INTO OUTFILE \'tmp\'', 'SELECT id FROM t WHERE @x:=id', 'SELECT id FROM t; SELECT 1'])
       expect(target(sql)).toBeUndefined();
+  });
+
+  it('连接来源以首表物理身份和协议别名共同确认，其他列不进入原行证据', () => {
+    const sql = 'SELECT q.label AS 名称, p.id AS 编号 FROM db.t p LEFT OUTER JOIN other.u q ON (q.id=p.id)';
+    const relation = target(sql)!;
+    expect(relation.joined).toEqual([{ database: 'db', table: 't', alias: 'p' }, { database: 'other', table: 'u', alias: 'q' }]);
+    const objects = new SessionObjects(0), managed = { queryRowContext: 'context', sessionObjects: objects } as ManagedConnection;
+    const origin = [{ schema: 'other', table: 'q', orgTable: 'u', orgName: 'label', flags: 0 },
+      { schema: 'db', table: 'p', orgTable: 't', orgName: 'id', flags: 4097 }] as FieldPacket[];
+    const rows = [{ c0: '连接列', c1: '9007199254740993' }, { c0: null, c1: '9007199254740992' }];
+    const joined = { ...result, rows };
+    const source = mysqlQueryRelationSource(managed, relation, origin, joined, 'run', ['id'])!;
+    expect(source).toMatchObject({ table: 't', columns: [null, 'id'], rowReadable: true });
+    expect(mysqlQueryKeysUnique(joined, [1])).toBe(true);
+    expect(mysqlQueryRelationSource(managed, relation, origin, joined, 'run', ['tenant', 'id'])?.rowReadable).toBeUndefined();
+    expect(mysqlQueryRelationSource(managed, relation, origin, { ...joined, rows: [rows[0], rows[0]] }, 'run', ['id'])?.rowReadable).toBeUndefined();
+    expect(mysqlQueryRelationSource(managed, relation, origin, { ...joined, truncated: true }, 'run', ['id'])?.rowReadable).toBeUndefined();
+    expect(mysqlQueryRelationSource(managed, relation, [{ ...origin[0], orgTable: 'unexpected' }, origin[1]], joined, 'run')).toBeUndefined();
+    const self = target('SELECT a.id, b.id FROM db.t a JOIN db.t b ON a.id=b.id')!;
+    expect(mysqlQueryRelationSource(managed, self, ['a', 'b'].map(table => ({ ...origin[1], table })), joined, 'run')).toBeUndefined();
+    expect(sessionObjectAction(sql, 'db', mode, 'mysql')).toMatchObject({ kind: 'opaque' });
+    expect(sessionObjectAction(sql, 'db', mode, 'mysql', true)).toMatchObject({ kind: 'dependencies' });
+    expect(sessionObjectAction(sql + ' WHERE db.unknown_fn(p.id)', 'db', mode, 'mysql', true)).toMatchObject({ kind: 'opaque' });
   });
 
   it('临时表遮蔽或协议指向不同表时不提供回查', () => {

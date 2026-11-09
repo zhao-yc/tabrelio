@@ -11,19 +11,21 @@ const constraints=new Set(['PRIMARY','UNIQUE','KEY','INDEX','FOREIGN','CONSTRAIN
 // 仅保留明确没有用户例程副作用的常用内置表达式；限定或引用的函数一律待核对。
 const safeCalls=new Set(['ABS','CAST','CEIL','CEILING','COALESCE','CONCAT','CONCAT_WS','CONNECTION_ID','CONVERT','COUNT','CURDATE','CURRENT_DATE','CURRENT_TIME','CURRENT_TIMESTAMP','DATABASE','DATE','DATE_FORMAT','DAY','EXISTS','EXTRACT','FLOOR','FOUND_ROWS','GREATEST','IF','IFNULL','IN','ISNULL','JSON_EXTRACT','JSON_UNQUOTE','LEAST','LEFT','LENGTH','LOWER','MAX','MIN','MOD','NOW','NULLIF','OCTET_LENGTH','RAND','REPLACE','RIGHT','ROUND','ROW_COUNT','SLEEP','SUBSTR','SUBSTRING','SUM','TIME','TRIM','TRUNCATE','UPPER','UTC_TIMESTAMP','VALUES','VERSION','YEAR']);
 /** 不能从SQL文本确认永久对象是否为调用函数的视图/触发器，因此只信任已确认临时来源。 */
-function expressionAction(tokens:Token[],database:string|undefined):SessionObjectAction{
+function expressionAction(tokens:Token[],database:string|undefined,directSource:boolean):SessionObjectAction{
   const first=word(tokens[0]);if(!['SELECT','TABLE','INSERT','REPLACE','UPDATE','DELETE','SET'].includes(first))return{kind:'opaque'};
+  const directSelect=directSource&&first==='SELECT';
   let target:ReturnType<typeof objectTarget>,sourceAt=-1;
   if(first==='SELECT'||first==='DELETE'){const sources=tokens.flatMap((token,index)=>word(token)==='FROM'?[index]:[]);if(sources.length>1)return{kind:'opaque'};sourceAt=sources[0]??-1;}
   else if(first==='TABLE')sourceAt=0;
   else if(first==='UPDATE')sourceAt=0;
   else if(first==='INSERT'||first==='REPLACE'){let cursor=1;if(word(tokens[cursor])==='INTO')cursor++;sourceAt=cursor-1;}
   if(sourceAt>=0){target=objectTarget(tokens,sourceAt+1,database);if(!target)return{kind:'opaque'};let cursor=target.end;if(word(tokens[cursor])==='AS')cursor+=2;else if(name(tokens[cursor])&&!['WHERE','SET','VALUES','VALUE','SELECT','GROUP','HAVING','ORDER','LIMIT','FOR','LOCK','WINDOW','INTO','ON','RETURNING'].includes(word(tokens[cursor])))cursor++;
-    if(tokens[cursor]?.value===','||tokens.some(token=>['JOIN','UNION','WITH','PROCEDURE'].includes(word(token))))return{kind:'opaque'};
+    if(tokens[cursor]?.value===','||tokens.some(token=>['UNION','WITH','PROCEDURE'].includes(word(token))||!directSelect&&word(token)==='JOIN'))return{kind:'opaque'};
   }
   if(tokens.some((token,index)=>index>0&&word(token)==='SELECT'))return{kind:'opaque'};
   for(let index=1;index<tokens.length;index++)if(tokens[index+1]?.value==='('&&(tokens[index].kind==='word'||tokens[index].kind==='identifier')){
     if(target&&index===target.end-1&&['INSERT','REPLACE'].includes(first))continue;
+    if(directSelect&&['ON','USING','WHERE','AND','OR','NOT'].includes(word(tokens[index])))continue;
     if(tokens[index].kind!=='word'||tokens[index-1]?.value==='.'||!safeCalls.has(word(tokens[index])))return{kind:'opaque'};
   }
   return target?{kind:'dependencies',targets:[target.target]}:{kind:'none'};
@@ -49,7 +51,7 @@ export function objectColumn(tokens:Token[]):SessionObjectColumn|undefined{
   return{name:column,...(type&&type.length<=64?{dataType:type}:{}),visible};
 }
 /** 解析成功DDL的目录变化；无法确认的语法只产生待核对状态，绝不执行或重写SQL。 */
-function parse(sql:string,database:string|undefined,mode:SqlLexicalMode,dialect:'mysql'|'mariadb'):SessionObjectAction{
+function parse(sql:string,database:string|undefined,mode:SqlLexicalMode,dialect:'mysql'|'mariadb',directSource:boolean):SessionObjectAction{
   if(sql.length>sessionObjectLimits.sqlUnits)return{kind:'opaque'};
   const tokens=tableDefinitionTokens(sql,{dialect,mode}).filter(token=>!(token.kind==='symbol'&&token.value===';'));
   if(tokens.some(token=>token.kind==='executable'))return{kind:'opaque'};
@@ -86,12 +88,12 @@ function parse(sql:string,database:string|undefined,mode:SqlLexicalMode,dialect:
     const pairs:{before:Target;after:Target}[]=[];
     for(const part of objectParts(tokens.slice(2))){const before=objectTarget(part,0,database);if(!before||word(part[before.end])!=='TO')return{kind:'opaque'};const after=objectTarget(part,before.end+1,database);if(!after||after.end!==part.length)return{kind:'opaque'};pairs.push({before:before.target,after:after.target});}return{kind:'rename',pairs};
   }
-  if(['SELECT','TABLE','WITH','INSERT','REPLACE','UPDATE','DELETE','SET','LOAD'].includes(first))return expressionAction(tokens,database);
+  if(['SELECT','TABLE','WITH','INSERT','REPLACE','UPDATE','DELETE','SET','LOAD'].includes(first))return expressionAction(tokens,database,directSource);
   return{kind:'none'};
 }
 /** 未知引号模式须由四种候选同意，不能按默认模式猜测对象名。 */
-export function sessionObjectAction(sql:string,database:string|undefined,mode:SqlLexicalMode,dialect:'mysql'|'mariadb'):SessionObjectAction{
-  try{const actions:SessionObjectAction[]=[];for(const ansiQuotes of mode.ansiQuotesKnown===false?[false,true]:[mode.ansiQuotes])for(const noBackslashEscapes of mode.noBackslashEscapesKnown===false?[false,true]:[mode.noBackslashEscapes])actions.push(parse(sql,database,{ansiQuotes,noBackslashEscapes},dialect));return actions.every(action=>JSON.stringify(action)===JSON.stringify(actions[0]))?actions[0]:{kind:'opaque'};}catch{return{kind:'opaque'};}
+export function sessionObjectAction(sql:string,database:string|undefined,mode:SqlLexicalMode,dialect:'mysql'|'mariadb',directSource=false):SessionObjectAction{
+  try{const actions:SessionObjectAction[]=[];for(const ansiQuotes of mode.ansiQuotesKnown===false?[false,true]:[mode.ansiQuotes])for(const noBackslashEscapes of mode.noBackslashEscapesKnown===false?[false,true]:[mode.noBackslashEscapes])actions.push(parse(sql,database,{ansiQuotes,noBackslashEscapes},dialect,directSource));return actions.every(action=>JSON.stringify(action)===JSON.stringify(actions[0]))?actions[0]:{kind:'opaque'};}catch{return{kind:'opaque'};}
 }
 
 /** ALTER只更新可完整表达的列动作；未知动作令列待读取，保留名称遮蔽。 */

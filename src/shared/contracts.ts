@@ -104,6 +104,7 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   postgresQueryReplaceColumns?: number[];
   postgresQueryRowSql?: import('./postgresQueryRecord').PostgresQueryRowSql;
   mysqlQueryRelation?: true;
+  mysqlQueryJoinColumns?: number[];
   mysqlQueryInsert?: true;
   /** 与原执行完整结果及列序号对齐，不随固定结果写入快照。 */
   mysqlResultOrigins?: (import('./mysqlResultOrigins').MysqlResultColumnOrigin[] | null)[];

@@ -64,7 +64,7 @@ import type { TableStatisticsInput } from '../shared/tableStatistics';
 import { incomingReferenceLimits, incomingReferenceMessages, type IncomingReferencesInput, type ChildReferencePageInput } from '../shared/incomingReferences';
 import { connect, execute, type ManagedConnection } from './connection';
 import { completionQuery } from './completionQuery';
-import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
+import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryKeysUnique, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
 import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
 import { mysqlResultOriginOpenSchema } from '../shared/mysqlResultOrigins';
 import { MysqlResultOrigins, mysqlResultOriginCatalogAllowed, readMysqlResultOrigin } from './mysqlResultOrigins';
@@ -1878,7 +1878,43 @@ export class Engine {
     const { managed } = context;
     const read = <T>(sql: string, values: (string | number | boolean | null | Buffer)[] = []) => completionQuery<T>(managed, context, sql, values);
     await read('SELECT 1 FROM ' + qualified(source.database, source.table) + ' LIMIT 0');
-    return metadata.tableInfo(managed, source.database, source.table, read);
+    const info = await metadata.tableInfo(managed, source.database, source.table, read);
+    if (source.joined) {
+      for (const target of source.joined) await read('SELECT 1 FROM ' + qualified(target.database, target.table) + ' LIMIT 0');
+      if (!await this.mysqlJoinBaseTables(managed, source.joined, read) ||
+          !mysqlQueryKeysUnique(source.result, info.primaryKey.map(name => source.columns.indexOf(name))))
+        throw Error('JOIN 主表的完整主键或连接表已无法核验');
+    }
+    return info;
+  }
+
+  /** JOIN 协议来源可指向视图，目录必须单独证明每个参与对象都是普通表。 */
+  private async mysqlJoinBaseTables(managed: ManagedConnection, targets: readonly { database: string; table: string }[],
+    read: <T>(sql: string, params: string[]) => Promise<{ rows: T }> = <T>(sql: string, params: string[]) => execute<T>(managed, sql, params)): Promise<boolean> {
+    const sql = 'SELECT TABLE_SCHEMA AS db,TABLE_NAME AS name,TABLE_TYPE AS kind FROM information_schema.TABLES WHERE ' +
+      targets.map(() => '(BINARY TABLE_SCHEMA=BINARY ? AND BINARY TABLE_NAME=BINARY ?)').join(' OR ');
+    const { rows } = await read<{ db: string; name: string; kind: string }[]>(sql, targets.flatMap(target => [target.database, target.table]));
+    return rows.length === targets.length && targets.every(target => rows.some(row => row.db === target.database && row.name === target.table && row.kind === 'BASE TABLE'));
+  }
+
+  /** 不在用户查询会话执行目录 SQL，避免改变结果、警告或用户会话状态。 */
+  private async confirmMysqlJoinSource(task: RunningTask, target: NonNullable<RunningTask['relationTarget']>): Promise<string[] | undefined> {
+    const origin = task.relationFields && mysqlQueryRelationOrigin(task.managed, target, task.relationFields);
+    const joined = origin?.joined;
+    if (!origin || !joined || task.cancelled) return;
+    try {
+      return await this.withConnection(task.managed.profile.id, async managed => {
+        if (managed.queryRowContext !== origin.context) return;
+        await execute(managed, 'SET SESSION lock_wait_timeout = 5');
+        if (!await this.mysqlJoinBaseTables(managed, [origin, ...joined])) return;
+        const { rows } = await execute<{ name: string }[]>(managed,
+          'SELECT k.COLUMN_NAME AS name FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.TABLES t ' +
+          'ON BINARY t.TABLE_SCHEMA=BINARY k.TABLE_SCHEMA AND BINARY t.TABLE_NAME=BINARY k.TABLE_NAME ' +
+          "WHERE BINARY k.TABLE_SCHEMA=BINARY ? AND BINARY k.TABLE_NAME=BINARY ? AND k.CONSTRAINT_NAME='PRIMARY' AND t.ENGINE='InnoDB' " +
+          'ORDER BY k.ORDINAL_POSITION LIMIT 1025', [origin.database, origin.table]);
+        return rows.length > 1024 || rows.some(row => typeof row.name !== 'string' || !row.name) ? [] : rows.map(row => row.name);
+      });
+    } catch { return undefined; }
   }
 
   private async readQueryOriginal(context: StructureTaskContext, source: MysqlQueryRelationSource, info: TableInfo, rowIndex: number, lock: boolean | 'share' = false) {
@@ -1925,8 +1961,13 @@ export class Engine {
     const columnIndices = batch && 'columnIndices' in batch ? batch.columnIndices : (columnIndex === undefined ? undefined : [columnIndex]);
     const { source, current, session } = this.queryRelationScope({ ...request, rowIndex: rowIndices[0] });
     // 原行和原字段只按原执行的协议序号定位，排序及显示别名不能扩大写入范围。
-    const columns = columnIndices?.map(index => source.columns[index]);
-    if (columns?.some(name => name === undefined) || columns && new Set(columns).size !== columns.length)
+    if (source.joined && (kind === 'relation' || operation !== 'update')) throw Error('JOIN 查询仅支持编辑主表原记录');
+    const columns = columnIndices?.map(index => {
+      const name = source.columns[index];
+      if (name === null || name === undefined) throw Error('当前查询字段没有可编辑的主表来源');
+      return name;
+    });
+    if (columns && new Set(columns).size !== columns.length)
       throw Error('查询结果原列不可用或重复引用同一字段');
     if (!profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId)
       throw Error('缺少原查询记录的可信连接');
@@ -2112,6 +2153,7 @@ export class Engine {
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
     let executed = 0, sourceRange: QueryFailureSourceRange | undefined;
     let relationTarget: ReturnType<typeof mysqlQueryRelationTarget>;
+    let joinedPrimaryKey: string[] | undefined;
     try {
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw new Error('参数查询必须提供参数列表');
@@ -2120,8 +2162,16 @@ export class Engine {
           task.managed.serverStatus !== undefined && (task.managed.serverStatus & 1) === 0
           ? mysqlQueryRelationTarget(statement, mode, task.managed.status.dialect) : undefined;
         task.relationTarget = relationTarget;
-        try { results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined)); }
+        try {
+          results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined));
+          if (relationTarget?.joined) {
+            joinedPrimaryKey = await this.confirmMysqlJoinSource(task, relationTarget);
+            if (!joinedPrimaryKey) { task.managed.sessionObjects?.invalidate(); relationTarget = undefined; }
+          }
+          this.checkCancelled(task);
+        }
         catch (error) {
+          if (relationTarget?.joined) task.managed.sessionObjects?.invalidate();
           if (!values) throw error;
           if (task.cancelled) this.checkCancelled(task);
           const code = (error as { code?: unknown })?.code;
@@ -2152,10 +2202,13 @@ export class Engine {
       this.emit({ taskId: task.id, status: 'running', progress: 99, message: 'SQL 已执行，但无法确认当前事务状态；会话已断开，请重新连接并核对结果，不要直接重复写操作。' });
     }
     const source = relationTarget && task.relationFields && executed === 1 && results.length === 1 && transactionOpen === false &&
-      !task.cancelled && !task.managed.broken ? mysqlQueryRelationSource(task.managed, relationTarget, task.relationFields, results[0], task.id) : undefined;
+      !task.cancelled && !task.managed.broken ? mysqlQueryRelationSource(task.managed, relationTarget, task.relationFields, results[0], task.id, joinedPrimaryKey) : undefined;
     if (source) this.queryRelationSources.set(task.managed, source);
     return { results, elapsedMs: performance.now() - started, transactionOpen,
-      ...(source ? { mysqlQueryInsert: true as const } : {}), ...(source?.rowReadable ? { mysqlQueryRelation: true as const } : {}) };
+      ...(source && !source.joined ? { mysqlQueryInsert: true as const } : {}),
+      ...(source?.rowReadable ? { mysqlQueryRelation: true as const, ...(source.joined ? {
+        mysqlQueryJoinColumns: source.columns.flatMap((column, index) => column === null ? [] : [index]),
+      } : {}) } : {}) };
   }
 
   /** 显式警告模式仍首错即停；采集与用户SQL分开计事实，默认路径不进入此分支。 */

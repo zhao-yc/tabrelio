@@ -24,12 +24,12 @@ interface BaseProps {
   onDirty(value: boolean): void;
   onDone(committed: boolean): void;
 }
-type Props = BaseProps & ({ database: string; table: string; recordRef: string; queryRecord?: never; isCurrent?: never; cell?: never; visible?: never } |
+type Props = BaseProps & ({ database: string; table: string; recordRef: string; queryRecord?: never; isCurrent?: never; cell?: never; visible?: never; joined?: never } |
   { database?: never; table?: never; recordRef?: never; queryRecord: MysqlQueryRecordEditInput; isCurrent(): boolean;
-    cell?: QueryInlineCellAnchor & { label: string; typed?: string }; visible?: boolean });
+    cell?: QueryInlineCellAnchor & { label: string; typed?: string }; visible?: boolean; joined?: boolean });
 
 /** 独立表单复用普通表页的字段输入和草稿校验，提交继续走原事务回执。 */
-export function MysqlSearchRecordEditDialog({ connectionId, database, table, recordRef, queryRecord, isCurrent, focusColumn, onDirty, onDone, cell, visible = true }: Props) {
+export function MysqlSearchRecordEditDialog({ connectionId, database, table, recordRef, queryRecord, isCurrent, focusColumn, onDirty, onDone, cell, visible = true, joined }: Props) {
   const labels = queryRecord ? queryText : { edit: text.edit, hint: text.mysqlEditHint, stale: text.mysqlEditStale,
     preview: text.mysqlPreview, confirm: text.mysqlConfirm, apply: text.mysqlApply, back: text.editBack, discard: text.editDiscard };
   const [version] = useState(() => useWorkspace.getState().connectionVersions[connectionId] ?? 0);
@@ -173,7 +173,7 @@ export function MysqlSearchRecordEditDialog({ connectionId, database, table, rec
     </form>, document.body);
   }
 
-  return <Modal title={preview ? labels.preview : labels.edit} onClose={close} wide>
+  return <Modal title={preview ? labels.preview : joined ? queryText.editJoin : labels.edit} onClose={close} wide>
     <div className="modal-content pg-table-preview">
       <p>{labels.hint}</p>
       {busy && <Spinner text={text.reading}/>}
