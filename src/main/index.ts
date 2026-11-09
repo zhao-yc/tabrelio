@@ -2742,6 +2742,15 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const { name } = store.createBoundQuery(historyPages.querySaveContent(input));
       return { name };
     }
+    case 'history.saveQueryBatch': {
+      const assertCurrent = () => {
+        columnsMain.assertCapturedOwner(columns);
+        if (shuttingDown) throw Error('客户端正在退出，不能批量保存历史查询');
+      };
+      assertCurrent();
+      const { contents, group } = historyPages.querySaveBatchContents(input);
+      return { count: store.createBoundQueryBatch(contents, group, assertCurrent) };
+    }
     case 'history.deletePreview': {
       if (shuttingDown) throw Error('客户端正在退出，不能清理执行历史');
       if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId) || historyDelete.owns(input.taskId)) throw Error('请求编号已使用');
@@ -3666,7 +3675,7 @@ else {
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command === 'cellFiles.saveText' || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.copySql' || payload.command === 'history.copySql' || payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.copySql' || payload.command === 'history.copySql' || payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'history.saveQueryBatch' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || payload.command === 'sqlite.tableExport' || payload.command === 'sqlite.queryExport' || payload.command === 'sqlite.workbookExport' || payload.command === 'postgres.workbookExport' || payload.command === 'mysql.workbookExport' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -3709,7 +3718,7 @@ else {
           if (payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript' || payload.command === 'sqlite.view.inspectQuery' || payload.command === 'sqlite.view.dependencies') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }
           if (payload.command === 'queries.copySql' || payload.command === 'history.copySql') columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
-          if (payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
+          if (payload.command === 'history.exportSql' || payload.command === 'history.exportSqlArchive' || payload.command === 'history.saveQuery' || payload.command === 'history.saveQueryBatch' || payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'table.filteredUpdate.preview') {
             try { filteredUpdates.assertPublication(result, columns!); }

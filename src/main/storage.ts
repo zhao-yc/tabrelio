@@ -39,7 +39,7 @@ import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetT
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQueryImportLimits,savedQuerySearchLimits}from'../shared/savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPagePosition}from'../shared/savedQueryPages';
-import type{HistoryPagePosition,HistoryPageInput}from'../shared/historyPages';
+import { historySaveBatchLimits, type HistoryPagePosition, type HistoryPageInput } from '../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
 import { queryCreateSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
 import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
@@ -57,7 +57,7 @@ import { savedQueryDeleteSelectedLimits, savedQueryDeleteSelectedSchema, savedQu
 import { parseHistoryRecord } from './historyPageMatch';
 import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
 import { historyDeleteByteTotal, historyDeleteReferences } from './historyDeleteStorage';
-import { savedQueryOrganizationApplySchema, savedQueryGroupIds, type SavedQueryOrganizationApply } from '../shared/savedQueryOrganization';
+import { savedQueryOrganizationApplySchema, savedQueryGroupIds, type SavedQueryGroupTarget, type SavedQueryOrganizationApply } from '../shared/savedQueryOrganization';
 import { applySavedQueryOrganization, readSavedQueryOrganization, savedQueryOrganizationRevision, savedQueryOrganizationSnapshot, savedQueryMembershipCondition, validateSavedQueryOrganizationStorage } from './savedQueryOrganizationStorage';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
@@ -1054,6 +1054,18 @@ export class LocalStore {
       ...(context.state === 'legacy' ? context.database === undefined ? {} : { database: context.database } : { databaseContext: { ...context }, ...(context.state === 'known' && context.database !== null ? { database: context.database } : {}) }) };
     return parseSavedQueryRecord(id, JSON.stringify(query));
   }
+  /** 保存时使用原分组版本，禁止把过期目标降级为未分组。 */
+  private assertQuerySaveGroup(group?: SavedQueryGroupTarget): void {
+    if (!group) return;
+    const organization = readSavedQueryOrganization(this.db);
+    const revision = savedQueryOrganizationRevision(organization, this.queryRevisionValue, this.queryOrganizationGeneration);
+    if (group.expectedRevision !== revision || !organization.groups.some(item => item.id === group.id))
+      throw Error('保存查询分组已变化，请刷新并重新选择分组');
+  }
+  private insertNewBoundQuery(query: SavedQuery, group?: SavedQueryGroupTarget): void {
+    this.db.run('INSERT INTO queries VALUES (?,?,?)', [query.id, JSON.stringify(query), query.updatedAt]);
+    if (group) this.db.run('INSERT INTO saved_query_memberships (query_id,group_id) VALUES (?,?)', [query.id, group.id]);
+  }
   /** 新编号和可选分组同一事务保存，旧分组视图或写盘失败都不会留下未分组的记录。 */
   createBoundQuery(raw: unknown): QuerySaveResult {
     const content = queryCreateSchema.parse(raw), query = this.boundQueryRecord(randomUUID(), content);
@@ -1062,17 +1074,26 @@ export class LocalStore {
     this.mutate(() => {
       profile = this.querySourceProfile(content.connectionId);
       if (content.connectionId && !profile) throw Error('当前连接已删除，请选择有效连接后另存');
-      if (group) {
-        const organization = readSavedQueryOrganization(this.db);
-        const revision = savedQueryOrganizationRevision(organization, this.queryRevisionValue, this.queryOrganizationGeneration);
-        if (group.expectedRevision !== revision || !organization.groups.some(item => item.id === group.id))
-          throw Error('保存查询分组已变化，请刷新并重新选择分组');
-      }
-      this.db.run('INSERT INTO queries VALUES (?,?,?)', [query.id, JSON.stringify(query), query.updatedAt]);
-      if (group) this.db.run('INSERT INTO saved_query_memberships (query_id,group_id) VALUES (?,?)', [query.id, group.id]);
+      this.assertQuerySaveGroup(group);
+      this.insertNewBoundQuery(query, group);
     });
     this.queryRevisionValue++;
     return { name: query.name, source: bindSavedQuery(query, JSON.stringify(query), profile) };
+  }
+  /** 一批历史查询及其分组成员同事务落盘，任何失败都恢复原查询库。 */
+  createBoundQueryBatch(contents: readonly QuerySaveContent[], group: SavedQueryGroupTarget | undefined, assertCurrent: () => void): number {
+    if (!contents.length || contents.length > historySaveBatchLimits.items) throw Error('批量保存查询的数量超出限制');
+    const records = contents.map(content => this.boundQueryRecord(randomUUID(), queryCreateSchema.parse(content)));
+    assertCurrent();
+    this.mutate(() => {
+      this.assertQuerySaveGroup(group);
+      for (const record of records) {
+        if (record.connectionId && !this.querySourceProfile(record.connectionId)) throw Error('历史来源连接已变化，请重新保存');
+        this.insertNewBoundQuery(record, group);
+      }
+    }, assertCurrent);
+    this.queryRevisionValue++;
+    return records.length;
   }
   /** 导入文件都生成独立编号。全部记录通过校验后才进入同一事务，写盘失败时一起恢复。 */
   createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void): void {

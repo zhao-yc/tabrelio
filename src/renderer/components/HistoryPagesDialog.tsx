@@ -1,7 +1,7 @@
 import { UsageHelp } from './ui';
 import{useEffect,useRef,useState}from'react';
 import{ArrowUpRight,Clock3,FileCode2,Search,CheckCircle2,XCircle}from'lucide-react';
-import type{HistoryPageInput,HistoryPage,HistoryPageEntry,HistoryPageSort}from'../../shared/historyPages';
+import { historySaveBatchLimits, type HistoryPageInput, type HistoryPage, type HistoryPageEntry, type HistoryPageSort } from '../../shared/historyPages';
 import type { QueryFileEncoding } from '../../shared/contracts';
 import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
 import { SavedQuerySaveGroup } from './SavedQuerySaveGroup';
@@ -24,6 +24,7 @@ import { historyInsertionZh as insertionText } from '../locales/historyInsertion
 import { SqlTextPreview } from './SqlTextPreview';
 
 type Filters=Omit<HistoryPageInput,'taskId'|'timeRange'|'durationRange'>;
+type BatchSaveDraft = { items: HistoryDeleteReference[]; revision: number; prefix: string; keepSource: boolean; group?: SavedQueryGroupTarget };
 
 /** 历史面板仅保留当前概要页，原文、错误全文和打开目标都需明确选择。 */
 export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectionId}:{onClose():void;onQueries():void;insertion?:HistoryInsertionTarget|null;initialConnectionId?:string}){
@@ -42,6 +43,13 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
  const [exportNotice, setExportNotice] = useState<{ item: HistoryPageEntry; name: string }>();
  const [archiveNotice, setArchiveNotice] = useState('');
+ const [batchDraft, setBatchDraft] = useState<BatchSaveDraft>();
+ const [batchNotice, setBatchNotice] = useState('');
+ const [batchError, setBatchError] = useState('');
+ const batchDraftRef = useRef(batchDraft);
+ batchDraftRef.current = batchDraft;
+ const batchTrigger = useRef<HTMLButtonElement>(null);
+ useEffect(() => { if (batchNotice) batchTrigger.current?.focus(); }, [batchNotice]);
  const [saveDraft, setSaveDraft] = useState<{ item: HistoryPageEntry; name: string; keepSource: boolean; trigger: HTMLButtonElement; group?: SavedQueryGroupTarget }>();
  const [saveNotice, setSaveNotice] = useState<{ item: HistoryPageEntry; name: string; trigger: HTMLButtonElement }>();
  const [saveError, setSaveError] = useState('');
@@ -53,11 +61,12 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  const cancellation=useRef<Promise<unknown>|undefined>(undefined);
  const insertionClosing=useRef(false),cancelInsertionClose=useRef(false);
  const insertionRef=useRef(insertion);insertionRef.current=insertion;
+ const batchVisible = batchDraft?.items === selected && batchDraft.revision === generation.current && filterKey === applied ? batchDraft : undefined;
  const[insertAvailable,setInsertAvailable]=useState(()=>insertion?.current()??false);
  /** 原编辑器事件即时更新可用性；关闭或切换资料源永久撤销本modal的同一租约。 */
  useEffect(()=>{if(!insertion){setInsertAvailable(false);return;}const sync=()=>setInsertAvailable(insertion.current());const unsubscribe=insertion.subscribe(sync);sync();return unsubscribe;},[insertion]);
  /** 每次草稿修改立即使旧范围选择失效；不会把新范围卡片混入旧选择。 */
- function draftChanged(){generation.current++;setSqlView(undefined);setCopiedItem(undefined);setExportNotice(undefined);setArchiveNotice('');setSaveDraft(undefined);setSaveNotice(undefined);deleteRef.current?.invalidate();if(selectedRef.current.length){selectedRef.current=[];setSelected([]);setSelectionNotice(deletion.selectionCleared);}}
+ function draftChanged(){generation.current++;setSqlView(undefined);setCopiedItem(undefined);setExportNotice(undefined);setArchiveNotice('');setBatchDraft(undefined);setBatchNotice('');setSaveDraft(undefined);setSaveNotice(undefined);deleteRef.current?.invalidate();if(selectedRef.current.length){selectedRef.current=[];setSelected([]);setSelectionNotice(deletion.selectionCleared);}}
  function changeFilters(value:Filters){draftChanged();setFilters(value);}
  /** 一个原任务只发送一次取消，并一直持有ACK直至原任务也终结。 */
  function cancelPage(){if(!active.current)return cancellation.current;const taskId=active.current;if(!cancellation.current)cancellation.current=invoke('query.cancel',{taskId});return cancellation.current;}
@@ -222,6 +231,47 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
     if (!closed.current) setBusy(false);
   }
  }
+ /** 只提交勾选当时的记录摘要。主进程核对整批后一次写入，失败时保留表单便于修正。 */
+ async function saveHistoryBatch(draft: BatchSaveDraft) {
+  const current = () => !closed.current && selectedRef.current === draft.items &&
+    generation.current === draft.revision && view.current.filterKey === view.current.applied;
+  if (locked.current || deleteRef.current || batchDraftRef.current !== draft || !current() || !draft.prefix.trim()) return;
+  locked.current = true;
+  setBusy(true);
+  setBatchError('');
+  setBatchNotice('');
+  try {
+   const { items, prefix, keepSource, group } = draft;
+   const request = invoke('history.saveQueryBatch', { items, prefix, keepSource, ...(group ? { group } : {}) });
+   pending.current = request;
+   const { count } = await request;
+   if (current()) {
+    setBatchDraft(undefined);
+    setBatchNotice(t.saveBatchDone(count));
+   }
+  } catch (reason) {
+   if (current()) setBatchError(errorMessage(reason));
+  } finally {
+   pending.current = undefined;
+   locked.current = false;
+   if (!closed.current) setBusy(false);
+  }
+ }
+ function beginSaveBatch() {
+  const items = selectedRef.current;
+  if (locked.current || closed.current || deleteRef.current || !items.length || items.length > historySaveBatchLimits.items ||
+    view.current.filterKey !== view.current.applied) return;
+  if (batchVisible) { closeSaveBatch(); return; }
+  setSaveDraft(undefined);
+  setBatchError('');
+  setBatchNotice('');
+  setBatchDraft({ items, revision: generation.current, prefix: t.saveBatchDefault, keepSource: true });
+ }
+ function closeSaveBatch() {
+  if (locked.current) return;
+  setBatchDraft(undefined);
+  batchTrigger.current?.focus();
+ }
  function closeSaveDraft() {
   saveDraft?.trigger.focus();
   setSaveDraft(undefined);
@@ -259,6 +309,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
     <button disabled={busy || closing || filterKey !== applied} aria-expanded={!!draft} onClick={event => {
       if (draft) { closeSaveDraft(); return; }
       setSaveError('');
+      setBatchDraft(undefined);
       setSaveDraft({ item, name: '', keepSource: !!source, trigger: event.currentTarget });
     }}>{t.saveQuery}</button>
     {draft && <form aria-label={t.saveQuery} onSubmit={event => { event.preventDefault(); void saveHistoryQuery(draft); }}>
@@ -288,6 +339,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  return <Modal title={zh.activity.text003} wide onClose={()=>void close()} onEscape={event => {
   event.stopPropagation();
   if (saveDraft) { if (!locked.current) closeSaveDraft(); }
+  else if (batchVisible) closeSaveBatch();
   else if (sqlView) setSqlView(undefined);
   else void close();
  }}><div className="dialog-tabs"><button className="selected"><Clock3 size={14}/>{zh.activity.text004}</button><button disabled={closing} onClick={()=>void close(onQueries)}><FileCode2 size={14}/>{zh.activity.text005}</button></div><div className="modal-content saved-query-pages history-pages">
@@ -310,7 +362,23 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   </select></label>
   <UsageHelp><p>{t.timeHint}</p><p>{t.durationHint}</p><p>{t.hint}</p><p>{insertionText.hint}</p><p>{t.openHint}</p></UsageHelp><p role="status">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p>{applied&&filterKey!==applied&&<p role="status" aria-label={t.filterStatus}>{t.pending}</p>}<ErrorBox message={error}/>{busy&&<Spinner/>}{reply&&<p role="status" aria-label={t.pageStatus}>{formatText(t.summary,batch,reply.scanned,reply.matched,reply.failed)} {reply.stoppedOnError?t.failedStop:reply.cursor?t.more:t.done}</p>}
   <section aria-label={deletion.title}><p role="status" aria-label={deletion.selectionStatus}>{deletion.selection(selected.length)}</p>{selectionNotice&&<p role="status" aria-label={deletion.selectionNoticeStatus}>{selectionNotice}</p>}<div className="inline-field"><button disabled={busy||closing||filterKey!==applied||!reply?.items.length} onClick={()=>selectItems(reply?.items??[])}>{deletion.selectBatch}</button><button disabled={busy||closing||!selected.length} onClick={clearSelection}>{deletion.clearSelection}</button><button disabled={busy || closing || filterKey !== applied || !selected.length} title={t.sqlArchiveHint}
-    onClick={() => void exportSqlArchive()}>{t.sqlArchive}</button><button disabled={busy||closing||filterKey!==applied||!selected.length} onClick={()=>beginDelete({kind:'selected',records:selectedRef.current})}>{deletion.selected}</button><button disabled={busy||closing||!reply||filterKey!==applied} onClick={()=>{const source=appliedInput.current;if(source){const{onError,sort,...matching}=source;beginDelete({kind:'filtered',filters:matching});}}}>{deletion.filtered}</button></div>{archiveNotice && <p role="status">{archiveNotice}</p>}<p className="muted small">{deletion.risk}</p></section>
+    onClick={() => void exportSqlArchive()}>{t.sqlArchive}</button><button disabled={busy || closing || filterKey !== applied || !selected.length || selected.length > historySaveBatchLimits.items}
+    ref={batchTrigger} aria-expanded={!!batchVisible} onClick={beginSaveBatch}>{t.saveBatch}</button><button disabled={busy||closing||filterKey!==applied||!selected.length} onClick={()=>beginDelete({kind:'selected',records:selectedRef.current})}>{deletion.selected}</button><button disabled={busy||closing||!reply||filterKey!==applied} onClick={()=>{const source=appliedInput.current;if(source){const{onError,sort,...matching}=source;beginDelete({kind:'filtered',filters:matching});}}}>{deletion.filtered}</button></div>{archiveNotice && <p role="status">{archiveNotice}</p>}
+  {selected.length > historySaveBatchLimits.items && <p className="muted small">{t.saveBatchLimit(historySaveBatchLimits.items)}</p>}
+  {batchVisible && <form aria-label={t.saveBatch} onSubmit={event => { event.preventDefault(); void saveHistoryBatch(batchVisible); }}>
+    <p>{t.saveBatchScope(batchVisible.items.length)}</p>
+    <Field label={t.saveBatchPrefix}><input autoFocus required maxLength={historySaveBatchLimits.prefix} value={batchVisible.prefix} disabled={busy || closing}
+      onChange={event => setBatchDraft({ ...batchVisible, prefix: event.target.value })}/></Field>
+    <label className="inline-field"><input type="checkbox" checked={batchVisible.keepSource} disabled={busy || closing}
+      onChange={event => setBatchDraft({ ...batchVisible, keepSource: event.target.checked })}/>{t.saveBatchKeepSource}</label>
+    <p className="muted small">{t.saveBatchSourceHint}</p>
+    <SavedQuerySaveGroup disabled={busy || closing} target={batchVisible.group} onChange={group => setBatchDraft({ ...batchVisible, group })}/>
+    <ErrorBox message={batchError}/>
+    <button type="submit" disabled={busy || closing || !batchVisible.prefix.trim()}>{t.saveBatchConfirm}</button>
+    <button type="button" disabled={busy || closing} onClick={closeSaveBatch}>{zh.common.cancel}</button>
+  </form>}
+  {batchNotice && <p role="status">{batchNotice}</p>}
+  <p className="muted small">{deletion.risk}</p></section>
   <div className="history-list">{reply?.items.map(item=><article className="history-card" data-history-id={item.entry.id} key={item.entry.id}><div><label><input type="checkbox" aria-label={deletion.select(item.entry.id)} checked={selected.some(value=>value.id===item.entry.id&&value.digest===item.digest)} disabled={busy||closing||filterKey!==applied} onChange={event=>{if(busy||closing||filterKey!==applied)return;if(event.target.checked)selectItems([item]);else{const value=selectedRef.current.filter(record=>record.id!==item.entry.id);selectedRef.current=value;setSelected(value);}}}/></label><strong>{new Date(item.entry.startedAt).toLocaleString('zh-CN',timeZone?{timeZone}:undefined)}</strong><span className="grow"/>{item.entry.success?<CheckCircle2 size={14} className="accent-text"/>:<XCircle size={14} className="danger"/>}<span className="muted small">{connections.find(profile=>profile.id===item.entry.connectionId)?.name||t.sourceMissing} / {databaseLabel(item)}</span></div><pre>{item.sqlPreview}{item.previewTruncated?'…':''}</pre>{item.previewTruncated&&<p className="muted small">{formatText(t.preview,item.sqlUnits)}</p>}{sqlView?.item===item?<SqlTextPreview key={item.digest} title={t.sqlTitle} sql={sqlView.sql} onClose={()=>setSqlView(value=>value===sqlView?undefined:value)}/>:<button disabled={busy||closing||filterKey!==applied} onClick={()=>void showSql(item)}>{t.sqlFull}</button>}<button disabled={busy||closing||filterKey!==applied} onClick={()=>void copySql(item)}>{t.sqlCopy}</button>{copiedItem===item&&<p role="status">{t.sqlCopied}</p>}<button disabled={busy||closing||filterKey!==applied} title={t.sqlExportHint} onClick={()=>void exportSql(item)}>{t.sqlExport}</button>{exportNotice?.item===item&&<p role="status">{t.sqlExported(exportNotice.name)}</p>}{saveControls(item)}{item.errorPreview!==undefined&&<div className="history-error"><p className="danger small">{t.errorPreview}：{item.errorPreview}{item.errorTruncated?'…':''}</p><button disabled={busy||closing} onClick={()=>void showError(item)}>{t.errorFull}</button>{errorView?.id===item.entry.id&&<section aria-label={t.errorTitle}><p className="muted small">{formatText(t.errorSize,item.errorUnits)}</p><pre>{errorView.error}</pre><button onClick={()=>setErrorView(undefined)}>{t.errorClose}</button></section>}</div>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection,item.entry.id)} value={target(item)} disabled={busy||closing} onChange={event=>setTargets(current=>new Map(current).set(item.entry.id,event.target.value))}><option value="">{t.choose}</option>{connections.map(profile=><option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label><footer><span className="muted small">{formatText(zh.activity.text008,item.entry.elapsedMs)}</span><span className="grow"/><button disabled={busy||closing||filterKey!==applied} onClick={()=>beginDelete({kind:'selected',records:[{id:item.entry.id,digest:item.digest}]})}>{deletion.single}</button><button disabled={busy||closing||!insertAvailable||filterKey!==applied} onClick={()=>void insert(item)}>{insertionText.insert}</button><button disabled={busy||closing||!target(item)} onClick={()=>void open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer></article>)}{reply&&!reply.items.length&&<Empty title={t.empty} text={t.emptyHint}/>}</div>
   {reply?.failures.length?<details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure,index)=><p key={index}>{failure.id}：{failure.message}</p>)}</details>:null}
  </div><footer className="modal-footer"><button disabled={busy||closing} onClick={()=>void load()}>{t.refresh}</button><button disabled={busy||closing||!reply?.cursor||filterKey!==applied} onClick={()=>void load(true)}>{t.next}</button>{busy&&<button disabled={closing||!active.current} onClick={()=>{if(active.current)void cancelPage()?.catch(reason=>setError(errorMessage(reason)));}}>{t.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={()=>void close()}>{zh.common.close}</button></footer></Modal>;

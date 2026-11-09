@@ -29,6 +29,15 @@ export type HistoryExportSqlInput = z.infer<typeof historyExportSqlSchema>;
 export type HistoryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
 export const historySaveQuerySchema = historyRecordReferenceSchema.extend({ name: name.trim().min(1), keepSource: z.boolean(), group: savedQueryGroupTargetSchema.optional() }).strict();
 export type HistorySaveQueryInput = z.infer<typeof historySaveQuerySchema>;
+export const historySaveBatchLimits = { items: 25, bytes: 32 * 1024 * 1024, prefix: 240 } as const;
+export const historySaveQueryBatchSchema = z.object({
+  items: z.array(historyRecordReferenceSchema).min(1).max(historySaveBatchLimits.items)
+    .refine(items => new Set(items.map(item => item.id)).size === items.length, '所选历史不能重复'),
+  prefix: z.string().trim().min(1).max(historySaveBatchLimits.prefix),
+  keepSource: z.boolean(),
+  group: savedQueryGroupTargetSchema.optional(),
+}).strict();
+export type HistorySaveQueryBatchInput = z.infer<typeof historySaveQueryBatchSchema>;
 export type HistoryRecord=z.infer<typeof historyRecordSchema>;
 export type HistoryPageInput=z.infer<typeof historyPageInputSchema>;
 export interface HistoryPagePosition{id:string;startedAt:string;connectionId:string;durationKey?:number}

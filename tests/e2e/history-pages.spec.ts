@@ -8,6 +8,7 @@ import type{HistoryEntry}from'../../src/shared/contracts';
 import{LocalStore}from'../../src/main/storage';
 import{test,expect,page,dataDir,pageErrors,desktop,quitDesktop,launchDesktop}from'./desktop-fixture';
 import { historyInsertionZh } from '../../src/renderer/locales/historyInsertion.zh-CN';
+import { historyDeleteZh as deletionText } from '../../src/renderer/locales/historyDelete.zh-CN';
 import { historyPagesZh as text } from '../../src/renderer/locales/historyPages.zh-CN';
 import { savedQueryPagesZh as savedText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQueryOrganizationZh as savedOrganizationText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
@@ -247,6 +248,72 @@ test('从历史离线保存完整查询，保留执行上下文或解除绑定',
  expect(unbound?.database).toBeUndefined();
  expect(await page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}))).toMatchObject({ groups: [{ id: groupId!, count: 1 }], unfiledCount: 2 });
  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(2);
+});
+
+test('跨批次勾选历史批量保存到查询库，重启后保留正文与各自来源', async ({}, info) => {
+ const sql = 'SELECT 9007199254740993;\r\n-- ' + '中'.repeat(1200) + '😀正文尾部';
+ let groupId: string;
+ await seed(store => {
+  source(store);
+  store.addHistory(entry({ id: 'first-batch', sql, startedAt: '2026-10-16T00:00:00Z', databaseContext: { state: 'known', database: null } }));
+  for (let i = 0; i < 24; i++) store.addHistory(entry({ id: 'filler-' + i }));
+  store.addHistory(entry({ id: 'second-batch', connectionId: 'removed', sql: 'SELECT 2', startedAt: '2026-10-14T00:00:00Z' }));
+  const group = store.applyQueryOrganization({ expectedRevision: store.queryOrganization().revision, operation: { kind: 'create', name: '批量归档', parentId: null } });
+  groupId = group.groups[0].id;
+ });
+ await desktop.evaluate(({ ipcMain }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args: any[]) => unknown> })._invokeHandlers;
+  const original = handlers.get('dbark:request');
+  if (!original) throw Error('缺少批量保存原 IPC');
+  const audit = { saved: [] as unknown[], denied: 0 };
+  Object.assign(globalThis, { __historyBatchSave: audit });
+  handlers.set('dbark:request', (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'history.saveQueryBatch') audit.saved.push(payload.input);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+    audit.denied++;
+    throw Error('本例禁止数据库请求');
+   }
+   return original(event, payload);
+  });
+ });
+ await open();
+ const trigger = dialog().getByRole('button', { name: text.saveBatch, exact: true });
+ await expect(trigger).toBeDisabled();
+ await dialog().getByRole('checkbox', { name: deletionText.select('first-batch'), exact: true }).check();
+ await dialog().getByRole('button', { name: text.next, exact: true }).click();
+ await dialog().getByRole('checkbox', { name: deletionText.select('second-batch'), exact: true }).check();
+ await trigger.click();
+ const form = dialog().getByRole('form', { name: text.saveBatch, exact: true });
+ await expect(form).toContainText(text.saveBatchScope(2));
+ const prefix = form.getByRole('textbox', { name: text.saveBatchPrefix, exact: true });
+ await expect(prefix).toBeFocused();
+ await prefix.press('Escape');
+ await expect(trigger).toBeFocused();
+ await expect(form).toBeHidden();
+ await trigger.click();
+ await prefix.fill(' 跨批复用 ');
+ await form.getByRole('button', { name: savedOrganizationText.chooseSaveGroup, exact: true }).click();
+ await form.getByRole('combobox', { name: savedOrganizationText.saveGroup, exact: true }).selectOption({ label: '批量归档' });
+ await page.screenshot({ path: info.outputPath('批量保存历史查询.png') });
+ await form.getByRole('button', { name: text.saveBatchConfirm, exact: true }).click();
+ await expect(dialog().getByText(text.saveBatchDone(2), { exact: true })).toBeVisible();
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __historyBatchSave?: unknown }).__historyBatchSave)).toEqual({
+  denied: 0, saved: [{ prefix: ' 跨批复用 ', keepSource: true, group: { id: groupId!, expectedRevision: expect.stringMatching(/^[a-f0-9]{64}$/) },
+   items: ['first-batch', 'second-batch'].map(id => ({ id, digest: expect.stringMatching(/^[a-f0-9]{64}$/) })) }],
+ });
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+ await quitDesktop();
+ await launchDesktop();
+ const records = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
+ expect(records).toHaveLength(2);
+ expect(records.find(query => query.name === '跨批复用 1')).toMatchObject({ sql, connectionId: 'source', databaseContext: { state: 'known', database: null } });
+ const unbound = records.find(query => query.name === '跨批复用 2');
+ expect(unbound).toMatchObject({ sql: 'SELECT 2', databaseContext: { state: 'unknown' } });
+ expect(unbound?.connectionId).toBeUndefined();
+ expect(await page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}))).toMatchObject({ groups: [{ id: groupId!, count: 2 }], unfiledCount: 0 });
+ expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(26);
 });
 
 test('历史和保存查询直接复制完整正文，记录失效不覆盖剪贴板端口', async () => {

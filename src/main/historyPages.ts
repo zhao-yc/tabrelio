@@ -1,5 +1,5 @@
 import{createHash}from'node:crypto';
-import{historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,historySaveQuerySchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult}from'../shared/historyPages';
+import{historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,historySaveBatchLimits,historySaveQueryBatchSchema,historySaveQuerySchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult,type HistoryRecord}from'../shared/historyPages';
 import { savedQueryOriginContext, type QueryCreate } from '../shared/queryBinding';
 import{LocalSqlPages}from'./localSqlPages';
 import{parseHistoryRecord}from'./historyPageMatch';
@@ -35,7 +35,23 @@ export class HistoryPages extends LocalSqlPages<HistoryPageInput,HistoryPageEntr
  querySaveContent(raw: unknown): QueryCreate {
   const { id, digest, name, keepSource, group } = historySaveQuerySchema.parse(raw);
   const record = this.current(id, digest);
-  const content = { name, sql: record.sql, ...(group ? { group } : {}) };
+  return { ...this.saveContent(record, name, keepSource), ...(group ? { group } : {}) };
+ }
+ /** 仅按原勾选顺序和摘要读取，先检查整批正文预算，再交给存储一次性提交。 */
+ querySaveBatchContents(raw: unknown) {
+  const { items, prefix, keepSource, group } = historySaveQueryBatchSchema.parse(raw);
+  let bytes = 0;
+  const contents = items.map(({ id, digest }, index) => {
+   const record = this.current(id, digest);
+   bytes += Buffer.byteLength(record.sql, 'utf8');
+   if (bytes > historySaveBatchLimits.bytes) throw Error('所选历史 SQL 合计超过 32 MiB，请缩小保存范围');
+   const bound = keepSource && !!record.connectionId && this.store.queryConnectionExists(record.connectionId);
+   return this.saveContent(record, `${prefix} ${index + 1}`, bound);
+  });
+  return { contents, group };
+ }
+ private saveContent(record: HistoryRecord, name: string, keepSource: boolean): QueryCreate {
+  const content = { name, sql: record.sql };
   if (!keepSource) return { ...content, context: { state: 'unknown' } };
   if (!record.connectionId || !this.store.queryConnectionExists(record.connectionId)) throw Error('历史来源连接已失效，请选择不绑定连接后保存');
   return { ...content, connectionId: record.connectionId, context: savedQueryOriginContext(record.database, record.databaseContext) };

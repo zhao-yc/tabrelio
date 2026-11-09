@@ -133,7 +133,7 @@ import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseS
 import { savedQueryRenameSchema } from './savedQueryRename';
 import { savedQueryDuplicateSchema } from './savedQueryDuplicate';
 import { savedQueryDeleteSelectedSchema } from './savedQueryDeleteSelected';
-import{historyExportSqlArchiveSchema,historyExportSqlSchema,historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,historySaveQuerySchema}from'./historyPages';
+import{historyExportSqlArchiveSchema,historyExportSqlSchema,historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,historySaveQueryBatchSchema,historySaveQuerySchema}from'./historyPages';
 import { historyDeletePreviewInputSchema, historyDeleteApplyInputSchema, historyDeleteReleaseInputSchema } from './historyDelete';
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
@@ -768,6 +768,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyRecordReferenceSchema,'history.readSql':historyRecordReferenceSchema, 'history.exportSql': historyExportSqlSchema,
   'history.deletePreview': historyDeletePreviewInputSchema, 'history.deleteApply': historyDeleteApplyInputSchema, 'history.deleteRelease': historyDeleteReleaseInputSchema,
   'history.saveQuery': historySaveQuerySchema,
+  'history.saveQueryBatch': historySaveQueryBatchSchema,
   'history.exportSqlArchive': historyExportSqlArchiveSchema,
   'history.copySql': historyRecordReferenceSchema,
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,

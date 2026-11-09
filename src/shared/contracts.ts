@@ -632,6 +632,7 @@ export interface CommandMap {
   'history.copySql': { input: import('./historyPages').HistoryRecordReference; output: void };
   'history.exportSqlArchive': { input: import('./historyPages').HistoryExportSqlArchiveInput; output: import('./savedQuerySearch').SavedQueryExportSqlArchiveResult };
   'history.saveQuery': { input: import('./historyPages').HistorySaveQueryInput; output: { name: string } };
+  'history.saveQueryBatch': { input: import('./historyPages').HistorySaveQueryBatchInput; output: { count: number } };
   'history.deletePreview': { input: HistoryDeletePreviewInput; output: HistoryDeletePreviewOutput };
   'history.deleteApply': { input: HistoryDeleteApplyInput; output: HistoryDeleteApplyOutput };
   'history.deleteRelease': { input: HistoryDeleteReleaseInput; output: void };
