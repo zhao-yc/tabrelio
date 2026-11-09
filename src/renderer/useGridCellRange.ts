@@ -134,6 +134,20 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return true;
   }
 
+  /** 矩形内阻止清空键降级为单格编辑，仅普通按键可暂存。 */
+  function clearValueKey(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent,
+    apply: (selected: GridCellRectangle) => void): boolean {
+    if ((event.key !== 'Delete' && event.key !== 'Backspace') || !allowed(event) || args.row === undefined) return false;
+    const selected = at(args.row, args.rowIdx, args.column?.key ?? '');
+    if (!selected) return false;
+    event.preventGridDefault();
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) apply(selected);
+    return true;
+  }
+
   /** 只允许在本矩形端点复制；活动格已变化时交还原勾选或单格复制。 */
   function copy<Value>(row: Row, column: string, read: (row: Row, key: string) => Value, skip?: (row: Row) => boolean) {
     const { scope: owned, anchor, focus } = live.current;
@@ -179,7 +193,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return grid.current?.element?.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? undefined;
   }
 
-  return { rectangle, mouse, key, move, copy, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
+  return { rectangle, mouse, key, clearValueKey, move, copy, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
 }
 
 const arrowDirections = new Map<string, Point>([

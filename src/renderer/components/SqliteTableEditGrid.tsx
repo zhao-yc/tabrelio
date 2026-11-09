@@ -4,7 +4,7 @@ import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } fro
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
-import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
+import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
@@ -12,6 +12,7 @@ import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
 import { GridRangeFill } from './GridRangeFill';
 import type { GridRangeFillInput } from '../gridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
+import { errorMessage } from '../lib';
 import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
@@ -276,6 +277,17 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,
   });
   const quickValue = useRef(onQuickValue); quickValue.current = onQuickValue;
+  function stageGridRangeFill(rectangle: GridCellRectangle, input: GridRangeFillInput) {
+    const range = cellRange.capture(rectangle);
+    if (!range || !onFillRange) throw Error(rangeFillText.stale);
+    onFillRange(range, input);
+  }
+
+  function clearGridRange(rectangle: GridCellRectangle): void {
+    try { stageGridRangeFill(rectangle, { kind: 'null', value: '' }); setError(''); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+
   function openCellActions(row: SqliteDraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const index = key?.startsWith('c') ? Number(key.slice(1)) : -1, edit = page.edit;
     if (!row || key === undefined || row.deleted || !order.includes(index) || edit?.kind !== 'editable' || disabled || !baseCurrent(row)) return false;
@@ -313,6 +325,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
           if (current()) onExportRange(result);
         } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeExportText.stale); }
       } }] : []),
+      ...(rectangle && onFillRange ? [{ label: rangeFillText.clear, run: () => clearGridRange(rectangle) }] : []),
       { label: quickValueText.copyCell, run: () => {
         try {
           const content = clipboardContent([], row, key);
@@ -411,11 +424,8 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     ] as const).map(([kind, build, labels]) => <button key={kind} type="button" title={labels.openHint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(build, selectedRows.size > 0, sql => onOpenRowSql(kind, sql))}>{labels.open}</button>)}
-    {onFillRange && cellRange.rectangle && !disabled && <GridRangeFill rectangle={cellRange.rectangle} typed onStage={(rectangle, input) => {
-      const range = cellRange.capture(rectangle);
-      if (!range) throw Error(rangeFillText.stale);
-      onFillRange(range, input);
-    }}/>}
+    {onFillRange && cellRange.rectangle && !disabled &&
+      <GridRangeFill rectangle={cellRange.rectangle} typed onStage={stageGridRangeFill}/>}
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={rowSelectionKey}
       isCurrent={rowSelectionCurrent}
@@ -434,6 +444,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     onCellKeyDown={(args, event) => {
       const { row, rowIdx, column, mode } = args;
       if (mode === 'ACTIVE' && cellRange.key(args, event)) return;
+      if (mode === 'ACTIVE' && onFillRange && cellRange.clearValueKey(args, event, clearGridRange)) return;
       if (mode === 'ACTIVE' && handleGridSelectAllKey(event,
         () => !!row && rows[rowIdx] === row && !!column && order.some(index => column.key === 'c' + index) && rowSelectionCurrent(),
         () => changeCheckedRows(gridRowKeys(rows, rowSelectionKey)))) return;

@@ -42,6 +42,9 @@ describe('PostgreSQL 勾选记录批量填充', () => {
     expect(changes).toEqual([{ kind: 'update', row: 1, fields: [...prior.fields, { column: 'c1', value: { mode: 'text', value: 'NULL' } }] }]);
     expect(postgresRangeFillChanges(page, [columns[1]], 0, 2, null, () => undefined)).toEqual([0, 1].map(row =>
       ({ kind: 'update', row, fields: [{ column: 'c1', value: { mode: 'null' } }] })));
+    const restricted = { ...columns[2], nullable: false };
+    expect(() => postgresRangeFillChanges({ ...page, columns: [...columns.slice(0, 2), restricted, columns[3]] },
+      [columns[1], restricted], 0, 2, null, () => undefined)).toThrow();
     for (const index of [0, 2, 3]) expect(() => postgresRangeFillChanges(page, [columns[1], columns[index]], 0, 2, '值', () => undefined)).toThrow();
     expect(() => postgresRangeFillChanges(page, [columns[1]], 0, 2, '值', key =>
       key === '二' ? { kind: 'delete', row: 1 } : undefined)).toThrow();

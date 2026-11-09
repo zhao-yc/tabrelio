@@ -1867,18 +1867,23 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     const { kind, value } = input;
     if (kind === 'down' || kind === 'up') {
       const plan = gridRangeFillSource(target, kind, row => row.deleted);
-      if (plan.rows.some(row => target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
+      if (plan.rows.some(row => !row.inserted && target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
       const next = prepareBatchFillFromRow(target.keys, plan.source, rows, new Set(plan.rows.map(row => row.id)), getRecordContext());
       if (next !== rows) setRows(next);
       setError('');
       return;
     }
     if ((kind !== 'text' && kind !== 'null') ||
-        target.rows.some(row => row.deleted || target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
+        target.rows.some(row => row.deleted || !row.inserted && target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
     const next = prepareBatchFill(target.keys.map(column => ({ column, input: { mode: kind, text: value } })),
       rows, new Set(target.rows.map(row => row.id)), getRecordContext());
     if (next !== rows) setRows(next);
     setError('');
+  }
+
+  function clearGridRange(rectangle: GridCellRectangle): void {
+    try { fillGridRange(rectangle, { kind: 'null', value: '' }); }
+    catch (reason) { setError(errorMessage(reason)); }
   }
   const headerCopyLayoutRevision = layoutRevision.current;
   /** 勾选记录不改变另存范围，仍绑定活动格及其当前草稿。 */
@@ -1974,6 +1979,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       event.preventGridDefault(); event.preventDefault(); void makePreview();
     } else if (event.key === 'Delete') {
       event.preventGridDefault(); event.preventDefault();
+      // 矩形无效或带修饰键时，不能退化为只改活动格。
+      if (event.repeat || cellRange.rectangle) return;
       const context = getRecordContext(), field = context.info?.columns.find(item => item.name === activeColumn.key), currentRow = rowsRef.current.find(row => row.id === activeRow.id);
       // 清空与编辑/粘贴共享当前列资格；缺结构、迟到行和记录输入不能被快捷键绕过。
       if (!editable || record.dirty || record.hasInput() || !field || currentRow !== activeRow || !page?.columns.some(item => item.key === activeColumn.key) || recordReadonlyReason(context, currentRow, activeColumn.key)) return;
@@ -2035,6 +2042,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
           setPageExport(lease);
         } catch (reason) { if (current()) setError(errorMessage(reason)); }
       } }] : []),
+      ...(rectangle && editable ? [{ label: rangeFillText.clear, run: () => clearGridRange(rectangle) }] : []),
       { label: quickValueText.copyCell, run: () => {
         try { copyGridCellValue(ownCell(row.data, key), current); }
         catch (reason) { if (current()) setError(errorMessage(reason)); }
@@ -2261,6 +2269,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
   }} onCellKeyDown={(args, event) => {
     if (args.mode === 'ACTIVE' && cellRange.key(args, event)) return;
+    if (args.mode === 'ACTIVE' && editable && cellRange.clearValueKey(args, event, rectangle => {
+      recordPages.cancel();
+      clearGridRange(rectangle);
+    })) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => !!args.row && rows[args.rowIdx] === args.row && !!args.column && visibleKeys.includes(args.column.key) && rowSelectionCurrent(),
       () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;

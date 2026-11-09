@@ -511,6 +511,56 @@ test('SQLite 矩形可填充同值并一次撤销，包含定位键时拒绝整�
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 可用 Backspace 和菜单将选区设为 NULL，定位键使整块拒绝', async () => {
+  await seed();
+  const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const id = table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true });
+  const first = table.getByRole('gridcell', { name: 'TEXT · 记录 1', exact: true });
+  const second = table.getByRole('gridcell', { name: 'TEXT · 记录 2', exact: true });
+  const undo = table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true });
+  await id.click();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Delete');
+  await expect(table.getByRole('alert')).toContainText(rangeFill.target);
+  await expect(first).toBeVisible();
+  await expect(second).toBeVisible();
+  await expect(undo).toBeDisabled();
+
+  const clear = page.getByRole('menuitem', { name: rangeFill.clear, exact: true });
+  for (const command of ['key', 'menu']) {
+    await first.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    if (command === 'key') await page.keyboard.press('Backspace');
+    else {
+      await first.click({ button: 'right' });
+      await clear.click();
+    }
+    await expect(first).toHaveCount(0);
+    await expect(second).toHaveCount(0);
+    await id.click();
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Shift+ArrowDown');
+    const rows = JSON.parse((await readGridRangeClipboard(page)).sqlite).rows;
+    expect(rows).toEqual([[{ kind: 'integer', value: '1' }, { kind: 'null' }], [{ kind: 'integer', value: '2' }, { kind: 'null' }]]);
+    await undo.click();
+    await expect(first).toBeVisible();
+    await expect(second).toBeVisible();
+  }
+
+  await page.locator('[data-workspace-tab-id="v-jump"]').getByRole('button', { name: '视图定位', exact: true }).click();
+  const viewStart = table.getByRole('gridcell', { name: '记录 1', exact: true });
+  await viewStart.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await viewStart.click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: rangeCopy.copy, exact: true })).toBeVisible();
+  await expect(clear).toHaveCount(0);
+  expect(readFileSync(database)).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 向下和向上填充保留整数、文本、字节与 NULL，可整步撤销', async () => {
   await seed(undefined, 'ALTER TABLE subject ADD COLUMN exact_value INTEGER;' +
     'ALTER TABLE subject ADD COLUMN payload BLOB;' +

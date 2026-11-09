@@ -192,6 +192,33 @@ test('MySQL 表页按矩形填充字面值，只暂存且可一步撤销', async
   expect(await calls()).toEqual([]);
 });
 
+test('MySQL Delete 将矩形设为 NULL，保留勾选并整步撤销', async () => {
+  const start = await cell('note', 2), end = await cell('other', 3);
+  const checkbox = start.locator('..').getByRole('checkbox');
+  await checkbox.check();
+  const select = async () => {
+    await start.click();
+    await end.click({ modifiers: ['Shift'] });
+    await expect(page.locator('.grid-cell-in-range')).toHaveCount(4);
+  };
+  await select();
+  await page.keyboard.press('Shift+Delete');
+  await expect(end).toBeFocused();
+  await end.dispatchEvent('keydown', { key: 'Backspace', repeat: true, bubbles: true, cancelable: true });
+  await expect(end).toBeFocused();
+  await end.dispatchEvent('keydown', { key: 'Delete', isComposing: true, bubbles: true, cancelable: true });
+  await expect(end).toBeFocused();
+  expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows).toEqual([['😀old前old后old', 'OLD'], ['', '无匹配']]);
+  await page.keyboard.press('Delete');
+  await select();
+  expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows).toEqual([[null, null], [null, null]]);
+  await expect(checkbox).toBeChecked();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await select();
+  expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows).toEqual([['😀old前old后old', 'OLD'], ['', '无匹配']]);
+  expect(await calls()).toEqual([]);
+});
+
 test('表页按行和字段高亮查找命中，切换列和清空查找撤销旧标记', async () => {
   await find('old');
   const highlight = panel().getByRole('checkbox', { name: findText.highlightAll, exact: true });

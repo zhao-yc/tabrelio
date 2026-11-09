@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BatchFillIntent, batchFillColumns, prepareBatchFillFromRow, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
+import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillFromRow, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
 import { DraftHistory } from '../../src/renderer/draftHistory';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo, TablePage } from '../../src/shared/contracts';
@@ -19,6 +19,17 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('给新增草稿中的 DEFAULT 显式赋 NULL 后可一步恢复默认值', () => {
+    const { rows, context } = fixture();
+    const inserted = { id: '新增', data: {}, inserted: true, deleted: false };
+    const before = [...rows, inserted];
+    const after = prepareBatchFill([{ column: 'note', input: { mode: 'null', text: '' } }], before, new Set([inserted.id]), context);
+    expect(after.at(-1)?.data).toEqual({ note: null });
+    expect(inserted.data).toEqual({});
+    const history = new DraftHistory();
+    history.record(before, after);
+    expect(history.move(after, 'undo')).toEqual(before);
+  });
   it('同列填充使用来源草稿的精确值，不修改来源或复用其字节对象', () => {
     const { rows, context, ids } = fixture();
     const source = rows[2];

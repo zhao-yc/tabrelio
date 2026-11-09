@@ -28,7 +28,7 @@ import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboar
 import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
-import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
+import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
@@ -315,6 +315,17 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   }
 
   const cellActionMenu = useGridCellActionMenu();
+  function stageGridRangeFill(rectangle: GridCellRectangle, input: GridRangeFillInput) {
+    const range = cellRange.capture(rectangle);
+    if (!range || !onFillRange) throw Error(rangeFillText.stale);
+    onFillRange(range, input);
+  }
+
+  function clearGridRange(rectangle: GridCellRectangle): void {
+    try { stageGridRangeFill(rectangle, { kind: 'null', value: '' }); }
+    catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+  }
+
   function openCellActions(row: DataRow | undefined, rowIdx: number, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const located = locateCell(row, rowIdx, key, target);
     if (!located || key === undefined || skipRowInInversion?.(located.cell.row)) return false;
@@ -342,6 +353,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       }));
     }
+    if (rectangle && onFillRange) actions.push({ label: rangeFillText.clear, run: () => clearGridRange(rectangle) });
     if (rectangle && onExportRange) actions.push({ label: rangeExportText.action, run: () => {
       try {
         const range = cellRange.capture(rectangle, null);
@@ -397,6 +409,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   function cellKeyDown(args:CellKeyDownArgs<DataRow>,event:CellKeyboardEvent):void{
     const {row,column}=args,key=event.key.toLowerCase();
     if (args.mode === 'ACTIVE' && cellRange.key(args, event)) return;
+    if (args.mode === 'ACTIVE' && onFillRange && cellRange.clearValueKey(args, event, clearGridRange)) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => canSelectRows && !!row && rows[args.rowIdx] === row && !!column && columns.some(item => item.key === column.key) && rowSelectionCurrent(),
       () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;
@@ -567,11 +580,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     quickValueActions.apply(cell, kind);
   }
   const copyTools = <>
-    {onFillRange && cellRange.rectangle && <GridRangeFill rectangle={cellRange.rectangle} onStage={(rectangle, input) => {
-      const range = cellRange.capture(rectangle);
-      if (!range) throw Error(rangeFillText.stale);
-      onFillRange(range, input);
-    }}/>}
+    {onFillRange && cellRange.rectangle && <GridRangeFill rectangle={cellRange.rectangle} onStage={stageGridRangeFill}/>}
     {quickValueActions && gridQuickValueKinds.map(kind =>
       <button key={kind} type="button" title={quickValueText[`${kind}Hint`]}
         disabled={!activeCopyCell || !quickValueActions.allowed(activeCopyCell, kind)} onClick={() => applyQuickValue(kind)}>{quickValueText[kind]}</button>)}

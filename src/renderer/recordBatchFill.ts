@@ -129,9 +129,11 @@ export function prepareBatchFillFromRow(keys: readonly string[], source: DraftRo
 
 /** 原批量草稿和撤销预算共用，只有整组通过后才分配已修改的行。 */
 function applyBatchFill(values: ReadonlyMap<string, DraftRow['data'][string]>, rows: DraftRow[], ids: ReadonlySet<string>): DraftRow[] {
+  // 新增草稿的 DEFAULT 尚未存字段，明确赋值时需把它加入数据而不是略过。
+  const patch = Object.fromEntries(values);
   let total = 2, history = 128; const replacements = new Map<string, DraftRow>();
   for (const row of rows) if (ids.has(row.id)) {
-    const data = Object.fromEntries(Object.entries(row.data).map(([key, old]) => [key, values.has(key) ? values.get(key)! : old]));
+    const data = { ...row.data, ...patch };
     for (const [key, cell] of Object.entries(data)) { total += bytes(key) + bytes(cell) + 4; if (total > limits.inputBytes) throw Error(text.budget); }
     if (same(row.data, data)) continue;
     const next = { ...row, data }; history += changedDraftHistoryBytes(row, next); if (history > draftHistoryLimits.bytes) throw Error(text.budget);
