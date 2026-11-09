@@ -1,3 +1,4 @@
+import { GridFindMatchActions, type GridMatchRowsAction } from './GridRowSelectionActions';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
@@ -20,14 +21,15 @@ interface Props {
   onJump(rowId: string, column: number, focusGrid?: boolean, range?: { start: number; end: number }): void;
   onStage(plan: SqliteTextReplacementPlan, continuation?: SqliteTableFindSeed): boolean | void;
   onPreviewChange?(open: boolean): void; onClearHit?(): void; onClose(): void;
+  onMatchRows?: GridMatchRowsAction<string>;
   onHighlights?(highlights: SqliteTableFindHighlights | undefined): void;
 }
 type Preview = { plan: SqliteTextReplacementPlan; patches: ReturnType<typeof sqliteTextReplacementPlanPreview> };
 interface Draft extends SqliteTableFindSeed { epoch: object; found?: SqliteFindReadyResult; position: number; preview?: Preview; error: string; }
 const defaultOptions: SqliteFindOptions = { kind: 'text', query: '', caseSensitive: false, wholeCell: false };
 /** 非模态当前页查找；所有正则与捕获仅交给真实有界Worker，替换只产生可核对的本地opaque计划。 */
-export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onHighlights }: Props) {
-  const owner = useRef({ page, rows, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose }).current;
+export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onMatchRows, onHighlights }: Props) {
+  const owner = useRef({ page, rows, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onMatchRows }).current;
   const invalid = useRef(false), propsInvalid = useRef(false), closed = useRef(false), mounted = useRef(false), consumed = useRef(new WeakSet<SqliteTextReplacementPlan>()), staging = useRef(false);
   const [draft, setDraft] = useState<Draft>(() => ({ options: { ...(seed?.options ?? defaultOptions) }, replacement: seed?.replacement ?? '', mode: seed?.mode ?? focusRequest.mode, epoch: {}, position: -1, error: '' })), live = useRef(draft); live.current = draft;
   const [highlightAll, setHighlightAll] = useState(seed?.highlightAll === true);
@@ -104,6 +106,11 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
     replace({ ...live.current, position: index });
     try { owner.onJump(match.rowId, match.column, focusGrid, match.range); } catch (reason) { replace({ ...live.current, error: reason instanceof Error ? reason.message : text.failed }); }
   }
+  /** 只接纳同一快照的完整命中；不从正在预览或停止的查找恢复旧结果。 */
+  function matchRows(checked: boolean): void {
+    if (!local() || !sourceCurrent() || work.current || composing.current || draft.preview || !draft.found?.matches.length) return;
+    owner.onMatchRows?.(new Set(draft.found.matches.map(match => match.rowId)), checked);
+  }
   useTableFindKeys(panel, jump);
   /** 一次确认只交付一个opaque计划；父消费并整批更改草稿，失败不得自动重试旧计划。 */
   function stage(): void {
@@ -155,7 +162,9 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
       <button type="button" aria-pressed={draft.mode === 'replace'} disabled={unavailable} onClick={() => { if (local() && inputCurrent()) replace({ ...draft, mode: draft.mode === 'replace' ? 'find' : 'replace', epoch: {} }); }}>{text.replaceMode}</button>
     </div><div className="sqlite-table-find-actions"><span role="status">{working === 'running' ? text.searching : working === 'stopping' ? text.stopping : text.count(found?.matches.length ?? 0, found?.occurrences.length ?? 0, draft.position)}</span>
       <button type="button" disabled={unavailable || !!working || options.kind === 'text' && !options.query} onClick={() => { if (local()) void run('find'); }}>{text.search}</button>{working && <button type="button" disabled={working === 'stopping'} onClick={() => { if (local()) { previewClosed(); cancelWork(text.stopped, true); } }}>{text.stop}</button>}
-      <button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(1)}>{text.next}</button><span className="grow"/><button type="button" disabled={staging.current} onClick={close}>{text.close}</button>
+      <button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(1)}>{text.next}</button>
+      {onMatchRows && <GridFindMatchActions disabled={unavailable || !!working || !found?.matches.length} onChange={matchRows}/>}
+      <span className="grow"/><button type="button" disabled={staging.current} onClick={close}>{text.close}</button>
     </div><p className="sqlite-table-find-status">{text.scopeCount(owner.rows.length, owner.page.columns.length)}</p>
     {current && <div className="sqlite-table-find-current"><p>{text.location(currentRow + 1, owner.page.columns[current.column]?.name ?? '', current.occurrence)}</p>{currentValue?.kind === 'text' && current.range && <pre>{currentValue.value.slice(Math.max(0, current.range.start - 60), current.range.start)}<mark>{currentValue.value.slice(current.range.start, current.range.end)}</mark>{currentValue.value.slice(current.range.end, current.range.end + 60)}</pre>}{!current.replaceable && <p>{text.currentReadonly}</p>}</div>}
     {draft.mode === 'replace' && <div className="sqlite-table-find-fields"><Field label={text.replacement}><input ref={replacementInput} aria-label={text.replacement} maxLength={4096} value={draft.replacement} disabled={unavailable || readonly || options.kind !== 'text'} onChange={event => changeReplacement(event.target.value, epoch)} onKeyDown={event => key(event, 'replacement')}/></Field><label><input type="checkbox" aria-label={text.captures} checked={!!options.captureReplacement} disabled={unavailable || readonly || options.kind !== 'text' || !options.regex} onChange={event => { if (local()) changeOptions({ captureReplacement: event.target.checked }, undefined, true); }}/>{text.captures}</label><button type="button" disabled={unavailable || !!working || readonly || !current?.replaceable || options.kind !== 'text'} onClick={() => { if (local()) void run('one'); }}>{text.replaceOne}</button><button type="button" disabled={unavailable || !!working || !replaceable} onClick={() => { if (local()) void run('all'); }}>{text.replaceAll}</button></div>}

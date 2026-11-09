@@ -80,6 +80,32 @@ test('PostgreSQL 表页文本和数值快捷筛选保留字面及精确语义', 
   } finally { await observer.end(); }
 });
 
+test('PostgreSQL 表页查找批量勾选命中且排除字段名模式', async () => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.find_checked (id int PRIMARY KEY, note text, auxiliary text);
+      INSERT INTO public.find_checked VALUES (1,'标记','标记'),(2,'保留',NULL),(3,'标记',NULL),(4,NULL,NULL)`);
+    await loadQuery(config, '', 'find_checked');
+    const tab = page.locator('.postgres-table-tab:visible'), grid = tab.getByRole('grid');
+    const check = (id: number) => grid.getByRole('gridcell', { name: String(id), exact: true }).locator('..').getByRole('checkbox');
+    await check(2).check();
+    await tab.getByRole('button', { name: findText.title, exact: true }).click();
+    const panel = tab.getByRole('region', { name: findText.title, exact: true });
+    const select = panel.getByRole('button', { name: resultFind.checkRows, exact: true });
+    await panel.getByLabel(findText.query, { exact: true }).fill('标记');
+    await select.click();
+    for (const row of [1, 2, 3]) await expect(check(row)).toBeChecked();
+    await expect(check(4)).not.toBeChecked();
+    await panel.getByRole('button', { name: resultFind.uncheckRows, exact: true }).click();
+    for (const row of [1, 3]) await expect(check(row)).not.toBeChecked();
+    await expect(check(2)).toBeChecked();
+    await panel.getByLabel(findText.mode, { exact: true }).selectOption('field');
+    await expect(select).toHaveCount(0);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
 test('PostgreSQL 表页双端区间以原精度交给服务器', async () => {
   const config = isolatedConnection(), observer = new Client(config);
   try {

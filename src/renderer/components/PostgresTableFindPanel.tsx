@@ -7,6 +7,7 @@ import { PageFindWorkerClient } from '../pageFindWorkerClient';
 import type { PostgresFindPlan } from '../postgresTableFind';
 import { postgresTableFindZh as text } from '../locales/postgresTableFind.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
+import { GridFindMatchActions, type GridMatchRowsAction } from './GridRowSelectionActions';
 import { ErrorBox } from './ui';
 import type { GridFindTarget } from './ResultsGrid';
 
@@ -23,13 +24,14 @@ interface Props<Column extends ResultColumn, Plan extends Review> {
   onOpen(replace: boolean): void; onClose(): void;
   onPreview(patches: readonly PageTextPatch[]): Plan;
   onStage(scope: object, plan: Plan): void;
+  onMatchRows?: GridMatchRowsAction<string>;
   renderGrid(target?: GridFindTarget, highlights?: ReadonlySet<string>): ReactNode;
 }
 
 /** 数据使用现有有界工作线程，字段名在本地目录中匹配。每次更换来源都撤销旧替换计划。 */
 export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends Review>(props: Props<Column, Plan>) {
   const { request, scope, pageKey, enabled, writable, rows, replacementRows, columns, isCurrent, anchor, replaceWritable, host,
-    shortcuts = true, scopeDescription = text.scope, replaceScopeDescription = text.replaceScope, onOpen, onClose, onPreview, onStage, renderGrid } = props;
+    shortcuts = true, scopeDescription = text.scope, replaceScopeDescription = text.replaceScope, onOpen, onClose, onPreview, onStage, onMatchRows, renderGrid } = props;
   const [mode, setMode] = useState<Mode>('text'), [column, setColumn] = useState('');
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
   const [regex, setRegex] = useState(false), [capture, setCapture] = useState(false);
@@ -120,6 +122,12 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const hasWritable = canReplace && found?.hits.some(canReplaceHit);
   const oneWritable = canReplace && hit && canReplaceHit(hit);
 
+  /** 字段名模式没有数据行；只允许完整数据命中调整当前页勾选。 */
+  function matchRows(checked: boolean): void {
+    if (mode === 'field' || !found?.hits.length || found.error || locked || composing ||
+        latest.current !== snapshot || !isCurrent()) return;
+    onMatchRows?.(new Set(found.hits.map(hit => hit.rowId)), checked);
+  }
   function jump(direction: -1 | 1) {
     if (!found?.hits.length || !isCurrent() || composing || locked) return;
     const length = found.hits.length;
@@ -197,6 +205,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         <label className="check"><input type="checkbox" checked={highlight} onChange={event => setHighlight(event.target.checked)}/>{text.highlight}</label>
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(-1)}>{text.previous}</button>
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(1)}>{text.next}</button>
+        {onMatchRows && mode !== 'field' && <GridFindMatchActions disabled={!enabled || !found?.hits.length || locked || composing} onChange={matchRows}/>}
         <button type="button" onClick={onClose}>{text.close}</button>
       </div>
       {replaceVisible && <div className="query-result-find-toolbar">

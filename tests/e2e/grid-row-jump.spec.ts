@@ -1580,6 +1580,36 @@ test('SQLite 表页快捷数值边界匹配跨页原生整数', async ({}, info)
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 表页查找批量勾选命中且保留其它行', async ({}, info) => {
+  await seed(undefined, "UPDATE subject SET name='批量标记批量标记' WHERE id IN (1,3,120);");
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+  const id = (value: number) => grid.getByRole('gridcell', { name: 'INTEGER · ' + value, exact: true });
+  const check = (value: number) => id(value).locator('..').getByRole('checkbox');
+  const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+    .filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
+  await check(2).check();
+  const before = await tasks();
+  await (await navigationMenuItem(table, { name: sqliteFind.entry, exact: true })).click();
+  const panel = table.getByRole('region', { name: sqliteFind.title, exact: true });
+  const input = panel.getByRole('textbox', { name: sqliteFind.query, exact: true });
+  const select = panel.getByRole('button', { name: resultFind.checkRows, exact: true });
+  const deselect = panel.getByRole('button', { name: resultFind.uncheckRows, exact: true });
+  await expect(select).toBeDisabled();
+  await input.fill('批量标记');
+  await expect(panel.getByRole('status')).toHaveText(sqliteFind.count(2, 4, -1));
+  await select.click();
+  for (const row of [1, 2, 3]) await expect(check(row)).toBeChecked();
+  await expect(check(4)).not.toBeChecked();
+  await expect(id(120)).toHaveCount(0);
+  await info.attach('SQLite查找勾选匹配行', { body: await page.screenshot(), contentType: 'image/png' });
+  await deselect.click();
+  for (const row of [1, 3]) await expect(check(row)).not.toBeChecked();
+  await expect(check(2)).toBeChecked();
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 表页勾选非相邻记录生成同类型区间草稿', async ({}, info) => {
   await seed(undefined, `ALTER TABLE subject ADD COLUMN metric;
     UPDATE subject SET metric=CASE id WHEN 1 THEN 9007199254740994 WHEN 2 THEN '9007199254740993'

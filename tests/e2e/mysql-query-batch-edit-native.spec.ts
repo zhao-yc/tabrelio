@@ -1,3 +1,5 @@
+import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { queryResultFindZh } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { randomBytes } from 'node:crypto';
 import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, pageErrors } from './desktop-fixture';
@@ -267,6 +269,18 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(tableCell('9007199254740992')).toHaveCount(0);
     await expect(tableCell('9007199254740993')).toHaveCount(0);
     await expect(tableCell('9007199254740994')).toBeVisible();
+    await tableTab.getByRole('button', { name: zh.common.clearAll, exact: true }).click();
+    await check('9007199254740994').check();
+    await (await navigationMenuItem(tableTab, { name: tableGridZh.find, exact: true })).click();
+    const find = tableTab.getByRole('region', { name: tableGridZh.find, exact: true });
+    await find.getByLabel(tableGridZh.query, { exact: true }).fill('9007199254740993');
+    await find.getByRole('button', { name: queryResultFindZh.checkRows, exact: true }).click();
+    await expect(check('9007199254740992')).not.toBeChecked();
+    await expect(check('9007199254740993')).toBeChecked();
+    await expect(check('9007199254740994')).toBeChecked();
+    await find.getByRole('button', { name: queryResultFindZh.uncheckRows, exact: true }).click();
+    await expect(check('9007199254740993')).not.toBeChecked();
+    await expect(check('9007199254740994')).toBeChecked();
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

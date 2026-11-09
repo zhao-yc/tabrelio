@@ -1,4 +1,5 @@
 import { gridRowSelectionZh as text } from '../locales/gridRowSelection.zh-CN';
+import { queryResultFindZh as findText } from '../locales/queryResultFind.zh-CN';
 import type { CellKeyboardEvent } from 'react-data-grid';
 
 interface Props<Row, Key> {
@@ -45,5 +46,24 @@ export function GridRowSelectionActions<Row, Key>({ rows, selected, disabled, ke
     <button type="button" title={text.allHint} aria-keyshortcuts="Control+Shift+Space Meta+Shift+Space" disabled={disabled || !rows.length} onClick={() => change('all')}>{text.all}</button>
     <button type="button" title={text.invertHint} disabled={disabled || !rows.length} onClick={() => change('invert')}>{text.invert}</button>
     <button type="button" disabled={disabled || !selected.size} onClick={() => change('clear')}>{text.clear}</button>
+  </>;
+}
+
+export type GridMatchRowsAction<Key> = (matches: ReadonlySet<Key>, checked: boolean) => void;
+
+/** 同一命中行只调整一次，保留原有的其它勾选。无变化时不推进选择代次。 */
+export function mergeGridMatchSelection<Key>(selected: ReadonlySet<Key>, matches: Iterable<Key>, checked: boolean): Set<Key> | undefined {
+  const next = new Set(selected);
+  for (const key of matches) {
+    if (checked) next.add(key);
+    else next.delete(key);
+  }
+  return next.size !== selected.size ? next : undefined;
+}
+
+export function GridFindMatchActions({ disabled, onChange }: { disabled: boolean; onChange(checked: boolean): void }) {
+  return <>
+    <button type="button" title={findText.checkRowsHint} disabled={disabled} onClick={() => onChange(true)}>{findText.checkRows}</button>
+    <button type="button" title={findText.checkRowsHint} disabled={disabled} onClick={() => onChange(false)}>{findText.uncheckRows}</button>
   </>;
 }

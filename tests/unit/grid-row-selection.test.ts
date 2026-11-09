@@ -1,6 +1,6 @@
 import type { CellKeyboardEvent } from 'react-data-grid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { gridRowKeys, handleGridSelectAllKey } from '../../src/renderer/components/GridRowSelectionActions';
+import { gridRowKeys, handleGridSelectAllKey, mergeGridMatchSelection } from '../../src/renderer/components/GridRowSelectionActions';
 
 class DataCell {
   constructor(readonly role = 'gridcell', readonly isContentEditable = false) {}
@@ -24,6 +24,17 @@ describe('当前页网格勾选', () => {
     const selected = gridRowKeys(rows, keyFor);
     expect([...selected]).toEqual(rows.filter(row => !row.deleted).map(row => row.id));
     expect([...gridRowKeys(rows, keyFor, new Set([0, 1, 2]))]).toEqual(rows.slice(3).map(row => row.id));
+  });
+
+  it('仅更新命中行并保留原勾选，重复命中和重复操作不会推进选择', () => {
+    const selected = new Set([2]);
+    const matches = [1, 1, 3];
+    const next = mergeGridMatchSelection(selected, matches, true)!;
+    expect(next).toEqual(new Set([1, 2, 3]));
+    expect(selected).toEqual(new Set([2]));
+    expect(mergeGridMatchSelection(next, matches, true)).toBeUndefined();
+    expect(mergeGridMatchSelection(next, matches, false)).toEqual(selected);
+    expect(mergeGridMatchSelection(selected, matches, false)).toBeUndefined();
   });
 
   it('只消费修饰键匹配的当前数据格，长按不重复修改', () => {
