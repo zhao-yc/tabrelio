@@ -66,6 +66,8 @@ import { connect, execute, type ManagedConnection } from './connection';
 import { completionQuery } from './completionQuery';
 import { mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
 import { mysqlQueryRelationSchema } from '../shared/mysqlQueryRelation';
+import { mysqlResultOriginOpenSchema } from '../shared/mysqlResultOrigins';
+import { MysqlResultOrigins, mysqlResultOriginCatalogAllowed, readMysqlResultOrigin } from './mysqlResultOrigins';
 import * as metadata from './metadata';
 import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
@@ -156,6 +158,7 @@ interface RunningTask {
   collectWarningsMode?: boolean;
   relationFields?: FieldPacket[];
   relationTarget?: ReturnType<typeof mysqlQueryRelationTarget>;
+  resultOrigins?: MysqlResultOrigins;
   sqlFileImport?: SqlFileImportEvidence;
   fileImportConflict?: FileImportConflictEvidence;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
@@ -176,6 +179,9 @@ export class Engine {
   private readonly profiles = new Map<string, NetworkConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly queryRelationSources = new WeakMap<ManagedConnection, MysqlQueryRelationSource>();
+  private readonly resultOriginSources = new WeakMap<ManagedConnection, {
+    executionId: string; context: string; origins: NonNullable<QueryOutcome['mysqlResultOrigins']>;
+  }>();
   private readonly tasks = new Map<string, RunningTask>();
   private readonly insertConfirmations=new QueryInsertConfirmations();
   private closing = false;
@@ -673,10 +679,12 @@ export class Engine {
         this.assertFile(input);
         return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => {
           this.queryRelationSources.delete(managed);
+          this.resultOriginSources.delete(managed);
           return this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string });
         }));
       }
       case 'mysql.queryRelation': return this.readQueryRelation(input);
+      case 'mysql.resultOriginOpen': return this.openResultOrigin(input);
       case 'query.confirmInsertExport':this.insertConfirmations.confirm({taskId:input.taskId,previewToken:input.previewToken,confirmation:input.confirmation});return;
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
         const mode = await this.sqlMode(managed);
@@ -1876,11 +1884,48 @@ export class Engine {
     return result;
   }
 
-  /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
+  /** 从本会话最新完整结果按序号取原目标；渲染端不能提交要跳转的库表或字段。 */
+  private async openResultOrigin(input: Input): Promise<CommandMap['mysql.resultOriginOpen']['output']> {
+    const { profile, ...raw } = input, request = mysqlResultOriginOpenSchema.parse(raw);
+    const session = this.sessions.get(request.sessionId), source = session && this.resultOriginSources.get(session.managed);
+    const origin = source?.origins[request.resultIndex]?.[request.columnIndex];
+    const current = () => {
+      if (!session || this.sessions.get(request.sessionId) !== session || session.connectionId !== request.connectionId ||
+          session.busy || session.managed.broken || !source || this.resultOriginSources.get(session.managed) !== source ||
+          source.executionId !== request.executionId || session.managed.queryRowContext !== source.context)
+        throw Error('原查询结果已变化，请重新查看来源');
+    };
+    current();
+    if (!profile || profile.id !== request.connectionId || !['mysql', 'mariadb'].includes(profile.dialect) || origin?.scope !== 'catalog')
+      throw Error('当前结果列没有已确认可打开的来源对象');
+    this.copySourceProfile(input);
+    const target = await this.withIndependentTask(request.connectionId, request.taskId, async (managed, control) => {
+      if (managed.queryRowContext !== source?.context) throw Error('来源目录连接与原查询的服务器或会话设置不一致');
+      current();
+      return readMysqlResultOrigin({ managed, ...control }, origin);
+    }, undefined, '核对结果列来源', 'no-default-database');
+    current();
+    return target;
+  }
+
+  /** 所有执行模式按实际交付的结果对象附上来源。警告、计划及内部诊断不冒充用户结果。 */
   private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean): Promise<QueryOutcome> {
+    if (!failureMode) return this.queryScriptStop(task, sql, maxRows, parameters, currentStatement);
     this.queryRelationSources.delete(task.managed);
-    if (continueOnError === true) return this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings);
-    if (collectWarnings === true) return this.queryScriptWithWarnings(task, sql, maxRows, parameters, currentStatement, failureMode);
+    this.resultOriginSources.delete(task.managed);
+    const capture = task.resultOrigins = new MysqlResultOrigins();
+    const outcome = continueOnError === true ? await this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings) :
+      collectWarnings === true ? await this.queryScriptWithWarnings(task, sql, maxRows, parameters, currentStatement, failureMode) :
+      await this.queryScriptStop(task, sql, maxRows, parameters, currentStatement, failureMode);
+    const context = task.managed.broken ? undefined : task.managed.queryRowContext;
+    const origins = capture.finish(outcome.results, !!context);
+    if (!origins) return outcome;
+    if (context) this.resultOriginSources.set(task.managed, { executionId: task.id, context, origins });
+    return { ...outcome, mysqlResultOrigins: origins };
+  }
+
+  /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
+  private async queryScriptStop(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized'): Promise<QueryOutcome> {
     const started = performance.now();
     const values = parameters !== undefined || failureMode === 'parameterized';
     const results: QueryResult[] = [];
@@ -1892,7 +1937,7 @@ export class Engine {
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw new Error('参数查询必须提供参数列表');
       for await (const { statement, template, mode } of this.queryStatements(task, sql, parameters, currentStatement, failureMode ? range => { sourceRange = range ? { ...range } : undefined; } : undefined)) {
-        relationTarget = executed === 0 && task.managed.queryRowContext && task.managed.transactionStateKnown === true &&
+        relationTarget = failureMode && executed === 0 && task.managed.queryRowContext && task.managed.transactionStateKnown === true &&
           task.managed.serverStatus !== undefined && (task.managed.serverStatus & 1) === 0
           ? mysqlQueryRelationTarget(statement, mode, task.managed.status.dialect) : undefined;
         task.relationTarget = relationTarget;
@@ -2192,6 +2237,8 @@ export class Engine {
     const relationTarget = task.relationTarget;
     const relationStatement = relationTarget ? { sql, direct: false } : undefined;
     if (relationStatement) task.managed.queryRelationStatement = relationStatement;
+    const originDirectory = task.resultOrigins ? task.managed.sessionObjects?.snapshot() : undefined;
+    const catalogAllowed = !!originDirectory && mysqlResultOriginCatalogAllowed(task.managed, sql);
     /** 按服务器结果序号分配结果容器，超过任务预算后不再保留后续结果。 */
     const ensure = (index: number): QueryResult | undefined => {
       if (discarded.has(index)) return;
@@ -2260,6 +2307,7 @@ export class Engine {
           const bytes = Buffer.byteLength(JSON.stringify(result.columns));
           if (bytes > budget.remainingBytes) { result.columns = []; result.truncated = true; }
           else budget.remainingBytes -= bytes;
+          task.resultOrigins?.record(result, fields, originDirectory, catalogAllowed);
           report({ taskId: task.id, status: 'running', progress: 0, message: '读取结果集', resultIndex: offset + resultIndex, columns: result.columns });
         }));
         query.on('result', consume((value: unknown[] | ResultSetHeader, resultIndex: number | undefined) => {

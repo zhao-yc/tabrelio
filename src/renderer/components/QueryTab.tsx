@@ -130,6 +130,8 @@ import { MysqlQueryRelationDialog } from './MysqlQueryRelationDialog';
 import { mysqlQueryRelationZh as mysqlRelationText } from '../locales/mysqlQueryRelation.zh-CN';
 import type { MysqlQueryRelationInput } from '../../shared/mysqlQueryRelation';
 import { SqliteResultOriginsDialog } from './SqliteResultOriginsDialog';
+import { MysqlResultOriginsDialog } from './MysqlResultOriginsDialog';
+import { mysqlResultOriginsZh as mysqlOriginsText } from '../locales/mysqlResultOrigins.zh-CN';
 import { sqliteResultOriginsZh as originsText } from '../locales/sqliteResultOrigins.zh-CN';
 import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
 import { QueryResultSnapshotActions, type QueryResultSnapshotOperation } from './QueryResultSnapshotActions';
@@ -326,7 +328,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   useEffect(() => () => { mysqlRelation?.job.release(); }, [mysqlRelation]);
   const retiredRecordTask = useRef<string | undefined>(undefined);
   const [restoreEditedCell, setRestoreEditedCell] = useState<{ row: DataRow; key: string }>();
-  const [originDialog, setOriginDialog] = useState<{ outcome: QueryOutcome; index: number }>();
+  const [originDialog, setOriginDialog] = useState<{ outcome: QueryOutcome; index: number; mysql?: { sessionId: string; executionId: string } }>();
   const [archiveOutcome, setArchiveOutcome] = useState<QueryOutcome>();
   const [exportResult, setExportResult] = useState<(GridRangeExportData & { rectangle?: true }) | null>(null);
   const [exportSelected, setExportSelected] = useState(false);
@@ -1294,7 +1296,21 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     ? outcome?.sqliteResultOrigins?.[resultIndex] : undefined;
   const activeOrigins = originDialog && originDialog.outcome === outcome && originDialog.index === resultIndex &&
     resultOrigins && sourceResult && resultOrigins.length === sourceResult.columns.length ? { result: sourceResult, origins: resultOrigins } : undefined;
-  useEffect(() => { if (originDialog && !activeOrigins) setOriginDialog(undefined); }, [originDialog, !!activeOrigins]);
+  const mysqlOrigins = !sqlite && !pin && !busy && !queryRunning && settings.activeTabId === tab.id && !closeRequest
+    ? outcome?.mysqlResultOrigins?.[resultIndex] : undefined;
+  const activeMysqlOrigins = originDialog?.mysql && originDialog.outcome === outcome && originDialog.index === resultIndex &&
+    originDialog.mysql.sessionId === sessionRef.current && originDialog.mysql.executionId === task.current &&
+    mysqlOrigins && sourceResult && mysqlOrigins.length === sourceResult.columns.length
+    ? { result: sourceResult, origins: mysqlOrigins, source: originDialog, ...originDialog.mysql } : undefined;
+  const mysqlOriginsOwner = useRef(activeMysqlOrigins?.source);
+  mysqlOriginsOwner.current = activeMysqlOrigins?.source;
+  useEffect(() => { if (originDialog && !activeOrigins && !activeMysqlOrigins) setOriginDialog(undefined); },
+    [originDialog, !!activeOrigins, !!activeMysqlOrigins]);
+
+  function mysqlOriginCurrent(view: NonNullable<typeof activeMysqlOrigins>): boolean {
+    return mysqlOriginsOwner.current === view.source && queryOwnerCurrent() && !busyRef.current &&
+      sessionRef.current === view.sessionId && task.current === view.executionId;
+  }
   const sqliteReceipt = sqlite && !pin && !queryRunning ? outcome?.sqliteResultReceipts?.[resultIndex] : undefined;
   const resultSqlPreview = showPinSql && sourceResult === showPinSql.result && showPinSql.taskId === task.current
     && showPinSql.connectionVersion === connectionVersion && showPinSql.pinId === selectedPin && showPinSql.resultIndex === resultIndex
@@ -1359,7 +1375,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   },[sourceResult,columnLayout,layoutMatches]);
   const frozenKeys=useMemo(()=>sourceResult&&layoutMatches&&columnLayout?frozenQueryResultKeys(sourceResult.columns,columnLayout.layout):[],[sourceResult,columnLayout,layoutMatches]);
   const resultColumnWidths = layoutMatches ? columnLayout?.layout.widths : undefined;
-  const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!recordEdit||!!recordRelation||!!mysqlRelation||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
+  const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!activeMysqlOrigins||!!recordEdit||!!recordRelation||!!mysqlRelation||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
   const failureLocator = failureSource.current;
   // SQLite筛选明确选择原存储类，先筛选再排序；所有消费者共用同一最终视图与租约。
   const filterBinding=resultFilter.bind(viewSource,resultContext,visibleColumns);
@@ -2438,6 +2454,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           <ActionMenuSection label={menuText.resultView}>{<button disabled={busy||pins.length<2||!!comparisonLease||!!statisticsLease} title={comparisonText.notice} onClick={openResultComparison}>{comparisonText.open}</button>}{outcome?.warnings && !pin && <button disabled={busy || !!pin || !warningsReportAvailable() || !!closeRequest} onClick={openWarningsReport}>{queryWarningsZh.open}</button>}
 <button disabled={busy || !outcome || !result?.columns.length || !!pin} title={zh.query.pinHint} onClick={pinResult}><Pin size={12}/>{zh.query.pinResult}</button>
 {resultOrigins && <button onClick={() => { if (outcome && queryMenuCurrent() && !busyRef.current) setOriginDialog({ outcome, index: resultIndex }); }}>{originsText.open}</button>}
+{mysqlOrigins && <button onClick={() => {
+  if (outcome && sessionRef.current && queryMenuCurrent() && !busyRef.current)
+    setOriginDialog({ outcome, index: resultIndex, mysql: { sessionId: sessionRef.current, executionId: task.current } });
+}}>{mysqlOriginsText.open}</button>}
 {(pin || sourceResult) && <button disabled={!canShowResultSql} onClick={openResultSql}>{pin ? zh.query.pinnedStatement : zh.query.resultSql}</button>}
 <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)} title={rowDetailsText.choose} onClick={openRowDetail}>{rowDetailsText.open}</button>{recordEditTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   onClick={openQueryRecord}>{originsText.editRecord}</button>}
@@ -2488,6 +2508,29 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         onApply={keyword => !columnLeaseRef.current && resultSelectionAllowed(selectionBinding) &&
           keywordFilter.apply(keyword, invalidateResultSelection)} />}
       {recordEditTable && <span className="muted small">{originsText.inlineHint}</span>}
+      {activeMysqlOrigins && <MysqlResultOriginsDialog result={activeMysqlOrigins.result} origins={activeMysqlOrigins.origins}
+        resolve={async (columnIndex, taskId) => {
+          if (!mysqlOriginCurrent(activeMysqlOrigins)) throw Error(mysqlOriginsText.stale);
+          const origin = activeMysqlOrigins.origins[columnIndex];
+          if (origin?.scope !== 'catalog') throw Error(mysqlOriginsText.stale);
+          const job = acquireWorkspaceBusy(tab.id);
+          try {
+            const target = await invoke('mysql.resultOriginOpen', { connectionId: tab.connectionId, sessionId: activeMysqlOrigins.sessionId,
+              executionId: activeMysqlOrigins.executionId, resultIndex: activeMysqlOrigins.source.index, columnIndex, taskId });
+            if (!job.owns() || !mysqlOriginCurrent(activeMysqlOrigins) || target.database !== origin.database || target.table !== origin.table)
+              throw Error(mysqlOriginsText.stale);
+            return target;
+          } finally { job.release(); }
+        }}
+        onClose={() => setOriginDialog(current => current === activeMysqlOrigins.source ? undefined : current)}
+        onOpen={target => {
+          if (!mysqlOriginCurrent(activeMysqlOrigins)) throw Error(mysqlOriginsText.stale);
+          const workspace = useWorkspace.getState();
+          if (workspace.settings.tabs.length >= 100 && !workspace.settings.tabs.some(item => item.kind === 'table' &&
+              item.connectionId === tab.connectionId && item.database === target.database && item.table === target.table)) throw Error(mysqlOriginsText.full);
+          setOriginDialog(undefined);
+          workspace.openTab({ ...target, kind: 'table', title: target.table, connectionId: tab.connectionId });
+        }} />}
       {mysqlRelation && <MysqlQueryRelationDialog request={mysqlRelation.request} direction={mysqlRelation.direction}
         current={() => mysqlRelation.job.owns() && queryOwnerCurrent() && relationResult.current === mysqlRelation.result &&
           sessionRef.current === mysqlRelation.request.sessionId && task.current === mysqlRelation.request.executionId}

@@ -154,6 +154,7 @@ import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
 import { mysqlQueryRelationSchema } from './mysqlQueryRelation';
+import { mysqlResultOriginOpenSchema } from './mysqlResultOrigins';
 import { queryExcelEncodingMessage, queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
 import { validateColumnPatches } from './tableColumnPatches';
@@ -296,6 +297,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.resultOrigins': postgresResultOriginsSchema,
   'postgres.queryRecordPage': postgresQueryRecordPageSchema,
   'mysql.queryRelation': mysqlQueryRelationSchema,
+  'mysql.resultOriginOpen': mysqlResultOriginOpenSchema,
   'postgres.storage.read': postgresStorageReadSchema,
   'postgres.storage.detail': postgresStorageDetailSchema,
   'postgres.relationMaintenance.read': postgresStructureInputSchema,
