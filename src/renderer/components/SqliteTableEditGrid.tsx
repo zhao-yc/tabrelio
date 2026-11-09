@@ -25,10 +25,11 @@ import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.z
 import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
 import { primaryKeyCopyZh as keyCopyText } from '../locales/primaryKeyCopy.zh-CN';
-import { sqliteCopyInsertDraftRows, sqliteCopyPrimaryKeyDraftRows, sqliteCopyUpdateDraftRows } from '../sqliteCopyInsertSql';
+import { sqliteCopyDeleteDraftRows, sqliteCopyInsertDraftRows, sqliteCopyPrimaryKeyDraftRows, sqliteCopyUpdateDraftRows } from '../sqliteCopyInsertSql';
 import { saveGridCell } from '../gridCellFile';
 import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
+import { deleteSqlCopyZh } from '../locales/deleteSqlCopy.zh-CN';
 import { useWorkspace } from '../store';
 import { fitGridColumnWidths, gridResizeHandleColumn, type GridColumnFitSource } from '../gridColumnFit';
 import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
@@ -336,6 +337,9 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     {!!page.primaryKey?.length && <button type="button" title={updateSqlCopyZh.hint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(sqliteCopyUpdateDraftRows, selectedRows.size > 0, updateSqlCopyZh.copied)}>{updateSqlCopyZh.action}</button>}
+    {!!page.primaryKey?.length && <button type="button" title={deleteSqlCopyZh.hint}
+      disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
+      onClick={() => handleTableSql(sqliteCopyDeleteDraftRows, selectedRows.size > 0, deleteSqlCopyZh.copied)}>{deleteSqlCopyZh.action}</button>}
     {!!page.primaryKey?.length && onOpenPrimaryKeyQuery && <button type="button" title={keyCopyText.openHint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(sqliteCopyPrimaryKeyDraftRows, selectedRows.size > 0, onOpenPrimaryKeyQuery)}>{keyCopyText.open}</button>}

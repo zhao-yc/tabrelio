@@ -128,6 +128,15 @@ export function prepareCopyUpdateSql(context: RecordContext, binding: RecordCopy
   }, '\n');
 }
 
+/** 先按原页拒绝任一选中草稿，再沿现有主键精度规则逐行生成文本。 */
+export function prepareCopyDeleteSql(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
+  rows: readonly DraftRow[], ids: ReadonlySet<string>): string {
+  copyOriginalRows(context, binding, page, rows, ids);
+  const { database, name } = context.info!;
+  const prefix = 'DELETE FROM ' + tableReadIdentifier(database) + '.' + tableReadIdentifier(name) + '\nWHERE ';
+  return copyPrimaryKeyRows(context, binding, page, rows, ids, condition => prefix + condition + ';', '\n');
+}
+
 /** 所有去向共用完整主键、逐行原始身份和最终字节预算。 */
 function copyPrimaryKeyRows(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
   rows: readonly DraftRow[], ids: ReadonlySet<string>, render: (condition: string, index: number) => string,

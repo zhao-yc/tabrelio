@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fixture } from '../helpers/copyInsertPage';
-import { prepareCopyPrimaryKeyQuery, prepareCopyUpdateSql } from '../../src/renderer/copyInsertSql';
+import { prepareCopyDeleteSql, prepareCopyPrimaryKeyQuery, prepareCopyUpdateSql } from '../../src/renderer/copyInsertSql';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 
 describe('仅复制明确表页中已加载的未修改行', () => {
@@ -89,6 +89,15 @@ describe('MySQL 和 MariaDB 原主键查询复制', () => {
     expect(sql.match(/^SET .*$/gm)).toEqual(["SET `note` = _utf8mb4 X'61275c62'", "SET `note` = _utf8mb4 X''"]);
     expect(sql.match(/^WHERE .*;$/gm)).toEqual(f.copy().match(/\([^\n]+\)/g)?.map(line => 'WHERE ' + line + ';'));
     f.rows[0].data.note = '本地修改';
+    expect(copy).toThrow('草稿');
+  });
+  it('DELETE 逐条使用完整原主键和精确时刻，拒绝任何选中草稿', () => {
+    const f = source();
+    const copy = () => prepareCopyDeleteSql(f.context, f.binding, f.page, f.rows, new Set(['行1', '行0']));
+    const sql = copy();
+    expect(sql.match(/^DELETE FROM /gm)).toHaveLength(2);
+    expect(sql.match(/^WHERE .*;$/gm)).toEqual(f.copy().match(/\([^\n]+\)/g)?.map(line => 'WHERE ' + line + ';'));
+    f.rows[1].data.值 = '修改草稿';
     expect(copy).toThrow('草稿');
   });
 });

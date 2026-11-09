@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
-import { sqliteCopyInsertDraftRows, sqliteCopyInsertSql, sqliteCopyPrimaryKeyDraftRows, sqliteCopyPrimaryKeyQuery, sqliteCopyUpdateSql } from '../../src/renderer/sqliteCopyInsertSql';
+import { sqliteCopyDeleteDraftRows, sqliteCopyDeleteSql, sqliteCopyInsertDraftRows, sqliteCopyInsertSql, sqliteCopyPrimaryKeyDraftRows, sqliteCopyPrimaryKeyQuery, sqliteCopyUpdateSql } from '../../src/renderer/sqliteCopyInsertSql';
 
 const columns = ['id', 'v"a', 'raw', 'g'].map((name, index) => ({ name, declaredType: '', ...(index === 3 ? { generated: true } : {}) }));
 const page: SqliteTablePage = {
@@ -16,6 +16,22 @@ const page: SqliteTablePage = {
     rows: [[{ kind: 'integer', value: '9223372036854775807' }, { kind: 'real', value: '-0' },
       { kind: 'blob', value: '00ff' }, { kind: 'integer', value: '3' }]] },
 };
+
+it('SQLite DELETE 回放只删除精确复合键，拒绝 NULL 与编辑草稿', () => {
+  const source: SqliteTablePage = { ...page, primaryKey: [{ name: 'v"a', collation: 'BINARY' }, { name: 'id', collation: 'BINARY' }] };
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE "表""名"(id INTEGER, "v""a" TEXT COLLATE NOCASE, PRIMARY KEY("v""a" COLLATE BINARY,id));' +
+      'INSERT INTO "表""名" VALUES (9223372036854775807,\'Key\'),(9223372036854775807,\'key\');');
+    const loaded = { ...source, storageTypes: ['itbi'], result: { ...source.result, rows: [{ ...source.result.rows[0], c1: 'Key' }] } };
+    db.exec(sqliteCopyDeleteSql(loaded, new Set([0])));
+    expect(db.prepare('SELECT "v""a" AS label FROM "表""名"').all()).toEqual([{ label: 'key' }]);
+    expect(() => sqliteCopyDeleteSql({ ...loaded, storageTypes: ['inbi'], result: { ...loaded.result, rows: [{ ...loaded.result.rows[0], c1: null }] } }, new Set([0]))).toThrow('缺少原主键值');
+    if (page.edit?.kind !== 'editable') throw Error('缺少测试编辑页');
+    const row = { id: 'original-0', index: 0, deleted: true, values: page.edit.rows[0] };
+    expect(() => sqliteCopyDeleteDraftRows(source, [row])).toThrow('草稿');
+  } finally { db.close(); }
+});
 
 it('按存储标记生成 INTEGER、REAL、TEXT、BLOB 与 NULL，省略生成列', () => {
   expect(sqliteCopyInsertSql(page, new Set([1, 0])).split('\n')).toEqual([

@@ -1009,6 +1009,8 @@ MySQL、MariaDB、SQLite 和 PostgreSQL 的表格与查询结果可直接「复�
 
 MySQL、MariaDB、SQLite 和 PostgreSQL 的实体表可「复制为 UPDATE SQL」。MySQL／MariaDB 表页从「更多 → 生成查询」进入，SQLite 和 PostgreSQL 的入口在网格上方。有勾选时每行生成一条语句，无勾选时使用当前记录。WHERE 使用完整原主键，SET 使用已加载的普通非键字段，省略生成列和标识列。所选行有未提交修改、新增或删除草稿时，先处理草稿再复制。操作只生成文本。回放 MySQL／MariaDB 的非主键 TIMESTAMP 赋值时，使用与读取原值一致的会话时区。
 
+同一位置可「复制为 DELETE SQL」。每条语句都带当前记录或勾选行的完整原主键条件。选中记录有草稿或主键无法准确读取时，整批停止复制。复制只生成文本，粘贴到查询编辑器后可先核对再手动执行。
+
 ### 另存当前单元格
 
 点击一个数据格，再选择「另存当前单元格」。MySQL、MariaDB 表格可从「更多 → 数据传输」进入。SQLite、PostgreSQL 表格和查询结果在网格工具栏提供入口。另存只取活动格，行勾选不会扩大范围。

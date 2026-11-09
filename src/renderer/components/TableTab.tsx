@@ -164,12 +164,13 @@ import { ActionMenuSection } from './ActionMenu';
 import { useUiCommandScope } from '../uiCommands';
 import { tableToolbarZh } from '../locales/tableToolbar.zh-CN';
 import { primaryKeyCopyZh } from '../locales/primaryKeyCopy.zh-CN';
-import { prepareCopyInsertSql, prepareCopyPrimaryKeyQuery, prepareCopyUpdateSql } from '../copyInsertSql';
+import { prepareCopyDeleteSql, prepareCopyInsertSql, prepareCopyPrimaryKeyQuery, prepareCopyUpdateSql } from '../copyInsertSql';
 import { saveGridCell } from '../gridCellFile';
 import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { gridHeaderDetailsZh as headerText } from '../locales/gridHeaderDetails.zh-CN';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
+import { deleteSqlCopyZh } from '../locales/deleteSqlCopy.zh-CN';
 import { copyInsertSqlZh } from '../../shared/copyInsertSql.zh-CN';
 
 /** 输入始终保留字符串精度，失焦仅提交到本地草稿，不执行数据库写入。 */
@@ -1700,7 +1701,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制 SQL 和打开查询草稿共享原页租约。活动页或勾选变更时撤销旧入口。 */
-  function handlePrimaryKeyQuery(destination: 'clipboard' | 'draft' | 'update') {
+  function handlePrimaryKeyQuery(destination: 'clipboard' | 'draft' | 'update' | 'delete') {
     const current = () => tableToolbarCurrent() && !insertCopyBlockedRef.current && !restoredDraftView &&
       !externalStaleRef.current && !activeGridEditor.current && !record.hasInput() &&
       rowsRef.current === rows && selectedRowsRef.current === selectedRows && selectionRef.current === selection &&
@@ -1709,7 +1710,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     try {
       const ids = selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
       const context = getRecordContext();
-      const prepare = destination === 'update' ? prepareCopyUpdateSql : prepareCopyPrimaryKeyQuery;
+      const prepare = destination === 'delete' ? prepareCopyDeleteSql : destination === 'update' ? prepareCopyUpdateSql : prepareCopyPrimaryKeyQuery;
       const sql = prepare(context, copyPage.current, page, rows, ids);
       if (destination === 'draft') {
         if (onOpenGeneratedQuery && current()) {
@@ -1720,7 +1721,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       }
       writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
       setError('');
-      setDuplicateNotice(destination === 'update' ? updateSqlCopyZh.copied : primaryKeyCopyZh.copied);
+      setDuplicateNotice(destination === 'delete' ? deleteSqlCopyZh.copied : destination === 'update' ? updateSqlCopyZh.copied : primaryKeyCopyZh.copied);
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
   }
   const primaryKeyQueryDisabled = insertCopyBlockedRef.current || restoredDraftView || !!copyMetadataReason || (!selection && !selectedRows.size);
@@ -2147,6 +2148,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     onClick={() => handlePrimaryKeyQuery('clipboard')}>{primaryKeyCopyZh.action}</button>
   <button title={updateSqlCopyZh.hint} disabled={primaryKeyQueryDisabled}
     onClick={() => handlePrimaryKeyQuery('update')}>{updateSqlCopyZh.action}</button>
+  <button title={deleteSqlCopyZh.hint} disabled={primaryKeyQueryDisabled}
+    onClick={() => handlePrimaryKeyQuery('delete')}>{deleteSqlCopyZh.action}</button>
   {onOpenGeneratedQuery && <button title={primaryKeyCopyZh.openHint} disabled={primaryKeyQueryDisabled}
     onClick={() => handlePrimaryKeyQuery('draft')}>{primaryKeyCopyZh.open}</button>}
 </>}</ActionMenuSection>

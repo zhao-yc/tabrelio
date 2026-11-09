@@ -99,6 +99,17 @@ export function sqliteCopyUpdateDraftRows(page: SqliteTablePage, rows: readonly 
   return sqliteCopyUpdateSql(page, cleanDraftIndices(page, rows));
 }
 
+export function sqliteCopyDeleteDraftRows(page: SqliteTablePage, rows: readonly SqliteDraftRow[]): string {
+  return sqliteCopyDeleteSql(page, cleanDraftIndices(page, rows));
+}
+
+/** 用原主键索引的排序规则和原生存储值生成独立 DELETE 文本。 */
+export function sqliteCopyDeleteSql(page: SqliteTablePage, indices: ReadonlySet<number>): string {
+  const keys = primaryKeyColumns(page);
+  const prefix = 'DELETE FROM "main".' + quoteSqliteIdentifier(page.target.table) + '\nWHERE ';
+  return copyRows(page, indices, keys, keyText, values => prefix + primaryKeyCondition(keys, values) + ';', '\n').join('\n');
+}
+
 /** SET 用逐格原生类型生成字面量，WHERE 沿用原主键索引与完整键值。 */
 export function sqliteCopyUpdateSql(page: SqliteTablePage, indices: ReadonlySet<number>): string {
   const keys = primaryKeyColumns(page);

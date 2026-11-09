@@ -75,6 +75,18 @@ export function postgresCopyUpdateSql(table: string, page: PostgresTablePage, in
   }, '\n');
 }
 
+/** 普通表仅删除该关系中的原主键行；分区表交由 PostgreSQL 路由。 */
+export function postgresCopyDeleteSql(table: string, page: PostgresTablePage, indices: ReadonlySet<number>,
+  draft: readonly PostgresDraftEntry[]): string {
+  const { target, columns } = primaryKeyTarget(table, page);
+  const changed = new Set(draft.map(entry => entry.rowKey));
+  return copyRows(page, indices, columns, keyText, (values, index) => {
+    const key = page.rowKeys?.[index];
+    if (changed.size && (key === undefined || changed.has(key))) throw Error(text.draft);
+    return 'DELETE FROM ' + target + '\nWHERE ' + primaryKeyCondition(columns, values) + ';';
+  }, '\n');
+}
+
 /** 两个复制入口沿相同的值校验与字节预算，整组生成后才交给剪贴板。 */
 function copyRows(page: PostgresTablePage, indices: ReadonlySet<number>, columns: readonly { key: string }[],
   errors: { selection: string; incomplete: string; type: string; limit: string },

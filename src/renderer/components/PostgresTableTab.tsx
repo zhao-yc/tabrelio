@@ -70,7 +70,7 @@ import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
 import { capturePostgresCheckedDelete, planPostgresCheckedDelete, type PostgresCheckedDeletePage } from '../postgresCheckedDelete';
-import { postgresCopyInsertSql, postgresCopyPrimaryKeyQuery, postgresCopyUpdateSql } from '../postgresCopyInsertSql';
+import { postgresCopyDeleteSql, postgresCopyInsertSql, postgresCopyPrimaryKeyQuery, postgresCopyUpdateSql } from '../postgresCopyInsertSql';
 import { planPostgresCheckedEdit } from '../postgresCheckedEdit';
 import { capturePostgresCheckedFill, planPostgresCheckedFill, postgresCheckedFillBytes, type PostgresCheckedFillPage } from '../postgresCheckedFill';
 import { capturePostgresCheckedDuplicate, planPostgresCheckedDuplicate, postgresCheckedDuplicateBytes, type PostgresCheckedDuplicatePage } from '../postgresCheckedDuplicate';
@@ -1616,6 +1616,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           ? indices => postgresCopyInsertSql(target.table, page, indices, draftRef.current) : undefined}
         updateSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind) && page.primaryKey?.length
           ? indices => postgresCopyUpdateSql(target.table, page, indices, draftRef.current) : undefined}
+        deleteSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind) && page.primaryKey?.length
+          ? indices => postgresCopyDeleteSql(target.table, page, indices, draftRef.current) : undefined}
         primaryKeySql={!page.truncated && isPostgresSqlExportRelation(page.relationKind) && page.primaryKey?.length
           ? indices => postgresCopyPrimaryKeyQuery(target.table, page, indices) : undefined}
         onOpenPrimaryKeyQuery={sql => openPrimaryKeyQueryDraft(target, sql)}

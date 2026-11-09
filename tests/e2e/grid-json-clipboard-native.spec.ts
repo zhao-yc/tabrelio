@@ -5,6 +5,7 @@ import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, re
 import { navigationMenuItem } from './navigation-menu';
 import { gridJsonClipboardZh as text } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
 import { gridCsvClipboardZh as csvText } from '../../src/renderer/locales/gridCsvClipboard.zh-CN';
+import { deleteSqlCopyZh } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
@@ -156,6 +157,12 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     const tableAmount = tableTab.getByRole('gridcell').filter({ hasText: /^(INTEGER · )?9007199254740993$/ });
     await menuCopy(tableAmount, expectedA.amount, expectedA.amount, local ? { kind: 'integer', value: expectedA.amount } : undefined);
     await expect(tableBCheck).toBeChecked();
+    if (local) {
+      await (await navigationMenuItem(tableTab, { name: deleteSqlCopyZh.action, exact: true })).click();
+      expect(await lastPacket()).toEqual({ 'text/plain': 'DELETE FROM "main"."json_subject"\nWHERE ("id" COLLATE BINARY = 2);' });
+      await expect(tableBCheck).toBeChecked();
+      expect(await readFile(filePath)).toEqual(baseline);
+    }
     const fitAmount = async () => {
       const amountHeader = tableTab.getByRole('columnheader', { name: /^amount\b/ });
       const labelHeader = tableTab.getByRole('columnheader', { name: /^label\b/ });
@@ -222,6 +229,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     if (local) {
       await open('json-view');
       await expect(tableCell).toBeVisible();
+      await expect(tableTab.getByRole('button', { name: deleteSqlCopyZh.action, exact: true })).toHaveCount(0);
       await tableCell.click();
       expect(await copy(tableTab)).toMatchObject([expectedA]);
       expect(await copyCsv(tableTab)).toBe('id,amount,label,payload,nullable\r\n1,9007199254740993,row A,base64:AP8=,\\N\r\n');
@@ -241,6 +249,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     const grid = query.locator('.query-result-grid').getByRole('grid');
     const rowA = grid.getByRole('gridcell', { name: 'row A', exact: true });
     const rowB = grid.getByRole('gridcell', { name: 'row B', exact: true });
+    await expect(query.getByRole('button', { name: deleteSqlCopyZh.action, exact: true })).toHaveCount(0);
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     await expect(rowA).toBeVisible();
     await expect.poll(async () => (await history()).map(entry => entry.success)).toEqual([true]);

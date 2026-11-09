@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTablePage } from '../../src/shared/postgresTable';
-import { postgresCopyInsertSql, postgresCopyPrimaryKeyQuery, postgresCopyUpdateSql } from '../../src/renderer/postgresCopyInsertSql';
+import { postgresCopyDeleteSql, postgresCopyInsertSql, postgresCopyPrimaryKeyQuery, postgresCopyUpdateSql } from '../../src/renderer/postgresCopyInsertSql';
 
 const page: PostgresTablePage = {
   exportToken: '原页', truncated: false, hasNext: true, order: 'primary', relationKind: 'r',
@@ -16,6 +16,18 @@ const page: PostgresTablePage = {
   rowKeys: ['一', '二'],
 };
 const table = '"带点.schema"."表""名"';
+
+it('PostgreSQL DELETE 保留 ONLY，拒绝 NULL、草稿和无法定位草稿归属的页', () => {
+  const source = { ...page, primaryKey: ['id'] };
+  const draft = { rowKey: '二', offset: 0, change: { kind: 'delete' as const, row: 1, pageToken: '旧页' } };
+  const selected = new Set([0]);
+  expect(postgresCopyDeleteSql(table, source, selected, [draft])).toBe(
+    'DELETE FROM ONLY "带点.schema"."表""名"\nWHERE ("id" = E\'9007199254740993\');');
+  expect(postgresCopyDeleteSql(table, { ...source, relationKind: 'p' }, selected, [])).toMatch(/^DELETE FROM "带点/);
+  expect(() => postgresCopyDeleteSql(table, source, new Set([1]), [draft])).toThrow('草稿');
+  expect(() => postgresCopyDeleteSql(table, { ...source, rowKeys: undefined }, selected, [draft])).toThrow('草稿');
+  expect(() => postgresCopyDeleteSql(table, { ...source, rows: [{ ...source.rows[0], c0: null }] }, selected, [])).toThrow('缺少原主键值');
+});
 
 it('PostgreSQL UPDATE 保持 ONLY 及原键，排除标识和生成列，拒绝任一选中草稿', () => {
   const source = { ...page, primaryKey: ['id'] };
