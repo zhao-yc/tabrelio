@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
-import type { SavedQueryPage, SavedQueryPageEntry } from '../../shared/savedQueryPages';
+import type { SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
 import type { SavedQueryOpenResult, SavedQueryScope } from '../../shared/savedQuerySearch';
 import type { QueryFileEncoding } from '../../shared/contracts';
@@ -27,10 +27,10 @@ import '../savedQueryPages.css';
 
 interface Services { request: typeof invoke; id(): string; }
 const services: Services = { request: invoke, id: uid };
-interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; scope: SavedQueryScope; }
+interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; scope: SavedQueryScope; sort: SavedQueryPageSort; }
 interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; criteria: string; epoch: number; duplicateRevision?: string; }
 interface DeleteEdit { items: readonly SelectedSavedQuery[]; selection: ReadonlyMap<string, SelectedSavedQuery>; epoch: number; }
-const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope]);
+const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.sort]);
 interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 
 /** 原Promise锁覆盖分组和列表；跨页选择只存编号、摘要和名称，不累计SQL正文。 */
@@ -39,6 +39,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [scope, setScope] = useState<SavedQueryScope>(() => initialConnectionId ? { kind: 'connection', connectionId: initialConnectionId } : { kind: 'all' });
   const [importEncoding, setImportEncoding] = useState<QueryFileEncoding>('utf8');
   const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
+  const [sort, setSort] = useState<SavedQueryPageSort>('recent');
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
@@ -46,7 +47,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
   const [deleting, setDeleting] = useState<DeleteEdit>(), deleteRef = useRef<DeleteEdit | undefined>(undefined);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
-  const criteria: Criteria = { search, policy, group, scope }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
+  const criteria: Criteria = { search, policy, group, scope, sort }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
   const currentSqlPreview = sqlPreview?.epoch === renderEpoch ? sqlPreview : undefined;
   // 分页、筛选或其它操作换代时释放大正文，渲染已立即隐藏旧预览。
@@ -98,6 +99,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         taskId, search: value.search, onError: value.policy,
         ...(value.group.kind === 'all' ? {} : { group: value.group }),
         ...(value.scope.kind === 'all' ? {} : { scope: value.scope }),
+        ...(value.sort === 'recent' ? {} : { sort: value.sort }),
       }));
       cursor.current = page.cursor; if (!owns(ticket)) { await release(); return; }
       setReply(page); setBatch(count => next ? count + 1 : 1); setApplied(criteriaKey(value)); setTargets(new Map());
@@ -115,6 +117,13 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
   function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
   function selectScope(value: SavedQueryGroupScope) { if (!editable()) return; setGroup(value); criteriaRef.current = { ...criteriaRef.current, group: value }; void load(false, criteriaRef.current); }
+  /** 排序换用首页和新游标，保留已勾选的原记录摘要。 */
+  function selectSort(value: SavedQueryPageSort) {
+    if (!editable()) return;
+    setSort(value);
+    criteriaRef.current = { ...criteriaRef.current, sort: value };
+    void load(false, criteriaRef.current);
+  }
   /** 切换来源时清空跨页选择及旧结果，避免操作上一个来源的记录。 */
   function selectConnectionScope(value: string) {
     if (!editable()) return;
@@ -331,6 +340,10 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           <option value="unbound">{t.unbound}</option>
           {scope.kind === 'connection' && !connections.some(profile => profile.id === scope.connectionId) && <option value={'connection:' + scope.connectionId}>{t.sourceMissing}</option>}
           {connections.map(profile => <option key={profile.id} value={'connection:' + profile.id}>{profile.name}</option>)}
+        </select></label>
+        <label className="inline-field">{t.sort}<select aria-label={t.sort} disabled={blocked} value={sort} onChange={event => selectSort(event.target.value as SavedQueryPageSort)}>
+          <option value="recent">{t.sortRecent}</option><option value="oldest">{t.sortOldest}</option>
+          <option value="name-asc">{t.sortNameAsc}</option><option value="name-desc">{t.sortNameDesc}</option>
         </select></label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
         <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>

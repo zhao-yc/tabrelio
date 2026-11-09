@@ -38,7 +38,7 @@ import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQueryImportLimits,savedQuerySearchLimits}from'../shared/savedQuerySearch';
-import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
+import type{SavedQueryPageInput,SavedQueryPagePosition}from'../shared/savedQueryPages';
 import type{HistoryPagePosition,HistoryPageInput}from'../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
 import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
@@ -57,13 +57,18 @@ import { savedQueryDeleteSelectedLimits, savedQueryDeleteSelectedSchema, savedQu
 import { parseHistoryRecord } from './historyPageMatch';
 import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
 import { historyDeleteByteTotal, historyDeleteReferences } from './historyDeleteStorage';
-import { savedQueryOrganizationApplySchema, savedQueryGroupIds, type SavedQueryOrganizationApply, type SavedQueryGroupScope } from '../shared/savedQueryOrganization';
+import { savedQueryOrganizationApplySchema, savedQueryGroupIds, type SavedQueryOrganizationApply } from '../shared/savedQueryOrganization';
 import { applySavedQueryOrganization, readSavedQueryOrganization, savedQueryOrganizationRevision, savedQueryOrganizationSnapshot, savedQueryMembershipCondition, validateSavedQueryOrganizationStorage } from './savedQueryOrganizationStorage';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
 /** 只由不可变预览生成，旧概要和单调修订共同约束最终原子替换。 */
 export interface ConnectionImportStorageOptions { expectedRevision: number; replacements: { sourceId: string; targetId: string; previous: ExportedConnectionProfile }[]; }
+
+// 名称键保留 UTF-8 字节，包括内嵌 NUL。损坏或超限文档留给原分页校验报告，不阻断配置库打开。
+const savedQueryNameKey = `CASE WHEN length(CAST(data AS BLOB)) <= ${savedQuerySearchLimits.recordBytes} AND json_valid(data)
+  THEN CASE WHEN json_type(data,'$.name')='text' AND length(CAST(json_extract(data,'$.name') AS BLOB)) <= 1024
+    THEN CAST(json_extract(data,'$.name') AS BLOB) ELSE X'' END ELSE X'' END`;
 
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
@@ -123,6 +128,7 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
         CREATE TABLE IF NOT EXISTS queries (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS queries_updated_id ON queries(updated_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
+        CREATE INDEX IF NOT EXISTS queries_name_id ON queries((${savedQueryNameKey}),id COLLATE BINARY);
         CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS history_started_id ON history(started_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
         CREATE INDEX IF NOT EXISTS history_connection_started_id ON history(connection_id COLLATE BINARY,started_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
@@ -924,13 +930,35 @@ export class LocalStore {
   }
   /** 二进制主键位置分页，仅取一条正文及下一条存在性，不复制整个查询库。 */
   querySearchNext(after?:string):{id:string;raw:string|null;hasMore:boolean}|null{const statement=this.db.prepare('SELECT id,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM queries '+(after===undefined?'':'WHERE id COLLATE BINARY>? ')+'ORDER BY id COLLATE BINARY LIMIT 2');try{statement.bind(after===undefined?[savedQuerySearchLimits.recordBytes]:[savedQuerySearchLimits.recordBytes,after]);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}}
-  /** 更新时间与ID均降序，复合索引定位下一条，不用OFFSET或复制整页正文数组。 */
-  queryPageNext(after?:SavedQueryPagePosition,input?:{group?:SavedQueryGroupScope}):{id:string;updatedAt:string;raw:string|null;hasMore:boolean;groupId?:string}|null{
+  /** 同一排序与编号组成续页位置。排序键来自本地索引，仍只读取至多两条正文。 */
+  queryPageNext(after?: SavedQueryPagePosition, input?: Pick<SavedQueryPageInput, 'group' | 'sort'>): (SavedQueryPagePosition & { raw: string | null; hasMore: boolean; groupId?: string }) | null {
     const ids=savedQueryGroupIds(readSavedQueryOrganization(this.db).groups,input?.group??{kind:'all'}),scope=savedQueryMembershipCondition(ids),conditions:string[]=[],params:SqlValue[]=[savedQuerySearchLimits.recordBytes];
     if(scope.condition){conditions.push(scope.condition);params.push(...scope.params);}
-    if(after){conditions.push('(q.updated_at COLLATE BINARY,q.id COLLATE BINARY)<(?,?)');params.push(after.updatedAt,after.id);}
-    const statement=this.db.prepare('SELECT q.id,q.updated_at,m.group_id,CASE WHEN length(CAST(q.data AS BLOB))<=? THEN q.data ELSE NULL END AS data FROM queries q LEFT JOIN saved_query_memberships m ON m.query_id=q.id '+(conditions.length?'WHERE '+conditions.join(' AND ')+' ':'')+'ORDER BY q.updated_at COLLATE BINARY DESC,q.id COLLATE BINARY DESC LIMIT 2');
-    try{statement.bind(params);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),updatedAt:String(row.updated_at),raw:typeof row.data==='string'?row.data:null,...(typeof row.group_id==='string'?{groupId:row.group_id}:{}),hasMore:statement.step()};}finally{statement.free();}
+    const sort = input?.sort;
+    const byName = sort === 'name-asc' || sort === 'name-desc';
+    const ascending = sort === 'name-asc' || sort === 'oldest';
+    const orderKey = byName ? `(${savedQueryNameKey})` : 'q.updated_at COLLATE BINARY';
+    const direction = ascending ? 'ASC' : 'DESC';
+    if (after) {
+      const previousKey = byName ? after.nameKey : after.updatedAt;
+      if (previousKey === undefined) throw Error('保存查询名称排序位置无效，请刷新列表');
+      const comparison = ascending ? '>' : '<';
+      if (byName) { conditions.push(`${orderKey}${comparison}=?`); params.push(previousKey); }
+      conditions.push(`(${orderKey},q.id COLLATE BINARY)${comparison}(?,?)`);
+      params.push(previousKey, after.id);
+    }
+    const columns = byName ? `,${orderKey} AS name_key` : '';
+    const statement = this.db.prepare('SELECT q.id,q.updated_at,m.group_id,CASE WHEN length(CAST(q.data AS BLOB))<=? THEN q.data ELSE NULL END AS data' + columns +
+      ' FROM queries q LEFT JOIN saved_query_memberships m ON m.query_id=q.id ' + (conditions.length ? 'WHERE ' + conditions.join(' AND ') + ' ' : '') +
+      `ORDER BY ${orderKey} ${direction},q.id COLLATE BINARY ${direction} LIMIT 2`);
+    try {
+      statement.bind(params);
+      if (!statement.step()) return null;
+      const row = statement.getAsObject();
+      const nameKey = row.name_key instanceof Uint8Array ? row.name_key : undefined;
+      return { id: String(row.id), updatedAt: String(row.updated_at), raw: typeof row.data === 'string' ? row.data : null,
+        ...(nameKey ? { nameKey } : {}), ...(typeof row.group_id === 'string' ? { groupId: row.group_id } : {}), hasMore: statement.step() };
+    } finally { statement.free(); }
   }
   /** 只在明确打开时读取一条当前原文，过大记录不会进入渲染进程。 */
   querySearchRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM queries WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('保存查询记录超过128MiB');return raw;}finally{statement.free();}}

@@ -9,6 +9,8 @@ import{LocalStore}from'../../src/main/storage';
 import{test,expect,page,dataDir,pageErrors,desktop,quitDesktop,launchDesktop}from'./desktop-fixture';
 import { historyInsertionZh } from '../../src/renderer/locales/historyInsertion.zh-CN';
 import { historyPagesZh as text } from '../../src/renderer/locales/historyPages.zh-CN';
+import { savedQueryPagesZh as savedText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
+import { savedQueryOrganizationZh as savedOrganizationText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({trace:'off',screenshot:'off',video:'off'});
@@ -93,6 +95,43 @@ test('查询内历史按活动标签连接打开，分页保持范围，全局�
  const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));
  expect(settings.tabs.map(tab=>tab.sql)).toEqual(['SELECT 10','SELECT 20']);
  expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
+test('保存查询按名称和更新时间跨批次排序，保留已勾选项', async () => {
+ const names = Array.from({ length: 28 }, (_, index) => `查询 ${String(index).padStart(2, '0')}`);
+ await seed(store => {
+  for (const [index, name] of names.entries()) {
+   store.saveQuery({ id: String(index).padStart(2, '0'), name, sql: 'SELECT 1', updatedAt: `2026-10-15T00:${String(27 - index).padStart(2, '0')}:00Z` });
+  }
+ });
+ await open();
+ await dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click();
+ const order = dialog().getByLabel(savedText.sort, { exact: true });
+ const visibleNames = dialog().locator('.history-card strong');
+ await expect(order).toHaveValue('recent');
+ await expect(visibleNames).toHaveText(names.slice(0, 25));
+ const first = dialog().getByRole('checkbox', { name: savedOrganizationText.select(names[0]), exact: true });
+ await first.check();
+ await order.selectOption('name-desc');
+ const reverse = [...names].reverse();
+ await expect(visibleNames).toHaveText(reverse.slice(0, 25));
+ await expect(dialog().getByText(savedOrganizationText.selected(1, 1), { exact: true })).toBeVisible();
+ await dialog().getByRole('button', { name: savedText.next, exact: true }).click();
+ await expect(visibleNames).toHaveText(reverse.slice(25));
+ await expect(first).toBeChecked();
+ await order.selectOption('name-asc');
+ await expect(visibleNames).toHaveText(names.slice(0, 25));
+ await expect(first).toBeChecked();
+ await order.selectOption('oldest');
+ await expect(visibleNames).toHaveText(reverse.slice(0, 25));
+ await dialog().getByRole('textbox', { name: savedText.search, exact: true }).fill('查询 0');
+ await dialog().getByRole('button', { name: savedText.searchButton, exact: true }).click();
+ await expect(visibleNames).toHaveText(reverse.slice(18, 25));
+ await dialog().getByRole('button', { name: savedText.next, exact: true }).click();
+ await expect(visibleNames).toHaveText(reverse.slice(25));
+ await expect(first).toBeChecked();
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
  expect(pageErrors).toEqual([]);
 });
 

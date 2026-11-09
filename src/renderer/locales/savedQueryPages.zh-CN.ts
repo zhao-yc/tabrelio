@@ -1,5 +1,6 @@
 /** 保存查询分页列表的文案集中管理，历史列表仍走原有兼容路径。 */
 export const savedQueryPagesZh={
+ sort:'保存查询排序',sortRecent:'最近更新',sortOldest:'最早更新',sortNameAsc:'名称升序',sortNameDesc:'名称降序',
  search:'搜索名称或完整SQL',searchButton:'搜索保存查询',refresh:'刷新到第一页',next:'读取下一批',cancel:'取消列表读取',
  scope:'保存查询来源',allSources:'全部来源',unbound:'未绑定连接',
  hint:'按更新时间倒序，每批检查 25 条；搜索完整名称和 SQL，打开时读取完整正文。',

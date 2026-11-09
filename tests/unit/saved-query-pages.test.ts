@@ -28,6 +28,12 @@ beforeEach(async()=>{directory=mkdtempSync(join(tmpdir(),'dbark-test-querypages-
 afterEach(async()=>{await service?.close();for(const worker of workers)expect(worker.threadId).toBe(-1);store?.close();removeDirectory(directory);});
 
 describe('保存查询概要和协议',()=>{
+ it('排序只允许在第一页提交枚举，不能通过续页改变顺序', () => {
+  for (const sort of ['recent', 'oldest', 'name-asc', 'name-desc'] as const)
+   expect(validateCommand('queries.page', request({ sort }))).toMatchObject({ sort });
+  expect(() => validateCommand('queries.page', { ...request(), sort: 'name; DROP TABLE queries' })).toThrow();
+  expect(() => validateCommand('queries.pageContinue', { taskId: randomUUID(), cursor: randomUUID(), sort: 'name-asc' })).toThrow();
+ });
  it('仅第一页允许传入严格的来源范围',()=>{
   const scope={kind:'connection' as const,connectionId:'source'};
   expect(validateCommand('queries.page',request({scope}))).toMatchObject({scope});
@@ -42,6 +48,41 @@ describe('保存查询概要和协议',()=>{
 });
 
 describe('真实SQLite键分页及工作线程',()=>{
+ it('名称和更新时间双向跨页，旧库重开建立索引且坏记录仍可单独报告', async () => {
+  const database = () => (store as unknown as { db: Database }).db;
+  database().run('DROP INDEX queries_name_id');
+  database().run('INSERT INTO queries VALUES (?,?,?)', ['broken', '{坏原文', '2026']);
+  const values = Array.from({ length: 58 }, (_, index) => query({
+   id: `sort-${String(index).padStart(2, '0')}`, name: index < 49 ? 'A\0保留' : ['a', 'A', '中文', '😀'][index % 4],
+   updatedAt: index % 2 ? '2026-10-15T01:00:00.000Z' : '2026-10-15T00:00:00.000Z',
+  }));
+  for (const value of values) store.saveQuery(value);
+  await service.close(); store.close();
+  store = await LocalStore.open(join(directory, 'test.sqlite'), require.resolve('sql.js/dist/sql-wasm.wasm'), protector);
+  service = new SavedQueryPages(store, workerPath);
+  expect(database().exec('PRAGMA user_version')[0].values[0][0]).toBe(9);
+  const indexSql = String(database().exec("SELECT sql FROM sqlite_master WHERE name='queries_name_id'")[0].values[0][0]);
+  const nameKey = indexSql.slice(indexSql.indexOf('((CASE') + 1, indexSql.lastIndexOf(',id COLLATE BINARY'));
+  const plan = JSON.stringify(database().exec(`EXPLAIN QUERY PLAN SELECT id FROM queries WHERE ${nameKey} >= X'41' AND (${nameKey},id COLLATE BINARY) > (X'41','sort-24') ORDER BY ${nameKey},id COLLATE BINARY LIMIT 2`));
+  expect(plan).toMatch(/SEARCH queries USING (?:COVERING )?INDEX queries_name_id/);
+  expect(plan).not.toContain('TEMP B-TREE');
+  const compare = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
+  for (const sort of ['name-asc', 'name-desc', 'oldest', 'recent'] as const) {
+   const key = sort.startsWith('name-') ? 'name' : 'updatedAt';
+   const direction = sort === 'recent' || sort === 'name-desc' ? -1 : 1;
+   const expected = [...values].sort((a, b) => direction * (compare(a[key], b[key]) || compare(a.id, b.id))).map(value => value.id);
+   let page = await service.start(request({ sort }));
+   const ids = page.items.map(item => item.query.id);
+   while (page.cursor) {
+    page = await service.next({ taskId: randomUUID(), cursor: page.cursor });
+    ids.push(...page.items.map(item => item.query.id));
+   }
+   expect(ids).toEqual(expected);
+   expect(page).toMatchObject({ scanned: 59, matched: 58, failed: 1 });
+  }
+  expect(store.querySearchRaw('broken')).toBe('{坏原文');
+  for (const value of values) expect(store.querySearchRaw(value.id)).toBe(JSON.stringify(value));
+ });
  it('续页沿用来源、分组和全文条件，未绑定与已删除来源分别处理',async()=>{
   const search='正文尾部', group={kind:'unfiled' as const};
   for(let index=0;index<25;index++)store.saveQuery(query({id:'z-'+index,connectionId:'other',sql:search}));
