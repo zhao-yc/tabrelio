@@ -21,7 +21,7 @@ export const postgresTableFindZh = {
   all: '预览替换全部',
   checkedOnly: '仅限勾选行',
   checkedScope: (count: number) => `已勾选 ${count} 行`,
-  checkedEmpty: '请先勾选要查找和替换的结果行。',
+  checkedEmpty: '请先勾选要查找和替换的行。',
   review: '替换预览',
   cancel: '取消替换预览',
   searching: '正在查找本页…',

@@ -48,7 +48,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const [checkedRequest, setCheckedRequest] = useState<PostgresFindRequest>();
   const checkedOnly = !!request && checkedRequest === request;
   const checked = checkedOnly ? replaceSelection : undefined;
-  const searchRows = useMemo(() => checkedOnly ? checked?.indices.map(index => rows[index]) ?? [] : rows, [checkedOnly, checked, rows]);
+  const searchRows = useMemo(() => checkedOnly ? checked?.indices.map(index => rows[index]).filter(row => row && !row.deleted) ?? [] : rows, [checkedOnly, checked, rows]);
   const writableRows = useMemo(() => replacementRows && (checkedOnly ? checked?.indices.map(index => replacementRows[index]) ?? [] : replacementRows), [checkedOnly, checked, replacementRows]);
   const [composing, setComposing] = useState(false);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null);
@@ -150,11 +150,11 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   /** 字段名模式没有数据行；只允许完整数据命中调整当前页勾选。 */
   function matchRows(checked: boolean): void {
     if (mode === 'field' || !found?.hits.length || found.error || locked || composing ||
-        latest.current !== snapshot || !isCurrent()) return;
+        latest.current !== snapshot || !isCurrent() || !rowsCurrent()) return;
     onMatchRows?.(new Set(found.hits.map(hit => hit.rowId)), checked);
   }
   function jump(direction: -1 | 1) {
-    if (!found?.hits.length || !isCurrent() || composing || locked) return;
+    if (!found?.hits.length || !isCurrent() || (mode !== 'field' && !rowsCurrent()) || composing || locked) return;
     const length = found.hits.length;
     setPosition(previous => {
       const index = previous?.snapshot === snapshot ? previous.index : -1;
@@ -231,6 +231,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         {mode === 'text' && <label className="check"><input type="checkbox" checked={regex} disabled={!enabled || locked}
           onChange={event => { setRegex(event.target.checked); setCapture(false); setError(''); }}/>{text.regex}</label>}
         <label className="check"><input type="checkbox" checked={highlight} onChange={event => setHighlight(event.target.checked)}/>{text.highlight}</label>
+        {replaceSelection !== undefined && mode !== 'field' && <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!enabled || locked}
+          onChange={event => { setCheckedRequest(event.target.checked ? request : undefined); setError(''); }}/>{text.checkedOnly}</label>}
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(-1)}>{text.previous}</button>
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(1)}>{text.next}</button>
         {onMatchRows && mode !== 'field' && <GridFindMatchActions disabled={!enabled || !found?.hits.length || locked || composing} onChange={matchRows}/>}
@@ -243,8 +245,6 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
       {replaceVisible && <div className="query-result-find-toolbar">
         <input ref={replacementInput} data-query-result-replace-input aria-label={text.replacement} value={replacement} maxLength={pageFindLimits.replacement} disabled={!canReplace || locked}
           onChange={event => { setReplacement(event.target.value); setError(''); }}/>
-        {replaceSelection !== undefined && <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!canReplace || locked}
-          onChange={event => { setCheckedRequest(event.target.checked ? request : undefined); setError(''); }}/>{text.checkedOnly}</label>}
         {mode === 'text' && regex && <label className="check"><input type="checkbox" checked={capture} disabled={!canReplace || locked}
           onChange={event => { setCapture(event.target.checked); setError(''); }}/>{text.captures}</label>}
         <button type="button" disabled={!oneWritable || locked} onClick={() => void makePreview(hit)}>{text.one}</button>

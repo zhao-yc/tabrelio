@@ -13,6 +13,7 @@ import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryRes
 import { tableSelectedFilterZh } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
 import { tableFindFilterZh } from '../../src/renderer/locales/tableFindFilter.zh-CN';
+import { postgresTableFindZh as findScopeText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -345,6 +346,13 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await find.getByRole('button', { name: queryResultFindZh.uncheckRows, exact: true }).click();
     await expect(check('9007199254740993')).toBeChecked();
     await expect(check('9007199254740994')).not.toBeChecked();
+    await find.getByRole('checkbox', { name: findScopeText.checkedOnly, exact: true }).check();
+    await expect(find.getByRole('status')).toHaveText(/当前页匹配 0 格/);
+    await expect(find.getByRole('button', { name: tableGridZh.preview, exact: true })).toBeDisabled();
+    await check('9007199254740993').uncheck();
+    await expect(find.getByRole('status')).toHaveText(findScopeText.checkedEmpty);
+    await check('9007199254740994').check();
+    await expect(find.getByText(findScopeText.checkedScope(1), { exact: true })).toBeVisible();
     await find.getByLabel(tableGridZh.replacement, { exact: true }).fill('空值补齐');
     await find.getByRole('button', { name: tableGridZh.preview, exact: true }).click();
     const replaceReview = page.getByRole('dialog', { name: tableGridZh.replaceTitle, exact: true });

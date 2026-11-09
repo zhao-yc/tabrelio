@@ -1,3 +1,4 @@
+import type { ResultCheckedRows } from '../resultExport';
 import type { GridMatchRowsAction } from './GridRowSelectionActions';
 import { tableRefreshShortcut } from '../tableRefreshShortcut';
 import { objectQueryKeyShortcuts, objectQueryShortcutLabel, openTableObjectQuery, tableObjectQueryShortcut } from '../objectQueryNavigation';
@@ -853,6 +854,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const findRows = useMemo(() => page && findRequest
     ? postgresFindRows(page, key => draft.find(entry => entry.rowKey === key)?.change) : [], [page, draft, !!findRequest]);
 
+  const [checkedFindRows, setCheckedFindRows] = useState<ResultCheckedRows>();
   const matchRowsRef = useRef<GridMatchRowsAction<number>>(null);
   /** 查找保留原页行索引，网格再按当前草稿状态及原勾选入口处理。 */
   function changeFindMatches(matches: ReadonlySet<string>, checked: boolean): void {
@@ -1713,7 +1715,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         projectionCurrent={() => !!page.exportToken && issued.current === page.exportToken && layoutScope.current.current()}
         moves={moves} onMove={moveRecord} onDirty={changeRecordInput} onStage={stageRecordView}/>}
       {page ? <div className="pg-record-grid-host" hidden={recordView}><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
-        rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent} replaceWritable={postgresFindWritable}
+        rows={findRows} replaceSelection={checkedFindRows ?? null} columns={gridLayout.columns} isCurrent={findIsCurrent} replaceWritable={postgresFindWritable}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
         onOpen={openFind} onClose={() => setFindRequest(undefined)} onStage={stageFind} onMatchRows={changeFindMatches}
         onStageFilter={rule => {
@@ -1725,7 +1727,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           return postgresFindPlan(page, findRows, gridLayout.columns, patches,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
-        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} matchRowsRef={matchRowsRef} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
+        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
         rowJump={canFind} rowJumpCurrent={findIsCurrent}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}

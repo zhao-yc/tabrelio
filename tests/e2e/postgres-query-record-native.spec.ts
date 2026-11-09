@@ -369,7 +369,7 @@ test('PostgreSQL 单列查找可带入整格、结尾、空文本和 NULL 全表
   } finally { await observer.end(); }
 });
 
-test('PostgreSQL 表页查找批量勾选命中且排除字段名模式', async () => {
+test('PostgreSQL 表页查找批量勾选命中并可仅替换勾选行', async ({}, info) => {
   const config = isolatedConnection(), observer = new Client(config);
   try {
     await observer.connect();
@@ -411,6 +411,29 @@ test('PostgreSQL 表页查找批量勾选命中且排除字段名模式', async 
     await review.getByRole('button', { name: tableText.stage, exact: true }).click();
     await expect(filled).toBeVisible();
     expect((await observer.query('SELECT note FROM public.find_checked WHERE id=4')).rows[0].note).toBe('');
+    await check(2).uncheck();
+    await check(4).uncheck();
+    await mode.selectOption('text');
+    await panel.getByLabel(findText.column, { exact: true }).selectOption({ label: 'note' });
+    await panel.getByLabel(findText.query, { exact: true }).fill('标记');
+    await panel.getByLabel(findText.replacement, { exact: true }).fill('勾选替换');
+    await panel.getByRole('checkbox', { name: findText.checkedOnly, exact: true }).check();
+    await expect(panel.getByRole('status')).toHaveText(findText.checkedEmpty);
+    await check(3).check();
+    await panel.getByRole('button', { name: findText.all, exact: true }).click();
+    await expect(review).toContainText(findText.reviewCount(1, 1));
+    await check(3).uncheck();
+    await expect(review).toBeHidden();
+    await expect(panel.getByRole('status')).toHaveText(findText.checkedEmpty);
+    await check(3).check();
+    await panel.getByRole('button', { name: findText.all, exact: true }).click();
+    await expect(review).toContainText(findText.location(2, 'note'));
+    await info.attach('PostgreSQL表页勾选行替换预览', { body: await page.screenshot(), contentType: 'image/png' });
+    await review.getByRole('button', { name: tableText.stage, exact: true }).click();
+    const note = (id: number) => grid.getByRole('gridcell', { name: String(id), exact: true }).locator('..').getByRole('gridcell').nth(2);
+    await expect(note(3)).toHaveText('勾选替换');
+    await expect(note(1)).toHaveText('标记');
+    expect((await observer.query('SELECT note FROM public.find_checked WHERE id IN (1,3) ORDER BY id')).rows).toEqual([{ note: '标记' }, { note: '标记' }]);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
