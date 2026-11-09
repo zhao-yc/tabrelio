@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent } from 'react';
 import type { DataGridHandle } from 'react-data-grid';
 import type { DataRow, ResultColumn } from '../../shared/contracts';
-import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindMode, type QueryResultFindProgress } from '../queryResultFind';
+import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindMode, type QueryResultFindPhase, type QueryResultFindProgress } from '../queryResultFind';
+import { QueryResultRegexWorkerClient } from '../queryResultRegexWorkerClient';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
 import { gridFindDirection } from '../gridFindKeys';
 import '../queryResultFind.css';
@@ -9,6 +10,7 @@ import '../queryResultFind.css';
 interface Run { owner: object; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
 interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; children: ReactNode; }
+const regexErrors: Partial<Record<QueryResultFindPhase, string>> = text.regexErrors;
 
 /** 查找栏与快捷键仅包住当前结果Grid；私有代次负责取消，绝不注册全局快捷键。 */
 export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, children }: Props) {
@@ -48,13 +50,14 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     // RDG每次render重发handle；实例以本挂载/原scope及可取得的原宿主核验，导航使用最新handle。
     const originalMount = mountOwner.current, originalElement = grid.current?.element;
     const next = { owner, index: -1 } as Run;
-    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && originalMount !== undefined && mountOwner.current === originalMount && grid.current !== null && originalElement !== undefined && (originalElement === null || grid.current.element === originalElement && originalElement.ownerDocument.contains(originalElement)), selectedColumn, nextMode);
+    const regex = nextMode === 'regex' ? new QueryResultRegexWorkerClient(() => new Worker(new URL('../queryResultRegex.worker.ts', import.meta.url), { type: 'module' })) : undefined;
+    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && originalMount !== undefined && mountOwner.current === originalMount && grid.current !== null && originalElement !== undefined && (originalElement === null || grid.current.element === originalElement && originalElement.ownerDocument.contains(originalElement)), selectedColumn, nextMode, regex);
     run.current = next;
     const progress = next.scan.progress();
     setView({ run: next, progress, index: -1 });
-    const advance = () => {
+    const advance = async () => {
       if (run.current !== next || !alive.current) return;
-      const progress = next.scan.current() ? next.scan.step() : next.scan.progress();
+      const progress = regex ? await next.scan.stepRegex() : next.scan.step();
       if (run.current !== next || !alive.current) return;
       setView({ run: next, progress, index: next.index });
       if (next.scan.current() && progress.phase === 'searching') next.timer = setTimeout(advance, 0);
@@ -88,7 +91,9 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     else if (visible && event.target === input.current && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); navigate(event.shiftKey ? -1 : 1); }
   }
   const progress = active?.progress;
-  const status = usesText && !query ? text.empty : !active ? text.stopped : progress?.phase === 'invalid' ? text.invalid : progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) : progress?.count ? text.count(progress.count, active.index) : text.noMatch;
+  const status = usesText && !query ? text.empty : !active ? text.stopped : progress?.phase === 'invalid' ? text.invalid :
+    progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
+      (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
   return <div className="query-result-find-region" onKeyDown={keyDown}>
     <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>

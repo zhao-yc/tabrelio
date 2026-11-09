@@ -145,6 +145,37 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
   expect(pageErrors).toEqual([]);
 });
 
+test('查询结果正则在线程查找、超时清除命中并可重新搜索', async () => {
+  await seed("SELECT id, CASE id WHEN 180 THEN 'aaaa' WHEN 178 THEN replace(hex(zeroblob(20000)), '0', 'a') || '!' ELSE name END AS 内容 FROM subject ORDER BY id DESC;");
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(query.getByRole('gridcell', { name: 'aaaa', exact: true })).toBeVisible();
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const before = await tasks();
+  await query.getByRole('button', { name: resultFind.open, exact: true }).click();
+  const input = query.getByRole('textbox', { name: resultFind.input, exact: true });
+  const status = query.locator('.query-result-find-status').getByRole('status');
+  await query.getByRole('combobox', { name: resultFind.columns, exact: true }).selectOption({ label: resultFind.columnOption('内容', 2) });
+  await query.getByRole('combobox', { name: resultFind.mode, exact: true }).selectOption({ label: resultFind.modes.regex });
+  await input.fill('^记录 (?:179|1)$');
+  await expect(status).toHaveText(resultFind.count(2, -1));
+  await query.getByRole('checkbox', { name: resultFind.highlightAll, exact: true }).check();
+  await input.press('Shift+F3');
+  await expect(query.getByRole('gridcell', { name: '记录 1', exact: true })).toHaveClass(/query-result-find-hit/);
+  await input.fill('[');
+  await expect(status).toHaveText(resultFind.regexErrors['regex-invalid']);
+  await expect(query.locator('.query-result-find-hit, .query-result-find-match')).toHaveCount(0);
+  await input.fill('^(a+)+\\1$');
+  await expect(status).toHaveText(resultFind.regexErrors['regex-timeout']);
+  await expect(query.locator('.query-result-find-hit, .query-result-find-match')).toHaveCount(0);
+  await input.fill('^记录 179$');
+  await expect(status).toHaveText(resultFind.count(1, -1));
+  await input.press('Enter');
+  await expect(query.getByRole('gridcell', { name: '记录 179', exact: true })).toHaveClass(/query-result-find-hit/);
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果按原类型查找可区分 SQL NULL、空字符串和整格文字', async () => {
   await seed("SELECT id, CASE id WHEN 180 THEN NULL WHEN 179 THEN 'NULL' WHEN 178 THEN '' ELSE 'nullable' END AS 内容, NULL AS 对照 FROM subject WHERE id >= 177 ORDER BY id DESC;");
   const query = page.locator('.query-tab:visible');
