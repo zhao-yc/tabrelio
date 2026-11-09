@@ -1,12 +1,15 @@
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultCopyCell } from './queryResultHeaderCopy';
 import { captureQueryResultCellFilter } from './queryResultCellFilter';
-import { queryResultFilterLimits, queryResultMemberFilterNode, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
+import { queryResultFilterLimits, queryResultFilterOperators, queryResultMemberFilterNode, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
 import { queryResultSelectedFilterZh as text } from './locales/queryResultSelectedFilter.zh-CN';
 import { queryResultFilterZh } from './locales/queryResultFilter.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
 import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
-import type { SortDialect } from './queryResultSort';
+import { compareQueryResultFilterKeys, queryResultFilterKey, type SortDialect } from './queryResultSort';
+import { compareSqliteResultKeys, sqliteResultComparisonKey } from './sqliteResultCompare';
+
+export type QueryResultSelectedFilterMode = boolean | 'between' | 'notBetween';
 
 export interface QueryResultSelectedFilterCapture {
   readonly cell: Readonly<QueryResultCopyCell>;
@@ -21,6 +24,7 @@ interface Binding {
   readonly columns: readonly ResultColumn[]; readonly rows: readonly DataRow[]; readonly columnRefs: readonly ResultColumn[];
   readonly metadata: readonly ResultColumn[]; readonly rowRefs: readonly DataRow[]; readonly indices: ReadonlySet<number>;
   readonly cell: QueryResultCopyCell; readonly selectedValues: readonly CellValue[]; invalid: boolean;
+  readonly dialect?: SortDialect;
   readonly sqlite?: { identity?: QueryResult; source?: SqliteResultFilterSource; groups: readonly { type: SqliteResultFilterType; values: readonly string[] }[]; literals: readonly string[]; types: readonly (SqliteResultFilterType | undefined)[] };
 }
 const bindings = new WeakMap<QueryResultSelectedFilterCapture, Binding>();
@@ -99,7 +103,7 @@ export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[
     cell: Object.freeze({ index: index as number, row: row as DataRow, column }), indices: Object.freeze(selected),
     key: admitted.key, name: admitted.name, type: admitted.type, values: Object.freeze(values), hasNull
   });
-  bindings.set(capture, { columns, rows, columnRefs, metadata: stamp, rowRefs, indices, cell: cell!, selectedValues, invalid: false, ...(sqlite ? { sqlite: { identity: sqliteSource, source, groups: [...typedGroups].map(([type, values]) => Object.freeze({ type, values: Object.freeze([...values]) })), literals: typedLiterals, types: typedKinds } } : {}) });
+  bindings.set(capture, { columns, rows, columnRefs, metadata: stamp, rowRefs, indices, cell: cell!, selectedValues, invalid: false, dialect, ...(sqlite ? { sqlite: { identity: sqliteSource, source, groups: [...typedGroups].map(([type, values]) => Object.freeze({ type, values: Object.freeze([...values]) })), literals: typedLiterals, types: typedKinds } } : {}) });
   if (!currentQueryResultSelectedFilter(capture, columns, rows)) throw Error(text.stale);
   return capture;
 }
@@ -125,9 +129,34 @@ export function currentQueryResultSelectedFilter(capture: QueryResultSelectedFil
   } catch { binding.invalid = true; return false; }
 }
 
-/** 确认捕获仍属于原结果后，生成通用的集合筛选草稿。 */
-export function queryResultSelectedFilterNode(capture: QueryResultSelectedFilterCapture, exclude = false): QueryResultFilterRule | QueryResultFilterGroup {
+/** 只用两个已捕获端点，按正式筛选比较器排序，绝不把精确值转成 JS 数值。 */
+export function queryResultSelectedBounds(capture: QueryResultSelectedFilterCapture): Pick<QueryResultFilterRule, 'value' | 'upper' | 'sqliteType'> | undefined {
+  const binding = bindings.get(capture);
+  if (!binding || binding.invalid || capture.indices.length !== 2 || capture.hasNull) return;
+  const column = { key: capture.key, name: capture.name, type: capture.type };
+  const [left, right] = binding.selectedValues;
+  let order: number, literals: readonly string[], sqliteType: SqliteResultFilterType | undefined;
+  if (binding.sqlite) {
+    sqliteType = binding.sqlite.types[0];
+    if ((sqliteType !== 'integer' && sqliteType !== 'real') || binding.sqlite.types[1] !== sqliteType) return;
+    const code = sqliteType === 'integer' ? 'i' : 'r';
+    order = compareSqliteResultKeys(sqliteResultComparisonKey(left, code)!, sqliteResultComparisonKey(right, code)!);
+    literals = binding.sqlite.literals;
+  } else {
+    if (column.type === 'BOOLEAN' || !queryResultFilterOperators(column, undefined, binding.dialect).includes('between')) return;
+    order = compareQueryResultFilterKeys(queryResultFilterKey(column, left, binding.dialect), queryResultFilterKey(column, right, binding.dialect));
+    literals = [String(left), String(right)];
+  }
+  const [value, upper] = order > 0 ? [literals[1], literals[0]] : literals;
+  return { value, upper, ...(sqliteType ? { sqliteType } : {}) };
+}
+
+/** 确认捕获仍属于原结果后，生成集合或双端区间草稿。 */
+export function queryResultSelectedFilterNode(capture: QueryResultSelectedFilterCapture, mode: QueryResultSelectedFilterMode = false): QueryResultFilterRule | QueryResultFilterGroup {
   const binding = bindings.get(capture);
   if (!binding || !currentQueryResultSelectedFilter(capture, binding.columns, binding.rows)) throw Error(text.stale);
-  return queryResultMemberFilterNode(capture.key, capture.values, capture.hasNull, exclude, binding.sqlite?.groups);
+  if (typeof mode === 'boolean') return queryResultMemberFilterNode(capture.key, capture.values, capture.hasNull, mode, binding.sqlite?.groups);
+  const bounds = queryResultSelectedBounds(capture);
+  if (!bounds) throw Error(text.boundsUnavailable);
+  return Object.freeze({ column: capture.key, operator: mode, ...bounds });
 }

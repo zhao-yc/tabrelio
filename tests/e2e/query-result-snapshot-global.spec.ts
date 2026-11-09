@@ -323,6 +323,15 @@ function register(): void {
       await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行']));
       await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
+      await step(() => exactBig.click());
+      await step(() => page.keyboard.press('Shift+ArrowUp'));
+      await step(() => page.keyboard.press('Shift+F10'));
+      await step(() => rangeMenu.getByRole('menuitem', { name: selectedFilterText.rangeBetween, exact: true }).click());
+      await step(() => expect(checkedFilter.getByLabel(filterText.lower + ' 1', { exact: true })).toHaveValue('2'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.upper + ' 1', { exact: true })).toHaveValue('18446744073709551615'));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(() => expect(viewer.getByText(filterText.counts(2, 2), { exact: true })).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       await step(() => other.click({ button: 'right' }));
       await step(() => rangeMenu.getByRole('menuitem', { name: filterText.cellContains, exact: true }).click());
       await step(() => expect(checkedFilter.getByLabel(filterText.column + ' 1', { exact: true })).toHaveValue('constructor'));

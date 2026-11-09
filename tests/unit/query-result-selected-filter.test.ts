@@ -22,6 +22,25 @@ const rule = (value: string, enabled?: boolean): QueryResultFilterRule => ({ col
 const group = (mode: 'AND' | 'OR', ...children: (QueryResultFilterRule | QueryResultFilterGroup)[]): QueryResultFilterGroup => ({ mode, children });
 
 describe('勾选值完整原文捕获及正式筛选', () => {
+  it('两个非相邻端点按精确小数排序，保留中间未选值与相等端点', () => {
+    const f = fixture(['9007199254740993.0003', '9007199254740993.0002', '9007199254740993.0001', '9007199254740993.0001', null],
+      'DECIMAL', [0, 2]);
+    const node = queryResultSelectedFilterNode(f.capture(), 'between');
+    expect(node).toEqual({ column: 'k', operator: 'between', value: '9007199254740993.0001', upper: '9007199254740993.0003' });
+    expect(controller(f.columns, f.rows, group('AND', node)).view.sourceIndices).toEqual([0, 1, 2, 3]);
+    const equal = fixture(['2', '2', '1'], 'BIGINT', [0, 1]);
+    const outside = queryResultSelectedFilterNode(equal.capture(), 'notBetween');
+    expect(controller(equal.columns, equal.rows, group('AND', outside)).view.sourceIndices).toEqual([2]);
+  });
+
+  it('拒绝 SQLite 混合存储端点及普通 NULL 端点', () => {
+    const columns = [{ key: 'k', name: '值', type: 'SQLITE' }], rows = [{ k: '2' }, { k: '3' }];
+    const source: QueryResult = { columns, rows, elapsedMs: 1, truncated: false, statement: '', sqliteStorage: { version: 1, rows: ['i', 'r'] } };
+    const mixed = captureQueryResultSelectedFilter(columns, rows, { row: rows[0], index: 0, column: columns[0] }, new Set([0, 1]), source);
+    expect(() => queryResultSelectedFilterNode(mixed, 'between')).toThrow(text.boundsUnavailable);
+    expect(() => queryResultSelectedFilterNode(fixture([null, '2'], 'BIGINT').capture(), 'between')).toThrow(text.boundsUnavailable);
+  });
+
   it.each([
     { selected: [0], remaining: [1, 2, 3] },
     { selected: [1], remaining: [0, 2, 3] },

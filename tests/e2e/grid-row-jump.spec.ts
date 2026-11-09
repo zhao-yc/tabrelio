@@ -1811,6 +1811,39 @@ test('SQLite 查询数值格生成精确边界且保留存储类型', async ({},
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询两格和勾选原值生成双端区间', async ({}, info) => {
+  await seed(`SELECT id, CASE id WHEN 1 THEN 9007199254740992 WHEN 2 THEN 9007199254740993
+    WHEN 3 THEN 9007199254740994 WHEN 4 THEN '9007199254740993' ELSE 9007199254740994.0 END AS v
+    FROM subject WHERE id <= 5 ORDER BY id DESC;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+  const row = (id: number) => ids.filter({ hasText: new RegExp('^' + id + '$') }).locator('..');
+  const value = (id: number) => row(id).getByRole('gridcell').last();
+  await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  await row(3).getByRole('checkbox').check();
+  await row(1).getByRole('checkbox').check();
+  await value(2).click();
+  await query.getByRole('button', { name: selectedFilterText.checkedBetween, exact: true }).click();
+  const panel = query.getByRole('region', { name: filterText.title, exact: true });
+  await expect(panel.getByLabel(filterText.lower + ' 1', { exact: true })).toHaveValue('9007199254740992');
+  await expect(panel.getByLabel(filterText.upper + ' 1', { exact: true })).toHaveValue('9007199254740994');
+  await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  await info.attach('SQLite查询双端区间草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['3', '2', '1']);
+  await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
+  await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  await value(3).click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Shift+F10');
+  await page.getByRole('menuitem', { name: selectedFilterText.rangeNotBetween, exact: true }).click();
+  await expect(panel.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('notBetween');
+  await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['1']);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果只显示匹配行可保留排序和筛选并恢复原范围', async () => {
   await seed();
   const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');

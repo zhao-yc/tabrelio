@@ -53,7 +53,7 @@ import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN'
 import { captureQueryResultCellFilter, cellBoundOperators, currentQueryResultCellFilter, type CellFilterOperator, type QueryResultCellFilterCapture } from '../queryResultCellFilter';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
-import { captureQueryResultSelectedFilter, currentQueryResultSelectedFilter, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
+import { captureQueryResultSelectedFilter, currentQueryResultSelectedFilter, queryResultSelectedBounds, type QueryResultSelectedFilterCapture, type QueryResultSelectedFilterMode } from '../queryResultSelectedFilter';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../locales/queryResultSelectedFilter.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../locales/queryResultStatistics.zh-CN';
 
@@ -76,7 +76,7 @@ function displayedValue(row: DataRow, key: string, present?: PresentGridCell) {
 }
 
 /** 表页可覆盖展示值，定位、编辑及原页能力仍引用原网格数据。查询结果默认使用原值。 */
-export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, freezeColumns, tableCopy, insertSql, updateSql, deleteSql, primaryKeySql, onOpenRowSql, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, onShowMatchingRows, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, ownDialog, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, cellMenuFilters, onCellEdit, onCellPaste, onFillRange, onExportRange, onFilterTableRange, findTarget, findMarks, navigateTo, restoreCell, onGridAnchor, quickValueActions, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; headerDetails?: GridHeaderDetailsOptions; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; freezeColumns?: GridHeaderFreeze; tableCopy?: { enabled: boolean; isCurrent(): boolean }; insertSql?(indices: ReadonlySet<number>): string; updateSql?(indices: ReadonlySet<number>): string; deleteSql?(indices: ReadonlySet<number>): string; primaryKeySql?(indices: ReadonlySet<number>): string; onOpenRowSql?(kind: RowSqlKind, sql: string): void; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; onShowMatchingRows?(indices: ReadonlySet<number>): void; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean; ownDialog?(): Element | undefined; sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude?: boolean):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; cellMenuFilters?(cell: QueryResultCopyCell): { label?: string; actions: GridCellAction[] } | undefined; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer, range?: GridRangeTarget<DataRow>): void; onFillRange?(range: GridRangeTarget<DataRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<DataRow>; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; restoreCell?: { row: DataRow; key: string }; onGridAnchor?(anchor: GridFindTarget | undefined): void; quickValueActions?: { allowed(cell: QueryResultCopyCell, kind: GridQuickValue): boolean; apply(cell: QueryResultCopyCell, kind: GridQuickValue): void }; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
+export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWidths, rowHeight, rowJump = false, rowJumpCurrent, freezeColumns, tableCopy, insertSql, updateSql, deleteSql, primaryKeySql, onOpenRowSql, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, onShowMatchingRows, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, ownDialog, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, cellMenuFilters, onCellEdit, onCellPaste, onFillRange, onExportRange, onFilterTableRange, findTarget, findMarks, navigateTo, restoreCell, onGridAnchor, quickValueActions, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; headerDetails?: GridHeaderDetailsOptions; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; freezeColumns?: GridHeaderFreeze; tableCopy?: { enabled: boolean; isCurrent(): boolean }; insertSql?(indices: ReadonlySet<number>): string; updateSql?(indices: ReadonlySet<number>): string; deleteSql?(indices: ReadonlySet<number>): string; primaryKeySql?(indices: ReadonlySet<number>): string; onOpenRowSql?(kind: RowSqlKind, sql: string): void; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; onShowMatchingRows?(indices: ReadonlySet<number>): void; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean; ownDialog?(): Element | undefined; sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, mode?: QueryResultSelectedFilterMode):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; cellMenuFilters?(cell: QueryResultCopyCell): { label?: string; actions: GridCellAction[] } | undefined; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer, range?: GridRangeTarget<DataRow>): void; onFillRange?(range: GridRangeTarget<DataRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<DataRow>; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; restoreCell?: { row: DataRow; key: string }; onGridAnchor?(anchor: GridFindTarget | undefined): void; quickValueActions?: { allowed(cell: QueryResultCopyCell, kind: GridQuickValue): boolean; apply(cell: QueryResultCopyCell, kind: GridQuickValue): void }; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
   const height = readGridRowHeight(rowHeight);
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
@@ -290,16 +290,21 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   }
   const selectedFilter=selectedFilterRef.current,selectedFilterAllowed=!!onFilterSelected&&selectedFilterCurrent(selectedFilter);
   /** 子网格只提出准确原值捕获，父级另核已接纳勾选和完整结构后才开审核草稿。 */
-  function filterFromSelected(exclude: boolean):void{
+  function filterFromSelected(mode: QueryResultSelectedFilterMode):void{
     if(copyRevisionRef.current!==copyRevision||!selectedFilterCurrent(selectedFilter)||!onFilterSelected)return;
-    onFilterSelected(selectedFilter!.capture, undefined, exclude);
+    onFilterSelected(selectedFilter!.capture, undefined, mode);
   }
+  const checkedBounds = selectedFilterAllowed && !!selectedFilter && queryResultSelectedBounds(selectedFilter.capture);
   const checkedFilterActions = onFilterSelected && ([
     [selectedFilterText.open, selectedFilterText.hint, false],
     [selectedFilterText.exclude, selectedFilterText.excludeHint, true],
-  ] as const).map(([label, hint, exclude]) =>
+    ...(checkedBounds ? [
+      [selectedFilterText.checkedBetween, selectedFilterText.boundsHint, 'between'],
+      [selectedFilterText.checkedNotBetween, selectedFilterText.boundsHint, 'notBetween'],
+    ] as const : []),
+  ] as const).map(([label, hint, mode]) =>
     <button key={label} type="button" title={selectedFilterAllowed ? hint : selectedFilterErrorRef.current || selectedFilterText.unavailable}
-      disabled={!selectedFilterAllowed} onClick={() => filterFromSelected(exclude)}>{label}</button>);
+      disabled={!selectedFilterAllowed} onClick={() => filterFromSelected(mode)}>{label}</button>);
   /** 统计锁定本次活动列和已接纳勾选；旧渲染不能读取后来选择，空结果仍可统计首列。 */
   function openStatistics():void {
     if(!onStatistics||!actionCurrent()||copyRevisionRef.current!==copyRevision)return;
@@ -430,17 +435,26 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       })));
     } catch { /* 未知或不可比较的原值不提供本地筛选项。 */ }
     if (rectangle && rectangle.left === rectangle.right && onFilterSelected) {
-      const stage = (exclude: boolean) => {
+      const captureRange = () => {
+        // 单列矩形绑定菜单打开时的选区，不读勾选、剪贴板或渲染文本。
+        const indices = new Set(Array.from({ length: rectangle.bottom - rectangle.top + 1 }, (_, index) => rectangle.top + index));
+        return captureQueryResultSelectedFilter(columns, rows, cell, indices, sqliteSource, filterDialect);
+      };
+      const stage = (mode: QueryResultSelectedFilterMode, captured?: QueryResultSelectedFilterCapture) => {
         if (!current()) return;
         try {
-          // 单列矩形绑定菜单打开时的选区，不读勾选、剪贴板或渲染文本。
-          const indices = new Set(Array.from({ length: rectangle.bottom - rectangle.top + 1 }, (_, index) => rectangle.top + index));
-          const capture = captureQueryResultSelectedFilter(columns, rows, cell, indices, sqliteSource, filterDialect);
-          if (current()) onFilterSelected(capture, current, exclude);
+          const capture = captured ?? captureRange();
+          if (current()) onFilterSelected(capture, current, mode);
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       };
       actions.push({ label: selectedFilterText.range, run: () => stage(false) },
         { label: selectedFilterText.rangeExclude, run: () => stage(true) });
+      if (rectangle.bottom - rectangle.top === 1) try {
+        const capture = captureRange();
+        if (queryResultSelectedBounds(capture)) actions.push(
+          { label: selectedFilterText.rangeBetween, run: () => stage('between', capture) },
+          { label: selectedFilterText.rangeNotBetween, run: () => stage('notBetween', capture) });
+      } catch { /* 不可靠的双端原值只保留原菜单。 */ }
     }
     if (quickValueActions) for (const kind of gridQuickValueKinds) actions.push({
       label: quickValueText[kind], disabled: !quickValueActions.allowed(cell, kind),

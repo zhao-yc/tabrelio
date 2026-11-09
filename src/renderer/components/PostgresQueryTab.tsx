@@ -59,7 +59,7 @@ import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule,
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterRule, type QueryResultFilterView } from '../queryResultFilter';
 import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilterOperator } from '../queryResultCellFilter';
-import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
+import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture, type QueryResultSelectedFilterMode } from '../queryResultSelectedFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { prepareQueryResultOrganization, QueryResultHistory } from '../queryResultHistory';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
@@ -1518,13 +1518,13 @@ export function PostgresQueryTab({
   }
 
   /** 取值须绑定当前勾选或单列矩形，原行列核验后才打开审核草稿。 */
-  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false) {
+  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, mode: QueryResultSelectedFilterMode = false) {
     const current = () => !!binding && resultCurrent() &&
       (rangeCurrent ? rangeCurrent() : resultSelection.matchesIndices(binding, capture.indices)) &&
       currentQueryResultSelectedFilter(capture, binding.visibleColumns, binding.rows);
     if (!current()) return;
     try {
-      const node = queryResultSelectedFilterNode(capture, exclude);
+      const node = queryResultSelectedFilterNode(capture, mode);
       if (current()) openResultFilter(node);
     }
     catch (reason) { setError(errorMessage(reason)); }

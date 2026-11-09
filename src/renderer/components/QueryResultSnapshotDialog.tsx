@@ -14,7 +14,7 @@ import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterB
 import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilterOperator } from '../queryResultCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { QueryRowDetails, type QueryRowDetailsView } from '../queryRowDetails';
-import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
+import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture, type QueryResultSelectedFilterMode } from '../queryResultSelectedFilter';
 import { prepareQueryResultOrganization, QueryResultHistory } from '../queryResultHistory';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
@@ -301,14 +301,14 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 选区和勾选各核自己的显示范围，草稿追加到完整快照的既有条件。 */
-  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false): void {
+  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, mode: QueryResultSelectedFilterMode = false): void {
     if (!loaded || !displayed || !visibleColumns || !filterBinding || !filterView || !filterTrigger.current) return;
     const current = () => editable() && loadedRef.current === loaded && filter.view(filterBinding) === filterView &&
       (rangeCurrent ? rangeCurrent() : exportSelection.matchesIndices(binding, capture.indices)) &&
       currentQueryResultSelectedFilter(capture, visibleColumns, displayed.rows, displayed);
     if (!current()) return;
     try {
-      const seed = appendQueryResultFilterNode(filterView.expression, queryResultSelectedFilterNode(capture, exclude));
+      const seed = appendQueryResultFilterNode(filterView.expression, queryResultSelectedFilterNode(capture, mode));
       if (current() && filterTrigger.current) openFilter(filterTrigger.current, seed);
     } catch (reason) { setError(errorMessage(reason)); }
   }
