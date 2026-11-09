@@ -105,7 +105,7 @@ export function mysqlQueryRelationSelect(source: MysqlQueryRelationSource, info:
 }
 
 /** 只保留原行及结构摘要。列顺序取可信目录，缺列或多列均不能伪造相同的完整原值。 */
-export function mysqlQueryEditRowDigest(info: TableInfo, row: DataRow): string {
+export function mysqlQueryEditRowDigest(info: Pick<TableInfo, 'columns'>, row: DataRow): string {
   if (Object.keys(row).length !== info.columns.length || info.columns.some(column => !Object.hasOwn(row, column.name))) throw blocked();
   return createHash('sha256').update(JSON.stringify(info.columns.map(column => row[column.name]))).digest('hex');
 }

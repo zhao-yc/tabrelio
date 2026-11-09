@@ -5,6 +5,7 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import type { QueryResult, TableInfo } from '../../src/shared/contracts';
 import { mysqlQueryEditRowDigest, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget } from '../../src/engine/mysqlQueryRelation';
 import { SessionObjects } from '../../src/engine/sessionObjects';
+import { buildChanges } from '../../src/engine/sql';
 import { validateCommand } from '../../src/shared/validation';
 
 const mode = { noBackslashEscapes: false, ansiQuotes: false };
@@ -57,7 +58,7 @@ describe('MySQL 查询关联原行', () => {
     expect(() => validateCommand('mysql.queryRelation', { ...request, columnIndex: 0 })).toThrow();
   });
 
-  it('编辑仅接纳单条更新并核对未投影字段的完整原值', () => {
+  it('编辑只接纳更新并核对未投影字段的完整原值', () => {
     const info = { columns: [{ name: 'id' }, { name: 'guard' }] } as TableInfo;
     const before = { id: '9007199254740993', guard: 1.0000000000000002 };
     expect(mysqlQueryEditRowDigest(info, before)).toBe(mysqlQueryEditRowDigest(info, { guard: before.guard, id: before.id }));
@@ -69,9 +70,23 @@ describe('MySQL 查询关联原行', () => {
     for (const command of ['table.preview', 'table.apply'] as const) {
       const request = command === 'table.apply' ? { ...input, taskId: 'submit', previewId: randomUUID() } : input;
       expect(validateCommand(command, request)).toEqual(request);
-      for (const extra of [{ changes: [update, update] }, { changes: [{ kind: 'insert', values: { id: '1' } }] },
+      for (const extra of [{ changes: Array.from({ length: 101 }, () => update) }, { changes: [{ kind: 'insert', values: { id: '1' } }] },
         { changes: [{ ...update, values: {} }] }, { searchRecordRef: randomUUID() }, { queryRecord: { ...input.queryRecord, table: 'forged' } }])
         expect(() => validateCommand(command, { ...request, ...extra })).toThrow();
     }
+  });
+
+  it('矩形编辑保留各原行的精确键并拒绝重复行列序号', () => {
+    const request = { connectionId: 'conn', sessionId: 'session', executionId: 'run', taskId: 'read', rowIndices: [3, 0], columnIndices: [2, 1] };
+    expect(validateCommand('mysql.queryBatchEdit', request)).toEqual(request);
+    for (const extra of [{ rowIndices: [3, 3] }, { columnIndices: [2, 2] }, { rowIndex: 3 }, { table: 't' }])
+      expect(() => validateCommand('mysql.queryBatchEdit', { ...request, ...extra })).toThrow();
+    const info = { database: 'db', name: 't', engine: 'InnoDB', editableKey: ['id'],
+      columns: [{ name: 'id', type: 'BIGINT' }, { name: 'v', type: 'VARCHAR(20)' }] } as TableInfo;
+    const ids = ['9007199254740993', '9007199254740992'];
+    const changes = ids.map(id => ({ kind: 'update' as const, before: { id, v: '原值' }, values: { v: '新值' } }));
+    const searchKeys = ids.map(id => ({ sql: '`id` = CAST(? AS DECIMAL(65,0))', params: [id] }));
+    expect(buildChanges(info, changes, { searchKeys }).statements.map(item => item.params)).toEqual(ids.map(id => ['新值', id, '原值']));
+    expect(() => buildChanges(info, changes, { searchKeys: searchKeys.slice(1) })).toThrow('批量写入定位不完整');
   });
 });

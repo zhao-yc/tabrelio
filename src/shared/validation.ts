@@ -153,7 +153,7 @@ import { queryParameterTypes, validateQueryParameters } from './queryParameters'
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
-import { mysqlQueryRelationSchema, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema } from './mysqlQueryRelation';
+import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRelationSchema, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema } from './mysqlQueryRelation';
 import { mysqlResultOriginOpenSchema } from './mysqlResultOrigins';
 import { queryExcelEncodingMessage, queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
@@ -290,8 +290,9 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
 });
 const tableChangeShape = { ...target, changes, searchRecordRef: z.uuid().optional(), queryRecord: mysqlQueryRecordRefSchema.optional() };
 const checkTableChangeSource = (input: z.infer<typeof tableChangeSchema>, context: z.RefinementCtx) => {
-  if (input.queryRecord && (input.searchRecordRef || input.changes.length !== 1 || input.changes[0].kind !== 'update' || !Object.keys(input.changes[0].values).length))
-    context.addIssue({ code: 'custom', message: '查询原记录只允许修改准确的一条已存在记录' });
+  if (input.queryRecord && (input.searchRecordRef || !input.changes.length || input.changes.length > mysqlQueryBatchLimits.rows ||
+      input.changes.some(change => change.kind !== 'update' || !Object.keys(change.values).length)))
+    context.addIssue({ code: 'custom', message: '查询原记录只允许修改选区内已存在的记录' });
 };
 const tableChangeSchema = z.object(tableChangeShape).strict();
 
@@ -304,6 +305,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.queryRecordPage': postgresQueryRecordPageSchema,
   'mysql.queryRelation': mysqlQueryRelationSchema,
   'mysql.queryRecordEdit': mysqlQueryRecordEditSchema,
+  'mysql.queryBatchEdit': mysqlQueryBatchEditSchema,
   'mysql.resultOriginOpen': mysqlResultOriginOpenSchema,
   'postgres.storage.read': postgresStorageReadSchema,
   'postgres.storage.detail': postgresStorageDetailSchema,

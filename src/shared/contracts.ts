@@ -317,6 +317,8 @@ export interface CommandMap {
   'mysql.queryRelation': { input: import('./mysqlQueryRelation').MysqlQueryRelationInput; output: { info: TableInfo; row: DataRow } };
   'mysql.queryRecordEdit': { input: import('./mysqlQueryRelation').MysqlQueryRecordEditInput;
     output: { info: TableInfo; row: DataRow; token: string; writable: string[] } };
+  'mysql.queryBatchEdit': { input: import('./mysqlQueryRelation').MysqlQueryBatchEditInput;
+    output: { info: TableInfo; rows: DataRow[]; token: string; columns: string[] } };
   'mysql.resultOriginOpen': { input: import('./mysqlResultOrigins').MysqlResultOriginOpenInput;
     output: { database: string; table: string } };
   'postgres.resultOrigins': { input: import('./postgresResultOrigins').PostgresResultOriginsInput; output: import('./postgresResultOrigins').PostgresResultOrigin[] };

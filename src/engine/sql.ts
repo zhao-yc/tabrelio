@@ -72,15 +72,17 @@ export function buildPageSql(info: TableInfo, page: number, pageSize: number, fi
 }
 
 /** 全旧值比较避免丢失更新；唯一键是可靠定位的必要条件，不能仅凭 LIMIT 1 写入。 */
+export interface SqlSearchKey { sql: string; params: CellValue[] }
 export function buildChanges(info: TableInfo, changes: RowChange[], options?: {
-  binaryText?: 'cast'; searchKey?: { sql: string; params: CellValue[] };
+  binaryText?: 'cast'; searchKey?: SqlSearchKey; searchKeys?: readonly SqlSearchKey[];
 }): SqlPreview {
   if (info.engine.toUpperCase() !== 'INNODB') throw new Error('仅允许对 InnoDB 事务表集中提交修改');
   if (!info.editableKey.length) throw new Error('此表没有全部非空的主键或唯一键，数据仅可读取');
   const columns = new Map(info.columns.map(column => [column.name, column]));
   const table = qualified(info.database, info.name);
   const statements: SqlPreview['statements'] = [];
-  for (const change of changes) {
+  if (options?.searchKeys && (options.searchKey || options.searchKeys.length !== changes.length)) throw Error('批量写入定位不完整');
+  for (const [index, change] of changes.entries()) {
     const params: CellValue[] = [];
     const values = change.kind === 'delete' ? [] : Object.entries(change.values);
     for (const [name] of values) {
@@ -97,9 +99,10 @@ export function buildChanges(info: TableInfo, changes: RowChange[], options?: {
     for (const name of info.editableKey) if (change.before[name] === null || change.before[name] === undefined) throw new Error('原始行唯一键不得为空');
     // 键条件保持可用索引；全文本旧值另做精确比较，不受 CI/AI/PAD SPACE 排序规则影响。
     const keyClauses: string[] = [];
-    if (options?.searchKey) {
-      keyClauses.push(options.searchKey.sql);
-      params.push(...options.searchKey.params);
+    const searchKey = options?.searchKeys?.[index] ?? options?.searchKey;
+    if (searchKey) {
+      keyClauses.push(searchKey.sql);
+      params.push(...searchKey.params);
     } else for (const name of info.editableKey) {
       params.push(change.before[name]);
       keyClauses.push(`${identifier(name)} <=> ${typedCellPlaceholder(columns.get(name)!, change.before[name])}`);

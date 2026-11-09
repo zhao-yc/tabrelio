@@ -1,7 +1,7 @@
 import type { ResultSetHeader } from 'mysql2';
 import type { RowChange, SqlPreview, TableInfo, CellValue } from '../shared/contracts';
 import { emptyTableApplyEvidence, type TableApplyEvidence, type TableApplyProgress } from '../shared/tableApplyReceipt';
-import { buildChanges, qualified } from './sql';
+import { buildChanges, qualified, type SqlSearchKey } from './sql';
 
 interface TableApplyGroup {
   info: TableInfo;
@@ -17,7 +17,8 @@ export interface TableApplyControl extends Pick<TableApplyGroup, 'lockInfo' | 'a
   send(sql: string, params: CellValue[], acknowledged: (result: ResultSetHeader) => void): Promise<ResultSetHeader>;
   rollback(): Promise<ResultSetHeader>; emit(p: TableApplyProgress): void;
   strictSync?: true;
-  searchKey?: { sql: string; params: CellValue[] };
+  searchKey?: SqlSearchKey;
+  searchKeys?: readonly SqlSearchKey[];
 }
 
 export function applyTableTransaction(info: TableInfo, changes: RowChange[], control: TableApplyControl): Promise<{ affectedRows: number }> {
@@ -32,7 +33,8 @@ export async function applyTableTransactionGroups(groups: TableApplyGroup[], c: 
   const emit = () => { if (c.operationId) c.emit({ operationId: c.operationId, sequence: ++sequence, phase, reason, evidence: { ...e } }); };
   const acknowledged = (r: ResultSetHeader) => { e.transactionKnown = Number.isInteger(r.serverStatus) && r.serverStatus >= 0 && r.serverStatus <= 65535; e.transactionOpen = e.transactionKnown && Boolean(r.serverStatus & 1); };
   try {
-    const options = { ...(c.strictSync || c.searchKey ? { binaryText: 'cast' as const } : {}), searchKey: c.searchKey };
+    if (c.searchKeys && groups.length !== 1) throw Error('查询批量写入只支持一张原表');
+    const options = { ...(c.strictSync || c.searchKey || c.searchKeys ? { binaryText: 'cast' as const } : {}), searchKey: c.searchKey, searchKeys: c.searchKeys };
     const plans = groups.map(group => ({ group, statements: buildChanges(group.info, group.changes, options).statements }));
     if (c.expectedPlan && JSON.stringify(c.expectedPlan) !== JSON.stringify(plans.flatMap(plan => plan.statements))) throw Error('提交计划自预览后已变化，请重新预览；未发送本批数据写入');
     await c.send('START TRANSACTION', [], r => { transactionStarted = true; acknowledged(r); });
@@ -52,7 +54,7 @@ export async function applyTableTransactionGroups(groups: TableApplyGroup[], c: 
           if (!e.transactionKnown || !e.transactionOpen) { e.transactionProtected = false; reason = 'transaction-unconfirmed'; throw Error('无法确认目标写入仍在同一事务内'); }
           if (!Number.isSafeInteger(r.affectedRows) || r.affectedRows < 0 || !Number.isSafeInteger(e.serverReportedRows + r.affectedRows)) throw Error('服务器返回的行数无效');
           e.dmlAcknowledged++; e.serverReportedRows += r.affectedRows; emit();
-          if (c.strictSync && r.warningStatus !== 0) throw Error('服务器返回写入警告');
+          if ((c.strictSync || c.searchKeys) && r.warningStatus !== 0) throw Error('服务器返回写入警告');
           if (r.affectedRows !== 1) { reason = 'conflict'; throw Error('数据已被其他连接修改、删除或行定位不唯一'); }
         });
         if (group.afterWrite) await group.afterWrite(index);
