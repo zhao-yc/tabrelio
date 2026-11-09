@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CellValue, QueryResult } from '../../src/shared/contracts';
 import { appendQueryResultFilterRule, QueryResultFilter, type QueryResultFilterGroup, type QueryResultFilterRule } from '../../src/renderer/queryResultFilter';
-import { captureQueryResultCellFilter, currentQueryResultCellFilter, queryResultCellFilterRule } from '../../src/renderer/queryResultCellFilter';
+import { captureQueryResultCellFilter, cellTextOperators, currentQueryResultCellFilter, queryResultCellFilterRule } from '../../src/renderer/queryResultCellFilter';
 import { queryResultFilterZh as text } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 
 /** 只用原格RAM对象，验证协议精度和唯一键，不连接数据库或触碰文件及剪贴板。 */
@@ -34,13 +34,17 @@ describe('当前单元格筛选的精确原值捕获',()=>{
 
   it.each([undefined, 'postgresql'] as const)('文本快捷条件按字面比较，方言 %s', dialect => {
     const source: QueryResult = { columns: [{ key: 'k', name: '文本', type: 'TEXT' }],
-      rows: ['A%_', '前A%_后', 'a%_', 'AAx', null, ''].map(k => ({ k })), elapsedMs: 0, truncated: false, statement: '' };
+      rows: ['A%_\n ', '前A%_\n 后', 'a%_\n ', 'AAx', null, '', 'A%_\n 后', '前A%_\n ', 'A%_\n'].map(k => ({ k })), elapsedMs: 0, truncated: false, statement: '' };
     const { columns, rows } = source;
     const capture = captureQueryResultCellFilter(columns, rows, { row: rows[0], index: 0, column: columns[0] }, undefined, dialect);
     const filter = new QueryResultFilter(dialect), binding = filter.bind(source, [])!;
-    for (const [operator, expected] of [['contains', [0, 1]], ['notContains', [2, 3, 5]]] as const) {
+    for (const [operator, expected] of [
+      ['contains', [0, 1, 6, 7]], ['notContains', [2, 3, 5, 8]],
+      ['startsWith', [0, 6]], ['notStartsWith', [1, 2, 3, 5, 7, 8]],
+      ['endsWith', [0, 7]], ['notEndsWith', [1, 2, 3, 5, 6, 8]],
+    ] as const) {
       const rule = queryResultCellFilterRule(capture, operator);
-      expect(rule.value).toBe('A%_');
+      expect(rule.value).toBe('A%_\n ');
       expect(filter.applyExpression(binding, filter.view(binding)!, { mode: 'AND', children: [rule] }).sourceIndices).toEqual(expected);
     }
   });
@@ -48,7 +52,7 @@ describe('当前单元格筛选的精确原值捕获',()=>{
   it.each([['', 'TEXT'], [null, 'TEXT'], ['42', 'BIGINT']] as const)('空值、NULL 和数值不可生成文本快捷条件 (%s, %s)', (value, type) => {
     const capture = fixture(value, type).capture();
     expect(capture.textMatch).toBe(false);
-    expect(() => queryResultCellFilterRule(capture, 'contains')).toThrow(text.invalid);
+    for (const operator of cellTextOperators) expect(() => queryResultCellFilterRule(capture, operator)).toThrow(text.invalid);
   });
 
   it.each([

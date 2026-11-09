@@ -50,7 +50,7 @@ import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { tableHeaderCopyZh as tableCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import '../queryResultCopy.css';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
-import { captureQueryResultCellFilter, cellBoundOperators, currentQueryResultCellFilter, type CellFilterOperator, type QueryResultCellFilterCapture } from '../queryResultCellFilter';
+import { captureQueryResultCellFilter, cellBoundOperators, cellTextOperators, currentQueryResultCellFilter, type CellFilterOperator, type QueryResultCellFilterCapture } from '../queryResultCellFilter';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
 import { captureQueryResultSelectedFilter, currentQueryResultSelectedFilter, queryResultSelectedBounds, type QueryResultSelectedFilterCapture, type QueryResultSelectedFilterMode } from '../queryResultSelectedFilter';
@@ -424,8 +424,9 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       };
       actions.push({ label: filterText.cellEquals, run: () => apply('eq') },
         { label: filterText.cellNotEquals, run: () => apply('ne') });
-      if (capture.textMatch) actions.push({ label: filterText.cellContains, run: () => apply('contains') },
-        { label: filterText.cellNotContains, run: () => apply('notContains') });
+      if (capture.textMatch) actions.push(...cellTextOperators.map(operator => ({
+        label: filterText.cellText[operator], run: () => apply(operator),
+      })));
       if (capture.orderedMatch) actions.push(...cellBoundOperators.map(operator => ({
         label: filterText.cellBounds[operator], run: () => apply(operator),
       })));

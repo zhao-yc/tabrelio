@@ -1,12 +1,16 @@
+export const cellTextFilterLabels = {
+  contains: '包含此文本', notContains: '不包含此文本',
+  startsWith: '以此文本开头', notStartsWith: '不以此文本开头',
+  endsWith: '以此文本结尾', notEndsWith: '不以此文本结尾',
+} as const;
+
 /** 表数据的快捷条件仅预填原值，实际读取仍走既有参数化分页。 */
 export const tableCellFilterZh = {
   context: '单元格筛选',
   postgresStaged: '已带入单元格原值。先添加条件，再应用高级筛选。排除普通值时，NULL 不会匹配。',
   postgresReplacesQuick: '当前使用快捷筛选。应用高级筛选会替换快捷筛选。',
   equal: '按此单元格值筛选', exclude: '排除此单元格值',
-  contains: '包含此文本', notContains: '不包含此文本',
-  startsWith: '以此文本开头', notStartsWith: '不以此文本开头',
-  endsWith: '以此文本结尾', notEndsWith: '不以此文本结尾',
+  ...cellTextFilterLabels,
   containsRule: '文本包含（按字面）', notContainsRule: '文本不包含（按字面）',
   startsWithRule: '文本开头为（按字面）', notStartsWithRule: '文本开头不是（按字面）',
   endsWithRule: '文本结尾为（按字面）', notEndsWithRule: '文本结尾不是（按字面）',

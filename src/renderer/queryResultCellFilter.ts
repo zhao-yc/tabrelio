@@ -7,8 +7,10 @@ import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from '
 import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
 
 export const cellBoundOperators = ['lt', 'lte', 'gt', 'gte'] as const;
-export type CellFilterOperator='eq'|'ne'|'contains'|'notContains'|typeof cellBoundOperators[number];
+export const cellTextOperators = ['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith'] as const;
+export type CellFilterOperator = 'eq' | 'ne' | typeof cellTextOperators[number] | typeof cellBoundOperators[number];
 const bounds = new Set<CellFilterOperator>(cellBoundOperators);
+const textOperators = new Set<CellFilterOperator>(cellTextOperators);
 export interface QueryResultCellFilterCapture {readonly cell:Readonly<QueryResultCopyCell>;readonly value:CellValue;readonly key:string;readonly name:string;readonly type:string;readonly literal:string;readonly textMatch:boolean;readonly orderedMatch:boolean;readonly sqliteType?:SqliteResultFilterType;}
 const sqliteBindings=new WeakMap<QueryResultCellFilterCapture,{source?:SqliteResultFilterSource;columns:readonly ResultColumn[];rows:readonly DataRow[];invalid:boolean}>();
 /** 只捕获当前可见原格；标量按声明类型往返核对，不能截断精确数值或把字节转成文本。 */
@@ -52,7 +54,7 @@ export function currentQueryResultCellFilter(capture:QueryResultCellFilterCaptur
 }
 /** NULL使用独立判断；空文本、NULL字样及精确输入都保留原文，不生成SQL。 */
 export function queryResultCellFilterRule(capture:QueryResultCellFilterCapture,operator:CellFilterOperator):QueryResultFilterRule{
-  if(operator!=='eq'&&operator!=='ne'&&!(capture.textMatch&&(operator==='contains'||operator==='notContains'))&&
+  if(operator!=='eq'&&operator!=='ne'&&!(capture.textMatch&&textOperators.has(operator))&&
     !(capture.orderedMatch&&bounds.has(operator)))throw Error(text.invalid);
   if(capture.type==='SQLITE'){const binding=sqliteBindings.get(capture);if(!binding||!currentQueryResultCellFilter(capture,binding.columns,binding.rows))throw Error(text.stale);}
   return Object.freeze({column:capture.key,operator:capture.value===null?(operator==='eq'?'null':'notNull'):operator,value:capture.literal,...(capture.sqliteType?{sqliteType:capture.sqliteType}:{})});

@@ -1508,7 +1508,7 @@ export function PostgresQueryTab({
     setFilterDraft(draft);
   }
 
-  /** 重新核对当前可见列和显示行，从原格填入等值或排除条件。 */
+  /** 重新核对当前可见列和显示行，从原格填入本地筛选草稿。 */
   function openCellFilter(cell: QueryResultCopyCell, operator: CellFilterOperator) {
     if (!resultCurrent() || !binding) return;
     try {

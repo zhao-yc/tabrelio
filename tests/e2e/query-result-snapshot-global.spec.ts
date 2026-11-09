@@ -333,9 +333,14 @@ function register(): void {
       await step(() => expect(viewer.getByText(filterText.counts(2, 2), { exact: true })).toBeVisible());
       await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       await step(() => other.click({ button: 'right' }));
-      await step(() => rangeMenu.getByRole('menuitem', { name: filterText.cellContains, exact: true }).click());
+      await step(() => rangeMenu.getByRole('menuitem', { name: filterText.cellText.endsWith, exact: true }).click());
       await step(() => expect(checkedFilter.getByLabel(filterText.column + ' 1', { exact: true })).toHaveValue('constructor'));
-      await step(() => expect(checkedFilter.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('contains'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('endsWith'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('不同内容'));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.cancel, exact: true }).click());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveCount(2));
+      await step(() => other.click({ button: 'right' }));
+      await step(() => rangeMenu.getByRole('menuitem', { name: filterText.cellText.endsWith, exact: true }).click());
       await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行']));
       await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
