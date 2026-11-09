@@ -1,4 +1,4 @@
-import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryPaste,
+import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryRangeEdit,
   type PostgresQueryRecordIntent } from './PostgresSearchRecordEditDialog';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
@@ -21,6 +21,7 @@ import { postgresTableLimits } from '../../shared/postgresTable';
 import { postgresClipboardInput, postgresGridPasteMatrix } from '../postgresGridPaste';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import type { GridRangeTarget } from '../useGridCellRange';
+import type { GridRangeFillInput } from '../gridRangeFill';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
 import type { UiCommandId } from '../../shared/uiCommands';
@@ -296,7 +297,7 @@ export function PostgresQueryTab({
     source: PostgresQueryRecordIntent;
     result: QueryResult; scope: Scope; job: ReturnType<typeof acquireWorkspaceBusy>;
     cell?: PostgresQueryCellEdit;
-    paste?: PostgresQueryPaste;
+    range?: PostgresQueryRangeEdit;
   }>();
   const retiredRecordExecution = useRef<string | undefined>(undefined);
   useEffect(() => () => { recordEdit?.job.release(); }, [recordEdit]);
@@ -1284,15 +1285,15 @@ export function PostgresQueryTab({
   const recordExecution = !pin && state.transactionKnown && !state.transactionOpen &&
     outcome?.postgresQueryRecordExecution !== retiredRecordExecution.current ? outcome?.postgresQueryRecordExecution : undefined;
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
-  function openQueryRecords(rows: readonly DataRow[], { cell, paste }: { cell?: PostgresQueryCellEdit; paste?: PostgresQueryPaste } = {}): boolean {
+  function openQueryRecords(rows: readonly DataRow[], { cell, range }: { cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit } = {}): boolean {
     const original = session.current;
     if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding)) return false;
     const rowIndices = rows.map(row => result.rows.indexOf(row));
     if (!rowIndices.length || rowIndices.some(index => index < 0) || new Set(rowIndices).size !== rowIndices.length) return false;
     const job = acquireWorkspaceBusy(tab.id);
     const identity = { sessionId: original.id, executionId: recordExecution };
-    const source = paste ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
-    setRecordEdit({ result, scope, job, cell, paste, source });
+    const source = range ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
+    setRecordEdit({ result, scope, job, cell, range, source });
     return true;
   }
 
@@ -1306,25 +1307,37 @@ export function PostgresQueryTab({
     return openQueryRecords([cell.row], { cell: { columnIndex, anchor, typed } });
   }
 
-  /** 从当前网格的矩形同步捕获剪贴板，显示行与列分别映射回原执行位置。 */
+  /** 按同一显示视图取行和原列序号，筛选、排序及隐藏列均不能改变原位置。 */
+  function queryRangeAt(startRow: number, startKey: string, height: number, width: number, selected?: GridRangeTarget<DataRow>) {
+    if (!result || !visibleColumns || !detailBinding || !rowDetailCurrent(detailBinding)) throw Error(originsText.editStale);
+    const startColumn = visibleColumns.findIndex(column => column.key === startKey);
+    if (startColumn < 0 || startRow < 0 || width < 1 || width > postgresTableLimits.fields ||
+        height < 1 || height > postgresTableLimits.changes || startColumn + width > visibleColumns.length ||
+        startRow + height > detailBinding.rows.length) throw Error(pasteText.bounds);
+    const rows = detailBinding.rows.slice(startRow, startRow + height);
+    const columns = visibleColumns.slice(startColumn, startColumn + width);
+    if (selected && (selected.rows.some((row, index) => row !== rows[index]) ||
+        selected.keys.some((key, index) => key !== columns[index]?.key))) throw Error(originsText.editStale);
+    const columnIndices = columns.map(column => result.columns.findIndex(origin => origin.key === column.key));
+    if (columnIndices.some(index => index < 0)) throw Error(originsText.editStale);
+    return { rows, columnIndices, startRow };
+  }
+
+  function fillQueryCells(selected: GridRangeTarget<DataRow>, input: GridRangeFillInput) {
+    const { rows, columnIndices, startRow } = queryRangeAt(selected.startRow, selected.keys[0], selected.rows.length, selected.keys.length, selected);
+    if (!openQueryRecords(rows, { range: { kind: 'fill', columnIndices, startRow, input } })) throw Error(originsText.editStale);
+    setError('');
+  }
+
+  /** 同步消费剪贴板事件，矩形确认仍由当前查询执行的快照负责。 */
   function pasteQueryCells(cell: QueryResultCopyCell, data: DataTransfer, selected?: GridRangeTarget<DataRow>) {
     try {
-      if (!result || !visibleColumns || !detailBinding || !cell.column || detailBinding.rows[cell.index] !== cell.row ||
-          !rowDetailCurrent(detailBinding)) throw Error(originsText.editStale);
+      if (!cell.column || detailBinding?.rows[cell.index] !== cell.row) throw Error(originsText.editStale);
       const matrix = postgresGridPasteMatrix(postgresClipboardInput(data),
         selected ? { rows: selected.rows.length, columns: selected.keys.length } : undefined);
-      const startRow = selected?.startRow ?? cell.index;
-      const startKey = selected?.keys[0] ?? cell.column.key;
-      const startColumn = visibleColumns.findIndex(column => column.key === startKey);
-      const width = matrix[0].length;
-      if (startColumn < 0 || width > postgresTableLimits.fields || startColumn + width > visibleColumns.length ||
-          startRow + matrix.length > detailBinding.rows.length) throw Error(pasteText.bounds);
-      const rows = detailBinding.rows.slice(startRow, startRow + matrix.length);
-      const columns = visibleColumns.slice(startColumn, startColumn + width);
-      if (selected && (selected.rows.some((row, index) => row !== rows[index]) ||
-          selected.keys.some((key, index) => key !== columns[index]?.key))) throw Error(originsText.editStale);
-      const columnIndices = columns.map(column => result.columns.findIndex(origin => origin.key === column.key));
-      if (columnIndices.some(index => index < 0) || !openQueryRecords(rows, { paste: { columnIndices, matrix, startRow } }))
+      const { rows, columnIndices, startRow } = queryRangeAt(selected?.startRow ?? cell.index, selected?.keys[0] ?? cell.column.key,
+        matrix.length, matrix[0].length, selected);
+      if (!openQueryRecords(rows, { range: { kind: 'paste', columnIndices, matrix, startRow } }))
         throw Error(originsText.editStale);
       setError('');
     } catch (reason) { setError(errorMessage(reason)); }
@@ -2164,6 +2177,7 @@ export function PostgresQueryTab({
                       onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
                       onCellEdit={recordExecution ? editQueryCell : undefined}
                       onCellPaste={recordExecution ? pasteQueryCells : undefined}
+                      onFillRange={recordExecution ? fillQueryCells : undefined}
                       filterDialect="postgresql"
                       onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
                       onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
@@ -2227,14 +2241,14 @@ export function PostgresQueryTab({
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
       {recordEdit && <PostgresSearchRecordEditDialog connectionId={tab.connectionId} database={recordEdit.scope.database} queryRecord={recordEdit.source}
-        cell={recordEdit.cell} paste={recordEdit.paste} visible={workspace.settings.activeTabId === tab.id}
+        cell={recordEdit.cell} range={recordEdit.range} visible={workspace.settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && same(recordEdit.scope) && session.current?.id === recordEdit.source.sessionId &&
           selectedResultRef.current === recordEdit.result && !closeRef.current && useWorkspace.getState().settings.activeTabId === tab.id}
         onDirty={() => { /* 原编辑窗口全程持有标签占用，放弃草稿由对话框确认。 */ }}
         onDone={committed => {
           if (committed) {
             retiredRecordExecution.current = recordEdit.source.executionId;
-            useWorkspace.getState().notify(recordEdit.paste ? originsText.pasteCommitted : originsText.editCommitted);
+            useWorkspace.getState().notify(recordEdit.range ? originsText.rangeCommitted : originsText.editCommitted);
           }
           recordEdit.job.release();
           setRecordEdit(undefined);

@@ -3,7 +3,7 @@ import type { PostgresTableChange, PostgresTableColumn, PostgresTablePage } from
 import { capturePostgresCheckedFill, planPostgresCheckedFill } from '../../src/renderer/postgresCheckedFill';
 import { retainPostgresCheckedPages, postgresCheckedPagePins } from '../../src/renderer/postgresCheckedPages';
 import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
-import { postgresBatchFillChanges, postgresRangeFillAcross, postgresRangeFillChanges, postgresRangeFillFromRow } from '../../src/renderer/postgresBatchFill';
+import { postgresBatchFillChanges, postgresQueryRangeFillChanges, postgresRangeFillAcross, postgresRangeFillChanges, postgresRangeFillFromRow } from '../../src/renderer/postgresBatchFill';
 
 const column = (key: string, options: Partial<PostgresTableColumn> = {}): PostgresTableColumn => ({
   key, name: key, type: 'text', primary: false, generated: false, binary: false, nullable: true, defaultValue: false, ...options,
@@ -19,6 +19,16 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 勾选记录批量填充', () => {
+  it('查询选区使用快照行序，省略同值，拒绝更新主键或生成列', () => {
+    expect(postgresQueryRangeFillChanges(page, [columns[1]], { kind: 'text', value: '甲' })).toEqual([
+      { kind: 'update', row: 1, fields: [{ column: 'c1', value: { mode: 'text', value: '甲' } }] },
+    ]);
+    expect(postgresQueryRangeFillChanges(page, [columns[2]], { kind: 'null', value: '' })).toEqual([
+      { kind: 'update', row: 0, fields: [{ column: 'c2', value: { mode: 'null' } }] },
+    ]);
+    for (const index of [0, 3])
+      expect(() => postgresQueryRangeFillChanges(page, [columns[index]], { kind: 'up', value: '' })).toThrow();
+  });
   it('横向填充从原行及已有草稿取值，并拒绝类型转换', () => {
     const mirror = column('mirror');
     const draftPage = { ...page, columns: [...columns, mirror], rows: page.rows.map(row => ({ ...row, mirror: '原目标' })) };

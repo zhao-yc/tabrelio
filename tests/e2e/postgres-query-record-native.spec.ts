@@ -4,6 +4,7 @@ import { postgresResultOriginsZh as text } from '../../src/renderer/locales/post
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { dataSearchRecordsZh as recordText } from '../../src/renderer/locales/dataSearchRecords.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
+import { gridRangeFillZh as fillText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -162,7 +163,7 @@ test('PostgreSQL 查询网格按可见矩形粘贴，约束失败整批回滚并
     const apply = preview.getByRole('button', { name: tableText.apply, exact: true });
     const submit = async () => {
       await expect(apply).toBeDisabled();
-      await preview.getByRole('checkbox', { name: text.pasteConfirm(2), exact: true }).check();
+      await preview.getByRole('checkbox', { name: text.rangeConfirm(2), exact: true }).check();
       await apply.click();
     };
 
@@ -194,6 +195,74 @@ test('PostgreSQL 查询网格按可见矩形粘贴，约束失败整批回滚并
       { id: '2', detail: '修改第一行', payload: '00feff' },
       { id: '9223372036854775807', detail: '默认内容', payload: null },
     ]);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标格并保留二进制', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.query_fill (id bigint PRIMARY KEY, note text, src bytea, dst bytea);
+      INSERT INTO public.query_fill VALUES
+        (2, '首行样本', decode('00FEFF','hex'), decode('BEEF','hex')),
+        (3, '首行样本', NULL, decode('CAFE','hex')),
+        (9223372036854775807, '末行原值', decode('1234','hex'), decode('CAFE','hex'))`);
+    await loadQuery(config, 'SELECT id AS 编号, note, src AS 同名, dst AS 同名 FROM public.query_fill ORDER BY id DESC;');
+    const query = page.locator('.postgres-query:visible');
+    const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
+    const edit = query.getByRole('button', { name: text.edit, exact: true });
+    const cell = (name: string) => query.getByRole('gridcell', { name, exact: true });
+    const preview = page.getByRole('dialog', { name: text.fillTitle, exact: true });
+    const read = async () => (await observer.query(`SELECT id::text, note, encode(src,'hex') AS src,
+      encode(dst,'hex') AS dst, xmin::text FROM public.query_fill ORDER BY id`)).rows;
+    const stage = async (direction: 'down' | 'right') => {
+      await query.getByRole('button', { name: fillText.open, exact: true }).click();
+      const panel = query.getByRole('region', { name: fillText.open, exact: true });
+      await panel.getByRole('combobox').selectOption(direction);
+      await panel.getByRole('button', { name: fillText.stage, exact: true }).click();
+      await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."query_fill"');
+    };
+    const submit = async (rows: number) => {
+      const apply = preview.getByRole('button', { name: tableText.apply, exact: true });
+      await expect(apply).toBeDisabled();
+      await preview.getByRole('checkbox', { name: text.rangeConfirm(rows), exact: true }).check();
+      await apply.click();
+      await expect(preview).toBeHidden();
+    };
+
+    await execute.click();
+    await expect(edit).toBeVisible();
+    await query.getByRole('columnheader', { name: '编号' }).click();
+    const before = await read();
+    await expect(cell('末行原值').locator('..')).toHaveAttribute('aria-rowindex', '4');
+    await cell('首行样本').first().click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await stage('down');
+    await expect(preview.locator('strong')).toHaveText(text.rangeRow(3));
+    await expect(preview.locator('dd')).toHaveText('首行样本');
+    expect(await read()).toEqual(before);
+    await submit(1);
+    const afterDown = await read();
+    expect(afterDown.slice(0, 2)).toEqual(before.slice(0, 2));
+    expect(afterDown[2]).toMatchObject({ id: '9223372036854775807', note: '首行样本', src: '1234', dst: 'cafe' });
+
+    await execute.click();
+    await expect(edit).toBeVisible();
+    await cell('0x1234').click();
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Shift+ArrowDown');
+    await stage('right');
+    await expect(preview.locator('dt')).toHaveText(['dst', 'dst']);
+    await expect(preview.locator('dd')).toHaveText(['1234', 'NULL']);
+    expect(await read()).toEqual(afterDown);
+    await info.attach('PostgreSQL查询结果选区填充', { body: await page.screenshot(), contentType: 'image/png' });
+    await submit(2);
+    const afterRight = await read();
+    expect(afterRight[0]).toEqual(before[0]);
+    expect(afterRight.map(row => [row.src, row.dst])).toEqual([['00feff', 'beef'], [null, null], ['1234', '1234']]);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

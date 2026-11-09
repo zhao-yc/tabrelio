@@ -353,7 +353,7 @@ export class PostgresTableWorkspace {
         options: {}, writeEligible: true, recordServerCheck: checkServer,
       };
       this.snapshots.set(key, { current: snapshot, retained: new Map() });
-      return { pageToken, columns: relation.columns, rows, order: 'primary', relationKind: relation.kind,
+      return { pageToken, columns: relation.columns, rows, rowKeys: snapshot.rows.map(row => row.key), order: 'primary', relationKind: relation.kind,
         hasNext: false, truncated: false, capabilities };
     } finally { this.active.delete(key); }
   }
