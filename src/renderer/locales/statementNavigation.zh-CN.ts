@@ -13,6 +13,8 @@ export const statementNavigationZh = {
   copyChecked: '复制勾选语句', openChecked: '在新查询中打开勾选语句', clearChecked: '清除勾选',
   saveChecked: '另存勾选语句', scriptEncoding: '勾选语句文件编码', scriptFile: '勾选语句.sql',
   saved: (name: string) => `已另存勾选语句到 ${name}`,
+  library: '保存勾选语句到查询库', libraryName: '查询名称', librarySave: '保存新查询', libraryCancel: '取消命名',
+  librarySaved: (name: string) => `已保存命名查询「${name}」`,
   copied: (count: number) => `已复制 ${count} 条语句`,
   copyUnavailable: '未能复制勾选语句，请重试。',
   reasons: {

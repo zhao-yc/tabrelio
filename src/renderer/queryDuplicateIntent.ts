@@ -16,11 +16,11 @@ export interface QueryDuplicatePorts {
   subscribe(changed: () => void): () => void;
   flush(editor: monaco.editor.IStandaloneCodeEditor, expectedDraft: string): string | Promise<string>;
   database(scope: QueryDuplicateScope): QueryDatabaseContext | Promise<QueryDatabaseContext>;
-  open(tab: Omit<WorkspaceTab, 'id'>): void;
+  open(tab: Omit<WorkspaceTab, 'id'>): void | Promise<void>;
   chooseTarget?(draft: QueryTargetDraft): void;
 }
 export interface QueryTargetDraft { sourceTabId: string; title: string; sql: string }
-export type QueryDuplicateMode = 'all' | 'selection' | 'target' | 'statement' | 'statements';
+export type QueryDuplicateMode = 'all' | 'selection' | 'target' | 'statement' | 'statements' | 'save-statements';
 const contextKey = (tab?: WorkspaceTab) => JSON.stringify([tab?.database ?? null, tab?.databaseContext?.state ?? 'legacy', tab?.databaseContext?.state === 'known' ? tab.databaseContext.database : null]);
 /** 标题保留Unicode字符边界，符合既有settings保存的256单元限制。 */
 function copyTitle(title: string, suffix: string): string {
@@ -93,10 +93,10 @@ export class QueryDuplicateIntent {
     if (!editor || !model || model.isDisposed() || editor.getRawOptions().readOnly || !scope.tab || scope.tab.kind !== 'query' || !scope.connection || !scope.present || !scope.active || scope.blocked) throw Error(text.unavailable);
     this.#editor = editor; this.#model = model; this.#version = model.getVersionId(); this.#sql = model.getValue(); this.#scope = scope; this.#source = { ...scope.tab }; this.#context = contextKey(scope.tab); this.#draft = scope.tab.sql ?? '';
     if (this.#sql.length > 20_000_000) throw Error(text.tooLarge);
-    if (mode === 'statement' || mode === 'statements') {
+    if (mode === 'statement' || mode === 'statements' || mode === 'save-statements') {
       const ranges = statements ?? [];
       this.#selected = { key: editorSelectionKey(editor), sql: statementDraftSql(this.#sql, ranges, scope.connection.dialect),
-        suffix: mode === 'statements' ? text.statementsSuffix : text.statementSuffix };
+        suffix: mode === 'statement' ? text.statementSuffix : text.statementsSuffix };
     } else if (mode === 'selection') {
       const ranges = editor.getSelections();
       const range = ranges?.[0];
@@ -118,9 +118,12 @@ export class QueryDuplicateIntent {
   /** 只允许flush自身把旧store正文推进到点击时已捕获的当前模型正文，其它来源不变。 */
   #matches(): boolean {
     const scope = this.ports.scope(), tab = scope.tab;
+    const sql = tab?.sql ?? '';
+    // 保存独立查询不写回原草稿，连工作区存下的原始换行也要保留。
+    const draftMatches = this.mode === 'save-statements' ? sql === this.#draft : sql === this.#sql || this.#flushing && sql === this.#draft;
     return !!tab && scope.present && scope.active && !scope.blocked && scope.connection === this.#scope.connection && scope.connectionVersion === this.#scope.connectionVersion && scope.sessionId === this.#scope.sessionId
       && tab.kind === 'query' && tab.id === this.#source.id && tab.connectionId === this.#source.connectionId && tab.title === this.#source.title && tab.sourceBinding === this.#source.sourceBinding && tab.fileSourceBinding === this.#source.fileSourceBinding && contextKey(tab) === this.#context
-      && ((tab.sql ?? '') === this.#sql || this.#flushing && (tab.sql ?? '') === this.#draft);
+      && draftMatches;
   }
   /** 选区移动即撤销本次操作，移回同一范围也不会重新取得原意图。 */
   #selectionCurrent(): boolean {
@@ -132,11 +135,13 @@ export class QueryDuplicateIntent {
     try { if (!this.#valid || !this.#matches() || this.ports.editor() !== this.#editor || this.#editor.getModel() !== this.#model || this.#model.isDisposed() || this.#model.getVersionId() !== this.#version || this.#model.getValue() !== this.#sql || this.#editor.getRawOptions().readOnly || !this.#selectionCurrent()) throw Error(); }
     catch { this.#valid = false; throw Error(text.changed); }
   }
-  /** flush从既有正文桥取全文；只读协议缓存/显式上下文后创建未绑定草稿，不执行SQL或读文件。 */
+  /** 复制前同步既有正文桥，独立保存只读原模型；获取数据库上下文后交付目标。 */
   async run(): Promise<void> {
     if (this.#started) throw Error(text.changed); this.#started = true;
     try {
-      this.#assert(); const sql = await this.ports.flush(this.#editor, this.#draft); this.#assert();
+      this.#assert();
+      const sql = this.mode === 'save-statements' ? this.#sql : await this.ports.flush(this.#editor, this.#draft);
+      this.#assert();
       if (sql !== this.#sql) throw Error(text.changed);
       this.#flushing = false; this.#assert();
       // 指定目标时不读取原会话的默认库。选择器只接收已核对的正文快照。
@@ -149,7 +154,7 @@ export class QueryDuplicateIntent {
       if (context.state !== 'known') throw Error(text.contextUnknown);
       const candidate: Omit<WorkspaceTab, 'id'> = { kind: 'query', title: copyTitle(this.#source.title, this.#selected?.suffix ?? text.suffix),
         connectionId: this.#source.connectionId, sql: this.#selected?.sql ?? sql, ...queryDatabasePatch({ state: 'known', database: context.database }) };
-      this.#assert(); this.ports.open(candidate);
+      this.#assert(); await this.ports.open(candidate);
     } finally { this.dispose(); }
   }
   /** 卸载或终态释放模型/store观察；不改原模型、撤销栈、查询来源或会话。 */

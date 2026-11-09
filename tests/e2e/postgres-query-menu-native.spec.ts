@@ -1914,9 +1914,17 @@ test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑
   await expect(panel.getByRole('status')).toHaveText(navigationText.total(3));
   await panel.getByRole('checkbox', {name: navigationText.check(2), exact: true}).check();
   await panel.getByRole('checkbox', {name: navigationText.check(0), exact: true}).check();
+  const firstStatement = sql.slice(0, sql.indexOf(';\n--第二条') + 1);
+  await panel.getByRole('button', {name: navigationText.library, exact: true}).click();
+  await panel.getByRole('textbox', {name: navigationText.libraryName, exact: true}).fill('离线复用');
+  await panel.getByRole('button', {name: navigationText.librarySave, exact: true}).click();
+  await expect(page.getByText(navigationText.librarySaved('离线复用'), {exact: true})).toBeVisible();
+  const saved = (await page.evaluate(() => window.dbark.invoke('queries.list', {}))).find(item => item.name === '离线复用');
+  expect(saved).toMatchObject({ databaseContext: { state: 'known', database: 'offline_db' } });
+  expect(saved?.sql.replaceAll('\r\n', '\n')).toBe(firstStatement + '\n\nSELECT 3');
+  expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).activeTabId).toBe('pg-original');
   await panel.getByRole('button', {name: navigationText.openChecked, exact: true}).click();
   await expect(page.locator('[data-workspace-tab-id]').filter({hasText: queryDuplicateZh.statementsSuffix})).toHaveCount(1);
-  const firstStatement = sql.slice(0, sql.indexOf(';\n--第二条') + 1);
   await expect.poll(async () => (await inspectModel()).sql.replaceAll('\r\n', '\n')).toBe(firstStatement + '\n\nSELECT 3');
   await page.locator('[data-workspace-tab-id="pg-original"]').getByRole('button', {name: '原 PostgreSQL 查询', exact: true}).click();
   await modelSelection(2, 8);

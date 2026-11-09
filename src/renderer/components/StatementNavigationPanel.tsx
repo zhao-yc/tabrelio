@@ -3,6 +3,7 @@ import type { QueryFileEncoding } from '../../shared/contracts';
 import type { StatementNavigationView } from '../statementNavigationController';
 import { currentNavigableStatement, statementNavigationPreview, statementNavigationStart, type NavigableStatement, type StatementNavigationDialect } from '../../shared/statementNavigation';
 import type { StatementSelectionDestination } from '../statementNavigationExtract';
+import { errorMessage } from '../lib';
 import { statementNavigationZh as text } from '../locales/statementNavigation.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import '../statementNavigation.css';
@@ -22,11 +23,20 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
   const selected = ranges?.filter((_, index) => checked?.has(index)) ?? [];
   const [encoding, setEncoding] = useState<QueryFileEncoding>('utf8');
   const [saving, setSaving] = useState(false), savingRef = useRef(false);
-  async function save() {
+  const [nameDraft, setNameDraft] = useState<{ checked: ReadonlySet<number>; name: string; error?: string }>();
+  // 命名只对应打开表单时的勾选，目录刷新或改选后须重新命名。
+  const naming = nameDraft?.checked === checked ? nameDraft : undefined;
+  async function save(destination: Extract<StatementSelectionDestination, object>) {
     if (savingRef.current || !selected.length) return;
     savingRef.current = true;
     setSaving(true);
-    try { await onExtract(selected, { encoding }); }
+    try {
+      await onExtract(selected, destination);
+      if ('libraryName' in destination) setNameDraft(undefined);
+    } catch (reason) {
+      if (!('libraryName' in destination) || !naming) throw reason;
+      setNameDraft({ ...naming, error: errorMessage(reason) });
+    }
     finally { savingRef.current = false; setSaving(false); }
   }
   const activeIndex = ranges ? currentNavigableStatement(source, ranges, cursor, dialect) : -1;
@@ -47,8 +57,21 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
           <option value="utf16le">{fileText.utf16le}</option>
           <option value="gb18030">{fileText.gb18030}</option>
         </select>
-        <button disabled={!selected.length || saving} onClick={() => void save()}>{text.saveChecked}</button>
+        <button disabled={!selected.length || saving} onClick={() => void save({ encoding })}>{text.saveChecked}</button>
+        <button disabled={!checked || !selected.length || saving || !!naming}
+          onClick={() => { if (checked) setNameDraft({ checked, name: '' }); }}>{text.library}</button>
       </div>
+      {naming && <form className="statement-navigation-selection" onSubmit={event => {
+        event.preventDefault();
+        const name = naming.name.trim();
+        if (name) void save({ libraryName: name });
+      }}>
+        <input autoFocus aria-label={text.libraryName} placeholder={text.libraryName} maxLength={256} value={naming.name}
+          disabled={saving} onChange={event => setNameDraft({ checked: naming.checked, name: event.target.value })}/>
+        <button type="submit" disabled={!naming.name.trim() || saving}>{text.librarySave}</button>
+        <button type="button" disabled={saving} onClick={() => setNameDraft(undefined)}>{text.libraryCancel}</button>
+        {naming.error && <p role="alert">{naming.error}</p>}
+      </form>}
       <ol start={actual * pageSize + 1}>{rows.slice(actual * pageSize, (actual + 1) * pageSize).map(row => <li key={row.index} className={row.index === activeIndex ? 'active' : ''}>
         <input type="checkbox" aria-label={text.check(row.index)} disabled={saving} checked={checked?.has(row.index) ?? false} onChange={event => {
           const enabled = event.currentTarget.checked;

@@ -15,6 +15,7 @@ import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
+import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { sqliteTableFindZh as sqliteFind } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
@@ -341,6 +342,26 @@ test('语句目录按原序保存三种编码，取消、失效和 SQLite 源文
   await expect(save).toBeDisabled();
   await panel.getByRole('checkbox', { name: navigationText.check(2), exact: true }).check();
   await panel.getByRole('checkbox', { name: navigationText.check(0), exact: true }).check();
+  const library = panel.getByRole('button', { name: navigationText.library, exact: true });
+  const name = panel.getByRole('textbox', { name: navigationText.libraryName, exact: true });
+  const saveQuery = panel.getByRole('button', { name: navigationText.librarySave, exact: true });
+  const settingsBefore = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  await library.click();
+  await expect(name).toBeFocused();
+  await name.fill('  ');
+  await expect(saveQuery).toBeDisabled();
+  await panel.getByRole('button', { name: navigationText.libraryCancel, exact: true }).click();
+  expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([]);
+  await library.click();
+  await name.fill('  常用语句  ');
+  await name.press('Enter');
+  await expect(page.getByText(navigationText.librarySaved('常用语句'), { exact: true })).toBeVisible();
+  await expect(name).toHaveCount(0);
+  const savedQueries = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
+  expect(savedQueries).toHaveLength(1);
+  expect(savedQueries[0]).toMatchObject({ name: '常用语句', connectionId: 'row-jump-offline', databaseContext: { state: 'known', database: 'main' } });
+  expect(savedQueries[0].sql.replaceAll('\r\n', '\n')).toBe(first + '\n' + third);
+  expect(await page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ tabs: settingsBefore.tabs, activeTabId: 'q-jump' });
   async function choose(path?: string, delayed = false) {
     // 只替换系统路径选择，保留文件令牌、编码及原子写入的正式 IPC。
     await desktop.evaluate(({ dialog, BrowserWindow }, input) => {
@@ -392,6 +413,9 @@ test('语句目录按原序保存三种编码，取消、失效和 SQLite 源文
   await expect(page.getByText(navigationText.reasons.stale, { exact: true })).toBeVisible();
   expect(existsSync(stale)).toBe(false);
   expect(readFileSync(database)).toEqual(before);
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: navigationZh.savedQueries, exact: true })).click();
+  const savedLibrary = page.getByRole('dialog', { name: zh.activity.text003, exact: true });
+  await expect(savedLibrary.getByText('常用语句', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });

@@ -88,6 +88,24 @@ describe('查询复制意图与既有正文桥', () => {
     expect(f.editor.edits).toEqual([]);
     f.close();
   });
+  it('保存勾选语句只读模型，等待期间原目录失效则不提交', async () => {
+    const f = selectionFixture(), gate = deferred<{ state: 'known'; database: '复用库' }>();
+    const end = f.model.value.length - 1, ranges = [{ start: 0, end, delimiterStart: end, delimiterEnd: end + 1 }];
+    f.change({ tab: { ...f.getScope().tab!, sql: 'SELECT 原文;\r\n' } });
+    const before = f.getScope().tab, flush = vi.fn(), database = vi.fn(() => gate.promise);
+    const pending = new QueryDuplicateIntent({ ...f.ports, flush, database }, 'save-statements', ranges).run();
+    expect(database).toHaveBeenCalledOnce();
+    f.change({ blocked: true });
+    f.change({ blocked: false });
+    gate.resolve({ state: 'known', database: '复用库' });
+    await expect(pending).rejects.toThrow('已变化');
+    expect(f.open).not.toHaveBeenCalled();
+    await new QueryDuplicateIntent({ ...f.ports, flush, database }, 'save-statements', ranges).run();
+    expect(f.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sql: 'SELECT 原文;', database: '复用库' }));
+    expect(f.getScope().tab).toBe(before);
+    expect(flush).not.toHaveBeenCalled();
+    f.close();
+  });
   it('选区原文独立建草稿，仍刷新原全文且保留原来源和版本', async () => {
     const f = selectionFixture(), before = f.getScope().tab, version = f.model.version;
     f.select([7, 10]);

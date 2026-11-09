@@ -98,6 +98,7 @@ import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { openFocusedGridRowJump } from './GridRowJump';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
+import { saveStatementQuery, type StatementQueryOutput } from '../statementNavigationExtract';
 import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
 import type { NavigableStatement } from '../../shared/statementNavigation';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
@@ -1644,9 +1645,13 @@ export function PostgresQueryTab({
     }, 0);
   }
   /** 复制只读取原草稿和固定数据库上下文，沿既有意图保护新建未绑定的独立查询。 */
-  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statements?: readonly NavigableStatement[]) {
+  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statements?: readonly NavigableStatement[], output?: StatementQueryOutput) {
+    const libraryName = output?.libraryName;
     if (duplicateIntent.current || expectedEditor !== editor.current ||
-        (mode === 'selection' || mode === 'statement' || mode === 'statements') && resultsOnly || !commandEditor()) return;
+        (mode === 'selection' || mode === 'statement' || mode === 'statements' || mode === 'save-statements') && resultsOnly || !commandEditor()) {
+      if (libraryName !== undefined) throw Error(queryDuplicateZh.unavailable);
+      return;
+    }
     let intent: QueryDuplicateIntent | undefined;
     try {
       intent = new QueryDuplicateIntent({
@@ -1664,7 +1669,7 @@ export function PostgresQueryTab({
               current.connectionId === origin.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === origin.version,
             active: workspace.settings.activeTabId === tab.id,
             blocked: insertionLocked.current || !!phase.current || !!workspace.activeJobs[tab.id] || !!closeRef.current ||
-              fileOperation.current() || !!document.querySelector(appModalSelector),
+              fileOperation.current() || !!document.querySelector(appModalSelector) || !!output && libraryName !== undefined && !output.current(),
           };
         },
         subscribe: changed => {
@@ -1686,6 +1691,7 @@ export function PostgresQueryTab({
           return { state: 'known', database: original?.scope.database || initial.tab?.database || connection.database || 'postgres' };
         },
         open: candidate => {
+          if (libraryName !== undefined) return saveStatementQuery(candidate, libraryName);
           const workspace = useWorkspace.getState();
           if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany);
           workspace.openTab(candidate);
@@ -1696,6 +1702,7 @@ export function PostgresQueryTab({
       setDuplicating(true);
       await intent.run();
     } catch (reason) {
+      if (libraryName !== undefined) throw reason;
       if (alive.current) setError(errorMessage(reason));
     } finally {
       intent?.dispose();
@@ -1717,7 +1724,8 @@ export function PostgresQueryTab({
     return { ...target, sessionId: original?.id, current: () =>
       available() && !files.isBusy() && currentTab() === draft && session.current === original &&
       editor.current === target.instance && !target.instance.getRawOptions().readOnly };
-  }, (instance, ranges, fromDirectory) => { void duplicateQuery(fromDirectory ? 'statements' : 'statement', instance, ranges); });
+  }, (instance, ranges, output) =>
+    duplicateQuery(output?.libraryName !== undefined ? 'save-statements' : output ? 'statements' : 'statement', instance, ranges, output));
   const canNavigate = editable && !navigation.busy;
   const canOpenStatementQuery = canNavigate && canDuplicateQuery && !resultsOnly;
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
