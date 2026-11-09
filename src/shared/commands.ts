@@ -205,7 +205,7 @@ export const publicCommands: Record<Command, true> = {
   'queries.renameChecked': true,
   'queries.duplicateChecked': true,
   'queries.deleteSelectedChecked': true,
-  'history.page':true,'history.pageContinue':true,'history.pageRelease':true,'history.read':true,'history.readError':true,'history.readSql':true,
+  'history.page':true,'history.pageContinue':true,'history.pageRelease':true,'history.read':true,'history.readBatch':true,'history.readError':true,'history.readSql':true,
   'history.copySql': true, 'history.exportSql': true, 'history.exportSqlArchive': true, 'history.saveQuery': true, 'history.saveQueryBatch': true, 'history.deletePreview': true, 'history.deleteApply': true, 'history.deleteRelease': true,
   'search.dataStart':true,'search.dataNext':true,'search.dataRelease':true,
   'search.catalogue':true,

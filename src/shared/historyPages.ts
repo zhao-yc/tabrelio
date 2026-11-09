@@ -2,7 +2,7 @@ import{z}from'zod';
 import { canonicalHistoryInstant } from './historyTimeRange';
 import { historyDurationRangeSchema } from './historyDurationRange';
 import type{QueryDatabaseContext}from'./queryContext';
-import{querySqlExportEncodingSchema,savedQueryArchiveLimits,savedQueryContextSchema,savedQuerySearchLimits}from'./savedQuerySearch';
+import{querySqlExportEncodingSchema,savedQueryArchiveLimits,savedQueryContextSchema,savedQueryOpenBatchLimits,savedQuerySearchLimits}from'./savedQuerySearch';
 import{localSqlPageLimits,type LocalSqlPage}from'./localSqlPages';
 import { savedQueryGroupTargetSchema } from './savedQueryOrganization';
 
@@ -16,6 +16,11 @@ const historyPageSortSchema = z.enum(['recent', 'oldest', 'slowest', 'fastest'])
 export type HistoryPageSort = z.infer<typeof historyPageSortSchema>;
 export const historyPageInputSchema=z.object({taskId:z.string().uuid(),search:z.string().max(512),fields:z.array(z.enum(['sql','error'])).min(1).max(2).refine(value=>new Set(value).size===value.length,'历史搜索字段不能重复'),scope:z.discriminatedUnion('kind',[z.object({kind:z.literal('all')}).strict(),z.object({kind:z.literal('connection'),connectionId:id}).strict(),z.object({kind:z.literal('unbound')}).strict()]),status:z.enum(['all','success','failed']),timeRange:historyTimeRangeSchema.optional(),durationRange:historyDurationRangeSchema.optional(),onError:z.enum(['stop','continue']),sort:historyPageSortSchema.optional()}).strict();
 export const historyReadSchema=z.object({id,digest,connectionId:id}).strict();
+export const historyReadBatchSchema = z.object({
+  items: z.array(historyReadSchema).min(1).max(savedQueryOpenBatchLimits.queries)
+    .refine(items => new Set(items.map(item => item.id)).size === items.length, '所选历史不能重复'),
+}).strict();
+export type HistoryReadBatchInput = z.infer<typeof historyReadBatchSchema>;
 export const historyRecordReferenceSchema=z.object({id,digest}).strict();
 export type HistoryRecordReference = z.infer<typeof historyRecordReferenceSchema>;
 export const historyExportSqlSchema = historyRecordReferenceSchema.extend({ encoding: querySqlExportEncodingSchema }).strict();

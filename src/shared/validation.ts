@@ -133,7 +133,7 @@ import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseS
 import { savedQueryRenameSchema } from './savedQueryRename';
 import { savedQueryDuplicateSchema } from './savedQueryDuplicate';
 import { savedQueryDeleteSelectedSchema } from './savedQueryDeleteSelected';
-import{historyExportSqlArchiveSchema,historyExportSqlSchema,historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,historySaveQueryBatchSchema,historySaveQuerySchema}from'./historyPages';
+import{historyExportSqlArchiveSchema,historyExportSqlSchema,historyPageInputSchema,historyReadBatchSchema,historyReadSchema,historyRecordReferenceSchema,historySaveQueryBatchSchema,historySaveQuerySchema}from'./historyPages';
 import { historyDeletePreviewInputSchema, historyDeleteApplyInputSchema, historyDeleteReleaseInputSchema } from './historyDelete';
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
@@ -765,7 +765,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
   ...snippetTransferSchemas,
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty, 'tasks.cancelState': taskCancelInputSchema,
-  'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyRecordReferenceSchema,'history.readSql':historyRecordReferenceSchema, 'history.exportSql': historyExportSqlSchema,
+  'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readBatch':historyReadBatchSchema,'history.readError':historyRecordReferenceSchema,'history.readSql':historyRecordReferenceSchema, 'history.exportSql': historyExportSqlSchema,
   'history.deletePreview': historyDeletePreviewInputSchema, 'history.deleteApply': historyDeleteApplyInputSchema, 'history.deleteRelease': historyDeleteReleaseInputSchema,
   'history.saveQuery': historySaveQuerySchema,
   'history.saveQueryBatch': historySaveQueryBatchSchema,

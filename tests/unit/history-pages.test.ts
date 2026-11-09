@@ -67,6 +67,27 @@ describe('历史概要和严格协议',()=>{
 });
 
 describe('真实SQLite与工作线程历史分页',()=>{
+ it('历史批量打开按勾选顺序重读正文，逐条核对连接和摘要', async () => {
+  store.saveConnection(profile());
+  store.saveConnection(profile('replacement'));
+  const sql = 'SELECT 9007199254740993;\r\n-- 保留换行';
+  store.addHistory(history({ id: 'bound', sql, databaseContext: { state: 'known', database: null } }));
+  store.addHistory(history({ id: 'lost', connectionId: 'gone', database: '旧库', error: '错误详情' }));
+  const hits = (await service.start(request())).items;
+  const items = ['bound', 'lost'].map((id, index) => ({ id, digest: hits.find(hit => hit.entry.id === id)!.digest,
+   connectionId: index ? 'replacement' : 'source' }));
+  expect(validateCommand('history.readBatch', { items })).toEqual({ items });
+  expect(() => validateCommand('history.readBatch', { items: [items[0], items[0]] })).toThrow();
+  const opened = service.readBatch({ items });
+  expect(opened).toMatchObject([
+   { entry: { id: 'bound', sql }, databaseContext: { state: 'known', database: null }, contextChanged: false },
+   { entry: { id: 'lost' }, connectionId: 'replacement', databaseContext: { state: 'unknown' }, contextChanged: true },
+  ]);
+  expect(opened[1].entry).not.toHaveProperty('error');
+  expect(() => service.readBatch({ items: [items[0], { ...items[1], digest: '0'.repeat(64) }] })).toThrow('历史已变化');
+  expect(() => service.readBatch({ items: [items[0], { ...items[1], connectionId: 'gone' }] })).toThrow('连接不存在');
+  expect(store.queries()).toEqual([]);
+ });
  it('完整SQL只按当前摘要读取，来源删除后可查看，替换或删记录不复用旧摘要',async()=>{
   const entry=history({connectionId:'removed',sql:'SELECT 1; -- '+ '文'.repeat(70000)+'\r\n😀尾部',error:'仅错误正文'});
   store.addHistory(entry);

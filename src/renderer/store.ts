@@ -170,6 +170,23 @@ export function openQueryTabBatch(drafts: readonly Omit<WorkspaceTab, 'id'>[]): 
   workspace.updateSettings({ tabs: [...original, ...tabs], activeTabId: tabs[0].id });
 }
 
+/** 批量打开等待期间监视原连接配置与版本，变化后即使切回也不能发布旧草稿。 */
+export function watchQueryBatchConnections(ids: readonly string[]) {
+  const initial = useWorkspace.getState();
+  const profiles = new Map(ids.map(id => [id, initial.connections.find(profile => profile.id === id)]));
+  if ([...profiles.values()].some(profile => !profile)) throw Error('请为每条查询选择有效连接');
+  let valid = true;
+  const current = () => {
+    const state = useWorkspace.getState();
+    for (const [id, profile] of profiles) {
+      if (state.connections.find(value => value.id === id) !== profile || state.connectionVersions[id] !== initial.connectionVersions[id]) valid = false;
+    }
+    return valid;
+  };
+  const dispose = useWorkspace.subscribe(current);
+  return { current, dispose };
+}
+
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {}, queryFileTasks: {}, queryFileOpenings: {},

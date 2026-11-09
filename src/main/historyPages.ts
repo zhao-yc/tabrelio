@@ -1,6 +1,7 @@
 import{createHash}from'node:crypto';
-import{historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,historySaveBatchLimits,historySaveQueryBatchSchema,historySaveQuerySchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult,type HistoryRecord}from'../shared/historyPages';
+import{historyPageInputSchema,historyReadBatchSchema,historyReadSchema,historyRecordReferenceSchema,historySaveBatchLimits,historySaveQueryBatchSchema,historySaveQuerySchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult,type HistoryRecord}from'../shared/historyPages';
 import { savedQueryOriginContext, type QueryCreate } from '../shared/queryBinding';
+import { savedQueryOpenBatchLimits } from '../shared/savedQuerySearch';
 import{LocalSqlPages}from'./localSqlPages';
 import{parseHistoryRecord}from'./historyPageMatch';
 
@@ -17,6 +18,17 @@ export class HistoryPages extends LocalSqlPages<HistoryPageInput,HistoryPageEntr
  private current(id:string,digest:string){const raw=this.store.historyRaw(id);if(raw===undefined)throw Error('执行历史已移除，请刷新列表');if(createHash('sha256').update(raw).digest('hex')!==digest)throw Error('执行历史已变化，请刷新列表后打开');return parseHistoryRecord(id,raw);}
  /** 原连接缺失需显式选替代连接；替代后默认库变为未知，且只创建新草稿。 */
  read(raw:unknown):HistoryOpenResult{const input=historyReadSchema.parse(raw),record=this.current(input.id,input.digest);if(!this.store.queryConnectionExists(input.connectionId))throw Error('所选连接不存在，请明确选择有效连接');const{error,...entry}=record,contextChanged=entry.connectionId!==input.connectionId;return{entry,connectionId:input.connectionId,...(contextChanged?{databaseContext:{state:'unknown' as const}}:{database:entry.databaseContext?entry.databaseContext.state==='known'?entry.databaseContext.database??undefined:undefined:entry.database,databaseContext:entry.databaseContext}),contextChanged};}
+ /** 仅在确认后同步读取原历史全文，任一引用或目标无效时整批不返回。 */
+ readBatch(raw: unknown): HistoryOpenResult[] {
+  const { items } = historyReadBatchSchema.parse(raw);
+  let bytes = 0;
+  return items.map(item => {
+   const opened = this.read(item);
+   bytes += Buffer.byteLength(opened.entry.sql, 'utf8');
+   if (bytes > savedQueryOpenBatchLimits.bytes) throw Error('所选历史 SQL 合计超过 32 MiB，请缩小打开范围');
+   return opened;
+  });
+ }
  /** 错误全文按单条显式读取，概要列表不传完整错误或SQL。 */
  readError(raw:unknown):{error:string}{const input=historyRecordReferenceSchema.parse(raw),record=this.current(input.id,input.digest);return{error:record.error??''};}
  /** 只返回摘要对应的本地 SQL，不要求来源连接仍存在，也不建立会话。 */

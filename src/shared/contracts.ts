@@ -627,6 +627,7 @@ export interface CommandMap {
   'history.pageContinue':{input:{taskId:string;cursor:string};output:HistoryPage};
   'history.pageRelease':{input:{cursor:string};output:void};
   'history.read':{input:{id:string;digest:string;connectionId:string};output:HistoryOpenResult};
+  'history.readBatch': { input: import('./historyPages').HistoryReadBatchInput; output: { entries: HistoryOpenResult[] } };
   'history.readError':{input:{id:string;digest:string};output:{error:string}};
   'history.readSql':{input:{id:string;digest:string};output:{sql:string}};
   'history.exportSql': { input: import('./historyPages').HistoryExportSqlInput; output: import('./historyPages').HistoryExportSqlResult };

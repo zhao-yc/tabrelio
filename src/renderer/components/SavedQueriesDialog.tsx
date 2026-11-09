@@ -11,7 +11,7 @@ import { historyPagesZh as sqlText } from '../locales/historyPages.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
-import { openQueryTabBatch, useWorkspace, type WorkspaceTab } from '../store';
+import { openQueryTabBatch, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { SavedQueryRenameEditor, type SavedQueryRenameOrigin } from './SavedQueryRenameEditor';
@@ -21,6 +21,7 @@ import { SavedQueryDeleteSelectedPreview } from './SavedQueryDeleteSelectedPrevi
 import { savedQueryDeleteSelectedSchema, readSavedQueryDeleteSelectedResult, savedQueryDeleteSelectedZh as deleteText } from '../../shared/savedQueryDeleteSelected';
 import { Empty, ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import { SqlTextPreview } from './SqlTextPreview';
+import { QueryBatchOpenPreview } from './QueryBatchOpenPreview';
 import type { HistoryInsertionTarget } from '../historyInsertion';
 import { savedQueryInsertionZh as insertionText } from '../locales/savedQueryInsertion.zh-CN';
 import '../savedQueryPages.css';
@@ -54,7 +55,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
   const [deleting, setDeleting] = useState<DeleteEdit>(), deleteRef = useRef<DeleteEdit | undefined>(undefined);
   const [opening, setOpening] = useState<OpenBatch>(), openRef = useRef<OpenBatch | undefined>(undefined);
-  const openBatchSection = useRef<HTMLElement>(null), openBatchTrigger = useRef<HTMLButtonElement>(null);
+  const openBatchTrigger = useRef<HTMLButtonElement>(null);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group, scope, sort }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
@@ -71,12 +72,6 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     const sync = () => setInsertAvailable(insertion?.current() ?? false);
     const off = insertion?.subscribe(sync); sync(); return () => { off?.(); };
   }, [insertion]);
-  useLayoutEffect(() => {
-    if (opening) {
-      openBatchSection.current?.focus();
-      openBatchSection.current?.scrollIntoView?.({ block: 'nearest' });
-    }
-  }, [opening?.selection]);
   const owns = (ticket: number) => alive.current && !closed.current && epoch.current === ticket;
   const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current && !deleteRef.current && !openRef.current;
   /** 原句柄仅在成功释放后遗忘；迟到新页也精确回收。 */
@@ -238,17 +233,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     const items = [...origin.selection.values()].map(({ id, digest }) => ({ id, digest, connectionId: origin.targets.get(id) ?? '' }));
     let opened = false;
     const work = run(async ticket => {
-      const workspace = useWorkspace.getState();
-      const profiles = new Map(items.map(({ connectionId }) => [connectionId, workspace.connections.find(profile => profile.id === connectionId)]));
-      if ([...profiles.values()].some(profile => !profile)) throw Error(t.choose);
-      let valid = true;
-      const check = () => {
-        const current = useWorkspace.getState();
-        for (const [id, profile] of profiles) {
-          if (current.connections.find(value => value.id === id) !== profile || current.connectionVersions[id] !== workspace.connectionVersions[id]) valid = false;
-        }
-      };
-      const unsubscribe = useWorkspace.subscribe(check);
+      const targets = watchQueryBatchConnections(items.map(item => item.connectionId));
       try {
         const result = await io.request('queries.readBatch', { items });
         if (!owns(ticket)) return;
@@ -260,11 +245,10 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           if (owns(ticket)) setReply(page => page ? { ...page, cursor: undefined } : page);
         }
         if (!owns(ticket)) return;
-        check();
-        if (!valid || selectedRef.current !== origin.selection || openRef.current !== origin) throw Error(t.openBatchStale);
+        if (!targets.current() || selectedRef.current !== origin.selection || openRef.current !== origin) throw Error(t.openBatchStale);
         openQueryTabBatch(result.queries.map(queryTab));
         opened = true;
-      } finally { unsubscribe(); }
+      } finally { targets.dispose(); }
     }, origin.epoch);
     if (work) void work.then(() => {
       if (opened && !closed.current) void close();
@@ -428,20 +412,9 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
         <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         {selected.size > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
-        {opening && <section ref={openBatchSection} tabIndex={-1} className="saved-query-organization-editor" role="group" aria-label={t.openBatchTitle}>
-          <h3>{t.openBatchTitle}</h3><p>{t.openBatchHint}</p>
-          <ol>{[...opening.selection.values()].map(item => <li key={item.id}>
-            <label className="inline-field">{item.name} <select aria-label={formatText(t.connection, item.name)} disabled={busy || closing}
-              value={opening.targets.get(item.id) ?? ''} onChange={event => changeOpenBatchTarget(opening, item.id, event.target.value)}>
-              <option value="">{t.choose}</option>
-              {connections.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-            </select></label>
-          </li>)}</ol>
-          <footer><button disabled={busy || closing} onClick={cancelOpenBatch}>{zh.common.cancel}</button><span className="grow"/>
-            <button className="primary" disabled={busy || closing || [...opening.selection.keys()].some(id =>
-              !connections.some(profile => profile.id === opening.targets.get(id)))} onClick={() => applyOpenBatch(opening)}>{t.openBatchConfirm(opening.selection.size)}</button>
-          </footer>
-        </section>}
+        {opening && <QueryBatchOpenPreview rows={[...opening.selection.values()]} targets={opening.targets} connections={connections}
+          busy={busy || closing} onTarget={(id, connectionId) => changeOpenBatchTarget(opening, id, connectionId)}
+          onCancel={cancelOpenBatch} onConfirm={() => applyOpenBatch(opening)}/>}
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p role="status">{notice}</p>}{busy && <Spinner/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>

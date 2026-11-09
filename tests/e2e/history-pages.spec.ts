@@ -169,6 +169,70 @@ test('保存查询按名称和更新时间跨批次排序，保留已勾选项',
  expect(pageErrors).toEqual([]);
 });
 
+test('跨批次勾选执行历史，打开独立草稿并保留原标签', async ({}, info) => {
+ const sql = 'UPDATE t SET n=9007199254740993;\r\n-- ' + '中'.repeat(900) + '😀尾部';
+ await seed(store => {
+  source(store);
+  source(store, 'replacement');
+  store.saveSettings({ ...store.settings(), activeTabId: 'existing', tabs: [
+   { id: 'existing', kind: 'query', title: '保留原草稿', connectionId: 'source', sql: 'SELECT 42' },
+  ] });
+  store.addHistory(entry({ id: 'first-history', sql, startedAt: '2026-10-16T00:00:00Z', databaseContext: { state: 'known', database: null } }));
+  for (let i = 0; i < 24; i++) store.addHistory(entry({ id: 'filler-' + i }));
+  store.addHistory(entry({ id: 'second-history', connectionId: 'removed', database: '旧库', sql: 'SELECT 3', startedAt: '2026-10-14T00:00:00Z' }));
+ });
+ await desktop.evaluate(({ ipcMain }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args: any[]) => unknown> })._invokeHandlers;
+  const original = handlers.get('dbark:request');
+  if (!original) throw Error('缺少原历史批量打开 IPC');
+  const audit = { reads: [] as unknown[], denied: 0 };
+  Object.assign(globalThis, { __historyOpenBatch: audit });
+  handlers.set('dbark:request', (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'history.readBatch') audit.reads.push(payload.input);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) {
+    audit.denied++;
+    throw Error('本例禁止数据库请求');
+   }
+   return original(event, payload);
+  });
+ });
+ await open();
+ await dialog().getByRole('checkbox', { name: deletionText.select('first-history'), exact: true }).check();
+ await dialog().getByRole('button', { name: text.next, exact: true }).click();
+ await dialog().getByRole('checkbox', { name: deletionText.select('second-history'), exact: true }).check();
+ const trigger = dialog().getByRole('button', { name: text.openBatch, exact: true });
+ await trigger.click();
+ const preview = dialog().getByRole('group', { name: savedText.openBatchTitle, exact: true });
+ const confirm = preview.getByRole('button', { name: savedText.openBatchConfirm(2), exact: true });
+ await expect(confirm).toBeDisabled();
+ await expect(preview.getByRole('combobox', { name: /first-history/ })).toHaveValue('source');
+ await page.keyboard.press('Escape');
+ await expect(preview).toBeHidden();
+ await trigger.click();
+ await preview.getByRole('combobox', { name: /second-history/ }).selectOption('replacement');
+ await page.screenshot({ path: info.outputPath('批量打开执行历史.png') });
+ await confirm.click();
+ await expect(dialog()).toBeHidden();
+ await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}).then(settings => settings.tabs.length))).toBe(3);
+ const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+ const [old, first, second] = settings.tabs;
+ expect(old).toMatchObject({ id: 'existing', sql: 'SELECT 42' });
+ expect(first).toMatchObject({ title: text.openBatchTab(1), connectionId: 'source', sql, databaseContext: { state: 'known', database: null } });
+ expect(second).toMatchObject({ title: text.openBatchTab(2), connectionId: 'replacement', sql: 'SELECT 3', databaseContext: { state: 'unknown' } });
+ expect(first.sourceBinding).toBeUndefined();
+ expect(second.sourceBinding).toBeUndefined();
+ expect(second.database).toBeUndefined();
+ expect(settings.activeTabId).toBe(first.id);
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __historyOpenBatch?: unknown }).__historyOpenBatch)).toEqual({
+  denied: 0, reads: [{ items: [{ id: 'first-history', connectionId: 'source' }, { id: 'second-history', connectionId: 'replacement' }]
+    .map(item => ({ ...item, digest: expect.stringMatching(/^[0-9a-f]{64}$/) })) }],
+ });
+ expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([]);
+ expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(26);
+ expect(pageErrors).toEqual([]);
+});
+
 test('跨批次勾选保存查询，分别选连接后一次打开独立标签', async ({}, info) => {
  const sql = 'SELECT 9007199254740993;\r\n-- ' + '中'.repeat(900) + '😀尾部';
  await seed(store => {
