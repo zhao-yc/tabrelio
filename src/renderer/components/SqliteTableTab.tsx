@@ -58,6 +58,8 @@ import { sqlitePresetDraft } from '../sqliteTablePresetDraft';
 import { validateSqlitePresetProfile, type SqliteTablePresetProfile, type SqliteTablePresetQuery } from '../../shared/sqliteTablePresets';
 import { captureSqliteCellFilter, sqliteCheckedFilterDraft, type SqliteCellFilterSource } from '../sqliteTableCellFilter';
 import { sqliteTableCellFilterZh as cellFilterText } from '../locales/sqliteTableCellFilter.zh-CN';
+import { tableCellFilterZh as textCellFilterText } from '../locales/tableCellFilter.zh-CN';
+import type { TableCellFilterMode } from '../tableCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { SqliteTableFilters } from './SqliteTableFilters';
 import type { SqliteTableRebuildTarget } from '../../shared/sqliteTableRebuild';
@@ -804,12 +806,12 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     selectFilterSource(anchor?.row.index, anchor?.column ?? -1, anchor?.row);
   }
   /** 从原格生成一条可审阅的typed草稿，整组校验成功后一次发布，不读取或写入数据库。 */
-  function appendCellFilter(exclude: boolean, supplied?: SqliteCellFilterSource): void {
+  function appendCellFilter(operation: TableCellFilterMode, supplied?: SqliteCellFilterSource): void {
     const owner = cellFilterRef.current, source = supplied ?? owner?.source;
     if (editRender.current !== editRenderTicket || !source || !source.current() || !available() || view.busy || externalBusy ||
         (!supplied && (!owner || owner !== cellFilterOwner || owner.page !== page))) return;
     try {
-      const next = [...filters, source.draft(exclude, uid())];
+      const next = [...filters, source.draft(operation, uid())];
       sqliteTableDraft({ connectionId: tab.connectionId, database: tab.database, table: tab.table }, limit, mode, next, sort);
       if ((!supplied && cellFilterRef.current !== owner) || !source.current()) return;
       setFilters(next); setConditions(true); setValidation('');
@@ -825,6 +827,10 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       return { actions: [
         { label: cellFilterText.equal, run: () => appendMenuFilter.current(false, source) },
         { label: cellFilterText.exclude, run: () => appendMenuFilter.current(true, source) },
+        ...(source.value.kind === 'text' && source.value.value ? [
+          { label: textCellFilterText.contains, run: () => appendMenuFilter.current('contains', source) },
+          { label: textCellFilterText.notContains, run: () => appendMenuFilter.current('notContains', source) },
+        ] : []),
       ] };
     } catch { return; }
   }

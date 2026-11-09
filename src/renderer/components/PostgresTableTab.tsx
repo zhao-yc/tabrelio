@@ -694,19 +694,25 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (!page || !canFilterCell()) return;
     try {
       const seed = postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows);
-      const apply = (exclude: boolean) => {
+      const apply = (mode: Parameters<typeof postgresTableCellFilterDraft>[3]) => {
         if (!canFilterCell()) return;
         try {
           const current = postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows);
           if (current.value !== seed.value || current.operator !== seed.operator || current.column !== seed.column) return;
-          setCellFilterSeed(exclude ? postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows, true) : current);
+          setCellFilterSeed(mode ? postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows, mode) : current);
           setAdvancedFilters(true);
         } catch { /* 原值失效时保留当前条件。 */ }
       };
-      return { label: cellFilterText.context, actions: [
+      const actions: { label: string; run(): void }[] = [
         { label: cellFilterText.equal, run: () => apply(false) },
         { label: cellFilterText.exclude, run: () => apply(true) },
-      ] };
+      ];
+      try {
+        postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows, 'contains');
+        actions.push({ label: cellFilterText.contains, run: () => apply('contains') },
+          { label: cellFilterText.notContains, run: () => apply('notContains') });
+      } catch { /* 非文本或空值只保留原等值入口。 */ }
+      return { label: cellFilterText.context, actions };
     } catch { return; }
   }
 

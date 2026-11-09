@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ColumnInfo, FilterGroup, FilterRule, SortRule, TableInfo } from '../../src/shared/contracts';
 import { buildFilteredTableSelect, buildTableFilterSql, buildTableReadOrder, tableReadSqlLimits, type FilteredTableSelectInput } from '../../src/shared/tableReadSql';
 import { buildPageSql, buildTableFilterSql as engineFilter, inlineParameters, splitSql } from '../../src/engine/sql';
+import { postgresTableCondition } from '../../src/shared/postgresTableReadSql';
 
 const column = (name: string, type = 'VARCHAR(100)'): ColumnInfo => ({ name, type, nullable: true, defaultValue: null, extra: '', comment: '', generated: false });
 const info = (): TableInfo => ({ database: '库?.``', name: '表?`', columns: [column('id', 'BIGINT UNSIGNED'), column('note'), column('amount', 'DECIMAL(40,18)'), column('at', 'DATETIME(6)'), column('float_value', 'FLOAT'), column('col?`')], primaryKey: ['id'], editableKey: ['id'], indexes: [], foreignKeys: [], engine: 'InnoDB', ddl: '' });
@@ -10,6 +11,16 @@ const literal = (value: string) => `_utf8mb4 X'${Buffer.from(value).toString('he
 const group = (mode: 'all' | 'any', ...children: (number | FilterGroup)[]): FilterGroup => ({ mode, children });
 
 describe('原表页筛选与排序共享编译', () => {
+  it.each([['CONTAINS', '> 0'], ['NOT CONTAINS', '= 0']] as const)('%s 将完整原文交给参数和生成查询', (operator, comparison) => {
+    const value = "A%_\\'中文", filters: FilterRule[] = [{ column: 'note', operator, value }];
+    const predicate = (parameter: string) => `LOCATE(CAST(CONVERT(${parameter} USING utf8mb4) AS BINARY), CAST(CONVERT(\`note\` USING utf8mb4) AS BINARY)) ${comparison}`;
+    expect(buildTableFilterSql(info(), filters)).toEqual({ where: '((' + predicate('?') + '))', params: [value] });
+    expect(buildFilteredTableSelect(input({ filters })).sql).toContain(predicate(literal(value)));
+    const bind = vi.fn(() => '$1');
+    expect(postgresTableCondition({ rules: filters, mode: 'all' }, name => '"' + name + '"', bind))
+      .toBe(`pg_catalog.strpos("note"::text COLLATE pg_catalog."C", $1) ${comparison}`);
+    expect(bind).toHaveBeenCalledExactlyOnceWith(value);
+  });
   it.each(['all', 'any'] as const)('旧平铺%s参数与分页SQL逐字节保持，limit仍多取一条', mode => {
     const source = { ...info(), database: 'db', name: 'items' }, filters: FilterRule[] = [{ column: 'id', operator: '=', value: '9007199254740993' }, { column: 'note', operator: 'IS NULL' }];
     expect(buildPageSql(source, 2, 2, filters, [], mode)).toEqual({ sql: `SELECT * FROM \`db\`.\`items\` WHERE ((\`id\` = CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)) ${mode === 'all' ? 'AND' : 'OR'} (\`note\` IS NULL)) ORDER BY \`id\` ASC LIMIT 3 OFFSET 2`, params: ['9007199254740993'] });

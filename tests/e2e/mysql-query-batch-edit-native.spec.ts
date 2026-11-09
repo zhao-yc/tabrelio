@@ -9,6 +9,8 @@ import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh
 import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { tableSelectedFilterZh } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
+import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -178,11 +180,23 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(cell('18446744073709551613')).toHaveCount(0);
     await expect(cell('13')).toBeVisible();
     await observer.query(`UPDATE ${table} SET note=NULL WHERE id=9007199254740992`);
+    await observer.query(`UPDATE ${table} SET guard=CASE id WHEN 9007199254740992 THEN 'A%_'
+      WHEN 9007199254740993 THEN '前A%_后' ELSE 'a%_' END`);
     await page.locator('[data-workspace-tab-id="table-batch"]').getByRole('button', { name: '选区筛选表', exact: true }).click();
     const tableTab = page.locator('.table-tab:visible'), tableGrid = tableTab.getByRole('grid');
     const tableCell = (value: string) => tableGrid.getByRole('gridcell', { name: value, exact: true });
     await expect(tableCell('9007199254740992')).toBeVisible();
     await tableTab.locator('[data-table-refresh]').click();
+    await tableCell('A%_').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: tableCellFilterZh.contains, exact: true }).press('Enter');
+    await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('CONTAINS');
+    await expect(tableTab.getByLabel(zh.table.text011, { exact: true })).toHaveValue('A%_');
+    await expect(tableCell('a%_')).toBeVisible();
+    await tableTab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(tableCell('a%_')).toHaveCount(0);
+    await expect(tableCell('前A%_后')).toBeVisible();
+    await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
+    await expect(tableCell('a%_')).toBeVisible();
     const column = await tableGrid.getByRole('columnheader').filter({ hasText: /^note/ }).getAttribute('aria-colindex');
     const note = (id: string) => tableCell(id).locator('..').locator('[role="gridcell"][aria-colindex="' + column + '"]');
     await expect(note('9007199254740993')).toHaveText('NULL');

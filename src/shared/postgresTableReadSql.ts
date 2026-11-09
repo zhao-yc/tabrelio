@@ -14,6 +14,8 @@ export function postgresTableCondition(filter: PostgresTableFilter | undefined, 
     if (rule.enabled === false) return '';
     const name = column(rule.column), operator = rule.operator;
     if (operator === 'IS NULL' || operator === 'IS NOT NULL') return name + ' ' + operator;
+    if (operator === 'CONTAINS' || operator === 'NOT CONTAINS')
+      return `pg_catalog.strpos(${name}::text COLLATE pg_catalog."C", ${bind(rule.value ?? '')}) ${operator === 'CONTAINS' ? '> 0' : '= 0'}`;
     if (operator === 'IN' || operator === 'NOT IN')
       return name + ' ' + operator + ' (' + rule.values!.map(bind).join(', ') + ')';
     if (operator === 'BETWEEN')

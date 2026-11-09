@@ -47,7 +47,7 @@ import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.
 import { maxTablePage, parsePageJump, parseTablePageSize, setAllFilterRulesEnabled, type FilterMode, type FilterDraft } from '../tableFilters';
 import { tableLastPageBounds } from '../../shared/tableLastPage';
 import { openNetworkSchemaScript, schemaScriptLabel } from '../schemaScriptNavigation';
-import { tableCellFilterDraft } from '../tableCellFilter';
+import { tableCellFilterDraft, type TableCellFilterMode } from '../tableCellFilter';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { buildTableSelectedFilter, type TableSelectedFilterProposal } from '../tableSelectedFilter';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
@@ -1042,11 +1042,11 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   let cellFilterAvailable = canSeedCellFilter && !!selection;
   if (cellFilterAvailable) { try { tableCellFilterDraft(info!.columns, rows, visibleKeys, selection); } catch { cellFilterAvailable = false; } }
   /** 快捷入口只预填手工条件；既有添加条件仍负责丢稿确认和服务器分页，不自动查询或提交。 */
-  function stageCellFilter(exclude: boolean, fromMenu?: { row: DraftRow; key: string }): void {
+  function stageCellFilter(mode: TableCellFilterMode, fromMenu?: { row: DraftRow; key: string }): void {
     const state = useWorkspace.getState(), current = state.settings.tabs.find(item => item.id === tab.id);
     if (tableReadAction.current !== tableReadRender || !mounted.current || !canSeedCellFilter ||
         (fromMenu ? !cellActionCurrent(fromMenu.row) : !cellFilterAvailable || selectionRef.current !== selection) || reloadBlocked() || activeGridEditor.current || record.hasInput() || collectChanges(rowsRef.current).length || state.settings.activeTabId !== tab.id || current?.connectionId !== tab.connectionId || current?.database !== tab.database || current?.table !== tab.table || (state.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion) return;
-    try { setCellFilterSeed(tableCellFilterDraft(info!.columns, rowsRef.current, visibleKeys, fromMenu ? { rowId: fromMenu.row.id, key: fromMenu.key } : selection, exclude)); setShowFilter(true); }
+    try { setCellFilterSeed(tableCellFilterDraft(info!.columns, rowsRef.current, visibleKeys, fromMenu ? { rowId: fromMenu.row.id, key: fromMenu.key } : selection, mode)); setShowFilter(true); }
     catch (reason) { setError(errorMessage(reason)); }
   }
   const stageMenuCellFilter = useRef(stageCellFilter); stageMenuCellFilter.current = stageCellFilter;
@@ -2036,12 +2036,15 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (!row || key === undefined || !visibleKeys.includes(key) || !cellActionCurrent(row)) return false;
     const rowIndex = rows.indexOf(row);
     const rectangle = cellRange.at(row, rowIndex, key), selectRow = cellRange.selectRowAction(row, rowIndex, key);
-    const filters = [];
-    if (canSeedCellFilter && info) try {
-      tableCellFilterDraft(info.columns, rows, visibleKeys, { rowId: row.id, key });
-      filters.push({ label: cellFilterText.equal, run: () => stageMenuCellFilter.current(false, { row, key }) },
-        { label: cellFilterText.exclude, run: () => stageMenuCellFilter.current(true, { row, key }) });
-    } catch { /* 未经原值校验的格不提供筛选项。 */ }
+    const filters = canSeedCellFilter && info ? ([
+      [false, cellFilterText.equal], [true, cellFilterText.exclude],
+      ['contains', cellFilterText.contains], ['notContains', cellFilterText.notContains],
+    ] as const).flatMap(([mode, label]) => {
+      try {
+        tableCellFilterDraft(info.columns, rows, visibleKeys, { rowId: row.id, key }, mode);
+        return [{ label, run: () => stageMenuCellFilter.current(mode, { row, key }) }];
+      } catch { return []; }
+    }) : [];
     const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),

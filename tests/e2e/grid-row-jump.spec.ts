@@ -40,6 +40,7 @@ import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { sqliteTableFindZh as sqliteFind } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
@@ -1525,6 +1526,29 @@ test('SQLite 表和视图从单列选区包含或排除原值，按明确应用�
     }
     expect(await tasks()).toHaveLength(before.length + 1);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', async ({}, info) => {
+  await seed(undefined, "UPDATE subject SET name='A%_' WHERE id=1; UPDATE subject SET name='前A%_后' WHERE id=120; UPDATE subject SET name='a%_' WHERE id=2;");
+  const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+  const id = (value: number) => grid.getByRole('gridcell', { name: 'INTEGER · ' + value, exact: true });
+  const note = id(1).locator('..').getByRole('gridcell').last();
+  await expect(id(1)).toBeVisible();
+  const before = await tasks();
+  await note.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: tableCellFilterZh.contains, exact: true }).click();
+  await expect(table.getByLabel(browseText.filterOperator(1), { exact: true })).toHaveValue('contains');
+  await expect(table.getByLabel(browseText.filterValue(1), { exact: true })).toHaveValue('A%_');
+  expect(await tasks()).toEqual(before);
+  await info.attach('SQLite表页文本快捷筛选草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  await table.getByRole('button', { name: browseText.apply, exact: true }).click();
+  await expect(id(120)).toBeVisible();
+  await expect(id(1)).toBeVisible();
+  await expect(id(2)).toHaveCount(0);
+  expect(await tasks()).toHaveLength(before.length + 1);
   expect(pageErrors).toEqual([]);
 });
 

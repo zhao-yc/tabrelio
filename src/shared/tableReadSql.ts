@@ -55,6 +55,13 @@ export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filt
     // JOIN只由本地受信编译器传限定列名；IPC不接受回调或任意引用SQL，原表页字节保持。
     const column = columnReference ? columnReference(filter.column) : tableReadIdentifier(filter.column);
     if (filter.operator === 'IS NULL' || filter.operator === 'IS NOT NULL') return `${column} ${filter.operator}`;
+    if (filter.operator === 'CONTAINS' || filter.operator === 'NOT CONTAINS') {
+      const value = filter.value ?? '';
+      params.push(value);
+      // 两端先转成 UTF-8，再按字节查找，避免列字符集和排序规则改变原文字面语义。
+      const input = parameterLiteral ? parameterLiteral(value) : '?';
+      return `LOCATE(CAST(CONVERT(${input} USING utf8mb4) AS BINARY), CAST(CONVERT(${column} USING utf8mb4) AS BINARY)) ${filter.operator === 'CONTAINS' ? '> 0' : '= 0'}`;
+    }
     /** 参数按条件原顺序加入，不拆分逗号、裁剪空白或转换为 JavaScript 数值。 */
     const parameter = (value: string) => {
       const sql = filterParameter(metadata, value, filter.operator === 'LIKE' || filter.operator === 'NOT LIKE'); params.push(value);

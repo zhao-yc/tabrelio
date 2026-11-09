@@ -20,6 +20,8 @@ import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/delete
 import { copyInsertSqlZh as insertCopy } from '../../src/shared/copyInsertSql.zh-CN';
 import { postgresReferencePickerZh as referenceText } from '../../src/renderer/locales/postgresReferencePicker.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
+import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_POSTGRES_QUERY_RECORD_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
@@ -33,19 +35,39 @@ function isolatedConnection() {
   return { host: '127.0.0.1', database, user, password, port, connectionTimeoutMillis: 3000 };
 }
 
-async function loadQuery({ port, user, database, password }: ReturnType<typeof isolatedConnection>, sql: string) {
+async function loadQuery({ port, user, database, password }: ReturnType<typeof isolatedConnection>, sql: string, table?: string) {
   const connectionId = await page.evaluate(async profile => (await window.dbark.invoke('connections.save', profile)).id, {
     id: '', name: '原记录专项', dialect: 'postgresql' as const, group: '', color: '#123456', host: '127.0.0.1',
     port, user, database, password, rememberPassword: false,
   });
-  await page.evaluate(async ({ connectionId, database, sql }) => {
+  await page.evaluate(async ({ connectionId, database, sql, table }) => {
     const settings = await window.dbark.invoke('settings.get', {});
-    await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'pg-query-record',
-      tabs: [{ id: 'pg-query-record', title: '原记录查询', kind: 'query', connectionId, database,
-        sql }] });
-  }, { connectionId, database, sql });
+    await window.dbark.invoke('settings.save', { ...settings, activeTabId: table ? 'pg-filter-table' : 'pg-query-record',
+      tabs: table ? [{ id: 'pg-filter-table', title: table, kind: 'table', connectionId, database, table }]
+        : [{ id: 'pg-query-record', title: '原记录查询', kind: 'query', connectionId, database, sql }] });
+  }, { connectionId, database, sql, table });
   await page.reload();
 }
+
+test('PostgreSQL 表页文本快捷筛选按字面排除且保留原 NULL 语义', async () => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.filter_text (id bigint PRIMARY KEY, note varchar(60));
+      INSERT INTO public.filter_text VALUES (1,'A%_'),(2,'前A%_后'),(3,'a%_'),(4,'普通'),(5,NULL)`);
+    await loadQuery(config, '', 'filter_text');
+    const tab = page.locator('.postgres-table-tab:visible'), grid = tab.getByRole('grid');
+    const cell = (name: string) => grid.getByRole('gridcell', { name, exact: true });
+    await cell('A%_').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: tableCellFilterZh.notContains, exact: true }).click();
+    await expect(tab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('NOT CONTAINS');
+    await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(cell('前A%_后')).toBeVisible();
+    await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['3', '4']);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
 
 test('PostgreSQL 只读查询结果可沿复合外键查看父子记录并拒绝陈旧原行', async ({}, info) => {
   const config = isolatedConnection();

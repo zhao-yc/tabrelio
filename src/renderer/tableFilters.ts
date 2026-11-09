@@ -3,6 +3,7 @@ import { FILTER_LIMITS, validateFilterRules } from '../shared/filtering';
 import { zh, formatText } from './locales/zh-CN';
 import { tableFilterEnabledZh as enabledText } from './locales/tableFilterEnabled.zh-CN';
 import { maxTablePage } from '../shared/tableLastPage';
+import { tableCellFilterZh as cellText } from './locales/tableCellFilter.zh-CN';
 
 export type { FilterMode };
 /** 与 table.page 的 IPC 页码上限保持一致；不据此虚构表的实际总页数。 */
@@ -14,6 +15,7 @@ export interface FilterDraft {
 export const filterOperatorLabels: Record<FilterRule['operator'], string> = {
   '=': zh.table.filterEquals, '!=': zh.table.filterNotEquals, '>': zh.table.filterGreater, '>=': zh.table.filterGreaterOrEqual,
   '<': zh.table.filterLess, '<=': zh.table.filterLessOrEqual, LIKE: zh.table.filterLike, 'NOT LIKE': zh.table.filterNotLike,
+  CONTAINS: cellText.containsRule, 'NOT CONTAINS': cellText.notContainsRule,
   IN: zh.table.filterIn, 'NOT IN': zh.table.filterNotIn, BETWEEN: zh.table.filterBetween,
   'IS NULL': zh.table.filterIsNull, 'IS NOT NULL': zh.table.filterIsNotNull
 };

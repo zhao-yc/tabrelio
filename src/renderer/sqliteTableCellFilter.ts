@@ -3,12 +3,13 @@ import type { SqliteOriginalValue } from '../shared/sqliteTableEdit';
 import type { SqliteFilterDraft } from './sqliteTableBrowser';
 import type { SqliteDraftRow } from './sqliteTableEditor';
 import { sqliteTableCellFilterZh as text } from './locales/sqliteTableCellFilter.zh-CN';
+import type { TableCellFilterMode } from './tableCellFilter';
 
 export interface SqliteCellFilterSource {
   readonly column: string;
   readonly value: Readonly<SqliteOriginalValue>;
   current(): boolean;
-  draft(exclude: boolean, id: string): SqliteFilterDraft;
+  draft(mode: TableCellFilterMode, id: string): SqliteFilterDraft;
 }
 
 /** 仅读准确数据属性，拒绝getter；类型来自原SQLite协议，而不是显示文本或列声明。 */
@@ -53,9 +54,11 @@ export function captureSqliteCellFilter(page: SqliteTablePage, index: number, co
     return valid;
   }
   /** NULL生成明确的IS NULL/IS NOT NULL；其余值先走原严格typed条件合同。 */
-  function draft(exclude: boolean, id: string): SqliteFilterDraft {
+  function draft(mode: TableCellFilterMode, id: string): SqliteFilterDraft {
     if (!check()) throw Error(text.unavailable);
-    const filter = value.kind === 'null' ? { column: name, operator: exclude ? 'notNull' as const : 'isNull' as const } : { column: name, operator: exclude ? 'ne' as const : 'eq' as const, value: { ...value } };
+    if (typeof mode !== 'boolean' && (value.kind !== 'text' || !value.value)) throw Error(text.unsupported);
+    const filter = value.kind === 'null' ? { column: name, operator: mode ? 'notNull' as const : 'isNull' as const } :
+      { column: name, operator: typeof mode === 'boolean' ? mode ? 'ne' as const : 'eq' as const : mode, value: { ...value } };
     if (!sqliteTableFilterSchema.safeParse(filter).success) throw Error(text.unsupported);
     return { id, column: name, operator: filter.operator, kind: value.kind === 'null' ? 'text' : value.kind, value: value.kind === 'null' ? '' : value.value };
   }
