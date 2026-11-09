@@ -16,6 +16,7 @@ import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
+import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { sqliteTableFindZh as sqliteFind } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
@@ -352,8 +353,14 @@ test('语句目录按原序保存三种编码，取消、失效和 SQLite 源文
   await expect(saveQuery).toBeDisabled();
   await panel.getByRole('button', { name: navigationText.libraryCancel, exact: true }).click();
   expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([]);
+  await page.evaluate(async () => {
+    const snapshot = await window.dbark.invoke('queries.organizationGet', {});
+    await window.dbark.invoke('queries.organizationApply', { expectedRevision: snapshot.revision, operation: { kind: 'create', name: '语句片段', parentId: null } });
+  });
   await library.click();
   await name.fill('  常用语句  ');
+  await panel.getByRole('button', { name: groupText.chooseSaveGroup, exact: true }).click();
+  await panel.getByRole('combobox', { name: groupText.saveGroup, exact: true }).selectOption({ label: '语句片段' });
   await name.press('Enter');
   await expect(page.getByText(navigationText.librarySaved('常用语句'), { exact: true })).toBeVisible();
   await expect(name).toHaveCount(0);
@@ -361,6 +368,7 @@ test('语句目录按原序保存三种编码，取消、失效和 SQLite 源文
   expect(savedQueries).toHaveLength(1);
   expect(savedQueries[0]).toMatchObject({ name: '常用语句', connectionId: 'row-jump-offline', databaseContext: { state: 'known', database: 'main' } });
   expect(savedQueries[0].sql.replaceAll('\r\n', '\n')).toBe(first + '\n' + third);
+  expect(await page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}))).toMatchObject({ groups: [{ name: '语句片段', count: 1 }], unfiledCount: 0 });
   expect(await page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ tabs: settingsBefore.tabs, activeTabId: 'q-jump' });
   async function choose(path?: string, delayed = false) {
     // 只替换系统路径选择，保留文件令牌、编码及原子写入的正式 IPC。

@@ -10,6 +10,7 @@ import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
+import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
@@ -1882,6 +1883,11 @@ test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑
   const sql = '/* 外层😀 /* 内层; */ */\n' + body + ";\n--第二条\nSELECT '片段;二';\nSELECT 3";
   await prepare({id: '', name: '离线 PostgreSQL 导航', dialect: 'postgresql', group: '', color: '#123456',
     host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  await page.evaluate(async () => {
+    const organization = await window.dbark.invoke('queries.organizationGet', {});
+    await window.dbark.invoke('queries.organizationApply', { expectedRevision: organization.revision,
+      operation: { kind: 'create', name: 'PostgreSQL 常用查询', parentId: null } });
+  });
   const panel = navigationPanel();
   await modelSelection(2, 8);
   await page.keyboard.press('ControlOrMeta+E');
@@ -1917,6 +1923,8 @@ test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑
   const firstStatement = sql.slice(0, sql.indexOf(';\n--第二条') + 1);
   await panel.getByRole('button', {name: navigationText.library, exact: true}).click();
   await panel.getByRole('textbox', {name: navigationText.libraryName, exact: true}).fill('离线复用');
+  await panel.getByRole('button', { name: groupText.chooseSaveGroup, exact: true }).click();
+  await panel.getByRole('combobox', { name: groupText.saveGroup, exact: true }).selectOption({ label: 'PostgreSQL 常用查询' });
   await panel.getByRole('button', {name: navigationText.librarySave, exact: true}).click();
   await expect(page.getByText(navigationText.librarySaved('离线复用'), {exact: true})).toBeVisible();
   const saved = (await page.evaluate(() => window.dbark.invoke('queries.list', {}))).find(item => item.name === '离线复用');
@@ -1936,6 +1944,21 @@ test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑
     return settings.tabs.find(item => item.id === settings.activeTabId);
   })).toMatchObject({ database: 'offline_db', kind: 'query' });
   await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  await page.locator('[data-workspace-tab-id="pg-original"]').getByRole('button', {name: '原 PostgreSQL 查询', exact: true}).click();
+  await command('save-query');
+  const save = page.getByRole('dialog', { name: queryBindingZh.title, exact: true });
+  await save.getByLabel(queryBindingZh.name).fill('完整脚本');
+  await save.getByRole('button', { name: groupText.chooseSaveGroup, exact: true }).click();
+  await save.getByRole('combobox', { name: groupText.saveGroup, exact: true }).selectOption({ label: 'PostgreSQL 常用查询' });
+  await page.screenshot({ path: info.outputPath('PostgreSQL查询保存分组.png') });
+  await save.getByRole('button', { name: queryBindingZh.create, exact: true }).click();
+  await expect(save).toHaveCount(0);
+  expect(await page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}))).toMatchObject({
+    groups: [{ name: 'PostgreSQL 常用查询', count: 2 }], unfiledCount: 0,
+  });
+  const full = (await page.evaluate(() => window.dbark.invoke('queries.list', {}))).find(item => item.name === '完整脚本');
+  expect(full).toMatchObject({ databaseContext: { state: 'known', database: 'offline_db' } });
+  expect(full?.sql.replaceAll('\r\n', '\n')).toBe(sql);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });

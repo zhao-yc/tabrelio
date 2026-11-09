@@ -22,6 +22,29 @@ async function open() {
 afterEach(() => { for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe('保存查询来源绑定和真实原子 CAS', () => {
+  it('分组和正文共同落盘，过期分组、未知编号和磁盘故障均不留下查询', async () => {
+    const { store, path, wasm } = await open();
+    const initial = store.queryOrganization();
+    const created = store.applyQueryOrganization({ expectedRevision: initial.revision, operation: { kind: 'create', name: '复用', parentId: null } });
+    const group = { id: created.groups[0].id, expectedRevision: created.revision };
+    const before = readFileSync(path);
+    expect(() => store.createBoundQuery({ ...content(), group: { ...group, expectedRevision: initial.revision } })).toThrow('分组已变化');
+    expect(() => store.createBoundQuery({ ...content(), group: { ...group, id: 'unknown' } })).toThrow('分组已变化');
+    mkdirSync(path + '.tmp');
+    try { expect(() => store.createBoundQuery({ ...content(), group })).toThrow('修改未保存'); }
+    finally { rmdirSync(path + '.tmp'); }
+    expect(store.queries()).toEqual([]);
+    expect(store.queryOrganization()).toEqual(created);
+    expect(readFileSync(path)).toEqual(before);
+
+    const result = store.createBoundQuery({ ...content(), group });
+    store.close();
+    const restored = await LocalStore.open(path, wasm, protector);
+    expect(restored.queries()[0]).toMatchObject({ id: result.source.id, sql });
+    expect(restored.queryOrganization()).toMatchObject({ groups: [{ id: group.id, count: 1 }], unfiledCount: 0 });
+    expect(commandSchemas['queries.updateSource'].safeParse({ source: result.source, content: { ...content(), group } }).success).toBe(false);
+    restored.close();
+  });
   it('多文件导入一次提交，同名保留独立编号，磁盘失败恢复整批及修订', async () => {
     const { store, path, wasm } = await open();
     const first = store.createBoundQuery(content());

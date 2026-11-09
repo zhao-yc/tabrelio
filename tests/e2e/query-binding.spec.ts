@@ -1,5 +1,6 @@
 import { discardTestTab } from './query-close-ui';
 import { test, expect, page, pageErrors, quitDesktop, launchDesktop } from './desktop-fixture';
+import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const query = () => page.locator('.query-tab:visible');
 const saveDialog = () => page.getByRole('dialog', { name: '保存查询', exact: true });
@@ -38,7 +39,33 @@ test('原查询更新、另存独立记录、绑定重启恢复与关闭清除�
   await edit(sourceSql + '\n-- 第一次更新'); await save('保存到原查询'); await expect(saveDialog()).toBeHidden();
   let records = await page.evaluate(() => window.dbark.invoke('queries.list', {})); expect(records).toHaveLength(1); expect(records[0].id).toBe(first.source.id); expect(records[0].sql).toContain('第一次更新');
   const updatedSql = records[0].sql;
-  await save('另存为新查询', '独立副本'); await expect(saveDialog()).toBeHidden();
+  const group = await page.evaluate(async () => {
+    const initial = await window.dbark.invoke('queries.organizationGet', {});
+    const root = await window.dbark.invoke('queries.organizationApply', { expectedRevision: initial.revision, operation: { kind: 'create', name: '日常', parentId: null } });
+    const result = await window.dbark.invoke('queries.organizationApply', { expectedRevision: root.revision, operation: { kind: 'create', name: '旧名称', parentId: root.groups[0].id } });
+    return result.groups.find(item => item.parentId !== null)!;
+  });
+  await (await navigationMenuItem(query(), { name: '保存查询', exact: true })).click();
+  const name = saveDialog().getByLabel('查询名称', { exact: true });
+  await name.fill('独立副本');
+  await saveDialog().getByRole('button', { name: groupText.chooseSaveGroup, exact: true }).click();
+  const groups = saveDialog().getByRole('combobox', { name: groupText.saveGroup, exact: true });
+  await groups.selectOption({ label: '日常 / 旧名称' });
+  await expect(saveDialog().getByRole('button', { name: '保存到原查询', exact: true })).toBeDisabled();
+  await page.evaluate(async id => {
+    const snapshot = await window.dbark.invoke('queries.organizationGet', {});
+    await window.dbark.invoke('queries.organizationApply', { expectedRevision: snapshot.revision, operation: { kind: 'rename', id, name: '常用' } });
+  }, group.id);
+  const create = saveDialog().getByRole('button', { name: '另存为新查询', exact: true });
+  await create.click();
+  await expect(saveDialog().getByRole('alert')).toContainText('分组已变化');
+  await expect(name).toHaveValue('独立副本');
+  expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual(records);
+  await saveDialog().getByRole('button', { name: groupText.refreshSaveGroups, exact: true }).click();
+  await expect(groups).toHaveValue('-');
+  await groups.selectOption({ label: '日常 / 常用' });
+  await create.click();
+  await expect(saveDialog()).toBeHidden();
   records = await page.evaluate(() => window.dbark.invoke('queries.list', {})); expect(records).toHaveLength(2); expect(records.find(record => record.id === first.source.id)?.sql).toBe(updatedSql);
   const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {})), copy = settings.tabs.find(tab => tab.id === tabId)!;
   expect(copy.id).toBe(tabId); expect(copy.sourceBinding?.id).not.toBe(first.source.id); expect(copy.sql).toContain('900719925474099312345');
@@ -46,6 +73,9 @@ test('原查询更新、另存独立记录、绑定重启恢复与关闭清除�
   expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs.find(tab => tab.id === tabId)?.sourceBinding).toEqual(copy.sourceBinding);
   await edit(updatedSql + '\n-- 重启后只更新副本'); await save('保存到原查询'); await expect(saveDialog()).toBeHidden();
   records = await page.evaluate(() => window.dbark.invoke('queries.list', {})); expect(records.find(record => record.id === first.source.id)?.sql).toBe(updatedSql); expect(records.find(record => record.id === copy.sourceBinding!.id)?.sql).toContain('重启后只更新副本');
+  const organized = await page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}));
+  expect(organized.groups.find(item => item.id === group.id)).toMatchObject({ name: '常用', count: 1 });
+  expect(organized.unfiledCount).toBe(1);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   await page.screenshot({ path: info.outputPath('query-binding-restored.png') });
   await discardTestTab(page, page.locator('.tab-strip .tab-close'));

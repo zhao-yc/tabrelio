@@ -41,7 +41,7 @@ import{savedQueryImportLimits,savedQuerySearchLimits}from'../shared/savedQuerySe
 import type{SavedQueryPageInput,SavedQueryPagePosition}from'../shared/savedQueryPages';
 import type{HistoryPagePosition,HistoryPageInput}from'../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
-import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
+import { queryCreateSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
 import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { dataCompareProfileMutationSchema, dataCompareProfileReadSchema, dataCompareProfileScope, readDataCompareProfiles,
   type DataCompareProfileConfiguration, type DataCompareProfileScope, type DataCompareProfileSummary, type StoredDataCompareProfile } from '../shared/dataCompareProfiles';
@@ -1054,14 +1054,22 @@ export class LocalStore {
       ...(context.state === 'legacy' ? context.database === undefined ? {} : { database: context.database } : { databaseContext: { ...context }, ...(context.state === 'known' && context.database !== null ? { database: context.database } : {}) }) };
     return parseSavedQueryRecord(id, JSON.stringify(query));
   }
-  /** 新建由主进程分配编号，绝不 upsert 或复用查询标签编号。 */
+  /** 新编号和可选分组同一事务保存，旧分组视图或写盘失败都不会留下未分组的记录。 */
   createBoundQuery(raw: unknown): QuerySaveResult {
-    const content = querySaveContentSchema.parse(raw), query = this.boundQueryRecord(randomUUID(), content);
+    const content = queryCreateSchema.parse(raw), query = this.boundQueryRecord(randomUUID(), content);
+    const group = content.group;
     let profile: ConnectionProfile | undefined;
     this.mutate(() => {
       profile = this.querySourceProfile(content.connectionId);
       if (content.connectionId && !profile) throw Error('当前连接已删除，请选择有效连接后另存');
+      if (group) {
+        const organization = readSavedQueryOrganization(this.db);
+        const revision = savedQueryOrganizationRevision(organization, this.queryRevisionValue, this.queryOrganizationGeneration);
+        if (group.expectedRevision !== revision || !organization.groups.some(item => item.id === group.id))
+          throw Error('保存查询分组已变化，请刷新并重新选择分组');
+      }
       this.db.run('INSERT INTO queries VALUES (?,?,?)', [query.id, JSON.stringify(query), query.updatedAt]);
+      if (group) this.db.run('INSERT INTO saved_query_memberships (query_id,group_id) VALUES (?,?)', [query.id, group.id]);
     });
     this.queryRevisionValue++;
     return { name: query.name, source: bindSavedQuery(query, JSON.stringify(query), profile) };

@@ -61,6 +61,8 @@ const operation = z.discriminatedUnion('kind', [
 export const savedQueryOrganizationOperationSchema = checked(operation);
 export const savedQueryOrganizationGetSchema = checked(z.object({}).strict());
 export const savedQueryOrganizationApplySchema = checked(z.object({ expectedRevision: digest, operation }).strict());
+export const savedQueryGroupTargetSchema = checked(z.object({ id, expectedRevision: digest }).strict());
+export type SavedQueryGroupTarget = z.infer<typeof savedQueryGroupTargetSchema>;
 export type SavedQueryOrganizationOperation = z.infer<typeof savedQueryOrganizationOperationSchema>;
 export type SavedQueryOrganizationApply = z.infer<typeof savedQueryOrganizationApplySchema>;
 export interface SavedQueryGroup { id: string; name: string; parentId: string | null; }

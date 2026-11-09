@@ -170,11 +170,14 @@ test('保存查询按名称和更新时间跨批次排序，保留已勾选项',
 
 test('从历史离线保存完整查询，保留执行上下文或解除绑定', async () => {
  const sql = 'UPDATE offline_fixture SET n=9007199254740993;\r\n-- ' + '中'.repeat(1024) + '😀历史尾部';
+ let groupId: string;
  await seed(store => {
   source(store);
   store.addHistory(entry({ id: 'bound-save', sql, databaseContext: { state: 'known', database: '执行库' } }));
   store.addHistory(entry({ id: 'orphan-save', connectionId: 'deleted', sql, databaseContext: { state: 'known', database: '旧库' } }));
   store.saveQuery({ id: 'existing-query', name: '重复名', sql: 'SELECT 42', updatedAt: '2026-10-15T00:00:00Z' });
+  const snapshot = store.applyQueryOrganization({ expectedRevision: store.queryOrganization().revision, operation: { kind: 'create', name: '历史复用', parentId: null } });
+  groupId = snapshot.groups[0].id;
  });
  await desktop.evaluate(({ipcMain}) => {
   const handlers = (ipcMain as unknown as {_invokeHandlers: Map<string, (...args:any[])=>unknown>})._invokeHandlers;
@@ -207,6 +210,8 @@ test('从历史离线保存完整查询，保留执行上下文或解除绑定',
  await trigger.click();
  await expect(bound.getByRole('checkbox', { name: text.saveQuerySource, exact: true })).toBeChecked();
  await expect(bound.getByText(text.saveQueryContext('离线来源 source', '执行库'))).toBeVisible();
+ await bound.getByRole('button', { name: savedOrganizationText.chooseSaveGroup, exact: true }).click();
+ await bound.getByRole('combobox', { name: savedOrganizationText.saveGroup, exact: true }).selectOption({ label: '历史复用' });
  await name.fill(' 重复名 ');
  await name.press('Enter');
  await expect(bound.getByText(text.savedQueryCreated('重复名'), { exact: true })).toBeVisible();
@@ -221,7 +226,8 @@ test('从历史离线保存完整查询，保留执行上下文或解除绑定',
  await expect(saved).toHaveText(['失效来源的查询', '重复名', '重复名']);
  const observation = await desktop.evaluate(() => (globalThis as typeof globalThis & { __saveHistoryQuery?: unknown }).__saveHistoryQuery);
  expect(observation).toEqual({ blocked: 0, saved: [
-  { id: 'bound-save', digest: expect.stringMatching(/^[0-9a-f]{64}$/), name: ' 重复名 ', keepSource: true },
+  { id: 'bound-save', digest: expect.stringMatching(/^[0-9a-f]{64}$/), name: ' 重复名 ', keepSource: true,
+   group: { id: groupId!, expectedRevision: expect.stringMatching(/^[0-9a-f]{64}$/) } },
   { id: 'orphan-save', digest: expect.stringMatching(/^[0-9a-f]{64}$/), name: '失效来源的查询', keepSource: false },
  ] });
  expect(await page.evaluate(() => window.dbark.invoke('settings.get', {}))).toEqual(before);
@@ -239,6 +245,7 @@ test('从历史离线保存完整查询，保留执行上下文或解除绑定',
  expect(unbound).toMatchObject({ sql, databaseContext: { state: 'unknown' } });
  expect(unbound?.connectionId).toBeUndefined();
  expect(unbound?.database).toBeUndefined();
+ expect(await page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}))).toMatchObject({ groups: [{ id: groupId!, count: 1 }], unfiledCount: 2 });
  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(2);
 });
 

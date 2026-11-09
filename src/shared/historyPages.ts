@@ -4,6 +4,7 @@ import { historyDurationRangeSchema } from './historyDurationRange';
 import type{QueryDatabaseContext}from'./queryContext';
 import{querySqlExportEncodingSchema,savedQueryArchiveLimits,savedQueryContextSchema,savedQuerySearchLimits}from'./savedQuerySearch';
 import{localSqlPageLimits,type LocalSqlPage}from'./localSqlPages';
+import { savedQueryGroupTargetSchema } from './savedQueryOrganization';
 
 /** 沿用最近1000条存储保留；分页限制传输，不扩大或截断旧记录正文。 */
 export const historyPageLimits={...localSqlPageLimits,retained:1000,errorPreviewUnits:256,errorUnits:20_000_000}as const;
@@ -26,7 +27,7 @@ export const historyExportSqlArchiveSchema = z.object({
 export type HistoryExportSqlArchiveInput = z.infer<typeof historyExportSqlArchiveSchema>;
 export type HistoryExportSqlInput = z.infer<typeof historyExportSqlSchema>;
 export type HistoryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
-export const historySaveQuerySchema = historyRecordReferenceSchema.extend({ name: name.trim().min(1), keepSource: z.boolean() }).strict();
+export const historySaveQuerySchema = historyRecordReferenceSchema.extend({ name: name.trim().min(1), keepSource: z.boolean(), group: savedQueryGroupTargetSchema.optional() }).strict();
 export type HistorySaveQueryInput = z.infer<typeof historySaveQuerySchema>;
 export type HistoryRecord=z.infer<typeof historyRecordSchema>;
 export type HistoryPageInput=z.infer<typeof historyPageInputSchema>;

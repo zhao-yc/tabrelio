@@ -3,6 +3,8 @@ import{useEffect,useRef,useState}from'react';
 import{ArrowUpRight,Clock3,FileCode2,Search,CheckCircle2,XCircle}from'lucide-react';
 import type{HistoryPageInput,HistoryPage,HistoryPageEntry,HistoryPageSort}from'../../shared/historyPages';
 import type { QueryFileEncoding } from '../../shared/contracts';
+import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
+import { SavedQuerySaveGroup } from './SavedQuerySaveGroup';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import{zh,formatText}from'../locales/zh-CN';
 import{queryContextZh}from'../locales/queryContext.zh-CN';
@@ -40,7 +42,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
  const [exportNotice, setExportNotice] = useState<{ item: HistoryPageEntry; name: string }>();
  const [archiveNotice, setArchiveNotice] = useState('');
- const [saveDraft, setSaveDraft] = useState<{ item: HistoryPageEntry; name: string; keepSource: boolean; trigger: HTMLButtonElement }>();
+ const [saveDraft, setSaveDraft] = useState<{ item: HistoryPageEntry; name: string; keepSource: boolean; trigger: HTMLButtonElement; group?: SavedQueryGroupTarget }>();
  const [saveNotice, setSaveNotice] = useState<{ item: HistoryPageEntry; name: string; trigger: HTMLButtonElement }>();
  const [saveError, setSaveError] = useState('');
  useEffect(() => { saveNotice?.trigger.focus(); }, [saveNotice]);
@@ -234,8 +236,8 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   setSaveError('');
   setSaveNotice(undefined);
   try {
-    const { item, name, keepSource } = draft;
-    const request = invoke('history.saveQuery', { id: item.entry.id, digest: item.digest, name, keepSource });
+    const { item, name, keepSource, group } = draft;
+    const request = invoke('history.saveQuery', { id: item.entry.id, digest: item.digest, name, keepSource, ...(group ? { group } : {}) });
     pending.current = request;
     const result = await request;
     if (current()) {
@@ -266,6 +268,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
         disabled={busy || closing} onChange={event => setSaveDraft({ ...draft, keepSource: event.target.checked })}/>{t.saveQuerySource}</label>}
       <p className="muted small">{draft.keepSource && source ? t.saveQueryContext(source.name, databaseLabel(item)) :
         draft.keepSource ? t.saveQuerySourceLost : t.saveQueryUnbound}</p>
+      <SavedQuerySaveGroup disabled={busy || closing} target={draft.group} onChange={group => setSaveDraft({ ...draft, group })}/>
       <ErrorBox message={saveError}/>
       <button type="submit" disabled={busy || closing || !draft.name.trim() || (draft.keepSource && !source)}>{t.saveQueryConfirm}</button>
       <button type="button" disabled={busy || closing} onClick={closeSaveDraft}>{zh.common.cancel}</button>

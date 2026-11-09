@@ -1,11 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
 import type { QueryFileEncoding } from '../../shared/contracts';
+import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
 import type { StatementNavigationView } from '../statementNavigationController';
 import { currentNavigableStatement, statementNavigationPreview, statementNavigationStart, type NavigableStatement, type StatementNavigationDialect } from '../../shared/statementNavigation';
 import type { StatementSelectionDestination } from '../statementNavigationExtract';
 import { errorMessage } from '../lib';
 import { statementNavigationZh as text } from '../locales/statementNavigation.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
+import { SavedQuerySaveGroup } from './SavedQuerySaveGroup';
 import '../statementNavigation.css';
 
 const pageSize = 10;
@@ -23,7 +25,7 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
   const selected = ranges?.filter((_, index) => checked?.has(index)) ?? [];
   const [encoding, setEncoding] = useState<QueryFileEncoding>('utf8');
   const [saving, setSaving] = useState(false), savingRef = useRef(false);
-  const [nameDraft, setNameDraft] = useState<{ checked: ReadonlySet<number>; name: string; error?: string }>();
+  const [nameDraft, setNameDraft] = useState<{ checked: ReadonlySet<number>; name: string; error?: string; group?: SavedQueryGroupTarget }>();
   // 命名只对应打开表单时的勾选，目录刷新或改选后须重新命名。
   const naming = nameDraft?.checked === checked ? nameDraft : undefined;
   async function save(destination: Extract<StatementSelectionDestination, object>) {
@@ -64,10 +66,11 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
       {naming && <form className="statement-navigation-selection" onSubmit={event => {
         event.preventDefault();
         const name = naming.name.trim();
-        if (name) void save({ libraryName: name });
+        if (name) void save({ libraryName: name, group: naming.group });
       }}>
         <input autoFocus aria-label={text.libraryName} placeholder={text.libraryName} maxLength={256} value={naming.name}
-          disabled={saving} onChange={event => setNameDraft({ checked: naming.checked, name: event.target.value })}/>
+          disabled={saving} onChange={event => setNameDraft({ ...naming, name: event.target.value, error: undefined })}/>
+        <SavedQuerySaveGroup disabled={saving} target={naming.group} onChange={group => setNameDraft({ ...naming, group, error: undefined })}/>
         <button type="submit" disabled={!naming.name.trim() || saving}>{text.librarySave}</button>
         <button type="button" disabled={saving} onClick={() => setNameDraft(undefined)}>{text.libraryCancel}</button>
         {naming.error && <p role="alert">{naming.error}</p>}

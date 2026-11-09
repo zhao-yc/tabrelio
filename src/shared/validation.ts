@@ -126,7 +126,7 @@ import { tableApplyReceiptListSchema } from './tableApplyReceipt';
 import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } from './tlsCredentials';
 import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
 import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
-import { querySaveContentSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
+import { queryCreateSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
 import { savedQueryRenameSchema } from './savedQueryRename';
 import { savedQueryDuplicateSchema } from './savedQueryDuplicate';
@@ -493,7 +493,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'dataCompareProfiles.mutate': dataCompareProfileMutationSchema,
   'workbench.protocolReady': externalObjectUriEmptySchema, 'workbench.protocolTake': externalObjectUriEmptySchema,
   'workbench.protocolResolve': externalObjectUriIdSchema, 'workbench.protocolCommit': externalObjectUriIdSchema, 'workbench.protocolFinish': externalObjectUriIdSchema,
-  'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,
+  'queries.create': queryCreateSchema, 'queries.updateSource': queryUpdateSourceSchema,
   'queries.organizationGet': savedQueryOrganizationGetSchema, 'queries.organizationApply': savedQueryOrganizationApplySchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
   'schema.compare': schemaCompareInputSchema, 'schema.comparePreview': schemaComparePreviewSchema, 'schema.compareRelease': schemaCompareReleaseSchema,

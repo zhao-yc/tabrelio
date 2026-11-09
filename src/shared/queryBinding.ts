@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { savedQueryContextSchema, savedQuerySearchLimits } from './savedQuerySearch';
 import type { QueryDatabaseContext } from './queryContext';
+import { savedQueryGroupTargetSchema } from './savedQueryOrganization';
 
 const id = z.string().min(1).max(200), name = z.string().min(1).max(256), digest = z.string().regex(/^[a-f0-9]{64}$/);
 /** 遗留记录与显式已知库、无库、未知保持区分，不借用当前连接默认库重写来源。 */
@@ -9,7 +10,9 @@ export type SavedQueryOriginContext = z.infer<typeof savedQueryOriginContextSche
 export const querySourceBindingSchema = z.object({ id, digest, connectionId: id.optional(), connectionDigest: digest.optional(), context: savedQueryOriginContextSchema }).strict();
 export type QuerySourceBinding = z.infer<typeof querySourceBindingSchema>;
 export const querySaveContentSchema = z.object({ name, connectionId: id.optional(), context: savedQueryOriginContextSchema, sql: z.string().max(savedQuerySearchLimits.sqlUnits) }).strict();
+export const queryCreateSchema = querySaveContentSchema.extend({ group: savedQueryGroupTargetSchema.optional() }).strict();
 export const queryUpdateSourceSchema = z.object({ source: querySourceBindingSchema, content: querySaveContentSchema }).strict();
+export type QueryCreate = z.infer<typeof queryCreateSchema>;
 export type QuerySaveContent = z.infer<typeof querySaveContentSchema>;
 export interface QuerySaveResult { source: QuerySourceBinding; name: string; }
 

@@ -1,5 +1,6 @@
 import type { QueryFileEncoding } from '../shared/contracts';
 import { savedQueryOriginContext } from '../shared/queryBinding';
+import type { SavedQueryGroupTarget } from '../shared/savedQueryOrganization';
 import type { NavigableStatement } from '../shared/statementNavigation';
 import { writeTableClipboardEvent } from './gridClipboard';
 import { errorMessage, invoke } from './lib';
@@ -8,15 +9,15 @@ import { statementDraftSql } from './queryDuplicateIntent';
 import type { StatementNavigationController } from './statementNavigationController';
 import { useWorkspace, type WorkspaceTab } from './store';
 
-export type StatementSelectionDestination = 'clipboard' | 'query' | { encoding: QueryFileEncoding } | { libraryName: string };
-export interface StatementQueryOutput { current(): boolean; libraryName?: string; }
+export type StatementSelectionDestination = 'clipboard' | 'query' | { encoding: QueryFileEncoding } | { libraryName: string; group?: SavedQueryGroupTarget };
+export interface StatementQueryOutput { current(): boolean; libraryName?: string; group?: SavedQueryGroupTarget; }
 
 /** 各输出共用本次目录签发的原文，生成脚本时保留语句顺序和客户端分隔符。 */
 export function extractStatementSelection(controller: StatementNavigationController, ranges: readonly NavigableStatement[],
   destination: StatementSelectionDestination, open: (output: StatementQueryOutput) => void | Promise<void>): void | Promise<void> {
   const result = controller.extract(ranges, (source, dialect, current) => {
     if (destination === 'query') return open({ current });
-    if (typeof destination === 'object' && 'libraryName' in destination) return open({ current, libraryName: destination.libraryName });
+    if (typeof destination === 'object' && 'libraryName' in destination) return open({ current, ...destination });
     if (typeof destination === 'object') return saveStatements(
       () => statementDraftSql(source, ranges, dialect), destination.encoding, current);
     try {
@@ -31,9 +32,9 @@ export function extractStatementSelection(controller: StatementNavigationControl
 }
 
 /** 只新建查询库条目，不接管或修改原编辑器的文件与查询来源。 */
-export async function saveStatementQuery(candidate: Omit<WorkspaceTab, 'id'>, name: string): Promise<void> {
+export async function saveStatementQuery(candidate: Omit<WorkspaceTab, 'id'>, name: string, group?: SavedQueryGroupTarget): Promise<void> {
   const context = savedQueryOriginContext(candidate.database, candidate.databaseContext);
-  const saved = await invoke('queries.create', { name, connectionId: candidate.connectionId, sql: candidate.sql ?? '', context });
+  const saved = await invoke('queries.create', { name, connectionId: candidate.connectionId, sql: candidate.sql ?? '', context, ...(group ? { group } : {}) });
   useWorkspace.getState().notify(text.librarySaved(saved.name));
 }
 

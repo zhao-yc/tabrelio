@@ -188,7 +188,7 @@ export interface CommandMap {
   'workbench.protocolCommit': { input: { id: string }; output: { committed: true } };
   'workbench.protocolFinish': { input: { id: string }; output: import('./externalObjectUris').ExternalObjectUriState };
   'workbench.copyUri': { input: WorkbenchTarget; output: void };
-  'queries.create': { input: QuerySaveContent; output: QuerySaveResult };
+  'queries.create': { input: import('./queryBinding').QueryCreate; output: QuerySaveResult };
   'queries.updateSource': { input: { source: QuerySourceBinding; content: QuerySaveContent }; output: QuerySaveResult };
   'table.presets.list': {input:TablePresetTarget;output:TablePresetSnapshot};
   'table.presets.save': {input:TablePresetSave;output:TablePresetSnapshot};

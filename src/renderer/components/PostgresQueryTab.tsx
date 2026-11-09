@@ -98,6 +98,7 @@ import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { openFocusedGridRowJump } from './GridRowJump';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
+import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
 import { saveStatementQuery, type StatementQueryOutput } from '../statementNavigationExtract';
 import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
 import type { NavigableStatement } from '../../shared/statementNavigation';
@@ -765,7 +766,7 @@ export function PostgresQueryTab({
     await owner.work;
   }
   /** 保存目录沿原来源CAS接口；回包过期仍保留已保存事实，不能覆盖后来编辑器内容。 */
-  async function saveQuery(action: 'create' | 'update', name: string) {
+  async function saveQuery(action: 'create' | 'update', name: string, group?: SavedQueryGroupTarget) {
     const snapshot = captureQueryFileSnapshot(editor.current, currentTab);
     const originalTab = currentTab(),
       original = snapshot.sql ?? '',
@@ -815,7 +816,7 @@ export function PostgresQueryTab({
       const result =
         action === 'update'
           ? await invoke('queries.updateSource', { source: snapshot.sourceBinding!, content })
-          : await invoke('queries.create', content);
+          : await invoke('queries.create', group ? { ...content, group } : content);
       const current =
         same(originalScope) &&
         currentTab() === originalTab &&
@@ -1691,7 +1692,7 @@ export function PostgresQueryTab({
           return { state: 'known', database: original?.scope.database || initial.tab?.database || connection.database || 'postgres' };
         },
         open: candidate => {
-          if (libraryName !== undefined) return saveStatementQuery(candidate, libraryName);
+          if (libraryName !== undefined) return saveStatementQuery(candidate, libraryName, output?.group);
           const workspace = useWorkspace.getState();
           if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany);
           workspace.openTab(candidate);

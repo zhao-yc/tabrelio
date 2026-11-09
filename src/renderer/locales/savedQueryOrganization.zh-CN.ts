@@ -3,6 +3,7 @@ export const savedQueryOrganizationZh = {
   title: '保存查询分组', all: '全部查询', unfiled: '未分组', includeDescendants: '包含子分组', tree: '保存查询分组树', toggle: '显示或折叠分组树',
   create: '新建分组', rename: '重命名分组', moveGroup: '移动分组', dissolve: '解散分组', moveQueries: '移动选中查询', clear: '清空选择',
   groupName: '分组名称', parent: '父分组', destination: '目标分组', root: '顶层', choose: '请选择分组', preview: '预览分组变更', confirm: '确认分组变更', back: '返回修改', cancel: '取消分组变更',
+  saveGroup: '保存分组', chooseSaveGroup: '选择保存分组', refreshSaveGroups: '刷新保存分组', loadSaveGroups: '正在读取保存分组', reselectSaveGroup: '请重新选择分组',
   previewTitle: '分组变更预览', metadataOnly: '仅整理本地分组，保留查询正文、来源及已打开草稿。',
   dissolveWarning: '将解散此分组及全部子分组，所有成员退回未分组；不会删除任何保存查询。',
   selected: (count: number, hidden: number) => `已选${count}条，其中${hidden}条不在当前页；最多100条。`,
