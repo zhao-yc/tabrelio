@@ -28,6 +28,18 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
   const [nameDraft, setNameDraft] = useState<{ checked: ReadonlySet<number>; name: string; error?: string; group?: SavedQueryGroupTarget }>();
   // 命名只对应打开表单时的勾选，目录刷新或改选后须重新命名。
   const naming = nameDraft?.checked === checked ? nameDraft : undefined;
+  /** 单条与批量更新都沿用目录原编号，避免搜索或翻页后按可见位置修改错行。 */
+  function updateChecked(targets: readonly number[], enabled: boolean) {
+    if (!ranges || savingRef.current) return;
+    setSelection(previous => {
+      const indices = new Set(previous?.ranges === ranges ? previous.indices : []);
+      for (const index of targets) {
+        if (enabled) indices.add(index);
+        else indices.delete(index);
+      }
+      return { ranges, indices };
+    });
+  }
   async function save(destination: Extract<StatementSelectionDestination, object>) {
     if (savingRef.current || !selected.length) return;
     savingRef.current = true;
@@ -43,13 +55,24 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
   }
   const activeIndex = ranges ? currentNavigableStatement(source, ranges, cursor, dialect) : -1;
   const rows = useMemo(() => ranges?.map((range, index) => ({ range, index, start: statementNavigationStart(source, range, dialect), preview: statementNavigationPreview(source, range, dialect) })).filter(row => !search || source.slice(row.range.start, row.range.end).toLowerCase().includes(search.toLowerCase())) ?? [], [ranges, source, search, dialect]);
+  const matchingChecked = rows.filter(row => checked?.has(row.index)).length;
+  const allMatchingChecked = rows.length > 0 && matchingChecked === rows.length;
+  const matchingMixed = matchingChecked > 0 && !allMatchingChecked;
+  const outsideSearch = selected.length - matchingChecked;
   const pages = Math.max(1, Math.ceil(rows.length / pageSize)), actual = Math.min(page, pages - 1);
   return <section className="statement-navigation" aria-label={text.title}><header><strong>{text.title}</strong><span role="status">{view.busy ? text.loading : result?.status === 'ready' ? text.total(rows.length) : result ? text.reasons[result.reason] ?? text.unavailable : ''}</span><span className="grow"/>
     {view.busy ? <button onClick={onCancel}>{text.cancel}</button> : <button onClick={onRefresh}>{text.refresh}</button>}<button onClick={onClose}>{text.close}</button></header>
     <p className="muted small">{text.hint}</p>
     {ranges && <><input aria-label={text.search} placeholder={text.search} value={search} maxLength={200} onChange={event => { setSearch(event.target.value); setPage(0); }}/>
+      <label className="inline-field statement-navigation-check-matches">
+        <input type="checkbox" checked={allMatchingChecked} aria-checked={matchingMixed ? 'mixed' : allMatchingChecked}
+          ref={input => { if (input) input.indeterminate = matchingMixed; }} disabled={!rows.length || saving}
+          onChange={event => updateChecked(rows.map(row => row.index), event.currentTarget.checked)}/>
+        {text.checkMatches}
+      </label>
       <div className="statement-navigation-selection" aria-busy={saving}>
         <span>{text.checked(selected.length)}</span>
+        {outsideSearch > 0 && <span className="muted">{text.checkedOutsideSearch(outsideSearch)}</span>}
         <button disabled={!selected.length || saving} onClick={() => onExtract(selected, 'clipboard')}>{text.copyChecked}</button>
         <button disabled={!selected.length || saving} onClick={() => onExtract(selected, 'query')}>{text.openChecked}</button>
         <button disabled={!selected.length || saving} onClick={() => setSelection(undefined)}>{text.clearChecked}</button>
@@ -76,14 +99,8 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
         {naming.error && <p role="alert">{naming.error}</p>}
       </form>}
       <ol start={actual * pageSize + 1}>{rows.slice(actual * pageSize, (actual + 1) * pageSize).map(row => <li key={row.index} className={row.index === activeIndex ? 'active' : ''}>
-        <input type="checkbox" aria-label={text.check(row.index)} disabled={saving} checked={checked?.has(row.index) ?? false} onChange={event => {
-          const enabled = event.currentTarget.checked;
-          setSelection(previous => {
-            const indices = new Set(previous?.ranges === ranges ? previous.indices : []);
-            if (enabled) indices.add(row.index); else indices.delete(row.index);
-            return { ranges, indices };
-          });
-        }}/>
+        <input type="checkbox" aria-label={text.check(row.index)} disabled={saving} checked={checked?.has(row.index) ?? false}
+          onChange={event => updateChecked([row.index], event.currentTarget.checked)}/>
         <button className="statement-navigation-target" aria-label={text.position(row.index, position(row.start).lineNumber)} title={row.preview} onClick={() => onNavigate(row.index, false)}><span>{text.position(row.index, position(row.start).lineNumber)}</span><code>{row.preview}</code></button>
         <button aria-label={`${text.select} ${row.index + 1}`} onClick={() => onNavigate(row.index, true)}>{text.select}</button>
       </li>)}</ol>{!rows.length && <p>{text.empty}</p>}

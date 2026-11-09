@@ -10,6 +10,7 @@ export const statementNavigationZh = {
   select: '选中正文', refresh: '刷新语句导航', cancel: '取消读取', close: '关闭语句导航', previous: '上一页', next: '下一页', page: (page: number, pages: number) => `${page} / ${pages}`,
   check: (index: number) => `勾选第 ${index + 1} 条语句`,
   checked: (count: number) => `已勾选 ${count} 条`,
+  checkMatches: '勾选全部搜索结果', checkedOutsideSearch: (count: number) => `其中 ${count} 条不符合当前搜索`,
   copyChecked: '复制勾选语句', openChecked: '在新查询中打开勾选语句', clearChecked: '清除勾选',
   saveChecked: '另存勾选语句', scriptEncoding: '勾选语句文件编码', scriptFile: '勾选语句.sql',
   saved: (name: string) => `已另存勾选语句到 ${name}`,

@@ -6,6 +6,7 @@
 .statement-navigation p { margin: 6px 0; }
 .statement-navigation input { width: 100%; min-height: 28px; }
 .statement-navigation input[type="checkbox"] { flex: 0 0 auto; width: auto; min-height: 0; }
+.statement-navigation-check-matches { margin-top: 6px; }
 .statement-navigation-selection { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 6px 0; }
 .statement-navigation ol { list-style: none; padding: 0; margin: 6px 0; }
 .statement-navigation li { min-width: 0; display: flex; align-items: center; gap: 8px; border-radius: 4px; }

@@ -330,6 +330,67 @@ test('查询和 SQLite 可从选区内打开复制菜单，表头只进入文本
   expect(pageErrors).toEqual([]);
 });
 
+test('语句目录跨页勾选全部搜索结果，只取消命中并按原序入库', async () => {
+  const statements = Array.from({ length: 16 }, (_, index) =>
+    `SELECT '${index === 1 || index === 13 ? '搜索之外' : '批量命中'} ${index}';`);
+  await seed(statements.join('\n'));
+  const query = page.locator('.query-tab:visible');
+  await (await navigationMenuItem(query, { name: navigationText.entry, exact: true })).click();
+  const panel = query.getByRole('region', { name: navigationText.title, exact: true });
+  const search = panel.getByRole('textbox', { name: navigationText.search, exact: true });
+  const master = panel.getByRole('checkbox', { name: navigationText.checkMatches, exact: true });
+  const rowCheck = (index: number) => panel.getByRole('checkbox', { name: navigationText.check(index), exact: true });
+  const checked = (count: number) => panel.getByText(navigationText.checked(count), { exact: true });
+  const outside = panel.getByText(navigationText.checkedOutsideSearch(1), { exact: true });
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(16));
+  await rowCheck(1).check();
+  await rowCheck(2).check();
+  await search.fill('批量命中');
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(14));
+  await expect(outside).toBeVisible();
+  await expect(master).toHaveAttribute('aria-checked', 'mixed');
+  await expect(master).toHaveJSProperty('indeterminate', true);
+  await master.press('Space');
+  await expect(master).toBeChecked();
+  await expect(checked(15)).toBeVisible();
+  await panel.getByRole('button', { name: navigationText.next, exact: true }).click();
+  await expect(rowCheck(15)).toBeChecked();
+  await rowCheck(15).uncheck();
+  await expect(master).toHaveAttribute('aria-checked', 'mixed');
+  await master.check();
+  await expect(rowCheck(15)).toBeChecked();
+
+  const library = panel.getByRole('button', { name: navigationText.library, exact: true });
+  const name = panel.getByRole('textbox', { name: navigationText.libraryName, exact: true });
+  await library.click();
+  await name.fill('过期选择');
+  await master.uncheck();
+  await expect(name).toHaveCount(0);
+  await expect(checked(1)).toBeVisible();
+  await expect(outside).toBeVisible();
+  await expect(rowCheck(15)).not.toBeChecked();
+  await search.fill('无匹配语句');
+  await expect(master).toBeDisabled();
+  await expect(checked(1)).toBeVisible();
+
+  await search.fill('批量命中');
+  await master.check();
+  await library.click();
+  await name.fill('跨页勾选');
+  await panel.getByRole('button', { name: navigationText.librarySave, exact: true }).click();
+  await expect(page.getByText(navigationText.librarySaved('跨页勾选'), { exact: true })).toBeVisible();
+  const records = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({ name: '跨页勾选', connectionId: 'row-jump-offline' });
+  expect(records[0].sql.replaceAll('\r\n', '\n')).toBe(statements.filter((_, index) => index !== 13).join('\n'));
+  await panel.getByRole('button', { name: navigationText.refresh, exact: true }).click();
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(16));
+  await expect(checked(0)).toBeVisible();
+  await expect(master).not.toBeChecked();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('语句目录按原序保存三种编码，取消、失效和 SQLite 源文件目标均不写入', async () => {
   const first = "SELECT '语句甲;原文';", third = "SELECT '语句丙';";
   await seed(first + "\nSELECT '排除';\n" + third);
