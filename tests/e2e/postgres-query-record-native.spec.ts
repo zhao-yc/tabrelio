@@ -503,3 +503,92 @@ test('PostgreSQL 查询勾选记录可复制完整原值，保留类型并在第
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
+
+test('PostgreSQL 可从空结果向无主键来源表新增，预览后结构变化拒绝写入', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    const password = randomBytes(32).toString('hex');
+    await observer.query(`CREATE ROLE query_new_user LOGIN PASSWORD '${password}';
+      CREATE SCHEMA query_new_scope;
+      CREATE TABLE query_new_scope.subject (
+        id bigint GENERATED ALWAYS AS IDENTITY (START WITH 9007199254740993),
+        note text NOT NULL DEFAULT '默认内容');
+      CREATE TABLE public.subject(note text);
+      GRANT USAGE ON SCHEMA query_new_scope TO query_new_user;
+      GRANT SELECT, INSERT ON query_new_scope.subject, public.subject TO query_new_user;
+      GRANT USAGE ON SEQUENCE query_new_scope.subject_id_seq TO query_new_user`);
+    await loadQuery({ ...config, user: 'query_new_user', password },
+      "SELECT note AS 说明 FROM query_new_scope.subject WHERE note = '匹配条件';");
+    const query = page.locator('.postgres-query:visible');
+    const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
+    const add = query.getByRole('button', { name: text.add, exact: true });
+    const form = page.getByRole('dialog', { name: tableText.add, exact: true });
+    const preview = page.getByRole('dialog', { name: text.addTitle, exact: true });
+    const read = async () => (await observer.query('SELECT id::text, note FROM query_new_scope.subject ORDER BY id')).rows;
+    const executions = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+      .filter(task => task.kind === 'query.execute' && task.status === 'completed').length);
+    let completed = 0;
+    const run = async () => {
+      await execute.click();
+      await expect.poll(executions).toBe(++completed);
+      await expect(add).toBeEnabled();
+    };
+    const stage = async (note?: string) => {
+      await add.click();
+      if (note !== undefined) {
+        await form.getByLabel('note ' + tableText.valueMode, { exact: true }).selectOption('text');
+        await form.getByLabel('note ' + tableText.value, { exact: true }).fill(note);
+      }
+      await form.getByRole('button', { name: tableText.stage, exact: true }).click();
+      await expect(preview.locator('pre')).toHaveText('INSERT INTO "query_new_scope"."subject"' +
+        (note === undefined ? ' DEFAULT VALUES' : ' ("note") VALUES ($1)'));
+    };
+    const submit = async () => {
+      const apply = preview.getByRole('button', { name: tableText.apply, exact: true });
+      await expect(apply).toBeDisabled();
+      await preview.getByRole('checkbox', { name: text.addConfirm, exact: true }).check();
+      await apply.click();
+    };
+
+    await run();
+    await expect(query.getByRole('gridcell')).toHaveCount(0);
+    await expect(query.getByRole('button', { name: text.edit, exact: true })).toBeHidden();
+    await stage();
+    await observer.query('ALTER TABLE query_new_scope.subject ADD COLUMN optional text');
+    await submit();
+    await expect(preview.locator('.error-box')).toContainText('关系结构或权限已变化');
+    expect(await read()).toEqual([]);
+    await answerDialogs([0]);
+    const [confirmation] = await Promise.all([page.waitForEvent('dialog'),
+      preview.getByRole('button', { name: text.editBack, exact: true }).click()]);
+    expect(confirmation.message()).toBe(text.addDiscard);
+    await expect(preview).toBeHidden();
+
+    await run();
+    await stage();
+    expect(await read()).toEqual([]);
+    await submit();
+    await expect(preview).toBeHidden();
+    expect(await read()).toEqual([{ id: '9007199254740993', note: '默认内容' }]);
+    expect(await executions()).toBe(completed);
+
+    await run();
+    await expect(query.getByRole('gridcell')).toHaveCount(0);
+    await stage('匹配条件');
+    await info.attach('PostgreSQL查询来源表新增预览', { body: await page.screenshot(), contentType: 'image/png' });
+    await submit();
+    await expect(preview).toBeHidden();
+    expect(await executions()).toBe(completed);
+    expect(await read()).toEqual([
+      { id: '9007199254740993', note: '默认内容' }, { id: '9007199254740994', note: '匹配条件' },
+    ]);
+    expect((await observer.query('SELECT * FROM public.subject')).rows).toEqual([]);
+    await run();
+    await expect(query.getByRole('gridcell', { name: '匹配条件', exact: true })).toBeVisible();
+    for (const name of [text.edit, text.deleteChecked, text.duplicateChecked])
+      await expect(query.getByRole('button', { name, exact: true })).toBeHidden();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});

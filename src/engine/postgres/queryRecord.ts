@@ -82,9 +82,9 @@ export interface PostgresQueryRecordSource {
 /** 在原查询会话按其搜索路径确认真正的关系、有效主键及物理文件。 */
 export async function postgresQueryRecordIdentity(connection: PostgresConnection, relation: string, oid: number) {
   const result = await connection.query(`SELECT c.relfilenode::text, current_user::text,
-    (SELECT pg_catalog.jsonb_agg(k.attnum ORDER BY k.ordinality)::text
+    COALESCE((SELECT pg_catalog.jsonb_agg(k.attnum ORDER BY k.ordinality)::text
      FROM pg_catalog.pg_index i, LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality)
-     WHERE i.indrelid=c.oid AND i.indisprimary AND i.indisvalid AND k.ordinality<=i.indnkeyatts),
+     WHERE i.indrelid=c.oid AND i.indisprimary AND i.indisvalid AND k.ordinality<=i.indnkeyatts), '[]'),
     pg_catalog.has_table_privilege(c.oid, 'UPDATE'), pg_catalog.has_table_privilege(c.oid, 'DELETE'),
     pg_catalog.has_table_privilege(c.oid, 'INSERT')
     FROM pg_catalog.pg_class c WHERE c.oid=$2::oid AND c.oid=pg_catalog.to_regclass($1)::oid
@@ -95,7 +95,7 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
   if (result.truncated || result.rows.length !== 1 || typeof row.c0 !== 'string' ||
       typeof row.c1 !== 'string' || typeof row.c2 !== 'string') return;
   const keys: unknown = JSON.parse(row.c2);
-  if (Array.isArray(keys) && keys.length && keys.every(key => Number.isSafeInteger(key) && key > 0))
+  if (Array.isArray(keys) && keys.every(key => Number.isSafeInteger(key) && key > 0))
     return { keys: keys as number[], identity: JSON.stringify([row.c0, row.c1, keys]),
       capabilities: { update: row.c3 === 't', delete: row.c4 === 't', insert: row.c5 === 't' } };
 }
@@ -129,7 +129,7 @@ export async function verifyPostgresQueryEdit(connection: PostgresConnection, so
   rowIndices: readonly number[], resolved: Awaited<ReturnType<typeof resolvePostgresQueryRecord>>,
   relation: { oid: string; sql: string; keys: string[] }) {
   const oid = String(source.relationOid);
-  if (relation.oid !== oid || relation.sql !== resolved.table || !relation.keys.length) throw blocked();
+  if (relation.oid !== oid || relation.sql !== resolved.table) throw blocked();
   const checkServer = async (current: PostgresConnection) => {
     if (current.serverIdentity !== source.server ||
         (await postgresQueryRecordIdentity(current, resolved.table, Number(oid)))?.identity !== source.identity) throw blocked();
@@ -137,6 +137,9 @@ export async function verifyPostgresQueryEdit(connection: PostgresConnection, so
   await checkServer(connection);
   const locked = await resolvePostgresQueryRecord(connection, source);
   if (locked.table !== resolved.table || locked.columns.some((column, index) => column !== resolved.columns[index])) throw blocked();
+  // 新增只核验原表及字段来源，不读取或锁定旧记录。
+  if (!rowIndices.length) return { originals: [], checkServer };
+  if (!relation.keys.length) throw blocked();
   const fields = locked.columns.flatMap((column, index) => column === null ? [] :
     [{ column: postgresIdentifier(column), key: source.result.columns[index].key }]);
   const keys = relation.keys.map(key => {

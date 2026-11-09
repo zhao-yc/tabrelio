@@ -69,4 +69,11 @@ describe('PostgreSQL 查询原记录', () => {
     expect(postgresQueryRecordPageSchema.safeParse({ ...deletion, rowIndices: [2, 2] }).success).toBe(false);
     expect(postgresQueryRecordPageSchema.safeParse({ ...deletion, operation: 'truncate' }).success).toBe(false);
   });
+
+  it('新增仅绑定原执行，不接收行索引或调用方指定的表', () => {
+    const source = { connectionId: 'conn', database: 'db', sessionId: 'session', executionId: 'exec', tabId: 'tab', operation: 'new' };
+    expect(postgresQueryRecordPageSchema.parse(source)).toEqual(source);
+    for (const extra of [{ rowIndices: [] }, { rowIndex: 0 }, { table: 'public.other' }])
+      expect(postgresQueryRecordPageSchema.safeParse({ ...source, ...extra }).success).toBe(false);
+  });
 });

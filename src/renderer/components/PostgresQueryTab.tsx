@@ -1287,18 +1287,21 @@ export function PostgresQueryTab({
   const canUpdateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.update === true;
   const canDeleteQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.delete === true;
   const canDuplicateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.insert === true;
+  const canAddQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.newRecord === true;
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
   function openQueryRecords(rows: readonly DataRow[], { cell, range, operation }: {
-    cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; operation?: 'delete' | 'insert';
+    cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; operation?: 'delete' | 'insert' | 'new';
   } = {}): boolean {
     const original = session.current;
     if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding) ||
-        !outcome?.postgresQueryRecordCapabilities?.[operation ?? 'update']) return false;
+        !outcome?.postgresQueryRecordCapabilities?.[operation === 'new' ? 'newRecord' : operation ?? 'update']) return false;
     const rowIndices = rows.map(row => result.rows.indexOf(row));
-    if (!rowIndices.length || rowIndices.some(index => index < 0) || new Set(rowIndices).size !== rowIndices.length) return false;
+    if ((operation === 'new' ? rowIndices.length !== 0 : !rowIndices.length) || rowIndices.some(index => index < 0) ||
+        new Set(rowIndices).size !== rowIndices.length) return false;
     const job = acquireWorkspaceBusy(tab.id);
     const identity = { sessionId: original.id, executionId: recordExecution };
-    const source: PostgresQueryRecordIntent = operation ? { ...identity, rowIndices, operation }
+    const source: PostgresQueryRecordIntent = operation === 'new' ? { ...identity, operation }
+      : operation ? { ...identity, rowIndices, operation }
       : range ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
     setRecordEdit({ result, scope, job, cell, range, source });
     setError('');
@@ -2130,6 +2133,7 @@ export function PostgresQueryTab({
                   title={originsText.deleteLimit} onClick={() => openCheckedQueryRows('delete')}>{originsText.deleteChecked}</button>}
                 {canDuplicateQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
                   title={originsText.duplicateLimit} onClick={() => openCheckedQueryRows('insert')}>{originsText.duplicateChecked}</button>}
+                {canAddQueryRecord && <button disabled={locked} onClick={() => openQueryRecords([], { operation: 'new' })}>{originsText.add}</button>}
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
                   onClick={() => openResultFilter()}>{filterText.open}</button>
                 {!!filterView?.rules.length && <>
@@ -2268,6 +2272,7 @@ export function PostgresQueryTab({
           if (committed) {
             retiredRecordExecution.current = recordEdit.source.executionId;
             useWorkspace.getState().notify(recordEdit.source.operation === 'delete' ? originsText.deleteCommitted :
+              recordEdit.source.operation === 'new' ? originsText.addCommitted :
               recordEdit.source.operation === 'insert' ? originsText.duplicateCommitted :
               recordEdit.range ? originsText.rangeCommitted : originsText.editCommitted);
           }

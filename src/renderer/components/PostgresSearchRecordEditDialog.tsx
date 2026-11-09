@@ -26,7 +26,7 @@ interface BaseProps {
 }
 
 export type PostgresQueryRecordIntent = Pick<PostgresQueryRecordPageInput, 'sessionId' | 'executionId'> &
-  ({ rowIndex: number; operation?: never } | { rowIndices: number[]; operation?: 'delete' | 'insert' });
+  ({ rowIndex: number; operation?: never } | { rowIndices: number[]; operation?: 'delete' | 'insert' } | { operation: 'new' });
 type RecordUpdate = Extract<PostgresEditableRecord, { kind: 'update' }>;
 export interface PostgresQueryCellEdit {
   columnIndex: number;
@@ -45,9 +45,12 @@ type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: neve
 export function PostgresSearchRecordEditDialog(props: Props) {
   const { connectionId, database, table: initialTable, recordRef, focusColumn, queryRecord, cell } = props;
   const range = 'range' in props ? props.range : undefined;
-  const operation = queryRecord?.operation ?? 'update';
-  const deleting = operation === 'delete', duplicating = operation === 'insert';
+  const requestedOperation = queryRecord?.operation ?? 'update';
+  const adding = requestedOperation === 'new';
+  const operation = adding ? 'insert' : requestedOperation;
+  const deleting = operation === 'delete', duplicating = requestedOperation === 'insert';
   const bulkLabels = deleting ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.deleteDiscard }
+    : adding ? { title: queryText.addTitle, hint: queryText.addHint, discard: queryText.addDiscard }
     : duplicating ? { title: queryText.duplicateTitle, hint: queryText.duplicateHint, discard: queryText.duplicateDiscard }
     : range?.kind === 'paste' ? { title: queryText.pasteTitle, hint: queryText.pasteHint, discard: queryText.pasteDiscard }
     : range ? { title: queryText.fillTitle, hint: queryText.fillHint, discard: queryText.fillDiscard } : undefined;
@@ -92,7 +95,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
           ? await invoke('postgres.queryRecordPage', { connectionId, database, tabId, ...queryRecord })
           : { table: initialTable!, page: await invoke('postgres.table.page', { ...target, searchRecordRef: recordRef, limit: 1, offset: 0 }), columnKeys: [] };
         const result = loaded.page;
-        const expectedRows = queryRecord && 'rowIndices' in queryRecord ? queryRecord.rowIndices.length : 1;
+        const expectedRows = adding ? 0 : queryRecord && 'rowIndices' in queryRecord ? queryRecord.rowIndices.length : 1;
         if (result.pageToken && (!active || !current() || result.rows.length !== expectedRows ||
             result.truncated || result.hasNext || !result.capabilities[operation] ||
             Object.entries(result.capabilities).some(([kind, enabled]) => kind !== operation && enabled)))
@@ -229,7 +232,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       onClose={() => draft ? setForm(false) : close()}/>;
   }
 
-  if (page && form) return <PostgresRecordForm page={page} row={0} initial={draft?.[0]} initialFocus={focusColumn}
+  if (page && form) return <PostgresRecordForm page={page} row={adding ? null : 0} initial={draft?.[0]} initialFocus={focusColumn}
     current={() => current() && !pending.current} onSave={change => stageChanges([change])} onClose={() => draft ? setForm(false) : close()}/>;
 
   const keys = deleting && page ? page.primaryKey?.map(name => page.columns.find(column => column.name === name)!) : undefined;
@@ -251,13 +254,14 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       </div>)}
       {preview && <><pre>{preview.statements.join(';\n')}</pre><label>
         <input type="checkbox" checked={confirmed} disabled={busy || frozen} onChange={event => setConfirmed(event.target.checked)}/>
-        {deleting ? queryText.deleteConfirm(preview.counts.delete) : duplicating ? queryText.duplicateConfirm(preview.counts.insert) :
+        {deleting ? queryText.deleteConfirm(preview.counts.delete) : adding ? queryText.addConfirm : duplicating ? queryText.duplicateConfirm(preview.counts.insert) :
           range ? queryText.rangeConfirm(preview.counts.update) : text.postgresConfirm}
       </label></>}
     </div>
     <footer className="modal-footer">
       <button disabled={busy} onClick={close}>{labels.back}</button>
-      {draft && !range && !frozen && <button disabled={busy} onClick={() => { setConfirmed(false); setForm(true); }}>{tableText.edit}</button>}
+      {draft && !range && !frozen && <button disabled={busy} onClick={() => { setConfirmed(false); setForm(true); }}>
+        {adding ? tableText.editInsertDraft : tableText.edit}</button>}
       {preview && <button className="primary" disabled={busy || frozen || !confirmed} onClick={apply}>
         {deleting ? queryText.deleteApply : tableText.apply}</button>}
     </footer>

@@ -312,11 +312,12 @@ export class PostgresTableWorkspace {
   /** 查询和搜索只获得指定原行的单一写入能力，不能替换已有表页或借此获得整表操作。 */
   async recordEdit(input: Scoped<PostgresTableTarget>, connect: Connect, verify: (connection: PostgresConnection, relation: Relation) =>
     Promise<{ originals: PostgresReferenceRowVersion[]; checkServer(connection: PostgresConnection): Promise<void> }>,
-    assertReference: () => void, operation: keyof Relation['capabilities'] = 'update'): Promise<PostgresTablePage> {
+    assertReference: () => void, operation: keyof Relation['capabilities'] | 'new' = 'update'): Promise<PostgresTablePage> {
     const key = this.key(input);
     if (this.active.has(key) || this.snapshots.has(key) || this.related.has(key))
       throw Error('原记录编辑需要独立的 PostgreSQL 表页');
     this.active.add(key);
+    const capability = operation === 'new' ? 'insert' : operation;
     try {
       const { relation, rows, originals, checkServer } = await connect(async connection => {
         await begin(connection, 'page');
@@ -326,10 +327,10 @@ export class PostgresTableWorkspace {
           ' IN ACCESS SHARE MODE', undefined, small());
         if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 原记录编辑的表锁未确认');
         const relation = await readRelation(connection, input.table, { headerComments: true });
-        if (!relation.capabilities[operation])
+        if (!relation.capabilities[capability])
           throw Error('此 PostgreSQL 表没有本次操作需要的写入权限');
         const { originals, checkServer } = await verify(connection, relation);
-        if (!originals.length || originals.length > postgresTableLimits.changes ||
+        if ((operation === 'new' ? originals.length !== 0 : !originals.length) || originals.length > postgresTableLimits.changes ||
             originals.some(row => row.tableOid !== relation.oid) || new Set(originals.map(row => row.tid)).size !== originals.length)
           throw Error('PostgreSQL 原记录身份已变化或重复，请重新读取');
         const rows: DataRow[] = [];
@@ -345,7 +346,7 @@ export class PostgresTableWorkspace {
         return { relation, rows, originals, checkServer };
       });
       assertReference();
-      const now = Date.now(), pageToken = randomUUID(), capabilities = { ...noWrites, [operation]: true };
+      const now = Date.now(), pageToken = randomUUID(), capabilities = { ...noWrites, [capability]: true };
       for (const [id, group] of this.snapshots) if (group.current.expires <= now) this.snapshots.delete(id);
       if (this.snapshots.size >= 128) throw Error('PostgreSQL表页快照已满，请关闭空闲表标签');
       const snapshot: Snapshot = {
@@ -930,7 +931,7 @@ export class PostgresTableWorkspace {
     const snapshot = this.snapshot(input, false, false, true), relation = snapshot.relation;
     if (snapshot.recordServerCheck) {
       const operation = relation.capabilities.insert ? 'insert' : relation.capabilities.delete ? 'delete' : 'update';
-      if ((operation !== 'update' && input.changes.length !== snapshot.rows.length) ||
+      if ((operation !== 'update' && input.changes.length !== (snapshot.rows.length || 1)) ||
           input.changes.some(change => change.kind !== operation || (change.kind !== 'insert' && !snapshot.rows[change.row]) ||
             (change.pageToken && change.pageToken !== input.pageToken)))
         throw Error('PostgreSQL 原记录操作必须与本次核验的操作和行范围一致');
@@ -955,7 +956,8 @@ export class PostgresTableWorkspace {
           ? ' (' + fields.map(field => field.column).join(', ') + ') VALUES (' + fields.map(field => field.expression).join(', ') + ')'
           : ' DEFAULT VALUES');
         // 查询副本与核验后的原行一一对应。原行仅供事务预检，不参与 INSERT。
-        return { kind: change.kind, sql, values, ...(snapshot.recordServerCheck ? { original: source.rows[index] } : {}) };
+        const original = snapshot.recordServerCheck ? source.rows[index] : undefined;
+        return { kind: change.kind, sql, values, ...(original ? { original } : {}) };
       }
       const original = source.rows[change.row];
       if (!original) throw Error('待修改的原行已失效');

@@ -46,6 +46,12 @@ export const postgresResultOriginsZh = {
   duplicateConfirm: (rows: number) => `确认新增这 ${rows} 条 PostgreSQL 副本`,
   duplicateDiscard: '放弃这些副本并返回查询结果？如果提交结果未确认，请先核对数据库。',
   duplicateCommitted: '副本已整批新增。重新执行查询可查看最新结果。',
+  add: '向查询来源表新增记录',
+  addTitle: '预览 PostgreSQL 查询来源表新增',
+  addHint: '在原查询对应的表中新增一条记录。未填写的字段使用数据库默认值。查询条件不会自动填入。',
+  addConfirm: '确认向查询来源表新增一条记录',
+  addDiscard: '放弃新增并返回查询结果？如果提交结果未确认，请先核对数据库。',
+  addCommitted: '记录已新增。重新执行查询可查看符合条件的最新结果。',
   invalid: '来源目录的回包与原查询列不匹配。',
   missing: '—',
 } as const;

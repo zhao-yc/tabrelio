@@ -1149,7 +1149,7 @@ export class PostgresEngine {
       const origin = references?.find(reference => reference !== null);
       const currentState = session.managed.state();
       if (!estimate && !analysisSql && !report?.errors.length && !task.cancelled && count === 1 && result?.postgresCommand === 'SELECT' &&
-          result.rows.length && references?.length === result.columns.length && session.managed.serverIdentity &&
+          references?.length === result.columns.length && session.managed.serverIdentity &&
           originalState.transactionKnown && !originalState.transactionOpen && currentState.transactionKnown && !currentState.transactionOpen &&
           origin && references.every(reference => !reference || reference.attribute > 0 && reference.relation === origin.relation)) {
         const table = postgresQueryRecordTable(result.statement, session.managed.standardStrings);
@@ -1158,10 +1158,13 @@ export class PostgresEngine {
           // 目录读取失败只撤销原记录编辑能力，不改写用户已完成的查询结果。
           const oid = origin.relation;
           const confirmed = await postgresQueryRecordIdentity(session.managed, qualified, oid).catch(() => undefined);
-          if (confirmed && Object.values(confirmed.capabilities).some(Boolean) && !task.cancelled && !session.managed.broken &&
-              postgresQueryHasUniqueKeys(result, references, confirmed.keys)) {
-            session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
-              identity: confirmed.identity, table, result, relationOid: oid, origins: references, capabilities: confirmed.capabilities };
+          if (confirmed && !task.cancelled && !session.managed.broken) {
+            const rowsEditable = !!result.rows.length && postgresQueryHasUniqueKeys(result, references, confirmed.keys);
+            const capabilities = { update: rowsEditable && confirmed.capabilities.update, delete: rowsEditable && confirmed.capabilities.delete,
+              insert: rowsEditable && confirmed.capabilities.insert, newRecord: confirmed.capabilities.insert };
+            if (Object.values(capabilities).some(Boolean))
+              session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
+                identity: confirmed.identity, table, result, relationOid: oid, origins: references, capabilities };
           }
         }
       }
@@ -1274,7 +1277,7 @@ export class PostgresEngine {
       case 'postgres.queryRecordPage': {
         const { owner, connectionRevision, profile, ...raw } = input;
         const request = postgresQueryRecordPageSchema.parse(raw), session = this.sessions.get(request.sessionId);
-        const rowIndices = 'rowIndices' in request ? request.rowIndices : [request.rowIndex];
+        const rowIndices = 'rowIndices' in request ? request.rowIndices : 'rowIndex' in request ? [request.rowIndex] : [];
         const operation = 'operation' in request ? request.operation : 'update';
         const source = session?.queryRecord;
         const current = () => {
@@ -1286,7 +1289,8 @@ export class PostgresEngine {
             throw Error('PostgreSQL 原查询结果已变化或原会话有活动事务');
         };
         current();
-        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId || !source?.capabilities[operation] ||
+        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId ||
+            !source?.capabilities[operation === 'new' ? 'newRecord' : operation] ||
             rowIndices.some(index => !source.result.rows[index]))
           throw Error('PostgreSQL 原查询记录不可用');
         return this.use(profile, request.database, async connection => {
