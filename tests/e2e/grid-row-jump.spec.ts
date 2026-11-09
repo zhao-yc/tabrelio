@@ -1757,6 +1757,14 @@ test('SQLite 只读表和视图可查找原值并勾选本页匹配行', async (
     await expect(mark(1)).toBeFocused();
     await expect(check(1)).not.toBeChecked();
     await expect(check(2)).toBeChecked();
+    await panel.getByRole('checkbox', { name: replaceText.checkedOnly, exact: true }).check();
+    await expect(status).toHaveText(sqliteFind.count(0, 0, -1));
+    await check(1).check();
+    await expect(status).toHaveText(sqliteFind.count(1, 1, -1));
+    await check(1).uncheck();
+    await check(2).uncheck();
+    await expect(status).toHaveText(replaceText.checkedEmpty);
+    await expect(next).toBeDisabled();
     expect(await tasks()).toEqual(before);
     await table.getByRole('button', { name: browseText.next, exact: true }).click();
     await expect(id(101)).toBeVisible();
@@ -1817,6 +1825,57 @@ test('SQLite 表页查找批量勾选命中且保留其它行', async ({}, info)
   await table.getByRole('button', { name: sqliteEditText.undo, exact: true }).click();
   await expect(filled).toHaveCount(0);
   expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 表页仅替换勾选行并通过原草稿入口提交', async ({}, info) => {
+  await seed(undefined, "UPDATE subject SET name='原标记' WHERE id IN (1,3,120);");
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+  const row = (id: number) => grid.getByRole('gridcell', { name: 'INTEGER · ' + id, exact: true }).locator('..');
+  const check = row(3).getByRole('checkbox');
+  await expect(check).toBeVisible();
+  await (await navigationMenuItem(table, { name: sqliteFind.entry, exact: true })).click();
+  const panel = table.getByRole('region', { name: sqliteFind.title, exact: true });
+  await panel.getByRole('button', { name: sqliteFind.replaceMode, exact: true }).click();
+  const status = panel.getByRole('status');
+  const all = panel.getByRole('button', { name: sqliteFind.replaceAll, exact: true });
+  const review = page.getByRole('dialog', { name: sqliteFind.previewTitle, exact: true });
+  await panel.getByRole('combobox', { name: sqliteFind.column, exact: true }).selectOption({ label: 'name' });
+  await panel.getByRole('textbox', { name: sqliteFind.query, exact: true }).fill('原标记');
+  await expect(status).toHaveText(sqliteFind.count(2, 2, -1));
+  await panel.getByRole('checkbox', { name: replaceText.checkedOnly, exact: true }).check();
+  await expect(status).toHaveText(replaceText.checkedEmpty);
+  await expect(all).toBeDisabled();
+  await check.check();
+  await expect(status).toHaveText(sqliteFind.count(1, 1, -1));
+  await panel.getByRole('textbox', { name: sqliteFind.replacement, exact: true }).fill('勾选替换');
+  await all.click();
+  await expect(review.getByRole('cell', { name: '3', exact: true })).toBeVisible();
+  await expect(review).toContainText(sqliteFind.previewCount(1, 1));
+  await info.attach('SQLite表页勾选行替换预览', { body: await page.screenshot(), contentType: 'image/png' });
+  await review.getByRole('button', { name: sqliteFind.cancelPreview, exact: true }).click();
+  await check.uncheck();
+  await expect(status).toHaveText(replaceText.checkedEmpty);
+  await expect(all).toBeDisabled();
+  await check.check();
+  await all.click();
+  await review.getByRole('button', { name: sqliteFind.stage, exact: true }).click();
+  await expect(row(3).getByRole('gridcell', { name: 'TEXT · 勾选替换', exact: true })).toBeVisible();
+  await expect(row(1).getByRole('gridcell', { name: 'TEXT · 原标记', exact: true })).toBeVisible();
+  const observer = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+  try {
+    const names = () => observer.prepare('SELECT name FROM subject WHERE id IN (1,3,120) ORDER BY id').all().map(row => row.name);
+    expect(names()).toEqual(['原标记', '原标记', '原标记']);
+    await panel.getByRole('button', { name: sqliteFind.close, exact: true }).click();
+    await (await navigationMenuItem(table, { name: sqliteEditText.preview, exact: true })).click();
+    const commit = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+    await expect(commit.getByRole('button', { name: '提交 SQLite 修改', exact: true })).toBeDisabled();
+    await commit.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+    await commit.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+    await expect(commit).toHaveCount(0);
+    expect(names()).toEqual(['原标记', '勾选替换', '原标记']);
+  } finally { observer.close(); }
   expect(pageErrors).toEqual([]);
 });
 

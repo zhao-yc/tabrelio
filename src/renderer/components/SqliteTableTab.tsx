@@ -119,7 +119,7 @@ import { sqliteCopyDeleteSql, sqliteCopyInsertSql, sqliteCopyPrimaryKeyQuery, sq
 import { SqliteTableEditGrid, type SqliteTableFindGridHit } from './SqliteTableEditGrid';
 import { SqliteTableFindPanel, type SqliteTableFindFocusRequest, type SqliteTableFindHighlights, type SqliteTableFindSeed } from './SqliteTableFindPanel';
 import { captureSqliteReadonlyFind, type SqliteReadonlyFindSource } from '../sqliteReadonlyFind';
-import { sqliteTextReplacementPlanValues, type SqliteTextReplacementPlan } from '../sqliteTableFindWorkerClient';
+import { sqliteTextReplacementPlanValues, type SqliteFindRowScope, type SqliteTextReplacementPlan } from '../sqliteTableFindWorkerClient';
 import { sqliteTableFindZh as findText } from '../locales/sqliteTableFind.zh-CN';
 import { SqliteTableValueDialog, SqliteTablePreviewDialog } from './SqliteTableEditDialog';
 import { sqliteTableEditZh as editText } from '../locales/sqliteTableEdit.zh-CN';
@@ -1665,6 +1665,20 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     event.preventDefault(); event.stopPropagation(); openFind(mode);
   }
   const checkedCount = checkedRows && checkedRows.editor === renderedEditor && checkedRows.capture.page === page && checkedRows.capture.rows === editRows ? checkedRows.capture.selected.length : 0;
+  const findCheckedRows = useMemo((): SqliteFindRowScope | null => {
+    if (!findOpen) return null;
+    if (findOpen.editor) {
+      const owner = checkedRows;
+      if (!owner || owner.editor !== findOpen.editor || owner.capture.page !== findOpen.page || owner.capture.rows !== findOpen.rows) return null;
+      // 查找面板自己校验预览模态，勾选凭据只负责原行与选择代次。
+      return { ids: Object.freeze(owner.capture.selected.map(row => row.id)),
+        isCurrent: () => checkedRef.current === owner && owner.capture.selectionCurrent() };
+    }
+    const owner = checkedReadRows;
+    if (!owner || owner.selection.scope !== findOpen.page || owner.selection.rows !== findOpen.page.result.rows) return null;
+    return { ids: Object.freeze([...owner.selection.indices].map(index => String(index))),
+      isCurrent: () => checkedReadRef.current === owner };
+  }, [findOpen, checkedRows, checkedReadRows]);
   const changes = renderedEditor?.changes ?? [], counts = { insert: changes.filter(change => change.kind === 'insert').length, update: changes.filter(change => change.kind === 'update').length, delete: changes.filter(change => change.kind === 'delete').length };
   const editBlocked = !!templateDialog || !active || externalBusy || !editView?.valid || editView.unknown || drafts.unknown || !!cellInput || !!pasteOpen || !!rangeOpen || !!fillOpen || !!filteredSelectOpen || findPreview;
   const headerSort: SqliteHeaderSort = page ? sqliteHeaderSortToGrid(applied.current.sort, page) : [];
@@ -1740,7 +1754,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       }}><SqliteTableFilters names={names} filters={filters} mode={mode} disabled={!active || invalidTarget || view.busy || externalBusy} current={() => editRender.current === editRenderTicket && available() && !view.busy && latest.current.refreshVersion === refreshVersion} id={uid} onFilters={setFilters} onMode={setMode}/>
       <fieldset aria-label={text.sorts}><legend>{text.sorts}</legend><button disabled={!names.length || sort.length >= sqliteTableBrowseLimits.sorts || sort.length >= names.length} onClick={() => setSort(values => { if (values.length >= sqliteTableBrowseLimits.sorts) return values; const column = names.find(name => !values.some(value => value.column === name)); return column ? [...values, { id: uid(), column, direction: 'asc' }] : values; })}>{text.addSort}</button>{sort.map((rule, index) => <div className="sqlite-browse-rule" key={rule.id}><span>{index + 1}</span><select aria-label={text.sortColumn(index + 1)} value={rule.column} onChange={event => setSort(values => values.map(value => value.id === rule.id ? { ...value, column: event.target.value } : value))}>{view.columns.map((column, columnIndex) => <option key={columnIndex} value={column.name} disabled={sort.some(value => value.id !== rule.id && value.column === column.name)}>{column.name}</option>)}</select><select aria-label={text.sortDirection(index + 1)} value={rule.direction} onChange={event => setSort(values => values.map(value => value.id === rule.id ? { ...value, direction: event.target.value as 'asc' | 'desc' } : value))}><option value="asc">{text.ascending}</option><option value="desc">{text.descending}</option></select><button aria-label={text.up(index + 1)} disabled={index === 0} onClick={() => moveSort(index, -1)}>↑</button><button aria-label={text.down(index + 1)} disabled={index === sort.length - 1} onClick={() => moveSort(index, 1)}>↓</button><button aria-label={text.removeSort(index + 1)} onClick={() => setSort(values => values.filter(value => value.id !== rule.id))}>×</button></div>)}</fieldset>
       <label>{text.limit}<input aria-label={text.limit} type="number" min={1} max={sqliteTableBrowseLimits.pageSize} value={limit} onChange={event => setLimit(Number(event.target.value))}/></label><button className="primary" disabled={!active || invalidTarget || externalBusy && !view.busy} onClick={apply}>{text.apply}</button></div></div>}
-    {findOpen && <SqliteTableFindPanel key={findOpen.id} page={findOpen.page} rows={findOpen.rows} visibleColumns={findOpen.visibleColumns} seed={findOpen.seed} previewOwner={findOpen.id} focusRequest={findFocus} onHighlights={setFindHighlights} isCurrent={() => findCurrent(findOpen)} onMatchRows={(matches, checked) => changeFindMatches(findOpen, matches, checked)} onJump={(rowId, column, focus, range) => jumpFind(findOpen, rowId, column, focus, range)} onStage={(plan, seed) => stageFind(findOpen, plan, seed)} onClearHit={() => clearFindHit(findOpen)} onPreviewChange={opened => findPreviewChanged(findOpen, opened)} onClose={() => closeFind(findOpen)} onStageFilter={rule => {
+    {findOpen && <SqliteTableFindPanel key={findOpen.id} page={findOpen.page} rows={findOpen.rows} visibleColumns={findOpen.visibleColumns} checkedRows={findCheckedRows} seed={findOpen.seed} previewOwner={findOpen.id} focusRequest={findFocus} onHighlights={setFindHighlights} isCurrent={() => findCurrent(findOpen)} onMatchRows={(matches, checked) => changeFindMatches(findOpen, matches, checked)} onJump={(rowId, column, focus, range) => jumpFind(findOpen, rowId, column, focus, range)} onStage={(plan, seed) => stageFind(findOpen, plan, seed)} onClearHit={() => clearFindHit(findOpen)} onPreviewChange={opened => findPreviewChanged(findOpen, opened)} onClose={() => closeFind(findOpen)} onStageFilter={rule => {
       const operator = rule.operator === 'IS NULL' ? 'isNull' : rule.operator === 'TEXT EQUALS' ? 'textEquals' :
         rule.operator === 'STARTS WITH' ? 'startsWith' : rule.operator === 'ENDS WITH' ? 'endsWith' : 'contains';
       appendFilterDraft(() => ({ id: uid(), column: rule.column, operator, kind: 'text', value: rule.value ?? '' }),

@@ -24,6 +24,28 @@ function fixture(count = 2) {
 }
 
 describe('SQLite查找Worker Client与opaque替换计划', () => {
+  it('线程只收到勾选原行，计划须以原整页消费且勾选失效后不可复用', async () => {
+    const f = fixture(3);
+    let current = true;
+    const scope = { ids: ['row-2'], isCurrent: () => current };
+    const pending = f.client.find(f.page, f.rows, options(), scope);
+    await f.flush();
+    const worker = f.ports[0]; worker.ready();
+    expect(worker.postMessage.mock.calls[0][0].request.source.rows.map((row: SqliteDraftRow) => row.id)).toEqual(['row-2']);
+    worker.complete();
+    const found = await pending;
+    if (found.status !== 'ready') throw Error(found.message);
+    expect(found.matches.map(match => match.rowId)).toEqual(['row-2']);
+    const plan = await f.preview(found);
+    expect(sqliteTextReplacementPlanPreview(plan, f.page, f.rows).map(patch => patch.rowId)).toEqual(['row-2']);
+    expect(() => sqliteTextReplacementPlanValues(plan, f.page, [f.rows[2]])).toThrow(text.stale);
+    current = false;
+    expect(() => sqliteTextReplacementPlanValues(plan, f.page, f.rows)).toThrow(text.stale);
+    current = true;
+    expect(() => sqliteTextReplacementPlanValues(plan, f.page, f.rows)).toThrow(text.stale);
+    expect(await f.client.find(f.page, f.rows, options(), { ...scope, ids: [] })).toMatchObject({ status: 'blocked', message: text.stale });
+  });
+
   it('握手前不发原文，每次find/preview独立Worker且terminate完成后才交付冻结结果', async () => {
     const f = fixture(), pending = f.client.find(f.page, f.rows, options()); await f.flush(); const port = f.ports[0]; expect(port.postMessage).not.toHaveBeenCalled(); port.ready(); expect(port.postMessage).toHaveBeenCalledTimes(1); port.complete(); const found = await pending; expect(port.terminate).toHaveBeenCalledTimes(1); expect(found.status).toBe('ready'); if (found.status !== 'ready') throw Error('未查到'); expect(Object.isFrozen(found)).toBe(true); expect(Object.isFrozen(found.matches[0])).toBe(true); const plan = await f.preview(found); expect(f.ports).toHaveLength(2); expect(f.ports[1].terminate).toHaveBeenCalledTimes(1); expect(plan).toEqual({ changedCells: 2, changedRows: 2 });
     expect(sqliteTextReplacementPlanPreview(plan, f.page, f.rows)).toEqual([{ rowId: 'row-0', column: 0, before: 'aa', after: 'bb' }, { rowId: 'row-1', column: 0, before: 'aa', after: 'bb' }]);

@@ -6,16 +6,17 @@ import { copySqliteFindTransfer, copySqliteFindOptions, matchesSqliteFindValue, 
 export interface SqliteFindReadyResult { status: 'ready'; matches: SqliteFindMatch[]; occurrences: SqliteFindOccurrence[]; }
 export interface SqliteFindBlockedResult { status: 'blocked'; reason: string; message: string; }
 export interface SqliteTextReplacementPlan { readonly changedCells: number; readonly changedRows: number; }
+export interface SqliteFindRowScope { readonly ids: readonly string[]; isCurrent(): boolean }
 export type SqliteFindResult = SqliteFindReadyResult | SqliteFindBlockedResult;
 export type SqliteFindPreviewResult = { status: 'ready'; plan: SqliteTextReplacementPlan } | SqliteFindBlockedResult;
 export interface SqliteFindWorkerPort { postMessage(value: unknown): void; terminate(): void | Promise<unknown>; onmessage: ((event: MessageEvent) => void) | null; onerror: ((event: ErrorEvent) => void) | null; onmessageerror: ((event: MessageEvent) => void) | null; }
-interface Owner { page: SqliteTablePage; rows: readonly SqliteDraftRow[]; rowOwners: { row: SqliteDraftRow; values: SqliteDraftRow['values'] }[]; source: SqliteFindSource; options: SqliteFindOptions; signature: string; valid: boolean; current(): boolean; }
+interface Owner { page: SqliteTablePage; rows: readonly SqliteDraftRow[]; searchRows: readonly SqliteDraftRow[]; rowOwners: { row: SqliteDraftRow; values: SqliteDraftRow['values'] }[]; source: SqliteFindSource; options: SqliteFindOptions; signature: string; valid: boolean; current(): boolean; }
 interface Proof { client: SqliteTableFindWorkerClient; owner: Owner; matches: SqliteFindMatch[]; occurrences: SqliteFindOccurrence[]; }
 interface PlanProof { owner: Owner; patches: SqliteTextPatch[]; current(): boolean; used: boolean; }
 interface Pending { id: number; worker: SqliteFindWorkerPort; request?: SqliteFindWorkerRequest; running: boolean; timer: ReturnType<typeof setTimeout>; resolve(value: SqliteFindWorkerResult): void; }
 const searches = new WeakMap<SqliteFindReadyResult, Proof>(), plans = new WeakMap<SqliteTextReplacementPlan, PlanProof>();
 const blocked = (reason: string, message: string): SqliteFindBlockedResult => ({ status: 'blocked', reason, message });
-/** 全页before按实际kind/value逐格比，不因对象属性顺序制造变化，也不漏掉非替换格变化。 */
+/** 扫描范围内所有值按实际kind/value逐格比，连非替换格也纳入来源核验。 */
 function sameSource(left: SqliteFindSource, right: SqliteFindSource): boolean {
   if (left.rows.length !== right.rows.length) return false;
   return left.rows.every((row, index) => { const other = right.rows[index]; return row.id === other.id && row.index === other.index && row.deleted === other.deleted && row.values.length === other.values.length && row.values.every((value, column) => { const next = other.values[column]; return value === undefined || next === undefined ? value === next : value.kind === next.kind && (value.kind === 'null' || next.kind !== 'null' && value.value === next.value); }); });
@@ -25,7 +26,7 @@ function assertOwner(owner: Owner): void {
   try {
     if (!owner.valid || !owner.current() || owner.rows.length !== owner.rowOwners.length || owner.rows.some((row, index) => row !== owner.rowOwners[index].row || row.values !== owner.rowOwners[index].values)) throw Error(text.stale);
     if (JSON.stringify(copySqliteFindOptions(owner.options, owner.source.columns.length)) !== JSON.stringify(owner.source.options)) throw Error(text.stale);
-    const source = sqliteFindSource(owner.page, owner.rows, owner.source.options); if (sqliteFindSourceSignature(owner.page, source) !== owner.signature || !sameSource(owner.source, source)) throw Error(text.stale);
+    const source = sqliteFindSource(owner.page, owner.searchRows, owner.source.options); if (sqliteFindSourceSignature(owner.page, source) !== owner.signature || !sameSource(owner.source, source)) throw Error(text.stale);
   } catch { owner.valid = false; throw Error(text.stale); }
 }
 /** 公开对象本身只含冻结摘要；结果外观、旧worker消息或克隆对象都不能签发替换。 */
@@ -75,10 +76,14 @@ export class SqliteTableFindWorkerClient {
   private readonly timeoutMs: number; private readonly startupMs: number;
   constructor(private readonly createWorker: () => SqliteFindWorkerPort, timeoutMs: number = limits.timeoutMs, startupMs: number = limits.startupMs) { if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > limits.timeoutMs || !Number.isInteger(startupMs) || startupMs < 1 || startupMs > limits.startupMs) throw Error(text.invalid); this.timeoutMs = timeoutMs; this.startupMs = startupMs; }
   /** 新find永久撤销旧search/plan，原page/rows及选项在首个await前捕获。 */
-  async find(page: SqliteTablePage, rows: readonly SqliteDraftRow[], options: SqliteFindOptions): Promise<SqliteFindResult> {
+  async find(page: SqliteTablePage, rows: readonly SqliteDraftRow[], options: SqliteFindOptions, scope?: SqliteFindRowScope): Promise<SqliteFindResult> {
     this.epoch = {}; this.planRevision++; const epoch = this.epoch;
     try {
-      const source = sqliteFindSource(page, rows, options), owner: Owner = { page, rows, rowOwners: rows.map(row => ({ row, values: row.values })), source, options, signature: sqliteFindSourceSignature(page, source), valid: true, current: () => !this.disposed && this.epoch === epoch };
+      const ids = scope && new Set(scope.ids);
+      const searchRows = ids ? rows.filter(row => !row.deleted && ids.has(row.id)) : rows;
+      if (scope && (!scope.isCurrent() || !searchRows.length || searchRows.length !== scope.ids.length)) throw Error(text.stale);
+      // 线程只拿勾选子集，计划消费仍须交回同一完整页的原行数组。
+      const source = sqliteFindSource(page, searchRows, options), owner: Owner = { page, rows, searchRows, rowOwners: rows.map(row => ({ row, values: row.values })), source, options, signature: sqliteFindSourceSignature(page, source), valid: true, current: () => !this.disposed && this.epoch === epoch && (!scope || scope.isCurrent()) };
       const result = await this.run({ operation: 'find', source }); if (result.status === 'blocked') return result; assertOwner(owner); if (result.operation !== 'find') throw Error(text.worker);
       const matches = checkedMatches(result.matches, source), occurrences = sqliteFindOccurrences(matches); for (const match of matches) { match.ranges.forEach(Object.freeze); Object.freeze(match.ranges); Object.freeze(match); } occurrences.forEach(value => { if (value.range) Object.freeze(value.range); Object.freeze(value); }); Object.freeze(matches); Object.freeze(occurrences);
       const output: SqliteFindReadyResult = Object.freeze({ status: 'ready', matches, occurrences }); searches.set(output, { client: this, owner, matches, occurrences }); return output;

@@ -91,7 +91,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       } catch { sourceValid = false; }
       if (!sourceValid) { valid = false; renewable = false; } return sourceValid;
     };
-    const capture: SqliteCheckedRows = Object.freeze({ page, rows, selected, current() {
+    const capture: SqliteCheckedRows = Object.freeze({ page, rows, selected, selectionCurrent: sourceCurrent, current() {
       if (!sourceCurrent() || !valid) return false;
       const context = checkedContext.current;
       try { if (!context || context.owner !== owner || context.disabled || !context.isCurrent() || !noModal()) { valid = false; renewable = true; } }

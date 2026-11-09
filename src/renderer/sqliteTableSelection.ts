@@ -6,5 +6,7 @@ export interface SqliteCheckedRows {
   readonly page: SqliteTablePage;
   readonly rows: readonly SqliteDraftRow[];
   readonly selected: readonly SqliteDraftRow[];
+  /** 只核对勾选代次和原行，调用方须另核自己允许的模态。 */
+  selectionCurrent(): boolean;
   current(): boolean;
 }
