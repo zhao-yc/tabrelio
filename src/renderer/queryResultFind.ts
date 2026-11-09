@@ -4,6 +4,8 @@ import { cellPreview, ownCell } from './lib';
 export const queryResultFindLimits = { queryUnits: 256, chunkUnits: 8192, batchUnits: 32768, batchCells: 256, hits: 5000 } as const;
 export interface QueryResultFindMatch { readonly row: number; readonly column: number; }
 export type QueryResultFindPhase = 'searching' | 'complete' | 'limited' | 'invalid' | 'stopped';
+export type QueryResultFindMode = 'contains' | 'whole' | 'null' | 'empty';
+export const isTextResultFind = (mode: QueryResultFindMode): boolean => mode === 'contains' || mode === 'whole';
 export interface QueryResultFindProgress { phase: QueryResultFindPhase; count: number; scannedCells: number; totalCells: number; }
 
 /** 只保留当前原文本引用和有限坐标；不复制行、不转数值、不解码完整二进制、不发请求。 */
@@ -19,12 +21,13 @@ export class QueryResultFindScan {
   private offset = 0;
   private text: string | undefined;
   private phase: QueryResultFindPhase;
-  constructor(private readonly rows: DataRow[], private readonly columns: ResultColumn[], query: string, private readonly caseSensitive: boolean, private readonly isCurrent: () => boolean, columnKey?: string) {
+  constructor(private readonly rows: DataRow[], private readonly columns: ResultColumn[], query: string, private readonly caseSensitive: boolean, private readonly isCurrent: () => boolean, columnKey?: string, private readonly mode: QueryResultFindMode = 'contains') {
     this.rowCount = rows.length; this.keys = columns.map(column => column.key);
     this.targetColumn = columnKey === undefined ? undefined : this.keys.indexOf(columnKey);
     this.scanColumnCount = this.targetColumn === undefined ? this.keys.length : this.targetColumn < 0 ? 0 : 1;
-    this.needle = query.length > queryResultFindLimits.queryUnits ? '' : caseSensitive ? query : query.toLowerCase();
-    this.phase = this.targetColumn === -1 ? 'stopped' : query.length > queryResultFindLimits.queryUnits ? 'invalid' : query && rows.length && this.scanColumnCount ? 'searching' : 'complete';
+    const usesText = isTextResultFind(mode), invalid = usesText && query.length > queryResultFindLimits.queryUnits;
+    this.needle = !usesText || invalid ? '' : caseSensitive ? query : query.toLowerCase();
+    this.phase = this.targetColumn === -1 ? 'stopped' : invalid ? 'invalid' : (!usesText || query) && rows.length && this.scanColumnCount ? 'searching' : 'complete';
   }
   /** 首次观察到归属失效即永久撤销，恢复相等引用也不能复活旧查找。 */
   current(): boolean {
@@ -53,24 +56,42 @@ export class QueryResultFindScan {
         if (!this.current()) break;
         // 扫描进度使用缩小后的范围，命中和高亮仍使用完整可见布局中的坐标。
         const row = Math.floor(this.cursor / this.scanColumnCount), column = this.targetColumn ?? this.cursor % this.scanColumnCount;
-        if (this.text === undefined) {
-          const value = ownCell(this.rows[row], this.keys[column]);
-          // NULL与空串保持显示语义；字符串含完整已返回原文；二进制只查有界显示预览。
-          this.text = value && typeof value === 'object' ? cellPreview(value) : value === null ? 'NULL' : value === undefined ? '' : String(value);
-        }
         const remaining = queryResultFindLimits.batchUnits - units;
-        // 余量装不下下一完整主片时先让出，不为凑满批次处理越界；原offset留给下一批。
-        if (Math.min(queryResultFindLimits.chunkUnits, this.text.length - this.offset) > remaining) break;
-        const end = Math.min(this.text.length, this.offset + queryResultFindLimits.chunkUnits, this.offset + remaining);
-        const piece = this.text.slice(this.offset, Math.min(this.text.length, end + this.needle.length));
-        units += Math.max(1, end - this.offset);
-        const found = (this.caseSensitive ? piece : piece.toLowerCase()).includes(this.needle);
+        let found: boolean, complete = true;
+        if (this.mode === 'contains') {
+          if (this.text === undefined) {
+            const value = ownCell(this.rows[row], this.keys[column]);
+            // 默认模式沿用原显示语义和有界二进制预览。
+            this.text = value && typeof value === 'object' ? cellPreview(value) : value === null ? 'NULL' : value === undefined ? '' : String(value);
+          }
+          // 余量不足时保留原offset，下一批接着处理原长值。
+          if (Math.min(queryResultFindLimits.chunkUnits, this.text.length - this.offset) > remaining) break;
+          const end = Math.min(this.text.length, this.offset + queryResultFindLimits.chunkUnits, this.offset + remaining);
+          const piece = this.text.slice(this.offset, Math.min(this.text.length, end + this.needle.length));
+          units += Math.max(1, end - this.offset);
+          found = (this.caseSensitive ? piece : piece.toLowerCase()).includes(this.needle);
+          complete = found || end === this.text.length;
+          this.offset = end;
+        } else {
+          const value = ownCell(this.rows[row], this.keys[column]);
+          if (this.mode === 'whole') {
+            // 整格只核对原标量。远长于搜索词的文本不折叠大小写，也不查二进制预览。
+            const scalar = value == null || typeof value === 'object' ? undefined : String(value);
+            const candidate = scalar !== undefined && scalar.length <= queryResultFindLimits.chunkUnits ? scalar : undefined;
+            const size = Math.max(1, candidate?.length ?? 0);
+            if (size > remaining) break;
+            units += size;
+            found = candidate !== undefined && (this.caseSensitive ? candidate : candidate.toLowerCase()) === this.needle;
+          } else {
+            units++;
+            found = this.mode === 'null' ? value === null : value === '';
+          }
+        }
         if (found) {
           this.matches.push({ row, column });
           this.matchCells.add(row * this.keys.length + column);
         }
-        if (found || end === this.text.length) { this.cursor++; cells++; this.offset = 0; this.text = undefined; }
-        else this.offset = end;
+        if (complete) { this.cursor++; cells++; this.offset = 0; this.text = undefined; }
         if (this.matches.length >= queryResultFindLimits.hits) { this.phase = 'limited'; this.text = undefined; break; }
       }
       if (this.phase === 'searching' && this.cursor === total) this.phase = 'complete';

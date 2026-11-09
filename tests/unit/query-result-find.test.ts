@@ -7,6 +7,21 @@ function finish(scan: QueryResultFindScan) { for (let n = 0; n < 1000 && scan.pr
 function positions(scan: QueryResultFindScan) { return Array.from({ length: scan.progress().count }, (_, index) => scan.match(index)); }
 
 describe('已返回结果的有界字面查找', () => {
+  it('整格文字、SQL NULL 和空字符串分别匹配，不把缺失值或二进制当文本', () => {
+    const rows: DataRow[] = [{ a: null }, { a: 'NULL' }, { a: '' }, {}, { a: 'NULLABLE' },
+      { a: { type: 'binary', base64: '' } }, { a: 'x'.repeat(100000) + 'NULL' }, { a: '18446744073709551615' }];
+    for (const [mode, query, expected] of [
+      ['contains', 'NULL', [0, 1, 4, 6]], ['whole', 'null', [1]], ['whole', '0x', []],
+      ['whole', '18446744073709551615', [7]], ['null', '', [0]], ['empty', '', [2]],
+    ] as const) {
+      const scan = new QueryResultFindScan(rows, columns, query, false, () => true, 'a', mode);
+      expect(finish(scan).scannedCells).toBe(rows.length);
+      expect(positions(scan)).toEqual(expected.map(row => ({ row, column: 0 })));
+    }
+    const unicode = new QueryResultFindScan([{ a: 'İ' }], columns, 'i\u0307', false, () => true, 'a', 'whole');
+    expect(finish(unicode).count).toBe(1);
+  });
+
   it('指定同名列时仅扫描该列，保留完整可见布局中的命中坐标', () => {
     const rows = [{ a: 'hit', b: 'miss' }, { a: 'hit', b: 'hit' }];
     const readOther = vi.fn(() => { throw Error('不应访问范围外列'); });

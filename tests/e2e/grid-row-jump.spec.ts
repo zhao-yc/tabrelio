@@ -145,6 +145,45 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
   expect(pageErrors).toEqual([]);
 });
 
+test('查询结果按原类型查找可区分 SQL NULL、空字符串和整格文字', async () => {
+  await seed("SELECT id, CASE id WHEN 180 THEN NULL WHEN 179 THEN 'NULL' WHEN 178 THEN '' ELSE 'nullable' END AS 内容, NULL AS 对照 FROM subject WHERE id >= 177 ORDER BY id DESC;");
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const selected = query.getByRole('gridcell', { name: '180', exact: true }).locator('..').getByRole('checkbox');
+  await selected.check();
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const before = await tasks();
+  await query.getByRole('button', { name: resultFind.open, exact: true }).click();
+  const input = query.getByRole('textbox', { name: resultFind.input, exact: true });
+  const columns = query.getByRole('combobox', { name: resultFind.columns, exact: true });
+  const mode = query.getByRole('combobox', { name: resultFind.mode, exact: true });
+  const status = query.locator('.query-result-find-status').getByRole('status');
+  await columns.selectOption({ label: resultFind.columnOption('内容', 2) });
+  await input.fill('NULL');
+  await expect(status).toHaveText(resultFind.count(3, -1));
+  const highlight = query.getByRole('checkbox', { name: resultFind.highlightAll, exact: true });
+  const nullable = query.getByRole('gridcell', { name: 'nullable', exact: true });
+  await highlight.check();
+  await expect(nullable).toHaveClass(/query-result-find-match/);
+
+  for (const [kind, row] of [['whole', 1], ['null', 0], ['empty', 2]] as const) {
+    await mode.selectOption({ label: resultFind.modes[kind] });
+    await expect(status).toHaveText(resultFind.count(1, -1));
+    await expect(nullable).not.toHaveClass(/query-result-find-match/);
+    await query.getByRole('button', { name: resultFind.next, exact: true }).click();
+    await expect(query.getByText(resultFind.location(row, 1), { exact: true })).toBeVisible();
+    await expect(query.locator('.query-result-find-hit')).toHaveCount(1);
+  }
+  await expect(input).toBeDisabled();
+  await mode.selectOption({ label: resultFind.modes.contains });
+  await expect(input).toHaveValue('NULL');
+  await expect(input).toBeEnabled();
+  await expect(status).toHaveText(resultFind.count(3, -1));
+  await expect(selected).toBeChecked();
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果按列查找可区分同名列，切换范围立即清除旧定位', async () => {
   await seed("SELECT id, name AS 同名, CASE WHEN id = 1 THEN '记录 对照' ELSE '无' END AS 同名 FROM subject ORDER BY id DESC;");
   const query = page.locator('.query-tab:visible');
