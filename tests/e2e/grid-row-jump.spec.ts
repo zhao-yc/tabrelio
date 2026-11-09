@@ -516,6 +516,83 @@ test('SQLite 查询计算列只读且原字段按精确主键提交', async ({},
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite JOIN 查询仅提交唯一主表原行', async ({}, info) => {
+  const projection = 's.note AS 同名,upper(p.note)||\'-计算\' AS 同名,p.tenant AS 区,p.id AS 编号,p.note AS 同名';
+  const select = `SELECT ${projection} FROM join_subject p`;
+  await seed(select + ' LEFT JOIN join_side s ON (s.id=p.side_id) ORDER BY p.id DESC;',
+    `CREATE TABLE join_subject(tenant TEXT, id INTEGER, side_id INTEGER, note TEXT, guard TEXT, PRIMARY KEY(tenant,id)) WITHOUT ROWID;
+     CREATE TABLE join_side(id INTEGER PRIMARY KEY, owner INTEGER, note TEXT);
+     INSERT INTO join_subject VALUES ('区',9007199254740992,1,'主表甲','甲保护'),('区',9007199254740993,2,'主表乙','乙保护');
+     INSERT INTO join_side VALUES (1,1,'连接甲'),(3,1,'连接丙');`,
+    select + ' INNER JOIN join_side s ON s.owner=p.side_id;');
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const cell = (value: string) => grid.getByRole('gridcell', { name: value, exact: true });
+  const inline = page.getByRole('region', { name: originsText.inlineLabel('同名'), exact: true });
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  const execute = async () => {
+    await query.locator('.query-execute-split > button.primary').click();
+    await expect(query.locator('.tab-status').getByText(/^本次总耗时/)).toBeVisible();
+  };
+  const disk = (sql: string) => {
+    const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+    try { return db.prepare(sql).all(); } finally { db.close(); }
+  };
+  const rows = () => disk('SELECT CAST(id AS TEXT) AS id,note,guard FROM join_subject ORDER BY id');
+  const links = () => disk('SELECT id,note FROM join_side ORDER BY id');
+  const original = rows(), originalLinks = links();
+  await execute();
+  await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+  const sort = grid.getByRole('columnheader').filter({ hasText: /^编号/ });
+  await sort.click();
+  await expect(sort.getByLabel(resultSort.ascending)).toBeVisible();
+  await cell('连接甲').click();
+  await cell('连接甲').press('F2');
+  await expect(inline).toHaveCount(0);
+  await pasteGridRangeClipboard(page, '不能改连接表');
+  await expect(query.getByRole('alert')).toContainText(originsText.joinReadOnly);
+  await cell('主表甲-计算').click();
+  await cell('主表甲-计算').press('F2');
+  await expect(inline).toHaveCount(0);
+  await pasteGridRangeClipboard(page, '不能改计算列');
+  await expect(query.getByRole('alert')).toContainText(originsText.computedReadOnly);
+  expect(rows()).toEqual(original);
+
+  await cell('主表乙').click();
+  await expect(await navigationMenuItem(query, { name: originsText.editJoin, exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await cell('主表甲').click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await pasteGridRangeClipboard(page, '更新甲\n更新乙');
+  const review = page.getByRole('dialog', { name: sqlitePaste.title, exact: true });
+  await expect(review).toBeVisible();
+  await review.getByRole('button', { name: sqlitePaste.preview, exact: true }).click();
+  await review.getByRole('button', { name: sqlitePaste.stage, exact: true }).click();
+  await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toContainText('9007199254740992');
+  expect(rows()).toEqual(original);
+  await info.attach('SQLite连接查询编辑主表', { body: await page.screenshot(), contentType: 'image/png' });
+  await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+  await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  await expect(preview).toBeHidden();
+  expect(rows()).toEqual([{ ...original[0], note: '更新甲' }, { ...original[1], note: '更新乙' }]);
+  expect(links()).toEqual(originalLinks);
+
+  await execute();
+  await cell('更新甲').click();
+  await (await navigationMenuItem(query, { name: rowSqlText.open, exact: true })).click();
+  const draft = page.getByRole('dialog', { name: rowSqlText.title, exact: true });
+  await draft.getByLabel(rowSqlText.kind, { exact: true }).selectOption('update');
+  await draft.getByRole('button', { name: rowSqlText.prepare, exact: true }).click();
+  await expect(draft.locator('pre')).toContainText('UPDATE "main"."join_subject" SET "note" = \'更新甲\'');
+  await expect(draft.locator('pre')).not.toContainText('join_side');
+  await draft.getByRole('button', { name: rowSqlText.close, exact: true }).click();
+
+  await page.locator('[data-workspace-tab-id="q-copy-source"]').getByRole('button', { name: '复制来源', exact: true }).click();
+  await execute();
+  await expect(cell('更新甲')).toHaveCount(2);
+  await expect(await navigationMenuItem(query, { name: originsText.editJoin, exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚', async ({}, info) => {
   await seed('SELECT id AS 同名, name AS 同名 FROM subject ORDER BY id DESC LIMIT 3;');
   const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');

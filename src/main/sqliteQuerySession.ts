@@ -9,11 +9,11 @@ import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
 import { sqliteNamedParameterNames, sqliteParameterInfo } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 import { validSqliteStatementTimeout } from '../shared/sqliteStatementTimeout';
-import { foldSqliteCompletionName } from '../shared/sqliteCompletion';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
 import { queryScriptReportSummary } from '../shared/queryContinueOnError';
 import type { SqlStatementRange } from '../shared/sqlScriptScanner';
-import { sqliteQueryComputedPositions, sqliteQueryRecordSchema, sqliteQueryRecordTarget, type SqliteQueryRecordSource } from './sqliteQueryRecord';
+import { sqliteQueryRecordOrigins, sqliteQueryRecordSchema, sqliteQueryRecordTarget,
+  type SqliteQueryRecordSchema, type SqliteQueryRecordSource } from './sqliteQueryRecord';
 import { continueSqliteScript } from './sqliteContinueOnError';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
@@ -260,7 +260,18 @@ export class SqliteQuerySession {
       const identity = this.driver.identity;
       const candidate = !options.explainView && identity && this.driver.transaction === false
         ? sqliteQueryRecordTarget(sql) : undefined;
-      const schema = candidate ? await sqliteQueryRecordSchema(this.driver, candidate.table).catch(() => undefined) : undefined;
+      const sourceSchemas = async (): Promise<SqliteQueryRecordSchema[] | undefined> => {
+        if (!candidate) return;
+        const schemas: SqliteQueryRecordSchema[] = [];
+        for (const { name } of candidate.tables) {
+          if (operation.cancelled) return;
+          const schema = await sqliteQueryRecordSchema(this.driver, name).catch(() => undefined);
+          if (!schema || schemas[0] && schema.version !== schemas[0].version) return;
+          schemas.push(schema);
+        }
+        return schemas;
+      };
+      const schemas = await sourceSchemas();
       if (operation.cancelled) throw new SqliteDriverError('SQLite 查询已取消', 'SQLITE_CANCELLED', this.driver.transaction, 0, this.driver.isClosed);
       const outcome = await this.driver.execute(sql, {
         maxRows: input.maxRows, batchRows: 200, maxBytes: queryBytes,
@@ -279,21 +290,17 @@ export class SqliteQuerySession {
         ? { ...buildSqliteExplainPlan(results[0], this.driver.version, options.explainView), sourceRange: options.sourceRange }
         : undefined;
       const original = completed.sqliteResultOrigins?.[0];
-      const computed = candidate && original && original.length === results[0]?.columns.length
-        ? sqliteQueryComputedPositions(candidate.projection, original.length) : undefined;
-      const excluded = new Set(computed), first = original?.find((_, index) => !excluded.has(index)), table = first?.table;
-      if (schema && candidate && identity && table && computed && original && results.length === 1 && results[0].rows.length &&
-          outcome.transaction === false && foldSqliteCompletionName(table) === foldSqliteCompletionName(candidate.table) &&
-          original.every((origin, index) => excluded.has(index) || origin?.database === 'main' && origin.table === table) &&
-          (await sqliteQueryRecordSchema(this.driver, candidate.table).catch(() => undefined))?.version === schema.version && !operation.cancelled) {
-        const origins = original.map((origin, index) => excluded.has(index) ? null : origin);
-        this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schema.version, result: results[0], origins,
-          keyed: schema.keys.length > 0 && schema.keys.every(key => origins.some(origin => origin?.column === key)) };
+      const proof = candidate && schemas && identity && original && results.length === 1 && outcome.transaction === false
+        ? sqliteQueryRecordOrigins(candidate, schemas, results[0], original) : undefined;
+      if (proof && identity && schemas && JSON.stringify(await sourceSchemas()) === JSON.stringify(schemas) && !operation.cancelled) {
+        const { table, origins, keyed } = proof;
+        this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schemas[0].version, result: results[0], origins, keyed };
       }
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
       return { ...completed, ...displayTitles(results.length),
         ...(this.recordSource?.keyed ? { sqliteQueryRecordTable: this.recordSource.table } : {}),
-        ...(this.recordSource && computed?.length ? { sqliteQueryComputedColumns: computed, sqliteResultOrigins: [[...this.recordSource.origins]] } : {}),
+        ...(this.recordSource && proof?.joined ? { sqliteQueryJoined: true as const } : {}),
+        ...(this.recordSource && proof?.computed.length ? { sqliteQueryComputedColumns: proof.computed, sqliteResultOrigins: [proof.displayOrigins] } : {}),
         ...(this.recordSource && !this.recordSource.result.truncated ? { sqliteQueryRowSql: true as const } : {}),
         elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {

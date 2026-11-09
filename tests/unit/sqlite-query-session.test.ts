@@ -127,6 +127,38 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
       expect((await execute(harness, sql)).sqliteQueryRowSql).toBeUndefined();
   });
 
+  it('按真实目录展开 JOIN 投影，只对唯一的首表原行签发引用', async () => {
+    const harness = await open(fixture());
+    await execute(harness, `INSERT INTO subject VALUES (9007199254740992,'甲'),(9007199254740993,'乙');
+      CREATE TABLE side(id INTEGER PRIMARY KEY, owner INTEGER, note TEXT);
+      INSERT INTO side VALUES (9007199254740992,9007199254740992,'匹配'),(3,9007199254740992,'重复');
+      CREATE VIEW side_view AS SELECT * FROM side;`);
+    const taskId = randomUUID();
+    const left = await execute(harness, `SELECT s.note AS 重名, p.*, upper(p.note) AS 重名, s.*
+      FROM subject p LEFT OUTER JOIN main.side AS s ON (s.id=p.id) ORDER BY p.id DESC;`, { taskId });
+    expect(left).toMatchObject({ sqliteQueryRecordTable: 'subject', sqliteQueryJoined: true, sqliteQueryComputedColumns: [3] });
+    expect(left.results[0].rows[0]).toMatchObject({ c0: null, c1: '9007199254740993' });
+    expect(left.sqliteResultOrigins?.[0]?.map(origin => origin?.table ?? null)).toEqual(
+      ['side', 'subject', 'subject', null, 'side', 'side', 'side']);
+    expect(harness.session.queryRecord(taskId, 'subject').origins.map(origin => origin?.column ?? null)).toEqual(
+      [null, 'id', 'note', null, null, null, null]);
+    await expect(execute(harness, 'SELECT *, upper(p.note) AS 算 FROM subject p INNER JOIN side s USING(id)'))
+      .resolves.toMatchObject({ sqliteQueryJoined: true, sqliteQueryComputedColumns: [4] });
+    await expect(execute(harness, 'SELECT p.id,p.note FROM subject p JOIN side s ON s.id=p.id'))
+      .resolves.toMatchObject({ sqliteQueryRecordTable: 'subject' });
+    for (const sql of ['SELECT p.id,p.note FROM subject p JOIN side s ON s.owner=p.id',
+      'SELECT p.id,p.note FROM subject p JOIN side_view s ON s.id=p.id',
+      'SELECT p.id,p.note FROM subject p JOIN subject s ON s.id=p.id',
+      'SELECT (p.id),p.note FROM subject p LEFT JOIN side s ON s.id=p.id',
+      'SELECT p.id,p.note FROM subject p CROSS JOIN side s ON s.id=p.id'])
+      expect((await execute(harness, sql)).sqliteQueryRowSql).toBeUndefined();
+    expect((await execute(harness, 'SELECT p.id,p.note FROM subject p LEFT JOIN side s ON s.id=p.id', { maxRows: 1 }))
+      .sqliteQueryRowSql).toBeUndefined();
+    await execute(harness, 'CREATE TEMP TABLE side(id INTEGER PRIMARY KEY)');
+    expect((await execute(harness, 'SELECT p.id,p.note FROM subject p LEFT JOIN side s ON s.id=p.id'))
+      .sqliteQueryRowSql).toBeUndefined();
+  });
+
   it('原生结果来源按结果和列位置对齐，别名和计算表达式不冒充源字段', async () => {
     const harness = await open(fixture());
     const outcome = await execute(harness, `CREATE VIEW visible AS SELECT id,note FROM subject;

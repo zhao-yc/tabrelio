@@ -16,6 +16,7 @@ export const sqliteResultOriginsZh = {
   inlinePreview: '预览修改',
   inlineUnavailable: '当前来源字段无法编辑。',
   computedReadOnly: 'SQLite 查询计算列只读，请选择原表字段。',
+  joinReadOnly: 'SQLite 连接表字段只读，请选择主表字段。',
   pastePosition: (firstRow: number, lastRow: number, firstColumn: number, lastColumn: number) =>
     `查询结果第 ${firstRow}～${lastRow} 行，第 ${firstColumn}～${lastColumn} 列`,
   pasteHint: '核验粘贴范围内的全部原记录，先比对新旧值，再预览 SQL 并确认提交。',
@@ -25,6 +26,7 @@ export const sqliteResultOriginsZh = {
   rangeDiscard: '放弃这批查询结果修改并返回？如果提交结果未确认，请先核对数据库。',
   rangeUnchanged: '所选字段已经是目标值。',
   editRecord: '编辑查询原记录',
+  editJoin: '编辑 JOIN 主表原记录',
   editHint: '核验原表主键和查询返回的字段后读取当前整行。修改需要预览并确认提交。',
   editDiscard: '放弃这条原记录的本地修改并返回查询结果？如果提交结果未确认，请先核对数据库。',
   editBack: '返回查询结果',

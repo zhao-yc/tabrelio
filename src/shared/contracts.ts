@@ -116,6 +116,7 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   /** 最新一次可回查的单表结果目标，读取和编辑均须由 Main 校验原行和主键。 */
   sqliteQueryRecordTable?: string;
   sqliteQueryComputedColumns?: number[];
+  sqliteQueryJoined?: true;
   sqliteQueryRowSql?: true;
   /** 仅本次 SQLite 完整结果使用，结果及列均按原序号对应；空项表示未取得原生来源。 */
   sqliteResultOrigins?: (SqliteResultColumnOrigin[] | null)[];

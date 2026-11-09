@@ -1666,6 +1666,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     return range.keys.map(key => {
       const index = sourceResult.columns.findIndex(column => column.key === key), origin = resultOrigins[index];
       if (outcome?.sqliteQueryComputedColumns?.includes(index)) throw Error(originsText.computedReadOnly);
+      if (outcome?.sqliteQueryJoined && origin && origin.table !== recordEditTable) throw Error(originsText.joinReadOnly);
       if (!origin || origin.database !== 'main' || origin.table !== recordEditTable) throw Error(gridRangeFillZh.target);
       return origin.column;
     });
@@ -2650,7 +2651,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 }}>{mysqlOriginsText.open}</button>}
 {(pin || sourceResult) && <button disabled={!canShowResultSql} onClick={openResultSql}>{pin ? zh.query.pinnedStatement : zh.query.resultSql}</button>}
 <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)} title={rowDetailsText.choose} onClick={openRowDetail}>{rowDetailsText.open}</button>{recordEditTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
-  onClick={openQueryRecord}>{originsText.editRecord}</button>}
+  onClick={openQueryRecord}>{outcome?.sqliteQueryJoined ? originsText.editJoin : originsText.editRecord}</button>}
 {recordTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   title={rowDetailsText.choose} onClick={openQueryRelation}>{relationText.entry}</button>}
 {mysqlRelationAvailable && !mysqlJoinColumns && (['parent', 'children'] as const).map(direction => <button key={direction}
