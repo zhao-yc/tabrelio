@@ -1,6 +1,6 @@
 import type { DataRow, QueryResult } from '../shared/contracts';
 import { createHash } from 'node:crypto';
-import { sqliteTableBrowseLimits as limits, sqliteLastPagePosition, sqliteRowCountSchema, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
+import { sqliteTableBrowseLimits as limits, sqliteLastPagePosition, sqliteQueryRecordIndices, sqliteRowCountSchema, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteCopySourceSchema, sqliteExportTextFunction, type SqliteColumn, type SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
@@ -156,7 +156,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
     const queryRecords = input.queryRecord ? await control.queryRecord?.(primaryKey, columns) : undefined;
-    if (input.queryRecord && queryRecords?.length !== ('operation' in input.queryRecord ? 0 : input.limit))
+    if (input.queryRecord && queryRecords?.length !== sqliteQueryRecordIndices(input.queryRecord).length)
       throw Error('SQLite 查询结果缺少原行核验');
     const searchRecord = input.searchRecordRef ? await control.searchRecord?.(catalogue) : undefined;
     if (input.searchRecordRef && !searchRecord) throw Error('SQLite 搜索记录缺少原行核验');

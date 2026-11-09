@@ -66,9 +66,10 @@ export class SqliteQuerySession {
   }
 
   /** 只允许使用本会话最新成功结果的原始行位置，外部不能提交列值或定位 SQL。 */
-  queryRecord(taskId: string, table: string, editing = true, inserting = false): SqliteQueryRecordSource {
+  queryRecord(taskId: string, table: string, editing = true, operation?: 'insert' | 'duplicate'): SqliteQueryRecordSource {
     const source = this.queryRowSqlSource(taskId);
-    if (!(inserting ? editing && source.insertable : source.keyed) || source.table !== table || editing && this.driver.readOnly)
+    if (!(operation === 'insert' ? source.insertable : source.keyed) || source.table !== table ||
+        editing && this.driver.readOnly || operation && !editing || operation === 'duplicate' && source.result.truncated)
       throw Error('SQLite 原查询结果已失效或当前会话有事务，请重新查询');
     return source;
   }

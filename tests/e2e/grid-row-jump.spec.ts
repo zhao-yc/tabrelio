@@ -44,7 +44,7 @@ import { resultSqlZh as sqlText } from '../../src/shared/resultSql.zh-CN';
 import { gridQuickValueZh as cellCopy } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 import { sqliteTableRangePasteZh as sqlitePaste } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
-import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
+import { answerDialogs, dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
@@ -696,6 +696,127 @@ test('SQLite 查询新增拒绝结构漂移，原执行新增能力只能暂存�
     expect(observer.prepare('SELECT * FROM insert_guard').all()).toEqual([]);
     expect(pageErrors).toEqual([]);
   } finally { observer.close(); }
+});
+
+test('SQLite 查询复制勾选记录可逐条修订并在唯一约束失败时整批回滚', async ({}, info) => {
+  await seed('SELECT p.id AS 编号,p.slug AS 名称 FROM copy_subject p ORDER BY p.id DESC;',
+    `CREATE TABLE copy_subject(id INTEGER PRIMARY KEY,slug TEXT UNIQUE, qty INTEGER, raw BLOB, guard TEXT,
+       derived TEXT GENERATED ALWAYS AS (slug || ':' || qty) STORED);
+     INSERT INTO copy_subject VALUES(1,'甲',9007199254740993,x'00ff','甲隐藏'),(2,'乙',7,NULL,'乙隐藏');
+     CREATE TABLE copy_audit(slug TEXT);
+     CREATE TRIGGER log_copy AFTER INSERT ON copy_subject BEGIN INSERT INTO copy_audit VALUES(new.slug); END;`);
+  const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+  try {
+    const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+    const form = page.getByRole('dialog', { name: sqliteEditText.duplicateTitle, exact: true });
+    const preview = page.getByRole('dialog', { name: originsText.duplicateTitle, exact: true });
+    const sql = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+    const action = () => navigationMenuItem(query, { name: originsText.duplicateChecked, exact: true });
+    const save = () => form.getByRole('button', { name: sqliteEditText.duplicateSave, exact: true }).click();
+    const setSlug = (value: string) => form.getByRole('textbox', { name: sqliteEditText.value('slug'), exact: true }).fill(value);
+    const rows = () => db.prepare('SELECT id,slug,CAST(qty AS TEXT) AS qty,hex(raw) AS raw,guard,derived FROM copy_subject ORDER BY id').all();
+    const audit = () => db.prepare('SELECT slug FROM copy_audit ORDER BY rowid').all();
+    const submit = async () => {
+      const apply = preview.getByRole('button', { name: originsText.duplicateApply, exact: true });
+      await expect(apply).toBeDisabled();
+      await preview.getByRole('checkbox', { name: originsText.duplicateConfirm, exact: true }).check();
+      await apply.click();
+    };
+    const before = rows();
+    await query.locator('.query-execute-split > button.primary').click();
+    await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+    await expect(await action()).toBeDisabled();
+    await page.keyboard.press('Escape');
+    const sort = grid.getByRole('columnheader').filter({ hasText: /^编号/ });
+    await sort.click();
+    await expect(sort.getByLabel(resultSort.ascending)).toBeVisible();
+    for (const name of ['乙', '甲'])
+      await grid.getByRole('gridcell', { name, exact: true }).locator('..').getByRole('checkbox').check();
+    await (await action()).click();
+    await expect(form.getByText(originsText.duplicatePosition(1, 1, 2), { exact: true })).toBeVisible();
+    await expect(form.getByRole('checkbox', { name: sqliteEditText.include('id'), exact: true })).not.toBeChecked();
+    await expect(form.getByRole('checkbox', { name: sqliteEditText.include('derived'), exact: true })).toBeDisabled();
+    await setSlug('甲副本');
+    await form.getByRole('button', { name: sqliteEditText.saveNextRecord, exact: true }).click();
+    await expect(form.getByText(originsText.duplicatePosition(2, 2, 2), { exact: true })).toBeVisible();
+    await save();
+    await expect(sql).toContainText('9007199254740993');
+    await expect(sql).toContainText("'甲隐藏'");
+    await expect(sql).toContainText("'乙隐藏'");
+    await expect(sql).not.toContainText('"id"');
+    await expect(sql).not.toContainText('"derived"');
+    expect(rows()).toEqual(before);
+    await submit();
+    await expect(preview.getByRole('alert')).toContainText('整批回滚');
+    expect(rows()).toEqual(before);
+    expect(audit()).toEqual([]);
+
+    await preview.getByRole('button', { name: originsText.duplicateBack, exact: true }).click();
+    await setSlug('乙副本');
+    await save();
+    await expect(sql).toContainText("'甲副本'");
+    await expect(sql).toContainText("'乙副本'");
+    await expect(preview.getByText(originsText.duplicateRows([1, 2]), { exact: true })).toBeVisible();
+    await info.attach('SQLite查询记录副本预览', { body: await page.screenshot(), contentType: 'image/png' });
+    await submit();
+    await expect(preview).toBeHidden();
+    expect(rows()).toEqual([...before,
+      { ...before[0], id: 3, slug: '甲副本', derived: '甲副本:9007199254740993' },
+      { ...before[1], id: 4, slug: '乙副本', derived: '乙副本:7' }]);
+    expect(audit()).toEqual([{ slug: '甲副本' }, { slug: '乙副本' }]);
+    expect(pageErrors).toEqual([]);
+  } finally { db.close(); }
+});
+
+test('SQLite JOIN 查询复制勾选主表记录时复核未投影字段', async ({}) => {
+  await seed('SELECT l.note AS 连接,p.id AS 编号,p.note AS 名称 FROM copy_main p LEFT JOIN copy_side l ON l.id=p.id;',
+    `CREATE TABLE copy_main(id INTEGER PRIMARY KEY,note TEXT, guard TEXT);
+     CREATE TABLE copy_side(id INTEGER PRIMARY KEY,note TEXT);
+     INSERT INTO copy_main VALUES(1,'原记录','隐藏原值');
+     INSERT INTO copy_side VALUES(1,'连接表原值');`);
+  const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+  try {
+    const query = page.locator('.query-tab:visible');
+    const form = page.getByRole('dialog', { name: sqliteEditText.duplicateTitle, exact: true });
+    const preview = page.getByRole('dialog', { name: originsText.duplicateTitle, exact: true });
+    const sql = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+    const execute = () => query.locator('.query-execute-split > button.primary').click();
+    const stage = async (guard: string) => {
+      await query.getByRole('gridcell', { name: '原记录', exact: true }).locator('..').getByRole('checkbox').check();
+      await (await navigationMenuItem(query, { name: originsText.duplicateCheckedJoin, exact: true })).click();
+      await form.getByRole('button', { name: sqliteEditText.duplicateSave, exact: true }).click();
+      await expect(sql).toContainText('INSERT INTO "main"."copy_main"');
+      await expect(sql).toContainText(guard);
+      await expect(sql).not.toContainText('copy_side');
+    };
+    const submit = async () => {
+      await preview.getByRole('checkbox', { name: originsText.duplicateConfirm, exact: true }).check();
+      await preview.getByRole('button', { name: originsText.duplicateApply, exact: true }).click();
+    };
+    await execute();
+    await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+    await stage('隐藏原值');
+    db.exec("UPDATE copy_main SET guard='外部变更' WHERE id=1");
+    await submit();
+    await expect(preview.getByRole('alert')).toContainText('SQLite原记录已被其他操作修改');
+    expect(db.prepare('SELECT * FROM copy_main').all()).toEqual([{ id: 1, note: '原记录', guard: '外部变更' }]);
+    await preview.getByRole('button', { name: originsText.duplicateBack, exact: true }).click();
+    await answerDialogs([0]);
+    const [confirmation] = await Promise.all([page.waitForEvent('dialog'),
+      form.getByRole('button', { name: sqliteEditText.duplicateCancel, exact: true }).click()]);
+    expect(confirmation.message()).toBe(originsText.duplicateDiscard);
+    await expect(form).toBeHidden();
+    await execute();
+    await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+    await stage('外部变更');
+    await submit();
+    await expect(preview).toBeHidden();
+    expect(db.prepare('SELECT * FROM copy_main ORDER BY id').all()).toEqual([
+      { id: 1, note: '原记录', guard: '外部变更' }, { id: 2, note: '原记录', guard: '外部变更' },
+    ]);
+    expect(db.prepare('SELECT * FROM copy_side').all()).toEqual([{ id: 1, note: '连接表原值' }]);
+    expect(pageErrors).toEqual([]);
+  } finally { db.close(); }
 });
 
 test('SQLite 查询删除勾选记录按显示顺序核验并提交', async ({}, info) => {

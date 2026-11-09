@@ -87,14 +87,14 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     expect(empty.sqliteQueryInsertTable).toBe('no_key');
     expect(empty.sqliteQueryRecordTable).toBeUndefined();
     expect(empty.sqliteQueryRowSql).toBeUndefined();
-    expect(harness.session.queryRecord(taskId, 'no_key', true, true).result.rows).toEqual([]);
-    for (const [table, editing, inserting] of [['subject', true, true], ['no_key', false, true], ['no_key', true, false]] as const)
-      expect(() => harness.session.queryRecord(taskId, table, editing, inserting)).toThrow(/已失效/);
+    expect(harness.session.queryRecord(taskId, 'no_key', true, 'insert').result.rows).toEqual([]);
+    for (const [table, editing, operation] of [['subject', true, 'insert'], ['no_key', false, 'insert'], ['no_key', true, 'duplicate']] as const)
+      expect(() => harness.session.queryRecord(taskId, table, editing, operation)).toThrow(/已失效/);
     expect((await execute(harness, 'SELECT note FROM no_key')).sqliteQueryInsertTable).toBe('no_key');
     for (const sql of ['SELECT note FROM shown', 'SELECT a.note,b.id FROM no_key a JOIN subject b ON 1=1',
       'SELECT note FROM no_key; SELECT 1', 'SELECT note FROM no_key'])
       expect((await execute(harness, sql, { maxRows: 1 })).sqliteQueryInsertTable).toBeUndefined();
-    expect(() => harness.session.queryRecord(taskId, 'no_key', true, true)).toThrow(/已失效/);
+    expect(() => harness.session.queryRecord(taskId, 'no_key', true, 'insert')).toThrow(/已失效/);
     await execute(harness, 'BEGIN');
     expect((await execute(harness, 'SELECT note FROM no_key')).sqliteQueryInsertTable).toBeUndefined();
     await execute(harness, 'ROLLBACK');

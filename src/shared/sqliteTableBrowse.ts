@@ -86,16 +86,17 @@ export type SqliteTableRelation = z.infer<typeof sqliteTableRelationSchema>;
 export const sqliteQueryEditMaxRows = 100;
 const queryRecordIdentity = { sessionId: z.string().min(1).max(200), taskId: z.string().min(1).max(200) };
 const queryRecordIndex = z.number().int().min(0).max(99999);
+const queryRecordIndices = z.array(queryRecordIndex).min(1).max(sqliteQueryEditMaxRows)
+  .refine(indices => new Set(indices).size === indices.length, 'SQLite 查询原记录序号不能重复');
 const sqliteQueryRecordSchema = z.union([
   z.object({ ...queryRecordIdentity, rowIndex: queryRecordIndex }).strict(),
-  z.object({ ...queryRecordIdentity, rowIndices: z.array(queryRecordIndex).min(1).max(sqliteQueryEditMaxRows)
-    .refine(indices => new Set(indices).size === indices.length, 'SQLite 查询原记录序号不能重复') }).strict(),
+  z.object({ ...queryRecordIdentity, rowIndices: queryRecordIndices }).strict(),
+  z.object({ ...queryRecordIdentity, rowIndices: queryRecordIndices, operation: z.literal('duplicate') }).strict(),
   z.object({ ...queryRecordIdentity, operation: z.literal('insert') }).strict(),
 ]);
 export type SqliteQueryRecordInput = z.infer<typeof sqliteQueryRecordSchema>;
 export function sqliteQueryRecordIndices(input: SqliteQueryRecordInput): number[] {
-  if ('operation' in input) return [];
-  return 'rowIndices' in input ? input.rowIndices : [input.rowIndex];
+  return 'rowIndices' in input ? input.rowIndices : 'rowIndex' in input ? [input.rowIndex] : [];
 }
 export const sqliteTablePageSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.literal('main'), table: name, taskId: z.string().min(1).max(200),

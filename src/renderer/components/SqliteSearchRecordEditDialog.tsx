@@ -3,6 +3,7 @@ import { invoke, errorMessage, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { SqliteTableEditor, type SqliteDraftRow, type SqliteEditView } from '../sqliteTableEditor';
 import { sqliteResultOriginsZh as queryText } from '../locales/sqliteResultOrigins.zh-CN';
+import { prepareSqliteDuplicate } from '../sqliteTableDuplicate';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { SqliteTablePreviewDialog, SqliteTableValueDialog } from './SqliteTableEditDialog';
 import { sqliteQueryRecordIndices, type SqliteQueryRecordInput } from '../../shared/sqliteTableBrowse';
@@ -33,19 +34,22 @@ export interface SqliteQueryRangePaste {
 
 type Props = BaseProps & ({ recordRef: string; queryRecord?: never; isCurrent?: never } |
   { recordRef?: never; queryRecord: SqliteQueryRecordInput; isCurrent(): boolean; cell?: SqliteQueryInlineCell; rangeFill?: SqliteQueryRangeFill;
-    rangePaste?: SqliteQueryRangePaste; deletePositions?: readonly number[]; visible?: boolean });
+    rangePaste?: SqliteQueryRangePaste; deletePositions?: readonly number[]; duplicatePositions?: readonly number[]; visible?: boolean });
 
 /** 只编辑已核验的原行，沿用表页签发的编辑快照和原有预览提交链。 */
 export function SqliteSearchRecordEditDialog(props: Props) {
   const { connectionId, table, recordRef, queryRecord, focusColumn } = props;
-  const inserting = !!queryRecord && 'operation' in queryRecord;
+  const operation = queryRecord && 'operation' in queryRecord ? queryRecord.operation : undefined;
+  const inserting = operation === 'insert', duplicating = operation === 'duplicate';
   const cell = props.queryRecord ? props.cell : undefined;
   const rangeFill = props.queryRecord ? props.rangeFill : undefined;
   const rangePaste = props.queryRecord ? props.rangePaste : undefined;
   const deletePositions = props.queryRecord ? props.deletePositions : undefined;
+  const duplicatePositions = props.queryRecord ? props.duplicatePositions : undefined;
   const [pasteAnchor, setPasteAnchor] = useState<SqlitePasteAnchor>();
   const typedConsumed = useRef(false);
   const labels = inserting ? { title: queryText.insertOpen, hint: queryText.insertHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
+    : duplicating ? { title: queryText.duplicateTitle, hint: queryText.duplicateHint, discard: queryText.duplicateDiscard, back: queryText.editBack, stale: queryText.editStale }
     : deletePositions ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : rangeFill || rangePaste ? { title: rangePaste ? pasteText.title : queryText.rangeTitle, hint: rangePaste ? queryText.pasteHint : queryText.rangeHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
@@ -54,6 +58,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
   const editor = useRef<SqliteTableEditor | undefined>(undefined);
   const [view, setView] = useState<SqliteEditView>(), [error, setError] = useState('');
   const [insertDraft, setInsertDraft] = useState<SqliteDraftRow>();
+  const [copies, setCopies] = useState<{ rows: SqliteDraftRow[]; index: number; edited: boolean }>();
   const [loading, setLoading] = useState(true), [closing, setClosing] = useState(false);
   const [preview, setPreview] = useState(false);
   const saved = useRef(false), closingRef = useRef(false), closeWork = useRef<Promise<void> | undefined>(undefined);
@@ -125,6 +130,11 @@ export function SqliteSearchRecordEditDialog(props: Props) {
             void instance.preview();
           } else {
             if (inserting) setInsertDraft({ id: uid(), values: page.edit.columns.map(() => undefined), deleted: false });
+            if (duplicating) {
+              if (duplicatePositions?.length !== count) throw Error(labels.stale);
+              const { rows } = instance.view;
+              setCopies({ rows: rows.map(row => prepareSqliteDuplicate(page, rows, row, uid(), true).row), index: 0, edited: false });
+            }
             if (rangePaste) {
               const edit = page.edit;
               const columns = rangePaste.columns.map(name => edit.columns.findIndex(column => column.name === name));
@@ -152,12 +162,12 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         callbacks.current.onDirty(false);
       }
     };
-  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste, deletePositions, inserting]);
+  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste, deletePositions, duplicatePositions, inserting, duplicating]);
 
   function close() {
     if (closeWork.current || editor.current?.busy) return;
     const instance = editor.current;
-    if (instance && (instance.view.unknown || !deletePositions && instance.changes.length) && !window.confirm(labels.discard)) return;
+    if (instance && (instance.view.unknown || copies?.edited || !deletePositions && instance.changes.length) && !window.confirm(labels.discard)) return;
     const read = load.current;
     closingRef.current = true; setClosing(true);
     const work = (async () => {
@@ -189,13 +199,44 @@ export function SqliteSearchRecordEditDialog(props: Props) {
 
   if (view && instance && preview) return <SqliteTablePreviewDialog key={view.preview?.previewId ?? 'pending'} ticket={ticket} view={view}
     review={deletePositions ? { title: labels.title, hint: labels.hint, details: queryText.deleteRows(deletePositions),
-      confirmation: queryText.deleteConfirm, submit: queryText.deleteApply } : undefined}
+      confirmation: queryText.deleteConfirm, submit: queryText.deleteApply, danger: true }
+      : duplicatePositions ? { title: labels.title, hint: labels.hint, details: queryText.duplicateRows(duplicatePositions),
+        confirmation: queryText.duplicateConfirm, submit: queryText.duplicateApply, close: queryText.duplicateBack } : undefined}
     current={() => editor.current === instance && !closingRef.current}
     onApply={() => void instance.apply()} onStop={() => instance.stop()}
     onClose={() => {
       if (rangeFill || rangePaste || deletePositions || !instance.view.valid || instance.view.unknown) { close(); return; }
-      instance.closePreview(); instance.inputOpen(true); saved.current = false; setPreview(false);
+      instance.closePreview();
+      // 副本作为一次追加暂存。退回表单时撤销这一步，表单继续保留各条副本输入。
+      if (copies) instance.undo();
+      instance.inputOpen(true); saved.current = false; setPreview(false);
     }}/>;
+  if (view && instance && copies && duplicatePositions) {
+    const { rows, index } = copies, row = rows[index];
+    const current = () => editor.current === instance && !closingRef.current && instance.canEdit();
+    const replace = (values: SqliteDraftRow['values']) => rows.map((item, i) => i === index ? { ...item, values } : item);
+    return <SqliteTableValueDialog key={row.id} ticket={ticket} page={view.page} row={row} duplicate
+      duplicatePosition={queryText.duplicatePosition(duplicatePositions[index], index + 1, rows.length)}
+      current={current}
+      navigation={rows.length > 1 ? { ownerId: row.id, previous: index > 0, next: index + 1 < rows.length,
+        move: (direction, values) => {
+          const next = index + direction;
+          if (!current() || !rows[next]) return false;
+          setCopies({ rows: values ? replace(values) : rows, index: next, edited: copies.edited || !!values });
+          return true;
+        } } : undefined}
+      onSave={values => {
+        if (!current()) return false;
+        const draft = replace(values);
+        instance.appendRows(draft.map(item => item.values));
+        setCopies({ rows: draft, index, edited: true });
+        saved.current = true;
+        setPreview(true);
+        void instance.preview();
+        return true;
+      }}
+      onClose={() => { if (!saved.current) close(); }}/>;
+  }
   if (view && instance && rangePaste && pasteAnchor) return <SqlitePasteRangeDialog page={view.page} rows={view.rows} anchor={pasteAnchor}
     shape={rangePaste.shape} queryPosition={rangePaste.position} initial={rangePaste.source}
     current={() => editor.current === instance && instance.view.rows === view.rows && !closingRef.current && instance.canEdit()}

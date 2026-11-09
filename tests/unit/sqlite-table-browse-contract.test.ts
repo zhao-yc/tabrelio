@@ -6,6 +6,14 @@ import { publicCommands } from '../../src/shared/commands';
 const base = { connectionId: 'file', database: 'main', table: '中文"表🚢', taskId: 'read', offset: 0, limit: 100, mode: 'and', filters: [], sort: [] };
 /** 严格IPC只接收结构化条件，不接受SQL或文件能力，也不会借用网络表协议。 */
 describe('SQLite表浏览严格合同及动态类型条件', () => {
+  it('查询副本只接受当前执行中唯一的原行序号', () => {
+    const queryRecord = { sessionId: 'session', taskId: 'execution', operation: 'duplicate', rowIndices: [9, 2] };
+    const input = { ...base, editing: true, limit: 2, queryRecord };
+    expect(sqliteTablePageSchema.parse(input).queryRecord).toEqual(queryRecord);
+    for (const patch of [{ editing: false }, { limit: 1 }, { queryRecord: { ...queryRecord, rowIndices: [9, 9] } },
+      { queryRecord: { ...queryRecord, rowIndex: 0 } }, { queryRecord: { ...queryRecord, operation: 'insert' } }])
+      expect(sqliteTablePageSchema.safeParse({ ...input, ...patch }).success).toBe(false);
+  });
   it('查询新增只接受本次执行身份和编辑请求，不能夹带原行、筛选或分页', () => {
     const queryRecord = { sessionId: 'session', taskId: 'execution', operation: 'insert' };
     const input = { ...base, editing: true, limit: 1, queryRecord };
