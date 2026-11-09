@@ -2353,6 +2353,52 @@ test('查询结果按原类型查找可区分 SQL NULL、空字符串和整格�
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询把单列查找带入本地筛选并保留已有条件', async ({}, info) => {
+  await seed(`SELECT id, CASE id WHEN 1 THEN '%_前' WHEN 2 THEN '中%_前' WHEN 3 THEN '%_后' ELSE NULL END AS 文本,
+    CASE WHEN id=4 THEN NULL ELSE '%_' END AS 文本 FROM subject WHERE id <= 4 ORDER BY id DESC;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+  await expect(ids).toHaveText(['4', '3', '2', '1']);
+  const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'query.execute').map(task => task.id));
+  const before = await tasks();
+  const panel = query.getByRole('region', { name: filterText.title, exact: true });
+  const column = query.getByRole('combobox', { name: resultFind.columns, exact: true });
+  const mode = query.getByRole('combobox', { name: resultFind.mode, exact: true });
+  const stage = query.getByRole('button', { name: resultFind.stageFilter, exact: true });
+  const open = () => query.getByRole('button', { name: resultFind.open, exact: true }).click();
+  await open();
+  await expect(stage).toBeDisabled();
+  await column.selectOption({ label: resultFind.columnOption('文本', 2) });
+  await mode.selectOption('startsWith');
+  await query.getByRole('textbox', { name: resultFind.input, exact: true }).fill('%_');
+  await expect(stage).toBeDisabled();
+  await query.getByRole('checkbox', { name: resultFind.sensitive, exact: true }).check();
+  await stage.click();
+  await expect(panel.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('startsWith');
+  await expect(panel.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text');
+  await expect(panel.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('%_');
+  await expect(grid).toHaveAttribute('aria-rowcount', '5');
+  await info.attach('SQLite结果查找转筛选草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['3', '1']);
+  await open();
+  await column.selectOption({ label: resultFind.columnOption('文本', 3) });
+  const secondKey = (await column.inputValue()).slice('column:'.length);
+  await mode.selectOption('null');
+  await stage.click();
+  await expect(panel.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('startsWith');
+  await expect(panel.getByLabel(filterText.operator + ' 2', { exact: true })).toHaveValue('null');
+  await expect(panel.getByLabel(filterText.column + ' 2', { exact: true })).toHaveValue(secondKey);
+  await expect(grid).toHaveAttribute('aria-rowcount', '3');
+  await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveCount(0);
+  await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
+  await expect(ids).toHaveText(['3', '1']);
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果按列查找可区分同名列，切换范围立即清除旧定位', async () => {
   await seed("SELECT id, name AS 同名, CASE WHEN id = 1 THEN '记录 对照' ELSE '无' END AS 同名 FROM subject ORDER BY id DESC;");
   const query = page.locator('.query-tab:visible');

@@ -480,6 +480,18 @@ function register(): void {
       await step(() => viewer.getByRole('button', { name: findText.clearMatchView, exact: true }).click());
       await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
       await step(() => expect(other).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: findText.open, exact: true }).click());
+      await step(() => viewer.getByRole('combobox', { name: findText.columns, exact: true }).selectOption('column:constructor'));
+      await step(() => viewer.getByRole('combobox', { name: findText.mode, exact: true }).selectOption('endsWith'));
+      await step(() => viewer.getByRole('checkbox', { name: findText.sensitive, exact: true }).check());
+      await step(() => input.fill('内容'));
+      await step(() => viewer.getByRole('button', { name: findText.stageFilter, exact: true }).click());
+      await step(() => expect(checkedFilter.getByLabel(filterText.column + ' 1', { exact: true })).toHaveValue('constructor'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('endsWith'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('内容'));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(() => expect(other).toBeVisible());
+      await step(() => expect(match).toHaveCount(0));
       await step(async () => (await navigationMenuItem(viewer, { name: text.close, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer).toBeHidden()); await step(() => expect(page.locator('.welcome-tab')).toBeVisible());
       expect(await step(() => page.locator('.query-tab').count())).toBe(0);
       const after = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(after).toEqual(baseline); expect(JSON.stringify(after)).not.toContain('offline-snapshot-source'); expect(JSON.stringify(after)).not.toContain('18446744073709551615');

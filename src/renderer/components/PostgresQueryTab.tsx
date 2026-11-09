@@ -1498,8 +1498,10 @@ export function PostgresQueryTab({
   function openResultFilter(node?: QueryResultFilterRule | QueryResultFilterGroup) {
     if (!filterBinding || !filterView || !sortView || !filterCurrent() ||
         document.querySelector(appModalSelector)) return;
-    const seed = node && appendQueryResultFilterNode(filterView.expression, node);
-    beginResultFilter({ binding: filterBinding, view: filterView, sortView, seed });
+    try {
+      const seed = node && appendQueryResultFilterNode(filterView.expression, node);
+      beginResultFilter({ binding: filterBinding, view: filterView, sortView, seed });
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
   /** 提交已经校验的草稿，统计窗口也沿用同一个筛选应用入口。 */
@@ -2092,6 +2094,7 @@ export function PostgresQueryTab({
       onFillRange={canUpdateQueryRecord ? fillQueryCells : undefined}
       filterDialect="postgresql"
       onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
+      onStageFindFilter={filterBinding && sortView && binding ? openResultFilter : undefined} findFilterSource={filterBinding?.source}
       onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
       onStatistics={binding ? openResultStatistics : undefined}
       onHistoryTravel={binding && historyBinding ? travelResultHistory : undefined}

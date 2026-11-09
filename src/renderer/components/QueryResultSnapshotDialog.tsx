@@ -297,8 +297,14 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     try {
       const capture = captureQueryResultCellFilter(visibleColumns, displayed.rows, cell,
         displayed.sqliteStorage ? displayed : undefined, dialect);
-      openFilter(filterTrigger.current, appendQueryResultFilterNode(filterView.expression, queryResultCellFilterNode(capture, operator)));
+      openFilterRule(queryResultCellFilterNode(capture, operator));
     } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 单格与查找条件追加到当前筛选，原文件及已应用视图保留至明确应用。 */
+  function openFilterRule(node: QueryResultFilterRule | QueryResultFilterGroup): void {
+    if (!editable() || !filterView || !filterTrigger.current) return;
+    try { openFilter(filterTrigger.current, appendQueryResultFilterNode(filterView.expression, node)); }
+    catch (reason) { setError(errorMessage(reason)); }
   }
   /** 选区和勾选各核自己的显示范围，草稿追加到完整快照的既有条件。 */
   function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, mode: QueryResultSelectedFilterMode = false): void {
@@ -460,7 +466,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
           ownDialog={ownDialog} filterDialect={dialect} onFilterSelected={filterView ? openSelectedFilter : undefined}
-          onFilterCell={filterView ? openCellFilter : undefined} onStatistics={filterView ? openStatistics : undefined}
+          onFilterCell={filterView ? openCellFilter : undefined} onStageFindFilter={filterView ? openFilterRule : undefined} findFilterSource={filterBinding?.source}
+          onStatistics={filterView ? openStatistics : undefined}
           onExportRange={binding ? openRangeExport : undefined}
           onHistoryTravel={historyBinding ? travelHistory : undefined}
           onActiveCellChange={selectDetailRow}

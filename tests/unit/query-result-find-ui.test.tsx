@@ -105,6 +105,27 @@ it('匹配行操作只消费完成的当前代次，旧按钮不能重放或修�
   expect(onSelectionChange).toHaveBeenCalledTimes(3);
 });
 
+it('查找转筛选只接纳活动单列条件，旧按钮不会重放', async () => {
+  (window as any).dbark = { invoke: vi.fn(async () => undefined) };
+  store.setState({ settings: { theme: 'light' } as any }); container();
+  const rows = [{ a: null, b: '其它值' }], stage = vi.fn(), owner = {};
+  const source = { columns: cols, rows, elapsedMs: 0, truncated: false, statement: '' };
+  await act(async () => root!.render(<Grid columns={cols} rows={rows} selectionScope={owner} isCurrent={() => true} findFilterSource={source} onStageFindFilter={stage}/>));
+  await click(text.open);
+  const select = (label: string, value: string) => act(async () => callback(document.querySelector(`select[aria-label="${label}"]`), 'onChange')({ target: { value } }));
+  await select(text.mode, 'null');
+  expect(button(text.stageFilter).disabled).toBe(true);
+  await select(text.columns, 'column:a');
+  const stale = callback(button(text.stageFilter));
+  await click(text.stageFilter);
+  expect(stage).toHaveBeenCalledExactlyOnceWith({ column: 'a', operator: 'null', value: '' });
+  await select(text.columns, 'column:b');
+  await act(async () => stale());
+  expect(stage).toHaveBeenCalledTimes(1);
+  await click(text.stageFilter);
+  expect(stage).toHaveBeenLastCalledWith({ column: 'b', operator: 'null', value: '' });
+});
+
 /** 原查询端口只返回合成常量；选择/导出/设置全部走RAM原UI命令，不实际执行SQL或文件。 */
 async function mountQuery() {
   commands = []; exports = [];

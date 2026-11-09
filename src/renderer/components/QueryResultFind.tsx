@@ -1,16 +1,19 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DataGridHandle } from 'react-data-grid';
-import type { DataRow, ResultColumn } from '../../shared/contracts';
+import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
 import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindMode, type QueryResultFindPhase, type QueryResultFindProgress } from '../queryResultFind';
 import { QueryResultRegexWorkerClient } from '../queryResultRegexWorkerClient';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
 import { gridFindDirection, gridFindModalBlocked } from '../gridFindKeys';
 import { queryResultHost } from '../queryResultShortcut';
+import { queryResultFindFilterRule, queryResultFindTextFilterable } from '../queryResultFindFilter';
+import type { QueryResultFilterRule } from '../queryResultFilter';
+import type { SortDialect } from '../queryResultSort';
 import '../queryResultFind.css';
 
 interface Run { owner: object; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
-interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; children: ReactNode; }
+interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; filterDialect?: SortDialect; children: ReactNode; }
 const regexErrors: Partial<Record<QueryResultFindPhase, string>> = text.regexErrors;
 const findOpeners = new WeakMap<Element, (target: HTMLElement) => boolean>();
 
@@ -33,7 +36,7 @@ export function escapeTargetsQueryResultFind(event: KeyboardEvent, root: HTMLEle
 }
 
 /** 查找栏与快捷键仅包住当前结果网格；私有代次负责取消。 */
-export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, children }: Props) {
+export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, onStageFindFilter, findFilterSource, filterDialect, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
   const region = useRef<HTMLDivElement>(null);
@@ -147,6 +150,14 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
       (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
+  const filterColumn = visible && findFilterSource ? columns.find(column => column.key === columnKey) : undefined;
+  const textFilterable = useMemo(() => queryResultFindTextFilterable(filterColumn, findFilterSource, filterDialect), [filterColumn, findFilterSource, filterDialect]);
+  const filterRule = onStageFindFilter && available && active && queryResultFindFilterRule(filterColumn, mode, query, sensitive, textFilterable);
+  /** 转换当前条件本身，不依赖命中数量或查找上限。旧条件或旧网格不得打开草稿。 */
+  function stageFilter() {
+    if (!filterRule || !active || !panelCurrent() || run.current !== active.run || !active.run.scan.current()) return;
+    onStageFindFilter?.(filterRule);
+  }
   return <div ref={region} className="query-result-find-region" data-query-result-find-open={visible ? '' : undefined} onKeyDown={keyDown}>
     <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
       {visible && <>
@@ -169,6 +180,8 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
         <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, false))}>{text.uncheckRows}</button>
         {onShowMatchingRows && <button type="button" disabled={!available || progress?.phase !== 'complete' || usesText && !query}
           onClick={() => applyMatchingRows(onShowMatchingRows)}>{text.showMatchingRows}</button>}
+        {onStageFindFilter && <button type="button" disabled={!filterRule} title={filterRule ? text.stageFilterHint : text.stageFilterUnavailable}
+          onClick={stageFilter}>{text.stageFilter}</button>}
         <button type="button" aria-label={text.close} onClick={close}>×</button>
       </>}
     </div>

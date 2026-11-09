@@ -1,12 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { DataRow, ResultColumn } from '../../src/shared/contracts';
+import type { DataRow, QueryResult, ResultColumn } from '../../src/shared/contracts';
 import { QueryResultFindScan, queryResultFindLimits as limits } from '../../src/renderer/queryResultFind';
+import { queryResultFindFilterRule, queryResultFindTextFilterable } from '../../src/renderer/queryResultFindFilter';
 const columns: ResultColumn[] = [{ key: 'a', name: '重复别名', type: 'TEXT' }, { key: 'b', name: '重复别名', type: 'TEXT' }];
 /** 仅RAM批次完成；保护测试本身不会在失控实现上无限循环。 */
 function finish(scan: QueryResultFindScan) { for (let n = 0; n < 1000 && scan.progress().phase === 'searching'; n++) scan.step(); return scan.progress(); }
 function positions(scan: QueryResultFindScan) { return Array.from({ length: scan.progress().count }, (_, index) => scan.match(index)); }
 
 describe('已返回结果的有界字面查找', () => {
+  it('只将兼容的单列条件带入原值筛选，保留唯一键与 SQLite 文本类型', () => {
+    const column = { key: 'a', name: '重复显示名', type: 'SQLITE' }, literal = ' %_😀 ';
+    for (const [mode, operator] of [['contains', 'contains'], ['whole', 'eq'], ['startsWith', 'startsWith'], ['endsWith', 'endsWith']] as const) {
+      expect(queryResultFindFilterRule(column, mode, literal, true, true)).toEqual({ column: 'a', operator, value: literal, sqliteType: 'text' });
+      expect(queryResultFindFilterRule(column, mode, literal, false, true)).toBeUndefined();
+      expect(queryResultFindFilterRule(column, mode, literal, true, false)).toBeUndefined();
+    }
+    expect(queryResultFindFilterRule(column, 'empty', '旧词', false, true)).toEqual({ column: 'a', operator: 'empty', value: '', sqliteType: 'text' });
+    const bytes = { ...column, type: 'BLOB' };
+    expect(queryResultFindFilterRule(bytes, 'null', '旧词', false, false)).toEqual({ column: 'a', operator: 'null', value: '' });
+    const source: QueryResult = { columns: [bytes], rows: [{ a: literal }, { a: null }], elapsedMs: 0, truncated: false, statement: '' };
+    expect(queryResultFindTextFilterable(bytes, source)).toBe(true);
+    const binarySource: QueryResult = { ...source, rows: [...source.rows, { a: { type: 'binary', base64: '' } }] };
+    expect(queryResultFindTextFilterable(bytes, binarySource)).toBe(false);
+    expect(queryResultFindTextFilterable({ ...column, type: 'BIGINT' }, source)).toBe(false);
+    const pg = { ...column, type: 'VARCHAR' };
+    expect(queryResultFindTextFilterable(pg, { ...source, columns: [pg] }, 'postgresql')).toBe(true);
+    expect(queryResultFindFilterRule(pg, 'endsWith', literal, true, true)).toEqual({ column: 'a', operator: 'endsWith', value: literal });
+    expect(queryResultFindFilterRule(pg, 'regex', '^A', true, true)).toBeUndefined();
+    expect(queryResultFindFilterRule(pg, 'startsWith', '\ud800', true, true)).toBeUndefined();
+    expect(queryResultFindFilterRule(pg, 'contains', 'x'.repeat(limits.queryUnits + 1), true, true)).toBeUndefined();
+    expect(queryResultFindFilterRule(undefined, 'null', '', false, false)).toBeUndefined();
+  });
+
   it('整格文字、SQL NULL 和空字符串分别匹配，不把缺失值或二进制当文本', () => {
     const rows: DataRow[] = [{ a: null }, { a: 'NULL' }, { a: '' }, {}, { a: 'NULLABLE' },
       { a: { type: 'binary', base64: '' } }, { a: 'x'.repeat(100000) + 'NULL' }, { a: '18446744073709551615' }];
