@@ -422,6 +422,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       };
       actions.push({ label: filterText.cellEquals, run: () => apply('eq') },
         { label: filterText.cellNotEquals, run: () => apply('ne') });
+      if (capture.textMatch) actions.push({ label: filterText.cellContains, run: () => apply('contains') },
+        { label: filterText.cellNotContains, run: () => apply('notContains') });
     } catch { /* 未知或不可比较的原值不提供本地筛选项。 */ }
     if (rectangle && rectangle.left === rectangle.right && onFilterSelected) {
       const stage = (exclude: boolean) => {

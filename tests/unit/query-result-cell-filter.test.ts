@@ -10,6 +10,25 @@ function fixture(value:CellValue,type='TEXT'){
   return{columns,rows,cell,capture:()=>captureQueryResultCellFilter(columns,rows,cell)};
 }
 describe('当前单元格筛选的精确原值捕获',()=>{
+  it.each([undefined, 'postgresql'] as const)('文本快捷条件按字面比较，方言 %s', dialect => {
+    const source: QueryResult = { columns: [{ key: 'k', name: '文本', type: 'TEXT' }],
+      rows: ['A%_', '前A%_后', 'a%_', 'AAx', null, ''].map(k => ({ k })), elapsedMs: 0, truncated: false, statement: '' };
+    const { columns, rows } = source;
+    const capture = captureQueryResultCellFilter(columns, rows, { row: rows[0], index: 0, column: columns[0] }, undefined, dialect);
+    const filter = new QueryResultFilter(dialect), binding = filter.bind(source, [])!;
+    for (const [operator, expected] of [['contains', [0, 1]], ['notContains', [2, 3, 5]]] as const) {
+      const rule = queryResultCellFilterRule(capture, operator);
+      expect(rule.value).toBe('A%_');
+      expect(filter.applyExpression(binding, filter.view(binding)!, { mode: 'AND', children: [rule] }).sourceIndices).toEqual(expected);
+    }
+  });
+
+  it.each([['', 'TEXT'], [null, 'TEXT'], ['42', 'BIGINT']] as const)('空值、NULL 和数值不可生成文本快捷条件 (%s, %s)', (value, type) => {
+    const capture = fixture(value, type).capture();
+    expect(capture.textMatch).toBe(false);
+    expect(() => queryResultCellFilterRule(capture, 'contains')).toThrow(text.invalid);
+  });
+
   it.each([
     ['BIGINT','18446744073709551615'],['DECIMAL','0.12345678901234567891'],['DATETIME','2026-10-20 12:00:00.123456'],['TIME','-100:00:00.000001'],['TEXT','  A,%_.*\nNULL  '],['TEXT',''],['DOUBLE',1.25],
   ] as [string,CellValue][])('%s只填当前唯一键及完整原值，正反条件不生成SQL',(type,value)=>{

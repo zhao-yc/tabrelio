@@ -23,6 +23,7 @@ export const queryResultFilterZh = {
   member:(condition:number,member:number)=>`第${condition}条条件第${member}个候选值`,removeMember:(condition:number,member:number)=>`移除第${condition}条条件第${member}个候选值`,addMember:(condition:number)=>`为第${condition}条条件添加候选值`,memberCount:(count:number,maximum:number)=>`${count} / ${maximum} 个候选值`,
   add: '添加条件', apply: '应用筛选', cancel: '取消筛选草稿', clear: '清除全部筛选', clearDraft: '清空条件草稿',
   cellEquals:'追加等值条件',cellNotEquals:'追加排除条件',cellHint:'将当前单元格作为新条件，与现有条件整体按 AND 组合。先审阅草稿，应用后生效；不重发 SQL。',cellUnavailable:'请选择支持比较的当前单元格；SQLite字节使用完整十六进制，其它字节、未知原值或过长值不能直接填入筛选条件。',
+  cellContains:'包含此文本',cellNotContains:'不包含此文本',
   remove: (index: number) => `移除第${index}条筛选条件`, condition: (index: number) => `第${index}条筛选条件`,
   duplicateLabel:'复制条件',duplicate:(index:number)=>`复制第${index}条筛选条件`,
   enabledLabel:'启用',enabled:(index:number)=>`启用第${index}条筛选条件`,

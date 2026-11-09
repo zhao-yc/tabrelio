@@ -1690,6 +1690,45 @@ test('查询结果列数据质量保留 SQLite 原类型并区分当前勾选范
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询文本快捷筛选按字面匹配且不扫描其它存储类型', async ({}, info) => {
+  await seed(`SELECT id, CASE id WHEN 1 THEN '%_' WHEN 2 THEN 'A%_B' WHEN 3 THEN '普通'
+    WHEN 4 THEN NULL ELSE 42 END AS v FROM subject WHERE id <= 5 ORDER BY id;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+  await expect(ids).toHaveText(['1', '2', '3', '4', '5']);
+  const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'query.execute').map(task => task.id));
+  const before = await tasks();
+  const menu = page.getByRole('menu');
+  const contains = menu.getByRole('menuitem', { name: filterText.cellContains, exact: true });
+  const notContains = menu.getByRole('menuitem', { name: filterText.cellNotContains, exact: true });
+  await grid.getByRole('gridcell', { name: '42', exact: true }).click({ button: 'right' });
+  await expect(menu.getByRole('menuitem', { name: filterText.cellEquals, exact: true })).toBeVisible();
+  await expect(contains).toHaveCount(0);
+  await expect(notContains).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  const textCell = grid.getByRole('gridcell', { name: '%_', exact: true });
+  const panel = query.getByRole('region', { name: filterText.title, exact: true });
+  await textCell.click();
+  await page.keyboard.press('Shift+F10');
+  await contains.click();
+  await expect(panel.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('contains');
+  await expect(panel.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text');
+  await expect(panel.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('%_');
+  await expect(ids).toHaveText(['1', '2', '3', '4', '5']);
+  await info.attach('SQLite查询文本快捷筛选', { body: await page.screenshot(), contentType: 'image/png' });
+  await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['1', '2']);
+  await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
+  await expect(ids).toHaveText(['1', '2', '3', '4', '5']);
+  await textCell.click({ button: 'right' });
+  await notContains.click();
+  await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['3']);
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果只显示匹配行可保留排序和筛选并恢复原范围', async () => {
   await seed();
   const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
