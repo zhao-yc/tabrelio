@@ -11,18 +11,21 @@ import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule,
 import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterRule, type QueryResultFilterView } from '../queryResultFilter';
 import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilterOperator } from '../queryResultCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
+import { QueryRowDetails, type QueryRowDetailsView } from '../queryRowDetails';
 import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
 import { prepareQueryResultOrganization, QueryResultHistory } from '../queryResultHistory';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../locales/queryResultStatistics.zh-CN';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
+import { queryRowDetailsZh as detailText } from '../locales/queryRowDetails.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultComparisonDialog, type QueryResultComparisonSource } from './QueryResultComparisonDialog';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
+import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { escapeTargetsQueryResultFind } from './QueryResultFind';
 import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
 import { SqlEditor } from './SqlEditor';
@@ -43,7 +46,8 @@ type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: Qu
 type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView; seed?: QueryResultFilterGroup };
 type SnapshotComparison = { kind: 'compare'; owner: string; source: Loaded; files: readonly QueryResultComparisonSource[]; dialect?: SortDialect };
 type SnapshotStatistics = { kind: 'statistics'; owner: string; source: Loaded; result: QueryResult; column: ResultColumn; indices: ReadonlySet<number> };
-type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison | SnapshotStatistics |
+type SnapshotRowDetail = { kind: 'row-detail'; source: Loaded; view: QueryRowDetailsView };
+type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison | SnapshotStatistics | SnapshotRowDetail |
   { kind: 'export'; scope: 'snapshot' | 'rectangle'; result: GridRangeExportData; selected: boolean };
 
 /** 全局查看只持有文件内容，不创建查询、连接或会话；原文件Promise包括主进程清理。 */
@@ -53,6 +57,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const [overlay, setOverlay] = useState<SnapshotOverlay>(), overlayRef = useRef<SnapshotOverlay | undefined>(undefined);
   const exportSelection = useMemo(() => new ResultExportSelection(), []);
   const [history] = useState(() => new QueryResultHistory());
+  const [rowDetails] = useState(() => new QueryRowDetails());
+  const [activeDetail, setActiveDetail] = useState<{ scope: object; result: QueryResult; index: number }>();
   const [, refreshSelection] = useState(0);
   const returnFocus = useRef<HTMLElement | null>(null);
   const exportTrigger = useRef<HTMLButtonElement | null>(null);
@@ -73,6 +79,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     { expression: filterView.expression, sort: sortView.rules }) : undefined;
   const matches = useQueryResultMatchView(sortView?.result ?? filterView?.result ?? sourceResult, sourceResult?.columns, [loaded?.scope]);
   const displayed = matches.result;
+  const detailBinding = rowDetails.bind(displayed, [loaded?.scope]);
+  const detailIndex = loaded && displayed && detailBinding && activeDetail?.scope === loaded.scope && activeDetail.result === displayed
+    ? activeDetail.index : undefined;
   const binding = exportSelection.bind(displayed, [loaded?.scope]);
   const checkedCount = exportSelection.count(binding);
   useLayoutEffect(() => { alive.current = true; lifetime.current++; return () => { alive.current = false; lifetime.current++; }; }, []);
@@ -170,8 +179,35 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   function closeOverlay(view: SnapshotOverlay): void {
     if (!alive.current || overlayRef.current !== view) return;
+    if (view.kind === 'row-detail') rowDetails.close(view.view);
     overlayRef.current = undefined;
     advance(); setOverlay(undefined);
+  }
+  /** 活动数据格只指定显示行，不借用勾选或原文件行号。 */
+  function selectDetailRow(cell: QueryResultCopyCell | undefined): void {
+    if (!loaded || !displayed || !gridCurrent(loaded, interaction, false)) return;
+    const index = cell?.column && displayed.rows[cell.index] === cell.row ? cell.index : undefined;
+    setActiveDetail(previous => index === undefined ? undefined :
+      previous?.scope === loaded.scope && previous.result === displayed && previous.index === index ? previous :
+      { scope: loaded.scope, result: displayed, index });
+  }
+  function openRowDetail(trigger: HTMLButtonElement): void {
+    if (!loaded || detailIndex === undefined || !editable()) return;
+    try { openOverlay({ kind: 'row-detail', source: loaded, view: rowDetails.open(detailBinding, detailIndex) }, trigger); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 翻行只更换本窗口的行租约，保留字段搜索和查看模式。 */
+  function moveRowDetail(draft: SnapshotRowDetail, index: number): void {
+    if (!detailCurrent(draft)) return;
+    try {
+      const next = { ...draft, view: rowDetails.move(draft.view, index) };
+      overlayRef.current = next;
+      setOverlay(next); setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  function detailCurrent(draft: SnapshotRowDetail): boolean {
+    return alive.current && overlayRef.current === draft && loadedRef.current === draft.source &&
+      displayed === draft.view.binding.result && !operation.current;
   }
   function sortDraftCurrent(draft: SnapshotSort): boolean {
     return alive.current && overlayRef.current === draft && sorter.view(draft.binding) === draft.initial;
@@ -345,6 +381,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button ref={exportTrigger} disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
       <button ref={filterTrigger} disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
+      <button disabled={!!busy || detailIndex === undefined} title={detailText.choose}
+        onClick={event => openRowDetail(event.currentTarget)}>{detailText.open}</button>
       <button disabled={!!busy || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
         onClick={event => openSort(event.currentTarget)}>{sortText.panelTitle}</button>
       <button disabled={!!busy || !history.target(historyBinding, -1)} title={history.limited ? historyText.limited : text.historyHint}
@@ -373,6 +411,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           onFilterCell={filterView ? openCellFilter : undefined} onStatistics={filterView ? openStatistics : undefined}
           onExportRange={binding ? openRangeExport : undefined}
           onHistoryTravel={historyBinding ? travelHistory : undefined}
+          onActiveCellChange={selectDetailRow}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>
@@ -383,6 +422,13 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     </> : <p>{text.empty}</p>}
   </div></Modal></div>
     {overlay?.kind === 'export' && <ResultExportDialog scope={overlay.scope} result={overlay.result} selected={overlay.selected} onClose={() => closeOverlay(overlay)}/>}
+    {overlay?.kind === 'row-detail' && <Modal title={detailText.open} wide onClose={() => closeOverlay(overlay)}>
+      <div className="query-result-snapshot-detail">
+        <QueryRowDetailsPanel controller={rowDetails} view={overlay.view} isCurrent={() => detailCurrent(overlay)}
+          onMove={(_, index) => moveRowDetail(overlay, index)} onClose={() => closeOverlay(overlay)}/>
+        <ErrorBox message={error}/>
+      </div>
+    </Modal>}
     {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} pins={overlay.files} dialect={overlay.dialect}
       isCurrent={() => comparisonCurrent(overlay)} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'statistics' && <QueryResultStatisticsDialog owner={overlay.owner} columns={overlay.result.columns}

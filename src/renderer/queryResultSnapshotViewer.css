@@ -6,3 +6,5 @@
 .query-result-snapshot-viewer-grid .query-result-find-region { min-height: 0; }
 .query-result-snapshot-viewer-sql { flex: 0 0 auto; min-height: 210px; }
 .query-result-snapshot-viewer-sql > p { margin: 0 0 6px; }
+.query-result-snapshot-detail { min-height: 0; overflow: auto; }
+.query-result-snapshot-detail > .query-row-details { width: auto; max-width: none; border-left: 0; overflow: visible; }

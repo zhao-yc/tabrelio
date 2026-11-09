@@ -25,6 +25,8 @@ function register(): void {
   const { queryResultSelectedFilterZh: selectedFilterText } = require('../../src/renderer/locales/queryResultSelectedFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultSelectedFilter.zh-CN');
   const { queryResultStatisticsZh: statisticsText } = require('../../src/renderer/locales/queryResultStatistics.zh-CN') as typeof import('../../src/renderer/locales/queryResultStatistics.zh-CN');
   const { queryResultHistoryZh: historyText } = require('../../src/renderer/locales/queryResultHistory.zh-CN') as typeof import('../../src/renderer/locales/queryResultHistory.zh-CN');
+  const { queryRowDetailsZh: detailText } = require('../../src/renderer/locales/queryRowDetails.zh-CN') as typeof import('../../src/renderer/locales/queryRowDetails.zh-CN');
+  const { queryReadonlyRecordZh: recordText } = require('../../src/renderer/locales/queryReadonlyRecord.zh-CN') as typeof import('../../src/renderer/locales/queryReadonlyRecord.zh-CN');
   const { queryResultComparisonZh: comparisonText } = require('../../src/renderer/locales/queryResultComparison.zh-CN') as typeof import('../../src/renderer/locales/queryResultComparison.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
@@ -179,6 +181,33 @@ function register(): void {
       await step(() => expect(big.getByLabel(sortText.ascending)).toBeVisible());
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
 
+      const detailButton = viewer.getByRole('button', { name: detailText.open, exact: true });
+      const detail = page.getByRole('dialog', { name: detailText.open, exact: true });
+      await step(() => expect(detailButton).toBeDisabled());
+      await step(() => grid.getByRole('gridcell', { name: '构造键安全', exact: true }).click());
+      await step(() => detailButton.click());
+      await step(() => expect(detail.getByLabel(detailText.row, { exact: true })).toHaveValue('2'));
+      await step(() => detail.getByRole('searchbox', { name: detailText.fieldSearch, exact: true }).fill('重复列'));
+      await step(() => expect(detail.getByRole('heading', { name: /重复列/ })).toHaveCount(2));
+      await step(() => expect(detail.locator('pre')).toHaveText(['原型键安全', '构造键安全']));
+      if (mode === 'save') await step(async () => info.attach('离线快照行详情', { body: await page.screenshot(), contentType: 'image/png' }));
+      await step(() => detail.getByRole('button', { name: detailText.previous, exact: true }).click());
+      await step(() => expect(detail.locator('pre')).toHaveText(['另一行', '不同内容']));
+      await step(() => detail.getByRole('button', { name: detailText.next, exact: true }).click());
+      await step(() => detail.getByRole('button', { name: recordText.json, exact: true }).click());
+      const rawRecord = detail.getByRole('textbox', { name: recordText.jsonText, exact: true });
+      await step(() => expect(rawRecord).toHaveAttribute('readonly', ''));
+      const fields = JSON.parse(await step(() => rawRecord.inputValue())).fields;
+      expect(fields.filter((field: { name: string }) => field.name === '重复列').map((field: { key: string }) => field.key))
+        .toEqual(['__proto__', 'constructor']);
+      expect(fields).toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: 'big', value: { kind: 'text', value: '18446744073709551615' } }),
+        expect.objectContaining({ key: 'blob', value: { kind: 'blob', encoding: 'base64', value: 'AP8A', bytes: 3 } }),
+      ]));
+      await step(() => page.keyboard.press('Escape'));
+      await step(() => expect(detail).toBeHidden());
+      await step(() => expect(detailButton).toBeFocused());
+
       const checked = grid.getByRole('row').filter({ hasText: '另一行' }).getByRole('checkbox');
       const includeChecked = viewer.getByRole('button', { name: selectedFilterText.open, exact: true });
       const excludeChecked = viewer.getByRole('button', { name: selectedFilterText.exclude, exact: true });
@@ -284,6 +313,13 @@ function register(): void {
       await step(() => expect(match).toBeVisible());
       await step(() => expect(other).toHaveCount(0));
       if (mode === 'save') await step(async () => info.attach('离线结果快照匹配视图', { body: await page.screenshot(), contentType: 'image/png' }));
+
+      await step(() => match.click());
+      await step(() => detailButton.click());
+      await step(() => expect(detail.getByLabel(detailText.row, { exact: true })).toHaveValue('1'));
+      await step(() => expect(detail.getByRole('button', { name: detailText.next, exact: true })).toBeDisabled());
+      await step(() => detail.getByRole('button', { name: detailText.close, exact: true }).click());
+      await step(() => expect(viewer).toBeVisible());
 
       await step(() => match.locator('..').getByRole('checkbox').check());
       await step(() => match.click());
