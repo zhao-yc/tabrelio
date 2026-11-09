@@ -192,6 +192,27 @@ test('MySQL 表页按矩形填充字面值，只暂存且可一步撤销', async
   expect(await calls()).toEqual([]);
 });
 
+test('MySQL 按每行边缘列向左和向右填充，一步撤销', async () => {
+  const start = await cell('note', 2), end = await cell('other', 3);
+  const form = page.getByRole('region', { name: rangeFill.open, exact: true });
+  const original = [['😀old前old后old', 'OLD'], ['', '无匹配']];
+  const read = async () => {
+    await start.click();
+    await end.click({ modifiers: ['Shift'] });
+    return JSON.parse((await readGridRangeClipboard(page)).typed).rows;
+  };
+  for (const [direction, source] of [['right', 0], ['left', 1]] as const) {
+    expect(await read()).toEqual(original);
+    await page.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    expect(await read()).toEqual(original.map(row => [row[source], row[source]]));
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+    expect(await read()).toEqual(original);
+  }
+  expect(await calls()).toEqual([]);
+});
+
 test('MySQL Delete 将矩形设为 NULL，保留勾选并整步撤销', async () => {
   const start = await cell('note', 2), end = await cell('other', 3);
   const checkbox = start.locator('..').getByRole('checkbox');

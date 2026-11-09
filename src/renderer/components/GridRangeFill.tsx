@@ -23,6 +23,7 @@ export function GridRangeFill({ rectangle, typed, onStage }: {
       <option value="text">{text.text}</option><option value="null">{text.null}</option>
       {typed && <><option value="integer">{text.integer}</option><option value="real">{text.real}</option></>}
       {rectangle.bottom > rectangle.top && <><option value="down">{text.down}</option><option value="up">{text.up}</option></>}
+      {rectangle.right > rectangle.left && <><option value="right">{text.right}</option><option value="left">{text.left}</option></>}
     </select></Field>
     {(kind === 'text' || kind === 'integer' || kind === 'real') &&
       <Field label={text.value}><textarea autoFocus value={value} onChange={event => setValue(event.target.value)}/></Field>}

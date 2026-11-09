@@ -3,7 +3,7 @@ import type { PostgresTableChange, PostgresTableColumn, PostgresTablePage } from
 import { capturePostgresCheckedFill, planPostgresCheckedFill } from '../../src/renderer/postgresCheckedFill';
 import { retainPostgresCheckedPages, postgresCheckedPagePins } from '../../src/renderer/postgresCheckedPages';
 import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
-import { postgresBatchFillChanges, postgresRangeFillChanges, postgresRangeFillFromRow } from '../../src/renderer/postgresBatchFill';
+import { postgresBatchFillChanges, postgresRangeFillAcross, postgresRangeFillChanges, postgresRangeFillFromRow } from '../../src/renderer/postgresBatchFill';
 
 const column = (key: string, options: Partial<PostgresTableColumn> = {}): PostgresTableColumn => ({
   key, name: key, type: 'text', primary: false, generated: false, binary: false, nullable: true, defaultValue: false, ...options,
@@ -19,6 +19,19 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 勾选记录批量填充', () => {
+  it('横向填充从原行及已有草稿取值，并拒绝类型转换', () => {
+    const mirror = column('mirror');
+    const draftPage = { ...page, columns: [...columns, mirror], rows: page.rows.map(row => ({ ...row, mirror: '原目标' })) };
+    const range = { startRow: 0, rows: draftPage.rows, keys: ['c1', 'mirror'] };
+    const prior = (key: string): PostgresTableChange | undefined => key === '二' ? {
+      kind: 'update', row: 1, fields: [{ column: 'c1', value: { mode: 'null' } }],
+    } : undefined;
+    expect(postgresRangeFillAcross(draftPage, [columns[1], mirror], range, 'right', prior)).toEqual([
+      { kind: 'update', row: 0, fields: [{ column: 'mirror', value: { mode: 'text', value: '甲' } }] },
+      { kind: 'update', row: 1, fields: [{ column: 'c1', value: { mode: 'null' } }, { column: 'mirror', value: { mode: 'null' } }] },
+    ]);
+    expect(() => postgresRangeFillAcross(draftPage, [columns[1], columns[2]], { ...range, keys: ['c1', 'c2'] }, 'right', prior)).toThrow(/c2/);
+  });
   it('首尾行分别作为来源，保留原二进制和草稿 NULL，拒绝 DEFAULT 或待删除行', () => {
     const range = { startRow: 0, rows: page.rows, keys: ['c1', 'c2'] };
     const visible = [columns[1], columns[2]];

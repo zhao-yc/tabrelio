@@ -1,9 +1,11 @@
-import type { ColumnInfo, TablePage } from '../shared/contracts';
+import type { ColumnInfo, DataRow, TablePage } from '../shared/contracts';
 import { copyInsertSqlLimits as limits } from '../shared/copyInsertSql';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import type { DraftRow } from './dataChanges';
 import { changedDraftHistoryBytes, draftHistoryLimits } from './draftHistory';
 import { ownCell, parseCell } from './lib';
+import { gridRangeFillColumns, type GridRangeFillSide } from './gridRangeFill';
+import type { GridRangeTarget } from './useGridCellRange';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
 import { assertRecordBatchFields, recordBatchCellBytes, sameRecordBatchRow } from './recordDuplicateBatch';
 import { recordCopyMetadataReason, type RecordCopyPage } from './recordCopySource';
@@ -131,14 +133,51 @@ export function prepareBatchFillFromRow(keys: readonly string[], source: DraftRo
 function applyBatchFill(values: ReadonlyMap<string, DraftRow['data'][string]>, rows: DraftRow[], ids: ReadonlySet<string>): DraftRow[] {
   // 新增草稿的 DEFAULT 尚未存字段，明确赋值时需把它加入数据而不是略过。
   const patch = Object.fromEntries(values);
-  let total = 2, history = 128; const replacements = new Map<string, DraftRow>();
-  for (const row of rows) if (ids.has(row.id)) {
+  return applyBatchRowPatches(rows, row => ids.has(row.id) ? patch : undefined);
+}
+
+/** 横向填充逐行核对目标类型和 NULL，沿用现有字节预算及一次发布。 */
+export function prepareBatchFillAcross(range: GridRangeTarget<DraftRow>, side: GridRangeFillSide, rows: DraftRow[],
+  context: RecordContext): DraftRow[] {
+  const { source, targets } = gridRangeFillColumns(range.keys, side);
+  const writable = new Map(batchFillColumns(context).map(column => [column.name, column]));
+  const original = context.info?.columns.find(column => column.name === source);
+  const selected = new Set(range.rows);
+  if (!original || range.rows.some((row, index) => row.deleted || rows[range.startRow + index] !== row)) throw Error(rangeText.target);
+  const fields = targets.map(key => {
+    const column = writable.get(key);
+    if (!column) throw Error(rangeText.target);
+    return column;
+  });
+  return applyBatchRowPatches(rows, row => {
+    if (!selected.has(row)) return;
+    const value = ownCell(row.data, source);
+    if (value === undefined) throw Error(rangeText.missing);
+    return Object.fromEntries(fields.map(column => {
+      if (!row.inserted && !Object.hasOwn(row.data, column.name)) throw Error(rangeText.target);
+      if (value === null ? !column.nullable : original.type !== column.type || original.characterSet !== column.characterSet)
+        throw Error(rangeText.incompatible(column.name));
+      return [column.name, value];
+    }));
+  });
+}
+
+function applyBatchRowPatches(rows: DraftRow[], patchFor: (row: DraftRow) => DataRow | undefined): DraftRow[] {
+  let total = 2, history = 128;
+  const replacements = new Map<DraftRow, { row: DraftRow; patch: DataRow }>();
+  for (const row of rows) {
+    const patch = patchFor(row);
+    if (!patch) continue;
     const data = { ...row.data, ...patch };
     for (const [key, cell] of Object.entries(data)) { total += bytes(key) + bytes(cell) + 4; if (total > limits.inputBytes) throw Error(text.budget); }
     if (same(row.data, data)) continue;
     const next = { ...row, data }; history += changedDraftHistoryBytes(row, next); if (history > draftHistoryLimits.bytes) throw Error(text.budget);
-    replacements.set(row.id, next);
+    replacements.set(row, { row: next, patch });
   }
   // 最后才深复制新写入的二进制包装，各行不能共享可变值；original及无关字段引用保持。
-  return replacements.size ? rows.map(row => { const next = replacements.get(row.id); return next ? { ...next, data: Object.fromEntries(Object.entries(next.data).map(([key, cell]) => [key, values.has(key) ? structuredClone(cell) : cell])) } : row; }) : rows;
+  return replacements.size ? rows.map(row => {
+    const next = replacements.get(row);
+    return next ? { ...next.row, data: Object.fromEntries(Object.entries(next.row.data)
+      .map(([key, cell]) => [key, Object.hasOwn(next.patch, key) ? structuredClone(cell) : cell])) } : row;
+  }) : rows;
 }

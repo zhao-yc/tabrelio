@@ -5,7 +5,7 @@ import { postgresBatchFillZh as text } from './locales/postgresBatchFill.zh-CN';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, postgresBatchValueValid } from './postgresBatchSelection';
 import { postgresClipboardFieldValue } from './postgresGridPaste';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
-import { gridRangeFillSource, type GridRangeFillDirection } from './gridRangeFill';
+import { gridRangeFillColumns, gridRangeFillSource, type GridRangeFillDirection, type GridRangeFillSide } from './gridRangeFill';
 import type { GridRangeTarget } from './useGridCellRange';
 
 /** 矩形只转换一次统一值，再交给既有的原行账本和批量字段校验。 */
@@ -29,14 +29,41 @@ export function postgresRangeFillFromRow(page: PostgresTablePage, columns: reado
     return !key || prior(key)?.kind === 'delete';
   });
   const source = prior(page.rowKeys![plan.sourceIndex]);
-  const fields = columns.map(column => {
-    const staged = source?.kind === 'update' ? source.fields.find(field => field.column === column.key)?.value : undefined;
-    const value = staged ?? postgresClipboardFieldValue(ownCell(plan.source, column.key), column);
-    if (value.mode === 'default') throw Error(rangeText.missing);
-    return { column: column.key, value };
-  });
+  const fields = columns.map(column => ({ column: column.key, value: fillSourceValue(plan.source, column, source) }));
   const selected = new Set(plan.rows.map((_, index) => plan.startRow + index));
   return postgresBatchFillChanges(page, columns, selected, fields, prior);
+}
+
+function fillSourceValue(row: DataRow, column: PostgresTableColumn, previous?: PostgresTableChange): PostgresTableField['value'] {
+  const staged = previous?.kind === 'update' ? previous.fields.find(field => field.column === column.key)?.value : undefined;
+  const value = staged ?? postgresClipboardFieldValue(ownCell(row, column.key), column);
+  if (value.mode === 'default') throw Error(rangeText.missing);
+  return value;
+}
+
+/** 横向复制逐行读取草稿，任何不兼容字段都在统一暂存前拒绝。 */
+export function postgresRangeFillAcross(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
+  range: GridRangeTarget<DataRow>, side: GridRangeFillSide, prior: (key: string) => PostgresTableChange | undefined): PostgresTableChange[] {
+  const { source, targets } = gridRangeFillColumns(columns, side);
+  if (!page.capabilities.update || columns.some(column => !page.columns.includes(column)) ||
+      targets.some(column => !postgresBatchEditableColumn(column)) || targets.length > postgresTableLimits.fields)
+    throw Error(rangeText.target);
+  const selected = new Set(range.rows.map((_, index) => range.startRow + index));
+  const rows = postgresBatchRows(page, selected, prior);
+  let size = 0;
+  const encoder = new TextEncoder();
+  return rows.flatMap(({ index: row, original, previous }) => {
+    const value = fillSourceValue(original, source, previous);
+    if ('value' in value) size += encoder.encode(value.value).byteLength * targets.length;
+    if (size > postgresTableLimits.draft) throw Error(rangeText.limit);
+    const fields = targets.map(column => {
+      if (value.mode !== 'null' && (column.type !== source.type || column.binary !== source.binary) ||
+          !postgresBatchValueValid(column, value)) throw Error(rangeText.incompatible(column.name));
+      return { column: column.key, value };
+    });
+    const next = postgresFilledFields(original, fields, previous);
+    return next ? [{ kind: 'update', row, fields: next }] : [];
+  });
 }
 
 /** 以明确的勾选行、原行键和可见列构造整批草稿。其它字段及已暂存行版本由原工作区保留。 */

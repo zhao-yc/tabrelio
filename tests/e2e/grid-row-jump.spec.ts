@@ -561,6 +561,53 @@ test('SQLite 可用 Backspace 和菜单将选区设为 NULL，定位键使整块
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 横向填充逐行保留原值，亲和性不兼容时整块拒绝', async () => {
+  await seed(undefined, 'ALTER TABLE subject ADD COLUMN mirror TEXT;' +
+    'ALTER TABLE subject ADD COLUMN numeric_target INTEGER;' +
+    "UPDATE subject SET name='000123', mirror='甲', numeric_target=1 WHERE id=1;" +
+    "UPDATE subject SET name=NULL, mirror='乙', numeric_target=2 WHERE id=2;");
+  const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const first = table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true }).first().locator('..');
+  const header = table.getByRole('columnheader').filter({ has: page.locator('.grid-header-detail-name').filter({ hasText: /^name$/ }) });
+  const column = await header.getAttribute('aria-colindex');
+  expect(column).toMatch(/^\d+$/);
+  const form = table.getByRole('region', { name: rangeFill.open, exact: true });
+  const undo = table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true });
+  async function select(wide = false) {
+    await first.locator('[role="gridcell"][aria-colindex="' + column + '"]').click();
+    await page.keyboard.press('Shift+ArrowRight');
+    if (wide) await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(table.locator('.grid-cell-in-range')).toHaveCount(wide ? 6 : 4);
+    return JSON.parse((await readGridRangeClipboard(page)).sqlite).rows;
+  }
+  async function stage(direction: 'left' | 'right') {
+    await table.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+  }
+  const original = await select();
+  expect(original).toEqual([
+    [{ kind: 'text', value: '000123' }, { kind: 'text', value: '甲' }],
+    [{ kind: 'null' }, { kind: 'text', value: '乙' }],
+  ]);
+  for (const [direction, index] of [['right', 0], ['left', 1]] as const) {
+    await stage(direction);
+    expect(await select()).toEqual(original.map((row: unknown[]) => [row[index], row[index]]));
+    await undo.click();
+    expect(await select()).toEqual(original);
+  }
+  const wide = await select(true);
+  await stage('right');
+  await expect(form.getByRole('alert')).toContainText(rangeFill.incompatible('numeric_target'));
+  await expect(undo).toBeDisabled();
+  expect(await select(true)).toEqual(wide);
+  expect(readFileSync(database)).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 向下和向上填充保留整数、文本、字节与 NULL，可整步撤销', async () => {
   await seed(undefined, 'ALTER TABLE subject ADD COLUMN exact_value INTEGER;' +
     'ALTER TABLE subject ADD COLUMN payload BLOB;' +

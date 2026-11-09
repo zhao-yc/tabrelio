@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillFromRow, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
+import { BatchFillIntent, batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatchFillFromRow, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
 import { DraftHistory } from '../../src/renderer/draftHistory';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo, TablePage } from '../../src/shared/contracts';
@@ -19,6 +19,21 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('横向填充按行使用来源草稿，字段类型或字符集不一致时整批拒绝', () => {
+    const { rows, info, context } = fixture();
+    info.columns.push({ ...info.columns[1], name: 'mirror' });
+    for (const row of rows) row.data.mirror = '目标';
+    rows[0].data.note = '000123';
+    rows[1].data.note = null;
+    const range = { startRow: 0, rows: rows.slice(0, 2), keys: ['note', 'mirror'] };
+    const next = prepareBatchFillAcross(range, 'right', rows, context);
+    expect(next.map(row => row.data.mirror)).toEqual(['000123', null, '目标']);
+    expect(next[2]).toBe(rows[2]);
+    expect(rows.map(row => row.data.mirror)).toEqual(['目标', '目标', '目标']);
+    expect(() => prepareBatchFillAcross({ ...range, keys: ['note', 'mirror', 'num'] }, 'right', rows, context)).toThrow(/num/);
+    info.columns.at(-1)!.characterSet = 'latin1';
+    expect(() => prepareBatchFillAcross(range, 'right', rows, context)).toThrow(/mirror/);
+  });
   it('给新增草稿中的 DEFAULT 显式赋 NULL 后可一步恢复默认值', () => {
     const { rows, context } = fixture();
     const inserted = { id: '新增', data: {}, inserted: true, deleted: false };

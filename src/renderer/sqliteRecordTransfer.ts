@@ -71,7 +71,7 @@ export function queryToSqliteValues(snapshot: PostgresRecordTransfer): SqliteCli
 }
 
 /** 目标可能隐式转换数值。只接受能够保留原类型的亲和性，STRICT ANY 保留所有非 NULL 类型。 */
-function accepts(column: SqliteEditColumn, strict: boolean, value: SqliteClipboardCell, preserveStorage: boolean): boolean {
+export function sqliteColumnAcceptsTransferValue(column: SqliteEditColumn, strict: boolean, value: SqliteClipboardCell, preserveStorage: boolean): boolean {
   if (!value || column.generated) return false;
   if (value.kind === 'null') return column.nullable && !column.primary;
   if (strict && column.declaredType.toUpperCase() === 'ANY') return true;
@@ -86,7 +86,7 @@ function accepts(column: SqliteEditColumn, strict: boolean, value: SqliteClipboa
 export function sqliteTransferTargets(snapshot: PostgresRecordTransfer, page: SqliteTablePage, values: readonly SqliteClipboardCell[][], index: number) {
   const edit = page.edit, preserveStorage = sqliteTransferEngine(snapshot) === 'SQLite';
   return edit?.kind === 'editable'
-    ? edit.columns.filter(column => values.every(row => accepts(column, !!edit.strict, row[index], preserveStorage))) : [];
+    ? edit.columns.filter(column => values.every(row => sqliteColumnAcceptsTransferValue(column, !!edit.strict, row[index], preserveStorage))) : [];
 }
 
 export function defaultSqliteTransferMapping(snapshot: PostgresRecordTransfer, page: SqliteTablePage, values: readonly SqliteClipboardCell[][]): SqlitePasteMapping {
@@ -100,7 +100,7 @@ export function defaultSqliteTransferMapping(snapshot: PostgresRecordTransfer, p
   return snapshot.columns.map(({ name }, index) => {
     const target = targets.get(name);
     const column = edit?.kind === 'editable' && target && names.get(name.toLowerCase()) === 1 &&
-      values.every(row => accepts(target, !!edit.strict, row[index], preserveStorage)) ? name : null;
+      values.every(row => sqliteColumnAcceptsTransferValue(target, !!edit.strict, row[index], preserveStorage)) ? name : null;
     return { column, kind: 'preserve' };
   });
 }
@@ -114,7 +114,7 @@ export function prepareSqliteRecordTransfer(snapshot: PostgresRecordTransfer, pa
   for (const [index, field] of mapping.entries()) {
     if (field.column === null) continue;
     const target = targets.get(field.column);
-    if (!target || field.kind !== 'preserve' || !values.every(row => accepts(target, !!edit.strict, row[index], preserveStorage))) throw Error(text.incompatible(field.column));
+    if (!target || field.kind !== 'preserve' || !values.every(row => sqliteColumnAcceptsTransferValue(target, !!edit.strict, row[index], preserveStorage))) throw Error(text.incompatible(field.column));
     if (!preserveStorage && sqliteTableImportAffinity(target.declaredType, !!edit.strict) === 'text') textTargets.add(index);
   }
   // 映射到 TEXT 时直接写入整数原文，后续较小的批次也能写入同一文本列。

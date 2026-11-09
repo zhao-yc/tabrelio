@@ -11,11 +11,11 @@ import type { SqliteRecordPatch } from '../sqliteRecordBatch';
 import { SqliteTableDraftDialog } from './SqliteTableDraftDialog';
 import { sqliteTableDraftZh as draftFileText } from '../locales/sqliteTableDraft.zh-CN';
 import type { SqliteDraftRestored, SqliteTableDraftDocument } from '../../shared/sqliteTableDraft';
-import { sqliteEditValueSchema, type SqliteTableEditPreviewInput } from '../../shared/sqliteTableEdit';
+import { sqliteEditValueSchema, sqliteTableEditLimits, type SqliteTableEditPreviewInput } from '../../shared/sqliteTableEdit';
 import type { GridRangeTarget } from '../useGridCellRange';
 import type { GridPasteShape } from '../gridRangePaste';
 import { gridRangePasteZh as rangePasteText } from '../locales/gridRangePaste.zh-CN';
-import { gridRangeFillSource, type GridRangeFillInput } from '../gridRangeFill';
+import { gridRangeFillColumns, gridRangeFillSource, type GridRangeFillInput } from '../gridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { SqliteEditWorkspace, type SqliteWorkspaceFill, type SqliteWorkspaceRecordEdit } from '../sqliteEditWorkspace';
 import { sqliteEditWorkspaceZh as workspaceText } from '../locales/sqliteEditWorkspace.zh-CN';
@@ -129,7 +129,7 @@ import { readSqliteClipboard, sqlitePastePlanValues, type SqliteClipboardSource,
 import { sqliteTableClipboardZh as clipboardText } from '../locales/sqliteTableClipboard.zh-CN';
 import { sqliteRecordTransferZh as transferText } from '../locales/sqliteRecordTransfer.zh-CN';
 import { usePostgresRecordTransfer, type PostgresRecordTransfer } from '../postgresRecordTransfer';
-import { queryToSqliteValues, sqliteTransferEngine, type SqliteTransferEngine } from '../sqliteRecordTransfer';
+import { queryToSqliteValues, sqliteColumnAcceptsTransferValue, sqliteTransferEngine, type SqliteTransferEngine } from '../sqliteRecordTransfer';
 import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView } from '../queryRowDetails';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { queryRowDetailsZh as detailText } from '../locales/queryRowDetails.zh-CN';
@@ -1384,15 +1384,41 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         editor.view.rows !== editRows || range.rows.some((row, index) => editRows[range.startRow + index] !== row))
       throw Error(rangeFillText.stale);
     if (range.rows.some(row => row.deleted)) throw Error(rangeFillText.target);
+    const editableColumn = (key: string) => {
+      const column = Number(key.slice(1)), field = source.columns[column];
+      if (!field || !projection.some(item => item.index === column) || field.primary || field.generated ||
+          source.locator.columns.includes(field.name)) throw Error(rangeFillText.target);
+      return { column, field };
+    };
+    if (input.kind === 'left' || input.kind === 'right') {
+      const plan = gridRangeFillColumns(range.keys, input.kind);
+      if (range.rows.length > sqliteTableEditLimits.changes || range.rows.length * plan.targets.length > sqliteTableEditLimits.cells)
+        throw Error(rangeFillText.limit);
+      const sourceColumn = Number(plan.source.slice(1));
+      if (!projection.some(item => item.index === sourceColumn)) throw Error(rangeFillText.stale);
+      const targets = plan.targets.map(editableColumn);
+      const patches = range.rows.map(row => {
+        const original = row.values[sourceColumn];
+        if (original === undefined) throw Error(rangeFillText.missing);
+        const value = sqliteEditValueSchema.parse(original);
+        const fields = targets.map(({ column, field }) => {
+          if (!sqliteColumnAcceptsTransferValue(field, !!source.strict, value, true)) throw Error(rangeFillText.incompatible(field.name));
+          return { column, value };
+        });
+        return { rowId: row.id, fields };
+      });
+      editor.editRecords(prepareSqliteFill(editor.page, editRows, range.rows), patches);
+      setValidation('');
+      return;
+    }
     const from = input.kind === 'down' || input.kind === 'up' ? gridRangeFillSource(range, input.kind, row => row.deleted) : undefined;
     const entered = from ? undefined : input.kind === 'null' ? { kind: 'null' } : { kind: input.kind, value: input.value };
     const fields = range.keys.map(key => {
-      const column = Number(key.slice(1)), field = source.columns[column], type = field?.declaredType.toUpperCase();
+      const { column, field } = editableColumn(key), type = field.declaredType.toUpperCase();
       const original = from ? from.source.values[column] : entered;
       if (original === undefined) throw Error(rangeFillText.missing);
       const value = sqliteEditValueSchema.parse(original);
-      if (!field || !projection.some(item => item.index === column) || field.primary || field.generated ||
-          source.locator.columns.includes(field.name) || value.kind === 'null' && !field.nullable ||
+      if (value.kind === 'null' && !field.nullable ||
           source.strict && value.kind !== 'null' && type !== 'ANY' &&
           (value.kind === 'text' ? type !== 'TEXT' : value.kind === 'integer' ? type !== 'INT' && type !== 'INTEGER' :
             value.kind === 'blob' ? type !== 'BLOB' : type !== 'REAL'))
