@@ -7,6 +7,7 @@ import { queryResultFindZh as find } from '../../src/renderer/locales/queryResul
 import { queryResultSortZh as sort } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filter } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
+import { gridRangeExportZh as rangeText } from '../../src/renderer/locales/gridRangeExport.zh-CN';
 import { queryResultSnapshotFileMessages as filesText } from '../../src/main/queryResultSnapshotFiles';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
@@ -14,10 +15,11 @@ import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_SNAPSHOT_EXPORT_NATIVE !== '1', '仅在独立离线文件验收运行');
 
-test('零连接工作台对快照排序并按显示和勾选范围导出真实文件', async ({}, info) => {
+test('零连接工作台对快照排序并按显示、选区和勾选范围导出真实文件', async ({}, info) => {
   expect(process.env.DBARK_INTEGRATION_ENABLED).toBe('0');
   const source = join(dataDir, '离线源.dbark-result.json');
   const csv = join(dataDir, '匹配行.csv'), json = join(dataDir, '勾选行.json');
+  const rectangle = join(dataDir, '选区.json');
   const right = join(dataDir, '对比输入.dbark-result.json'), report = join(dataDir, '对比报告.json');
   const wire = JSON.stringify({
     kind: 'dbark.query-result-snapshot', version: 1, result: {
@@ -59,17 +61,19 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
       return original(event, payload);
     });
     dialog.showOpenDialog = (async (parent: Electron.BrowserWindow, options: Electron.OpenDialogOptions) => {
-      const compare = state.dialogs.length === 3;
+      const compare = state.dialogs.length === 4;
       if (parent !== window || options.title !== paths.openTitle || state.dialogs.length && !compare) reject('showOpenDialog');
       state.dialogs.push(compare ? 'compare' : 'open');
       return { canceled: false, filePaths: [compare ? paths.right : paths.source] };
     }) as typeof dialog.showOpenDialog;
     dialog.showSaveDialog = (async (parent: Electron.BrowserWindow, options: Electron.SaveDialogOptions) => {
-      const format = state.dialogs.length === 1 ? 'csv' : 'json';
-      const report = state.dialogs.length === 4 && options.defaultPath === paths.reportName;
-      if (parent !== window || options.title !== '导出文件' || state.dialogs.length > 2 && !report || !options.defaultPath?.endsWith('.' + format)) reject('showSaveDialog');
-      state.dialogs.push(report ? 'report' : format);
-      return { canceled: false, filePath: report ? paths.report : paths[format] };
+      const slot = state.dialogs.length;
+      const target = slot === 1 ? 'csv' : slot === 2 ? 'rectangle' : slot === 3 ? 'json' : 'report';
+      const extension = target === 'csv' ? '.csv' : '.json';
+      if (parent !== window || options.title !== '导出文件' || slot < 1 || slot > 5 ||
+          (target === 'report' ? slot !== 5 || options.defaultPath !== paths.reportName : !options.defaultPath?.endsWith(extension))) reject('showSaveDialog');
+      state.dialogs.push(target);
+      return { canceled: false, filePath: paths[target] };
     }) as typeof dialog.showSaveDialog;
     const fork = utilityProcess.fork.bind(utilityProcess);
     utilityProcess.fork = ((path: string, args: string[], options: Electron.ForkOptions) => {
@@ -78,14 +82,14 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
       const post = child.postMessage.bind(child);
       child.postMessage = ((message: { command: string; input: { connectionId?: string; sessionId?: string; filePath?: string } }) => {
         if (message.command !== '__shutdown' && (message.command !== 'files.exportResult' || message.input.connectionId ||
-            message.input.sessionId || ![paths.csv, paths.json, paths.report].includes(message.input.filePath ?? ''))) reject(message.command);
+            message.input.sessionId || ![paths.csv, paths.json, paths.rectangle, paths.report].includes(message.input.filePath ?? ''))) reject(message.command);
         state.engine.push(message.command);
         post(message);
       }) as typeof child.postMessage;
       return child;
     }) as typeof utilityProcess.fork;
     return state;
-  }, { source, csv, json, right, report, openTitle: filesText.choose, reportName: comparisonText.reportName });
+  }, { source, csv, json, rectangle, right, report, openTitle: filesText.choose, reportName: comparisonText.reportName });
 
   try {
     const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
@@ -160,7 +164,7 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
     await expect(filterButton).toBeFocused();
     await expect(filtered).toBeVisible();
 
-    const save = async (title: string, format: 'csv' | 'json', rows: number) => {
+    const save = async (title: string, format: 'csv' | 'json', rows: number, filename: string) => {
       const dialog = page.getByRole('dialog', { name: title, exact: true });
       await expect(dialog).toBeVisible();
       await expect(viewer).toBeHidden();
@@ -168,7 +172,7 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
       await expect(selector.locator('option[value="sql"]')).toHaveCount(0);
       await selector.selectOption(format);
       await dialog.getByRole('button', { name: new RegExp(zh.resultExport.chooseFile) }).click();
-      await expect(dialog.getByText(format === 'csv' ? '匹配行.csv' : '勾选行.json', { exact: true })).toBeVisible();
+      await expect(dialog.getByText(filename, { exact: true })).toBeVisible();
       if (format === 'csv') await info.attach('离线快照导出预览', { body: await page.screenshot(), contentType: 'image/png' });
       await dialog.getByRole('button', { name: zh.resultExport.start, exact: true }).click();
       await expect(dialog.getByText(formatText(zh.resultExport.completed, rows), { exact: true })).toBeVisible();
@@ -176,10 +180,25 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
       await expect(viewer).toBeVisible();
     };
     await shown.click();
-    await save(text.exportShown, 'csv', 2);
+    await save(text.exportShown, 'csv', 2, '匹配行.csv');
     await expect(shown).toBeFocused();
     expect((await readFile(csv, 'utf8')).replace(/^\uFEFF/, '')).toBe(
       '内容,金额,字节\r\n匹配丙,9007199254740993.0002,\\N\r\n匹配甲,9007199254740993.0002,\\N\r\n');
+    await labels.first().click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Shift+F10');
+    await viewer.getByRole('menuitem', { name: rangeText.action, exact: true }).click();
+    const rectangleDialog = page.getByRole('dialog', { name: rangeText.action, exact: true });
+    await expect(rectangleDialog.getByText(rangeText.summary(2, 2), { exact: true })).toBeVisible();
+    await expect(rectangleDialog.getByRole('columnheader').filter({ hasText: '字节' })).toHaveCount(0);
+    await info.attach('离线快照矩形导出', { body: await page.screenshot(), contentType: 'image/png' });
+    await save(rangeText.action, 'json', 2, '选区.json');
+    await expect(labels.last().locator('..').locator('[role="gridcell"][aria-colindex="3"]')).toBeFocused();
+    expect(JSON.parse(await readFile(rectangle, 'utf8'))).toEqual([
+      { 内容: '匹配丙', 金额: '9007199254740993.0002' },
+      { 内容: '匹配甲', 金额: '9007199254740993.0002' },
+    ]);
     await expect(filtered).toBeVisible();
     await viewer.getByRole('button', { name: filter.clear, exact: true }).click();
     await expect(matched).toBeVisible();
@@ -189,7 +208,7 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
     const rowCheck = viewer.getByRole('row').filter({ hasText: '勾选行' }).getByRole('checkbox');
     await rowCheck.check();
     await checked.click();
-    await save(text.exportChecked, 'json', 1);
+    await save(text.exportChecked, 'json', 1, '勾选行.json');
     await expect(checked).toBeFocused();
     await expect(rowCheck).toBeChecked();
     expect(JSON.parse(await readFile(json, 'utf8'))).toEqual([{ 内容: '勾选行', 金额: '9007199254740993', 字节: { type: 'binary', base64: 'AP8=' } }]);
@@ -228,9 +247,9 @@ test('零连接工作台对快照排序并按显示和勾选范围导出真实�
     expect(pageErrors).toEqual([]);
     const audit = await observer.jsonValue();
     expect(audit.denied).toEqual([]);
-    expect(audit.dialogs).toEqual(['open', 'csv', 'json', 'compare', 'report']);
-    expect(audit.engine).toEqual(['files.exportResult', 'files.exportResult', 'files.exportResult']);
-    expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(3);
+    expect(audit.dialogs).toEqual(['open', 'csv', 'rectangle', 'json', 'compare', 'report']);
+    expect(audit.engine).toEqual(Array(4).fill('files.exportResult'));
+    expect(audit.requests.filter(command => command === 'files.exportResult')).toHaveLength(4);
   } finally {
     await observer.dispose();
   }

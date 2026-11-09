@@ -1,11 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { QueryResult } from '../../shared/contracts';
 import { parseQueryResultSnapshot, type QueryResultSnapshotDocument } from '../../shared/queryResultSnapshot';
 import { queryResultSnapshotViewerZh as text } from '../locales/queryResultSnapshotViewer.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
+import type { GridRangeExportData } from '../gridRangeExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView, type SortDialect } from '../queryResultSort';
 import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
 import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
@@ -36,7 +36,8 @@ interface Operation { mode: FileMode; epoch: number; source: Loaded | undefined;
 type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: QueryResultSortView };
 type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView; seed?: QueryResultFilterGroup };
 type SnapshotComparison = { kind: 'compare'; owner: string; source: Loaded; files: readonly QueryResultComparisonSource[]; dialect?: SortDialect };
-type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison | { kind: 'export'; result: QueryResult; selected: boolean };
+type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison |
+  { kind: 'export'; scope: 'snapshot' | 'rectangle'; result: GridRangeExportData; selected: boolean };
 
 /** 全局查看只持有文件内容，不创建查询、连接或会话；原文件Promise包括主进程清理。 */
 export function QueryResultSnapshotDialog({ onClose, services = queryResultSnapshotViewerServices }: { onClose(): void; services?: QueryResultSnapshotViewerServices }) {
@@ -45,7 +46,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const [overlay, setOverlay] = useState<SnapshotOverlay>(), overlayRef = useRef<SnapshotOverlay | undefined>(undefined);
   const exportSelection = useMemo(() => new ResultExportSelection(), []);
   const [, refreshSelection] = useState(0);
-  const returnFocus = useRef<HTMLButtonElement | null>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const exportTrigger = useRef<HTMLButtonElement | null>(null);
   const filterTrigger = useRef<HTMLButtonElement | null>(null);
   const [interaction, setInteraction] = useState(0), interactionRef = useRef(0), operation = useRef<Operation | null>(null);
   const alive = useRef(false), lifetime = useRef(0), committed = useRef<object | null>(null), host = useRef<HTMLDivElement | null>(null), ticket = {};
@@ -140,10 +142,18 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     if (!editable() || !loaded || loadedRef.current !== loaded || !binding) return;
     try {
       const result = selected ? exportSelection.snapshot(binding) : exportSelection.allSnapshot(binding);
-      openOverlay({ kind: 'export', result, selected }, trigger);
+      openOverlay({ kind: 'export', scope: 'snapshot', result, selected }, trigger);
     } catch (reason) { setError(errorMessage(reason)); }
   }
-  function openOverlay(view: SnapshotOverlay, trigger: HTMLButtonElement): void {
+  /** 网格已冻结显示矩形，交给既有文件导出。结束后回到菜单归还焦点的原格。 */
+  function openRangeExport(result: GridRangeExportData): void {
+    if (!loaded || !editable() || !gridCurrent(loaded, interaction, false)) return;
+    const active = document.activeElement;
+    const trigger = active instanceof HTMLElement && active.getAttribute('role') === 'gridcell' && host.current?.contains(active)
+      ? active : exportTrigger.current;
+    if (trigger) openOverlay({ kind: 'export', scope: 'rectangle', result, selected: false }, trigger);
+  }
+  function openOverlay(view: SnapshotOverlay, trigger: HTMLElement): void {
     returnFocus.current = trigger;
     overlayRef.current = view;
     advance(); setOverlay(view); setError('');
@@ -270,7 +280,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button>
       <button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button>
       <button disabled={!!busy || !sourceResult?.columns.length} onClick={event => void file('compare', event.currentTarget)}>{text.compare}</button>
-      <button disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
+      <button ref={exportTrigger} disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
       <button ref={filterTrigger} disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
       <button disabled={!!busy || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
@@ -294,6 +304,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
           ownDialog={ownDialog} filterDialect={dialect} onFilterSelected={filterView ? openSelectedFilter : undefined}
+          onExportRange={binding ? openRangeExport : undefined}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>
@@ -303,7 +314,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       </section>}
     </> : <p>{text.empty}</p>}
   </div></Modal></div>
-    {overlay?.kind === 'export' && <ResultExportDialog scope="snapshot" result={overlay.result} selected={overlay.selected} onClose={() => closeOverlay(overlay)}/>}
+    {overlay?.kind === 'export' && <ResultExportDialog scope={overlay.scope} result={overlay.result} selected={overlay.selected} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} pins={overlay.files} dialect={overlay.dialect}
       isCurrent={() => comparisonCurrent(overlay)} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'sort' && <Modal title={sortText.panelTitle} wide onClose={() => closeOverlay(overlay)}>
