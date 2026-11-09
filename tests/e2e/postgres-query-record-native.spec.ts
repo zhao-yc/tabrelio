@@ -102,6 +102,18 @@ test('PostgreSQL 表页双端区间以原精度交给服务器', async () => {
     await expect(ids).toHaveText(['1', '2', '3', '4', '5']);
     await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
     await expect(ids).toHaveText(['4']);
+    await tab.getByRole('button', { name: zh.common.clearAll, exact: true }).click();
+    await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(ids).toHaveText(['1', '2', '3', '4', '5']);
+    for (const id of ['1', '3']) await cell(id).locator('..').getByRole('checkbox').check();
+    await cell('9007199254740993.0001').click();
+    await tab.getByRole('button', { name: tableSelectedFilterZh.checkedNotBetween, exact: true }).click();
+    await expect(tab.getByLabel(zh.table.filterRangeStart, { exact: true })).toHaveValue('9007199254740993.0002');
+    await expect(tab.getByLabel(zh.table.filterRangeEnd, { exact: true })).toHaveValue('9007199254740993.0003');
+    await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(ids).toHaveText(['1', '2', '3', '4', '5']);
+    await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(ids).toHaveText(['2', '4']);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

@@ -6,6 +6,11 @@ export interface TableRangeFilter<Row> {
   bounds?(range: GridRangeTarget<Row>, current: () => boolean): ((outside: boolean) => void) | undefined;
 }
 
+export const tableCheckedBoundsOptions = [
+  { label: text.checkedBetween, outside: false },
+  { label: text.checkedNotBetween, outside: true },
+] as const;
+
 /** 只在两个端点当前可用时提供操作；执行前重读同一范围，避免用到已变化的值。 */
 export function captureTableRangeBounds<Bounds>(read: () => Bounds, current: () => boolean,
   stage: (bounds: Bounds, outside: boolean) => void): ((outside: boolean) => void) | undefined {

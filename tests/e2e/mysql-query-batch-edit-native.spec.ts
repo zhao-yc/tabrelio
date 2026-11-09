@@ -235,6 +235,21 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
       await expect(tableCell('13')).toBeVisible();
       await expect(tableCell('18446744073709551615')).toBeVisible();
     }
+    const check = (id: string) => tableCell(id).locator('..').getByRole('checkbox');
+    await check('9007199254740992').check();
+    await check('9007199254740994').check();
+    await tableCell('18446744073709551613').click();
+    await (await navigationMenuItem(tableTab, { name: tableSelectedFilterZh.checkedNotBetween, exact: true })).click();
+    await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('NOT BETWEEN');
+    await expect(tableTab.getByLabel(zh.table.filterRangeStart, { exact: true })).toHaveValue('13');
+    await expect(tableTab.getByLabel(zh.table.filterRangeEnd, { exact: true })).toHaveValue('18446744073709551615');
+    await expect(tableCell('18446744073709551613')).toBeVisible();
+    await tableTab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(tableCell('18446744073709551613')).toHaveCount(0);
+    await expect(tableCell('18446744073709551615')).toHaveCount(0);
+    await expect(tableCell('13')).toHaveCount(0);
+    await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
+    await expect(tableCell('13')).toBeVisible();
     const column = await tableGrid.getByRole('columnheader').filter({ hasText: /^note/ }).getAttribute('aria-colindex');
     const note = (id: string) => tableCell(id).locator('..').locator('[role="gridcell"][aria-colindex="' + column + '"]');
     await expect(note('9007199254740993')).toHaveText('NULL');

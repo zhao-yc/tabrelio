@@ -48,7 +48,7 @@ import { useUiCommandScope } from '../uiCommands';
 import { openFocusedGridRowJump } from './GridRowJump';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { tableCellBoundActions } from '../tableCellFilter';
-import { captureTableRangeBounds } from '../tableRangeFilter';
+import { captureTableRangeBounds, tableCheckedBoundsOptions } from '../tableRangeFilter';
 import { postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
@@ -756,17 +756,35 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   }
 
   /** 端点只能来自当前页未被草稿覆盖的可见列，区间草稿沿用高级筛选。 */
-  function captureRangeBounds(range: GridRangeTarget<DataRow>, gridCurrent: () => boolean) {
-    const column = gridLayout.columns.find(item => item.key === range.keys[0]);
+  function captureBounds(firstIndex: number, lastIndex: number, key: string, gridCurrent: () => boolean) {
+    const column = gridLayout.columns.find(item => item.key === key);
     if (!page || !column) return;
-    const [first, last] = range.rows;
+    const first = page.rows[firstIndex], last = page.rows[lastIndex];
+    if (!first || !last) return;
     const current = () => canFilterCell() && gridCurrent() && !draftGrid?.cell(first, column.key) && !draftGrid?.cell(last, column.key);
     return captureTableRangeBounds(() => postgresTableRangeFilterDraft(
-      { column, row: first, index: range.startRow }, { column, row: last, index: range.startRow + 1 }, gridLayout.columns, page.rows),
+      { column, row: first, index: firstIndex }, { column, row: last, index: lastIndex }, gridLayout.columns, page.rows),
     current, (draft, outside) => {
       setCellFilterSeed({ ...draft, operator: outside ? 'NOT BETWEEN' : 'BETWEEN' });
       setAdvancedFilters(true);
+      setError('');
     });
+  }
+
+  function captureRangeBounds(range: GridRangeTarget<DataRow>, gridCurrent: () => boolean) {
+    if (!page || range.rows.some((row, index) => page.rows[range.startRow + index] !== row)) return;
+    return captureBounds(range.startRow, range.startRow + 1, range.keys[0], gridCurrent);
+  }
+
+  /** 选择必须属于当前结果网格，活动格只用来确定字段。 */
+  function stageCheckedBounds(indices: ReadonlySet<number>, gridCurrent: () => boolean, outside: boolean): void {
+    const column = selectedFilterColumn, anchor = findAnchor.current;
+    const current = () => gridCurrent() && findAnchor.current === anchor && canFilterCell();
+    if (indices.size !== 2 || !column || anchor?.scope !== cellScope || anchor.value?.key !== column.key || !current()) return;
+    const [first, last] = indices;
+    const stage = captureBounds(first, last, column.key, current);
+    if (stage) stage(outside);
+    else if (current()) setError(selectedFilterText.checkedBoundsUnavailable);
   }
 
   const canChangeGrid = !recordView && active && writable && pageConnectionVersion === connectionVersion;
@@ -1718,6 +1736,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             <button type="button" title={selectedFilterText.postgresUnsupported}
               disabled={!cellMenuEnabled || !selected.size || !selectedFilterColumn}
               onClick={() => openSelectedFilter(selected, current)}>{selectedFilterText.entry}</button>
+            {selected.size === 2 && tableCheckedBoundsOptions.map(({ label, outside }) => <button key={label} type="button"
+              title={selectedFilterText.checkedBoundsHint} disabled={!cellMenuEnabled || !selectedFilterColumn}
+              onClick={() => stageCheckedBounds(selected, current, outside)}>{label}</button>)}
             {page.capabilities.delete && <div className="query-row-details-actions" role="group" aria-label={deleteText.collectRegion}>
               <button type="button" disabled={!canBatch('delete', selected)} onClick={() => collectDeletePage(selected, current)}>
                 {deletePage ? deleteText.replace : deleteText.collect}

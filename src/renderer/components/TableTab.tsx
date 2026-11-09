@@ -52,7 +52,7 @@ import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.
 import { buildTableSelectedFilter, type TableSelectedFilterProposal } from '../tableSelectedFilter';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import { TableSelectedFilterPanel } from './TableSelectedFilterPanel';
-import { captureTableRangeBounds, tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFilter';
+import { captureTableRangeBounds, tableCheckedBoundsOptions, tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFilter';
 import { TableFilterPanel } from './TableFilterPanel';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
 import { tableFilterGroupAfterChange, tableFilterGroupWithMode, tableFilterGroupSummary } from '../tableFilterGroups';
@@ -1070,10 +1070,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   openRangeFilter.current = (range, exclude, current) => {
     openSelectedFilter(exclude, { rowId: range.rows[0].id, key: range.keys[0] }, new Set(range.rows.map(row => row.id)), current);
   };
-  /** 与单格草稿共享门槛。鼠标或键盘菜单都必须持有原页及双格选区。 */
-  function captureRangeBounds(range: GridRangeTarget<DraftRow>, gridCurrent: () => boolean) {
+  /** 双格与勾选复用相同的原页、原行和草稿门槛。 */
+  function captureBounds(first: DraftRow, last: DraftRow, key: string, gridCurrent: () => boolean) {
     if (!info || !canSeedCellFilter) return;
-    const [first, last] = range.rows, [key] = range.keys;
     // 打开菜单会重渲染本组件；绑定网格快照和表页租约，允许菜单本身的重渲染。
     const current = () => gridCurrent() && !externalStaleRef.current && !reloadBlocked() &&
       !collectChanges(rowsRef.current).length && cellActionCurrent(first) && cellActionCurrent(last);
@@ -1081,7 +1080,21 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       (draft, outside) => {
         setCellFilterSeed({ ...draft, operator: outside ? 'NOT BETWEEN' : 'BETWEEN' });
         setShowFilter(true);
+        setError('');
       });
+  }
+  function captureRangeBounds(range: GridRangeTarget<DraftRow>, gridCurrent: () => boolean) {
+    return captureBounds(range.rows[0], range.rows[1], range.keys[0], gridCurrent);
+  }
+  /** 活动格只确定字段；端点严格来自本页两个勾选 ID，旧工具栏动作不能消费新勾选。 */
+  function stageCheckedBounds(outside: boolean): void {
+    if (!selection || selectedRows.size !== 2 || !selectedFilterAvailable) return;
+    const current = () => selectionRef.current === selection && selectedRowsRef.current === selectedRows;
+    if (!current()) return;
+    const [first, last] = rows.filter(row => selectedRows.has(row.id));
+    const stage = first && last && captureBounds(first, last, selection.key, current);
+    if (stage) stage(outside);
+    else if (current()) setError(selectedFilterText.checkedBoundsUnavailable);
   }
   /** 页、列、原值、勾选或连接变化即永久失效；原提案不能借后来相同值恢复授权。 */
   function selectedFilterCurrent(lease: TableSelectedFilterLease): boolean {
@@ -2254,7 +2267,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button title={cellFilterText.hint} disabled={!cellFilterAvailable} onClick={() => stageCellFilter(false)}>{cellFilterText.equal}</button>
 <button title={cellFilterText.hint} disabled={!cellFilterAvailable} onClick={() => stageCellFilter(true)}>{cellFilterText.exclude}</button>
 <button aria-label={selectedFilterText.entry} title={selectedFilterText.hint} disabled={!selectedFilterAvailable} onClick={() => openSelectedFilter(false)}>{selectedFilterText.entry}</button>
-<button aria-label={selectedFilterText.excludeEntry} title={selectedFilterText.hint} disabled={!selectedFilterAvailable} onClick={() => openSelectedFilter(true)}>{selectedFilterText.excludeEntry}</button></ActionMenuSection>
+<button aria-label={selectedFilterText.excludeEntry} title={selectedFilterText.hint} disabled={!selectedFilterAvailable} onClick={() => openSelectedFilter(true)}>{selectedFilterText.excludeEntry}</button>
+{selectedRows.size === 2 && tableCheckedBoundsOptions.map(({ label, outside }) => <button key={label} type="button"
+  title={selectedFilterText.checkedBoundsHint} disabled={!selectedFilterAvailable || !canSeedCellFilter} onClick={() => stageCheckedBounds(outside)}>{label}</button>)}</ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.references}><button aria-label={referenceZh.choose} title={referenceZh.choose} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.some(key => info && referenceWritable(info, key))} onClick={() => openReference('choose')}>{referenceZh.choose}</button>
 <button aria-label={referenceZh.browse} title={referenceZh.browse} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.length} onClick={() => openReference('browse')}>{referenceZh.browse}</button>
 <button aria-label={childReferencesZh.title} title={childReferencesZh.title} disabled={blocked || !connection || !referenceRow || referenceRow.deleted || referenceRow.inserted || info?.objectKind !== 'table' || !page || externalStale || gridEditing || record.hasInput()} onClick={openChildReferences}>{childReferencesZh.title}</button></ActionMenuSection>

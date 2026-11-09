@@ -1,6 +1,9 @@
 export const tableSelectedFilterZh = {
   entry: '按勾选行值筛选', excludeEntry: '排除勾选行值', title: '勾选值筛选预览',
   rangeEntry: '按选区值筛选', rangeExclude: '排除选区值', rangeTitle: '选区值筛选预览',
+  checkedBetween: '用勾选两行设为区间内', checkedNotBetween: '用勾选两行设为区间外',
+  checkedBoundsHint: '勾选本页两行，再点选要筛选的列。两个端点都须是可比较且未修改的原值。',
+  checkedBoundsUnavailable: '无法从当前勾选行和字段生成区间。请选择两个同类型、可比较且未修改的非 NULL 原值。',
   rangeBetween: '用选区两格设为区间内', rangeNotBetween: '用选区两格设为区间外',
   rangeApply: '应用选区值筛选', rangeRowCount: '选区原行数', rangeNullState: '选区值中的 NULL',
   rangeHint: '使用单列选区的未修改原值，去重后与已有条件整体按 AND 组合。',

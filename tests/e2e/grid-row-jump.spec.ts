@@ -1580,6 +1580,38 @@ test('SQLite 表页快捷数值边界匹配跨页原生整数', async ({}, info)
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 表页勾选非相邻记录生成同类型区间草稿', async ({}, info) => {
+  await seed(undefined, `ALTER TABLE subject ADD COLUMN metric;
+    UPDATE subject SET metric=CASE id WHEN 1 THEN 9007199254740994 WHEN 2 THEN '9007199254740993'
+      WHEN 3 THEN 9007199254740992 WHEN 4 THEN 9007199254740991 WHEN 120 THEN 9007199254740993 END;`);
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+  const id = (value: number) => grid.getByRole('gridcell', { name: 'INTEGER · ' + value, exact: true });
+  const check = (value: number) => id(value).locator('..').getByRole('checkbox');
+  const metric = (value: number) => id(value).locator('..').getByRole('gridcell').last();
+  const action = { name: tableSelectedFilterText.checkedBetween, exact: true };
+  await check(1).check();
+  await check(2).check();
+  await metric(4).click();
+  await (await navigationMenuItem(table, action)).click();
+  await expect(table.getByRole('alert')).toContainText(tableSelectedFilterText.checkedBoundsUnavailable);
+  await check(2).uncheck();
+  await check(3).check();
+  await metric(4).click();
+  await (await navigationMenuItem(table, action)).click();
+  await expect(table.getByLabel(browseText.filterOperator(1), { exact: true })).toHaveValue('between');
+  await expect(table.getByLabel(browseText.filterValue(1), { exact: true })).toHaveValue('9007199254740992');
+  const upper = table.getByLabel(browseText.filterSecondValue(1), { exact: true });
+  await expect(upper).toHaveValue('9007199254740994');
+  await expect(id(4)).toBeVisible();
+  await upper.scrollIntoViewIfNeeded();
+  await info.attach('SQLite表页勾选区间草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  await table.getByRole('button', { name: browseText.apply, exact: true }).click();
+  for (const included of [1, 3, 120]) await expect(id(included)).toBeVisible();
+  for (const absent of [2, 4, 5]) await expect(id(absent)).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 表页双端区间匹配跨页原值并忽略其它存储类型', async ({}, info) => {
   await seed(undefined, `ALTER TABLE subject ADD COLUMN metric;
     UPDATE subject SET metric=CASE id WHEN 1 THEN 9007199254740994 WHEN 2 THEN 9007199254740992
