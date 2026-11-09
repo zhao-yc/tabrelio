@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DataRow, ResultColumn } from '../../src/shared/contracts';
-import { postgresTableCellFilterDraft } from '../../src/renderer/postgresTableCellFilter';
+import { postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../../src/renderer/postgresTableCellFilter';
 import { filterRuleFromDraft } from '../../src/renderer/tableFilters';
 
 const column: ResultColumn = { key: 'c0', name: '列"名', type: 'text' };
@@ -12,6 +12,14 @@ function rule(value: DataRow[string], exclude = false) {
 }
 
 describe('PostgreSQL 表页单元格筛选', () => {
+  it('带字段范围与精度的 INTERVAL 列按微秒确定上下界，保留两端原文', () => {
+    const interval = { ...column, type: 'interval day to second(6)' };
+    const rows = [{ c0: '1 day' }, { c0: '23:59:59.999999' }];
+    const cell = (index: number) => ({ index, row: rows[index], column: interval });
+    expect(postgresTableRangeFilterDraft(cell(0), cell(1), [interval], rows)).toMatchObject({
+      operator: 'BETWEEN', value: '23:59:59.999999', upperValue: '1 day',
+    });
+  });
   it.each(['9007199254740993', '1.230000000000000001', '', 'NULL', 'a\r\nb', " O'Brien "])('保留协议原值 %j', value => {
     expect(rule(value)).toEqual({ column: column.name, operator: '=', value });
     expect(rule(value, true)).toEqual({ column: column.name, operator: '!=', value });

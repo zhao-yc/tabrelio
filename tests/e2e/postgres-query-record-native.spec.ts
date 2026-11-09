@@ -11,6 +11,7 @@ import { postgresBatchEditZh as batchText } from '../../src/renderer/locales/pos
 import { postgresTableFindZh as findText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { QueryResultSort } from '../../src/renderer/queryResultSort';
 import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
@@ -107,6 +108,65 @@ test('PostgreSQL 查询结果 ISO 时间排序及区间和服务器顺序一致'
     await table.getByRole('button', { name: zh.table.text013, exact: true }).click();
     await table.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
     await expect(tableGrid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['3', '4', '5']);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 查询结果 INTERVAL 排序及区间和服务器一致', async ({}, info) => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.interval_order (id int PRIMARY KEY, span interval(6));
+      INSERT INTO public.interval_order VALUES
+      (1,'-infinity'), (2,'infinity'), (3,'0 seconds'), (4,'-0.000001 seconds'),
+      (5,'1 month'), (6,'30 days'), (7,'30 days 00:00:00.000001'), (8,NULL),
+      (9,make_interval(months => -14, days => 3, secs => -14706.000001)),
+      (10,make_interval(days => -1, secs => 86400.000001)),
+      (11,make_interval(days => -2, secs => -61.000001)), (12,'-2 months')`);
+    const order = (await observer.query('SELECT id FROM public.interval_order ORDER BY span, id DESC')).rows.map(row => row.id);
+    for (const style of ['postgres', 'postgres_verbose', 'sql_standard', 'iso_8601'] as const) {
+      await observer.query(`SET IntervalStyle TO '${style}'`);
+      const { rows } = await observer.query<{ id: number; span: string | null }>('SELECT id, span::text FROM public.interval_order ORDER BY id DESC');
+      const controller = new QueryResultSort('postgresql');
+      const binding = controller.bind({ rows, columns: [{ key: 'span', name: 'span', type: 'INTERVAL' }],
+        truncated: false, elapsedMs: 0, statement: '' }, [])!;
+      expect(binding.reasons.get('span'), style).toBeUndefined();
+      const sorted = controller.apply(binding, controller.view(binding)!, { column: 'span', direction: 'ASC' });
+      expect(sorted.result.rows.map(row => row.id), style).toEqual(order);
+    }
+
+    await loadQuery(config, 'SELECT id, span FROM public.interval_order ORDER BY id DESC;');
+    const query = page.locator('.postgres-query:visible'), grid = query.getByRole('grid');
+    await query.getByRole('button', { name: postgresZh.execute, exact: true }).click();
+    const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+    await grid.getByRole('columnheader', { name: /^span/ }).click();
+    await expect(ids).toHaveText(order.map(String));
+    const lower = '-00:00:00.000001', upper = '00:00:00';
+    const lowerCell = grid.getByRole('gridcell', { name: lower, exact: true });
+    await grid.getByRole('gridcell', { name: upper, exact: true }).click();
+    await page.keyboard.press('Shift+ArrowUp');
+    await expect(lowerCell).toBeFocused();
+    await lowerCell.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: queryResultSelectedFilterZh.rangeBetween, exact: true }).press('Enter');
+    const filter = query.getByRole('region', { name: queryResultFilterZh.title, exact: true });
+    await expect(filter.getByLabel(queryResultFilterZh.lower + ' 1', { exact: true })).toHaveValue(lower);
+    await expect(filter.getByLabel(queryResultFilterZh.upper + ' 1', { exact: true })).toHaveValue(upper);
+    await info.attach('PostgreSQL时长区间', { body: await page.screenshot(), contentType: 'image/png' });
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(ids).toHaveText(['4', '3']);
+
+    await loadQuery(config, '', 'interval_order');
+    const tab = page.locator('.postgres-table-tab:visible'), tableGrid = tab.getByRole('grid');
+    const cell = (name: string) => tableGrid.getByRole('gridcell', { name, exact: true });
+    for (const id of ['5', '6']) await cell(id).locator('..').getByRole('checkbox').check();
+    await cell('1 mon').click();
+    await tab.getByRole('button', { name: tableSelectedFilterZh.checkedBetween, exact: true }).click();
+    await expect(tab.getByLabel(zh.table.filterRangeStart, { exact: true })).toHaveValue('1 mon');
+    await expect(tab.getByLabel(zh.table.filterRangeEnd, { exact: true })).toHaveValue('30 days');
+    await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(tableGrid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['5', '6']);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

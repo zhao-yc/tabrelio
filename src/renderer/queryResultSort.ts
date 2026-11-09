@@ -1,4 +1,5 @@
 import { postgresTemporalOrder, type PostgresTemporalKind } from './postgresResultTemporal';
+import { postgresIntervalOrder } from './postgresResultInterval';
 import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultSortRule } from '../shared/queryResultPresets';
 export type { QueryResultSortRule } from '../shared/queryResultPresets';
@@ -8,7 +9,7 @@ import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultCo
 
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
-type SortKind = Kind | PostgresTemporalKind | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
+type SortKind = Kind | PostgresTemporalKind | 'pgInterval' | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
 export type SortDialect = 'postgresql';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
@@ -54,6 +55,7 @@ function sortKind(column: Pick<ResultColumn, 'type'>, dialect?: SortDialect): So
     case 'TIMETZ': return 'pgTimeTz';
     case 'TIMESTAMP': return 'pgTimestamp';
     case 'TIMESTAMPTZ': return 'pgTimestampTz';
+    case 'INTERVAL': return 'pgInterval';
   }
 }
 /** 入口和面板共用准确说明，不能把UTF-8固定本地序误称数据库COLLATE或原MySQL文本序。 */
@@ -157,6 +159,12 @@ function valueUnits(value: CellValue, sqlite: boolean): number { return typeof v
 /** 原类型标记是唯一准入凭据；BLOB与文本键在分配前受单值上限约束。 */
 function scalarKey(value: CellValue, type: Exclude<SortKind, 'sqlite'>, column: ResultColumn): Key {
   switch (type) {
+    case 'pgInterval': {
+      if (value === null) return null;
+      if (typeof value !== 'string' || value.length > queryResultSortLimits.valueUnits) throw Error(text.postgresIntervalValue);
+      const order = postgresIntervalOrder(value);
+      return typeof order === 'bigint' ? exact(String(order), true) : order;
+    }
     case 'pgDate': case 'pgTime': case 'pgTimeTz': case 'pgTimestamp': case 'pgTimestampTz': {
       if (value === null) return null;
       if (typeof value !== 'string' || value.length > queryResultSortLimits.valueUnits) throw Error(text.postgresTemporalValue);

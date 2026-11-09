@@ -39,10 +39,20 @@ describe('PostgreSQL 结果筛选', () => {
     expect(() => f.apply([rule('gt', '2026-11-05 10:00:00')])).toThrow();
     expect(f.filter.view(f.binding)).toBe(previous);
   });
+  it('INTERVAL 比较不同输出格式，区间端点保留相邻微秒', () => {
+    const f = fixture('INTERVAL', ['1 mon', '30 days', '30 days 00:00:00.000001',
+      '@ 0.000001 secs ago', 'PT0S', '-infinity', null], 'postgresql');
+    expect(f.apply([rule('eq', 'P1M')]).sourceIndices).toEqual([0, 1]);
+    expect(f.apply([{ ...rule('between', '-0:00:00.000001'), upper: '+0-0 +30 +0:00:00' }]).sourceIndices)
+      .toEqual([0, 1, 3, 4]);
+    const previous = f.filter.view(f.binding);
+    expect(() => f.apply([rule('eq', 'PT')])).toThrow();
+    expect(f.filter.view(f.binding)).toBe(previous);
+  });
   it('布尔、浮点原文和未知类型分别使用准确条件', () => {
     expect(fixture('BOOLEAN',['t','f',null],'postgresql').apply([rule('eq','TRUE')]).sourceIndices).toEqual([0]);
     expect(fixture('DOUBLE PRECISION',['1e-300','-Infinity',null],'postgresql').apply([rule('gt','-inf')]).sourceIndices).toEqual([0]);
-    const unknown=fixture('INTERVAL',['2026-11-05 10:00:00+00',null],'postgresql');
+    const unknown=fixture('UUID',['ab5b981c-e1c9-403f-9947-90a55c455beb',null],'postgresql');
     expect(unknown.apply([rule('null')]).sourceIndices).toEqual([1]);
     expect(()=>unknown.apply([rule('gt','2026-11-05')])).toThrow(text.invalid);
   });

@@ -45,7 +45,15 @@ describe('PostgreSQL 固定结果匹配键', () => {
     expect(result).toMatchObject({ equal: 2, rows: [{ kind: 'equal', rightIndex: 1 }, { kind: 'equal', rightIndex: 0 }] });
   });
 
-  it.each(['REAL', 'DOUBLE PRECISION', 'BYTEA', 'INTERVAL'])('%s 可作为对比值但不作为 PostgreSQL 匹配键', type => {
+  it('INTERVAL 匹配键识别跨格式等值并区分相邻微秒', () => {
+    const metadata = [{ key: 'span', name: '时长', type: 'INTERVAL' }];
+    const left = source([['1 mon'], ['30 days 00:00:00.000001']], metadata);
+    const right = source([['P30DT0.000001S'], ['P30D']], metadata);
+    const result = finish(new QueryResultComparisonScan(captureQueryResultComparison(left, right, ['span'], 'postgresql')));
+    expect(result).toMatchObject({ equal: 2, rows: [{ kind: 'equal', rightIndex: 1 }, { kind: 'equal', rightIndex: 0 }] });
+  });
+
+  it.each(['REAL', 'DOUBLE PRECISION', 'BYTEA', 'UUID'])('%s 可作为对比值但不作为 PostgreSQL 匹配键', type => {
     const metadata = [{ key: 'id', name: '字段', type }];
     expect(queryResultComparisonKeyReason(metadata[0], 'postgresql')).toBe(text.postgresKeyUnsupported);
     expect(() => captureQueryResultComparison(source([], metadata), source([], metadata), ['id'], 'postgresql'))

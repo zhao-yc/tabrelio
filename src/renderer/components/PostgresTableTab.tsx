@@ -50,7 +50,7 @@ import { openFocusedGridRowJump } from './GridRowJump';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { tableCellBoundActions } from '../tableCellFilter';
 import { captureTableRangeBounds, tableCheckedBoundsOptions } from '../tableRangeFilter';
-import { postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../postgresTableCellFilter';
+import { isPostgresIntervalDeclaration, postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
@@ -680,8 +680,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const checkedExport = useTableCheckedExport(collectScope, collectSignature);
   const cellScope = useMemo(() => ({}), [page, gridLayout.columns, connectionVersion]);
   const cellMenuEnabled = active && !frozenPage && !requiresRefresh && pageConnectionVersion === connectionVersion && !!page?.exportToken;
-  const selectedFilterColumn = findAnchor.current?.scope === cellScope
-    ? page?.columns.find(column => column.key === selectionColumn && column.valueOptions && !column.binary) : undefined;
+  const activeFilterColumn = findAnchor.current?.scope === cellScope
+    ? page?.columns.find(column => column.key === selectionColumn && !column.binary) : undefined;
+  const selectedFilterColumn = activeFilterColumn?.valueOptions ? activeFilterColumn : undefined;
+  const selectedBoundsColumn = selectedFilterColumn ??
+    (activeFilterColumn && isPostgresIntervalDeclaration(activeFilterColumn.type) ? activeFilterColumn : undefined);
 
   useLayoutEffect(() => {
     if (selectedFilter && (!cellMenuEnabled || recordView || selectedFilter.scope !== cellScope)) setSelectedFilter(undefined);
@@ -779,7 +782,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   /** 选择必须属于当前结果网格，活动格只用来确定字段。 */
   function stageCheckedBounds(indices: ReadonlySet<number>, gridCurrent: () => boolean, outside: boolean): void {
-    const column = selectedFilterColumn, anchor = findAnchor.current;
+    const column = selectedBoundsColumn, anchor = findAnchor.current;
     const current = () => gridCurrent() && findAnchor.current === anchor && canFilterCell();
     if (indices.size !== 2 || !column || anchor?.scope !== cellScope || anchor.value?.key !== column.key || !current()) return;
     const [first, last] = indices;
@@ -1751,7 +1754,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
               disabled={!cellMenuEnabled || !selected.size || !selectedFilterColumn}
               onClick={() => openSelectedFilter(selected, current)}>{selectedFilterText.entry}</button>
             {selected.size === 2 && tableCheckedBoundsOptions.map(({ label, outside }) => <button key={label} type="button"
-              title={selectedFilterText.checkedBoundsHint} disabled={!cellMenuEnabled || !selectedFilterColumn}
+              title={selectedFilterText.checkedBoundsHint} disabled={!cellMenuEnabled || !selectedBoundsColumn}
               onClick={() => stageCheckedBounds(selected, current, outside)}>{label}</button>)}
             {page.capabilities.delete && <div className="query-row-details-actions" role="group" aria-label={deleteText.collectRegion}>
               <button type="button" disabled={!canBatch('delete', selected)} onClick={() => collectDeletePage(selected, current)}>
