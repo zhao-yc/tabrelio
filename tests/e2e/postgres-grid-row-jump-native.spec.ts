@@ -59,7 +59,22 @@ test('PostgreSQL 表和只读视图跳到本页行并保留活动列、勾选和
     await expect(input).toHaveCount(0);
     await editorInput.fill('本地草稿');
     await editor.getByRole('button', { name: table.stage, exact: true }).click();
-    await cell('本地草稿').focus();
+    // 固定紧凑窗口尺寸，直接检查网格空间及鼠标命中，避免键盘绕开重叠。
+    await desktop.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      window.setContentSize(1160, 730);
+    });
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([1160, 730]);
+    const gridSpace = () => grid.evaluate(element => {
+      const header = element.querySelector('[role="row"][aria-rowindex="1"]');
+      const row = element.querySelector('[role="row"][aria-rowindex="2"]');
+      if (!header || !row) return -1;
+      return element.clientHeight - header.getBoundingClientRect().height - 2 * row.getBoundingClientRect().height;
+    });
+    await info.attach('PostgreSQL紧凑窗口草稿与网格', { body: await page.screenshot(), contentType: 'image/png' });
+    await expect.poll(gridSpace).toBeGreaterThanOrEqual(0);
+    await cell('本地草稿').click();
+    await info.attach('PostgreSQL紧凑窗口草稿格鼠标可达', { body: await page.screenshot(), contentType: 'image/png' });
     await expect(cell('记录 60')).toHaveCount(0);
     const before = await tasks();
     await page.keyboard.press('Control+g');
@@ -115,7 +130,7 @@ test('PostgreSQL 表和只读视图跳到本页行并保留活动列、勾选和
       Array.from({ length: 59 }, (_, i) => ['记录 ' + (i + 62)]),
     );
     const second = cell('62').locator('..').getByRole('checkbox');
-    await second.press('Space');
+    await second.check();
     await expect(second).toBeChecked();
     const selectionTasks = await tasks();
     await button(selection.invert).click();

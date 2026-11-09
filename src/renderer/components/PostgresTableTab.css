@@ -37,8 +37,18 @@
 .postgres-table-tab .table-preferences-display-controls select { width: 210px; }
 .postgres-table-tab .table-preferences-display-controls input[type="search"] { width: min(200px, 55vw); }
 .pg-table-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.pg-table-grid .results-grid { flex: 1; }
-.postgres-table-tab:has(.pg-selected-filter) .pg-table-grid .results-grid { height: auto; min-height: 0; }
+/* 窄窗用表页滚动容纳外层工具和草稿，避免它们挤到虚拟网格的数据行。 */
+.postgres-table-tab:has(> .pg-table-grid > .pg-record-grid-host:not([hidden])) { overflow-y: auto; }
+.postgres-table-tab:has(> .pg-table-grid > .pg-record-grid-host:not([hidden])) > .pg-table-draft { flex: none; }
+.pg-table-grid:has(> .pg-record-grid-host:not([hidden])) { min-height: 240px; }
+.pg-table-grid .results-grid {
+  /* 高度由剩余空间分配，至少容纳表头与两行，避免原有 100% 高度计入相邻工具条。 */
+  flex: 1 0 calc(var(--rdg-header-row-height, 40px) + 2 * var(--pg-data-row-height, 32px));
+  height: 0;
+  min-height: 0;
+}
+.pg-table-grid .grid-row-height-24 { --pg-data-row-height: 24px; }
+.pg-table-grid .grid-row-height-56 { --pg-data-row-height: 56px; }
 .pg-view-switch { display: inline-flex; gap: 4px; }
 .pg-view-switch button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); }
 .pg-record-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -80,6 +90,7 @@
 .pg-record-pending { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; background: var(--surface); }
 .pg-find-host { display: contents; }
 .pg-table-find { flex: none; max-height: 50%; overflow: auto; border-bottom: 1px solid var(--line-soft); }
+.pg-table-grid .pg-table-find { flex-shrink: 1; }
 .pg-table-find:has(.pg-find-review) { max-height: min(65%, 420px); }
 .pg-find-mode { display: inline-flex; align-items: center; gap: 6px; }
 .pg-find-mode select,
@@ -97,7 +108,7 @@
 .postgres-table-tab .pg-grid-deleted { text-decoration: line-through; }
 .pg-record-form, .pg-table-preview { overflow: auto; max-height: min(60vh, 640px); }
 .pg-record-field { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-.pg-batch-actions { flex: none; }
+.pg-batch-actions { flex: 0 1 auto; min-height: 0; overflow: auto; }
 .pg-batch-fill-field { display: flex; align-items: start; gap: 12px; }
 .pg-batch-fill-field .pg-record-field { flex: 1; min-width: 0; }
 .pg-batch-fill-field .pg-record-inputs select { flex: none; width: min(170px, 40%); }
