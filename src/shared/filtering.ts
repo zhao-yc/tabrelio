@@ -3,14 +3,28 @@ import { z } from 'zod';
 
 /** 筛选体积在界面、IPC 与引擎使用相同上限，避免集合展开形成过大的查询。 */
 export const FILTER_LIMITS = { conditions: 30, groups: 16, depth: 8, setValues: 200, valueLength: 4096, totalValues: 1000, totalCharacters: 1_000_000 } as const;
-const operators = new Set(['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'CONTAINS', 'NOT CONTAINS', 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN', 'IS NULL', 'IS NOT NULL']);
+/** 字面文本位置比较。后缀将两侧反转后仍只需要一次原值绑定。 */
+export const tableTextFilterMatch = {
+  CONTAINS: { comparison: '> 0', reverse: false },
+  'NOT CONTAINS': { comparison: '= 0', reverse: false },
+  'STARTS WITH': { comparison: '= 1', reverse: false },
+  'NOT STARTS WITH': { comparison: '<> 1', reverse: false },
+  'ENDS WITH': { comparison: '= 1', reverse: true },
+  'NOT ENDS WITH': { comparison: '<> 1', reverse: true },
+} as const;
+export function isTableTextFilterOperator(operator: FilterRule['operator']): operator is keyof typeof tableTextFilterMatch {
+  return Object.hasOwn(tableTextFilterMatch, operator);
+}
+const operatorNames = ['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'CONTAINS', 'NOT CONTAINS',
+  'STARTS WITH', 'NOT STARTS WITH', 'ENDS WITH', 'NOT ENDS WITH', 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN', 'IS NULL', 'IS NOT NULL'] as const;
+const operators = new Set<FilterRule['operator']>(operatorNames);
 const field = z.string().min(1).max(256), value = z.string().max(FILTER_LIMITS.valueLength,`每个筛选值不能超过 ${FILTER_LIMITS.valueLength} 个字符`);
 /** 表页与命名方案共用严格形状，拒绝SQL、认证路径及未知扩展字段。 */
 /** 两种区间运算共用两个有序参数及同一预算。 */
 export function isTableRangeOperator(operator: FilterRule['operator']): operator is 'BETWEEN' | 'NOT BETWEEN' {
   return operator === 'BETWEEN' || operator === 'NOT BETWEEN';
 }
-const filterRuleShape = z.object({ column: field, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','NOT LIKE','CONTAINS','NOT CONTAINS','IN','NOT IN','BETWEEN','NOT BETWEEN','IS NULL','IS NOT NULL']), value: value.optional(), values: z.array(value).max(FILTER_LIMITS.setValues,`筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional(), enabled: z.boolean().optional() }).strict();
+const filterRuleShape = z.object({ column: field, operator: z.enum(operatorNames), value: value.optional(), values: z.array(value).max(FILTER_LIMITS.setValues,`筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional(), enabled: z.boolean().optional() }).strict();
 export const filterRuleSchema = z.unknown().transform((input, context): FilterRule => {
   try { return filterRuleShape.parse(copyRule(input)); }
   catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选条件无效' }); return z.NEVER; }

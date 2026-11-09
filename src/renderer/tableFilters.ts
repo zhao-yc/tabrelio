@@ -16,6 +16,8 @@ export const filterOperatorLabels: Record<FilterRule['operator'], string> = {
   '=': zh.table.filterEquals, '!=': zh.table.filterNotEquals, '>': zh.table.filterGreater, '>=': zh.table.filterGreaterOrEqual,
   '<': zh.table.filterLess, '<=': zh.table.filterLessOrEqual, LIKE: zh.table.filterLike, 'NOT LIKE': zh.table.filterNotLike,
   CONTAINS: cellText.containsRule, 'NOT CONTAINS': cellText.notContainsRule,
+  'STARTS WITH': cellText.startsWithRule, 'NOT STARTS WITH': cellText.notStartsWithRule,
+  'ENDS WITH': cellText.endsWithRule, 'NOT ENDS WITH': cellText.notEndsWithRule,
   IN: zh.table.filterIn, 'NOT IN': zh.table.filterNotIn, BETWEEN: zh.table.filterBetween, 'NOT BETWEEN': zh.table.filterNotBetween,
   'IS NULL': zh.table.filterIsNull, 'IS NOT NULL': zh.table.filterIsNotNull
 };

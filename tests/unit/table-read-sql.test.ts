@@ -11,14 +11,22 @@ const literal = (value: string) => `_utf8mb4 X'${Buffer.from(value).toString('he
 const group = (mode: 'all' | 'any', ...children: (number | FilterGroup)[]): FilterGroup => ({ mode, children });
 
 describe('原表页筛选与排序共享编译', () => {
-  it.each([['CONTAINS', '> 0'], ['NOT CONTAINS', '= 0']] as const)('%s 将完整原文交给参数和生成查询', (operator, comparison) => {
+  it.each([
+    ['CONTAINS', '> 0', false], ['NOT CONTAINS', '= 0', false],
+    ['STARTS WITH', '= 1', false], ['NOT STARTS WITH', '<> 1', false],
+    ['ENDS WITH', '= 1', true], ['NOT ENDS WITH', '<> 1', true],
+  ] as const)('%s 将完整原文交给参数和生成查询', (operator, comparison, reverse) => {
     const value = "A%_\\'中文", filters: FilterRule[] = [{ column: 'note', operator, value }];
-    const predicate = (parameter: string) => `LOCATE(CAST(CONVERT(${parameter} USING utf8mb4) AS BINARY), CAST(CONVERT(\`note\` USING utf8mb4) AS BINARY)) ${comparison}`;
+    const bytes = (expression: string) => {
+      const converted = `CAST(CONVERT(${expression} USING utf8mb4) AS BINARY)`;
+      return reverse ? `REVERSE(${converted})` : converted;
+    };
+    const predicate = (parameter: string) => `LOCATE(${bytes(parameter)}, ${bytes('\`note\`')}) ${comparison}`;
     expect(buildTableFilterSql(info(), filters)).toEqual({ where: '((' + predicate('?') + '))', params: [value] });
     expect(buildFilteredTableSelect(input({ filters })).sql).toContain(predicate(literal(value)));
     const bind = vi.fn(() => '$1');
     expect(postgresTableCondition({ rules: filters, mode: 'all' }, name => '"' + name + '"', bind))
-      .toBe(`pg_catalog.strpos("note"::text COLLATE pg_catalog."C", $1) ${comparison}`);
+      .toBe(`pg_catalog.strpos(${reverse ? 'pg_catalog.reverse("note"::text)' : '"note"::text'} COLLATE pg_catalog."C", ${reverse ? 'pg_catalog.reverse($1)' : '$1'}) ${comparison}`);
     expect(bind).toHaveBeenCalledExactlyOnceWith(value);
   });
   it('区间外使用两个参数并保留原精度，拒绝一端或三端', () => {

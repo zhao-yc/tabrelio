@@ -280,6 +280,41 @@ test('PostgreSQL 表页文本和数值快捷筛选保留字面及精确语义', 
   } finally { await observer.end(); }
 });
 
+test('PostgreSQL 表页字面前后缀筛选区分大小写、空文本和 NULL', async () => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.filter_edges (id int PRIMARY KEY, note text);
+      INSERT INTO public.filter_edges VALUES (1,'A%_🚢'),(2,'前A%_🚢'),(3,'A%_🚢后'),
+      (4,'a%_🚢'),(5,'A%_🚢 '),(6,''),(7,NULL)`);
+    await loadQuery(config, '', 'filter_edges');
+    const tab = page.locator('.postgres-table-tab:visible'), grid = tab.getByRole('grid');
+    const cell = grid.getByRole('gridcell', { name: 'A%_🚢', exact: true }).first();
+    const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+    const apply = () => tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    const all = ['1', '2', '3', '4', '5', '6', '7'];
+    for (const [label, operator, matching] of [
+      [tableCellFilterZh.startsWith, 'STARTS WITH', ['1', '3', '5']],
+      [tableCellFilterZh.endsWith, 'ENDS WITH', ['1', '2']],
+      [tableCellFilterZh.notStartsWith, 'NOT STARTS WITH', ['2', '4', '6']],
+      [tableCellFilterZh.notEndsWith, 'NOT ENDS WITH', ['3', '4', '5', '6']],
+    ] as const) {
+      await cell.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: label, exact: true }).press('Enter');
+      await expect(tab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue(operator);
+      await expect(tab.getByLabel(zh.table.text011, { exact: true })).toHaveValue('A%_🚢');
+      await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+      await expect(ids).toHaveText(all);
+      await apply();
+      await expect(ids).toHaveText([...matching]);
+      await tab.getByRole('button', { name: zh.common.clearAll, exact: true }).click();
+      await apply();
+      await expect(ids).toHaveText(all);
+    }
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
 test('PostgreSQL 表页查找批量勾选命中且排除字段名模式', async () => {
   const config = isolatedConnection(), observer = new Client(config);
   try {

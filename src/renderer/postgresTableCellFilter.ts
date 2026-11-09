@@ -3,7 +3,7 @@ import { postgresAdvancedTableFilterSchema } from '../shared/postgresTable';
 import type { QueryResultCopyCell } from './queryResultHeaderCopy';
 import { tableCellFilterZh as text } from './locales/tableCellFilter.zh-CN';
 import { filterDraftFromRule } from './tableFilters';
-import { orderedTableRange, tableCellBoundSymbols, type TableCellFilterMode } from './tableCellFilter';
+import { isTableCellTextMode, orderedTableRange, tableCellBoundSymbols, tableCellTextSymbols, type TableCellFilterMode } from './tableCellFilter';
 import { isPostgresResultIdentifierType } from './postgresResultIdentifier';
 import { queryResultFilterKey } from './queryResultSort';
 
@@ -26,10 +26,10 @@ export function postgresTableCellFilterDraft(cell: QueryResultCopyCell, columns:
   if (value !== null && !scalar) throw Error(text.unavailable);
   let operator: FilterRule['operator'];
   if (typeof mode === 'boolean') operator = value === null ? mode ? 'IS NOT NULL' : 'IS NULL' : mode ? '!=' : '=';
-  else if (mode === 'contains' || mode === 'notContains') {
+  else if (isTableCellTextMode(mode)) {
     if (typeof value !== 'string' || !value || value.includes('\0') ||
         !/^(?:text|character varying|character|varchar|char)(?:\(\d+\))?$/i.test(column.type)) throw Error(text.unavailable);
-    operator = mode === 'contains' ? 'CONTAINS' : 'NOT CONTAINS';
+    operator = tableCellTextSymbols[mode];
   } else {
     // format_type 返回目录声明，包括精度和时间类型的时区限定。
     const type = postgresTableSpecialOrderedType(column.type);

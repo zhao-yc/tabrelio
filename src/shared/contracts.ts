@@ -129,7 +129,7 @@ export interface PostgresResultSource { statementOrdinal: number; sourceRange: i
 export type FilterMode = 'all' | 'any';
 /** 数字引用同一filters数组位置；每条条件（含停用）在完整树中恰好出现一次。 */
 export interface FilterGroup { readonly mode: FilterMode; readonly children: readonly (number | FilterGroup)[]; }
-export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'CONTAINS' | 'NOT CONTAINS' | 'IN' | 'NOT IN' | 'BETWEEN' | 'NOT BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; /** 缺省启用；停用保留原条件但不参与本次筛选，仍计入全部预算。 */ enabled?: boolean; }
+export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'CONTAINS' | 'NOT CONTAINS' | 'STARTS WITH' | 'NOT STARTS WITH' | 'ENDS WITH' | 'NOT ENDS WITH' | 'IN' | 'NOT IN' | 'BETWEEN' | 'NOT BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; /** 缺省启用；停用保留原条件但不参与本次筛选，仍计入全部预算。 */ enabled?: boolean; }
 export interface SortRule { column: string; direction: 'ASC' | 'DESC'; /** 缺省沿用数据库顺序；显式位置与升降序独立。 */ nulls?: 'FIRST' | 'LAST'; }
 export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: boolean; page: number; pageSize: number; /** 仅显式末页请求返回同快照的匹配总数。 */ matchingRows?: string; /** 显式复制页在同一MDL内读取的目录身份；缺失时只能查看。 */ copyMetadataKey?: string; copySource?: TableCopyPageSources; /** TIMESTAMP 主键的原读 Unix 时间，按原页行号对齐。 */ primaryKeyEpochs?: Record<string, string>[]; }
 export type RowChange = { kind: 'insert'; values: DataRow } | { kind: 'update'; before: DataRow; values: DataRow } | { kind: 'delete'; before: DataRow };

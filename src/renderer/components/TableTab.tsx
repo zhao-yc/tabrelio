@@ -47,7 +47,7 @@ import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.
 import { maxTablePage, parsePageJump, parseTablePageSize, setAllFilterRulesEnabled, type FilterMode, type FilterDraft } from '../tableFilters';
 import { tableLastPageBounds } from '../../shared/tableLastPage';
 import { openNetworkSchemaScript, schemaScriptLabel } from '../schemaScriptNavigation';
-import { tableCellBoundActions, tableCellFilterDraft, tableRangeFilterDraft, type TableCellFilterMode } from '../tableCellFilter';
+import { tableCellBoundActions, tableCellFilterDraft, tableCellTextActions, tableRangeFilterDraft, type TableCellFilterMode } from '../tableCellFilter';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { buildTableSelectedFilter, type TableSelectedFilterProposal } from '../tableSelectedFilter';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
@@ -2071,7 +2071,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     const rectangle = cellRange.at(row, rowIndex, key), selectRow = cellRange.selectRowAction(row, rowIndex, key);
     const filters = canSeedCellFilter && info ? ([
       [false, cellFilterText.equal], [true, cellFilterText.exclude],
-      ['contains', cellFilterText.contains], ['notContains', cellFilterText.notContains],
+      ...tableCellTextActions,
       ...tableCellBoundActions,
     ] as const).flatMap(([mode, label]) => {
       try {

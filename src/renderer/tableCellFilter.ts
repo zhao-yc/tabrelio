@@ -6,7 +6,17 @@ import { cellBoundOperators } from './queryResultCellFilter';
 import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterLiteral, type SortDialect } from './queryResultSort';
 import { queryResultFilterZh } from './locales/queryResultFilter.zh-CN';
 
-export type TableCellFilterMode = boolean | 'contains' | 'notContains' | typeof cellBoundOperators[number];
+export const tableCellTextSymbols = {
+  contains: 'CONTAINS', notContains: 'NOT CONTAINS',
+  startsWith: 'STARTS WITH', notStartsWith: 'NOT STARTS WITH',
+  endsWith: 'ENDS WITH', notEndsWith: 'NOT ENDS WITH',
+} as const;
+type TableCellTextMode = keyof typeof tableCellTextSymbols;
+export type TableCellFilterMode = boolean | TableCellTextMode | typeof cellBoundOperators[number];
+export const tableCellTextActions = (Object.keys(tableCellTextSymbols) as TableCellTextMode[]).map(mode => [mode, text[mode]] as const);
+export function isTableCellTextMode(mode: Exclude<TableCellFilterMode, boolean>): mode is TableCellTextMode {
+  return Object.hasOwn(tableCellTextSymbols, mode);
+}
 export const tableCellBoundSymbols = { lt: '<', lte: '<=', gt: '>', gte: '>=' } as const;
 export const tableCellBoundActions = cellBoundOperators.map(mode => [mode, queryResultFilterZh.cellBounds[mode]] as const);
 
@@ -23,9 +33,9 @@ export function tableCellFilterDraft(columns: readonly ColumnInfo[], rows: reado
   if (cell !== null && typeof cell !== 'string' && typeof cell !== 'boolean' && typeof cell !== 'number' || typeof cell === 'number' && (!Number.isFinite(cell) || Number.isInteger(cell) && !Number.isSafeInteger(cell))) throw Error(text.unavailable);
   let operator: FilterDraft['operator'];
   if (typeof mode === 'boolean') operator = cell === null ? mode ? 'IS NOT NULL' : 'IS NULL' : mode ? '!=' : '=';
-  else if (mode === 'contains' || mode === 'notContains') {
+  else if (isTableCellTextMode(mode)) {
     if (typeof cell !== 'string' || !cell || !/^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT)\b/i.test(fields[0].type)) throw Error(text.unavailable);
-    operator = mode === 'contains' ? 'CONTAINS' : 'NOT CONTAINS';
+    operator = tableCellTextSymbols[mode];
   } else {
     // 数字外观不能证明字段支持有序比较。只认可实际数值和日期时间声明。
     if (!(typeof cell === 'number' || typeof cell === 'string' && cell.length) ||

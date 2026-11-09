@@ -48,7 +48,7 @@ import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh
 import { useUiCommandScope } from '../uiCommands';
 import { openFocusedGridRowJump } from './GridRowJump';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
-import { tableCellBoundActions } from '../tableCellFilter';
+import { tableCellBoundActions, tableCellTextActions } from '../tableCellFilter';
 import { captureTableRangeBounds, tableCheckedBoundsOptions } from '../tableRangeFilter';
 import { postgresTableSpecialOrderedType, postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
@@ -715,8 +715,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       ];
       try {
         postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows, 'contains');
-        actions.push({ label: cellFilterText.contains, run: () => apply('contains') },
-          { label: cellFilterText.notContains, run: () => apply('notContains') });
+        actions.push(...tableCellTextActions.map(([mode, label]) => ({ label, run: () => apply(mode) })));
       } catch { /* 非文本或空值只保留原等值入口。 */ }
       try {
         postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows, 'gte');

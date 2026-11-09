@@ -1,5 +1,5 @@
 import type { FilterGroup, FilterRule } from './contracts';
-import { isTableRangeOperator, validateFilterGroup } from './filtering';
+import { isTableRangeOperator, isTableTextFilterOperator, tableTextFilterMatch, validateFilterGroup } from './filtering';
 import { postgresTableSortRules, type PostgresTableFilter, type PostgresTablePage, type PostgresTablePageInput } from './postgresTable';
 
 /** 浏览、游标和 COPY 共用条件树，参数或字面量的生成由协议入口决定。 */
@@ -14,8 +14,12 @@ export function postgresTableCondition(filter: PostgresTableFilter | undefined, 
     if (rule.enabled === false) return '';
     const name = column(rule.column), operator = rule.operator;
     if (operator === 'IS NULL' || operator === 'IS NOT NULL') return name + ' ' + operator;
-    if (operator === 'CONTAINS' || operator === 'NOT CONTAINS')
-      return `pg_catalog.strpos(${name}::text COLLATE pg_catalog."C", ${bind(rule.value ?? '')}) ${operator === 'CONTAINS' ? '> 0' : '= 0'}`;
+    if (isTableTextFilterOperator(operator)) {
+      const { comparison, reverse } = tableTextFilterMatch[operator];
+      const input = bind(rule.value ?? '');
+      const source = reverse ? `pg_catalog.reverse(${name}::text)` : `${name}::text`;
+      return `pg_catalog.strpos(${source} COLLATE pg_catalog."C", ${reverse ? `pg_catalog.reverse(${input})` : input}) ${comparison}`;
+    }
     if (operator === 'IN' || operator === 'NOT IN')
       return name + ' ' + operator + ' (' + rule.values!.map(bind).join(', ') + ')';
     if (isTableRangeOperator(operator))

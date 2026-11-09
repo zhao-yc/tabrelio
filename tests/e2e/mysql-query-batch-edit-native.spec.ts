@@ -29,7 +29,7 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
   const observer = await createConnection({ host, port, user: 'root', password, supportBigNumbers: true, bigNumberStrings: true, connectTimeout: 2000 });
   try {
     for (const sql of [
-      `CREATE DATABASE ${database}`,
+      `CREATE DATABASE ${database} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci`,
       `CREATE TABLE ${table} (tenant VARCHAR(10), id BIGINT, note VARCHAR(40), qty BIGINT CHECK (qty>=0), guard VARCHAR(30), rank_value BIGINT UNSIGNED,
         PRIMARY KEY(tenant,id)) ENGINE=InnoDB`,
       `INSERT INTO ${table} VALUES ('A',9007199254740992,'原记录甲',1,'未投影甲',11),('A',9007199254740993,'原记录乙',2,'未投影乙',12),
@@ -207,6 +207,26 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(tableCell('前A%_后')).toBeVisible();
     await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
     await expect(tableCell('a%_')).toBeVisible();
+    await observer.query(`UPDATE ${table} SET guard=CASE id WHEN 9007199254740992 THEN 'A%_🚢'
+      WHEN 9007199254740993 THEN '前A%_🚢' ELSE 'A%_🚢后' END`);
+    await tableTab.locator('[data-table-refresh]').click();
+    const guardValues = ['A%_🚢', '前A%_🚢', 'A%_🚢后'];
+    for (const [label, operator, matching] of [
+      [tableCellFilterZh.startsWith, 'STARTS WITH', [0, 2]],
+      [tableCellFilterZh.endsWith, 'ENDS WITH', [0, 1]],
+      [tableCellFilterZh.notStartsWith, 'NOT STARTS WITH', [1]],
+      [tableCellFilterZh.notEndsWith, 'NOT ENDS WITH', [2]],
+    ] as const) {
+      await tableCell('A%_🚢').click({ button: 'right' });
+      await page.getByRole('menuitem', { name: label, exact: true }).press('Enter');
+      await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue(operator);
+      await expect(tableTab.getByLabel(zh.table.text011, { exact: true })).toHaveValue('A%_🚢');
+      await tableTab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+      const selected: readonly number[] = matching;
+      for (const [index, value] of guardValues.entries()) await expect(tableCell(value)).toHaveCount(selected.includes(index) ? 1 : 0);
+      await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
+      await expect(tableCell('A%_🚢')).toBeVisible();
+    }
     await tableCell('18446744073709551613').click({ button: 'right' });
     await page.getByRole('menuitem', { name: queryResultFilterZh.cellBounds.gt, exact: true }).press('Enter');
     await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('>');

@@ -59,8 +59,7 @@ import { sqlitePresetDraft } from '../sqliteTablePresetDraft';
 import { validateSqlitePresetProfile, type SqliteTablePresetProfile, type SqliteTablePresetQuery } from '../../shared/sqliteTablePresets';
 import { captureSqliteCellFilter, sqliteCheckedFilterDraft, sqliteTableRangeFilterDraft, type SqliteCellFilterSource } from '../sqliteTableCellFilter';
 import { sqliteTableCellFilterZh as cellFilterText } from '../locales/sqliteTableCellFilter.zh-CN';
-import { tableCellFilterZh as textCellFilterText } from '../locales/tableCellFilter.zh-CN';
-import { tableCellBoundActions, type TableCellFilterMode } from '../tableCellFilter';
+import { tableCellBoundActions, tableCellTextActions, type TableCellFilterMode } from '../tableCellFilter';
 import { captureTableRangeBounds, tableCheckedBoundsOptions } from '../tableRangeFilter';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
@@ -833,10 +832,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       return { actions: [
         { label: cellFilterText.equal, run: () => appendMenuFilter.current(false, source) },
         { label: cellFilterText.exclude, run: () => appendMenuFilter.current(true, source) },
-        ...(source.value.kind === 'text' && source.value.value ? [
-          { label: textCellFilterText.contains, run: () => appendMenuFilter.current('contains', source) },
-          { label: textCellFilterText.notContains, run: () => appendMenuFilter.current('notContains', source) },
-        ] : []),
+        ...(source.value.kind === 'text' && source.value.value ?
+          tableCellTextActions.map(([mode, label]) => ({ label, run: () => appendMenuFilter.current(mode, source) })) : []),
         ...(source.value.kind === 'integer' || source.value.kind === 'real' ?
           tableCellBoundActions.map(([mode, label]) => ({ label, run: () => appendMenuFilter.current(mode, source) })) : []),
       ] };

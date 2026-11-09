@@ -1,5 +1,5 @@
 import type { CellValue, ColumnInfo, FilterGroup, FilterMode, FilterRule, SortRule, TableInfo } from './contracts';
-import { copyFilterRules, isTableRangeOperator, validateFilterGroup } from './filtering';
+import { copyFilterRules, isTableRangeOperator, isTableTextFilterOperator, tableTextFilterMatch, validateFilterGroup } from './filtering';
 
 export const tableReadSqlLimits = Object.freeze({ columns: 4096, sorts: 20, sqlBytes: 2 * 1024 * 1024, limit: 100000 });
 export const tableReadSqlText = Object.freeze({
@@ -55,12 +55,17 @@ export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filt
     // JOIN只由本地受信编译器传限定列名；IPC不接受回调或任意引用SQL，原表页字节保持。
     const column = columnReference ? columnReference(filter.column) : tableReadIdentifier(filter.column);
     if (filter.operator === 'IS NULL' || filter.operator === 'IS NOT NULL') return `${column} ${filter.operator}`;
-    if (filter.operator === 'CONTAINS' || filter.operator === 'NOT CONTAINS') {
+    if (isTableTextFilterOperator(filter.operator)) {
       const value = filter.value ?? '';
       params.push(value);
       // 两端先转成 UTF-8，再按字节查找，避免列字符集和排序规则改变原文字面语义。
       const input = parameterLiteral ? parameterLiteral(value) : '?';
-      return `LOCATE(CAST(CONVERT(${input} USING utf8mb4) AS BINARY), CAST(CONVERT(${column} USING utf8mb4) AS BINARY)) ${filter.operator === 'CONTAINS' ? '> 0' : '= 0'}`;
+      const { comparison, reverse } = tableTextFilterMatch[filter.operator];
+      const bytes = (expression: string) => {
+        const converted = `CAST(CONVERT(${expression} USING utf8mb4) AS BINARY)`;
+        return reverse ? `REVERSE(${converted})` : converted;
+      };
+      return `LOCATE(${bytes(input)}, ${bytes(column)}) ${comparison}`;
     }
     /** 参数按条件原顺序加入，不拆分逗号、裁剪空白或转换为 JavaScript 数值。 */
     const parameter = (value: string) => {

@@ -1530,7 +1530,7 @@ test('SQLite 表和视图从单列选区包含或排除原值，按明确应用�
 });
 
 test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', async ({}, info) => {
-  await seed(undefined, "UPDATE subject SET name='A%_' WHERE id=1; UPDATE subject SET name='前A%_后' WHERE id=120; UPDATE subject SET name='a%_' WHERE id=2;");
+  await seed(undefined, "UPDATE subject SET name='A%_' WHERE id=1; UPDATE subject SET name='前A%_' WHERE id=120; UPDATE subject SET name='a%_' WHERE id=2; UPDATE subject SET name='A%_后' WHERE id=3;");
   const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
   await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
   const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
@@ -1549,6 +1549,21 @@ test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', asyn
   await expect(id(1)).toBeVisible();
   await expect(id(2)).toHaveCount(0);
   expect(await tasks()).toHaveLength(before.length + 1);
+  await expect(id(3)).toBeVisible();
+  await (await navigationMenuItem(table.locator('.toolbar'), { name: browseText.conditions, exact: true })).click();
+  await expect(table.getByLabel(browseText.filterOperator(1), { exact: true })).toHaveCount(0);
+  await note.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: tableCellFilterZh.endsWith, exact: true }).click();
+  const suffixOperator = table.getByLabel(browseText.filterOperator(2), { exact: true });
+  await expect(suffixOperator).toHaveValue('endsWith');
+  await expect(table.getByLabel(browseText.filterValue(2), { exact: true })).toHaveValue('A%_');
+  expect(await tasks()).toHaveLength(before.length + 1);
+  await suffixOperator.scrollIntoViewIfNeeded();
+  await info.attach('SQLite表页字面后缀筛选', { body: await page.screenshot(), contentType: 'image/png' });
+  await table.getByRole('button', { name: browseText.apply, exact: true }).click();
+  await expect(id(120)).toBeVisible();
+  await expect(id(3)).toHaveCount(0);
+  expect(await tasks()).toHaveLength(before.length + 2);
   expect(pageErrors).toEqual([]);
 });
 

@@ -3,7 +3,7 @@ import type { SqliteOriginalValue } from '../shared/sqliteTableEdit';
 import type { SqliteFilterDraft } from './sqliteTableBrowser';
 import type { SqliteDraftRow } from './sqliteTableEditor';
 import { sqliteTableCellFilterZh as text } from './locales/sqliteTableCellFilter.zh-CN';
-import type { TableCellFilterMode } from './tableCellFilter';
+import { isTableCellTextMode, type TableCellFilterMode } from './tableCellFilter';
 import { compareSqliteResultKeys, sqliteResultComparisonKey } from './sqliteResultCompare';
 
 export interface SqliteCellFilterSource {
@@ -57,7 +57,7 @@ export function captureSqliteCellFilter(page: SqliteTablePage, index: number, co
   /** NULL生成明确的IS NULL/IS NOT NULL；其余值先走原严格typed条件合同。 */
   function draft(mode: TableCellFilterMode, id: string): SqliteFilterDraft {
     if (!check()) throw Error(text.unavailable);
-    if (mode === 'contains' || mode === 'notContains') {
+    if (typeof mode !== 'boolean' && isTableCellTextMode(mode)) {
       if (value.kind !== 'text' || !value.value) throw Error(text.unsupported);
     } else if (typeof mode !== 'boolean' && value.kind !== 'integer' && value.kind !== 'real') throw Error(text.unsupported);
     const filter = value.kind === 'null' ? { column: name, operator: mode ? 'notNull' as const : 'isNull' as const } :
