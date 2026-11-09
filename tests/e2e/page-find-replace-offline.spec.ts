@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { readGridRangeClipboard } from './grid-cell-range-clipboard';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
 const errors: string[] = [];
@@ -89,6 +90,18 @@ test('最小窗口同格逐处导航、单处替换及整批预览仅形成草�
   await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.preview, exact: true })).click(); await expect(preview()).toBeVisible();
   await (await (await import('./navigation-menu')).navigationMenuItem(preview(), { name: text.apply, exact: true })).click(); await expect(await cell()).toHaveText('😀$1/$&前$1/$&后$1/$&');
   expect(await calls()).toEqual([]); expect(errors).toEqual([]); await page.screenshot({ path: result.outputPath('最小窗口单处与整批草稿.png') });
+});
+
+test('表页支持从右下向左上选择矩形并复制，排除相邻二进制列', async () => {
+  const from = await cell('other', 3), to = await cell('note', 2);
+  await from.click();
+  await to.click({ modifiers: ['Shift'] });
+  await expect(to).toBeFocused();
+  await expect(page.locator('.grid-cell-in-range')).toHaveCount(4);
+  const payload = await readGridRangeClipboard(page);
+  expect(JSON.parse(payload.typed).rows).toEqual([['😀old前old后old', 'OLD'], ['', '无匹配']]);
+  expect(payload.text).toBe('😀old前old后old\tOLD\n\t无匹配');
+  expect(await calls()).toEqual([]);
 });
 
 test('表页按行和字段高亮查找命中，切换列和清空查找撤销旧标记', async () => {

@@ -27,3 +27,5 @@
 .connection-uri-actions>button{flex:0 0 auto;max-width:100%;white-space:normal;overflow-wrap:anywhere}
 
 .import-mapping-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+
+.results-grid .grid-cell-in-range{background:var(--accent-bg);box-shadow:inset 0 0 0 1px var(--accent)}

@@ -18,6 +18,7 @@ import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sq
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
+import { readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -212,6 +213,56 @@ test('查找可标记全部命中并跨屏循环定位，保留勾选且不执�
   await findPanel.getByRole('button', { name: sqliteFind.close, exact: true }).click();
   await expect(table.locator('.query-result-find-match, .sqlite-find-hit')).toHaveCount(0);
   expect(await tasks()).toEqual(beforeTable);
+  expect(pageErrors).toEqual([]);
+});
+
+test('查询结果和 SQLite 表页可选择并复制矩形区域，保留勾选和原类型', async () => {
+  await seed();
+  const query = page.locator('.query-tab:visible');
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const firstResult = query.getByRole('gridcell', { name: '180', exact: true });
+  await query.locator('.query-execute-split > button.primary').click();
+  const checked = firstResult.locator('..').getByRole('checkbox');
+  await checked.check();
+  const beforeQuery = await tasks();
+  await firstResult.click();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await expect(query.getByRole('gridcell', { name: '记录 179', exact: true })).toBeFocused();
+  await expect(query.locator('.grid-cell-in-range')).toHaveCount(4);
+  let payload = await readGridRangeClipboard(page);
+  expect(payload.text).toBe('180\t记录 180\n179\t记录 179');
+  expect(JSON.parse(payload.typed).rows).toEqual([['180', '记录 180'], ['179', '记录 179']]);
+
+  await page.keyboard.press('Escape');
+  await expect(query.locator('.grid-cell-in-range')).toHaveCount(0);
+  expect((await readGridRangeClipboard(page)).text).toBe('180\t记录 180');
+  await firstResult.click();
+  await query.getByRole('grid').evaluate(grid => { grid.scrollTop = grid.scrollHeight; });
+  const last = query.getByRole('gridcell', { name: '记录 1', exact: true });
+  await last.click({ modifiers: ['Shift'] });
+  await expect(last).toBeFocused();
+  payload = await readGridRangeClipboard(page);
+  expect(JSON.parse(payload.typed).rows).toEqual(Array.from({ length: 180 }, (_, index) => [String(180 - index), '记录 ' + (180 - index)]));
+  expect(await tasks()).toEqual(beforeQuery);
+
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  await table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true }).click();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  const destination = table.getByRole('gridcell', { name: 'TEXT · 记录 2', exact: true });
+  await expect(destination).toBeFocused();
+  await expect(table.locator('.grid-cell-in-range')).toHaveCount(4);
+  payload = await readGridRangeClipboard(page);
+  expect(payload.text).toBe('1\t记录 1\n2\t记录 2');
+  expect(JSON.parse(payload.sqlite)).toMatchObject({ columns: ['id', 'name'], rows: [
+    [{ kind: 'integer', value: '1' }, { kind: 'text', value: '记录 1' }],
+    [{ kind: 'integer', value: '2' }, { kind: 'text', value: '记录 2' }],
+  ] });
+  await destination.click();
+  await expect(table.locator('.grid-cell-in-range')).toHaveCount(0);
+  expect((await readGridRangeClipboard(page)).text).toBe('记录 2');
   expect(pageErrors).toEqual([]);
 });
 

@@ -3,7 +3,8 @@ import { useGridHeaderMenu, type GridHeaderFreeze } from './GridHeaderMenu';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
+import { gridCellRangeClass, useGridCellRange } from '../useGridCellRange';
 import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
@@ -50,6 +51,10 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
   const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
   const owner = source.current, [, selectionChanged] = useState(0), [error, setError] = useState('');
+  const rangeKeys = useMemo(() => order.map(index => 'c' + index), [order]);
+  const rangeRowIndex = useMemo(() => new Map(rows.map((row, index) => [row, index])), [rows]);
+  const cellRange = useGridCellRange(rows, rangeKeys, owner, 2);
+  const rangeCurrent = () => !disabled && current() && noModal();
   const selection = useRef<{ owner: typeof owner; ids: ReadonlySet<string>; revision: object }>({ owner, ids: initialCheckedRows ?? new Set(), revision: {} });
   // 返回同一个缓存页时恢复准确行数组的勾选。新草稿数组不会继承原选择。
   if (selection.current?.owner !== owner) selection.current = { owner, ids: new Set(initialCheckedRows), revision: {} };
@@ -140,10 +145,14 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
   /** 输入控件保留自己的剪贴板语义，不截获文字编辑器、搜索框或其它模态的copy/paste。 */
   function inputTarget(event: ClipboardEvent<HTMLDivElement>): boolean { const node = event.target as HTMLElement | null; return !!node && (node.isContentEditable || ['TEXTAREA', 'SELECT'].includes(node.tagName) || node.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes((node as HTMLInputElement).type)); }
   const currentFindHit = findHit?.page === page && findHit.rows === rows ? findHit : undefined;
-  const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...display.map(({ index, width, frozen }): Column<SqliteDraftRow> => ({
+  const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...display.map(({ index, width, frozen }, position): Column<SqliteDraftRow> => ({
     key: 'c' + index, name: page.columns[index].name + (page.columns[index].generated ? ' · ' + text.generated : ''), minWidth: 64, width: width ?? 180, frozen, resizable: true, sortable: !!onSortChange && !disabled,
-    cellClass: row => !row.deleted && (currentFindHit?.row !== row || currentFindHit.column !== index) &&
-      findHighlights?.get(row.id)?.has(index) ? 'query-result-find-match' : undefined,
+    cellClass: row => {
+      if (row.deleted) return;
+      const rangeClass = gridCellRangeClass(cellRange.rectangle, rangeRowIndex.get(row), position);
+      if (rangeClass) return rangeClass;
+      if ((currentFindHit?.row !== row || currentFindHit.column !== index) && findHighlights?.get(row.id)?.has(index)) return 'query-result-find-match';
+    },
     // 仅替换显示名称，保留 RDG 自带的排序方向和多列优先级。
     renderHeaderCell: props => renderHeaderCell({ ...props, column: { ...props.column, name:
       <GridHeaderDetails name={String(props.column.name)} type={showFieldType ? page.columns[index].declaredType || browseText.dynamic : undefined}/>
@@ -168,9 +177,12 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
   /** RDG的真实copy事件同步写三种MIME；先编码完整内容，失败只清本事件已写的数据。 */
   function copy(row: SqliteDraftRow, key: string, event: ClipboardEvent<HTMLDivElement>): void {
     if (inputTarget(event)) return; event.preventDefault();
-    if (!current(row) || !noModal() || row.deleted) return;
+    if (!current(row) || !noModal()) return;
     try {
-      const content = clipboardContent(rows.filter(item => selectedRows.has(item.id) && !item.deleted), row, key);
+      const selected = rangeCurrent() ? cellRange.copy(row, key, (item, column) => item.values[Number(column.slice(1))], item => item.deleted) : undefined;
+      if (selected ? !selected.values.length : row.deleted) return;
+      const content = selected ? encodeSqliteClipboard(selected.values, selected.columns.map(column => page.columns[Number(column.slice(1))].name))
+        : clipboardContent(rows.filter(item => selectedRows.has(item.id) && !item.deleted), row, key);
       if (!content) return;
       if (!current(row) || !noModal()) return; writeSqliteClipboardData(event.clipboardData, content); setError('');
     } catch (reason) { try { event.clipboardData.clearData(); } catch { /* 仅原事件可清理，不借系统剪贴板重试。 */ } if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
@@ -364,13 +376,16 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={changeCheckedRows}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}
+    onCellMouseDown={(args, event) => cellRange.mouse(args, event, rangeCurrent)}
     onCellClick={({ row, column }) => { if (baseCurrent(row)) { onSelect(row); captureCell(row, column?.key); } }}
     onCellDoubleClick={({ row, column }, event) => { event.preventGridDefault(); edit(row, column.key); }}
     onCellContextMenu={({ row, column }, event) => {
       if (event.defaultPrevented || !openCellActions(row, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
       event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
     }}
-    onCellKeyDown={({ row, rowIdx, column, mode }, event) => {
+    onCellKeyDown={(args, event) => {
+      const { row, rowIdx, column, mode } = args;
+      if (mode === 'ACTIVE' && cellRange.key(args, event, rangeCurrent)) return;
       if (mode === 'ACTIVE' && handleGridSelectAllKey(event,
         () => !!row && rows[rowIdx] === row && !!column && order.some(index => column.key === 'c' + index) && rowSelectionCurrent(),
         () => changeCheckedRows(gridRowKeys(rows, rowSelectionKey)))) return;
@@ -381,5 +396,5 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       if (row && column && event.key === 'F2' && !event.nativeEvent.isComposing) { event.preventDefault(); event.preventGridDefault(); edit(row, column.key); }
     }}
     onCellCopy={({ row, column }, event) => copy(row, column.key, event)}
-    onActivePositionChange={({ row, column }) => { if (row && baseCurrent(row)) onSelect(row); captureCell(row, column?.key); }}/></div>;
+    onActivePositionChange={({ row, rowIdx, column }) => { cellRange.move(row, rowIdx, column?.key); if (row && baseCurrent(row)) onSelect(row); captureCell(row, column?.key); }}/></div>;
 }

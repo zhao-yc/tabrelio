@@ -28,6 +28,7 @@ import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboar
 import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
+import { gridCellRangeClass, useGridCellRange } from '../useGridCellRange';
 import type { QueryResultFindScan } from '../queryResultFind';
 import { appModalSelector } from '../modalSelectors';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
@@ -103,6 +104,9 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     onSortChange?.(next.map(rule=>{const previous=sort?.find(previous=>previous.column===rule.columnKey);return{column:rule.columnKey,direction:rule.direction,...(previous?.nulls?{nulls:previous.nulls}:{}),...(previous?.ignoreCase!==undefined?{ignoreCase:previous.ignoreCase}:{})};}));
   }
   const gridRef = useRef<DataGridHandle | null>(null);
+  const rangeKeys = useMemo(() => columns.map(column => column.key), [columns]);
+  const cellRange = useGridCellRange(rows, rangeKeys, scope, onActiveRowChange ? 0 : 1);
+  const rangeCurrent = () => !onActiveRowChange && actionCurrent() && tableCopy?.enabled !== false && tableCopy?.isCurrent() !== false;
   useLayoutEffect(() => {
     const target = findTarget ?? navigateTo;
     if (!target || !gridRef.current?.element?.isConnected || !actionCurrent()) return;
@@ -347,6 +351,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   /** 整理快捷键仅属于当前只读网格；输入框、编辑模式和旧渲染不能借此撤销正文或另一结果。 */
   function cellKeyDown(args:CellKeyDownArgs<DataRow>,event:CellKeyboardEvent):void{
     const {row,column}=args,key=event.key.toLowerCase();
+    if (args.mode === 'ACTIVE' && cellRange.key(args, event, rangeCurrent)) return;
     if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
       () => canSelectRows && !!row && rows[args.rowIdx] === row && !!column && columns.some(item => item.key === column.key) && rowSelectionCurrent(),
       () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;
@@ -402,6 +407,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, frozen: index < frozenCount, headerCellClass: findTarget?.row === -1 && findTarget.key === column.key ? 'query-result-find-hit' : findMarks?.has('-1:' + column.key) ? 'pg-find-match' : undefined, cellClass: row => {
     const rowIndex = rowIndexes.get(row);
     if (activeHit?.row === rowIndex && activeHit?.column === index || findTarget?.row === rowIndex && findTarget?.key === column.key) return 'query-result-find-hit';
+    const rangeClass = !skipRowInInversion?.(row) && gridCellRangeClass(cellRange.rectangle, rowIndex, index);
+    if (rangeClass) return rangeClass;
     if (rowIndex !== undefined && activeHighlights?.scan.hasMatch(rowIndex, index)) return 'query-result-find-match';
     return findMarks?.has(rowIndex + ':' + column.key) ? 'pg-find-match' : undefined;
   }, resizable: true, minWidth: columnWidths || onColumnWidthsChange ? 64 : 110, maxWidth: onColumnWidthsChange ? 2000 : undefined, width: Number.isInteger(columnWidths?.get(column.key)) && columnWidths!.get(column.key)! >= 64 && columnWidths!.get(column.key)! <= 2000 ? columnWidths!.get(column.key)! : 170, sortable: !!onSortChange && !sortReasons?.get(column.key), renderHeaderCell: () => {
@@ -423,8 +430,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       value={value} type={column.type} source="protocol"
       className={['grid-row-preview', value === null && 'null-value', presentation?.className].filter(Boolean).join(' ')}
       title={presentation?.title ?? label}>{label}</DataTypeColor>;
-  } }))], [columns, columnWidths, headerDetails, onColumnWidthsChange, frozenCount, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, activeHighlights, findTarget, findMarks, rowIndexes, presentCell, dataTypeColors, dataTypeColors ? selectedRows : null]);
-  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}`} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
+  } }))], [columns, columnWidths, headerDetails, onColumnWidthsChange, frozenCount, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, activeHighlights, findTarget, findMarks, cellRange.rectangle, skipRowInInversion, rowIndexes, presentCell, dataTypeColors, dataTypeColors ? selectedRows : null]);
+  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}`} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellMouseDown={(args, event) => cellRange.mouse(args, event, rangeCurrent)} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
     if (event.defaultPrevented || !openCellActions(row, rowIdx, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
     event.preventGridDefault();
     event.preventDefault();
@@ -439,14 +446,19 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       }
     }
     viewBinary(row, column.key);
-  }} onCellKeyDown={cellKeyDown} rowHeight={height} headerRowHeight={headerDetails?.showType && headerDetails.showComment ? 52 : 40} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; captureCopyCell(row, rowIdx, column); onGridAnchor?.(column && columns.some(item => item.key === column.key) ? { row: rowIdx, key: column.key } : undefined); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={changeSortColumns} onCellCopy={({ row, column }, event) => {
+  }} onCellKeyDown={cellKeyDown} rowHeight={height} headerRowHeight={headerDetails?.showType && headerDetails.showComment ? 52 : 40} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; cellRange.move(row, rowIdx, column?.key); captureCopyCell(row, rowIdx, column); onGridAnchor?.(column && columns.some(item => item.key === column.key) ? { row: rowIdx, key: column.key } : undefined); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={changeSortColumns} onCellCopy={({ row, column }, event) => {
     event.preventDefault();
     if(!actionCurrent()||!rowIndexes.has(row)||!selectedRows.size&&!columns.some(item=>item.key===column.key))return;
     try {
-      if(selectedRows.size*columns.length>maxClipboardCells)throw Error(zh.clipboard.copyLimit);
-      const indices=[...selectedRows].sort((a,b)=>a-b);
-      if(indices.some(index=>!Number.isSafeInteger(index)||index<0||index>=rows.length))return;
-      const values=indices.length?indices.map(index=>columns.map(column=>copyValue(rows[index],column.key))):[[copyValue(row,column.key)]];
+      const selected = rangeCurrent() ? cellRange.copy(row, column.key, copyValue, skipRowInInversion) : undefined;
+      if (selected && !selected.values.length) return;
+      let values = selected?.values;
+      if (!values) {
+        if(selectedRows.size*columns.length>maxClipboardCells)throw Error(zh.clipboard.copyLimit);
+        const indices=[...selectedRows].sort((a,b)=>a-b);
+        if(indices.some(index=>!Number.isSafeInteger(index)||index<0||index>=rows.length))return;
+        values=indices.length?indices.map(index=>columns.map(column=>copyValue(rows[index],column.key))):[[copyValue(row,column.key)]];
+      }
       const content=encodeClipboard(values);event.clipboardData.setData('text/plain',content.text);event.clipboardData.setData(cellClipboardType,content.typed);
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
