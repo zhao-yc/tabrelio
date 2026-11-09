@@ -2,18 +2,28 @@ import { copyInsertSqlLimits as limits } from '../shared/copyInsertSql';
 import { copyInsertSqlZh as text } from '../shared/copyInsertSql.zh-CN';
 import { postgresDdlLiteral, postgresNewIdentifier } from '../shared/postgresCreateTable';
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
-import { isPostgresFilteredUpdateColumn, isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTablePage } from '../shared/postgresTable';
+import type { QueryResult } from '../shared/contracts';
+import type { PostgresQueryRowSql } from '../shared/postgresQueryRecord';
+import { isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTableColumn, type PostgresTablePage } from '../shared/postgresTable';
 import type { PostgresDraftEntry } from '../shared/postgresTableDraft';
 import { primaryKeyCopyZh as keyText } from './locales/primaryKeyCopy.zh-CN';
 import { updateSqlCopyZh as updateText } from './locales/updateSqlCopy.zh-CN';
 import { cellText, ownCell } from './lib';
 
 const utf8 = new TextEncoder();
+type SqlColumn = Pick<PostgresTableColumn, 'key' | 'name' | 'primary' | 'generated' | 'identityAlways'> & { sequenceDefault?: boolean };
+type SqlRows = Pick<PostgresTablePage, 'rows' | 'rowKeys' | 'relationKind' | 'primaryKey'> & { columns: SqlColumn[] };
+const updateColumn = (column: SqlColumn) => !column.primary && !column.generated && !column.identityAlways && !column.sequenceDefault;
+const pageAvailable = (page: PostgresTablePage) => !!page.exportToken && !page.truncated && isPostgresSqlExportRelation(page.relationKind);
 
 /** 仅从已加载原页生成可审阅 SQL。隐藏列仍按目录读取，计算生成列交由目标表重算。 */
 export function postgresCopyInsertSql(table: string, page: PostgresTablePage, indices: ReadonlySet<number>,
   draft: readonly PostgresDraftEntry[]): string {
-  if (!page.exportToken || page.truncated || !isPostgresSqlExportRelation(page.relationKind)) throw Error(text.target);
+  if (!pageAvailable(page)) throw Error(text.target);
+  return insertSql(table, page, indices, draft);
+}
+
+function insertSql(table: string, page: SqlRows, indices: ReadonlySet<number>, draft: readonly PostgresDraftEntry[]): string {
   const { schema, name } = postgresRelationName(table);
   const columns = page.columns.filter(isPostgresSqlExportColumn);
   if (!columns.length || ![schema, name, ...columns.map(column => column.name)].every(value => postgresNewIdentifier.safeParse(value).success) ||
@@ -31,6 +41,11 @@ export function postgresCopyInsertSql(table: string, page: PostgresTablePage, in
 
 /** 沿实际主键顺序构造每行条件，普通表保留 ONLY，分区表读取全部分区。 */
 export function postgresCopyPrimaryKeyQuery(table: string, page: PostgresTablePage, indices: ReadonlySet<number>): string {
+  if (!pageAvailable(page)) throw Error(keyText.target);
+  return primaryKeyQuery(table, page, indices);
+}
+
+function primaryKeyQuery(table: string, page: SqlRows, indices: ReadonlySet<number>): string {
   const { target, columns } = primaryKeyTarget(table, page);
   const prefix = 'SELECT * FROM ' + target + '\nWHERE ';
   const predicates = copyRows(page, indices, columns, keyText, values => primaryKeyCondition(columns, values),
@@ -39,9 +54,9 @@ export function postgresCopyPrimaryKeyQuery(table: string, page: PostgresTablePa
 }
 
 /** 普通表使用 ONLY 避免同主键继承子表被更新，分区表仍由服务器路由。 */
-function primaryKeyTarget(table: string, page: PostgresTablePage) {
+function primaryKeyTarget(table: string, page: SqlRows) {
   const keys = page.primaryKey;
-  if (!page.exportToken || page.truncated || !isPostgresSqlExportRelation(page.relationKind) || !keys?.length) throw Error(keyText.target);
+  if (!keys?.length) throw Error(keyText.target);
   const { schema, name } = postgresRelationName(table);
   const primary = page.columns.filter(column => column.primary);
   const byName = new Map(primary.map(column => [column.name, column]));
@@ -61,8 +76,13 @@ function primaryKeyCondition(columns: readonly { name: string }[], values: reado
 /** 使用完整原主键，省略主键、生成字段和标识字段；任何选中草稿使整批复制失败。 */
 export function postgresCopyUpdateSql(table: string, page: PostgresTablePage, indices: ReadonlySet<number>,
   draft: readonly PostgresDraftEntry[]): string {
+  if (!pageAvailable(page)) throw Error(keyText.target);
+  return updateSql(table, page, indices, draft);
+}
+
+function updateSql(table: string, page: SqlRows, indices: ReadonlySet<number>, draft: readonly PostgresDraftEntry[]): string {
   const { target, columns: keys } = primaryKeyTarget(table, page);
-  const columns = page.columns.filter(column => isPostgresFilteredUpdateColumn(column) && !column.identityAlways && !column.sequenceDefault);
+  const columns = page.columns.filter(updateColumn);
   if (!columns.length || columns.some(column => !postgresNewIdentifier.safeParse(column.name).success) ||
       new Set(page.columns.map(column => column.name)).size !== page.columns.length ||
       new Set(page.columns.map(column => column.key)).size !== page.columns.length) throw Error(updateText.target);
@@ -78,6 +98,11 @@ export function postgresCopyUpdateSql(table: string, page: PostgresTablePage, in
 /** 普通表仅删除该关系中的原主键行；分区表交由 PostgreSQL 路由。 */
 export function postgresCopyDeleteSql(table: string, page: PostgresTablePage, indices: ReadonlySet<number>,
   draft: readonly PostgresDraftEntry[]): string {
+  if (!pageAvailable(page)) throw Error(keyText.target);
+  return deleteSql(table, page, indices, draft);
+}
+
+function deleteSql(table: string, page: SqlRows, indices: ReadonlySet<number>, draft: readonly PostgresDraftEntry[]): string {
   const { target, columns } = primaryKeyTarget(table, page);
   const changed = new Set(draft.map(entry => entry.rowKey));
   return copyRows(page, indices, columns, keyText, (values, index) => {
@@ -87,8 +112,24 @@ export function postgresCopyDeleteSql(table: string, page: PostgresTablePage, in
   }, '\n');
 }
 
+/** 查询只使用服务器核验的原列映射与当前显示行。复制不会借用表页写入能力。 */
+export function postgresQueryRowSqlBuilders(source: PostgresQueryRowSql, result: QueryResult, rows: QueryResult['rows']) {
+  const columns = source.columns.map(({ position, ...column }) => ({ ...column, key: result.columns[position]?.key }));
+  if (!columns.length || columns.some(column => !column.key)) return;
+  const page: SqlRows = { columns, rows, relationKind: 'r', primaryKey: source.primaryKey };
+  const table = source.table;
+  return {
+    table,
+    insert: columns.some(isPostgresSqlExportColumn) ? (indices: ReadonlySet<number>) => insertSql(table, page, indices, []) : undefined,
+    update: !!source.primaryKey?.length && columns.some(updateColumn)
+      ? (indices: ReadonlySet<number>) => updateSql(table, page, indices, []) : undefined,
+    delete: source.primaryKey?.length ? (indices: ReadonlySet<number>) => deleteSql(table, page, indices, []) : undefined,
+    select: source.primaryKey?.length ? (indices: ReadonlySet<number>) => primaryKeyQuery(table, page, indices) : undefined,
+  };
+}
+
 /** 两个复制入口沿相同的值校验与字节预算，整组生成后才交给剪贴板。 */
-function copyRows(page: PostgresTablePage, indices: ReadonlySet<number>, columns: readonly { key: string }[],
+function copyRows(page: SqlRows, indices: ReadonlySet<number>, columns: readonly { key: string }[],
   errors: { selection: string; incomplete: string; type: string; limit: string },
   render: (values: readonly string[], index: number) => string, separator: string, sqlBytes = 0): string {
   if (!indices.size) throw Error(errors.selection);

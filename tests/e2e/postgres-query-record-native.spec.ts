@@ -9,6 +9,10 @@ import { gridRangeFillZh as fillText } from '../../src/renderer/locales/gridRang
 import { postgresBatchDuplicateZh as duplicateText } from '../../src/renderer/locales/postgresBatchDuplicate.zh-CN';
 import { postgresBatchEditZh as batchText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
 import { postgresTableFindZh as findText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
+import { primaryKeyCopyZh as keyCopy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
+import { updateSqlCopyZh as updateCopy } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
+import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
+import { copyInsertSqlZh as insertCopy } from '../../src/shared/copyInsertSql.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -717,6 +721,95 @@ test('PostgreSQL 查询文本替换按原字段去重，保留计算列和查询
       { id: '2', note: '乙新', tag: '保留', auto_text: '乙新标记' },
       before[2],
     ]);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 只读查询按复合主键生成可回放的原表 SQL 和查询草稿', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  const table = '"row.sql"."two""names"';
+  try {
+    await observer.connect();
+    const password = randomBytes(32).toString('hex');
+    await observer.query(`CREATE ROLE query_row_sql_user LOGIN PASSWORD '${password}';
+      CREATE SCHEMA "row.sql";
+      CREATE TABLE ${table} (tenant text, id bigint GENERATED ALWAYS AS IDENTITY (START WITH 9007199254740993),
+        note text, payload bytea, calc integer GENERATED ALWAYS AS (length(note)) STORED,
+        PRIMARY KEY (tenant,id));
+      INSERT INTO ${table}(tenant,note,payload) VALUES ('区甲','原''值',decode('00FEFF','hex')), ('区乙','',NULL), ('范围外','保留',NULL);
+      GRANT USAGE ON SCHEMA "row.sql" TO query_row_sql_user;
+      GRANT SELECT ON ${table} TO query_row_sql_user`);
+    await loadQuery({ ...config, user: 'query_row_sql_user', password },
+      `SELECT id AS 编号, note AS 同名, upper(note) AS 同名, tenant AS 分组, payload, note AS 重复, calc
+        FROM ${table} WHERE tenant <> '范围外' ORDER BY id DESC;`);
+    const query = page.locator('.postgres-query:visible');
+    await query.getByRole('button', { name: postgresZh.execute, exact: true }).click();
+    const button = (name: string) => query.getByRole('button', { name, exact: true });
+    await expect(button(insertCopy.selected)).toBeVisible();
+    await expect(button(text.edit)).toBeHidden();
+    await expect(button(text.add)).toBeHidden();
+    await query.getByRole('columnheader', { name: '编号' }).click();
+    const cell = (id: string) => query.getByRole('gridcell', { name: id, exact: true });
+    for (const id of ['9007199254740994', '9007199254740993']) await cell(id).locator('..').getByRole('checkbox').check();
+    const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    const beforeTasks = await tasks();
+    const read = async () => (await observer.query(`SELECT tenant,id::text,note,encode(payload,'hex') AS payload,calc FROM ${table} ORDER BY id`)).rows;
+    const before = await read();
+    const handle = await page.evaluateHandle(() => {
+      const captured: string[] = [];
+      const descriptor = Object.getOwnPropertyDescriptor(document, 'execCommand');
+      Object.defineProperty(document, 'execCommand', { configurable: true, value: (command: string) => {
+        if (command !== 'copy') return false;
+        const clipboardData = new DataTransfer();
+        document.dispatchEvent(new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true }));
+        captured.push(clipboardData.getData('text/plain'));
+        return true;
+      } });
+      return { captured, restore: () => {
+        if (descriptor) Object.defineProperty(document, 'execCommand', descriptor);
+        else Reflect.deleteProperty(document, 'execCommand');
+      } };
+    });
+    let sql: string[];
+    try {
+      for (const name of [insertCopy.selected, keyCopy.action, updateCopy.action, deleteCopy.action]) await button(name).click();
+      sql = await handle.evaluate(value => value.captured);
+    } finally {
+      await handle.evaluate(value => value.restore());
+      await handle.dispose();
+    }
+    expect(sql).toHaveLength(4);
+    const [insert, select, update, remove] = sql;
+    expect(insert).toContain(`INSERT INTO ${table} ("id", "note", "tenant", "payload") OVERRIDING SYSTEM VALUE`);
+    expect(select).toContain(`SELECT * FROM ONLY ${table}\nWHERE ("tenant" = E'区甲' AND "id" = E'9007199254740993')`);
+    expect(update).toContain(`UPDATE ONLY ${table}\nSET "note" = E'原''值', "payload" =`);
+    expect(remove).toContain(`DELETE FROM ONLY ${table}\nWHERE ("tenant" = E'区甲' AND "id" = E'9007199254740993')`);
+    expect(await tasks()).toEqual(beforeTasks);
+    expect(await read()).toEqual(before);
+
+    await observer.query('BEGIN');
+    try {
+      await observer.query('SET LOCAL standard_conforming_strings = off');
+      expect((await observer.query(select)).rows.map(row => row.id).sort()).toEqual(['9007199254740993', '9007199254740994']);
+      await observer.query(update);
+      await observer.query(remove);
+      expect(await read()).toEqual([before[2]]);
+      await observer.query(insert);
+      expect(await read()).toEqual(before);
+    } finally { await observer.query('ROLLBACK'); }
+
+    await button(updateCopy.open).click();
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('settings.get', {})).tabs
+      .filter(tab => tab.title.endsWith('UPDATE 草稿')).map(tab => ({ sql: tab.sql, database: tab.database })))).toEqual([
+      { sql: update, database: config.database },
+    ]);
+    const editor = query.locator('.view-lines');
+    await expect(editor).toContainText('UPDATE');
+    await expect(editor).toContainText('9007199254740993');
+    await info.attach('PostgreSQL查询结果原记录SQL草稿', { body: await page.screenshot(), contentType: 'image/png' });
+    expect(await tasks()).toEqual(beforeTasks);
+    expect(await read()).toEqual(before);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

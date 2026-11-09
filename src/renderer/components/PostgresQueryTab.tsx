@@ -19,6 +19,8 @@ import { ResultArchiveDialog } from './ResultArchiveDialog';
 import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
 import { postgresTableLimits } from '../../shared/postgresTable';
 import { postgresClipboardInput, postgresGridPasteMatrix } from '../postgresGridPaste';
+import { postgresQueryRowSqlBuilders } from '../postgresCopyInsertSql';
+import { openRowSqlDraft } from '../openRowSqlDraft';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import type { GridRangeTarget } from '../useGridCellRange';
 import type { GridRangeFillInput } from '../gridRangeFill';
@@ -1097,6 +1099,8 @@ export function PostgresQueryTab({
   const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
     resultContext, visibleColumns);
   const selectedCount = resultSelection.count(binding);
+  const rowSqlSource = !pin ? outcome?.postgresQueryRowSql : undefined;
+  const rowSql = rowSqlSource && binding && result ? postgresQueryRowSqlBuilders(rowSqlSource, result, binding.rows) : undefined;
   // 显示行已筛选和排序，完整列仍来自该结果的原始元数据。
   const detailBinding = rowDetails.bind(!locked ? binding?.result : undefined, [binding]);
   const currentRowDetail = rowDetail && rowDetails.valid(rowDetail) ? rowDetail : undefined;
@@ -2019,6 +2023,11 @@ export function PostgresQueryTab({
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
     <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding}
+      insertSql={rowSql?.insert} updateSql={rowSql?.update} deleteSql={rowSql?.delete} primaryKeySql={rowSql?.select}
+      onOpenRowSql={rowSql ? (kind, sql) => {
+        if (resultCurrent() && !document.querySelector(appModalSelector))
+          openRowSqlDraft({ connectionId: tab.connectionId, database: scope.database, table: rowSql.table }, kind, sql);
+      } : undefined}
       frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
       onShowMatchingRows={binding ? changeMatchView : undefined}

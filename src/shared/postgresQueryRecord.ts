@@ -15,3 +15,10 @@ export const postgresQueryRecordPageSchema = z.union([
   source.extend({ operation: z.literal('new') }).strict(),
 ]);
 export type PostgresQueryRecordPageInput = z.infer<typeof postgresQueryRecordPageSchema>;
+
+/** 只描述原执行中实际返回的原表字段，不包含表页令牌或执行权限。 */
+export interface PostgresQueryRowSql {
+  table: string;
+  columns: { position: number; name: string; primary: boolean; generated: boolean; identityAlways: boolean; sequenceDefault: boolean }[];
+  primaryKey?: string[];
+}

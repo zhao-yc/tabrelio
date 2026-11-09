@@ -1,6 +1,6 @@
 import { postgresQueryRecordPageSchema } from '../../shared/postgresQueryRecord';
 import { postgresQueryHasUniqueKeys, postgresQueryJoinTarget, postgresQueryRecordIdentity, postgresQueryRecordTable,
-  qualifiedQueryTable, resolvePostgresQueryRecord, verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
+  postgresQueryRowSql, qualifiedQueryTable, resolvePostgresQueryRecord, verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
 import { postgresResultOriginsSchema } from '../../shared/postgresResultOrigins';
 import { postgresColumnReferences, readPostgresResultOrigins } from './resultOrigins';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
@@ -1033,6 +1033,7 @@ export class PostgresEngine {
     const resultSources: NonNullable<QueryOutcome['postgresResultSources']> = [];
     const resultOrigins: NonNullable<QueryOutcome['postgresResultOrigins']> = [];
     let originBytes = 0;
+    let rowSql: QueryOutcome['postgresQueryRowSql'];
     const report: QueryScriptReport | undefined = input.continueOnError === true
       ? {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []} : undefined;
     const notices = new PostgresNoticeCollector(input.parameters !== undefined);
@@ -1159,10 +1160,12 @@ export class PostgresEngine {
           const oid = joined ? await postgresQueryJoinTarget(session.managed, table, references).catch(() => undefined) :
             references.every(reference => !reference || reference.relation === origin.relation) ? origin.relation : undefined;
           const confirmed = oid === undefined || task.cancelled ? undefined :
-            await postgresQueryRecordIdentity(session.managed, qualifiedQueryTable(table), oid).catch(() => undefined);
+            await postgresQueryRecordIdentity(session.managed, qualifiedQueryTable(table), oid, !!result.rows.length).catch(() => undefined);
           if (oid !== undefined && confirmed && !task.cancelled && !session.managed.broken) {
             const targets = joined ? references.map(reference => reference?.relation === oid ? reference : null) : references;
             const rowsEditable = !!result.rows.length && postgresQueryHasUniqueKeys(result, targets, confirmed.keys);
+            if (confirmed.rowSql && (!joined || rowsEditable))
+              rowSql = postgresQueryRowSql(confirmed.rowSql, targets, confirmed.keys, rowsEditable);
             const capabilities = { update: rowsEditable && confirmed.capabilities.update,
               delete: !joined && rowsEditable && confirmed.capabilities.delete,
               insert: !joined && rowsEditable && confirmed.capabilities.insert, newRecord: !joined && confirmed.capabilities.insert };
@@ -1228,6 +1231,7 @@ export class PostgresEngine {
         postgresQueryRecordCapabilities: session.queryRecord.capabilities } : {}),
       ...(session.queryRecord?.joined ? { postgresQueryRecordJoinTarget: session.queryRecord.relationOid } : {}),
       ...(session.queryRecord?.replaceColumns.length ? { postgresQueryReplaceColumns: session.queryRecord.replaceColumns } : {}),
+      ...(rowSql ? { postgresQueryRowSql: rowSql } : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */

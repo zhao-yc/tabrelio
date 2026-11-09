@@ -1,5 +1,6 @@
 import type { CellValue, QueryOutcome, QueryResult } from '../../shared/contracts';
 import type { PostgresColumnReference } from '../../shared/postgresResultOrigins';
+import type { PostgresQueryRowSql } from '../../shared/postgresQueryRecord';
 import { postgresIdentifier, scanPostgresEditorTokens } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 import type { PostgresReferenceRowVersion } from './tableReferences';
@@ -161,7 +162,15 @@ export interface PostgresQueryRecordSource {
 }
 
 /** 在原查询会话按其搜索路径确认真正的关系、有效主键及物理文件。 */
-export async function postgresQueryRecordIdentity(connection: PostgresConnection, relation: string, oid: number) {
+export async function postgresQueryRecordIdentity(connection: PostgresConnection, relation: string, oid: number, includeRowSql = false) {
+  const rowSqlColumns = includeRowSql ? `, n.nspname::text, c.relname::text,
+    COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(a.attnum, a.attname::text,
+      a.attgenerated <> '', a.attidentity = 'a', a.attidentity <> '' OR EXISTS (
+        SELECT 1 FROM pg_catalog.pg_depend p JOIN pg_catalog.pg_class seq ON seq.oid=p.refobjid AND seq.relkind='S'
+        WHERE p.classid='pg_catalog.pg_attrdef'::regclass AND p.objid=d.oid
+          AND p.refclassid='pg_catalog.pg_class'::regclass AND p.refobjsubid=0)))::text
+      FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+      WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped), '[]')` : '';
   const result = await connection.query(`SELECT c.relfilenode::text, current_user::text,
     COALESCE((SELECT pg_catalog.jsonb_agg(k.attnum ORDER BY k.ordinality)::text
      FROM pg_catalog.pg_index i, LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality)
@@ -170,8 +179,9 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
     pg_catalog.has_table_privilege(c.oid, 'INSERT'),
     COALESCE((SELECT pg_catalog.jsonb_agg(a.attnum)::text FROM pg_catalog.pg_attribute a
       WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
-        AND a.attidentity <> 'a' AND a.atttypid IN (25, 1042, 1043)), '[]')
-    FROM pg_catalog.pg_class c WHERE c.oid=$2::oid AND c.oid=pg_catalog.to_regclass($1)::oid
+        AND a.attidentity <> 'a' AND a.atttypid IN (25, 1042, 1043)), '[]')${rowSqlColumns}
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    WHERE c.oid=$2::oid AND c.oid=pg_catalog.to_regclass($1)::oid
       AND c.relkind='r' AND c.relpersistence IN ('p','u') AND NOT c.relispartition AND NOT c.relhasrules
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhparent=c.oid)`,
     [relation, String(oid)], budget(), undefined, 'extended');
@@ -183,7 +193,32 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
   if (Array.isArray(keys) && keys.every(key => Number.isSafeInteger(key) && key > 0))
     return { keys: keys as number[], identity: JSON.stringify([row.c0, row.c1, keys]),
       textAttributes: new Set<number>(Array.isArray(textAttributes) ? textAttributes : []),
+      rowSql: typeof row.c7 === 'string' && typeof row.c8 === 'string' && typeof row.c9 === 'string'
+        ? { table: qualifiedQueryTable({ schema: row.c7, name: row.c8 }), columns: row.c9 } : undefined,
       capabilities: { update: row.c3 === 't', delete: row.c4 === 't', insert: row.c5 === 't' } };
+}
+
+/** 以协议序号连接真实列名，重复投影只取第一次，计算列与连接表不进入 SQL。 */
+export function postgresQueryRowSql(catalogue: { table: string; columns: string }, targets: readonly PostgresColumnReference[],
+  keys: readonly number[], uniqueKeys: boolean): PostgresQueryRowSql | undefined {
+  let decoded: unknown;
+  try { decoded = JSON.parse(catalogue.columns); } catch { return; }
+  if (!Array.isArray(decoded)) return;
+  const columns: PostgresQueryRowSql['columns'] = [];
+  const names = new Map<number, string>();
+  const byAttribute = new Map(decoded.filter(item => Array.isArray(item)).map(item => [item[0], item]));
+  for (const [position, origin] of targets.entries()) {
+    if (!origin || names.has(origin.attribute)) continue;
+    const entry = byAttribute.get(origin.attribute);
+    if (!entry || typeof entry[1] !== 'string' || entry.slice(2).length !== 3 ||
+        entry.slice(2).some(value => typeof value !== 'boolean')) return;
+    const [, name, generated, identityAlways, sequenceDefault] = entry;
+    columns.push({ position, name, primary: keys.includes(origin.attribute), generated: generated || identityAlways, identityAlways, sequenceDefault });
+    names.set(origin.attribute, name);
+  }
+  if (!columns.length) return;
+  const primaryKey = uniqueKeys && keys.every(key => names.has(key)) ? keys.map(key => names.get(key)!) : undefined;
+  return { table: catalogue.table, columns, ...(primaryKey?.length ? { primaryKey } : {}) };
 }
 
 /** 独立连接必须仍在原服务器和库，来源目录使用服务器报告的关系 OID。 */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTablePage } from '../../src/shared/postgresTable';
-import { postgresCopyDeleteSql, postgresCopyInsertSql, postgresCopyPrimaryKeyQuery, postgresCopyUpdateSql } from '../../src/renderer/postgresCopyInsertSql';
+import { postgresCopyDeleteSql, postgresCopyInsertSql, postgresCopyPrimaryKeyQuery, postgresCopyUpdateSql, postgresQueryRowSqlBuilders } from '../../src/renderer/postgresCopyInsertSql';
+import { postgresQueryRowSql } from '../../src/engine/postgres/queryRecord';
 
 const page: PostgresTablePage = {
   exportToken: '原页', truncated: false, hasNext: true, order: 'primary', relationKind: 'r',
@@ -16,6 +17,27 @@ const page: PostgresTablePage = {
   rowKeys: ['一', '二'],
 };
 const table = '"带点.schema"."表""名"';
+
+it('查询用原列名和原主键顺序生成 SQL，跳过计算列及重复投影', () => {
+  const source = postgresQueryRowSql({ table, columns: JSON.stringify([
+    [1, 'id', false, true, true], [2, 'tenant', false, false, false], [3, 'a"b', false, false, false],
+  ]) }, [null, { relation: 1, attribute: 3 }, { relation: 1, attribute: 1 }, { relation: 1, attribute: 2 },
+    { relation: 1, attribute: 3 }], [2, 1], true)!;
+  const result = {
+    columns: ['calc', 'note', 'id', 'tenant', 'duplicate'].map(key => ({ key, name: '同名', type: '' })),
+    rows: [{ calc: '计算', note: '原值', id: '9007199254740993', tenant: '区', duplicate: '原值' }],
+    elapsedMs: 0, statement: '', truncated: true,
+  };
+  const builders = postgresQueryRowSqlBuilders(source, result, result.rows)!;
+  const selected = new Set([0]);
+  expect(builders.update?.(selected)).toBe(
+    `UPDATE ONLY ${table}\nSET "a""b" = E'原值'\nWHERE ("tenant" = E'区' AND "id" = E'9007199254740993');`);
+  expect(builders.insert?.(selected)).toBe(
+    `INSERT INTO ${table} ("a""b", "id", "tenant") OVERRIDING SYSTEM VALUE VALUES (E'原值', E'9007199254740993', E'区');`);
+  const partial = postgresQueryRowSqlBuilders({ ...source, primaryKey: undefined }, result, result.rows)!;
+  expect(partial.select).toBeUndefined();
+  expect(partial.delete).toBeUndefined();
+});
 
 it('PostgreSQL DELETE 保留 ONLY，拒绝 NULL、草稿和无法定位草稿归属的页', () => {
   const source = { ...page, primaryKey: ['id'] };
