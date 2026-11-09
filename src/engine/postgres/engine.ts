@@ -1,6 +1,6 @@
 import { postgresQueryRecordPageSchema } from '../../shared/postgresQueryRecord';
-import { postgresQueryHasUniqueKeys, postgresQueryRecordIdentity, postgresQueryRecordTable, resolvePostgresQueryRecord,
-  verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
+import { postgresQueryHasUniqueKeys, postgresQueryJoinTarget, postgresQueryRecordIdentity, postgresQueryRecordTable,
+  qualifiedQueryTable, resolvePostgresQueryRecord, verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
 import { postgresResultOriginsSchema } from '../../shared/postgresResultOrigins';
 import { postgresColumnReferences, readPostgresResultOrigins } from './resultOrigins';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
@@ -1151,20 +1151,25 @@ export class PostgresEngine {
       if (!estimate && !analysisSql && !report?.errors.length && !task.cancelled && count === 1 && result?.postgresCommand === 'SELECT' &&
           references?.length === result.columns.length && session.managed.serverIdentity &&
           originalState.transactionKnown && !originalState.transactionOpen && currentState.transactionKnown && !currentState.transactionOpen &&
-          origin && references.every(reference => !reference || reference.attribute > 0 && reference.relation === origin.relation)) {
+          origin && references.every(reference => !reference || reference.attribute > 0)) {
         const table = postgresQueryRecordTable(result.statement, session.managed.standardStrings);
         if (table) {
-          const qualified = (table.schema ? postgresIdentifier(table.schema) + '.' : '') + postgresIdentifier(table.name);
           // 目录读取失败只撤销原记录编辑能力，不改写用户已完成的查询结果。
-          const oid = origin.relation;
-          const confirmed = await postgresQueryRecordIdentity(session.managed, qualified, oid).catch(() => undefined);
-          if (confirmed && !task.cancelled && !session.managed.broken) {
-            const rowsEditable = !!result.rows.length && postgresQueryHasUniqueKeys(result, references, confirmed.keys);
-            const capabilities = { update: rowsEditable && confirmed.capabilities.update, delete: rowsEditable && confirmed.capabilities.delete,
-              insert: rowsEditable && confirmed.capabilities.insert, newRecord: confirmed.capabilities.insert };
+          const joined = !!table.joins?.length;
+          const oid = joined ? await postgresQueryJoinTarget(session.managed, table, references).catch(() => undefined) :
+            references.every(reference => !reference || reference.relation === origin.relation) ? origin.relation : undefined;
+          const confirmed = oid === undefined || task.cancelled ? undefined :
+            await postgresQueryRecordIdentity(session.managed, qualifiedQueryTable(table), oid).catch(() => undefined);
+          if (oid !== undefined && confirmed && !task.cancelled && !session.managed.broken) {
+            const targets = joined ? references.map(reference => reference?.relation === oid ? reference : null) : references;
+            const rowsEditable = !!result.rows.length && postgresQueryHasUniqueKeys(result, targets, confirmed.keys);
+            const capabilities = { update: rowsEditable && confirmed.capabilities.update,
+              delete: !joined && rowsEditable && confirmed.capabilities.delete,
+              insert: !joined && rowsEditable && confirmed.capabilities.insert, newRecord: !joined && confirmed.capabilities.insert };
             if (Object.values(capabilities).some(Boolean))
               session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
-                identity: confirmed.identity, table, result, relationOid: oid, origins: references, capabilities };
+                identity: confirmed.identity, table, result, relationOid: oid, origins: targets, capabilities,
+                ...(joined ? { joined: true } : {}) };
           }
         }
       }
@@ -1219,6 +1224,7 @@ export class PostgresEngine {
       ...(resultOrigins.some(Boolean) ? { postgresResultOrigins: resultOrigins } : {}),
       ...(session.queryRecord ? { postgresQueryRecordExecution: session.queryRecord.executionId,
         postgresQueryRecordCapabilities: session.queryRecord.capabilities } : {}),
+      ...(session.queryRecord?.joined ? { postgresQueryRecordJoinTarget: session.queryRecord.relationOid } : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */

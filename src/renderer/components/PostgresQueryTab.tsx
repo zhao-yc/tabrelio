@@ -1288,6 +1288,11 @@ export function PostgresQueryTab({
   const canDeleteQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.delete === true;
   const canDuplicateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.insert === true;
   const canAddQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.newRecord === true;
+  const joinTarget = outcome?.postgresQueryRecordJoinTarget;
+  function writableQueryColumn(index: number) {
+    const origin = origins?.[index];
+    return !!origin && (joinTarget === undefined || origin.relation === joinTarget);
+  }
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
   function openQueryRecords(rows: readonly DataRow[], { cell, range, operation }: {
     cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; operation?: 'delete' | 'insert' | 'new';
@@ -1322,7 +1327,7 @@ export function PostgresQueryTab({
     const raw = ownCell(cell.row, column.key);
     if (raw !== null && typeof raw !== 'string') return false;
     const columnIndex = result?.columns.findIndex(item => item.key === column.key) ?? -1;
-    if (columnIndex < 0 || !origins?.[columnIndex]) return false;
+    if (columnIndex < 0 || !writableQueryColumn(columnIndex)) return false;
     return openQueryRecords([cell.row], { cell: { columnIndex, anchor, typed } });
   }
 
@@ -1339,7 +1344,8 @@ export function PostgresQueryTab({
         selected.keys.some((key, index) => key !== columns[index]?.key))) throw Error(originsText.editStale);
     const columnIndices = columns.map(column => result.columns.findIndex(origin => origin.key === column.key));
     if (columnIndices.some(index => index < 0)) throw Error(originsText.editStale);
-    if (columnIndices.some(index => !origins?.[index])) throw Error(originsText.expressionReadOnly);
+    if (columnIndices.some(index => !writableQueryColumn(index)))
+      throw Error(joinTarget === undefined ? originsText.expressionReadOnly : originsText.joinColumnReadOnly);
     return { rows, columnIndices, startRow };
   }
 
@@ -2125,10 +2131,10 @@ export function PostgresQueryTab({
                 <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
                 {canUpdateQueryRecord && <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
-                  title={originsText.cellHint} onClick={() => {
+                  title={joinTarget === undefined ? originsText.cellHint : originsText.joinEditHint} onClick={() => {
                     if (activeDetailRow && activeDetailRow.binding === detailBinding)
                       openQueryRecords([activeDetailRow.binding.rows[activeDetailRow.index]]);
-                  }}>{originsText.edit}</button>}
+                  }}>{joinTarget === undefined ? originsText.edit : originsText.editJoin}</button>}
                 {canDeleteQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
                   title={originsText.deleteLimit} onClick={() => openCheckedQueryRows('delete')}>{originsText.deleteChecked}</button>}
                 {canDuplicateQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}

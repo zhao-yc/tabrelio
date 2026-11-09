@@ -592,3 +592,78 @@ test('PostgreSQL 可从空结果向无主键来源表新增，预览后结构变
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
+
+test('PostgreSQL JOIN 仅可编辑明确定位的首张表，重复主键和自连接保持只读', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE SCHEMA join_main; CREATE SCHEMA join_side;
+      CREATE TABLE join_main.subject (id bigint PRIMARY KEY, side_id bigint, note text);
+      CREATE TABLE join_side.subject (id bigint PRIMARY KEY, note text);
+      INSERT INTO join_main.subject VALUES (2,1,'主表已匹配'), (9223372036854775807,99,'主表未匹配');
+      INSERT INTO join_side.subject VALUES (1,'右表原值'), (2,'右表第二行')`);
+    await loadQuery(config, `SELECT s.note AS 同名, p.id, p.note AS 同名, s.id AS 侧编号
+      FROM join_main.subject AS p LEFT OUTER JOIN join_side.subject AS s ON p.side_id=s.id ORDER BY p.id DESC;`);
+    const query = page.locator('.postgres-query:visible');
+    const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
+    const edit = query.getByRole('button', { name: text.editJoin, exact: true });
+    const cell = (name: string) => query.getByRole('gridcell', { name, exact: true });
+    await execute.click();
+    await expect(edit).toBeVisible();
+    for (const name of [text.add, text.deleteChecked, text.duplicateChecked])
+      await expect(query.getByRole('button', { name, exact: true })).toBeHidden();
+    const inline = page.getByRole('region', { name: tableText.cellEdit('note'), exact: true });
+    await cell('右表原值').click();
+    await page.keyboard.press('F2');
+    await expect(cell('右表原值')).toBeFocused();
+    await expect(inline).toBeHidden();
+    await page.keyboard.press('Shift+ArrowRight');
+    await query.locator('[role="gridcell"]:focus').evaluate(element => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData('text/plain', '拒绝\t拒绝');
+      element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }));
+    });
+    await expect(query.getByText(text.joinColumnReadOnly, { exact: true })).toBeVisible();
+
+    await cell('主表未匹配').dblclick();
+    const input = inline.getByRole('textbox', { name: tableText.value, exact: true });
+    await expect(input).toHaveValue('主表未匹配');
+    await input.fill('只更新主表');
+    await input.press('Enter');
+    const preview = page.getByRole('dialog', { name: tableText.preview, exact: true });
+    await expect(preview.locator('pre')).toContainText('UPDATE ONLY "join_main"."subject" SET "note" = $1');
+    await info.attach('PostgreSQL连接查询主表编辑', { body: await page.screenshot(), contentType: 'image/png' });
+    await preview.getByRole('checkbox', { name: recordText.postgresConfirm, exact: true }).check();
+    await preview.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(preview).toBeHidden();
+    expect((await observer.query('SELECT id::text, note FROM join_main.subject ORDER BY id')).rows).toEqual([
+      { id: '2', note: '主表已匹配' }, { id: '9223372036854775807', note: '只更新主表' },
+    ]);
+    expect((await observer.query('SELECT id::text, note FROM join_side.subject ORDER BY id')).rows).toEqual([
+      { id: '1', note: '右表原值' }, { id: '2', note: '右表第二行' },
+    ]);
+
+    const rerun = async (sql: string) => {
+      await page.evaluate(async sql => {
+        const settings = await window.dbark.invoke('settings.get', {});
+        await window.dbark.invoke('settings.save', { ...settings, tabs: settings.tabs.map(tab => tab.id === 'pg-query-record' ? { ...tab, sql } : tab) });
+      }, sql);
+      await page.reload();
+      await execute.click();
+    };
+    await rerun('SELECT p.*, s.note AS 侧注 FROM join_main.subject p INNER JOIN join_side.subject s ON p.side_id=s.id;');
+    await cell('主表已匹配').click();
+    await edit.click();
+    const form = page.getByRole('dialog', { name: tableText.edit, exact: true });
+    await expect(form.getByLabel('note ' + tableText.valueMode, { exact: true })).toBeVisible();
+    await form.getByRole('button', { name: tableText.cancel, exact: true }).click();
+    await rerun('SELECT p.id, p.note, s.note AS 侧注 FROM join_main.subject p JOIN join_main.subject s ON p.id=s.id;');
+    await expect(cell('只更新主表')).toHaveCount(2);
+    await expect(edit).toBeHidden();
+    await rerun('SELECT p.id, p.note, s.note AS 侧注 FROM join_main.subject p JOIN join_side.subject s ON p.side_id<=s.id;');
+    await expect(cell('主表已匹配')).toHaveCount(2);
+    await expect(edit).toBeHidden();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});

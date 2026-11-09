@@ -13,18 +13,66 @@ const identifier = (token: Token | undefined) => token?.kind === 'word' ? token.
 const blocked = () => Error('PostgreSQL 查询原记录无法核验，请重新执行查询');
 const budget = () => ({ rows: 2, bytes: 8 * 1024 * 1024 });
 
-/** 只识别单一普通 FROM 目标。表达式可保留在投影中，写入来源仍由协议元数据决定。 */
-export function postgresQueryRecordTable(sql: string, standardStrings: boolean): { schema?: string; name: string } | undefined {
+interface QueryTable { schema?: string; name: string; }
+interface QueryTables extends QueryTable { joins?: QueryTable[]; anchorIndex?: number; }
+export const qualifiedQueryTable = ({ schema, name }: QueryTable) =>
+  (schema ? postgresIdentifier(schema) + '.' : '') + postgresIdentifier(name);
+const suffix = (token: Token | undefined) => ['where', 'order', 'limit', 'offset', 'fetch'].some(word => keyword(token, word));
+const joinModifiers = ['left', 'right', 'full', 'inner', 'cross', 'natural'];
+
+function queryTableAt(tokens: Token[], start: number) {
+  let end = start;
+  const first = identifier(tokens[end++]);
+  if (!first || ['only', 'lateral'].some(word => keyword(tokens[start], word))) return;
+  const schema = punct(tokens[end], '.') ? first : undefined;
+  const name = schema ? identifier(tokens[end + 1]) : first;
+  if (schema) end += 2;
+  if (!name) return;
+  let qualifier = name;
+  if (keyword(tokens[end], 'as')) {
+    const alias = identifier(tokens[++end]);
+    if (!alias) return;
+    qualifier = alias;
+    end++;
+  } else if (identifier(tokens[end]) && !suffix(tokens[end]) &&
+      !['join', 'on', 'using', 'tablesample', ...joinModifiers].some(word => keyword(tokens[end], word))) {
+    qualifier = identifier(tokens[end++])!;
+  }
+  return { table: { schema, name }, qualifier, end };
+}
+
+/** 在发生星号展开前，定位明确引用左表的投影。目录在查询后变化也不能调换主表。 */
+function joinAnchorIndex(tokens: Token[], top: ReadonlySet<number>, start: number, from: number, qualifier: string) {
+  let position = 0;
+  for (let end = start; end <= from; end++) {
+    if (end !== from && (!top.has(end) || !punct(tokens[end], ','))) continue;
+    const column = tokens[start + 2];
+    const direct = identifier(tokens[start]) === qualifier && punct(tokens[start + 1], '.') &&
+      (identifier(column) || punct(column, '*'));
+    if (direct && (end === start + 3 || end === start + 4 && identifier(tokens[start + 3]) ||
+        end === start + 5 && keyword(tokens[start + 3], 'as') && identifier(tokens[start + 4]))) return position;
+    for (let index = start; index < end; index++) {
+      if (top.has(index) && punct(tokens[index], '*') && (index === start || punct(tokens[index - 1], '.'))) return;
+    }
+    start = end + 1;
+    position++;
+  }
+}
+
+/** 识别普通 FROM 和保持左侧原行身份的 INNER／LEFT JOIN。协议和目录再核对实际关系。 */
+export function postgresQueryRecordTable(sql: string, standardStrings: boolean): QueryTables | undefined {
   if (sql.length > 262144) return;
   const tokens = scanPostgresEditorTokens(sql, 16384, standardStrings)?.filter(token => token.kind !== 'blocked' || token.text !== 'comment');
   if (!tokens || !keyword(tokens[0], 'select')) return;
   if (punct(tokens.at(-1), ';')) tokens.pop();
   if (keyword(tokens[1], 'distinct')) return;
   const closing: string[] = [];
+  const top = new Set<number>();
   let from = -1;
   for (let index = 1; index < tokens.length; index++) {
     const token = tokens[index];
     if (punct(token, ';') || keyword(token, 'select') || keyword(token, 'over') && punct(tokens[index - 1], ')')) return;
+    if (!closing.length) top.add(index);
     if (punct(token, '(') || punct(token, '[')) closing.push(token.text === '(' ? ')' : ']');
     else if (punct(token, ')') || punct(token, ']')) {
       if (closing.pop() !== token.text) return;
@@ -35,21 +83,52 @@ export function postgresQueryRecordTable(sql: string, standardStrings: boolean):
     }
   }
   if (closing.length || from <= (keyword(tokens[1], 'all') ? 2 : 1)) return;
-  let i = from + 1;
-  const first = identifier(tokens[i++]);
-  if (!first || ['only', 'lateral'].some(word => keyword(tokens[i - 1], word))) return;
-  const schema = punct(tokens[i], '.') ? first : undefined;
-  const name = schema ? identifier(tokens[++i]) : first;
-  if (schema) i++;
-  if (!name) return;
-  const suffix = (token: Token | undefined) => ['where', 'order', 'limit', 'offset', 'fetch'].some(word => keyword(token, word));
-  if (keyword(tokens[i], 'as')) {
-    if (!identifier(tokens[++i])) return;
-    i++;
-  } else if (identifier(tokens[i]) && !suffix(tokens[i]) &&
-      !['join', 'left', 'right', 'full', 'inner', 'cross', 'natural', 'tablesample'].some(word => keyword(tokens[i], word))) i++;
-  if (tokens[i] && !suffix(tokens[i])) return;
-  return { schema, name };
+  const first = queryTableAt(tokens, from + 1);
+  if (!first) return;
+  let index = first.end;
+  const joins: QueryTable[] = [];
+  while (tokens[index] && !suffix(tokens[index])) {
+    if (keyword(tokens[index], 'left')) {
+      index++;
+      if (keyword(tokens[index], 'outer')) index++;
+    } else if (keyword(tokens[index], 'inner')) index++;
+    if (!keyword(tokens[index], 'join') || joins.length === 8) return;
+    const joined = queryTableAt(tokens, index + 1);
+    if (!joined || !['on', 'using'].some(word => keyword(tokens[joined.end], word))) return;
+    joins.push(joined.table);
+    index = joined.end + 1;
+    const condition = index;
+    while (tokens[index]) {
+      if (top.has(index)) {
+        if (punct(tokens[index], ',')) return;
+        const next = keyword(tokens[index + 1], 'outer') ? index + 2 : index + 1;
+        if (suffix(tokens[index]) || keyword(tokens[index], 'join') ||
+            joinModifiers.some(word => keyword(tokens[index], word)) && keyword(tokens[next], 'join')) break;
+      }
+      index++;
+    }
+    if (index === condition) return;
+  }
+  if (!joins.length) return first.table;
+  const anchorIndex = joinAnchorIndex(tokens, top, keyword(tokens[1], 'all') ? 2 : 1, from, first.qualifier);
+  if (anchorIndex !== undefined) return { ...first.table, joins, anchorIndex };
+}
+
+/** 每张参与表须在 RowDescription 中留下自己的物理 OID，以排除别名、自连接和目录漂移歧义。 */
+export async function postgresQueryJoinTarget(connection: Pick<PostgresConnection, 'query'>, table: QueryTables,
+  origins: readonly PostgresColumnReference[]): Promise<number | undefined> {
+  const names = [table, ...(table.joins ?? [])].map(qualifiedQueryTable);
+  const projected = new Set(origins.flatMap(origin => origin ? [origin.relation] : []));
+  if (projected.size !== names.length) return;
+  const found = await connection.query(`SELECT c.oid::text
+    FROM pg_catalog.jsonb_array_elements_text($1::pg_catalog.jsonb) WITH ORDINALITY AS x(name, pos)
+    JOIN pg_catalog.pg_class c ON c.oid = pg_catalog.to_regclass(x.name)::oid
+    WHERE c.relkind = 'r' AND c.relpersistence IN ('p', 'u') AND NOT c.relispartition AND NOT c.relhasrules
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid)
+    ORDER BY x.pos`, [JSON.stringify(names)], { rows: names.length, bytes: 4096 }, undefined, 'extended');
+  const oids = found.rows.map(row => Number(row.c0));
+  if (found.truncated || oids.length !== names.length || new Set(oids).size !== names.length || oids.some(oid => !projected.has(oid))) return;
+  return table.anchorIndex !== undefined && origins[table.anchorIndex]?.relation === oids[0] ? oids[0] : undefined;
 }
 
 /** 拒绝同一主键在返回结果中出现多次，覆盖集合返回函数扩行等情形。 */
@@ -77,6 +156,7 @@ export interface PostgresQueryRecordSource {
   relationOid: number;
   origins: PostgresColumnReference[];
   capabilities: NonNullable<QueryOutcome['postgresQueryRecordCapabilities']>;
+  joined?: true;
 }
 
 /** 在原查询会话按其搜索路径确认真正的关系、有效主键及物理文件。 */
