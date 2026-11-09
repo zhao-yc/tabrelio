@@ -34,6 +34,8 @@ import { postgresReferencePickerZh as referenceText } from '../locales/postgresR
 import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTableRecordView';
 import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
+import type { GridRangeTarget } from '../useGridCellRange';
+import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import { postgresRecordTransferZh as transferText } from '../locales/postgresRecordTransfer.zh-CN';
 import { capturePostgresRecordTransfer, postgresTransferChanges, samePostgresTransferTable, usePostgresRecordTransfer, type PostgresRecordTransfer } from '../postgresRecordTransfer';
@@ -64,7 +66,7 @@ import { postgresColumnStatisticsZh } from '../locales/postgresColumnStatistics.
 import type { PostgresColumnReadSource } from '../postgresColumnRead';
 import { PostgresColumnStatisticsDialog } from './PostgresColumnStatisticsDialog';
 import { PostgresBatchFillDialog } from './PostgresBatchFillDialog';
-import { postgresBatchFillChanges } from '../postgresBatchFill';
+import { postgresBatchFillChanges, postgresRangeFillChanges } from '../postgresBatchFill';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, type PostgresBatchRow } from '../postgresBatchSelection';
 import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
@@ -103,7 +105,7 @@ import { useTableCheckedExport } from '../tableCheckedExport';
 import { projectQueryResultRows } from '../queryResultColumns';
 import { TableCheckedExportActions } from './TableCheckedExportActions';
 import { ResultExportDialog } from './ResultExportDialog';
-import type { ResultExportData } from '../../shared/contracts';
+import type { DataRow, ResultExportData } from '../../shared/contracts';
 import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
@@ -1089,6 +1091,21 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     return { column, rowKey, original, fields: prior?.kind === 'update' ? prior.fields : [] };
   }
 
+  function fillGridRange(range: GridRangeTarget<DataRow>, value: string | null) {
+    if (!page || !canEditGrid || !findIsCurrent() || recordInput.current ||
+        range.rows.some((row, index) => page.rows[range.startRow + index] !== row)) throw Error(rangeFillText.stale);
+    const columns = range.keys.map(key => {
+      const column = gridLayout.columns.find(item => item.key === key);
+      if (!column) throw Error(rangeFillText.stale);
+      return column;
+    });
+    const changes = postgresRangeFillChanges(page, columns, range.startRow, range.rows.length, value,
+      key => draftRef.current.find(entry => entry.rowKey === key)?.change);
+    if (changes.length && !stageChanges(changes)) throw Error(rangeFillText.stale);
+    setError('');
+    setMessage('');
+  }
+
   /** 暂存仍沿用准确原行；值恢复为原值时只移除该格的差异。 */
   function setQuickValue(cell: QueryResultCopyCell, kind: GridQuickValue): void {
     if (!findIsCurrent() || recordInput.current) return;
@@ -1707,6 +1724,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           if (gridReturn) setGridReturn(undefined);
         }}
         cellMenuFilters={cellMenuEnabled ? cellMenuFilters : undefined}
+        onFillRange={canEditGrid ? fillGridRange : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
         onCellPaste={(cell, data) => {

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { readFileSync, realpathSync } from 'node:fs';
+import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
 import { LocalStore } from '../../src/main/storage';
@@ -272,6 +273,36 @@ test('查询结果和 SQLite 表页可选择并复制矩形区域，保留勾选
   await page.mouse.up();
   await expect(destination).toBeFocused();
   expect((await readGridRangeClipboard(page)).sqlite).toBe(payload.sqlite);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 矩形可填充同值并一次撤销，包含定位键时拒绝整块填充', async () => {
+  await seed();
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const first = table.getByRole('gridcell', { name: 'TEXT · 记录 1', exact: true });
+  const second = table.getByRole('gridcell', { name: 'TEXT · 记录 2', exact: true });
+  const form = table.getByRole('region', { name: rangeFill.open, exact: true });
+  const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  const stage = async () => {
+    await table.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('统一草稿');
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+  };
+  await table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true }).click();
+  await page.keyboard.press('Shift+ArrowRight');
+  await stage();
+  await expect(form.getByRole('alert')).toContainText(rangeFill.target);
+  await expect(first).toBeVisible();
+  await first.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await stage();
+  await expect(table.getByRole('gridcell', { name: 'TEXT · 统一草稿', exact: true })).toHaveCount(2);
+  await expect(table.getByRole('gridcell', { name: 'TEXT · 记录 3', exact: true })).toBeVisible();
+  await table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true }).click();
+  await expect(first).toBeVisible();
+  await expect(second).toBeVisible();
+  expect(readFileSync(database)).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

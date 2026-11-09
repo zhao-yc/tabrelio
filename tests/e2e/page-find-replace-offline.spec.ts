@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { gridCellCenter, readGridRangeClipboard } from './grid-cell-range-clipboard';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
@@ -109,6 +110,27 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   await page.mouse.up();
   await expect(to).toBeFocused();
   expect(await readGridRangeClipboard(page)).toEqual(payload);
+  expect(await calls()).toEqual([]);
+});
+
+test('MySQL 表页按矩形填充字面值，只暂存且可一步撤销', async () => {
+  const start = await cell('note', 2), end = await cell('other', 3);
+  await start.click();
+  await end.click({ modifiers: ['Shift'] });
+  await page.getByRole('button', { name: rangeFill.open, exact: true }).click();
+  const form = page.getByRole('region', { name: rangeFill.open, exact: true });
+  await expect(form).toContainText(rangeFill.scope(2, 2));
+  await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('NULL');
+  await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+  for (const key of ['note', 'other']) {
+    for (const row of [2, 3]) await expect(await cell(key, row)).toHaveText('NULL');
+  }
+  await end.click();
+  const copied = await readGridRangeClipboard(page);
+  expect(JSON.parse(copied.typed).rows).toEqual([['NULL']]);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await expect(start).toHaveText('😀old前old后old');
+  await expect(end).toHaveText('无匹配');
   expect(await calls()).toEqual([]);
 });
 

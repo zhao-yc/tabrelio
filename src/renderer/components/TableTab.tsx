@@ -16,7 +16,9 @@ import { RecordBatchEditIntent } from '../recordBatchEdit';
 import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
-import { gridCellRangeClass, useGridCellRange } from '../useGridCellRange';
+import { gridCellRangeClass, useGridCellRange, type GridCellRectangle } from '../useGridCellRange';
+import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
+import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { readGridRowHeight } from '../../shared/gridRowHeight';
@@ -150,7 +152,7 @@ import { tableCopyMetadataKey, type TableCopyPageSources } from '../../shared/ta
 import { PasteInsertIntent, preparePasteInsert, type PasteInsertPlan } from '../pasteInsert';
 import { PasteInsertDialog } from './PasteInsertDialog';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
-import { BatchFillIntent, type BatchFillAssignment } from '../recordBatchFill';
+import { BatchFillIntent, prepareBatchFill, type BatchFillAssignment } from '../recordBatchFill';
 import type { RecordInput } from '../recordViews';
 import { TableBatchFillDialog } from './TableBatchFillDialog';
 import { recordBatchFillZh } from '../locales/recordBatchFill.zh-CN';
@@ -1853,6 +1855,18 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     }
     catch (reason) { setError(errorMessage(reason)); }
   }
+  /** 选区只授权这些行列，不改变原有勾选；整组通过批量预算后只写一步草稿。 */
+  function fillGridRange(rectangle: GridCellRectangle, input: GridRangeFillInput) {
+    const target = cellRange.capture(rectangle);
+    if (!target || !editable) throw Error(rangeFillText.stale);
+    const { kind, value } = input;
+    if ((kind !== 'text' && kind !== 'null') ||
+        target.rows.some(row => row.deleted || target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
+    const next = prepareBatchFill(target.keys.map(column => ({ column, input: { mode: kind, text: value } })),
+      rows, new Set(target.rows.map(row => row.id)), getRecordContext());
+    if (next !== rows) setRows(next);
+    setError('');
+  }
   const headerCopyLayoutRevision = layoutRevision.current;
   /** 勾选记录不改变另存范围，仍绑定活动格及其当前草稿。 */
   function saveActiveCell(): void {
@@ -2225,6 +2239,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       </form>}<GridRowJump grid={grid} scope={rowJumpScope} count={rows.length} disabled={rowJumpDisabled} onJump={jumpToGridRow}/>
       <GridColumnJump scope={rowJumpScope} columns={visibleColumns} disabled={rowJumpDisabled || !page}
         isCurrent={gridJumpCurrent} onJump={jumpToGridColumn}/>
+      {editable && cellRange.rectangle && !rowJumpDisabled && <GridRangeFill rectangle={cellRange.rectangle} onStage={fillGridRange}/>}
       <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={rowJumpDisabled}
         keyFor={rowSelectionKey}
         isCurrent={rowSelectionCurrent}

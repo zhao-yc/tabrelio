@@ -5,19 +5,20 @@ import { maxClipboardCells } from './gridClipboard';
 import { zh } from './locales/zh-CN';
 import { startGridCellRangeDrag, type GridRangePoint as Point } from './gridCellRangeDrag';
 
-interface Rectangle { top: number; bottom: number; left: number; right: number; }
+export interface GridCellRectangle { top: number; bottom: number; left: number; right: number; }
+export interface GridRangeTarget<Row> { startRow: number; rows: readonly Row[]; keys: readonly string[]; }
 
 function samePoint(left: Point | undefined, right: Point | undefined): boolean {
   return left?.row === right?.row && left?.column === right?.column;
 }
 
-function bounds(anchor: Point, focus: Point): Rectangle {
+function bounds(anchor: Point, focus: Point): GridCellRectangle {
   return { top: Math.min(anchor.row, focus.row), bottom: Math.max(anchor.row, focus.row),
     left: Math.min(anchor.column, focus.column), right: Math.max(anchor.column, focus.column) };
 }
 
 /** 在读取原值前检查格数预算；以当前可见顺序输出，待删除行由调用方排除。 */
-export function readGridCellRange<Row, Key, Value>(rectangle: Rectangle, rows: readonly Row[], keys: readonly Key[],
+export function readGridCellRange<Row, Key, Value>(rectangle: GridCellRectangle, rows: readonly Row[], keys: readonly Key[],
   read: (row: Row, key: Key) => Value, skip?: (row: Row) => boolean) {
   const columns = keys.slice(rectangle.left, rectangle.right + 1);
   const selected = rows.slice(rectangle.top, rectangle.bottom + 1).filter(row => !skip?.(row));
@@ -29,14 +30,14 @@ export function readGridCellRange<Row, Key, Value>(rectangle: Rectangle, rows: r
 export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly string[], source: unknown, columnOffset: number,
   grid: RefObject<DataGridHandle | null>, current: () => boolean) {
   const scope = useMemo(() => ({}), [rows, keys, source, columnOffset]);
-  const live = useRef<{ scope: object; active?: Point; anchor?: Point; focus?: Point }>({ scope });
+  const live = useRef<{ scope: object; active?: Point; anchor?: Point; focus?: Point; rectangle?: GridCellRectangle }>({ scope });
   if (live.current.scope !== scope) live.current = { scope };
   const committedCurrent = useRef(current);
   useLayoutEffect(() => { committedCurrent.current = current; }, [current]);
   const drag = useRef<(() => void) | undefined>(undefined);
   function stopDrag() { drag.current?.(); drag.current = undefined; }
   useLayoutEffect(() => stopDrag, [scope]);
-  const [shown, setShown] = useState<{ scope: object; rectangle: Rectangle }>();
+  const [shown, setShown] = useState<{ scope: object; rectangle: GridCellRectangle }>();
   const rectangle = shown?.scope === scope ? shown.rectangle : undefined;
 
   function position(row: Row | undefined, rowIndex: number, key: string | undefined): Point | undefined {
@@ -60,8 +61,9 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   }
 
   function select(anchor: Point, focus: Point) {
-    live.current = { scope, active: focus, anchor, focus };
-    setShown({ scope, rectangle: bounds(anchor, focus) });
+    const rectangle = bounds(anchor, focus);
+    live.current = { scope, active: focus, anchor, focus, rectangle };
+    setShown({ scope, rectangle });
   }
 
   function allowed(event: CellKeyboardEvent | CellMouseEvent): boolean {
@@ -132,7 +134,16 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return readGridCellRange(bounds(anchor, focus), rows, keys, read, skip);
   }
 
-  return { rectangle, mouse, key, move, copy };
+  /** 表单只能消费打开时的准确矩形；换页、重排及清除后即使坐标相同也须重开。 */
+  function capture(selected: GridCellRectangle): GridRangeTarget<Row> | undefined {
+    if (live.current.scope !== scope || live.current.rectangle !== selected || drag.current || !current()) return;
+    if ((selected.bottom - selected.top + 1) * (selected.right - selected.left + 1) > maxClipboardCells)
+      throw Error(zh.clipboard.copyLimit);
+    return { startRow: selected.top, rows: rows.slice(selected.top, selected.bottom + 1),
+      keys: keys.slice(selected.left, selected.right + 1) };
+  }
+
+  return { rectangle, mouse, key, move, copy, capture };
 }
 
 const arrowDirections = new Map<string, Point>([
@@ -140,7 +151,7 @@ const arrowDirections = new Map<string, Point>([
   ['ArrowLeft', { row: 0, column: -1 }], ['ArrowRight', { row: 0, column: 1 }],
 ]);
 
-export function gridCellRangeClass(rectangle: Rectangle | undefined, row: number | undefined, column: number): string | undefined {
+export function gridCellRangeClass(rectangle: GridCellRectangle | undefined, row: number | undefined, column: number): string | undefined {
   if (rectangle && row !== undefined && row >= rectangle.top && row <= rectangle.bottom && column >= rectangle.left && column <= rectangle.right)
     return 'grid-cell-in-range';
 }

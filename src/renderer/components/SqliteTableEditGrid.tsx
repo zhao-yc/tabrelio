@@ -4,7 +4,9 @@ import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } fro
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
-import { gridCellRangeClass, useGridCellRange } from '../useGridCellRange';
+import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
+import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
+import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
@@ -38,9 +40,9 @@ import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
+interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFilterCell, cellMenuFilters, onCheckedRows, findHit, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight }: Props) {
+export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFillRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight }: Props) {
   const height = readGridRowHeight(rowHeight);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
@@ -368,6 +370,11 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     ] as const).map(([kind, build, labels]) => <button key={kind} type="button" title={labels.openHint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(build, selectedRows.size > 0, sql => onOpenRowSql(kind, sql))}>{labels.open}</button>)}
+    {onFillRange && cellRange.rectangle && !disabled && <GridRangeFill rectangle={cellRange.rectangle} typed onStage={(rectangle, input) => {
+      const range = cellRange.capture(rectangle);
+      if (!range) throw Error(rangeFillText.stale);
+      onFillRange(range, input);
+    }}/>}
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={rowSelectionKey}
       isCurrent={rowSelectionCurrent}

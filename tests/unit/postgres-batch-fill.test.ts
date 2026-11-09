@@ -3,7 +3,7 @@ import type { PostgresTableChange, PostgresTableColumn, PostgresTablePage } from
 import { capturePostgresCheckedFill, planPostgresCheckedFill } from '../../src/renderer/postgresCheckedFill';
 import { retainPostgresCheckedPages, postgresCheckedPagePins } from '../../src/renderer/postgresCheckedPages';
 import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
-import { postgresBatchFillChanges } from '../../src/renderer/postgresBatchFill';
+import { postgresBatchFillChanges, postgresRangeFillChanges } from '../../src/renderer/postgresBatchFill';
 
 const column = (key: string, options: Partial<PostgresTableColumn> = {}): PostgresTableColumn => ({
   key, name: key, type: 'text', primary: false, generated: false, binary: false, nullable: true, defaultValue: false, ...options,
@@ -19,6 +19,16 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 勾选记录批量填充', () => {
+  it('矩形填充保留字面 NULL 和原草稿其它字段，拒绝受保护字段或待删除记录', () => {
+    const prior: PostgresTableChange = { kind: 'update', row: 1, fields: [{ column: 'c2', value: { mode: 'default' } }] };
+    const changes = postgresRangeFillChanges(page, [columns[1]], 1, 1, 'NULL', () => prior);
+    expect(changes).toEqual([{ kind: 'update', row: 1, fields: [...prior.fields, { column: 'c1', value: { mode: 'text', value: 'NULL' } }] }]);
+    expect(postgresRangeFillChanges(page, [columns[1]], 0, 2, null, () => undefined)).toEqual([0, 1].map(row =>
+      ({ kind: 'update', row, fields: [{ column: 'c1', value: { mode: 'null' } }] })));
+    for (const index of [0, 2, 3]) expect(() => postgresRangeFillChanges(page, [columns[1], columns[index]], 0, 2, '值', () => undefined)).toThrow();
+    expect(() => postgresRangeFillChanges(page, [columns[1]], 0, 2, '值', key =>
+      key === '二' ? { kind: 'delete', row: 1 } : undefined)).toThrow();
+  });
   it('只构造有变化的勾选行，保留该行其他草稿字段', () => {
     const previous: PostgresTableChange = { kind: 'update', row: 7, fields: [{ column: 'c2', value: { mode: 'default' } }] };
     const rows = postgresBatchFillChanges(page, columns, new Set([1, 0]), [{ column: 'c1', value: { mode: 'text', value: '甲' } }],

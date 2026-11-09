@@ -3,6 +3,21 @@ import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn
 import { ownCell } from './lib';
 import { postgresBatchFillZh as text } from './locales/postgresBatchFill.zh-CN';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, postgresBatchValueValid } from './postgresBatchSelection';
+import { postgresClipboardFieldValue } from './postgresGridPaste';
+import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
+
+/** 矩形只转换一次统一值，再交给既有的原行账本和批量字段校验。 */
+export function postgresRangeFillChanges(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
+  start: number, count: number, value: string | null, prior: (key: string) => PostgresTableChange | undefined) {
+  if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 1 || start + count > page.rows.length ||
+      count > postgresTableLimits.changes) throw Error(rangeText.target);
+  const fields = columns.map(column => {
+    if (column.binary && value !== null) throw Error(rangeText.target);
+    return { column: column.key, value: postgresClipboardFieldValue(value, column) };
+  });
+  const selected = new Set(Array.from({ length: count }, (_, index) => start + index));
+  return postgresBatchFillChanges(page, columns, selected, fields, prior);
+}
 
 /** 以明确的勾选行、原行键和可见列构造整批草稿。其它字段及已暂存行版本由原工作区保留。 */
 export function postgresBatchFillChanges(page: PostgresTablePage, visible: readonly PostgresTableColumn[],
