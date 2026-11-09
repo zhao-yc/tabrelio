@@ -315,7 +315,7 @@ export interface CommandMap {
   'postgres.queryRecordPage': { input: import('./postgresQueryRecord').PostgresQueryRecordPageInput;
     output: { table: string; page: import('./postgresTable').PostgresTablePage; columnKeys: (string | null)[] } };
   'mysql.queryRelation': { input: import('./mysqlQueryRelation').MysqlQueryRelationInput; output: { info: TableInfo; row: DataRow } };
-  'mysql.queryRecordEdit': { input: import('./mysqlQueryRelation').MysqlQueryRelationInput;
+  'mysql.queryRecordEdit': { input: import('./mysqlQueryRelation').MysqlQueryRecordEditInput;
     output: { info: TableInfo; row: DataRow; token: string; writable: string[] } };
   'mysql.resultOriginOpen': { input: import('./mysqlResultOrigins').MysqlResultOriginOpenInput;
     output: { database: string; table: string } };

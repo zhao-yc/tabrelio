@@ -51,7 +51,10 @@ describe('MySQL 查询关联原行', () => {
     for (const extra of [{ table: 't' }, { values: ['1'] }, { sql: 'SELECT id FROM t' }, { rowIndex: -1 }])
       expect(() => validateCommand('mysql.queryRelation', { ...request, ...extra })).toThrow();
     expect(validateCommand('mysql.queryRecordEdit', request)).toEqual(request);
-    expect(() => validateCommand('mysql.queryRecordEdit', { ...request, table: 't' })).toThrow();
+    expect(validateCommand('mysql.queryRecordEdit', { ...request, columnIndex: 0 })).toEqual({ ...request, columnIndex: 0 });
+    for (const extra of [{ table: 't' }, { column: 'label' }, { columnIndex: -1 }, { columnIndex: 1.5 }])
+      expect(() => validateCommand('mysql.queryRecordEdit', { ...request, ...extra })).toThrow();
+    expect(() => validateCommand('mysql.queryRelation', { ...request, columnIndex: 0 })).toThrow();
   });
 
   it('编辑仅接纳单条更新并核对未投影字段的完整原值', () => {

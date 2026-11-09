@@ -8,5 +8,9 @@ export const mysqlQueryRecordEditZh = {
   back: '返回查询结果',
   discard: '放弃这条查询原记录的本地修改并返回？',
   readOnly: '当前账号没有此字段的更新权限。',
+  inlineHint: '双击单元格或按 F2 编辑，Enter 预览 SQL。',
+  inlineLabel: (column: string) => `编辑查询单元格 · ${column}`,
+  inlineUnavailable: '无法编辑当前查询字段。',
+  inlineCancel: '取消编辑',
   committed: '查询原记录已提交。重新执行查询可查看最新结果。',
 } as const;

@@ -65,7 +65,7 @@ import { incomingReferenceLimits, incomingReferenceMessages, type IncomingRefere
 import { connect, execute, type ManagedConnection } from './connection';
 import { completionQuery } from './completionQuery';
 import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
-import { mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
+import { mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
 import { mysqlResultOriginOpenSchema } from '../shared/mysqlResultOrigins';
 import { MysqlResultOrigins, mysqlResultOriginCatalogAllowed, readMysqlResultOrigin } from './mysqlResultOrigins';
 import * as metadata from './metadata';
@@ -1886,21 +1886,29 @@ export class Engine {
   }
 
   /** 使用服务器实际列权限，查询编辑不需要额外的实例管理权限。 */
-  private async queryEditWritable(context: StructureTaskContext, info: TableInfo): Promise<string[]> {
+  private async queryEditWritable(context: StructureTaskContext, info: TableInfo, column?: string): Promise<string[]> {
     const { rows } = await completionQuery<{ name: string; privileges: string }[]>(context.managed, context,
       'SELECT COLUMN_NAME AS name, PRIVILEGES AS privileges FROM information_schema.COLUMNS ' +
       'WHERE BINARY TABLE_SCHEMA=BINARY ? AND BINARY TABLE_NAME=BINARY ? ORDER BY ORDINAL_POSITION LIMIT 1025', [info.database, info.name]);
     if (rows.length !== info.columns.length || rows.some((row, index) => row.name !== info.columns[index].name || typeof row.privileges !== 'string'))
       throw Error('无法确认查询原表的字段权限');
     const writable = rows.filter((row, index) => !info.columns[index].generated && row.privileges.split(',').includes('update')).map(row => row.name);
+    if (column !== undefined) {
+      if (!writable.includes(column)) throw Error('当前查询字段不可编辑，请核对字段是否为生成列以及账号的列级更新权限');
+      return [column];
+    }
     if (!writable.length) throw Error('当前账号没有查询原表的字段更新权限');
     return writable;
   }
 
   /** 同一原执行的行才可回查，完整原值在独立只读事务读取并核对。 */
   private async readQueryRelation(input: Input, editing: boolean) {
-    const { profile, ...raw } = input, request = mysqlQueryRelationSchema.parse(raw);
+    const { profile, ...raw } = input;
+    const { columnIndex, ...request } = editing ? mysqlQueryRecordEditSchema.parse(raw) : { ...mysqlQueryRelationSchema.parse(raw), columnIndex: undefined };
     const { source, current, session } = this.queryRelationScope(request);
+    // 单格只按原协议列序号授权，显示别名及隐藏、冻结列的位置不能扩大写入范围。
+    const column = columnIndex === undefined ? undefined : source.columns[columnIndex];
+    if (columnIndex !== undefined && column === undefined) throw Error('查询结果原列已变化，请重新查询');
     if (!profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId)
       throw Error('缺少原查询记录的可信连接');
     this.copySourceProfile(input);
@@ -1915,7 +1923,7 @@ export class Engine {
       const edit: MysqlQueryEditSnapshot | undefined = editing ? {
         token: randomUUID(), source, rowIndex: request.rowIndex, expires: Date.now() + 5 * 60 * 1000, claimed: false,
         schemaDigest: mysqlQueryEditSchemaDigest(managed, info), rowDigest: mysqlQueryEditRowDigest(info, row),
-        writable: await this.queryEditWritable(context, info), searchKey,
+        writable: await this.queryEditWritable(context, info, column), searchKey,
       } : undefined;
       await read('ROLLBACK');
       current();

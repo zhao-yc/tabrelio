@@ -6,10 +6,12 @@ import { recordViewZh as text } from '../locales/recordViews.zh-CN';
 import { BinaryCellViewer } from './BinaryCellViewer';
 
 /** 文本域保留词法内容与输入法行为，只读模式仍可聚焦、选择和复制。 */
-export function RecordValueEditor({ column, input, inserted, reason, focus, binaryStale = false, source, isCurrent, onChange }: { column: ColumnInfo; input: RecordInput; inserted: boolean; reason: string; focus: boolean; binaryStale?: boolean; source?: readonly unknown[]; isCurrent?(): boolean; onChange(input: RecordInput): void }) {
+export function RecordValueEditor({ column, input, inserted, reason, focus, selectOnFocus, binaryStale = false, source, isCurrent, onChange }: { column: ColumnInfo; input: RecordInput; inserted: boolean; reason: string; focus: boolean; selectOnFocus?: boolean; binaryStale?: boolean; source?: readonly unknown[]; isCurrent?(): boolean; onChange(input: RecordInput): void }) {
   const id = useId(); const field = useRef<HTMLTextAreaElement>(null);
   const binaryColumn = /^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(column.type);
-  useEffect(() => { if (focus) field.current?.focus(); }, [focus]);
+  useEffect(() => {
+    if (focus) { field.current?.focus(); if (selectOnFocus) field.current?.select(); }
+  }, [focus, selectOnFocus]);
   if (binaryStale && (binaryColumn || input.mode === 'binary')) return <p role="alert">{text.changed}</p>;
   return <div className="record-value-editor">
     <label htmlFor={`${id}-mode`}>{text.mode}</label>

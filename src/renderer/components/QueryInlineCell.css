@@ -1,0 +1,17 @@
+.query-inline-cell {
+  position: fixed;
+  z-index: 85;
+  display: grid;
+  gap: 8px;
+  width: min(340px, calc(100vw - 16px));
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.query-inline-cell[hidden] { display: none; }
+.query-inline-cell strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.query-inline-cell textarea { width: 100%; resize: vertical; }
+.query-inline-actions { display: flex; justify-content: flex-end; gap: 8px; }

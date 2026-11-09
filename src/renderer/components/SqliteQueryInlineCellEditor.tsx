@@ -6,11 +6,9 @@ import { sqliteTableEditZh as editText } from '../locales/sqliteTableEdit.zh-CN'
 import { sqliteBinaryInputHex } from '../sqliteBinaryInput';
 import { errorMessage } from '../lib';
 import { ErrorBox, Spinner } from './ui';
-import './SqliteQueryInlineCellEditor.css';
+import { useQueryInlineCellPosition, type QueryInlineCellAnchor } from '../queryInlineCellAnchor';
 
-export interface SqliteQueryInlineCell {
-  findAnchor(): HTMLElement | null;
-  bounds: DOMRect;
+export interface SqliteQueryInlineCell extends QueryInlineCellAnchor {
   column: string;
   label: string;
   typed?: string;
@@ -29,28 +27,8 @@ export function SqliteQueryInlineCellEditor({ cell, initial, nullable, loading, 
   const kind = draft?.kind ?? (cell.typed !== undefined && initial?.kind === 'null' ? 'text' : initial?.kind ?? 'text');
   const value = draft?.value ?? cell.typed ?? (initial && initial.kind !== 'null' ? initial.value : '');
   const ready = !!initial && !loading && !error;
-  const { findAnchor, bounds, typed } = cell;
-
-  useLayoutEffect(() => {
-    const element = panel.current;
-    if (!element || !visible) return;
-    const position = () => {
-      const current = findAnchor()?.getBoundingClientRect();
-      const rect = current?.width && current.height ? current : bounds;
-      element.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - element.offsetWidth - 8)) + 'px';
-      element.style.top = Math.max(8, Math.min(rect.top, window.innerHeight - element.offsetHeight - 8)) + 'px';
-    };
-    position();
-    const observer = new ResizeObserver(position);
-    observer.observe(element);
-    window.addEventListener('resize', position);
-    document.addEventListener('scroll', position, true);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', position);
-      document.removeEventListener('scroll', position, true);
-    };
-  }, [findAnchor, bounds, visible]);
+  const { typed } = cell;
+  useQueryInlineCellPosition(panel, cell, visible);
 
   useLayoutEffect(() => {
     composing.current = false;
@@ -71,7 +49,7 @@ export function SqliteQueryInlineCellEditor({ cell, initial, nullable, loading, 
     } catch (reason) { setValidation(errorMessage(reason)); }
   }
 
-  return createPortal(<form className="sqlite-query-inline-cell" ref={panel} hidden={!visible} role="region"
+  return createPortal(<form className="query-inline-cell" ref={panel} hidden={!visible} role="region"
     aria-label={text.inlineLabel(cell.label)} onSubmit={event => { event.preventDefault(); stage(); }}
     onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
     onKeyDown={event => {
@@ -91,7 +69,7 @@ export function SqliteQueryInlineCellEditor({ cell, initial, nullable, loading, 
       spellCheck={false} value={value} maxLength={sqliteTableEditLimits.valueUnits}
       onChange={event => { setDraft({ kind, value: event.target.value }); setValidation(''); }}/>}</>}
     <ErrorBox message={error || validation}/>
-    <div className="sqlite-query-inline-actions">
+    <div className="query-inline-actions">
       <button ref={cancel} type="button" onClick={onCancel}>{editText.cancelInput}</button>
       <button type="submit" disabled={!ready} className="primary">{text.inlinePreview}</button>
     </div>

@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RowChange, SqlPreview } from '../../shared/contracts';
+import { createPortal } from 'react-dom';
+import type { ColumnInfo, RowChange, SqlPreview } from '../../shared/contracts';
 import type { MysqlSearchEditRecord } from '../../shared/dataSearchRecords';
-import type { MysqlQueryRelationInput } from '../../shared/mysqlQueryRelation';
+import type { MysqlQueryRecordEditInput } from '../../shared/mysqlQueryRelation';
 import { collectChanges, type DraftRow } from '../dataChanges';
+import { isBinaryCell } from '../binaryCell';
 import { errorMessage, invoke, ownCell, uid } from '../lib';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { mysqlQueryRecordEditZh as queryText } from '../locales/mysqlQueryRecordEdit.zh-CN';
 import { recordViewZh as recordText } from '../locales/recordViews.zh-CN';
 import {
-  beginRecordDraft, editRecordInput, recordFieldTooLarge, recordInputDirty, recordReadonlyReason,
-  recordValueSummary, stageRecordDraft, type RecordContext, type RecordDraft,
+  beginRecordDraft, editRecordInput, initialRecordInput, recordFieldTooLarge, recordInputDirty, recordReadonlyReason,
+  recordValueSummary, stageRecordDraft, type RecordContext, type RecordDraft, type RecordInput,
 } from '../recordViews';
 import { useWorkspace } from '../store';
 import { RecordValueEditor } from './RecordValueEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
+import { useQueryInlineCellPosition, type QueryInlineCellAnchor } from '../queryInlineCellAnchor';
 
 interface BaseProps {
   connectionId: string;
@@ -21,11 +24,12 @@ interface BaseProps {
   onDirty(value: boolean): void;
   onDone(committed: boolean): void;
 }
-type Props = BaseProps & ({ database: string; table: string; recordRef: string; queryRecord?: never; isCurrent?: never } |
-  { database?: never; table?: never; recordRef?: never; queryRecord: MysqlQueryRelationInput; isCurrent(): boolean });
+type Props = BaseProps & ({ database: string; table: string; recordRef: string; queryRecord?: never; isCurrent?: never; cell?: never; visible?: never } |
+  { database?: never; table?: never; recordRef?: never; queryRecord: MysqlQueryRecordEditInput; isCurrent(): boolean;
+    cell?: QueryInlineCellAnchor & { label: string; typed?: string }; visible?: boolean });
 
 /** 独立表单复用普通表页的字段输入和草稿校验，提交继续走原事务回执。 */
-export function MysqlSearchRecordEditDialog({ connectionId, database, table, recordRef, queryRecord, isCurrent, focusColumn, onDirty, onDone }: Props) {
+export function MysqlSearchRecordEditDialog({ connectionId, database, table, recordRef, queryRecord, isCurrent, focusColumn, onDirty, onDone, cell, visible = true }: Props) {
   const labels = queryRecord ? queryText : { edit: text.edit, hint: text.mysqlEditHint, stale: text.mysqlEditStale,
     preview: text.mysqlPreview, confirm: text.mysqlConfirm, apply: text.mysqlApply, back: text.editBack, discard: text.editDiscard };
   const [version] = useState(() => useWorkspace.getState().connectionVersions[connectionId] ?? 0);
@@ -36,6 +40,8 @@ export function MysqlSearchRecordEditDialog({ connectionId, database, table, rec
   const [field, setField] = useState<string>(), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false), [frozen, setFrozen] = useState(false);
   const pending = useRef(true), live = useRef(false), callbacks = useRef({ onDirty, onDone, isCurrent });
+  const panel = useRef<HTMLFormElement>(null), cancelInline = useRef<HTMLButtonElement>(null), composing = useRef(false);
+  useQueryInlineCellPosition(panel, cell, visible && !preview);
   callbacks.current = { onDirty, onDone, isCurrent };
   const context: RecordContext = { target, generation: 0, connectionVersion: version, info: data?.info ?? null, loaded: !!data, stale: false, busy: false };
   const current = () => live.current && (useWorkspace.getState().connectionVersions[connectionId] ?? 0) === version &&
@@ -64,7 +70,14 @@ export function MysqlSearchRecordEditDialog({ connectionId, database, table, rec
           record.info.columns.find(column => !writable || writable.includes(column.name));
         const input = beginRecordDraft(original, context);
         const editable = name && !recordReadonlyReason(context, original, name.name) && !recordFieldTooLarge(ownCell(record.row, name.name));
-        setData(record); setRow(original); setDraft(editable ? editRecordInput(input, name) : input); setField(name?.name);
+        if (cell && (!editable || writable?.length !== 1 || isBinaryCell(ownCell(record.row, name.name), name.type)))
+          throw Error(queryText.inlineUnavailable);
+        const initial = editable ? initialRecordInput(input, name) : undefined;
+        const typed = cell?.typed;
+        const mode = initial?.mode === 'null' ? (/json/i.test(name?.type ?? '') ? 'json' : 'text') : initial?.mode;
+        const next = editable && initial && mode ? editRecordInput(input, name, typed === undefined ? initial : { mode, text: typed }) : input;
+        setData(record); setRow(original); setField(name?.name);
+        setDraft(next);
         callbacks.current.onDirty(true);
       } catch (reason) { if (active) setError(errorMessage(reason)); }
       finally { reading = false; if (active) { pending.current = false; setBusy(false); } }
@@ -74,7 +87,12 @@ export function MysqlSearchRecordEditDialog({ connectionId, database, table, rec
       if (reading) void invoke('query.cancel', { taskId }).catch(reason => notify(errorMessage(reason), true));
       callbacks.current.onDirty(false);
     };
-  }, [connectionId, database, table, recordRef, queryRecord]);
+  }, [connectionId, database, table, recordRef, queryRecord, cell]);
+  const inlineReady = !!draft;
+  useEffect(() => {
+    if (cell && visible && !preview && !inlineReady) cancelInline.current?.focus({ preventScroll: true });
+    composing.current = false;
+  }, [cell, visible, preview, inlineReady]);
 
   const source = () => {
     if (!queryRecord) return { searchRecordRef: recordRef };
@@ -99,6 +117,7 @@ export function MysqlSearchRecordEditDialog({ connectionId, database, table, rec
   function stage() {
     if (!draft || !row) return;
     void run(async () => {
+      if (cell && !cell.findAnchor()?.getClientRects().length) throw Error(labels.stale);
       const next = collectChanges(stageRecordDraft([row], draft, context));
       if (next.length !== 1 || next[0].kind !== 'update') throw Error(text.mysqlNoChange);
       const plan = await invoke('table.preview', { ...target, changes: next, ...source() });
@@ -121,6 +140,39 @@ export function MysqlSearchRecordEditDialog({ connectionId, database, table, rec
     });
   }
 
+  function updateField(column: ColumnInfo, next: RecordInput) {
+    if (!draft) return;
+    try { setDraft(editRecordInput(draft, column, next)); setError(''); }
+    catch (failure) { setError(errorMessage(failure)); }
+  }
+
+  if (cell && !preview) {
+    const column = data?.info.columns.find(item => item.name === field);
+    const input = column && draft?.fields.get(column.name);
+    const dirty = recordInputDirty(draft ?? null, context.info);
+    const cancel = () => { if (!pending.current || !data) callbacks.current.onDone(false); };
+    return createPortal(<form ref={panel} className="query-inline-cell" hidden={!visible} role="region" aria-label={queryText.inlineLabel(cell.label)}
+      onSubmit={event => { event.preventDefault(); if (!composing.current && dirty) stage(); }}
+      onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
+      onKeyDown={event => {
+        if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229 || composing.current || event.repeat) return;
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel(); }
+        if (event.key === 'Enter' && event.target instanceof HTMLTextAreaElement && !event.shiftKey && !event.altKey) {
+          event.preventDefault(); event.stopPropagation(); if (dirty) stage();
+        }
+      }}>
+      <strong title={column?.name}>{cell.label}</strong>
+      {busy && <Spinner text={text.reading}/>}
+      {column && input && row && <RecordValueEditor column={column} input={input} inserted={false} reason={busy ? recordText.busy : ''}
+        focus={visible} selectOnFocus={cell.typed === undefined} source={[row, column]} isCurrent={current} onChange={next => updateField(column, next)}/>}
+      <ErrorBox message={error}/>
+      <div className="query-inline-actions">
+        <button ref={cancelInline} type="button" disabled={busy && !!data} onClick={cancel}>{queryText.inlineCancel}</button>
+        <button type="submit" disabled={busy || !dirty} className="primary">{queryText.preview}</button>
+      </div>
+    </form>, document.body);
+  }
+
   return <Modal title={preview ? labels.preview : labels.edit} onClose={close} wide>
     <div className="modal-content pg-table-preview">
       <p>{labels.hint}</p>
@@ -140,7 +192,7 @@ export function MysqlSearchRecordEditDialog({ connectionId, database, table, rec
             <p>{recordValueSummary(value)}</p>
             {reason ? <p>{reason}</p> : field === column.name && input ? <RecordValueEditor column={column} input={input} inserted={false}
               reason={busy ? recordText.busy : ''} focus source={[row, column]} isCurrent={current}
-              onChange={next => { try { setDraft(editRecordInput(draft, column, next)); setError(''); } catch (failure) { setError(errorMessage(failure)); } }}/>
+              onChange={next => updateField(column, next)}/>
               : <button disabled={busy} onClick={() => {
                 try { setDraft(editRecordInput(draft, column)); setField(column.name); setError(''); }
                 catch (failure) { setError(errorMessage(failure)); }
