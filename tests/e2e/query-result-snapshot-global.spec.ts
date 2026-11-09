@@ -22,6 +22,7 @@ function register(): void {
   const { queryResultFindZh: findText } = require('../../src/renderer/locales/queryResultFind.zh-CN') as typeof import('../../src/renderer/locales/queryResultFind.zh-CN');
   const { queryResultSortZh: sortText } = require('../../src/renderer/locales/queryResultSort.zh-CN') as typeof import('../../src/renderer/locales/queryResultSort.zh-CN');
   const { queryResultFilterZh: filterText } = require('../../src/renderer/locales/queryResultFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultFilter.zh-CN');
+  const { queryResultComparisonZh: comparisonText } = require('../../src/renderer/locales/queryResultComparison.zh-CN') as typeof import('../../src/renderer/locales/queryResultComparison.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
   const { binaryCellFilesZh } = require('../../src/renderer/locales/binaryCellFiles.zh-CN') as typeof import('../../src/renderer/locales/binaryCellFiles.zh-CN');
@@ -31,7 +32,12 @@ function register(): void {
   // 独立固定wire：不调用产品codec创建输入；数字使用协议的原始十进制文本。
   const wire = String.raw`{"kind":"dbark.query-result-snapshot","version":1,"name":"离线合成结果","result":{"columns":[{"key":"__proto__","name":"重复列","type":"VAR_STRING"},{"key":"constructor","name":"重复列","type":"VAR_STRING"},{"key":"big","name":"BIGINT","type":"LONGLONG"},{"key":"decimal","name":"DECIMAL","type":"NEWDECIMAL"},{"key":"date","name":"日期","type":"DATETIME"},{"key":"nullable","name":"NULL","type":"NULL"},{"key":"empty","name":"空串","type":"VAR_STRING"},{"key":"blob","name":"BLOB","type":"BLOB"},{"key":"emptyBlob","name":"空BLOB","type":"BLOB"},{"key":"negativeZero","name":"负零","type":"DOUBLE"}],"rows":[{"__proto__":"原型键安全","constructor":"构造键安全","big":"18446744073709551615","decimal":"12345678901234567890.1234567890","date":"2026-10-28 12:34:56.123456","nullable":null,"empty":"","blob":{"type":"binary","base64":"AP8A"},"emptyBlob":{"type":"binary","base64":""},"negativeZero":{"type":"number","text":"-0"}},{"__proto__":"另一行","constructor":"不同内容","big":"2","decimal":"2.00","date":"2026-10-29 01:00:00.000000","nullable":null,"empty":"","blob":{"type":"binary","base64":"AQ=="},"emptyBlob":{"type":"binary","base64":""},"negativeZero":{"type":"number","text":"0"}}],"truncated":true,"elapsedMs":{"type":"number","text":"0.5"},"statement":"SELECT '仅快照SQL'; -- offline-snapshot-source"}}`;
   const expectedWire = JSON.parse(wire);
-  let halted = false, firstComplete = false, outputRemoved = false, output = '', sourcePath = '', savedPath = '', savedSha256 = '', firstPid = 0, firstProfile = '';
+  const rightWire = JSON.stringify({ ...expectedWire, result: { ...expectedWire.result, rows: [
+    { ...expectedWire.result.rows[0], decimal: '12345678901234567890.1234567891', nullable: '', blob: { type: 'binary', base64: 'AQI=' } },
+    expectedWire.result.rows[1],
+    { ...expectedWire.result.rows[1], big: '18446744073709551614' },
+  ] } });
+  let halted = false, firstComplete = false, outputRemoved = false, output = '', sourcePath = '', rightPath = '', savedPath = '', savedSha256 = '', firstPid = 0, firstProfile = '';
   let outputIdentity: { dev: number; ino: number } | undefined;
   const cases = new Map<object, { complete: boolean; check(): void }>();
   /** 专用双门只控制本例；不读取或消费数据库认证参数。 */
@@ -77,18 +83,19 @@ function register(): void {
       } else expect(actual.pid).toBe(launcherPid);
       if (mode === 'save') {
         firstPid = actual.pid; firstProfile = profileDirectory;
-        output = await step(() => mkdtemp(join(tmpdir(), 'dbark-result-snapshot-global-'))); sourcePath = join(output, '合成输入.dbark-result.json'); savedPath = join(output, '真实保存.dbark-result.json');
+        output = await step(() => mkdtemp(join(tmpdir(), 'dbark-result-snapshot-global-'))); sourcePath = join(output, '合成输入.dbark-result.json'); savedPath = join(output, '真实保存.dbark-result.json'); rightPath = join(output, '第二份输入.dbark-result.json');
         expect(dirname(resolve(output))).toBe(resolve(tmpdir())); expect(basename(output)).toMatch(/^dbark-result-snapshot-global-/);
         const stat = await step(() => lstat(output)); expect(stat.isDirectory() && !stat.isSymbolicLink()).toBe(true); outputIdentity = { dev: stat.dev, ino: stat.ino };
         await step(() => info.attach('结果快照原临时文件归属', { body: JSON.stringify({ kind: 'dbark.result-snapshot-files', output, sourcePath, savedPath, outputIdentity }), contentType: 'application/json' }));
         await step(() => writeFile(sourcePath, wire, { flag: 'wx', mode: 0o600 }));
+        await step(() => writeFile(rightPath, rightWire, { flag: 'wx', mode: 0o600 }));
       } else { expect(firstComplete).toBe(true); expect(actual.pid).not.toBe(firstPid); expect(profileDirectory).not.toBe(firstProfile); expect(hash(await step(() => readFile(savedPath)))).toBe(savedSha256); }
       // 从fixture就绪后安装窗口级审计，再冻结真实空工作区的文档/chooser身份；不重签来源回包。
       await step(() => application.evaluate(({ ipcMain, dialog, BrowserWindow, utilityProcess }, input) => {
         const root = globalThis as any, handlers = (ipcMain as any)._invokeHandlers, previous = handlers?.get('dbark:request'), windows = BrowserWindow.getAllWindows(), window = windows[0], contents = window?.webContents;
         const originalOpen = dialog.showOpenDialog, originalSave = dialog.showSaveDialog, originalFork = utilityProcess.fork;
         if (root.__queryResultSnapshotGlobal || typeof previous !== 'function' || windows.length !== 1 || !contents) throw Error('全局结果快照离线旁观归属未知');
-        const state = { pending: 0, engineStarts: 0, denied: [] as string[], calls: [] as { command: string; ok: boolean }[], opened: 0, saved: 0, chooserCalls: 0, originalCells: undefined as unknown, frame: undefined as Electron.WebFrameMain | undefined, file: undefined as { mode: 'open' | 'save'; path: string; chosen: boolean } | undefined, reading: undefined as unknown, check() {}, arm(_mode: 'open' | 'save') {}, bind() {} };
+        const state = { pending: 0, engineStarts: 0, denied: [] as string[], calls: [] as { command: string; ok: boolean }[], opened: 0, saved: 0, chooserCalls: 0, originalCells: undefined as unknown, frame: undefined as Electron.WebFrameMain | undefined, file: undefined as { mode: 'open' | 'save'; path: string; chosen: boolean } | undefined, reading: undefined as unknown, check() {}, arm(_mode: 'open' | 'save' | 'compare') {}, bind() {} };
         const check = () => { if (root.__queryResultSnapshotGlobal !== state || handlers.get('dbark:request') !== wrapped || utilityProcess.fork !== blocked || dialog.showOpenDialog !== open || dialog.showSaveDialog !== save || window.isDestroyed() || contents.isDestroyed() || BrowserWindow.getAllWindows().length !== 1 || BrowserWindow.getAllWindows()[0] !== window || state.frame && contents.mainFrame !== state.frame) throw Error('全局结果快照离线原窗口/文档或适配器变化'); };
         const reject = (command: string): never => { state.denied.push(command); throw Error('全局结果快照离线禁止数据库或未声明请求：' + command); };
         const blocked = ((..._args: unknown[]) => { state.engineStarts++; return reject('utilityProcess.fork'); }) as typeof utilityProcess.fork;
@@ -110,7 +117,7 @@ function register(): void {
               if (!file.chosen || !fact.ok || response.result?.name !== file.path.split(/[\\/]/).at(-1)) throw Error('结果快照原文件操作未成功闭合');
               if (file.mode === 'open') {
                 const result = response.result.snapshot.result, row = result.rows[0]; state.opened++;
-                state.originalCells = { negativeZero: Object.is(row.negativeZero, -0), prototypeOwn: Object.hasOwn(row, '__proto__'), constructorOwn: Object.hasOwn(row, 'constructor'), big: row.big, decimal: row.decimal, date: row.date, nullable: row.nullable, empty: row.empty, blob: row.blob.base64, emptyBlob: row.emptyBlob.base64, truncated: result.truncated };
+                if (state.opened === 1) state.originalCells = { negativeZero: Object.is(row.negativeZero, -0), prototypeOwn: Object.hasOwn(row, '__proto__'), constructorOwn: Object.hasOwn(row, 'constructor'), big: row.big, decimal: row.decimal, date: row.date, nullable: row.nullable, empty: row.empty, blob: row.blob.base64, emptyBlob: row.emptyBlob.base64, truncated: result.truncated };
               } else state.saved++;
               state.file = undefined;
             }
@@ -118,11 +125,15 @@ function register(): void {
           } finally { state.pending--; if (file && state.reading === file) state.reading = undefined; }
         };
         state.check = check; state.bind = () => { check(); if (state.frame || state.pending || state.file) throw Error('结果快照正式文档只能在准备收尾后捕获一次'); state.frame = contents.mainFrame; };
-        state.arm = mode => { check(); if (!state.frame || state.pending || state.file || state.reading || mode === 'save' && input.mode !== 'save') throw Error('结果快照文件尚未空闲或保存未授权'); state.file = { mode, path: mode === 'save' ? input.savedPath : input.openPath, chosen: false }; };
+        state.arm = mode => {
+          check();
+          if (!state.frame || state.pending || state.file || state.reading || mode !== 'open' && input.mode !== 'save') throw Error('结果快照文件尚未空闲或操作未授权');
+          state.file = { mode: mode === 'compare' ? 'open' : mode, path: mode === 'compare' ? input.rightPath : mode === 'save' ? input.savedPath : input.openPath, chosen: false };
+        };
         root.__queryResultSnapshotGlobal = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = open; dialog.showSaveDialog = save; utilityProcess.fork = blocked; check();
         // 原函数保留在闭包，只替chooser；原文件服务、codec与所有IPC结果仍由产品执行。
         void originalOpen; void originalSave; void originalFork;
-      }, { mode, savedPath, openPath: mode === 'save' ? sourcePath : savedPath, openTitle: filesText.choose, saveTitle: filesText.save })); armed = true;
+      }, { mode, savedPath, rightPath, openPath: mode === 'save' ? sourcePath : savedPath, openTitle: filesText.choose, saveTitle: filesText.save })); armed = true;
       expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]);
       // 直接使用新安装的真实空工作区；不通过settings.save注入伪查询、连接或结果。
       await step(() => expect(page.locator('.welcome-tab')).toBeVisible());
@@ -209,6 +220,40 @@ function register(): void {
       await step(() => filter.getByRole('button', { name: filterText.apply, exact: true }).click());
       await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
       if (mode === 'save') {
+        await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('compare')));
+        const compare = viewer.getByRole('button', { name: text.compare, exact: true });
+        await step(() => compare.click());
+        const comparison = page.getByRole('dialog', { name: comparisonText.fileTitle, exact: true });
+        const left = comparison.getByLabel(comparisonText.leftFile, { exact: true });
+        const right = comparison.getByLabel(comparisonText.rightFile, { exact: true });
+        const start = comparison.getByRole('button', { name: comparisonText.start, exact: true });
+        const key = comparison.getByRole('checkbox', { name: comparisonText.key('big'), exact: true });
+        await step(() => expect(left.locator('option:checked')).toHaveText(text.comparisonCurrent(basename(sourcePath))));
+        await step(() => expect(right.locator('option:checked')).toHaveText(text.comparisonOther(basename(rightPath))));
+        await step(() => expect(comparison.getByRole('note')).toContainText(comparisonText.truncated));
+        await step(() => expect(start).toBeDisabled());
+        await step(() => key.check());
+        await step(() => start.click());
+        for (const [label, count] of [[comparisonText.added, '1'], [comparisonText.removed, '0'], [comparisonText.changed, '1'], [comparisonText.equal, '1']])
+          await step(() => expect(comparison.getByLabel(label, { exact: true })).toHaveText(count));
+        const changed = comparison.getByRole('table', { name: comparisonText.rows, exact: true }).locator('tbody tr').filter({ hasText: comparisonText.changed });
+        await step(() => changed.getByRole('button').click());
+        await step(() => expect(comparison.getByLabel(comparisonText.leftValue + ' decimal', { exact: true })).toContainText('12345678901234567890.1234567890'));
+        await step(() => expect(comparison.getByLabel(comparisonText.rightValue + ' decimal', { exact: true })).toContainText('12345678901234567890.1234567891'));
+        await step(() => expect(comparison.getByLabel(comparisonText.leftValue + ' nullable', { exact: true })).toContainText(comparisonText.nullValue));
+        await step(() => expect(comparison.getByLabel(comparisonText.rightValue + ' nullable', { exact: true })).toContainText(comparisonText.emptyString));
+        await step(() => expect(comparison.getByLabel(comparisonText.leftValue + ' blob', { exact: true })).toContainText('AP8A'));
+        await step(() => expect(comparison.getByLabel(comparisonText.rightValue + ' blob', { exact: true })).toContainText('AQI='));
+        await step(async () => info.attach('离线快照差异对比', { body: await page.screenshot(), contentType: 'image/png' }));
+        await step(() => left.selectOption({ label: text.comparisonOther(basename(rightPath)) }));
+        await step(() => right.selectOption({ label: text.comparisonCurrent(basename(sourcePath)) }));
+        await step(() => expect(key).not.toBeChecked());
+        await step(() => key.check());
+        await step(() => start.click());
+        await step(() => expect(comparison.getByLabel(comparisonText.removed, { exact: true })).toHaveText('1'));
+        await step(() => comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click());
+        await step(() => expect(compare).toBeFocused());
+        await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
         await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('save'))); await step(async () => (await navigationMenuItem(viewer, { name: text.save, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.getByText(text.saved(basename(savedPath)), { exact: true })).toBeVisible());
         const saved = await step(() => readFile(savedPath)); savedSha256 = hash(saved); const independent = JSON.parse(saved.toString('utf8'));
         expect(Object.keys(independent).sort()).toEqual(['kind', 'name', 'result', 'version']); expect(independent.name).toBe(expectedWire.name); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);
@@ -223,12 +268,13 @@ function register(): void {
       expect(await step(() => page.locator('.query-tab').count())).toBe(0);
       const after = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(after).toEqual(baseline); expect(JSON.stringify(after)).not.toContain('offline-snapshot-source'); expect(JSON.stringify(after)).not.toContain('18446744073709551615');
       expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); expect(runtime.pageErrors).toEqual([]);
-      const result = await step(audit); expect(result.pending).toBe(0); expect(result.engineStarts).toBe(0); expect(result.denied).toEqual([]); expect(result.opened).toBe(1); expect(result.saved).toBe(mode === 'save' ? 1 : 0); expect(result.chooserCalls).toBe(mode === 'save' ? 2 : 1); expect(result.calls.every(call => call.ok)).toBe(true);
+      const result = await step(audit); expect(result.pending).toBe(0); expect(result.engineStarts).toBe(0); expect(result.denied).toEqual([]); expect(result.opened).toBe(mode === 'save' ? 2 : 1); expect(result.saved).toBe(mode === 'save' ? 1 : 0); expect(result.chooserCalls).toBe(mode === 'save' ? 3 : 1); expect(result.calls.every(call => call.ok)).toBe(true);
+      expect(await step(() => readFile(rightPath, 'utf8'))).toBe(rightWire);
       expect(await step(() => readFile(sourcePath, 'utf8'))).toBe(wire); expect(hash(await step(() => readFile(savedPath)))).toBe(savedSha256);
       await step(() => runtime.confirmOwnedDesktopExit(info), true); closed = true; armed = false; expect(originalProcess.exitCode).toBe(0); completion.check();
       if (mode === 'reopen') {
-        guard(); expect((await step(() => readdir(output))).sort()).toEqual([basename(sourcePath), basename(savedPath)].sort());
-        for (const path of [sourcePath, savedPath]) { const stat = await step(() => lstat(path)); expect(stat.isFile() && !stat.isSymbolicLink()).toBe(true); expect(dirname(resolve(path))).toBe(output); await step(() => unlink(path)); }
+        guard(); expect((await step(() => readdir(output))).sort()).toEqual([basename(sourcePath), basename(savedPath), basename(rightPath)].sort());
+        for (const path of [sourcePath, savedPath, rightPath]) { const stat = await step(() => lstat(path)); expect(stat.isFile() && !stat.isSymbolicLink()).toBe(true); expect(dirname(resolve(path))).toBe(output); await step(() => unlink(path)); }
         await step(async () => { await rmdir(output); outputRemoved = true; });
       }
       await step(() => info.attach('全局结果快照离线真实文件-' + mode, { body: JSON.stringify({ mode, actual, launcherPid, launcherLineage, profileDirectory, firstPid, newProcess: mode === 'reopen', originalProcessExitCode: originalProcess.exitCode, fileSha256: savedSha256, pending: result.pending, engineStarts: result.engineStarts, databaseRequests: result.denied.length, opens: result.opened, saves: result.saved, chooserCalls: result.chooserCalls, originalCells: result.originalCells, initialZeroConnectionsAndZeroTabsPreserved: true, configurationContainsSnapshotData: false, clipboardCalls: 0, completeFileDirectoryRemoved: outputRemoved, observationScope: 'fixture就绪后安装旁观，至正常退出前', startupBeforeObserver: '未观察', unverified: ['已有实库结果与活动事务', '查询页高级筛选排序（既有入口另验）', '安装包', '其它平台', '取消与失败文件场景由单元测试另验'] }, null, 2), contentType: 'application/json' }), true);

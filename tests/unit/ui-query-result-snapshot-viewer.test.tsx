@@ -17,6 +17,7 @@ import { createQueryResultSnapshot, type QueryResultSnapshotDocument } from '../
 import { queryResultSnapshotViewerZh as text } from '../../src/renderer/locales/queryResultSnapshotViewer.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 const rendered = vi.hoisted(() => ({ grids: [] as any[], parents: [] as any[], editors: [] as any[] }));
@@ -174,6 +175,36 @@ it('离线排序保留匹配成员和 SQLite 逐格类型，撤销旧网格回�
   expect(bridge.mock.calls.at(-1)).toEqual(['resultSnapshotFiles.save', { snapshot: value.snapshot }]);
   await click(sortText.clear);
   expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'i', 'n', 'i']);
+});
+it('第二份对比文件取消或格式不符时保留原结果，选择器占用期间拒绝旧文件操作', async () => {
+  const close = vi.fn();
+  await mount(<Dialog onClose={close}/>);
+  expect(button(text.compare).disabled).toBe(true);
+  bridge.mockResolvedValueOnce(opened());
+  await click(text.choose);
+  const original = parent();
+  const open = props(button(text.choose)).onClick;
+  const save = props(button(text.save)).onClick;
+  const pending = deferred<ReturnType<typeof opened> | null>();
+  bridge.mockReturnValueOnce(pending.promise);
+  await click(text.compare);
+  await act(async () => { open(); save(); });
+  expect(bridge.mock.calls.map(call => call[0])).toEqual(['resultSnapshotFiles.open', 'resultSnapshotFiles.open']);
+  expect(parent().isCurrent()).toBe(false);
+  await act(async () => pending.resolve(null));
+  expect(document.body.textContent).toContain(text.cancelled);
+  expect(parent().rows).toBe(original.rows);
+  expect(parent().selectionScope).toBe(original.selectionScope);
+  const sqlite = createQueryResultSnapshot({
+    columns: [{ key: 'id', name: '编号', type: 'SQLITE' }], rows: [{ id: '1' }],
+    sqliteStorage: { version: 1, rows: ['i'] }, elapsedMs: 0, truncated: false, statement: 'SELECT id FROM sample;',
+  });
+  bridge.mockResolvedValueOnce(opened('SQLite 文件', sqlite));
+  await click(text.compare);
+  expect(document.body.textContent).toContain(text.comparisonFormat);
+  expect(document.body.textContent).not.toContain(comparisonText.fileTitle);
+  expect(parent().rows).toBe(original.rows);
+  expect(close).not.toHaveBeenCalled();
 });
 it('BLOB纯查看内层Escape只关闭内层，原外层header也不能穿透，下一Escape才关外层', async () => {
   const close = vi.fn(); await mount(<Dialog onClose={close}/>); bridge.mockResolvedValueOnce(opened()); await click(text.choose); const grid = rendered.grids.at(-1);

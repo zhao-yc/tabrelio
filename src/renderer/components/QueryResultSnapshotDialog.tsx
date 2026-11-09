@@ -2,11 +2,11 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { QueryResult } from '../../shared/contracts';
 import { parseQueryResultSnapshot, type QueryResultSnapshotDocument } from '../../shared/queryResultSnapshot';
 import { queryResultSnapshotViewerZh as text } from '../locales/queryResultSnapshotViewer.zh-CN';
-import { errorMessage, invoke } from '../lib';
+import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
-import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
+import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView, type SortDialect } from '../queryResultSort';
 import { QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
 import { prepareQueryResultOrganization } from '../queryResultHistory';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
@@ -14,6 +14,7 @@ import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN'
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
+import { QueryResultComparisonDialog, type QueryResultComparisonSource } from './QueryResultComparisonDialog';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { escapeTargetsQueryResultFind } from './QueryResultFind';
 import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
@@ -29,15 +30,17 @@ export const queryResultSnapshotViewerServices: QueryResultSnapshotViewerService
   open: () => invoke('resultSnapshotFiles.open', {}), save: snapshot => invoke('resultSnapshotFiles.save', { snapshot }),
 };
 interface Loaded { name: string; snapshot: QueryResultSnapshotDocument; scope: object; }
-interface Operation { mode: 'open' | 'save'; epoch: number; source: Loaded | undefined; }
+type FileMode = 'open' | 'save' | 'compare';
+interface Operation { mode: FileMode; epoch: number; source: Loaded | undefined; }
 type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: QueryResultSortView };
 type SnapshotFilter = { kind: 'filter'; binding: QueryResultFilterBinding; initial: QueryResultFilterView };
-type SnapshotOverlay = SnapshotSort | SnapshotFilter | { kind: 'export'; result: QueryResult; selected: boolean };
+type SnapshotComparison = { kind: 'compare'; owner: string; source: Loaded; files: readonly QueryResultComparisonSource[]; dialect?: SortDialect };
+type SnapshotOverlay = SnapshotSort | SnapshotFilter | SnapshotComparison | { kind: 'export'; result: QueryResult; selected: boolean };
 
 /** 全局查看只持有文件内容，不创建查询、连接或会话；原文件Promise包括主进程清理。 */
 export function QueryResultSnapshotDialog({ onClose, services = queryResultSnapshotViewerServices }: { onClose(): void; services?: QueryResultSnapshotViewerServices }) {
   const [loaded, setLoaded] = useState<Loaded>(), loadedRef = useRef(loaded);
-  const [busy, setBusy] = useState<'open' | 'save'>(), [error, setError] = useState(''), [message, setMessage] = useState(''), [showSql, setShowSql] = useState(false);
+  const [busy, setBusy] = useState<FileMode>(), [error, setError] = useState(''), [message, setMessage] = useState(''), [showSql, setShowSql] = useState(false);
   const [overlay, setOverlay] = useState<SnapshotOverlay>(), overlayRef = useRef<SnapshotOverlay | undefined>(undefined);
   const exportSelection = useMemo(() => new ResultExportSelection(), []);
   const [, refreshSelection] = useState(0);
@@ -194,20 +197,38 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   function clearFilter(): void {
     if (loaded && gridCurrent(loaded, interaction, false)) publishFilter({ mode: 'AND', children: [] });
   }
+  /** 允许比较器和其暂时隐藏的父窗口，旧文件或其他模态会撤销比较。 */
+  function comparisonCurrent(view: SnapshotComparison): boolean {
+    if (!alive.current || overlayRef.current !== view || loadedRef.current !== view.source || operation.current) return false;
+    const viewer = ownDialog();
+    const comparison = document.querySelector(`[data-query-result-comparison-owner="${view.owner}"]`)?.querySelector(appModalSelector);
+    return !!viewer && Array.from(document.querySelectorAll(appModalSelector)).every(dialog => dialog === viewer || dialog === comparison);
+  }
   /** 只有准确原操作能更新显示；失效保存仍报告已写可能性或原Main错误。 */
-  async function file(mode: 'open' | 'save'): Promise<void> {
-    if (!editable() || mode === 'save' && (!loaded || loadedRef.current !== loaded)) return;
+  async function file(mode: FileMode, trigger?: HTMLButtonElement): Promise<void> {
+    if (!editable() || mode !== 'open' && (!loaded || loadedRef.current !== loaded) ||
+        mode === 'compare' && (!trigger || !sourceResult?.columns.length)) return;
     const port = callbacks.current.services, active: Operation = { mode, epoch: lifetime.current, source: loadedRef.current };
     operation.current = active; advance(); setBusy(mode); setError(''); setMessage('');
     const current = () => alive.current && lifetime.current === active.epoch && operation.current === active && callbacks.current.services === port && loadedRef.current === active.source && visible() && topmost();
     try {
-      if (mode === 'open') {
+      if (mode !== 'save') {
         const selected = await port.open();
         if (!current()) return;
         if (selected === null) { setMessage(text.cancelled); return; }
         const snapshot = parseQueryResultSnapshot(selected.snapshot); if (!current()) return;
-        const next = { name: selected.name, snapshot, scope: {} }; loadedRef.current = next;
-        setLoaded(next); setOrganization(undefined); setShowSql(false); setMessage('');
+        if (mode === 'compare') {
+          const source = active.source!;
+          if (source.snapshot.version !== snapshot.version || !snapshot.result.columns.length) throw Error(text.comparisonFormat);
+          // 比较固定两份文件的原结果，第二次选择不替换当前文件，也不继承任何筛选投影。
+          openOverlay({ kind: 'compare', owner: uid(), source, dialect, files: [
+            { id: 'current', label: text.comparisonCurrent(source.name), result: source.snapshot.result },
+            { id: 'other', label: text.comparisonOther(selected.name), result: snapshot.result },
+          ] }, trigger!);
+        } else {
+          const next = { name: selected.name, snapshot, scope: {} }; loadedRef.current = next;
+          setLoaded(next); setOrganization(undefined); setShowSql(false); setMessage('');
+        }
       } else {
         const saved = await port.save(active.source!.snapshot);
         if (saved === null) { if (current()) setMessage(text.cancelled); return; }
@@ -229,6 +250,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     <div className="query-result-snapshot-viewer-actions">
       <button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button>
       <button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button>
+      <button disabled={!!busy || !sourceResult?.columns.length} onClick={event => void file('compare', event.currentTarget)}>{text.compare}</button>
       <button disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
       <button disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
@@ -238,7 +260,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button>
       <span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button>
     </div>
-    <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : text.saving}/>} {message && <p role="status">{message}</p>}
+    <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : busy === 'compare' ? text.comparingFile : text.saving}/>} {message && <p role="status">{message}</p>}
     {loaded && displayed ? <>
       <p role="status">{text.opened(loaded.name)}</p>
       <p>{text.count(loaded.snapshot.result.rows.length, displayed.columns.length)}</p>
@@ -262,6 +284,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     </> : <p>{text.empty}</p>}
   </div></Modal></div>
     {overlay?.kind === 'export' && <ResultExportDialog scope="snapshot" result={overlay.result} selected={overlay.selected} onClose={() => closeOverlay(overlay)}/>}
+    {overlay?.kind === 'compare' && <QueryResultComparisonDialog offline owner={overlay.owner} pins={overlay.files} dialect={overlay.dialect}
+      isCurrent={() => comparisonCurrent(overlay)} onClose={() => closeOverlay(overlay)}/>}
     {overlay?.kind === 'sort' && <Modal title={sortText.panelTitle} wide onClose={() => closeOverlay(overlay)}>
       <QueryResultSortPanel offline binding={overlay.binding} initial={overlay.initial} isCurrent={() => sortDraftCurrent(overlay)}
         onApply={rules => applySort(overlay, rules)} onClose={() => closeOverlay(overlay)}/>

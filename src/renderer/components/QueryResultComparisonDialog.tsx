@@ -7,9 +7,10 @@ import type { SortDialect } from '../queryResultSort';
 import { errorMessage } from '../lib';
 import { UsageHelp, ErrorBox, Modal  } from './ui';
 
-interface Props { pins: readonly PinnedQueryResult[]; owner: string; dialect?: SortDialect; isCurrent(): boolean; onClose(): void; }
+export type QueryResultComparisonSource = Pick<PinnedQueryResult, 'id' | 'label' | 'result'>;
+interface Props { pins: readonly QueryResultComparisonSource[]; owner: string; dialect?: SortDialect; offline?: boolean; isCurrent(): boolean; onClose(): void; }
 type Draft = { left: string; right: string; keys: readonly string[] };
-type Source = { pin: PinnedQueryResult; id: string; label: string; result: QueryResult; columns: readonly ResultColumn[]; truncated: boolean };
+type Source = { pin: QueryResultComparisonSource; id: string; label: string; result: QueryResult; columns: readonly ResultColumn[]; truncated: boolean };
 type Run = { draft: Draft; left: QueryResult; right: QueryResult; capture: QueryResultComparisonCapture; scan: QueryResultComparisonScan; timer?: ReturnType<typeof setTimeout> };
 type View = { run?: Run; processed: number; total: number; result?: QueryResultComparisonResult; error?: string };
 type Filter = 'all' | 'differences' | QueryResultComparisonRow['kind'];
@@ -22,12 +23,12 @@ function own(value: unknown, key: PropertyKey): unknown {
   return descriptor.value;
 }
 /** 下拉列表只拷贝有界元数据，源SQL和行值仅由真实对比捕获器按需准入。 */
-function sources(pins: readonly PinnedQueryResult[]): Source[] {
+function sources(pins: readonly QueryResultComparisonSource[]): Source[] {
   const count = own(pins, 'length');
   if (!Array.isArray(pins) || !Number.isSafeInteger(count) || (count as number) < 2 || (count as number) > pinLimits.count) throw Error(text.requireTwo);
   const output: Source[] = [];
   for (let index = 0; index < (count as number); index++) {
-    const pin = own(pins, String(index)) as PinnedQueryResult, id = own(pin, 'id'), label = own(pin, 'label'), result = own(pin, 'result') as QueryResult;
+    const pin = own(pins, String(index)) as QueryResultComparisonSource, id = own(pin, 'id'), label = own(pin, 'label'), result = own(pin, 'result') as QueryResult;
     if (typeof id !== 'string' || !id || typeof label !== 'string') throw Error(text.identity);
     const truncated = own(result, 'truncated'), rawColumns = own(result, 'columns'), length = own(rawColumns, 'length');
     if (typeof truncated !== 'boolean') throw Error(text.identity);
@@ -54,7 +55,7 @@ function valueText(value: CellValue | undefined): string {
 }
 
 /** 两份固定快照只读对比；必须显式选择匹配键，不重新查询或生成同步SQL。 */
-export function QueryResultComparisonDialog({ pins, owner, dialect, isCurrent, onClose }: Props) {
+export function QueryResultComparisonDialog({ pins, owner, dialect, offline = false, isCurrent, onClose }: Props) {
   const origin = useRef({ pins, owner, dialect }).current, latest = useRef({ pins, owner, dialect, isCurrent }); latest.current = { pins, owner, dialect, isCurrent };
   const [prepared] = useState(() => { try { return { sources: sources(pins), error: '' }; } catch (reason) { return { sources: [] as Source[], error: errorMessage(reason) }; } });
   const [draft, setDraft] = useState<Draft>(() => ({ left: prepared.sources[0]?.id ?? '', right: prepared.sources.at(-1)?.id ?? '', keys: [] }));
@@ -146,10 +147,11 @@ export function QueryResultComparisonDialog({ pins, owner, dialect, isCurrent, o
     catch (reason) { invalid.current = true; setView({ processed: 0, total: 0, error: errorMessage(reason) }); }
   }
   const kindLabel = (kind: QueryResultComparisonRow['kind']) => text[kind];
-  return <div data-query-result-comparison-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : dialect === 'postgresql' ? text.postgresKeysHint : text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
-    <div className="filter-inputs"><label>{text.left}<select aria-label={text.left} value={draft.left} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: event.target.value, right: draft.right, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
-      <label>{text.right}<select aria-label={text.right} value={draft.right} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: draft.left, right: event.target.value, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label></div>
+  const leftLabel = offline ? text.leftFile : text.left, rightLabel = offline ? text.rightFile : text.right;
+  return <div data-query-result-comparison-owner={owner}><Modal title={offline ? text.fileTitle : text.title} onClose={close} wide><div className="modal-content">
+    <p>{offline ? text.fileNotice : text.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : dialect === 'postgresql' ? text.postgresKeysHint : text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
+    <div className="filter-inputs"><label>{leftLabel}<select aria-label={leftLabel} value={draft.left} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: event.target.value, right: draft.right, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
+      <label>{rightLabel}<select aria-label={rightLabel} value={draft.right} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: draft.left, right: event.target.value, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label></div>
     <fieldset disabled={!valid}><legend>{text.keys}</legend>{columns.map(column => { const reason = queryResultComparisonKeyReason(column, dialect), checked = draft.keys.includes(column.key); return <label key={column.key} className="check" title={reason}><input type="checkbox" aria-label={text.key(column.key)} checked={checked} disabled={!valid || !!reason || !checked && draft.keys.length >= 8} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, keys: event.target.checked ? [...draft.keys, column.key] : draft.keys.filter(key => key !== column.key) }); }}/>{column.name || column.key} · {column.key}{reason && <span> · {reason}</span>}</label>; })}</fieldset>
     <p>{text.selectKeys}</p>{!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={view.error}/>
     {running && valid && <p role="status">{text.scanning} {text.progress(view.processed, view.total)}</p>}

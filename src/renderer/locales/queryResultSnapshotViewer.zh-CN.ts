@@ -11,6 +11,10 @@ export const queryResultSnapshotViewerZh = {
   exportShown: '导出快照当前显示行', exportChecked: '导出快照勾选行',
   exportCount: (rows: number, selected: boolean) => `本次导出快照${selected ? '勾选' : '当前显示'}的 ${rows} 行`,
   exportScope: '文件仅包含打开本窗口时选定的行和原列，不读取数据库，也不导出来源 SQL。',
+  compare: '与另一份快照比较', comparingFile: '正在读取对比文件…',
+  comparisonFormat: '两份快照必须使用同一结果格式且含有结果列，无法混合比较。',
+  comparisonCurrent: (name: string) => `当前文件：${name}`,
+  comparisonOther: (name: string) => `对比文件：${name}`,
   stale: '原查看窗口或显示来源已变化，本次回包未接纳。',
   lateSave: '快照文件可能已保存，但原查看窗口已失效，请核对目标文件；不会自动重试。',
 } as const;

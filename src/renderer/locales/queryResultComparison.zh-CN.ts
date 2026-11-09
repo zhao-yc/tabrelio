@@ -1,6 +1,8 @@
 /** 固定结果只读对比文案；不暗示已执行同步、数据库读取或写入。 */
 export const queryResultComparisonZh = {
   open: '固定结果对比', title: '固定结果对比', close: '关闭', cancel: '取消对比',
+  fileTitle: '离线快照对比', leftFile: '左侧快照文件', rightFile: '右侧快照文件',
+  fileNotice: '按两份文件的原始行比较，行号对应文件顺序。当前查看器的筛选和排序不参与比较。',
   left: '左侧固定结果', right: '右侧固定结果', start: '开始对比', stop: '停止对比',
   key: (columnKey: string) => `匹配键 ${columnKey}`,
   keys: '匹配键', keyHint: '请明确选择 1～8 个匹配键，不推断主键。', keysHint: '请选择 1～8 个唯一匹配键；匹配键不能为 NULL 或重复，不支持浮点、字节与未知类型。',
