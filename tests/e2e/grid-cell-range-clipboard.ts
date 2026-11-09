@@ -22,12 +22,15 @@ export function readGridRangeClipboard(page: Page) {
 }
 
 /** 隔离系统剪贴板，只向当前数据格派发粘贴事件。 */
-export function pasteGridRangeClipboard(page: Page, value: string) {
-  return page.evaluate(text => {
+export function pasteGridRangeClipboard(page: Page, value: string | { text: string; sqlite?: string; typed?: string }) {
+  return page.evaluate(content => {
     const active = document.activeElement;
     if (active?.getAttribute('role') !== 'gridcell') throw Error('粘贴前未聚焦数据格');
     const data = new DataTransfer();
+    const { text, sqlite, typed } = typeof content === 'string' ? { text: content } : content;
     data.setData('text/plain', text);
+    if (sqlite !== undefined) data.setData('application/x-dbark-sqlite-cells', sqlite);
+    if (typed !== undefined) data.setData('application/x-dbark-cells', typed);
     active.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
   }, value);
 }

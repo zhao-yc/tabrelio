@@ -15,6 +15,10 @@ export const sqliteResultOriginsZh = {
   inlineReading: '正在核验查询原记录…',
   inlinePreview: '预览修改',
   inlineUnavailable: '当前来源字段无法编辑。',
+  pastePosition: (firstRow: number, lastRow: number, firstColumn: number, lastColumn: number) =>
+    `查询结果第 ${firstRow}～${lastRow} 行，第 ${firstColumn}～${lastColumn} 列`,
+  pasteHint: '核验粘贴范围内的全部原记录，先比对新旧值，再预览 SQL 并确认提交。',
+  pasteDuplicateColumn: '选区中多个结果列指向同一个来源字段，请缩小粘贴范围。',
   rangeTitle: '填充 SQLite 查询结果选区',
   rangeHint: '核验选区内全部原记录后生成一份 SQL 预览。只有确认后才会写入数据库。',
   rangeDiscard: '放弃这批查询结果修改并返回？如果提交结果未确认，请先核对数据库。',

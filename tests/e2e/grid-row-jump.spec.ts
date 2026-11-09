@@ -344,6 +344,79 @@ test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚'
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询矩形粘贴保留原生类型并按排序后的选区提交', async ({}, info) => {
+  await seed('SELECT id AS 同名, name AS 同名, qty AS 同名 FROM subject ORDER BY id DESC LIMIT 3;',
+    'ALTER TABLE subject ADD qty INTEGER DEFAULT 0');
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const input = page.getByRole('dialog', { name: sqlitePaste.title, exact: true });
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  const execute = () => query.locator('.query-execute-split > button.primary').click();
+  const disk = () => {
+    const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+    try { return db.prepare('SELECT id,name,CAST(qty AS TEXT) AS qty,typeof(qty) AS kind FROM subject WHERE id BETWEEN 178 AND 180 ORDER BY id').all(); }
+    finally { db.close(); }
+  };
+  async function applyPaste() {
+    await input.getByRole('button', { name: sqlitePaste.stage, exact: true }).click();
+    await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toBeVisible();
+    expect(disk()[2]).toMatchObject({ id: 180, name: '记录 180', qty: '0' });
+    await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+    await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+    await expect(preview).toHaveCount(0);
+  }
+  await execute();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^同名/ }).first();
+  const first = grid.getByRole('gridcell', { name: '记录 178', exact: true });
+  await expect(first).toBeVisible();
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  const before = disk();
+  await first.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Shift+ArrowRight');
+  await pasteGridRangeClipboard(page, '错误\t尺寸');
+  await expect(page.getByText(selectionPaste.shape(2, 2), { exact: true })).toBeVisible();
+  await expect(input).toHaveCount(0);
+  expect(disk()).toEqual(before);
+  await pasteGridRangeClipboard(page, {
+    text: '\t9223372036854775807\nNULL\t-9223372036854775808',
+    sqlite: JSON.stringify({ version: 1, rows: [
+      [{ kind: 'text', value: '' }, { kind: 'integer', value: '9223372036854775807' }],
+      [{ kind: 'null' }, { kind: 'integer', value: '-9223372036854775808' }],
+    ] }),
+  });
+  await input.getByRole('button', { name: sqlitePaste.preview, exact: true }).click();
+  const table = input.getByRole('table', { name: sqlitePaste.previewRows, exact: true });
+  await expect(table.getByRole('columnheader', { name: 'qty', exact: true })).toBeVisible();
+  await expect(table).toContainText('9223372036854775807');
+  await expect(input.getByText(originsText.pastePosition(1, 2, 2, 3), { exact: true })).toHaveCount(2);
+  await expect(table).toContainText(sqlitePaste.kindLabels.null);
+  await info.attach('SQLite查询矩形粘贴预览', { body: await page.screenshot(), contentType: 'image/png' });
+  expect(disk()).toEqual(before);
+  await applyPaste();
+  expect(disk()).toEqual([
+    { id: 178, name: '', qty: '9223372036854775807', kind: 'integer' },
+    { id: 179, name: null, qty: '-9223372036854775808', kind: 'integer' },
+    before[2],
+  ]);
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+
+  await execute();
+  await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+    .filter(task => task.kind === 'query.execute' && task.status === 'completed').length)).toBe(2);
+  await grid.getByRole('gridcell', { name: '记录 180', exact: true }).click();
+  await pasteGridRangeClipboard(page, '单格锚点\n第二行');
+  await input.getByRole('button', { name: sqlitePaste.preview, exact: true }).click();
+  await expect(table).toContainText('第二行');
+  await applyPaste();
+  expect(disk().map(row => row.name)).toEqual(['', '第二行', '单格锚点']);
+  const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  expect(tasks.filter(task => task.kind === 'query.execute')).toHaveLength(2);
+  expect(tasks.filter(task => task.kind === 'sqlite.tablePage' && task.status === 'completed')).toHaveLength(2);
+  expect(tasks.filter(task => task.kind === 'sqlite.tableEdit.apply').map(task => task.sqliteWrite?.phase)).toEqual(['committed', 'committed']);
+  expect(pageErrors).toEqual([]);
+});
+
 test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async ({}, info) => {
   await seed(`/* NAME: 精确原值 */ SELECT 9223372036854775807 AS v, X'00ff' AS v;
     /* NAME: 不导出 */ SELECT '跳过';
