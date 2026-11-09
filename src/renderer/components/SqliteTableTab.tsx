@@ -1485,7 +1485,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   /** 刷新使用已应用条件及原偏移，避免把尚未提交的筛选或排序草稿带入读取。 */
   function refreshTable() { if (!refreshDisabled) read(page?.offset ?? 0); }
 
-  return <div className="workspace-tab table-tab sqlite-table-tab" onKeyDownCapture={findKey} onKeyDown={event => {
+  return <div className="workspace-tab table-tab sqlite-table-tab" data-table-find-scope onKeyDownCapture={findKey} onKeyDown={event => {
     if (!refreshDisabled && tableRefreshShortcut(event)) refreshTable();
     if (available() && !view.busy && !externalBusy && tableObjectQueryShortcut(event)) openTableObjectQuery(tab, version);
   }} aria-label={text.title} data-readonly={editView ? 'false' : 'true'}>

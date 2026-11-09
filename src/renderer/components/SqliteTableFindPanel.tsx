@@ -4,6 +4,7 @@ import type { SqliteDraftRow } from '../sqliteTableEditor';
 import { sqliteFindMessages, type SqliteFindOptions, type SqliteFindOccurrence } from '../sqliteTableFind';
 import { SqliteTableFindWorkerClient, sqliteTextReplacementPlanPreview, type SqliteFindReadyResult, type SqliteTextReplacementPlan } from '../sqliteTableFindWorkerClient';
 import { sqliteTableFindZh as text } from '../locales/sqliteTableFind.zh-CN';
+import { useTableFindKeys } from '../gridFindKeys';
 import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 import '../sqliteTableFind.css';
 
@@ -27,6 +28,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
   const client = useRef<SqliteTableFindWorkerClient | undefined>(undefined), serial = useRef(0), timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), composing = useRef(false);
   const [working, setWorking] = useState<'running' | 'stopping' | undefined>(), work = useRef<typeof working>(undefined), renderTicket = {}, committed = useRef<object | undefined>(undefined);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null), kindInput = useRef<HTMLSelectElement>(null);
+  const panel = useRef<HTMLElement>(null);
   const pendingFocus = useRef<SqliteTableFindFocusRequest | undefined>(focusRequest);
   const metadata = () => JSON.stringify([owner.page.target, owner.page.schemaKey, owner.page.columns, owner.page.edit?.kind, owner.page.edit?.kind === 'editable' ? [owner.page.edit.snapshotId, owner.page.edit.expiresAt, owner.page.edit.columns, owner.page.edit.locator] : undefined]);
   const [source] = useState(() => ({ metadata: metadata(), rows: owner.rows.map(row => ({ row, id: row.id, index: row.index, deleted: row.deleted, values: row.values, cells: row.values.map(value => value === undefined ? undefined : { ...value }) })) }));
@@ -96,6 +98,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
     replace({ ...live.current, position: index });
     try { owner.onJump(match.rowId, match.column, focusGrid, match.range); } catch (reason) { replace({ ...live.current, error: reason instanceof Error ? reason.message : text.failed }); }
   }
+  useTableFindKeys(panel, jump);
   /** 一次确认只交付一个opaque计划；父消费并整批更改草稿，失败不得自动重试旧计划。 */
   function stage(): void {
     const chosen = draft.preview;
@@ -131,7 +134,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, seed, previewOw
   useEffect(() => { const request = pendingFocus.current; if (!request || !sourceCurrent() || live.current.preview || draft.mode !== request.mode) return; pendingFocus.current = undefined; const input = request.mode === 'replace' ? replacementInput.current : queryInput.current; (input && !input.disabled ? input : kindInput.current)?.focus(); }, [focusRequest.id, focusRequest.mode, draft.mode]);
   useEffect(() => { if (seed && sourceCurrent() && !seed.options.regex && !seed.options.captureReplacement) schedule(); return () => { mounted.current = false; closed.current = true; ++serial.current; clearTimeout(timer.current); void client.current?.dispose(); owner.onPreviewChange?.(false); }; }, []);
   const unavailable = !valid || !!draft.preview || staging.current, options = draft.options, epoch = draft.epoch, replaceable = !readonly && options.kind === 'text' && !!found?.matches.some(match => match.replaceable);
-  return <section className="sqlite-table-find" aria-label={text.title} onCompositionStart={() => { if (inputCurrent()) { composing.current = true; cancelWork(); } }} onCompositionEnd={() => { if (inputCurrent()) { composing.current = false; cancelWork(); schedule(); } }}>
+  return <section ref={panel} className="sqlite-table-find" aria-label={text.title} onCompositionStart={() => { if (inputCurrent()) { composing.current = true; cancelWork(); } }} onCompositionEnd={() => { if (inputCurrent()) { composing.current = false; cancelWork(); schedule(); } }}>
     <UsageHelp><p>{text.scope}</p><p>{text.typedHint}</p><p>{text.regexHint}</p></UsageHelp><div className="sqlite-table-find-fields">
       <Field label={text.kind}><select ref={kindInput} aria-label={text.kind} disabled={unavailable} value={options.kind} onChange={event => { if (local() && Object.hasOwn(text.kinds, event.target.value)) changeOptions({ kind: event.target.value as SqliteFindOptions['kind'] }, undefined, true); }}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></Field>
       <Field label={text.query}><input ref={queryInput} aria-label={text.query} maxLength={512} value={options.query} disabled={unavailable || options.kind !== 'text'} onChange={event => changeOptions({ query: event.target.value }, epoch)} onKeyDown={event => key(event, 'query')}/></Field>

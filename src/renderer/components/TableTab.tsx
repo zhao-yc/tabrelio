@@ -2086,7 +2086,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (canReload(undefined, () => tableToolbarCurrent() && !reloadBlocked())) { checkedExport.clear(); void load(); }
   }
 
-  return <div ref={rootElement} className="workspace-tab table-tab" onKeyDown={event => {
+  return <div ref={rootElement} className="workspace-tab table-tab" data-table-find-scope onKeyDown={event => {
     if (!blocked && tableRefreshShortcut(event)) refreshTable();
     if (!blocked && !gridEditing && tableToolbarCurrent() && tableObjectQueryShortcut(event)) openTableObjectQuery(tab, connectionVersion);
   }}>{cellActionMenu.menu}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}

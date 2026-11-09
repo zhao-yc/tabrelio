@@ -12,6 +12,8 @@ import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sq
 import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
+import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { sqliteTableFindZh as sqliteFind } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -127,6 +129,60 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
     }
     expect(await tasks()).toEqual(originalTasks);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('查找快捷键从输入和数据格循环定位，虚拟滚动后可继续且不执行数据任务', async () => {
+  await seed();
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const resultCheck = query.getByRole('gridcell', { name: '记录 180', exact: true }).locator('..').getByRole('checkbox');
+  await resultCheck.check();
+  const beforeQuery = await tasks();
+  await query.getByRole('button', { name: resultFind.open, exact: true }).click();
+  const input = query.getByRole('textbox', { name: resultFind.input, exact: true });
+  const resultStatus = query.locator('.query-result-find-status').getByRole('status');
+  await input.fill('记录');
+  await expect(resultStatus).toHaveText(resultFind.count(180, -1));
+  await input.press('Shift+F3');
+  await expect(input).toBeFocused();
+  await expect(resultStatus).toHaveText(resultFind.count(180, 179));
+  const lastResult = query.getByRole('gridcell', { name: '记录 1', exact: true });
+  await expect(lastResult).toBeInViewport();
+  await lastResult.click();
+  await page.keyboard.press('F3');
+  await expect(resultStatus).toHaveText(resultFind.count(180, 0));
+  // 虚拟网格会保留一个屏外的活动格，实际可见性以视口为准。
+  await expect(lastResult).not.toBeInViewport();
+  await expect(query.getByRole('grid')).toBeFocused();
+  await page.keyboard.press('F3');
+  await expect(resultStatus).toHaveText(resultFind.count(180, 1));
+  await expect(resultCheck).toBeChecked();
+  expect(await tasks()).toEqual(beforeQuery);
+
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const first = table.getByRole('gridcell', { name: 'TEXT · 记录 1', exact: true });
+  await expect(first).toBeVisible();
+  const beforeTable = await tasks();
+  await first.click();
+  await page.keyboard.press('Control+f');
+  const findPanel = table.getByRole('region', { name: sqliteFind.title, exact: true });
+  const tableInput = findPanel.getByRole('textbox', { name: sqliteFind.query, exact: true });
+  const tableStatus = findPanel.getByRole('status');
+  await tableInput.fill('记录');
+  await expect(tableStatus).toHaveText(sqliteFind.count(100, 100, -1));
+  await tableInput.press('F3');
+  await expect(tableInput).toBeFocused();
+  await expect(tableStatus).toHaveText(sqliteFind.count(100, 100, 0));
+  await first.click();
+  await page.keyboard.press('Shift+F3');
+  await expect(tableStatus).toHaveText(sqliteFind.count(100, 100, 99));
+  await expect(table.getByRole('gridcell', { name: 'TEXT · 记录 100', exact: true })).toBeFocused();
+  await page.keyboard.press('F3');
+  await expect(first).toBeFocused();
+  expect(await tasks()).toEqual(beforeTable);
   expect(pageErrors).toEqual([]);
 });
 

@@ -3,6 +3,7 @@ import type { DataGridHandle } from 'react-data-grid';
 import type { DataRow, ResultColumn } from '../../shared/contracts';
 import { QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindProgress } from '../queryResultFind';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
+import { gridFindDirection } from '../gridFindKeys';
 import '../queryResultFind.css';
 
 interface Run { owner: object; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
@@ -13,6 +14,7 @@ interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid:
 export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
   const panel = useRef<object | undefined>(undefined), mountOwner = useRef<object | undefined>({});
   const [opened, setOpened] = useState<{ owner: object; token: object }>();
   const [query, setQuery] = useState(''), [sensitive, setSensitive] = useState(false);
@@ -55,11 +57,13 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   }
   function close() { if (!alive.current || latest.current.owner !== owner || !visible || panel.current !== opened?.token || run.current !== view?.run) return; cancel(); panel.current = undefined; setOpened(undefined); setView(undefined); onHit(undefined); }
   /** 只滚动并标记坐标，不调用setActivePosition或行选择，不改变复制/导出所选行。 */
-  function navigate(direction: -1 | 1) {
+  function navigate(direction: -1 | 1, keepGridFocus = false) {
     if (!panelCurrent() || !active || run.current !== active.run || !active.run.scan.current()) return;
     const progress = active.run.scan.progress(); if (!progress.count) return;
     const index = active.run.index < 0 ? direction === 1 ? 0 : progress.count - 1 : (active.run.index + direction + progress.count) % progress.count;
     const match = active.run.scan.match(index); if (!match || !grid.current || !own()) return;
+    // 大跨度跳转会卸载原数据格，先保留网格宿主焦点以便继续按 F3。
+    if (keepGridFocus) grid.current.element?.focus({ preventScroll: true });
     grid.current.scrollToCell({ rowIdx: match.row, idx: match.column + 1 });
     if (!active.run.scan.current() || run.current !== active.run) return;
     active.run.index = index; setView({ run: active.run, progress, index }); onHit({ scan: active.run.scan, match });
@@ -67,6 +71,8 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   /** 快捷键只在本包围元素中冒泡；输入法、Alt组合及其它按键均交还原控件。 */
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.nativeEvent.isComposing || event.altKey || !own()) return;
+    const direction = visible && !event.defaultPrevented && gridFindDirection(event.nativeEvent, event.currentTarget, toolbar.current);
+    if (direction) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) navigate(direction, !toolbar.current?.contains(event.target as Node)); return; }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); event.stopPropagation(); if (panelCurrent()) input.current?.focus(); else open(); }
     else if (visible && event.key === 'Escape' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); close(); }
     else if (visible && event.target === input.current && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); navigate(event.shiftKey ? -1 : 1); }
@@ -75,7 +81,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   const status = !query ? text.empty : !active ? text.stopped : progress?.phase === 'invalid' ? text.invalid : progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) : progress?.count ? text.count(progress.count, active.index) : text.noMatch;
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
   return <div className="query-result-find-region" onKeyDown={keyDown}>
-    <div className="query-result-find-toolbar"><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
+    <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
       {visible && <><input ref={input} type="text" aria-label={text.input} value={query} onChange={event => start(event.target.value, sensitive)}/><label className="check"><input type="checkbox" checked={sensitive} onChange={event => start(query, event.target.checked)}/>{text.sensitive}</label><button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button><button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button><button type="button" aria-label={text.close} onClick={close}>×</button></>}
     </div>
     {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{text.scope(rows.length, columns.length)}</span></div>}

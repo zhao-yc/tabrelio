@@ -74,7 +74,13 @@ async function calls() { return page.evaluate(() => (window as unknown as { __pa
 
 test('最小窗口同格逐处导航、单处替换及整批预览仅形成草稿', async ({}, result) => {
   await find('old'); await expect(panel().getByRole('status')).toContainText('0 / 3 处');
-  await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click(); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click();
+  const query = panel().getByRole('textbox', { name: text.query, exact: true });
+  await query.press('F3'); await expect(query).toBeFocused();
+  await expect(panel().getByRole('status')).toContainText('1 / 3 处');
+  await (await cell()).click();
+  await page.keyboard.press('Shift+F3');
+  await expect(panel().getByRole('status')).toContainText('3 / 3 处');
+  await page.keyboard.press('Shift+F3');
   await expect(panel().locator('.page-find-current')).toContainText('第 1 行 · 列 note · 格内第 2 处 · UTF-16 位置 7');
   await expect(panel().locator('mark')).toHaveText('old'); await panel().getByRole('textbox', { name: text.replacement, exact: true }).fill('$1/$&');
   await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.replaceOne, exact: true })).click(); await expect(await cell()).toHaveText('😀old前$1/$&后old');

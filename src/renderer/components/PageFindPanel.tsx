@@ -3,6 +3,7 @@ import type { TableInfo } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
 import { nextPageOccurrenceAfterReplacement, pageOccurrences, pageReplaceWritable, type PageCellMatch, type PageFindOptions, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { useTableFindKeys } from '../gridFindKeys';
 import { PageFindWorkerClient } from '../pageFindWorkerClient';
 import { errorMessage, ownCell } from '../lib';
 import { formatText, zh } from '../locales/zh-CN';
@@ -26,6 +27,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   const [foundState, setFound] = useState<{ matches: PageCellMatch[]; snapshot: typeof snapshot | null }>({ matches: [], snapshot: null });
   const found = foundState.snapshot === snapshot ? foundState.matches : [];
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null), kindSelect = useRef<HTMLSelectElement>(null);
+  const panel = useRef<HTMLElement>(null);
   /** 每次明确打开或重复快捷键都接管输入焦点，不能让查找文字进入活动网格草稿。 */
   useEffect(() => { const target = focusRequest.target === 'replacement' ? replacementInput.current : queryInput.current; (target && !target.disabled ? target : kindSelect.current)?.focus(); }, [focusRequest]);
   const occurrences = useMemo(() => pageOccurrences(found), [foundState, snapshot]);
@@ -70,6 +72,9 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   useEffect(() => { setOptions(current => current.column && !keys.includes(current.column) ? { ...current, column: undefined } : current); }, [keys]);
   /** 返回下一格的身份，由网格按最新可见列定位与虚拟滚动。 */
   function jump(delta: number, focusGrid = true) { if (!occurrences.length || disabled || composingRef.current || activeOptions.current !== snapshot.options) return; invalidateIntent(); const active = positionRef.current, next = active < 0 ? delta > 0 ? 0 : occurrences.length - 1 : (active + delta + occurrences.length) % occurrences.length; const match = occurrences[next]; selectPosition(next); onJump(match.rowId, match.key, focusGrid); }
+  useTableFindKeys(panel, (direction, focusGrid) => {
+    if (latest.current === snapshot && !workingRef.current) jump(direction, focusGrid);
+  });
   /** 单处命令只接受当前快照中的精确出现位置；不能回退成整格或整页替换。 */
   function replaceCurrent() { const match = occurrences[positionRef.current], row = match && rows.find(row => row.id === match.rowId); if (disabled || composingRef.current || workingRef.current || singleLock.current || replaceDisabled || options.kind !== 'text' || !info || !match?.range || !row || typeof ownCell(row.data, match.key) !== 'string' || !pageReplaceWritable(info, match.key)) return; void run('preview', match); }
   /** Enter仅处理本面板输入；组合标志或229保留原生输入，不产生导航或草稿。 */
@@ -102,7 +107,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   async function cancel() { invalidateIntent(); const serial = requestSerial.current; await client.current?.cancel(); if (serial === requestSerial.current) { workingRef.current = false; singleLock.current = false; setWorking(false); setError(text.cancelled); } }
   /** 单次确认先检查整批快照，失败保留窗口和既有草稿。 */
   function apply() { if (!preview || disabled || replaceDisabled || composingRef.current || applyLock.current) return; applyLock.current = true; try { if (previewSource.current?.snapshot !== latest.current || previewSource.current.replacement !== latestReplacement.current || previewSource.current.intent !== intentRevision.current) throw new Error(text.changed); onApply(preview); setPreview(null); setError(''); } catch (reason) { applyLock.current = false; setError(errorMessage(reason)); } }
-  return <section className="page-find-panel" aria-label={text.find} onCompositionStart={compositionStarted} onCompositionEnd={event => compositionEnded(event.target)}><UsageHelp><p>{text.scope}</p><p>{text.binaryHint}</p><p>{text.replaceOneHint}</p>{options.kind === 'text' && options.regex && <p>{text.regexHint}</p>}{options.captureReplacement && <p>{text.captureHint}</p>}</UsageHelp><div className="page-find-fields">
+  return <section ref={panel} className="page-find-panel" aria-label={text.find} onCompositionStart={compositionStarted} onCompositionEnd={event => compositionEnded(event.target)}><UsageHelp><p>{text.scope}</p><p>{text.binaryHint}</p><p>{text.replaceOneHint}</p>{options.kind === 'text' && options.regex && <p>{text.regexHint}</p>}{options.captureReplacement && <p>{text.captureHint}</p>}</UsageHelp><div className="page-find-fields">
     <Field label={text.kind}><select ref={kindSelect} disabled={disabled} value={options.kind} onChange={event => changeOptions({ ...options, kind: event.target.value as PageFindOptions['kind'] })}><option value="text">{text.text}</option><option value="null">{text.null}</option><option value="default">{text.default}</option></select></Field>
     <Field label={text.query}><input ref={queryInput} disabled={disabled || options.kind !== 'text'} maxLength={512} value={options.query} onKeyDown={event => inputKey(event, 'query')} onChange={event => changeOptions({ ...options, query: event.target.value })}/></Field>
     <Field label={text.column}><select disabled={disabled} value={options.column ?? ''} onChange={event => changeOptions({ ...options, column: event.target.value || undefined })}><option value="">{text.all}</option>{keys.map(key => <option key={key}>{key}</option>)}</select></Field>
