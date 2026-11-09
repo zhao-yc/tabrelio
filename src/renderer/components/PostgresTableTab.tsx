@@ -1826,7 +1826,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <footer className="modal-footer"><button disabled={busy} onClick={() => setDraftFile(undefined)}>{text.cancel}</button>
         <button className="primary" disabled={busy} onClick={transferDraftFile}>{draftFile === 'save' ? draftFilesText.chooseSave : draftFilesText.chooseRestore}</button></footer>
     </Modal>}
-    {collectedDialog && <ResultExportDialog result={collectedDialog.result} tabId={tab.id} scope={collectedDialog.scope} allowSql={false}
+    {collectedDialog && <ResultExportDialog result={collectedDialog.result} tabId={tab.id} scope={collectedDialog.scope}
+      allowSql={collectedDialog.scope === 'rectangle'} sqlDialect="postgresql"
       onClose={() => setCollectedDialog(undefined)}/>}
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
       isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&

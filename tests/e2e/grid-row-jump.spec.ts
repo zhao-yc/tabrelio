@@ -22,6 +22,7 @@ import { navigationMenuItem } from './navigation-menu';
 import { gridCellCenter, pasteGridRangeClipboard, readGridMenuClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { gridRangeExportZh as rangeExport } from '../../src/renderer/locales/gridRangeExport.zh-CN';
+import { resultSqlZh as sqlText } from '../../src/shared/resultSql.zh-CN';
 import { gridQuickValueZh as cellCopy } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 import { sqliteTableRangePasteZh as sqlitePaste } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
@@ -334,7 +335,7 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   async function exportJson(name: string) {
     await expect(modal.getByText(rangeExport.summary(2, 1), { exact: true })).toBeVisible();
     const format = modal.getByLabel(zh.resultExport.format, { exact: true });
-    await expect(format.locator('option[value="sql"]')).toHaveCount(0);
+    await expect(format.locator('option[value="sql"]')).toHaveText(sqlText.sqliteFormat);
     await format.selectOption('json');
     const output = join(dataDir, name);
     // 只固定本次保存位置，文件写入继续使用正式导出 IPC。
@@ -379,8 +380,85 @@ test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', asyn
   await page.keyboard.press('Shift+ArrowDown');
   await draftStart.click({ button: 'right' });
   await menu.click();
+  await modal.getByLabel(zh.resultExport.format, { exact: true }).selectOption('sql');
+  await modal.getByLabel(sqlText.sqliteDatabase, { exact: true }).fill('main');
+  await modal.getByLabel(sqlText.table, { exact: true }).fill('copied');
+  await modal.getByLabel(sqlText.column(1), { exact: true }).fill('name');
+  await modal.getByRole('button', { name: sqlText.clipboardPreview, exact: true }).click();
+  const script = modal.locator('pre').filter({ hasText: '待提交' });
+  await expect(script).toBeVisible();
+  const copied = await readGridMenuClipboard(page, modal.getByRole('button', { name: sqlText.clipboardCopy, exact: true }));
+  expect(copied.text).toBe(await script.textContent());
+  expect(copied.text.match(/VALUES \('待提交'\)/g)).toHaveLength(2);
   expect(await exportJson('矩形草稿.json')).toEqual([{ name: '待提交' }, { name: '待提交' }]);
   expect(readFileSync(database)).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 矩形 INSERT 文件在独立数据库保留原生类型和精度', async () => {
+  await seed(`SELECT '排除甲' AS hidden_first, 9223372036854775807 AS n, '000123' AS t,
+    1.5 AS r, X'00FF' AS b, NULL AS z, '排除乙' AS hidden_last
+    UNION ALL SELECT '排除丙', -9223372036854775808, '000456', 2.5, X'AB', NULL, '排除丁'
+    UNION ALL SELECT '范围外', 3, '不要导出', 4.5, X'01', NULL, '范围外';`);
+  const source = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(source);
+  const menu = page.getByRole('menuitem', { name: rangeExport.action, exact: true });
+  const modal = page.getByRole('dialog', { name: rangeExport.action, exact: true });
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const first = query.getByRole('gridcell', { name: '9223372036854775807', exact: true });
+  await first.click();
+  for (let column = 0; column < 4; column++) await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await first.click({ button: 'right' });
+  await menu.click();
+  await expect(modal.getByText(rangeExport.summary(2, 5), { exact: true })).toBeVisible();
+  await modal.getByLabel(zh.resultExport.format, { exact: true }).selectOption('sql');
+  await modal.getByLabel(sqlText.sqliteDatabase, { exact: true }).fill('main');
+  await modal.getByLabel(sqlText.table, { exact: true }).fill('copied');
+  for (const [index, name] of ['n', 't', 'r', 'b', 'z'].entries())
+    await modal.getByLabel(sqlText.column(index + 1), { exact: true }).fill(name);
+  await modal.getByRole('button', { name: sqlText.preview, exact: true }).click();
+  await expect(modal.getByText(sqlText.previewScope(2, 2), { exact: true })).toBeVisible();
+  const output = join(dataDir, '矩形.sql');
+  // 仅替换一次系统保存位置，保留 Main 的预览、文件授权和原子写入。
+  await desktop.evaluate(({ dialog, BrowserWindow }, output) => {
+    const original = dialog.showSaveDialog;
+    dialog.showSaveDialog = (async (...args: unknown[]) => {
+      dialog.showSaveDialog = original;
+      if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes('sql'))
+        throw Error('仅允许本例 SQL 保存选择');
+      return { canceled: false, filePath: output };
+    }) as typeof original;
+  }, output);
+  await modal.getByRole('button', { name: new RegExp(zh.resultExport.chooseFile) }).click();
+  const start = modal.getByRole('button', { name: zh.resultExport.start, exact: true });
+  await expect(start).toBeDisabled();
+  await modal.getByLabel(sqlText.confirmation, { exact: true }).fill('main.copied');
+  await modal.getByRole('checkbox', { name: sqlText.acknowledge, exact: true }).check();
+  await start.click();
+  await modal.getByRole('button', { name: zh.common.done, exact: true }).click();
+
+  const replay = new DatabaseSync(':memory:');
+  try {
+    replay.exec('CREATE TABLE copied(n,t,r,b,z);');
+    replay.exec(readFileSync(output, 'utf8'));
+    const rows = replay.prepare(`SELECT typeof(n) AS nt, CAST(n AS TEXT) AS n, typeof(t) AS tt, t,
+      typeof(r) AS rt, r, typeof(b) AS bt, hex(b) AS b, typeof(z) AS z FROM copied ORDER BY rowid;`).all();
+    expect(rows).toEqual([
+      { nt: 'integer', n: '9223372036854775807', tt: 'text', t: '000123', rt: 'real', r: 1.5, bt: 'blob', b: '00FF', z: 'null' },
+      { nt: 'integer', n: '-9223372036854775808', tt: 'text', t: '000456', rt: 'real', r: 2.5, bt: 'blob', b: 'AB', z: 'null' },
+    ]);
+  } finally { replay.close(); }
+
+  await page.locator('[data-workspace-tab-id="v-jump"]').getByRole('button', { name: '视图定位', exact: true }).click();
+  const view = page.locator('.sqlite-table-tab:visible');
+  const viewStart = view.getByRole('gridcell', { name: '记录 1', exact: true });
+  await viewStart.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await viewStart.click({ button: 'right' });
+  await menu.click();
+  await expect(modal.getByLabel(zh.resultExport.format, { exact: true }).locator('option[value="sql"]')).toHaveText(sqlText.sqliteFormat);
+  expect(readFileSync(source)).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

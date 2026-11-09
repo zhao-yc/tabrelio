@@ -11,6 +11,7 @@ import { gridCellCenter, pasteGridRangeClipboard, readGridMenuClipboard, readGri
 import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { gridRangeExportZh as rangeExport } from '../../src/renderer/locales/gridRangeExport.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
 const errors: string[] = [];
@@ -124,6 +125,7 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   await expect(exported.getByText(rangeExport.summary(2, 2), { exact: true })).toBeVisible();
   await expect(exported.locator('.sample-grid').getByRole('columnheader').filter({ hasText: /\S/ })).toHaveText(['note', 'other']);
   await expect(exported.getByRole('gridcell', { name: '无匹配', exact: true })).toBeVisible();
+  await expect(exported.getByLabel(zh.resultExport.format, { exact: true }).locator('option[value="sql"]')).toHaveText('INSERT SQL');
   expect(await calls()).toEqual([]);
 });
 
