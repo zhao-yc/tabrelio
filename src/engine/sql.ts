@@ -74,10 +74,11 @@ export function buildPageSql(info: TableInfo, page: number, pageSize: number, fi
 /** 全旧值比较避免丢失更新；唯一键是可靠定位的必要条件，不能仅凭 LIMIT 1 写入。 */
 export interface SqlSearchKey { sql: string; params: CellValue[] }
 export function buildChanges(info: TableInfo, changes: RowChange[], options?: {
-  binaryText?: 'cast'; searchKey?: SqlSearchKey; searchKeys?: readonly SqlSearchKey[];
+  binaryText?: 'cast'; searchKey?: SqlSearchKey; searchKeys?: readonly SqlSearchKey[]; allowUnkeyedInsert?: true;
 }): SqlPreview {
   if (info.engine.toUpperCase() !== 'INNODB') throw new Error('仅允许对 InnoDB 事务表集中提交修改');
-  if (!info.editableKey.length) throw new Error('此表没有全部非空的主键或唯一键，数据仅可读取');
+  if (!info.editableKey.length && (!options?.allowUnkeyedInsert || changes.length !== 1 || changes[0].kind !== 'insert'))
+    throw new Error('此表没有全部非空的主键或唯一键，数据仅可读取');
   const columns = new Map(info.columns.map(column => [column.name, column]));
   const table = qualified(info.database, info.name);
   const statements: SqlPreview['statements'] = [];

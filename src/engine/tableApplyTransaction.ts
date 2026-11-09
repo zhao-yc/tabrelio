@@ -17,6 +17,7 @@ export interface TableApplyControl extends Pick<TableApplyGroup, 'lockInfo' | 'a
   send(sql: string, params: CellValue[], acknowledged: (result: ResultSetHeader) => void): Promise<ResultSetHeader>;
   rollback(): Promise<ResultSetHeader>; emit(p: TableApplyProgress): void;
   strictSync?: true;
+  allowUnkeyedInsert?: true;
   searchKey?: SqlSearchKey;
   searchKeys?: readonly SqlSearchKey[];
 }
@@ -34,7 +35,8 @@ export async function applyTableTransactionGroups(groups: TableApplyGroup[], c: 
   const acknowledged = (r: ResultSetHeader) => { e.transactionKnown = Number.isInteger(r.serverStatus) && r.serverStatus >= 0 && r.serverStatus <= 65535; e.transactionOpen = e.transactionKnown && Boolean(r.serverStatus & 1); };
   try {
     if (c.searchKeys && groups.length !== 1) throw Error('查询批量写入只支持一张原表');
-    const options = { ...(c.strictSync || c.searchKey || c.searchKeys ? { binaryText: 'cast' as const } : {}), searchKey: c.searchKey, searchKeys: c.searchKeys };
+    const options = { ...(c.strictSync || c.searchKey || c.searchKeys ? { binaryText: 'cast' as const } : {}),
+      searchKey: c.searchKey, searchKeys: c.searchKeys, allowUnkeyedInsert: c.allowUnkeyedInsert };
     const plans = groups.map(group => ({ group, statements: buildChanges(group.info, group.changes, options).statements }));
     if (c.expectedPlan && JSON.stringify(c.expectedPlan) !== JSON.stringify(plans.flatMap(plan => plan.statements))) throw Error('提交计划自预览后已变化，请重新预览；未发送本批数据写入');
     await c.send('START TRANSACTION', [], r => { transactionStarted = true; acknowledged(r); });

@@ -7,7 +7,7 @@ import { gridRangeFillZh } from '../locales/gridRangeFill.zh-CN';
 import { mysqlQueryBatchEditZh as text } from '../locales/mysqlQueryBatchEdit.zh-CN';
 import { mysqlQueryBatchChanges, type MysqlQueryBatchInput } from '../mysqlQueryBatchEdit';
 import { useWorkspace } from '../store';
-import { MysqlQueryCopyDraftEditor, prepareMysqlQueryCopy } from './MysqlQueryCopyDraftEditor';
+import { MysqlQueryInsertDraftEditor, prepareMysqlQueryInsert } from './MysqlQueryInsertDraftEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
 import '../tableGrid.css';
 
@@ -27,13 +27,14 @@ type BatchRecord = CommandMap['mysql.queryBatchEdit']['output'];
 /** 单次预览绑定原执行和完整变更，提交失败保留差异及回执，禁止重放。 */
 export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isCurrent, onDone }: Props) {
   const [preview, setPreview] = useState<Preview>(), [error, setError] = useState('');
-  const [copy, setCopy] = useState<{ record: BatchRecord; draft: ReturnType<typeof prepareMysqlQueryCopy> }>();
+  const [insert, setInsert] = useState<{ record: BatchRecord; draft: ReturnType<typeof prepareMysqlQueryInsert> }>();
   const [busy, setBusy] = useState(true), [confirmed, setConfirmed] = useState(false), [attempted, setAttempted] = useState(false);
   const live = useRef(false), pending = useRef(true), submitted = useRef(false);
   const callbacks = useRef({ isCurrent, onDone });
   callbacks.current = { isCurrent, onDone };
   const deleting = operation.kind === 'delete';
   const copying = operation.kind === 'insert';
+  const creating = operation.kind === 'new', inserting = copying || creating;
 
   async function makePreview(record: BatchRecord, changes: RowChange[]): Promise<Preview> {
     const target: Target = { connectionId: request.connectionId, database: record.info.database, table: record.info.name,
@@ -57,7 +58,10 @@ export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isC
         reading = false;
         if (!active) return;
         if (!callbacks.current.isCurrent()) throw Error(text.stale);
-        if (operation.kind === 'insert') { setCopy({ record, draft: prepareMysqlQueryCopy(record, request.connectionId) }); return; }
+        if (operation.kind === 'insert' || operation.kind === 'new') {
+          setInsert({ record, draft: prepareMysqlQueryInsert(record, request.connectionId, operation.kind === 'new') });
+          return;
+        }
         const changes = mysqlQueryBatchChanges(record.info, record.rows, record.columns, operation);
         const next = await makePreview(record, changes);
         if (active) setPreview(next);
@@ -75,14 +79,14 @@ export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isC
   }
 
   /** 同一份副本草稿可返回修改，预览成功后才替换当前显示的待提交计划。 */
-  async function previewCopy(rows: DraftRow[]) {
-    if (!copy || pending.current || !callbacks.current.isCurrent()) return;
+  async function previewInsert(rows: DraftRow[]) {
+    if (!insert || pending.current || !callbacks.current.isCurrent()) return;
     pending.current = true; setBusy(true); setError('');
     try {
       const fields = rows.reduce((count, row) => count + Object.keys(row.data).length, 0);
       if (fields > mysqlQueryBatchLimits.cells) throw Error(gridRangeFillZh.limit);
-      const next = await makePreview(copy.record, collectChanges(rows));
-      if (live.current) { setCopy({ ...copy, draft: { ...copy.draft, rows } }); setPreview(next); }
+      const next = await makePreview(insert.record, collectChanges(rows));
+      if (live.current) { setInsert({ ...insert, draft: { ...insert.draft, rows } }); setPreview(next); }
     } catch (reason) { if (live.current) setError(errorMessage(reason)); }
     finally { pending.current = false; if (live.current) setBusy(false); }
   }
@@ -93,7 +97,8 @@ export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isC
     submitted.current = true; pending.current = true; setAttempted(true); setBusy(true); setError('');
     try {
       const result = await invoke('table.apply', { ...preview.target, changes: preview.changes, previewId: preview.plan.previewId, taskId: uid() });
-      useWorkspace.getState().notify((deleting ? text.deleted : copying ? text.copied : text.committed)(result.affectedRows), result.receiptSaved === false);
+      const message = creating ? text.created : (deleting ? text.deleted : copying ? text.copied : text.committed)(result.affectedRows);
+      useWorkspace.getState().notify(message, result.receiptSaved === false);
       if (live.current) callbacks.current.onDone(true);
     } catch (reason) {
       if (live.current) { setConfirmed(false); setError(errorMessage(reason)); }
@@ -103,15 +108,15 @@ export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isC
 
   const count = preview?.rows.reduce((total, { change }) => total + (change.kind === 'update' ? Object.keys(change.values).length : 0), 0);
   const table = preview && qualifiedName(preview.target.database, preview.target.table);
-  return <Modal title={copying && preview ? text.copyPreview : text[operation.kind]} onClose={close} wide>
+  return <Modal title={inserting && preview ? (creating ? text.newPreview : text.copyPreview) : text[operation.kind]} onClose={close} wide>
     <div className="modal-content pg-table-preview">
       {'columnIndices' in request && <p>{text.scope(request.rowIndices.length, request.columnIndices.length)}</p>}
       {busy && <Spinner text={attempted ? text.applying : text.reading}/>}
       <ErrorBox message={error}/>
-      {copy && !preview && <MysqlQueryCopyDraftEditor draft={copy.draft} displayRows={displayRows} busy={busy} isCurrent={isCurrent} onPreview={rows => void previewCopy(rows)}/>}
-      {preview && <><p>{deleting ? text.deleteCount(preview.rows.length, table!) : copying ? text.copyCount(preview.rows.length, table!) : text.count(preview.rows.length, count!)}</p>
+      {insert && !preview && <MysqlQueryInsertDraftEditor draft={insert.draft} displayRows={displayRows} creating={creating} busy={busy} isCurrent={isCurrent} onPreview={rows => void previewInsert(rows)}/>}
+      {preview && <><p>{deleting ? text.deleteCount(preview.rows.length, table!) : inserting ? text.copyCount(preview.rows.length, table!) : text.count(preview.rows.length, count!)}</p>
         {deleting && <p>{text.deleteEffects}</p>}
-        <div className="page-replace-preview"><table><thead><tr>{[text.row, ...(deleting ? preview.primaryKey : copying ? [text.column, text.after] : [text.column, text.before, text.after])].map((label, index) => <th scope="col" key={index}>{label}</th>)}</tr></thead>
+        <div className="page-replace-preview"><table><thead><tr>{[text.row, ...(deleting ? preview.primaryKey : inserting ? [text.column, text.after] : [text.column, text.before, text.after])].map((label, index) => <th scope="col" key={index}>{label}</th>)}</tr></thead>
           <tbody>{preview.rows.flatMap(({ position, change }) => {
             if (change.kind === 'delete') return [<tr key={position}><td>{position}</td>{preview.primaryKey.map(column => <td key={column}><pre>{cellText(change.before[column])}</pre></td>)}</tr>];
             const values = Object.entries(change.values);
@@ -121,12 +126,12 @@ export function MysqlQueryBatchEditDialog({ request, operation, displayRows, isC
           })}</tbody>
         </table></div>
         <details><summary>{text.sql}</summary><pre>{preview.plan.sql}</pre></details>
-        <label><input type="checkbox" checked={confirmed} disabled={busy || attempted} onChange={event => setConfirmed(event.target.checked)}/>{deleting ? text.deleteConfirm : copying ? text.copyConfirm : text.confirm}</label></>}
+        <label><input type="checkbox" checked={confirmed} disabled={busy || attempted} onChange={event => setConfirmed(event.target.checked)}/>{deleting ? text.deleteConfirm : creating ? text.newConfirm : copying ? text.copyConfirm : text.confirm}</label></>}
     </div>
     <footer className="modal-footer">
       <button onClick={close} disabled={busy && attempted}>{text.cancel}</button>
-      {copying && preview && !attempted && <button onClick={() => { setPreview(undefined); setConfirmed(false); }}>{text.copyBack}</button>}
-      {preview && <button className={deleting ? 'danger' : 'primary'} disabled={busy || attempted || !confirmed} onClick={() => void apply()}>{deleting ? text.deleteApply : copying ? text.copyApply : text.apply}</button>}
+      {inserting && preview && !attempted && <button onClick={() => { setPreview(undefined); setConfirmed(false); }}>{creating ? text.newBack : text.copyBack}</button>}
+      {preview && <button className={deleting ? 'danger' : 'primary'} disabled={busy || attempted || !confirmed} onClick={() => void apply()}>{deleting ? text.deleteApply : creating ? text.newApply : copying ? text.copyApply : text.apply}</button>}
     </footer>
   </Modal>;
 }

@@ -29,6 +29,9 @@ describe('MySQL 查询关联原行', () => {
     const objects = new SessionObjects(0), managed = { queryRowContext: 'context', sessionObjects: objects } as ManagedConnection;
     const relation = { database: 'db', table: 't' };
     expect(mysqlQueryRelationSource(managed, relation, fields, result, 'run')?.columns).toEqual(['id', 'label']);
+    expect(mysqlQueryRelationSource(managed, relation, fields, { ...result, rows: [] }, 'run')).toMatchObject({ table: 't', executionId: 'run' });
+    expect(mysqlQueryRelationSource(managed, relation, fields, { ...result, rows: [] }, 'run')?.rowReadable).toBeUndefined();
+    expect(mysqlQueryRelationSource(managed, relation, fields.map(field => ({ ...field, flags: 0 })), result, 'run')?.rowReadable).toBeUndefined();
     expect(mysqlQueryRelationSource(managed, { ...relation, table: 'view' }, fields, result, 'run')).toBeUndefined();
     objects.observe('CREATE TEMPORARY TABLE t (id INT)', 'db', mode, 'mysql');
     expect(mysqlQueryRelationSource(managed, relation, fields, result, 'run')).toBeUndefined();
@@ -116,5 +119,21 @@ describe('MySQL 查询关联原行', () => {
     const input = { connectionId: scope.connectionId, database: 'db', table: 't', queryRecord: ref, changes: [{ kind: 'insert', values: {} }] };
     expect(validateCommand('table.preview', input)).toEqual(input);
     expect(() => validateCommand('table.preview', { ...input, queryRecord: { ...ref, operation: 'delete' } })).toThrow();
+  });
+
+  it('直接新增只绑定来源执行，只允许一个 INSERT，普通无键表提交限制保持', () => {
+    const request = { connectionId: 'conn', sessionId: 'session', executionId: 'run', taskId: 'read', operation: 'new' };
+    expect(validateCommand('mysql.queryBatchEdit', request)).toEqual(request);
+    expect(() => validateCommand('mysql.queryBatchEdit', { ...request, rowIndices: [0] })).toThrow();
+    const values = { label: '新增' }, changes = [{ kind: 'insert' as const, values }];
+    const input = { connectionId: 'conn', database: 'db', table: 't', changes,
+      queryRecord: { sessionId: 'session', token: randomUUID(), operation: 'new' } };
+    expect(validateCommand('table.preview', input)).toEqual(input);
+    expect(() => validateCommand('table.preview', { ...input, changes: [...changes, ...changes] })).toThrow();
+    const info: TableInfo = { database: 'db', name: 't', engine: 'InnoDB', editableKey: [], primaryKey: [], indexes: [], foreignKeys: [], ddl: '',
+      columns: [{ name: 'label', type: 'varchar(50)', nullable: false, defaultValue: null, extra: '', comment: '', generated: false }] };
+    expect(() => buildChanges(info, changes)).toThrow('此表没有全部非空的主键或唯一键');
+    expect(buildChanges(info, changes, { allowUnkeyedInsert: true }).statements).toEqual([{ sql: 'INSERT INTO `db`.`t` (`label`) VALUES (?)', params: ['新增'] }]);
+    expect(() => buildChanges(info, [{ kind: 'delete', before: values }], { allowUnkeyedInsert: true })).toThrow();
   });
 });

@@ -9,7 +9,8 @@ const columnIndex = z.number().int().min(0).max(65535);
 export const mysqlQueryRecordEditSchema = mysqlQueryRelationSchema.extend({ columnIndex: columnIndex.optional() });
 export type MysqlQueryRecordEditInput = z.infer<typeof mysqlQueryRecordEditSchema>;
 export const mysqlQueryBatchLimits = { rows: 100, cells: 5000, bytes: 4 * 1024 * 1024 } as const;
-const queryBatchScope = mysqlQueryRelationSchema.omit({ rowIndex: true }).extend({
+const querySourceScope = mysqlQueryRelationSchema.omit({ rowIndex: true });
+const queryBatchScope = querySourceScope.extend({
   rowIndices: z.array(mysqlQueryRelationSchema.shape.rowIndex).min(1).max(mysqlQueryBatchLimits.rows)
     .refine(indices => new Set(indices).size === indices.length, '查询选区包含重复行'),
 });
@@ -18,7 +19,8 @@ export const mysqlQueryBatchEditSchema = z.union([
     .refine(value => value.rowIndices.length * value.columnIndices.length <= mysqlQueryBatchLimits.cells &&
       new Set(value.columnIndices).size === value.columnIndices.length, '查询编辑选区重复或超过预算'),
   queryBatchScope.extend({ operation: z.enum(['delete', 'insert']) }),
+  querySourceScope.extend({ operation: z.literal('new') }),
 ]);
 export type MysqlQueryBatchEditInput = z.infer<typeof mysqlQueryBatchEditSchema>;
-export const mysqlQueryRecordRefSchema = z.object({ sessionId: id, token: z.uuid(), operation: z.enum(['delete', 'insert']).optional() }).strict();
+export const mysqlQueryRecordRefSchema = z.object({ sessionId: id, token: z.uuid(), operation: z.enum(['delete', 'insert', 'new']).optional() }).strict();
 export type MysqlQueryRecordRef = z.infer<typeof mysqlQueryRecordRefSchema>;

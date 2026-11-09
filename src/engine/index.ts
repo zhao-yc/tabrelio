@@ -145,7 +145,7 @@ import { createFileImportConflictEvidence, finishFileImportConflictEvidence, imp
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
 interface MysqlQueryEditSnapshot {
   token: string; source: MysqlQueryRelationSource; expires: number; claimed: boolean;
-  schemaDigest: string; columns: TableInfo['columns']; writable: string[]; batch: boolean; operation: 'update' | 'delete' | 'insert';
+  schemaDigest: string; columns: TableInfo['columns']; writable: string[]; batch: boolean; operation: 'update' | 'delete' | 'insert' | 'new';
   rows: Map<string, { rowIndex: number; searchKey: SqlSearchKey }>;
 }
 interface ConflictImportLease { connectionId: string; controller: AbortController; done: Promise<void>; phase: 'connecting' | 'running' | 'closing'; evidence: FileImportConflictEvidence; }
@@ -1858,14 +1858,15 @@ export class Engine {
   }
 
   /** 浏览与编辑均绑定同一连接、会话、执行和原行位置。 */
-  private queryRelationScope(request: Omit<MysqlQueryRelationInput, 'taskId'>) {
+  private queryRelationScope(request: Pick<MysqlQueryRelationInput, 'connectionId' | 'sessionId' | 'executionId'> & { rowIndex?: number }) {
     const session = this.sessions.get(request.sessionId), source = session && this.queryRelationSources.get(session.managed);
     const current = () => {
       const managed = session?.managed;
       if (!session || this.sessions.get(request.sessionId) !== session || session.connectionId !== request.connectionId ||
           !managed || managed.broken || session.busy || managed.transactionStateKnown !== true || managed.serverStatus === undefined ||
           (managed.serverStatus & 1) !== 0 || !source || this.queryRelationSources.get(managed) !== source ||
-          managed.queryRowContext !== source.context || source.executionId !== request.executionId || !source.result.rows[request.rowIndex])
+          managed.queryRowContext !== source.context || source.executionId !== request.executionId ||
+          request.rowIndex !== undefined && (!source.rowReadable || !source.result.rows[request.rowIndex]))
         throw Error('MySQL／MariaDB 原查询结果已失效或会话正在执行，请重新查询');
     };
     current();
@@ -1917,9 +1918,10 @@ export class Engine {
     const batch = kind === 'batch' ? mysqlQueryBatchEditSchema.parse(raw) : undefined;
     const single = batch ? undefined : kind === 'record' ? mysqlQueryRecordEditSchema.parse(raw) : mysqlQueryRelationSchema.parse(raw);
     const request = batch ?? single!;
-    const rowIndices = batch?.rowIndices ?? [single!.rowIndex];
+    const rowIndices = batch ? ('rowIndices' in batch ? batch.rowIndices : []) : [single!.rowIndex];
     const columnIndex = single && 'columnIndex' in single && typeof single.columnIndex === 'number' ? single.columnIndex : undefined;
     const operation = batch && 'operation' in batch ? batch.operation : 'update';
+    const inserting = operation === 'insert' || operation === 'new';
     const columnIndices = batch && 'columnIndices' in batch ? batch.columnIndices : (columnIndex === undefined ? undefined : [columnIndex]);
     const { source, current, session } = this.queryRelationScope({ ...request, rowIndex: rowIndices[0] });
     // 原行和原字段只按原执行的协议序号定位，排序及显示别名不能扩大写入范围。
@@ -1936,17 +1938,20 @@ export class Engine {
       await read('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
       await read('START TRANSACTION READ ONLY');
       const context = { managed, ...control }, info = await this.readQueryTableInfo(context, source);
+      if (operation === 'new' && (info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' ||
+          source.columns.some(name => !info.columns.some(field => field.name === name))))
+        throw Error('新增记录需要可核验的 InnoDB 来源表');
       const rows: DataRow[] = [], snapshots: MysqlQueryEditSnapshot['rows'] = new Map();
       let edit: MysqlQueryEditSnapshot | undefined;
       if (kind !== 'relation') {
-        const writable = operation === 'delete' ? [] : await this.queryEditWritable(context, info, operation);
+        const writable = operation === 'delete' ? [] : await this.queryEditWritable(context, info, inserting ? 'insert' : 'update');
         if (columns?.some(name => !writable.includes(name) || kind === 'batch' && (info.primaryKey.includes(name) ||
             info.columns.some(field => field.name === name && /\bauto_increment\b/i.test(field.extra)))))
           throw Error('当前查询字段不可编辑，请核对字段是否为定位键、生成列以及账号的列级更新权限');
-        if (operation !== 'delete' && !writable.length) throw Error(operation === 'insert' ? '当前账号没有查询原表的新增权限' : '当前账号没有查询原表的字段更新权限');
-        const copyColumns = operation === 'insert' ? writable.filter(name => !info.columns.some(field => field.name === name && /\bauto_increment\b/i.test(field.extra))) : undefined;
+        if (operation !== 'delete' && !writable.length) throw Error(inserting ? '当前账号没有查询原表的新增权限' : '当前账号没有查询原表的字段更新权限');
+        const copyColumns = inserting ? writable.filter(name => !info.columns.some(field => field.name === name && /\bauto_increment\b/i.test(field.extra))) : undefined;
         edit = { token: randomUUID(), source, expires: 0, claimed: false, batch: kind === 'batch', operation,
-          schemaDigest: mysqlQueryEditSchemaDigest(managed, info), columns: info.columns, writable: columns ?? copyColumns ?? writable, rows: snapshots };
+          schemaDigest: mysqlQueryEditSchemaDigest(managed, info, operation === 'new'), columns: info.columns, writable: columns ?? copyColumns ?? writable, rows: snapshots };
       }
       let bytes = 0;
       for (const rowIndex of rowIndices) {
@@ -1982,16 +1987,18 @@ export class Engine {
     const session = this.sessions.get(ref.sessionId), edit = session && this.queryEdits.get(session.managed);
     const changes: RowChange[] = input.changes;
     const invalid = () => Error('查询原记录编辑引用或字段范围已变化，请重新打开编辑');
-    if (!edit || edit.claimed || edit.token !== ref.token || edit.expires <= Date.now() || input.searchRecordRef ||
-        input.database !== edit.source.database || input.table !== edit.source.table || !changes.length || changes.length > edit.rows.size ||
-        edit.operation !== (ref.operation ?? 'update') || edit.operation !== 'update' && changes.length !== edit.rows.size ||
+    if (!edit || edit.claimed || edit.token !== ref.token || edit.expires <= Date.now() || input.searchRecordRef) throw invalid();
+    const creating = edit.operation === 'new', operation = creating ? 'insert' : edit.operation;
+    const count = creating ? 1 : edit.rows.size;
+    if (input.database !== edit.source.database || input.table !== edit.source.table || !changes.length || changes.length > count ||
+        edit.operation !== (ref.operation ?? 'update') || operation !== 'update' && changes.length !== count ||
         edit.batch && Buffer.byteLength(JSON.stringify(changes)) > 2 * mysqlQueryBatchLimits.bytes)
       throw invalid();
     const seen = new Set<string>();
     const searchKeys: SqlSearchKey[] = [];
     let insertCells = 0;
     for (const change of changes) {
-      if (change.kind !== edit.operation || change.kind !== 'delete' &&
+      if (change.kind !== operation || change.kind !== 'delete' &&
           (change.kind === 'update' && !Object.keys(change.values).length || Object.keys(change.values).some(name => !edit.writable.includes(name))))
         throw invalid();
       if (change.kind === 'insert') {
@@ -2004,21 +2011,24 @@ export class Engine {
       seen.add(digest);
       searchKeys.push(original.searchKey);
     }
-    const rowIndex = edit.rows.values().next().value!.rowIndex;
+    const rowIndex = edit.rows.values().next().value?.rowIndex;
     const scope = this.queryRelationScope({ connectionId: input.connectionId, sessionId: ref.sessionId, executionId: edit.source.executionId, rowIndex });
     const current = () => {
       scope.current();
       if (this.queryEdits.get(scope.session.managed) !== edit || edit.expires <= Date.now()) throw Error('查询原记录编辑已失效');
     };
     current();
-    return { ...scope, edit, current, changes, options: edit.operation === 'insert' ? { strictSync: true as const } : edit.batch ? { searchKeys } : { searchKey: searchKeys[0] } };
+    const options = operation === 'insert' ? { strictSync: true as const, ...(creating ? { allowUnkeyedInsert: true as const } : {}) }
+      : edit.batch ? { searchKeys } : { searchKey: searchKeys[0] };
+    return { ...scope, edit, current, changes, options };
   }
 
   private async verifyQueryEdit(context: StructureTaskContext, scope: ReturnType<Engine['queryEditScope']>, lock = false) {
     scope.current();
     const { edit, changes } = scope;
     const info = await this.readQueryTableInfo(context, scope.source);
-    if (mysqlQueryEditSchemaDigest(context.managed, info) !== edit.schemaDigest) throw Error('查询原记录或表结构已变化，请重新打开编辑');
+    if (mysqlQueryEditSchemaDigest(context.managed, info, edit.operation === 'new') !== edit.schemaDigest)
+      throw Error('查询原记录或表结构已变化，请重新打开编辑');
     if (edit.operation === 'delete' && lock) await this.requireQueryDeletePrivilege(context, info);
     for (const [digest, { rowIndex }] of edit.rows) {
       scope.current();
@@ -2027,9 +2037,10 @@ export class Engine {
       if (mysqlQueryEditRowDigest(info, row) !== digest) throw Error('查询原记录或表结构已变化，请重新打开编辑');
     }
     if (edit.operation !== 'delete') {
-      const writable = await this.queryEditWritable(context, info, edit.operation);
-      if (edit.operation === 'insert' && !writable.length || changes.some(change => change.kind !== 'delete' && Object.keys(change.values).some(name => !writable.includes(name))))
-        throw Error(edit.operation === 'insert' ? '查询原表的新增权限已变化' : '查询原记录的字段更新权限已变化');
+      const privilege = edit.operation === 'update' ? 'update' : 'insert';
+      const writable = await this.queryEditWritable(context, info, privilege);
+      if (privilege === 'insert' && !writable.length || changes.some(change => change.kind !== 'delete' && Object.keys(change.values).some(name => !writable.includes(name))))
+        throw Error(privilege === 'insert' ? '查询原表的新增权限已变化' : '查询原记录的字段更新权限已变化');
     }
     scope.current();
     return info;
@@ -2143,7 +2154,8 @@ export class Engine {
     const source = relationTarget && task.relationFields && executed === 1 && results.length === 1 && transactionOpen === false &&
       !task.cancelled && !task.managed.broken ? mysqlQueryRelationSource(task.managed, relationTarget, task.relationFields, results[0], task.id) : undefined;
     if (source) this.queryRelationSources.set(task.managed, source);
-    return { results, elapsedMs: performance.now() - started, transactionOpen, ...(source ? { mysqlQueryRelation: true as const } : {}) };
+    return { results, elapsedMs: performance.now() - started, transactionOpen,
+      ...(source ? { mysqlQueryInsert: true as const } : {}), ...(source?.rowReadable ? { mysqlQueryRelation: true as const } : {}) };
   }
 
   /** 显式警告模式仍首错即停；采集与用户SQL分开计事实，默认路径不进入此分支。 */
@@ -2549,7 +2561,7 @@ export class Engine {
         await this.statement(task, 'SET SESSION lock_wait_timeout = 5, innodb_lock_wait_timeout = 5');
       }
       info = await metadata.tableInfo(task.managed, input.database, input.table);
-      if (queryEdit && mysqlQueryEditSchemaDigest(task.managed, info) !== queryEdit.edit.schemaDigest)
+      if (queryEdit && mysqlQueryEditSchemaDigest(task.managed, info, queryEdit.edit.operation === 'new') !== queryEdit.edit.schemaDigest)
         throw Error('查询原表结构已变化，请重新打开编辑');
     }
     catch (error) {

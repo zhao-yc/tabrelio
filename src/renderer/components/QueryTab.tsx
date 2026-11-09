@@ -1462,8 +1462,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setRecordRelation(current => current === view ? undefined : current);
   }
 
-  const mysqlRelationAvailable = !pin && !transaction && transactionKnown && !queryRunning && !busy &&
-    retiredRecordTask.current !== task.current && outcome?.mysqlQueryRelation === true;
+  const mysqlSourceAvailable = !pin && !transaction && transactionKnown && !queryRunning && !busy && retiredRecordTask.current !== task.current;
+  const mysqlRelationAvailable = mysqlSourceAvailable && outcome?.mysqlQueryRelation === true;
+  const mysqlInsertAvailable = mysqlSourceAvailable && outcome?.mysqlQueryInsert === true;
   /** 查询排序只改变视图次序，回查使用原执行中准确的行对象。 */
   function openMysqlRelation(direction: 'parent' | 'children' | 'edit'): void {
     if (!activeDetailRow || activeDetailRow.binding !== detailBinding) return;
@@ -1521,6 +1522,17 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (!indices.length || indices.length > mysqlQueryBatchLimits.rows) return;
     try { startMysqlQueryBatch(indices, { kind }); }
     catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 新增只绑定原执行的来源表，空结果也能打开独立草稿。 */
+  function openMysqlNewRecord(): void {
+    if (!mysqlInsertAvailable || !sourceResult || !sessionRef.current || resultModal || !queryMenuCurrent()) return;
+    try {
+      const job = acquireWorkspaceBusy(tab.id);
+      setMysqlBatch({ request: { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current,
+        taskId: uid(), operation: 'new' }, operation: { kind: 'new' }, result: sourceResult, job, displayRows: [1] });
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
   function closeMysqlBatch(view: NonNullable<typeof mysqlBatch>, committed: boolean): void {
@@ -2546,7 +2558,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {mysqlRelationAvailable && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
   title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('delete')}>{mysqlBatchText.deleteChecked}</button>}
 {mysqlRelationAvailable && <button disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
-  title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('insert')}>{mysqlBatchText.insert}</button>}</ActionMenuSection>
+  title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('insert')}>{mysqlBatchText.insert}</button>}
+{mysqlInsertAvailable && <button disabled={resultModal} onClick={openMysqlNewRecord}>{mysqlBatchText.new}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
 {sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={memoryText.hint} onClick={rememberResultOrganization}>{memoryText.save}</button></>:null}{resultMemory&&<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)} title={queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)?memoryText.scope:memoryText.mismatch} onClick={applyRememberedOrganization}>{memoryText.apply}</button><button disabled={!rememberedOrganizationCanDiscard()} onClick={discardRememberedOrganization}>{memoryText.clear}</button></>}<div className="action-menu-field" role="group" aria-label={zh.app.text020}><label className="inline-field">{zh.query.text020}<input aria-label={zh.query.text021} type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => useWorkspace.getState().updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/>{zh.query.text022}</label></div></ActionMenuSection>

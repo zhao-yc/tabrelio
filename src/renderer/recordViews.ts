@@ -5,7 +5,7 @@ import { recordViewZh as text } from './locales/recordViews.zh-CN';
 import { binaryCellLimits } from './binaryCell';
 
 export interface RecordTarget { connectionId: string; database: string; table: string }
-export interface RecordContext { target: RecordTarget; connectionVersion: number; generation: number; info: TableInfo | null; loaded: boolean; stale: boolean; busy: boolean }
+export interface RecordContext { target: RecordTarget; connectionVersion: number; generation: number; info: TableInfo | null; loaded: boolean; stale: boolean; busy: boolean; allowUnkeyedInsert?: true }
 export type RecordMode = 'text' | 'json' | 'binary' | 'null' | 'default';
 export interface RecordInput { mode: RecordMode; text: string }
 export interface RecordDraft {
@@ -48,7 +48,7 @@ export function recordReadonlyReason(context: RecordContext, row?: DraftRow, key
   if (context.info.objectKind === 'view') return text.viewReadonly;
   if (context.info.objectKind !== 'table') return text.unknownObject;
   if (context.info.engine.toUpperCase() !== 'INNODB') return text.engineReadonly;
-  if (!context.info.editableKey.length) return text.noKey;
+  if (!context.info.editableKey.length && !(context.allowUnkeyedInsert && row?.inserted)) return text.noKey;
   if (row?.deleted) return text.deletedReadonly;
   if (key !== undefined) { const column = context.info.columns.find(item => item.name === key); if (!column) return text.unknownField; if (column.generated) return text.generated; }
   return '';

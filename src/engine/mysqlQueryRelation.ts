@@ -49,6 +49,7 @@ export interface MysqlQueryRelationSource {
   table: string;
   columns: string[];
   result: QueryResult;
+  rowReadable?: true;
 }
 
 /** 记录原生列位置，结果别名和显示顺序不参与库表身份。 */
@@ -66,11 +67,11 @@ export function mysqlQueryRelationOrigin(managed: ManagedConnection, target: Non
 
 export function mysqlQueryRelationSource(managed: ManagedConnection, target: NonNullable<ReturnType<typeof mysqlQueryRelationTarget>>,
   fields: readonly FieldPacket[], result: QueryResult, executionId: string): MysqlQueryRelationSource | undefined {
-  // mysql2 的原始 PRI_KEY 标志只用于发现入口，真正完整主键以回查目录为准。
-  if (fields.length !== result.columns.length || !result.rows.length ||
-      !fields.some(field => typeof field.flags === 'number' && (field.flags & 2) !== 0)) return;
+  if (fields.length !== result.columns.length) return;
   const origin = mysqlQueryRelationOrigin(managed, target, fields);
-  return origin && { ...origin, executionId, result };
+  // 新增只用表来源。原行操作仍要求实际返回行和协议主键标志，完整键以目录回查为准。
+  const rowReadable = result.rows.length > 0 && fields.some(field => typeof field.flags === 'number' && (field.flags & 2) !== 0);
+  return origin && { ...origin, executionId, result, ...(rowReadable ? { rowReadable: true as const } : {}) };
 }
 
 /** 数值主键沿用精确十进制绑定，避免以双精度字符串比较相邻 BIGINT。 */
@@ -110,9 +111,10 @@ export function mysqlQueryEditRowDigest(info: Pick<TableInfo, 'columns'>, row: D
   return createHash('sha256').update(JSON.stringify(info.columns.map(column => row[column.name]))).digest('hex');
 }
 
-export function mysqlQueryEditSchemaDigest(managed: ManagedConnection, info: TableInfo): string {
-  if (managed.sqlMode === undefined || !info.primaryKey.length || info.primaryKey.length !== info.editableKey.length ||
-      info.primaryKey.some((name, index) => name !== info.editableKey[index])) throw blocked();
+export function mysqlQueryEditSchemaDigest(managed: ManagedConnection, info: TableInfo, unkeyedInsert = false): string {
+  if (managed.sqlMode === undefined || info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' ||
+      !unkeyedInsert && (!info.primaryKey.length || info.primaryKey.length !== info.editableKey.length ||
+      info.primaryKey.some((name, index) => name !== info.editableKey[index]))) throw blocked();
   return createHash('sha256').update(JSON.stringify([info.columns, info.primaryKey,
     recordDefinitionDigest(info.ddl, managed.sqlMode, managed.status.dialect)])).digest('hex');
 }

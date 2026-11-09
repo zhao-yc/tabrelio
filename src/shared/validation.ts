@@ -291,8 +291,10 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
 const tableChangeShape = { ...target, changes, searchRecordRef: z.uuid().optional(), queryRecord: mysqlQueryRecordRefSchema.optional() };
 const checkTableChangeSource = (input: z.infer<typeof tableChangeSchema>, context: z.RefinementCtx) => {
   if (!input.queryRecord) return;
-  const operation = input.queryRecord.operation ?? 'update';
+  const creating = input.queryRecord.operation === 'new';
+  const operation = creating ? 'insert' : input.queryRecord.operation ?? 'update';
   if (input.searchRecordRef || !input.changes.length || input.changes.length > mysqlQueryBatchLimits.rows ||
+      creating && input.changes.length !== 1 ||
       input.changes.some(change => change.kind !== operation || change.kind === 'update' && !Object.keys(change.values).length))
     context.addIssue({ code: 'custom', message: '查询原记录的变更必须与选定操作一致' });
 };
