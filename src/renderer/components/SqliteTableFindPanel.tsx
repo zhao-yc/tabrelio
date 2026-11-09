@@ -2,6 +2,7 @@ import { findKindAllowsReplacement } from '../pageFindReplace';
 import { GridFindMatchActions, type GridMatchRowsAction } from './GridRowSelectionActions';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
+import type { FilterRule } from '../../shared/contracts';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import { sqliteFindMessages, type SqliteFindOptions, type SqliteFindOccurrence } from '../sqliteTableFind';
 import { SqliteTableFindWorkerClient, sqliteTextReplacementPlanPreview, type SqliteFindReadyResult, type SqliteTextReplacementPlan } from '../sqliteTableFindWorkerClient';
@@ -10,6 +11,8 @@ import { useTableFindKeys } from '../gridFindKeys';
 import { tableFindHighlights } from '../tableFindHighlights';
 import { queryResultFindZh as findText } from '../locales/queryResultFind.zh-CN';
 import { ErrorBox, Field, Modal, UsageHelp } from './ui';
+import { tableFindFilterRule } from '../tableFindFilter';
+import { tableFindFilterZh as filterText } from '../locales/tableFindFilter.zh-CN';
 import '../sqliteTableFind.css';
 import '../queryResultFind.css';
 
@@ -24,13 +27,14 @@ interface Props {
   onStage(plan: SqliteTextReplacementPlan, continuation?: SqliteTableFindSeed): boolean | void;
   onPreviewChange?(open: boolean): void; onClearHit?(): void; onClose(): void;
   onMatchRows?: GridMatchRowsAction<string>;
+  onStageFilter?(rule: FilterRule): void;
   onHighlights?(highlights: SqliteTableFindHighlights | undefined): void;
 }
 type Preview = { plan: SqliteTextReplacementPlan; patches: ReturnType<typeof sqliteTextReplacementPlanPreview> };
 interface Draft extends SqliteTableFindSeed { epoch: object; found?: SqliteFindReadyResult; position: number; preview?: Preview; error: string; }
 const defaultOptions: SqliteFindOptions = { kind: 'text', query: '', caseSensitive: false, wholeCell: false };
 /** 非模态当前页查找；所有正则与捕获仅交给真实有界Worker，替换只产生可核对的本地opaque计划。 */
-export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onMatchRows, onHighlights }: Props) {
+export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onMatchRows, onHighlights, onStageFilter }: Props) {
   const owner = useRef({ page, rows, visibleColumns, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onMatchRows }).current;
   const invalid = useRef(false), propsInvalid = useRef(false), closed = useRef(false), mounted = useRef(false), consumed = useRef(new WeakSet<SqliteTextReplacementPlan>()), staging = useRef(false);
   const [draft, setDraft] = useState<Draft>(() => ({ options: { ...(seed?.options ?? defaultOptions) }, replacement: seed?.replacement ?? '', mode: seed?.mode ?? focusRequest.mode, epoch: {}, position: -1, error: '' })), live = useRef(draft); live.current = draft;
@@ -157,6 +161,8 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
   useEffect(() => { const request = pendingFocus.current; if (!request || !sourceCurrent() || live.current.preview || draft.mode !== request.mode) return; pendingFocus.current = undefined; const input = request.mode === 'replace' ? replacementInput.current : queryInput.current; (input && !input.disabled ? input : kindInput.current)?.focus(); }, [focusRequest.id, focusRequest.mode, draft.mode]);
   useEffect(() => { if (seed && sourceCurrent() && !seed.options.regex && !seed.options.captureReplacement) schedule(); return () => { mounted.current = false; closed.current = true; ++serial.current; clearTimeout(timer.current); void client.current?.dispose(); owner.onPreviewChange?.(false); }; }, []);
   const unavailable = !valid || !!draft.preview || staging.current, options = draft.options, epoch = draft.epoch;
+  const findFilter = options.column !== undefined && (!visibleColumns || visibleColumns.includes(options.column))
+    ? tableFindFilterRule(options, page.columns[options.column], 'sqlite') : undefined;
   const replaceableKind = findKindAllowsReplacement(options.kind);
   const replaceable = !readonly && replaceableKind && !!found?.matches.some(match => match.replaceable);
   return <section ref={panel} className="sqlite-table-find" aria-label={text.title} onCompositionStart={() => { if (inputCurrent()) { composing.current = true; cancelWork(); } }} onCompositionEnd={() => { if (inputCurrent()) { composing.current = false; cancelWork(); schedule(); } }}>
@@ -171,6 +177,10 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
       <button type="button" disabled={unavailable || !!working || options.kind === 'text' && !options.query} onClick={() => { if (local()) void run('find'); }}>{text.search}</button>{working && <button type="button" disabled={working === 'stopping'} onClick={() => { if (local()) { previewClosed(); cancelWork(text.stopped, true); } }}>{text.stop}</button>}
       <button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(1)}>{text.next}</button>
       {onMatchRows && <GridFindMatchActions disabled={unavailable || !!working || !found?.matches.length} onChange={matchRows}/>}
+      {onStageFilter && <button type="button" title={findFilter ? filterText.sqliteHint : filterText.unavailable}
+        disabled={unavailable || !findFilter} onClick={() => {
+          if (findFilter && local() && inputCurrent(epoch) && !composing.current) onStageFilter(findFilter);
+        }}>{filterText.action}</button>}
       <span className="grow"/><button type="button" disabled={staging.current} onClick={close}>{text.close}</button>
     </div><p className="sqlite-table-find-status">{text.scopeCount(owner.rows.length, owner.visibleColumns?.length ?? owner.page.columns.length)}</p>
     {current && <div className="sqlite-table-find-current"><p>{text.location(currentRow + 1, owner.page.columns[current.column]?.name ?? '', current.occurrence)}</p>{currentValue?.kind === 'text' && current.range && <pre>{currentValue.value.slice(Math.max(0, current.range.start - 60), current.range.start)}<mark>{currentValue.value.slice(current.range.start, current.range.end)}</mark>{currentValue.value.slice(current.range.end, current.range.end + 60)}</pre>}{!current.replaceable && <p>{text.currentReadonly}</p>}</div>}

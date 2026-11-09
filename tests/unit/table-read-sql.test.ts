@@ -11,6 +11,18 @@ const literal = (value: string) => `_utf8mb4 X'${Buffer.from(value).toString('he
 const group = (mode: 'all' | 'any', ...children: (number | FilterGroup)[]): FilterGroup => ({ mode, children });
 
 describe('原表页筛选与排序共享编译', () => {
+  it('整格文本等值保留空串、尾随空格和字面通配符，并且只绑定一次', () => {
+    for (const value of ['', 'A%_🚢 ']) {
+      const filters: FilterRule[] = [{ column: 'note', operator: 'TEXT EQUALS', value }];
+      const predicate = (parameter: string) => 'CAST(CONVERT(`note` USING utf8mb4) AS BINARY) = CAST(CONVERT(' + parameter + ' USING utf8mb4) AS BINARY)';
+      expect(buildTableFilterSql(info(), filters)).toEqual({ where: '((' + predicate('?') + '))', params: [value] });
+      expect(buildFilteredTableSelect(input({ filters })).sql).toContain(predicate(literal(value)));
+      const bind = vi.fn(() => '$1');
+      expect(postgresTableCondition({ rules: filters, mode: 'all' }, name => '"' + name + '"', bind))
+        .toBe('"note"::text COLLATE pg_catalog."C" = $1');
+      expect(bind).toHaveBeenCalledExactlyOnceWith(value);
+    }
+  });
   it.each([
     ['CONTAINS', '> 0', false], ['NOT CONTAINS', '= 0', false],
     ['STARTS WITH', '= 1', false], ['NOT STARTS WITH', '<> 1', false],

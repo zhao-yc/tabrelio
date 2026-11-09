@@ -24,6 +24,7 @@ import { postgresReferencePickerZh as referenceText } from '../../src/renderer/l
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
 import { tableSelectedFilterZh } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { tableFindFilterZh } from '../../src/renderer/locales/tableFindFilter.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -310,6 +311,45 @@ test('PostgreSQL 表页字面前后缀筛选区分大小写、空文本和 NULL'
       await tab.getByRole('button', { name: zh.common.clearAll, exact: true }).click();
       await apply();
       await expect(ids).toHaveText(all);
+    }
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 单列查找可带入整格、空文本和 NULL 全表筛选', async () => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.find_filter (id int PRIMARY KEY, note text);
+      INSERT INTO public.find_filter VALUES (1,'A%_🚢'),(2,'a%_🚢'),(3,'A%_🚢 '),(4,''),(5,' '),(6,NULL)`);
+    await loadQuery(config, '', 'find_filter');
+    const tab = page.locator('.postgres-table-tab:visible'), ids = tab.getByRole('grid').locator('[role="gridcell"][aria-colindex="2"]');
+    await expect(ids).toHaveText(['1', '2', '3', '4', '5', '6']);
+    const findButton = tab.getByRole('button', { name: findText.title, exact: true });
+    await findButton.click();
+    const find = tab.getByRole('region', { name: findText.title, exact: true });
+    const stage = find.getByRole('button', { name: tableFindFilterZh.action, exact: true });
+    await find.getByLabel(findText.column, { exact: true }).selectOption({ label: 'note' });
+    await find.getByLabel(findText.query, { exact: true }).fill('A%_🚢');
+    await expect(stage).toBeDisabled();
+    await find.getByRole('checkbox', { name: findText.caseSensitive, exact: true }).check();
+    await find.getByRole('checkbox', { name: findText.whole, exact: true }).check();
+    for (const [kind, operator, value, matched] of [
+      ['text', 'TEXT EQUALS', 'A%_🚢', '1'], ['empty', 'TEXT EQUALS', '', '4'], ['null', 'IS NULL', undefined, '6'],
+    ] as const) {
+      if (!await find.isVisible()) await findButton.click();
+      await find.getByLabel(findText.mode, { exact: true }).selectOption(kind);
+      await find.getByLabel(findText.column, { exact: true }).selectOption({ label: 'note' });
+      await stage.click();
+      await expect(tab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue(operator);
+      if (value !== undefined) await expect(tab.getByLabel(zh.table.text011, { exact: true })).toHaveValue(value);
+      await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+      await expect(ids).toHaveCount(6);
+      await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+      await expect(ids).toHaveText([matched]);
+      await tab.getByRole('button', { name: zh.common.clearAll, exact: true }).click();
+      await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+      await expect(ids).toHaveCount(6);
     }
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }

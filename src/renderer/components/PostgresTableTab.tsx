@@ -54,7 +54,7 @@ import { postgresTableSpecialOrderedType, postgresTableCellFilterDraft, postgres
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
-import type { FilterDraft } from '../tableFilters';
+import { filterDraftFromRule, type FilterDraft } from '../tableFilters';
 import { TableSortPanel } from './TableSortPanel';
 import { TablePresetPanel } from './TablePresetPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
@@ -1716,6 +1716,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent} replaceWritable={postgresFindWritable}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
         onOpen={openFind} onClose={() => setFindRequest(undefined)} onStage={stageFind} onMatchRows={changeFindMatches}
+        onStageFilter={rule => {
+          if (!findIsCurrent() || !canFilterCell()) return;
+          setCellFilterSeed(filterDraftFromRule(rule)); setAdvancedFilters(true);
+        }}
         onPreview={patches => {
           if (!findIsCurrent() || !canEditGrid) throw Error(findText.stale);
           return postgresFindPlan(page, findRows, gridLayout.columns, patches,

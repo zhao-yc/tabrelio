@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import type { ResultColumn } from '../../shared/contracts';
+import type { FilterRule, ResultColumn } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
 import { cellPreview, errorMessage } from '../lib';
 import { findKindAllowsReplacement, pageFindLimits, pageOccurrences, type PageFindOptions, type PageOccurrence, type PageTextPatch } from '../pageFindReplace';
@@ -11,6 +11,8 @@ import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { GridFindMatchActions, type GridMatchRowsAction } from './GridRowSelectionActions';
 import { ErrorBox } from './ui';
 import type { GridFindTarget } from './ResultsGrid';
+import { tableFindFilterRule } from '../tableFindFilter';
+import { tableFindFilterZh as filterText } from '../locales/tableFindFilter.zh-CN';
 
 export interface PostgresFindRequest { replace: boolean; }
 type Mode = 'text' | 'empty' | 'null' | 'field';
@@ -26,13 +28,14 @@ interface Props<Column extends ResultColumn, Plan extends Review> {
   onPreview(patches: readonly PageTextPatch[]): Plan;
   onStage(scope: object, plan: Plan): void;
   onMatchRows?: GridMatchRowsAction<string>;
+  onStageFilter?(rule: FilterRule): void;
   renderGrid(target?: GridFindTarget, highlights?: ReadonlySet<string>): ReactNode;
 }
 
 /** 数据使用现有有界工作线程，字段名在本地目录中匹配。每次更换来源都撤销旧替换计划。 */
 export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends Review>(props: Props<Column, Plan>) {
   const { request, scope, pageKey, enabled, writable, rows, replacementRows, columns, isCurrent, anchor, replaceWritable, host,
-    shortcuts = true, scopeDescription = text.scope, replaceScopeDescription = text.replaceScope, onOpen, onClose, onPreview, onStage, onMatchRows, renderGrid } = props;
+    shortcuts = true, scopeDescription = text.scope, replaceScopeDescription = text.replaceScope, onOpen, onClose, onPreview, onStage, onMatchRows, onStageFilter, renderGrid } = props;
   const [mode, setMode] = useState<Mode>('text'), [column, setColumn] = useState('');
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
   const [regex, setRegex] = useState(false), [capture, setCapture] = useState(false);
@@ -64,6 +67,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const pending = preparing === snapshot;
   const locked = pending || !!review;
   const options: PageFindOptions = { kind, query, caseSensitive: sensitive, wholeCell: whole, regex: mode === 'text' && regex, column: column || undefined };
+  const findFilter = onStageFilter && mode !== 'field'
+    ? tableFindFilterRule(options, columns.find(item => item.key === column), 'postgresql') : undefined;
 
   useEffect(() => {
     if (!request || !enabled) return;
@@ -213,6 +218,10 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(-1)}>{text.previous}</button>
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(1)}>{text.next}</button>
         {onMatchRows && mode !== 'field' && <GridFindMatchActions disabled={!enabled || !found?.hits.length || locked || composing} onChange={matchRows}/>}
+        {onStageFilter && <button type="button" title={findFilter ? filterText.hint : filterText.unavailable}
+          disabled={!enabled || locked || composing || !findFilter} onClick={() => {
+            if (findFilter && enabled && !locked && !composing && latest.current === snapshot && isCurrent()) onStageFilter(findFilter);
+          }}>{filterText.action}</button>}
         <button type="button" onClick={onClose}>{text.close}</button>
       </div>
       {replaceVisible && <div className="query-result-find-toolbar">

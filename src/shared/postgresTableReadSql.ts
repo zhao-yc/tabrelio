@@ -18,6 +18,7 @@ export function postgresTableCondition(filter: PostgresTableFilter | undefined, 
       const { comparison, reverse } = tableTextFilterMatch[operator];
       const input = bind(rule.value ?? '');
       const source = reverse ? `pg_catalog.reverse(${name}::text)` : `${name}::text`;
+      if (operator === 'TEXT EQUALS') return `${source} COLLATE pg_catalog."C" = ${input}`;
       return `pg_catalog.strpos(${source} COLLATE pg_catalog."C", ${reverse ? `pg_catalog.reverse(${input})` : input}) ${comparison}`;
     }
     if (operator === 'IN' || operator === 'NOT IN')

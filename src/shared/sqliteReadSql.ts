@@ -49,7 +49,9 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
     if (filter.operator === 'between' || filter.operator === 'notBetween') return ['(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'between' ? ' BETWEEN ' : ' NOT BETWEEN ') + operand + ' AND ' + render({ kind: 'operand', value: filter.secondValue! }) + ')'];
     let comparison: string;
     if (isSqliteTextFilter(filter.operator)) {
-      if (filter.operator === 'endsWith' || filter.operator === 'notEndsWith') {
+      if (filter.operator === 'textEquals') {
+        comparison = 'CAST(' + column + ' AS BLOB) = CAST(' + operand + ' AS BLOB)';
+      } else if (filter.operator === 'endsWith' || filter.operator === 'notEndsWith') {
         // TEXT length遇NUL即停止；完整字节比较保留后缀。SQLite空BLOB的substr返回NULL，显式恢复空字节。
         const bytes = 'CAST(' + column + ' AS BLOB)', length = 'length(CAST(' + operand + ' AS BLOB))';
         comparison = 'coalesce(substr(' + bytes + ', length(' + bytes + ') - ' + length + ' + 1), zeroblob(0)) ' + (filter.operator === 'endsWith' ? '=' : '<>') + ' CAST(' + render({ kind: 'operand', value }) + ' AS BLOB)';

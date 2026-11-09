@@ -41,6 +41,7 @@ import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locale
 import { sqliteTableFindZh as sqliteFind } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { tableFindFilterZh } from '../../src/renderer/locales/tableFindFilter.zh-CN';
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
@@ -1600,6 +1601,37 @@ test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', asyn
   await expect(id(120)).toBeVisible();
   await expect(id(3)).toHaveCount(0);
   expect(await tasks()).toHaveLength(before.length + 2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 从只读视图单列查找带入全表筛选，命中原先未加载的行', async ({}, info) => {
+  await seed(undefined, "UPDATE subject SET name='z%_🚢' WHERE id=1; UPDATE subject SET name='Z%_🚢 ' WHERE id=119; UPDATE subject SET name='Z%_🚢' WHERE id=120;");
+  await page.locator('[data-workspace-tab-id="v-jump"]').getByRole('button', { name: '视图定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+  const id = (value: number) => grid.getByRole('gridcell', { name: String(value), exact: true });
+  const reads = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
+  await expect(id(1)).toBeVisible();
+  const before = await reads();
+  await (await navigationMenuItem(table, { name: sqliteFind.entry, exact: true })).click();
+  const find = table.getByRole('region', { name: sqliteFind.title, exact: true });
+  const stage = find.getByRole('button', { name: tableFindFilterZh.action, exact: true });
+  await find.getByLabel(sqliteFind.query, { exact: true }).fill('Z%_🚢');
+  await expect(stage).toBeDisabled();
+  await find.getByLabel(sqliteFind.column, { exact: true }).selectOption('1');
+  await find.getByRole('checkbox', { name: sqliteFind.sensitive, exact: true }).check();
+  await find.getByRole('checkbox', { name: sqliteFind.whole, exact: true }).check();
+  await stage.click();
+  const operator = table.getByLabel(browseText.filterOperator(1), { exact: true });
+  await expect(operator).toHaveValue('textEquals');
+  await expect(table.getByLabel(browseText.filterValue(1), { exact: true })).toHaveValue('Z%_🚢');
+  expect(await reads()).toEqual(before);
+  await operator.scrollIntoViewIfNeeded();
+  await info.attach('SQLite查找转全表筛选草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  await table.getByRole('button', { name: browseText.apply, exact: true }).click();
+  await expect(id(120)).toBeVisible();
+  await expect(id(1)).toHaveCount(0);
+  await expect(id(119)).toHaveCount(0);
+  expect(await reads()).toHaveLength(before.length + 1);
   expect(pageErrors).toEqual([]);
 });
 

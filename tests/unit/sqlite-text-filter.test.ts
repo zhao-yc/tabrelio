@@ -13,6 +13,7 @@ afterAll(() => { for (const db of databases) db.close(); });
 /** 独立JS字符串谓词作为期望，不用待验SQL构造器计算自身答案。 */
 function matches(operator: typeof sqliteTextFilterOperators[number], value: unknown, needle: string): boolean {
   if (typeof value !== 'string') return false;
+  if (operator === 'textEquals') return value === needle;
   const result = operator.endsWith('Contains') || operator === 'contains' ? value.includes(needle) : operator.endsWith('StartsWith') || operator === 'startsWith' ? value.startsWith(needle) : value.endsWith(needle);
   return operator.startsWith('not') ? !result : result;
 }
@@ -21,7 +22,7 @@ function input(filter: SqliteTableFilter): SqliteTablePageInput { return { conne
 /** 原生参数严格保类型，位置参数不依赖SQL中的问号计数。 */
 function parameters(plan: ReturnType<typeof buildSqliteReadPlan>): SQLInputValue[] { return plan.parameters.map(item => item.kind !== 'operand' ? item.value : item.value.kind === 'text' ? item.value.value : item.value.kind === 'integer' ? BigInt(item.value.value) : item.value.kind === 'real' ? Number(item.value.value) : Buffer.from(item.value.value, 'hex')); }
 
-it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s下六种TEXT匹配与独立原文期望一致，包含NUL、空值、通配字符、大小写及组合字符', encoding => {
+it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s下TEXT匹配与独立原文期望一致，包含NUL、空值、通配字符、大小写及组合字符', encoding => {
   const db = new DatabaseSync(':memory:'); databases.push(db); db.exec("PRAGMA encoding='" + encoding + "'; CREATE TABLE subject(id INTEGER PRIMARY KEY,v COLLATE NOCASE)");
   expect(Object.values(db.prepare('PRAGMA encoding').get()!)[0]).toBe(encoding);
   const insert = db.prepare('INSERT INTO subject VALUES(?,?)'); values.forEach((value, index) => insert.run(index + 1, value));

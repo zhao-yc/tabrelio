@@ -65,7 +65,9 @@ export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filt
         const converted = `CAST(CONVERT(${expression} USING utf8mb4) AS BINARY)`;
         return reverse ? `REVERSE(${converted})` : converted;
       };
-      return `LOCATE(${bytes(input)}, ${bytes(column)}) ${comparison}`;
+      return filter.operator === 'TEXT EQUALS'
+        ? `${bytes(column)} = ${bytes(input)}`
+        : `LOCATE(${bytes(input)}, ${bytes(column)}) ${comparison}`;
     }
     /** 参数按条件原顺序加入，不拆分逗号、裁剪空白或转换为 JavaScript 数值。 */
     const parameter = (value: string) => {

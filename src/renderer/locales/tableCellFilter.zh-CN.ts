@@ -10,6 +10,7 @@ export const tableCellFilterZh = {
   containsRule: '文本包含（按字面）', notContainsRule: '文本不包含（按字面）',
   startsWithRule: '文本开头为（按字面）', notStartsWithRule: '文本开头不是（按字面）',
   endsWithRule: '文本结尾为（按字面）', notEndsWithRule: '文本结尾不是（按字面）',
+  textEqualsRule: '整格文本等于（按字面）',
   hint: '选择单元格后带入条件草稿；审阅并添加条件才按当前全部／任一规则重新查询服务器。请先处理未提交数据和活动编辑器。',
   staged: '已带入单元格原值，可继续修改；添加条件后才读取服务器全表，采用当前全部／任一规则。NULL使用空值判断；普通不等于不包含NULL。',
   unavailable: '当前单元格、字段或原值已变化，不能带入筛选；请重新选择已加载的普通单元格。',

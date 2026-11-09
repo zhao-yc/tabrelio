@@ -13,7 +13,7 @@ export function sqliteLastPagePosition(count: string, limit: number): { offset: 
   if (offset > BigInt(sqliteTableBrowseLimits.offset)) throw Error('SQLite末页超出可浏览的偏移范围，请缩小筛选范围');
   return { offset: Number(offset), rows: Number(total - offset) };
 }
-export const sqliteTextFilterOperators = ['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith'] as const;
+export const sqliteTextFilterOperators = ['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith', 'textEquals'] as const;
 /** 表单和合同共用文本运算符集合，不能将数值或二进制隐式转成文本。 */
 export function isSqliteTextFilter(operator: string): operator is typeof sqliteTextFilterOperators[number] { return sqliteTextFilterOperators.some(value => value === operator); }
 /** 名称及文本拒绝孤立代理项，避免跨进程UTF8编码静默改成另一个字符。 */

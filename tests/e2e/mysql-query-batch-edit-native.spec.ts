@@ -12,6 +12,7 @@ import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilte
 import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { tableSelectedFilterZh } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { tableFindFilterZh } from '../../src/renderer/locales/tableFindFilter.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -227,6 +228,24 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
       await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
       await expect(tableCell('A%_🚢')).toBeVisible();
     }
+    const findButton = () => navigationMenuItem(tableTab, { name: tableGridZh.find, exact: true });
+    await (await findButton()).click();
+    const tableFind = tableTab.getByRole('region', { name: tableGridZh.find, exact: true });
+    await tableFind.getByRole('combobox', { name: tableGridZh.column, exact: true }).selectOption('guard');
+    await tableFind.getByLabel(tableGridZh.query, { exact: true }).fill('A%_🚢');
+    await tableFind.getByRole('checkbox', { name: tableGridZh.case, exact: true }).check();
+    await tableFind.getByRole('checkbox', { name: tableGridZh.whole, exact: true }).check();
+    await tableFind.getByRole('button', { name: tableFindFilterZh.action, exact: true }).click();
+    await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('TEXT EQUALS');
+    await expect(tableTab.getByLabel(zh.table.text011, { exact: true })).toHaveValue('A%_🚢');
+    await expect(tableCell('前A%_🚢')).toBeVisible();
+    await tableTab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(tableCell('前A%_🚢')).toHaveCount(0);
+    await expect(tableCell('A%_🚢后')).toHaveCount(0);
+    await expect(tableCell('A%_🚢')).toBeVisible();
+    await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
+    await expect(tableCell('前A%_🚢')).toBeVisible();
+    if (await tableFind.isVisible()) await (await findButton()).click();
     await tableCell('18446744073709551613').click({ button: 'right' });
     await page.getByRole('menuitem', { name: queryResultFilterZh.cellBounds.gt, exact: true }).press('Enter');
     await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('>');
