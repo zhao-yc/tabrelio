@@ -18,6 +18,8 @@ import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle } from '../useGridCellRange';
 import { gridRangeCopyActions } from '../gridRangeCopy';
+import { snapshotGridRangeExport } from '../gridRangeExport';
+import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
 import { fitGridRangePaste } from '../gridRangePaste';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
@@ -225,7 +227,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [filterGroups, setFilterGroups] = useState<TableFilterGroupLease | null>(null), filterGroupsRef = useRef(filterGroups);
   const [selectedFilter, setSelectedFilter] = useState<TableSelectedFilterLease | null>(null), selectedFilterRef = useRef(selectedFilter);
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
-  const [pageExport, setPageExport] = useState<{ data: ResultExportData; selected: boolean; scope?: 'collected' } | null>(null), pageExportRef = useRef(pageExport);
+  const [pageExport, setPageExport] = useState<{ data: ResultExportData; selected: boolean; scope?: 'collected' | 'rectangle' } | null>(null), pageExportRef = useRef(pageExport);
   const [rowTransferDialog, setRowTransferDialog] = useState<ResultInsertSourceIntent | null>(null), rowTransferIntent = useRef<ResultInsertSourceIntent | null>(null);
   const incomingTransfer = useRef<{ snapshot: PostgresRecordTransfer; fixed: FixedResultInsertTarget; committed: boolean } | null>(null);
   const rowTransferSource = useRef<object | null>(null), rowTransferEnvironment = useRef<unknown[]>([]);
@@ -2010,6 +2012,18 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
             ? selected.columns.map(key => visibleColumns.find(column => column.key === key)!.name) : undefined);
         } catch (reason) { if (current()) setError(errorMessage(reason)); }
       }) : []),
+      ...(rectangle ? [{ label: rangeExportText.action, run: () => {
+        if (pageExportRef.current) return;
+        try {
+          const range = cellRange.capture(rectangle, null);
+          if (!range) throw Error(rangeExportText.stale);
+          const data = snapshotGridRangeExport(range, visibleColumns, (item, key) => ownCell(item.data, key), item => item.deleted);
+          if (!current()) return;
+          const lease = { data, selected: false, scope: 'rectangle' as const };
+          pageExportRef.current = lease;
+          setPageExport(lease);
+        } catch (reason) { if (current()) setError(errorMessage(reason)); }
+      } }] : []),
       { label: quickValueText.copyCell, run: () => {
         try { copyGridCellValue(ownCell(row.data, key), current); }
         catch (reason) { if (current()) setError(errorMessage(reason)); }

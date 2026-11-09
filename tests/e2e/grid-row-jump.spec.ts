@@ -21,6 +21,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { gridCellCenter, pasteGridRangeClipboard, readGridMenuClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
+import { gridRangeExportZh as rangeExport } from '../../src/renderer/locales/gridRangeExport.zh-CN';
 import { gridQuickValueZh as cellCopy } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 import { sqliteTableRangePasteZh as sqlitePaste } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
@@ -321,6 +322,65 @@ test('查询和 SQLite 可从选区内打开复制菜单，表头只进入文本
   await page.keyboard.press('Shift+F10');
   const plain = await copy(rangeCopy.copy);
   expect(plain).toEqual({ ...withHeaders, text: '1\t记录 1\n2\t记录 2' });
+  expect(pageErrors).toEqual([]);
+});
+
+test('矩形选区导出仅写所选列和行，SQLite 文件保持不变', async () => {
+  await seed();
+  const menu = page.getByRole('menuitem', { name: rangeExport.action, exact: true });
+  const modal = page.getByRole('dialog', { name: rangeExport.action, exact: true });
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  async function exportJson(name: string) {
+    await expect(modal.getByText(rangeExport.summary(2, 1), { exact: true })).toBeVisible();
+    const format = modal.getByLabel(zh.resultExport.format, { exact: true });
+    await expect(format.locator('option[value="sql"]')).toHaveCount(0);
+    await format.selectOption('json');
+    const output = join(dataDir, name);
+    // 只固定本次保存位置，文件写入继续使用正式导出 IPC。
+    await desktop.evaluate(({ dialog, BrowserWindow }, output) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        dialog.showSaveDialog = original;
+        if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.[0]?.extensions.includes('json'))
+          throw Error('仅允许本例 JSON 保存选择');
+        return { canceled: false, filePath: output };
+      }) as typeof original;
+    }, output);
+    await modal.getByRole('button', { name: new RegExp(zh.resultExport.chooseFile) }).click();
+    await modal.getByRole('button', { name: zh.resultExport.start, exact: true }).click();
+    await modal.getByRole('button', { name: zh.common.done, exact: true }).click();
+    return JSON.parse(readFileSync(output, 'utf8'));
+  }
+
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const queryStart = query.getByRole('gridcell', { name: '记录 180', exact: true });
+  await queryStart.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  const beforeQuery = await tasks();
+  await queryStart.click({ button: 'right' });
+  await menu.click();
+  await expect(modal).toBeVisible();
+  expect(await tasks()).toEqual(beforeQuery);
+  expect(await exportJson('矩形查询.json')).toEqual([{ name: '记录 180' }, { name: '记录 179' }]);
+
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const tableStart = table.getByRole('gridcell', { name: 'TEXT · 记录 1', exact: true });
+  await tableStart.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await table.getByRole('button', { name: rangeFill.open, exact: true }).click();
+  const fill = table.getByRole('region', { name: rangeFill.open, exact: true });
+  await fill.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('待提交');
+  await fill.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+  const draftStart = table.getByRole('gridcell', { name: 'TEXT · 待提交', exact: true }).first();
+  await draftStart.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await draftStart.click({ button: 'right' });
+  await menu.click();
+  expect(await exportJson('矩形草稿.json')).toEqual([{ name: '待提交' }, { name: '待提交' }]);
+  expect(readFileSync(database)).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

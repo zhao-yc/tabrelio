@@ -9,6 +9,7 @@ import { queryResultFindZh as findText } from '../../src/renderer/locales/queryR
 import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { gridCellCenter, pasteGridRangeClipboard, readGridMenuClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
+import { gridRangeExportZh as rangeExport } from '../../src/renderer/locales/gridRangeExport.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
@@ -117,6 +118,12 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   expect(withHeaders.text).toBe('note\tother\n😀old前old后old\tOLD\n\t无匹配');
   expect(withHeaders.typed).toBe(payload.typed);
   await expect(to).toBeFocused();
+  await from.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: rangeExport.action, exact: true }).click();
+  const exported = page.getByRole('dialog', { name: rangeExport.action, exact: true });
+  await expect(exported.getByText(rangeExport.summary(2, 2), { exact: true })).toBeVisible();
+  await expect(exported.locator('.sample-grid').getByRole('columnheader').filter({ hasText: /\S/ })).toHaveText(['note', 'other']);
+  await expect(exported.getByRole('gridcell', { name: '无匹配', exact: true })).toBeVisible();
   expect(await calls()).toEqual([]);
 });
 

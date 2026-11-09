@@ -142,9 +142,9 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   }
 
   /** 表单只能消费打开时的准确矩形；换页、重排及清除后即使坐标相同也须重开。 */
-  function capture(selected: GridCellRectangle): GridRangeTarget<Row> | undefined {
-    if (live.current.scope !== scope || live.current.rectangle !== selected || drag.current || !current()) return;
-    if ((selected.bottom - selected.top + 1) * (selected.right - selected.left + 1) > maxClipboardCells)
+  function capture(selected: GridCellRectangle, cellLimit: number | null = maxClipboardCells): GridRangeTarget<Row> | undefined {
+    if (!rectangleCurrent(selected)) return;
+    if (cellLimit !== null && (selected.bottom - selected.top + 1) * (selected.right - selected.left + 1) > cellLimit)
       throw Error(zh.clipboard.copyLimit);
     return { startRow: selected.top, rows: rows.slice(selected.top, selected.bottom + 1),
       keys: keys.slice(selected.left, selected.right + 1) };

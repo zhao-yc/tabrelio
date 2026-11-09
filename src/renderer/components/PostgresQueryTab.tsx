@@ -7,7 +7,7 @@ import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { formatSqlEditor } from '../sqlFormatting';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
-import type { PostgresResultSource, QueryOutcome, QueryResult, ResultColumn } from '../../shared/contracts';
+import type { PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
 import { postgresTableLimits } from '../../shared/postgresTable';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
@@ -272,7 +272,7 @@ export function PostgresQueryTab({
   const statisticsDraftRef = useRef<StatisticsDraft | undefined>(undefined);
   const [presetDraft, setPresetDraft] = useState<PresetDraft>();
   const presetDraftRef = useRef<PresetDraft | undefined>(undefined);
-  const [exportView, setExportView] = useState<{ result: QueryResult; selected: boolean }>();
+  const [exportView, setExportView] = useState<{ result: ResultExportData; selected: boolean; scope?: 'rectangle' }>();
   const [fullExport, setFullExport] = useState<FullQueryExportSource>();
   const exportOpen = useRef(false);
   const scope: Scope = {
@@ -1975,6 +1975,11 @@ export function PostgresQueryTab({
                     <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
                       frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
                       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
+                      onExportRange={binding ? result => {
+                        if (!resultCurrent() || document.querySelector(appModalSelector)) return;
+                        exportOpen.current = true;
+                        setExportView({ result, selected: false, scope: 'rectangle' });
+                      } : undefined}
                       onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
                       filterDialect="postgresql"
                       onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
@@ -2038,7 +2043,7 @@ export function PostgresQueryTab({
           isCurrent={() => sortCurrent(sortDraft)} onApply={rules => applyResultSort(rules, sortDraft)}
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
-      {exportView && <ResultExportDialog result={exportView.result} tabId={tab.id} selected={exportView.selected}
+      {exportView && <ResultExportDialog result={exportView.result} tabId={tab.id} selected={exportView.selected} scope={exportView.scope}
         sqlDialect="postgresql" onClose={() => {
           exportOpen.current = false;
           setExportView(undefined);

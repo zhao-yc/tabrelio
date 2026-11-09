@@ -198,7 +198,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     duplicatePagesRef.current = next;
     setDuplicatePages(next);
   }
-  const [collectedDialog, setCollectedDialog] = useState<ResultExportData>();
+  const [collectedDialog, setCollectedDialog] = useState<{ result: ResultExportData; scope: 'collected' | 'rectangle' }>();
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
   const [importPage, setImportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
@@ -1636,6 +1636,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
         rowJump={canFind} rowJumpCurrent={findIsCurrent}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
+        onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}
         insertSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind)
           ? indices => postgresCopyInsertSql(target.table, page, indices, draftRef.current) : undefined}
         updateSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind) && page.primaryKey?.length
@@ -1719,7 +1720,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             <TableCheckedExportActions collection={checkedExport.value} position={options.offset} selected={selected.size}
               ready={canFind && !draft.length} hasDrafts={!!draft.length}
               onCollect={() => collectCheckedPage(selected, current)}
-              onExport={() => { if (checkedExport.value && checkedExportCurrent()) setCollectedDialog(checkedExport.value.result); }}
+              onExport={() => { if (checkedExport.value && checkedExportCurrent()) setCollectedDialog({ result: checkedExport.value.result, scope: 'collected' }); }}
               onClear={() => { if (checkedExportCurrent()) checkedExport.clear(); }}/>
             {!!selected.size && <span>{fillText.count(selected.size)}</span>}
           </div>}
@@ -1825,7 +1826,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <footer className="modal-footer"><button disabled={busy} onClick={() => setDraftFile(undefined)}>{text.cancel}</button>
         <button className="primary" disabled={busy} onClick={transferDraftFile}>{draftFile === 'save' ? draftFilesText.chooseSave : draftFilesText.chooseRestore}</button></footer>
     </Modal>}
-    {collectedDialog && <ResultExportDialog result={collectedDialog} tabId={tab.id} scope="collected" allowSql={false}
+    {collectedDialog && <ResultExportDialog result={collectedDialog.result} tabId={tab.id} scope={collectedDialog.scope} allowSql={false}
       onClose={() => setCollectedDialog(undefined)}/>}
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
       isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&

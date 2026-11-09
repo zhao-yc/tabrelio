@@ -6,6 +6,10 @@ import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
 import { gridRangeCopyActions } from '../gridRangeCopy';
+import { snapshotGridRangeExport } from '../gridRangeExport';
+import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
+import type { ResultExportData } from '../../shared/contracts';
+import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
 import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
@@ -41,9 +45,9 @@ import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor, range?: GridRangeTarget<SqliteDraftRow>): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
+interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor, range?: GridRangeTarget<SqliteDraftRow>): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onExportRange?(result: ResultExportData): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFillRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight }: Props) {
+export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFillRange, onExportRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight }: Props) {
   const height = readGridRowHeight(rowHeight);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
@@ -289,6 +293,18 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
           writeTableClipboardEvent(current, data => writeSqliteClipboardData(data, content));
         } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
       }) : []),
+      ...(rectangle && onExportRange ? [{ label: rangeExportText.action, run: () => {
+        try {
+          const range = cellRange.capture(rectangle, null);
+          if (!range) throw Error(rangeExportText.stale);
+          const result = snapshotGridRangeExport(range, page.result.columns, (item, key) => {
+            const value = item.values[Number(key.slice(1))];
+            if (value?.kind === 'blob') return sqliteBinaryOriginalCell(value.value);
+            return value?.kind === 'null' ? null : value?.value;
+          }, item => item.deleted);
+          if (current()) onExportRange(result);
+        } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeExportText.stale); }
+      } }] : []),
       { label: quickValueText.copyCell, run: () => {
         try {
           const content = clipboardContent([], row, key);
