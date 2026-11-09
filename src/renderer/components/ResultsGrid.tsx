@@ -527,7 +527,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     {primaryKeySql && <button type="button" title={keyCopyText.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
       onClick={() => handleRowOutput(primaryKeySql, selectedRows.size > 0, keyCopyText.copied)}>{keyCopyText.action}</button>}
     {onOpenRowSql && ([
-      ['select', primaryKeySql, keyCopyText], ['update', updateSql, updateSqlCopyZh], ['delete', deleteSql, deleteSqlCopyZh],
+      ['select', primaryKeySql, keyCopyText], ['insert', insertSql, insertCopyText], ['update', updateSql, updateSqlCopyZh], ['delete', deleteSql, deleteSqlCopyZh],
     ] as const).map(([kind, build, labels]) => build && <button key={kind} type="button" title={labels.openHint}
       disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
       onClick={() => handleRowOutput(build, selectedRows.size > 0, sql => onOpenRowSql(kind, sql))}>{labels.open}</button>)}

@@ -1,6 +1,9 @@
 /** 表行 INSERT 复制的跨进程提示统一维护，不能把生成成功说成数据库执行成功。 */
 export const copyInsertSqlZh = {
   current: '复制当前行为 INSERT SQL', selected: '复制选中行为 INSERT SQL',
+  open: '打开 INSERT 草稿',
+  openHint: '根据当前记录或本页勾选记录的已加载原值打开独立 INSERT 草稿，可核对后手动执行。',
+  queryTitle: (table: string) => table + ' · INSERT 草稿',
   policy: '仅复制当前页未修改的已加载原始行；不含草稿，不补取数据，不执行 SQL。',
   copied: 'INSERT SQL 已复制；未执行数据库操作。',
   invalid: 'INSERT 复制参数无效，未写入剪贴板。',

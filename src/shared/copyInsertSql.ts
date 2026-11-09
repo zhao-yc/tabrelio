@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CellValue, DataRow } from './contracts';
 import { copyInsertSqlZh as text } from './copyInsertSql.zh-CN';
+import { tableReadIdentifier, tableReadTextLiteral } from './tableReadSql';
 
 /** 小于网格复制的字符上限，独立限制主进程请求及最终 UTF-8 SQL 字节，绝不截断。 */
 export const copyInsertSqlLimits = { rows: 1000, columns: 1024, cells: 50_000, cellBytes: 256 * 1024, inputBytes: 1024 * 1024, sqlBytes: 1024 * 1024 } as const;
@@ -116,3 +117,28 @@ export const copyInsertSqlInputSchema = z.unknown().transform((value, context): 
   try { assertCopyInsertSqlInput(value); return value; }
   catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : text.invalid }); return z.NEVER; }
 });
+
+/** 剪贴板和查询草稿共用生成器；文本和字节的十六进制字面量独立于 SQL mode。 */
+export function buildCopyInsertSql(input: unknown): string {
+  assertCopyInsertSqlInput(input);
+  const target = tableReadIdentifier(input.database) + '.' + tableReadIdentifier(input.table);
+  const prefix = 'INSERT INTO ' + target + ' (' + input.columns.map(column => tableReadIdentifier(column.name)).join(', ') + ') VALUES (';
+  let bytes = 0;
+  const statements: string[] = [];
+  for (const row of input.rows) {
+    const values = input.columns.map(column => {
+      const value = row[column.name];
+      const numeric = copyInsertNumericLiteral(column, value);
+      if (numeric !== undefined) return numeric;
+      if (value === null) return 'NULL';
+      if (typeof value === 'string') return tableReadTextLiteral(value);
+      if (typeof value === 'object') return "X'" + Array.from(atob(value.base64), byte => byte.charCodeAt(0).toString(16).padStart(2, '0')).join('') + "'";
+      return fail(text.type);
+    });
+    const statement = prefix + values.join(', ') + ');';
+    bytes += encoder.encode(statement).length + (statements.length ? 1 : 0);
+    if (bytes > copyInsertSqlLimits.sqlBytes) throw Error(text.limit);
+    statements.push(statement);
+  }
+  return statements.join('\n');
+}

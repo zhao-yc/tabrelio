@@ -341,6 +341,9 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     {!!page.primaryKey?.length && <button type="button" title={deleteSqlCopyZh.hint}
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(sqliteCopyDeleteDraftRows, selectedRows.size > 0, deleteSqlCopyZh.copied)}>{deleteSqlCopyZh.action}</button>}
+    {page.insertCopy && onOpenRowSql && <button type="button" title={insertCopyText.openHint}
+      disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
+      onClick={() => handleTableSql(sqliteCopyInsertDraftRows, selectedRows.size > 0, sql => onOpenRowSql('insert', sql))}>{insertCopyText.open}</button>}
     {!!page.primaryKey?.length && onOpenRowSql && ([
       ['select', sqliteCopyPrimaryKeyDraftRows, keyCopyText], ['update', sqliteCopyUpdateDraftRows, updateSqlCopyZh],
       ['delete', sqliteCopyDeleteDraftRows, deleteSqlCopyZh],

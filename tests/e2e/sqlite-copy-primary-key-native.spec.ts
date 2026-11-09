@@ -5,6 +5,7 @@ import { desktop, page, dataDir, expect, test, confirmOwnedDesktopExit, retainOw
 import { primaryKeyCopyZh as copy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { updateSqlCopyZh as update } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
 import { deleteSqlCopyZh as remove } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
+import { copyInsertSqlZh as insert } from '../../src/shared/copyInsertSql.zh-CN';
 import { sqliteTableEditZh as edit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { expectPrimaryKeyQueryDraft } from './primary-key-query-draft';
 
@@ -127,7 +128,7 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     await field.getByLabel(edit.value('scope'), { exact: true }).fill('仅本地新键');
     await field.getByRole('button', { name: edit.saveInput, exact: true }).click();
     await cell('TEXT · 仅本地新键').click();
-    for (const action of [update.open, remove.open]) {
+    for (const action of [insert.open, update.open, remove.open]) {
       await button(action).click();
       await expect(tab.getByRole('alert')).toContainText('草稿');
       await expect(page.locator('.tab-strip [data-workspace-tab-id]')).toHaveCount(4);
@@ -148,6 +149,7 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     const deletes = batch.text.split('\nWHERE ')[1].slice(0, -1).split('\n   OR ')
       .map(condition => deletePrefix + condition + ';').join('\n');
     for (const [labels, sql] of [
+      [insert, 'INSERT INTO "main".' + target + ' ("id", "scope", "raw", "note") VALUES (9007199254740993, \'Key\', X\'00ff\', \'目标甲\');'],
       [update, 'UPDATE "main".' + target + '\nSET "note" = \'目标甲\'\nWHERE ' + predicate],
       [remove, deletes],
     ] as const) {
@@ -181,6 +183,7 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     await expect(button(copy.open)).toHaveCount(0);
     await expect(button(update.open)).toHaveCount(0);
     await expect(button(remove.open)).toHaveCount(0);
+    await expect(button(insert.open)).toHaveCount(0);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

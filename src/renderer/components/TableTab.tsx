@@ -172,6 +172,7 @@ import { gridHeaderDetailsZh as headerText } from '../locales/gridHeaderDetails.
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { deleteSqlCopyZh } from '../locales/deleteSqlCopy.zh-CN';
 import { copyInsertSqlZh } from '../../shared/copyInsertSql.zh-CN';
+import { buildCopyInsertSql } from '../../shared/copyInsertSql';
 
 /** 输入始终保留字符串精度，失焦仅提交到本地草稿，不执行数据库写入。 */
 function TextCellEditor({ row, column, onRowChange, onClose, binary, onEditingChange }: RenderEditCellProps<DraftRow> & { binary: boolean; onEditingChange: (editor: object, editing: boolean) => void }) {
@@ -1710,8 +1711,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     try {
       const ids = selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
       const context = getRecordContext();
-      const prepare = { select: prepareCopyPrimaryKeyQuery, update: prepareCopyUpdateSql, delete: prepareCopyDeleteSql }[kind];
-      const sql = prepare(context, copyPage.current, page, rows, ids);
+      const prepare = { select: prepareCopyPrimaryKeyQuery, update: prepareCopyUpdateSql, delete: prepareCopyDeleteSql };
+      const sql = kind === 'insert' ? buildCopyInsertSql(prepareCopyInsertSql(context, copyPage.current, page, rows, ids))
+        : prepare[kind](context, copyPage.current, page, rows, ids);
       if (destination === 'draft') {
         if (onOpenGeneratedQuery && current()) {
           openRowSqlDraft(context.target, kind, sql, onOpenGeneratedQuery);
@@ -1721,7 +1723,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       }
       writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
       setError('');
-      setDuplicateNotice({ select: primaryKeyCopyZh.copied, update: updateSqlCopyZh.copied, delete: deleteSqlCopyZh.copied }[kind]);
+      setDuplicateNotice({ select: primaryKeyCopyZh.copied, insert: copyInsertSqlZh.copied, update: updateSqlCopyZh.copied, delete: deleteSqlCopyZh.copied }[kind]);
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
   }
   const primaryKeyQueryDisabled = insertCopyBlockedRef.current || restoredDraftView || !!copyMetadataReason || (!selection && !selectedRows.size);
@@ -2143,6 +2145,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={filteredSelectText.entry} title={filteredSelectText.hint} disabled={!filteredSelectAvailable} onClick={openFilteredSelect}>{filteredSelectText.entry}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selection} onClick={() => copyRowsAsInsert(false)}>{copyInsertSqlZh.current}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selectedRows.size} onClick={() => copyRowsAsInsert(true)}>{copyInsertSqlZh.selected}</button>
+{onOpenGeneratedQuery && info?.objectKind === 'table' && <button title={copyInsertSqlZh.openHint} disabled={primaryKeyQueryDisabled}
+  onClick={() => handleRowSql('insert', 'draft')}>{copyInsertSqlZh.open}</button>}
 {info?.objectKind === 'table' && !!info.primaryKey.length && <>
   <button title={primaryKeyCopyZh.hint} disabled={primaryKeyQueryDisabled}
     onClick={() => handleRowSql('select', 'clipboard')}>{primaryKeyCopyZh.action}</button>

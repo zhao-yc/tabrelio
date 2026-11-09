@@ -6,17 +6,19 @@ import * as jsxRuntime from 'react/jsx-runtime';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { prepareCopyInsertSql } from '../../src/renderer/copyInsertSql';
-import { copyInsertSql } from '../../src/main/copyInsertSql';
+import { buildCopyInsertSql, copyInsertSql } from '../../src/main/copyInsertSql';
 import { copyInsertSqlZh } from '../../src/shared/copyInsertSql.zh-CN';
 import { fixture } from '../helpers/copyInsertPage';
 
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8');
 const tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let handler = '';
+let rowSqlHandler = '';
 const wiring = { current: '', selected: '' };
 /** 执行生产 TableTab 原处理器；只替换 IPC 端口，不把它描述为真实 GUI/剪贴板验收。 */
 function visit(node: ts.Node) {
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'copyRowsAsInsert') handler = node.getText(tree);
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleRowSql') rowSqlHandler = node.getText(tree);
   if (ts.isJsxElement(node) && node.openingElement.tagName.getText(tree) === 'button') {
     for (const key of ['current', 'selected'] as const) if (node.children.some(child => ts.isJsxExpression(child) && child.expression?.getText(tree) === `copyInsertSqlZh.${key}`)) wiring[key] = node.getText(tree);
   }
@@ -32,6 +34,29 @@ function port() {
   return { f, tab, workspace, context, click(selected = false) { runInContext(`copyRowsAsInsert(${selected})`, context); }, async settle() { resolve(); await Promise.resolve(); await Promise.resolve(); } };
 }
 describe('表页 INSERT 入口的纯端口验证（实际 GUI/OS 为零）', () => {
+  it('无主键表可从真实处理器生成勾选行草稿，归属失效不会发布', () => {
+    const f = fixture(), openRowSqlDraft = vi.fn(), writeTableClipboardEvent = vi.fn(), setError = vi.fn();
+    const selectedRows = new Set(['行1', '行0']), selection = { rowId: '行0' };
+    const context = createContext({ Set, prepareCopyInsertSql, buildCopyInsertSql, openRowSqlDraft, writeTableClipboardEvent,
+      prepareCopyPrimaryKeyQuery: vi.fn(), prepareCopyUpdateSql: vi.fn(), prepareCopyDeleteSql: vi.fn(),
+      tableToolbarCurrent: () => true, insertCopyBlockedRef: { current: false }, restoredDraftView: false,
+      externalStaleRef: { current: false }, activeGridEditor: { current: null }, record: { hasInput: () => false },
+      rows: f.rows, rowsRef: { current: f.rows }, selectedRows, selectedRowsRef: { current: selectedRows },
+      selection, selectionRef: { current: selection }, page: f.page, copyPage: { current: f.binding }, getRecordContext: () => f.context,
+      onOpenGeneratedQuery: vi.fn(), setError, errorMessage: (error: Error) => error.message });
+    runInContext(ts.transpileModule(rowSqlHandler, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+    expect(f.info.primaryKey).toEqual([]);
+    const open = () => runInContext("handleRowSql('insert', 'draft')", context);
+    open();
+    expect(openRowSqlDraft).toHaveBeenCalledExactlyOnceWith(f.context.target, 'insert', buildCopyInsertSql(f.prepare(selectedRows)), context.onOpenGeneratedQuery);
+    f.rows[1].data.值 = '未提交草稿';
+    open();
+    expect(setError).toHaveBeenLastCalledWith(copyInsertSqlZh.draft);
+    context.selectedRowsRef.current = new Set();
+    open();
+    expect(openRowSqlDraft).toHaveBeenCalledTimes(1);
+    expect(writeTableClipboardEvent).not.toHaveBeenCalled();
+  });
   it('真实两个入口接在 TableTab，中文标题说明原值策略，分别控制当前与勾选入口', () => {
     expect(wiring.current).toContain('onClick={() => copyRowsAsInsert(false)}');
     expect(wiring.selected).toContain('onClick={() => copyRowsAsInsert(true)}');
