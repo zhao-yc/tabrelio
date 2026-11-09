@@ -133,6 +133,7 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} INNER 和 
     expect(direct.blocked).toContain('没有可编辑的主表来源');
     await page.locator('[data-workspace-tab-id="mysql-inner"]').getByRole('button', { name: '内连接', exact: true }).click();
     await execute();
+    await expect(query.getByText(text.inlineHint, { exact: true })).toBeVisible();
     await cell('主表甲新值').click();
     await cell('主表甲新值').press('F2');
     const field = inline.getByLabel('note · ' + recordViewZh.value, { exact: true });

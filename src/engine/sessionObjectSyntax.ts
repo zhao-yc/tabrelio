@@ -15,7 +15,15 @@ function expressionAction(tokens:Token[],database:string|undefined,directSource:
   const first=word(tokens[0]);if(!['SELECT','TABLE','INSERT','REPLACE','UPDATE','DELETE','SET'].includes(first))return{kind:'opaque'};
   const directSelect=directSource&&first==='SELECT';
   let target:ReturnType<typeof objectTarget>,sourceAt=-1;
-  if(first==='SELECT'||first==='DELETE'){const sources=tokens.flatMap((token,index)=>word(token)==='FROM'?[index]:[]);if(sources.length>1)return{kind:'opaque'};sourceAt=sources[0]??-1;}
+  if(first==='SELECT'||first==='DELETE'){
+    let depth=0;
+    const sources=tokens.flatMap((token,index)=>{
+      if(token.kind==='symbol'&&token.value==='(')depth++;
+      if(token.kind==='symbol'&&token.value===')')depth--;
+      return word(token)==='FROM'&&(!directSelect||depth===0)?[index]:[];
+    });
+    if(sources.length>1)return{kind:'opaque'};sourceAt=sources[0]??-1;
+  }
   else if(first==='TABLE')sourceAt=0;
   else if(first==='UPDATE')sourceAt=0;
   else if(first==='INSERT'||first==='REPLACE'){let cursor=1;if(word(tokens[cursor])==='INTO')cursor++;sourceAt=cursor-1;}
@@ -25,7 +33,8 @@ function expressionAction(tokens:Token[],database:string|undefined,directSource:
   if(tokens.some((token,index)=>index>0&&word(token)==='SELECT'))return{kind:'opaque'};
   for(let index=1;index<tokens.length;index++)if(tokens[index+1]?.value==='('&&(tokens[index].kind==='word'||tokens[index].kind==='identifier')){
     if(target&&index===target.end-1&&['INSERT','REPLACE'].includes(first))continue;
-    if(directSelect&&['ON','USING','WHERE','AND','OR','NOT'].includes(word(tokens[index])))continue;
+    if(directSelect&&['ON','USING','WHERE','WHEN','THEN','ELSE','AND','OR','NOT'].includes(word(tokens[index])))continue;
+    if(directSelect&&word(tokens[index-1])==='AS'&&['BINARY','CHAR','DECIMAL','DOUBLE','FLOAT','TIME','DATETIME'].includes(word(tokens[index])))continue;
     if(tokens[index].kind!=='word'||tokens[index-1]?.value==='.'||!safeCalls.has(word(tokens[index])))return{kind:'opaque'};
   }
   return target?{kind:'dependencies',targets:[target.target]}:{kind:'none'};

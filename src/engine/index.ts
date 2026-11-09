@@ -1980,7 +1980,7 @@ export class Engine {
       await read('START TRANSACTION READ ONLY');
       const context = { managed, ...control }, info = await this.readQueryTableInfo(context, source);
       if (operation === 'new' && (info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' ||
-          source.columns.some(name => !info.columns.some(field => field.name === name))))
+          source.columns.some(name => name !== null && !info.columns.some(field => field.name === name))))
         throw Error('新增记录需要可核验的 InnoDB 来源表');
       const rows: DataRow[] = [], snapshots: MysqlQueryEditSnapshot['rows'] = new Map();
       let edit: MysqlQueryEditSnapshot | undefined;
@@ -2161,6 +2161,13 @@ export class Engine {
         relationTarget = failureMode && executed === 0 && task.managed.queryRowContext && task.managed.transactionStateKnown === true &&
           task.managed.serverStatus !== undefined && (task.managed.serverStatus & 1) === 0
           ? mysqlQueryRelationTarget(statement, mode, task.managed.status.dialect) : undefined;
+        if (relationTarget?.projection && currentStatement === undefined) {
+          // 新增的计算列回查只用于单条语句，保留多语句脚本原有的会话目录确认规则。
+          try {
+            const scanner = new SqlScriptScanner(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+            if (scanner.push(sql, true, 2).length !== 1) relationTarget = undefined;
+          } catch { relationTarget = undefined; }
+        }
         task.relationTarget = relationTarget;
         try {
           results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined));
@@ -2206,7 +2213,7 @@ export class Engine {
     if (source) this.queryRelationSources.set(task.managed, source);
     return { results, elapsedMs: performance.now() - started, transactionOpen,
       ...(source && !source.joined ? { mysqlQueryInsert: true as const } : {}),
-      ...(source?.rowReadable ? { mysqlQueryRelation: true as const, ...(source.joined ? {
+      ...(source?.rowReadable ? { mysqlQueryRelation: true as const, ...(source.computed ? { mysqlQueryComputedColumns: source.computed } : {}), ...(source.joined ? {
         mysqlQueryJoinColumns: source.columns.flatMap((column, index) => column === null ? [] : [index]),
       } : {}) } : {}) };
   }

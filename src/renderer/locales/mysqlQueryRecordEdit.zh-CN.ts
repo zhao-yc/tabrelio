@@ -2,6 +2,7 @@ export const mysqlQueryRecordEditZh = {
   edit: '编辑查询原记录',
   editJoin: '编辑 JOIN 主表原记录',
   joinReadOnly: '连接表字段只读，请选择主表字段。',
+  computedReadOnly: '计算列只读，请选择原表字段。',
   hint: '核对查询原行和完整字段值后编辑。请预览 SQL 并明确确认提交。',
   stale: '查询原记录或连接已变化，请重新查询。',
   preview: '预览查询原记录修改',

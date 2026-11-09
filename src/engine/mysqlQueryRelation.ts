@@ -14,9 +14,56 @@ const symbol = (token: TableDefinitionToken | undefined, value: string) => token
 const blocked = () => Error('MySQL／MariaDB 查询原记录无法核验，请重新执行查询');
 
 interface QueryTable { database?: string; table: string; alias: string }
-interface QueryTarget { database?: string; table: string; joined?: QueryTable[] }
+type ProjectionKind = 'column' | 'expand' | 'expression';
+interface QueryTarget { database?: string; table: string; joined?: QueryTable[]; projection?: ProjectionKind[] }
 const suffix = (token?: TableDefinitionToken) => ['WHERE', 'ORDER', 'LIMIT'].includes(word(token));
 const joinWords = new Set(['JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'NATURAL', 'STRAIGHT_JOIN']);
+// 只允许明确是标量的内置函数，不能从聚合、窗口或用户函数推断可编辑原行。
+const scalarCalls = new Set(['ABS', 'CAST', 'CEIL', 'CEILING', 'COALESCE', 'CONCAT', 'CONCAT_WS', 'CONVERT', 'DATE',
+  'DATE_FORMAT', 'FLOOR', 'GREATEST', 'IF', 'IFNULL', 'JSON_EXTRACT', 'JSON_UNQUOTE', 'LEAST', 'LENGTH', 'LOWER',
+  'NULLIF', 'OCTET_LENGTH', 'ROUND', 'SUBSTR', 'SUBSTRING', 'TRIM', 'UPPER']);
+const castTypes = new Set(['BINARY', 'CHAR', 'DECIMAL', 'DOUBLE', 'FLOAT', 'TIME', 'DATETIME']);
+const expressionKeywords = new Set(['NULL', 'TRUE', 'FALSE', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP', 'LOCALTIME', 'LOCALTIMESTAMP']);
+const scalarSyntax = new Set(['WHEN', 'THEN', 'ELSE', 'AND', 'OR', 'NOT', 'IN']);
+
+function directProjection(tokens: TableDefinitionToken[]): ProjectionKind | undefined {
+  let end = 0;
+  while (name(tokens[end]) && symbol(tokens[end + 1], '.')) end += 2;
+  if (symbol(tokens[end], '*') && end === tokens.length - 1) return 'expand';
+  const column = tokens[end++];
+  if (!name(column) || end === 1 && expressionKeywords.has(word(column))) return;
+  const rest = tokens.length - end;
+  if (rest === 0 || rest === 1 && name(tokens[end]) || rest === 2 && word(tokens[end]) === 'AS' && name(tokens[end + 1])) return 'column';
+}
+
+/** 从语法固定计算列的位置，协议把括号中的单列仍报为原列时也不能因此写入。 */
+function queryProjection(tokens: TableDefinitionToken[]): ProjectionKind[] | undefined {
+  if (!tokens.length || ['DISTINCT', 'DISTINCTROW'].includes(word(tokens[0]))) return;
+  const parts: TableDefinitionToken[][] = [];
+  let depth = 0, start = 0;
+  for (const [index, token] of tokens.entries()) {
+    if (symbol(token, ',') && depth === 0) { parts.push(tokens.slice(start, index)); start = index + 1; }
+    else if (symbol(token, '(')) depth++;
+    else if (symbol(token, ')')) { depth--; if (depth < 0) return; }
+  }
+  if (depth) return;
+  parts.push(tokens.slice(start));
+  if (parts.some(part => !part.length || part.some((token, index) => {
+    if (!name(token) || !symbol(part[index + 1], '(')) return false;
+    return symbol(part[index - 1], '.') || !scalarCalls.has(word(token)) && !scalarSyntax.has(word(token)) &&
+      !(word(part[index - 1]) === 'AS' && castTypes.has(word(token)));
+  }))) return;
+  const kinds = parts.map(part => directProjection(part) ?? 'expression');
+  if (kinds.includes('expression') && (kinds.every(kind => kind === 'expression') || kinds.filter(kind => kind === 'expand').length > 1)) return;
+  return kinds;
+}
+
+function expressionIndices(projection: ProjectionKind[] | undefined, count: number): number[] | undefined {
+  if (!projection) return [];
+  const expansion = count - projection.length, wildcard = projection.indexOf('expand');
+  if (expansion < 0 || wildcard < 0 && expansion !== 0) return;
+  return projection.flatMap((kind, index) => kind === 'expression' ? [index + (wildcard >= 0 && index > wildcard ? expansion : 0)] : []);
+}
 
 function tableAt(tokens: TableDefinitionToken[], start: number) {
   const first = name(tokens[start]);
@@ -44,12 +91,16 @@ export function mysqlQueryRelationTarget(sql: string, mode: SqlLexicalMode, dial
   try { tokens = tableDefinitionTokens(sql, { mode, dialect }); } catch { return; }
   if (symbol(tokens.at(-1), ';')) tokens.pop();
   if (word(tokens[0]) !== 'SELECT' || tokens.slice(1).some(token => token.kind === 'executable' || symbol(token, ';') ||
-    symbol(token, '@') || ['SELECT', 'UNION', 'INTERSECT', 'EXCEPT', 'GROUP', 'HAVING', 'WINDOW', 'INTO', 'FOR', 'LOCK', 'PROCEDURE'].includes(word(token)))) return;
-  const from = tokens.findIndex((token, index) => index > 1 && word(token) === 'FROM');
+    symbol(token, '@') || ['SELECT', 'UNION', 'INTERSECT', 'EXCEPT', 'GROUP', 'HAVING', 'WINDOW', 'OVER', 'INTO', 'FOR', 'LOCK', 'PROCEDURE'].includes(word(token)))) return;
+  let depth = 0;
+  const from = tokens.findIndex((token, index) => {
+    if (symbol(token, '(')) depth++;
+    if (symbol(token, ')')) depth--;
+    return depth === 0 && index > 1 && word(token) === 'FROM';
+  });
   if (from < 0) return;
-  const projection = tokens.slice(word(tokens[1]) === 'ALL' ? 2 : 1, from);
-  if (!projection.length || ['DISTINCT', 'DISTINCTROW'].includes(word(projection[0])) ||
-      projection.some(token => !name(token) && !['.', '*', ','].some(value => symbol(token, value)))) return;
+  const projection = queryProjection(tokens.slice(word(tokens[1]) === 'ALL' ? 2 : 1, from));
+  if (!projection) return;
   const first = tableAt(tokens, from + 1);
   if (!first) return;
   let cursor = first.end;
@@ -77,11 +128,11 @@ export function mysqlQueryRelationTarget(sql: string, mode: SqlLexicalMode, dial
     if (depth || cursor === start) return;
   }
   const { database, table } = first.target;
-  return { database, table, ...(joined.length > 1 ? { joined } : {}) };
+  return { database, table, ...(joined.length > 1 ? { joined } : {}), ...(projection.includes('expression') ? { projection } : {}) };
 }
 
 type PhysicalTable = { database: string; table: string };
-interface QueryOrigin extends PhysicalTable { context: string; columns: (string | null)[]; joined?: PhysicalTable[] }
+interface QueryOrigin extends PhysicalTable { context: string; columns: (string | null)[]; joined?: PhysicalTable[]; computed?: number[] }
 export interface MysqlQueryRelationSource extends QueryOrigin {
   executionId: string;
   result: QueryResult;
@@ -92,17 +143,22 @@ export interface MysqlQueryRelationSource extends QueryOrigin {
 export function mysqlQueryRelationOrigin(managed: ManagedConnection, target: QueryTarget, fields: readonly FieldPacket[]): QueryOrigin | undefined {
   const directory = managed.sessionObjects?.snapshot(), context = managed.queryRowContext;
   if (!context || !directory || directory.uncertain || !fields.length || fields.length > 1024) return;
+  const computed = expressionIndices(target.projection, fields.length);
+  if (!computed) return;
+  const computedSet = new Set(computed), computedInfo = computed.length ? { computed } : {};
   const equal = (a: string, b: string) => directory.caseMode ? a.toLowerCase() === b.toLowerCase() : a === b;
   const shadowed = (database: string, table: string) => directory.objects.some(object => equal(database, object.database) && equal(table, object.name));
   if (!target.joined) {
-    const first = fields[0], database = first.schema ?? first.db, table = first.orgTable;
+    const first = fields.find((_, index) => !computedSet.has(index));
+    const database = first?.schema ?? first?.db, table = first?.orgTable;
     if (!database || !table || !equal(table, target.table) || target.database && !equal(database, target.database) ||
-        fields.some(field => (field.schema ?? field.db) !== database || field.orgTable !== table || !field.orgName) || shadowed(database, table)) return;
-    return { context, database, table, columns: fields.map(field => field.orgName) };
+        fields.some((field, index) => !computedSet.has(index) && ((field.schema ?? field.db) !== database || field.orgTable !== table || !field.orgName)) || shadowed(database, table)) return;
+    return { context, database, table, columns: fields.map((field, index) => computedSet.has(index) ? null : field.orgName), ...computedInfo };
   }
   const currentDatabase = managed.completionDatabase?.known ? managed.completionDatabase.database : undefined;
   const resolved = new Map<QueryTable, PhysicalTable>(), columns: (string | null)[] = [];
-  for (const field of fields) {
+  for (const [index, field] of fields.entries()) {
+    if (computedSet.has(index)) { columns.push(null); continue; }
     const matches = target.joined.filter(ref => !!field.table && equal(ref.alias, field.table));
     const ref = matches[0], database = field.schema ?? field.db, table = field.orgTable;
     const expectedDatabase = ref?.database ?? currentDatabase;
@@ -117,7 +173,7 @@ export function mysqlQueryRelationOrigin(managed: ManagedConnection, target: Que
   if (physical.some(ref => !ref)) return;
   const joined = physical as PhysicalTable[];
   if (joined.some((ref, index) => joined.slice(0, index).some(other => equal(ref.database, other.database) && equal(ref.table, other.table)))) return;
-  return { context, ...joined[0], columns, joined: joined.slice(1) };
+  return { context, ...joined[0], columns, joined: joined.slice(1), ...computedInfo };
 }
 
 /** 对选定的主表协议列按原类型核对所有已返回行的主键唯一性。 */

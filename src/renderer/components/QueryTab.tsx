@@ -1466,6 +1466,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const mysqlRelationAvailable = mysqlSourceAvailable && outcome?.mysqlQueryRelation === true;
   const mysqlInsertAvailable = mysqlSourceAvailable && outcome?.mysqlQueryInsert === true;
   const mysqlJoinColumns = outcome?.mysqlQueryJoinColumns;
+  const mysqlComputedColumns = outcome?.mysqlQueryComputedColumns;
   /** 查询排序只改变视图次序，回查使用原执行中准确的行对象。 */
   function openMysqlRelation(direction: 'parent' | 'children' | 'edit'): void {
     if (!activeDetailRow || activeDetailRow.binding !== detailBinding) return;
@@ -1504,6 +1505,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const rowIndices = displayIndices.map(index => sourceResult.rows.indexOf(result.rows[index]));
     const columnIndices = keys.map(key => sourceResult.columns.findIndex(column => column.key === key));
     if (rowIndices.some(index => index < 0) || columnIndices.some(index => index < 0)) throw Error(mysqlBatchText.stale);
+    if (mysqlComputedColumns && columnIndices.some(index => mysqlComputedColumns.includes(index))) throw Error(mysqlEditText.computedReadOnly);
     if (mysqlJoinColumns && columnIndices.some(index => !mysqlJoinColumns.includes(index))) throw Error(mysqlEditText.joinReadOnly);
     const job = acquireWorkspaceBusy(tab.id);
     const owner = { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current, taskId: uid(), rowIndices };
@@ -1624,7 +1626,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const position = captureQueryInlineCellAnchor(anchor);
     if (index < 0 || !position) return false;
     const target = { ...position, label: cell.column.name, typed, key: cell.column.key, row: cell.row };
-    if (mysqlRelationAvailable) return mysqlJoinColumns?.includes(index) !== false && startMysqlQueryRecord('edit', cell.row, { ...target, columnIndex: index });
+    if (mysqlRelationAvailable) return !mysqlComputedColumns?.includes(index) && mysqlJoinColumns?.includes(index) !== false &&
+      startMysqlQueryRecord('edit', cell.row, { ...target, columnIndex: index });
     const origin = resultOrigins?.[index];
     if (!origin || origin.database !== 'main' || origin.table !== recordEditTable) return false;
     return startQueryRecords([cell.row], { cell: { ...target, column: origin.column } });

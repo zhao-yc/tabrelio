@@ -49,6 +49,23 @@ describe('MySQL 查询关联原行', () => {
     expect(sessionObjectAction(sql + ' WHERE db.unknown_fn(p.id)', 'db', mode, 'mysql', true)).toMatchObject({ kind: 'opaque' });
   });
 
+  it('星号展开后计算列仍按原位置只读，括号列不能替代直接投影的主键', () => {
+    const sql = 'SELECT (t.id) AS 计算键, t.*, CAST(t.id AS DECIMAL(20,2)) AS 数值, NULL AS 空值 FROM db.t';
+    const relation = target(sql)!;
+    expect(relation.projection).toEqual(['expression', 'expand', 'expression', 'expression']);
+    const objects = new SessionObjects(0), managed = { queryRowContext: 'context', sessionObjects: objects } as ManagedConnection;
+    const projected = { columns: Array.from({ length: 5 }, (_, index) => ({ key: 'c' + index, name: '同名', type: 'VARCHAR' })),
+      rows: [{ c0: '9007199254740993', c1: '9007199254740993', c2: '原值', c3: '9007199254740993.00', c4: null }],
+      truncated: false, elapsedMs: 0, statement: sql };
+    const source = mysqlQueryRelationSource(managed, relation, [fields[0], ...fields, {}, {}] as FieldPacket[], projected, 'run');
+    expect(source).toMatchObject({ computed: [0, 3, 4], columns: [null, 'id', 'label', null, null], rowReadable: true });
+    const hidden = mysqlQueryRelationSource(managed, target('SELECT (t.id),t.label FROM db.t')!, fields, result, 'run');
+    expect(hidden?.rowReadable).toBeUndefined();
+    expect(sessionObjectAction(sql, 'db', mode, 'mysql', true)).toMatchObject({ kind: 'dependencies' });
+    for (const rejected of ['SELECT id, SUM(qty) FROM t', 'SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t',
+      'SELECT id, db.custom(note) FROM t', 'SELECT id, (SELECT 1) FROM t']) expect(target(rejected)).toBeUndefined();
+  });
+
   it('临时表遮蔽或协议指向不同表时不提供回查', () => {
     const objects = new SessionObjects(0), managed = { queryRowContext: 'context', sessionObjects: objects } as ManagedConnection;
     const relation = { database: 'db', table: 't' };
