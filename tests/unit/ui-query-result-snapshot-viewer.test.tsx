@@ -15,6 +15,8 @@ import ts from 'typescript';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { createQueryResultSnapshot, type QueryResultSnapshotDocument } from '../../src/shared/queryResultSnapshot';
 import { queryResultSnapshotViewerZh as text } from '../../src/renderer/locales/queryResultSnapshotViewer.zh-CN';
+import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 const rendered = vi.hoisted(() => ({ grids: [] as any[], parents: [] as any[], editors: [] as any[] }));
@@ -146,6 +148,32 @@ it('离线导出冻结勾选并锁住原查看器，关闭后保留勾选，换�
   const next = parent();
   await act(async () => { expect(next.onSelectionChange({ scope: next.selectionScope, rows: next.rows, columns: next.columns, indices: new Set([0]) })).toBe(true); });
   expect(button(text.exportChecked).disabled).toBe(false);
+});
+it('离线排序保留匹配成员和 SQLite 逐格类型，撤销旧网格回调，另存原行序', async () => {
+  const value = opened('SQLite 排序快照', createQueryResultSnapshot({
+    columns: [{ key: 'value', name: '值', type: 'SQLITE' }],
+    rows: [{ value: '2' }, { value: '10' }, { value: null }, { value: '2' }],
+    sqliteStorage: { version: 1, rows: ['t', 'i', 'n', 'i'] },
+    elapsedMs: 0, truncated: false, statement: 'SELECT value FROM source;',
+  }));
+  await mount();
+  bridge.mockResolvedValueOnce(value);
+  await click(text.choose);
+  await act(async () => parent().onShowMatchingRows(new Set([0, 1, 3])));
+  const beforeSort = parent();
+  await act(async () => beforeSort.onSortChange([{ column: 'value', direction: 'ASC', nulls: 'LAST' }]));
+  expect(parent().rows.map((row: { value: unknown }) => row.value)).toEqual(['2', '10', '2']);
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['i', 'i', 't']);
+  await act(async () => beforeSort.onSortChange([{ column: 'value', direction: 'DESC' }]));
+  expect(parent().sort).toEqual([{ column: 'value', direction: 'ASC', nulls: 'LAST' }]);
+
+  await click(findText.clearMatchView);
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['i', 'i', 't', 'n']);
+  bridge.mockResolvedValueOnce({ name: '完整副本' });
+  await click(text.save);
+  expect(bridge.mock.calls.at(-1)).toEqual(['resultSnapshotFiles.save', { snapshot: value.snapshot }]);
+  await click(sortText.clear);
+  expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'i', 'n', 'i']);
 });
 it('BLOB纯查看内层Escape只关闭内层，原外层header也不能穿透，下一Escape才关外层', async () => {
   const close = vi.fn(); await mount(<Dialog onClose={close}/>); bridge.mockResolvedValueOnce(opened()); await click(text.choose); const grid = rendered.grids.at(-1);

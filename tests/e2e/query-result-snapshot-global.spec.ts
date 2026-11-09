@@ -20,6 +20,7 @@ function register(): void {
   const executeFile = promisify(execFile);
   const { queryResultSnapshotViewerZh: text } = require('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN');
   const { queryResultFindZh: findText } = require('../../src/renderer/locales/queryResultFind.zh-CN') as typeof import('../../src/renderer/locales/queryResultFind.zh-CN');
+  const { queryResultSortZh: sortText } = require('../../src/renderer/locales/queryResultSort.zh-CN') as typeof import('../../src/renderer/locales/queryResultSort.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
   const { binaryCellFilesZh } = require('../../src/renderer/locales/binaryCellFiles.zh-CN') as typeof import('../../src/renderer/locales/binaryCellFiles.zh-CN');
@@ -154,6 +155,12 @@ function register(): void {
         expect(found).toBe(true); await step(() => expect(grid.getByRole('gridcell').filter({ hasText: value })).toContainText(value));
       }
       await step(async () => (await navigationMenuItem(viewer, { name: text.sourceShow, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.locator('.monaco-editor .view-lines')).toContainText('仅快照SQL')); await step(() => expect(viewer.getByRole('textbox')).toHaveAttribute('aria-autocomplete', 'none')); await step(async () => (await navigationMenuItem(viewer, { name: text.sourceHide, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.locator('.monaco-editor')).toHaveCount(0));
+
+      await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
+      const big = grid.getByRole('columnheader').filter({ hasText: /^BIGINT/ });
+      await step(() => big.click());
+      await step(() => expect(big.getByLabel(sortText.ascending)).toBeVisible());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
 
       const input = viewer.getByRole('textbox', { name: findText.input, exact: true });
       const status = viewer.locator('.query-result-find-status').getByRole('status');

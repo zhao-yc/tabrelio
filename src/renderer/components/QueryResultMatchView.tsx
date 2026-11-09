@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { QueryResult, ResultColumn } from '../../shared/contracts';
-import { projectQueryResultRows } from '../queryResultKeyword';
+import { projectQueryResultKeyword, projectQueryResultRows } from '../queryResultKeyword';
 import { queryResultFindZh as text } from '../locales/queryResultFind.zh-CN';
 import '../queryResultKeyword.css';
 
@@ -34,7 +34,12 @@ export function useQueryResultMatchView(source: QueryResult | undefined, columns
     invalidate();
     setProjection(undefined);
   }
-  return { result, active, apply, clear };
+  /** 同一批原行重排时沿用匹配成员，使用新顺序重新投影 SQLite 逐格类型。 */
+  function reorder(sorted: QueryResult): void {
+    if (active) setProjection({ source: sorted, columns, context,
+      result: projectQueryResultKeyword(sorted, new Set(active.result.rows)) });
+  }
+  return { result, active, apply, clear, reorder };
 }
 
 export function QueryResultMatchView({ active, disabled, onClear }: { active: Projection; disabled: boolean; onClear(): void }) {

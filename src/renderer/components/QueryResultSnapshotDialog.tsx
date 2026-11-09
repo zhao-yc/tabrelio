@@ -6,8 +6,11 @@ import { errorMessage, invoke } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
+import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
+import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
+import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { escapeTargetsQueryResultFind } from './QueryResultFind';
 import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
 import { SqlEditor } from './SqlEditor';
@@ -23,13 +26,14 @@ export const queryResultSnapshotViewerServices: QueryResultSnapshotViewerService
 };
 interface Loaded { name: string; snapshot: QueryResultSnapshotDocument; scope: object; }
 interface Operation { mode: 'open' | 'save'; epoch: number; source: Loaded | undefined; }
-interface SnapshotExport { result: QueryResult; selected: boolean; }
+type SnapshotSort = { kind: 'sort'; binding: QueryResultSortBinding; initial: QueryResultSortView };
+type SnapshotOverlay = SnapshotSort | { kind: 'export'; result: QueryResult; selected: boolean };
 
 /** 全局查看只持有文件内容，不创建查询、连接或会话；原文件Promise包括主进程清理。 */
 export function QueryResultSnapshotDialog({ onClose, services = queryResultSnapshotViewerServices }: { onClose(): void; services?: QueryResultSnapshotViewerServices }) {
   const [loaded, setLoaded] = useState<Loaded>(), loadedRef = useRef(loaded);
   const [busy, setBusy] = useState<'open' | 'save'>(), [error, setError] = useState(''), [message, setMessage] = useState(''), [showSql, setShowSql] = useState(false);
-  const [exportView, setExportView] = useState<SnapshotExport>(), exportRef = useRef<SnapshotExport | undefined>(undefined);
+  const [overlay, setOverlay] = useState<SnapshotOverlay>(), overlayRef = useRef<SnapshotOverlay | undefined>(undefined);
   const exportSelection = useMemo(() => new ResultExportSelection(), []);
   const [, refreshSelection] = useState(0);
   const returnFocus = useRef<HTMLButtonElement | null>(null);
@@ -37,18 +41,22 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const alive = useRef(false), lifetime = useRef(0), committed = useRef<object | null>(null), host = useRef<HTMLDivElement | null>(null), ticket = {};
   const callbacks = useRef({ onClose, services }); callbacks.current = { onClose, services };
   const sourceResult = loaded?.snapshot.result;
-  const matches = useQueryResultMatchView(sourceResult, sourceResult?.columns, [loaded?.scope]);
+  const dialect = loaded?.snapshot.version === 3 ? 'postgresql' : undefined;
+  const sorter = useMemo(() => new QueryResultSort(dialect), [dialect]);
+  const sortBinding = sorter.bind(sourceResult, [loaded?.scope]);
+  const sortView = sorter.view(sortBinding);
+  const matches = useQueryResultMatchView(sortView?.result ?? sourceResult, sourceResult?.columns, [loaded?.scope]);
   const displayed = matches.result;
   const binding = exportSelection.bind(displayed, [loaded?.scope]);
   const checkedCount = exportSelection.count(binding);
   useLayoutEffect(() => { alive.current = true; lifetime.current++; return () => { alive.current = false; lifetime.current++; }; }, []);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = null; }; });
   useLayoutEffect(() => {
-    if (!exportView && returnFocus.current) {
+    if (!overlay && returnFocus.current) {
       returnFocus.current.focus({ preventScroll: true });
       returnFocus.current = null;
     }
-  }, [exportView]);
+  }, [overlay]);
   /** 逐级核可见性和真实挂载；内存测试不需要伪造浏览器几何。 */
   function visible(): boolean {
     const element = host.current; if (!element || !document.body.contains(element)) return false;
@@ -62,19 +70,19 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   /** 只有当前最上层模态可以关闭或领文件，alertdialog同样阻止穿透。 */
   function topmost(): boolean { const dialogs = document.querySelectorAll(appModalSelector); return !!ownDialog() && dialogs[dialogs.length - 1] === ownDialog(); }
   /** 已提交DOM、可见窗口与同步IO槽必须同时有效，旧按钮不能领取新操作。 */
-  function editable(): boolean { return alive.current && committed.current === ticket && !operation.current && !exportRef.current && visible() && topmost(); }
+  function editable(): boolean { return alive.current && committed.current === ticket && !operation.current && !overlayRef.current && visible() && topmost(); }
   /** 开始和结束都推进网格回调代次；同一文件selectionScope保持稳定，旧回调永不复活。 */
   function advance(): void { interactionRef.current++; if (alive.current) setInteraction(interactionRef.current); }
   /** 普通网格拒绝任何其它模态；纯字节显示只认可本查看器内部的嵌套窗口。 */
   function gridCurrent(source: Loaded, epoch: number, binary: boolean): boolean {
-    if (!alive.current || operation.current || exportRef.current || loadedRef.current !== source || interactionRef.current !== epoch || !visible()) return false;
+    if (!alive.current || operation.current || overlayRef.current || loadedRef.current !== source || interactionRef.current !== epoch || !visible()) return false;
     const own = ownDialog(), dialogs = Array.from(document.querySelectorAll(appModalSelector));
     return !!own && dialogs.every(dialog => dialog === own || binary && !!host.current?.contains(dialog));
   }
   const binaryIdentity = useMemo(() => loaded ? [loaded.scope, interaction] : [], [loaded, interaction]);
   /** Header、footer和Escape共用原IO门；嵌套字节窗口的Escape不能穿透关闭外层。 */
   function close(): void {
-    if (!alive.current || committed.current !== ticket || exportRef.current || !visible() || !topmost()) return;
+    if (!alive.current || committed.current !== ticket || overlayRef.current || !visible() || !topmost()) return;
     if (operation.current) { setMessage(text.waiting); return; }
     callbacks.current.onClose();
   }
@@ -113,16 +121,43 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     if (!editable() || !loaded || loadedRef.current !== loaded || !binding) return;
     try {
       const result = selected ? exportSelection.snapshot(binding) : exportSelection.allSnapshot(binding);
-      const view = { result, selected };
-      returnFocus.current = trigger;
-      exportRef.current = view;
-      advance(); setExportView(view); setError('');
+      openOverlay({ kind: 'export', result, selected }, trigger);
     } catch (reason) { setError(errorMessage(reason)); }
   }
-  function closeExport(view: SnapshotExport): void {
-    if (!alive.current || exportRef.current !== view) return;
-    exportRef.current = undefined;
-    advance(); setExportView(undefined);
+  function openOverlay(view: SnapshotOverlay, trigger: HTMLButtonElement): void {
+    returnFocus.current = trigger;
+    overlayRef.current = view;
+    advance(); setOverlay(view); setError('');
+  }
+  function closeOverlay(view: SnapshotOverlay): void {
+    if (!alive.current || overlayRef.current !== view) return;
+    overlayRef.current = undefined;
+    advance(); setOverlay(undefined);
+  }
+  function sortDraftCurrent(draft: SnapshotSort): boolean {
+    return alive.current && overlayRef.current === draft && sorter.view(draft.binding) === draft.initial;
+  }
+  /** 只重排内存中的原行，匹配范围跟随行身份；文件和完整快照仍保留原序。 */
+  function publishSort(binding: QueryResultSortBinding, initial: QueryResultSortView, rules: QueryResultSortRule[]): void {
+    const next = sorter.apply(binding, initial, rules);
+    matches.reorder(next.result);
+    exportSelection.invalidate();
+    advance(); setError('');
+  }
+  function sortGrid(rules: QueryResultSortRule[]): void {
+    if (!loaded || !sortBinding || !sortView || !gridCurrent(loaded, interaction, false)) return;
+    try { publishSort(sortBinding, sortView, rules); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+  function openSort(trigger: HTMLButtonElement): void {
+    if (!editable() || !sortBinding || !sortView || sorter.view(sortBinding) !== sortView) return;
+    openOverlay({ kind: 'sort', binding: sortBinding, initial: sortView }, trigger);
+  }
+  function applySort(draft: SnapshotSort, rules: QueryResultSortRule[]): boolean {
+    if (!sortDraftCurrent(draft)) return false;
+    publishSort(draft.binding, draft.initial, rules);
+    closeOverlay(draft);
+    return true;
   }
   /** 只有准确原操作能更新显示；失效保存仍报告已写可能性或原Main错误。 */
   async function file(mode: 'open' | 'save'): Promise<void> {
@@ -153,13 +188,16 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   /** SQL只控制本窗口只读显隐，不设置编辑器正文或提供任何执行回调。 */
   function toggleSql(): void { if (editable() && loaded && loadedRef.current === loaded) setShowSql(value => !value); }
-  return <><div hidden={!!exportView}><Modal title={text.title} wide onClose={close} onEscape={escape}><div ref={host} className="query-result-snapshot-viewer" aria-busy={!!busy}>
+  return <><div hidden={!!overlay}><Modal title={text.title} wide onClose={close} onEscape={escape}><div ref={host} className="query-result-snapshot-viewer" aria-busy={!!busy}>
     <p>{text.notice}</p><UsageHelp><p>{text.scope}</p></UsageHelp>
     <div className="query-result-snapshot-viewer-actions">
       <button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button>
       <button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button>
       <button disabled={!!busy || !binding} onClick={event => openExport(false, event.currentTarget)}>{text.exportShown}</button>
       <button disabled={!!busy || !checkedCount} onClick={event => openExport(true, event.currentTarget)}>{text.exportChecked}</button>
+      <button disabled={!!busy || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
+        onClick={event => openSort(event.currentTarget)}>{sortText.panelTitle}</button>
+      {sortView && sortView.rules.length > 0 && <button disabled={!!busy} onClick={() => sortGrid([])}>{sortText.clear}</button>}
       <button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button>
       <span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button>
     </div>
@@ -172,6 +210,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <div className="query-result-snapshot-viewer-grid">
         <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
           onSelectionChange={binding ? selectRows : undefined}
+          sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>
@@ -181,6 +220,10 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       </section>}
     </> : <p>{text.empty}</p>}
   </div></Modal></div>
-    {exportView && <ResultExportDialog scope="snapshot" result={exportView.result} selected={exportView.selected} onClose={() => closeExport(exportView)}/>}
+    {overlay?.kind === 'export' && <ResultExportDialog scope="snapshot" result={overlay.result} selected={overlay.selected} onClose={() => closeOverlay(overlay)}/>}
+    {overlay?.kind === 'sort' && <Modal title={sortText.panelTitle} wide onClose={() => closeOverlay(overlay)}>
+      <QueryResultSortPanel offline binding={overlay.binding} initial={overlay.initial} isCurrent={() => sortDraftCurrent(overlay)}
+        onApply={rules => applySort(overlay, rules)} onClose={() => closeOverlay(overlay)}/>
+    </Modal>}
   </>;
 }
