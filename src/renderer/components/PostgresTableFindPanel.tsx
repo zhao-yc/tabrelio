@@ -5,6 +5,7 @@ import { cellPreview, errorMessage } from '../lib';
 import { pageFindLimits, pageOccurrences, type PageFindOptions, type PageOccurrence, type PageTextPatch } from '../pageFindReplace';
 import { PageFindWorkerClient } from '../pageFindWorkerClient';
 import type { PostgresFindPlan } from '../postgresTableFind';
+import { queryResultFindZh } from '../locales/queryResultFind.zh-CN';
 import { postgresTableFindZh as text } from '../locales/postgresTableFind.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { GridFindMatchActions, type GridMatchRowsAction } from './GridRowSelectionActions';
@@ -12,7 +13,7 @@ import { ErrorBox } from './ui';
 import type { GridFindTarget } from './ResultsGrid';
 
 export interface PostgresFindRequest { replace: boolean; }
-type Mode = 'text' | 'null' | 'field';
+type Mode = 'text' | 'empty' | 'null' | 'field';
 type Review = Pick<PostgresFindPlan, 'patches'>;
 interface Props<Column extends ResultColumn, Plan extends Review> {
   request?: PostgresFindRequest; scope: object; pageKey?: string; enabled: boolean; writable: boolean; rows: DraftRow[];
@@ -55,7 +56,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const chosen = position?.snapshot === snapshot ? position.index : -1;
   const review = preview?.snapshot === snapshot && preview.replacement === replacement ? preview : undefined;
   const hit = found?.hits[chosen];
-  const canSearch = mode === 'null' || !!query;
+  const needsQuery = mode === 'text' || mode === 'field';
+  const canSearch = !needsQuery || !!query;
   const replaceVisible = request?.replace && mode === 'text';
   const canReplace = writable && enabled && replaceVisible;
   const pending = preparing === snapshot;
@@ -189,14 +191,14 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
       onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}>
       <div className="query-result-find-toolbar">
         <label className="pg-find-mode">{text.mode} <select ref={modeInput} aria-label={text.mode} value={mode} disabled={!enabled || locked} onChange={event => setMode(event.target.value as Mode)}>
-          <option value="text">{text.values}</option><option value="field">{text.fields}</option><option value="null">{text.null}</option>
+          <option value="text">{text.values}</option><option value="field">{text.fields}</option><option value="empty">{queryResultFindZh.modes.empty}</option><option value="null">{text.null}</option>
         </select></label>
-        {mode !== 'null' && <input ref={queryInput} aria-label={text.query} value={query} maxLength={pageFindLimits.query}
+        {needsQuery && <input ref={queryInput} aria-label={text.query} value={query} maxLength={pageFindLimits.query}
           disabled={!enabled || locked} onChange={event => { setQuery(event.target.value); setError(''); }}/>}
         {mode !== 'field' && <select aria-label={text.column} value={column} disabled={!enabled || locked} onChange={event => setColumn(event.target.value)}>
           <option value="">{text.allColumns}</option>{columns.map(item => <option key={item.key} value={item.key}>{item.name}</option>)}
         </select>}
-        {mode !== 'null' && <>
+        {needsQuery && <>
           <label className="check"><input type="checkbox" checked={sensitive} disabled={!enabled || locked} onChange={event => setSensitive(event.target.checked)}/>{text.caseSensitive}</label>
           <label className="check"><input type="checkbox" checked={whole} disabled={!enabled || locked} onChange={event => setWhole(event.target.checked)}/>{text.whole}</label>
         </>}

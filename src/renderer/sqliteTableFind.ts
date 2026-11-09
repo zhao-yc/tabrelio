@@ -6,7 +6,7 @@ import { PageTextSize, joinPageText, type PageTextSpan } from './pageFindText';
 
 export const sqliteFindLimits = { ...pageFindLimits, rows: 1500, columns: 1024, patches: 10000, changedRows: 500, valueUnits: 65536, writeBytes: 2 * 1024 * 1024 } as const;
 export const sqliteFindMessages = { invalid: 'SQLite当前页查找数据或回包无效。', budget: 'SQLite当前页查找或替换超过完整预算，未截断或暂存部分结果。', stale: '原SQLite页、草稿或查找选项已变化，请重新明确查找。', readonly: '当前SQLite页不能暂存文本替换。', cancelled: 'SQLite当前页查找已取消。', timeout: 'SQLite当前页查找超时，原线程已终止。', worker: 'SQLite查找线程未正常完成，未授予替换资格。', empty: '请输入当前页查找文字。', regexInvalid: '正则表达式无效。', noReplace: '只有实际TEXT且非生成列、非待删除的匹配格可以替换。', valueLimit: '替换后单元格超过65536字符，未暂存任何修改。', capture: '捕获组替换只允许明确启用的文本正则模式。' } as const;
-export interface SqliteFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: number; regex?: boolean; captureReplacement?: boolean; }
+export interface SqliteFindOptions { kind: 'text' | 'empty' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: number; regex?: boolean; captureReplacement?: boolean; }
 export interface SqliteFindMatch { rowId: string; column: number; ranges: { start: number; end: number }[]; replaceable: boolean; }
 export interface SqliteFindOccurrence { rowId: string; column: number; range?: { start: number; end: number }; occurrence: number; replaceable: boolean; }
 export interface SqliteTextPatch { rowId: string; column: number; before: string; after: string; }
@@ -32,7 +32,7 @@ function fields(value: unknown, required: string[], optional: string[] = []): Re
 /** 查找选项保原文，NULL/DEFAULT与文字不同；列号绑定真实页列，不从字段名猜测。 */
 export function copySqliteFindOptions(raw: SqliteFindOptions, width: number): SqliteFindOptions {
   const value = fields(copySqliteFindTransfer(raw), ['kind', 'query', 'caseSensitive', 'wholeCell'], ['column', 'regex', 'captureReplacement']);
-  if (!['text', 'null', 'default'].includes(value.kind) || typeof value.query !== 'string' || value.query.length > limits.query || typeof value.caseSensitive !== 'boolean' || typeof value.wholeCell !== 'boolean' || value.regex !== undefined && typeof value.regex !== 'boolean' || value.captureReplacement !== undefined && typeof value.captureReplacement !== 'boolean' || value.column !== undefined && (!Number.isInteger(value.column) || value.column < 0 || value.column >= width)) throw invalid();
+  if (!['text', 'empty', 'null', 'default'].includes(value.kind) || typeof value.query !== 'string' || value.query.length > limits.query || typeof value.caseSensitive !== 'boolean' || typeof value.wholeCell !== 'boolean' || value.regex !== undefined && typeof value.regex !== 'boolean' || value.captureReplacement !== undefined && typeof value.captureReplacement !== 'boolean' || value.column !== undefined && (!Number.isInteger(value.column) || value.column < 0 || value.column >= width)) throw invalid();
   if (value.captureReplacement && (value.kind !== 'text' || !value.regex)) throw Error(sqliteFindMessages.capture); if (value.kind === 'text' && !value.query) throw Error(sqliteFindMessages.empty); return { kind: value.kind, query: value.query, caseSensitive: value.caseSensitive, wholeCell: value.wholeCell, ...(value.column === undefined ? {} : { column: value.column }), regex: !!value.regex, captureReplacement: !!value.captureReplacement };
 }
 /** 原值不经Number；查找可阅读真实无穷REAL，替换资格只来自实际TEXT。 */
@@ -60,11 +60,24 @@ export function sqliteFindOccurrences(matches: readonly SqliteFindMatch[]): Sqli
 interface PlannedMatch extends SqliteFindMatch { captures?: RegExpExecArray[]; }
 /** 用户模式只由实际Worker调用此编译器，字面查找也在线程内统一执行。 */
 function pattern(options: SqliteFindOptions): RegExp | undefined { if (options.kind !== 'text') return; const source = options.regex ? options.query : options.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); try { return new RegExp(options.regex && options.wholeCell ? '^(?:' + source + ')$' : source, options.caseSensitive ? 'gu' : 'giu'); } catch { throw Error(sqliteFindMessages.regexInvalid); } }
+/** 原值模式由线程和回包验证共用，空 BLOB 不能借空十六进制表示成为空 TEXT 命中。 */
+export function matchesSqliteFindValue(kind: Exclude<SqliteFindOptions['kind'], 'text'>, row: SqliteDraftRow, column: number): boolean {
+  const value = row.values[column];
+  if (kind === 'empty') return value?.kind === 'text' && value.value === '';
+  if (kind === 'null') return value?.kind === 'null';
+  return value === undefined && row.index === undefined;
+}
 /** Unicode matchAll原生推进零宽模式；完整命中超过五万时拒绝，不静默截断。 */
 function scan(source: SqliteFindSource, captures: boolean, only?: SqliteFindOccurrence): PlannedMatch[] {
   const options = source.options, regex = pattern(options), matches: PlannedMatch[] = []; let occurrences = 0, captureBytes = 0;
   for (const row of source.rows) { if (row.deleted) continue; for (let column = 0; column < source.columns.length; column++) { if (options.column !== undefined && options.column !== column) continue; const value = row.values[column], replaceable = source.writable && !source.columns[column].generated && value?.kind === 'text' && options.kind === 'text';
-    if (options.kind !== 'text') { if (options.kind === 'null' && value?.kind === 'null' || options.kind === 'default' && value === undefined && row.index === undefined) { if (++occurrences > limits.matches) throw Error(sqliteFindMessages.budget); matches.push({ rowId: row.id, column, ranges: [], replaceable: false }); } continue; }
+    if (options.kind !== 'text') {
+      if (matchesSqliteFindValue(options.kind, row, column)) {
+        if (++occurrences > limits.matches) throw Error(sqliteFindMessages.budget);
+        matches.push({ rowId: row.id, column, ranges: [], replaceable: false });
+      }
+      continue;
+    }
     if (!value || value.kind === 'null') continue; const before = value.value, ranges: SqliteFindMatch['ranges'] = [], saved: RegExpExecArray[] = [];
     for (const match of before.matchAll(regex!)) { if (options.wholeCell && (match.index !== 0 || match[0].length !== before.length)) continue; if (++occurrences > limits.matches) throw Error(sqliteFindMessages.budget); ranges.push({ start: match.index, end: match.index + match[0].length }); if (captures && replaceable && (!only || only.rowId === row.id && only.column === column && only.range?.start === match.index && only.range.end === match.index + match[0].length)) { captureBytes += match.length * 16 + match.reduce((sum, value) => sum + (value?.length ?? 0) * 2, 0) + Object.entries(match.groups ?? {}).reduce((sum, [name, value]) => sum + name.length * 2 + (value?.length ?? 0) * 2 + 16, 0); if (captureBytes + limits.bytes * 6 + limits.matches * 128 > limits.memory) throw Error(sqliteFindMessages.budget); saved.push(match); } }
     if (ranges.length) matches.push({ rowId: row.id, column, ranges, replaceable, ...(saved.length ? { captures: saved } : {}) });

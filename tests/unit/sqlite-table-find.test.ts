@@ -24,6 +24,15 @@ describe('SQLite当前页typed查找算法', () => {
     expect(ready(run({ operation: 'find', source: { ...value, options: options({ kind: 'null', query: '' }) } })).matches.map(match => match.rowId)).toEqual(['null']); expect(ready(run({ operation: 'find', source: { ...value, options: options({ kind: 'default', query: '' }) } })).matches.map(match => match.rowId)).toEqual(['default']); expect(ready(run({ operation: 'find', source: { ...value, options: options({ query: 'NULL' }) } })).matches.map(match => match.rowId)).toEqual(['text']);
     expect(run({ operation: 'preview', source: { ...value, options: options({ kind: 'null', query: '' }) }, replacement: 'x' }).status).toBe('blocked');
   });
+  it('空字符串只匹配空 TEXT，与空 BLOB、空白和 SQL NULL 区分', () => {
+    const value = source({ columns: source().columns.slice(), rows: [{
+      id: 'row', index: 0, deleted: false,
+      values: [{ kind: 'text', value: '' }, { kind: 'text', value: ' ' }, { kind: 'blob', value: '' }, { kind: 'null' }],
+    }], options: options({ kind: 'empty', query: '', regex: true }) });
+    expect(ready(run({ operation: 'find', source: value })).matches)
+      .toEqual([{ rowId: 'row', column: 0, ranges: [], replaceable: false }]);
+    expect(run({ operation: 'preview', source: value, replacement: 'x' }).status).toBe('blocked');
+  });
   it('字面模式不执行正则，regex显式模式才支持捕获组；美元默认保持字面', () => {
     const value = source({ columns: [{ name: 'x', generated: false }], rows: [{ id: 'one', index: 0, deleted: false, values: [{ kind: 'text', value: 'a12 a3' }] }], options: options({ query: '(?<word>a)(\\d+)', regex: true, captureReplacement: true }) });
     const result = ready(run({ operation: 'preview', source: value, replacement: '$<word>-$2-$$-$&' })); if (result.operation !== 'preview') throw Error('非预览'); expect(result.patches[0].after).toBe('a12 a3'.replace(/(?<word>a)(\d+)/gu, '$<word>-$2-$$-$&'));

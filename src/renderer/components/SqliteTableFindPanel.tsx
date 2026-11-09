@@ -72,7 +72,9 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
   /** 字面模式防抖；正则和捕获无自动运行路径，必须明确search或preview。 */
   function schedule(): void {
     clearTimeout(timer.current); const value = live.current;
-    if (composing.current || value.options.regex || value.options.captureReplacement || value.options.kind === 'text' && !value.options.query) return;
+    // 正则与捕获选项只约束文本模式，切换到原值类型时应立即按新模式查找。
+    if (composing.current || value.options.kind === 'text' &&
+        (value.options.regex || value.options.captureReplacement || !value.options.query)) return;
     const request = serial.current;
     timer.current = setTimeout(() => { timer.current = undefined; if (serial.current === request && mounted.current && sourceCurrent() && !work.current && !composing.current) void run('find'); }, 160);
   }

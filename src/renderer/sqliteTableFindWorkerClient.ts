@@ -1,6 +1,6 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import type { SqliteDraftRow } from './sqliteTableEditor';
-import { copySqliteFindTransfer, copySqliteFindOptions, sqliteFindSource, sqliteFindSourceSignature, sqliteFindOccurrences, sqliteFindLimits as limits, sqliteFindMessages as text, type SqliteFindOptions, type SqliteFindMatch, type SqliteFindOccurrence, type SqliteFindSource, type SqliteFindWorkerRequest, type SqliteFindWorkerResult, type SqliteTextPatch } from './sqliteTableFind';
+import { copySqliteFindTransfer, copySqliteFindOptions, matchesSqliteFindValue, sqliteFindSource, sqliteFindSourceSignature, sqliteFindOccurrences, sqliteFindLimits as limits, sqliteFindMessages as text, type SqliteFindOptions, type SqliteFindMatch, type SqliteFindOccurrence, type SqliteFindSource, type SqliteFindWorkerRequest, type SqliteFindWorkerResult, type SqliteTextPatch } from './sqliteTableFind';
 
 export interface SqliteFindReadyResult { status: 'ready'; matches: SqliteFindMatch[]; occurrences: SqliteFindOccurrence[]; }
 export interface SqliteFindBlockedResult { status: 'blocked'; reason: string; message: string; }
@@ -39,7 +39,10 @@ function checkedMatches(raw: unknown, source: SqliteFindSource): SqliteFindMatch
   for (const match of matches) {
     if (!match || typeof match !== 'object' || Object.keys(match).sort().join(',') !== 'column,ranges,replaceable,rowId' || typeof match.rowId !== 'string' || !Number.isInteger(match.column) || match.column < 0 || match.column >= source.columns.length || source.options.column !== undefined && match.column !== source.options.column || !Array.isArray(match.ranges) || typeof match.replaceable !== 'boolean') throw Error(text.worker);
     const rowIndex = source.rows.findIndex(row => row.id === match.rowId), row = source.rows[rowIndex]; if (!row || row.deleted) throw Error(text.worker); const order = rowIndex * limits.columns + match.column; if (order <= prior) throw Error(text.worker); prior = order; const value = row.values[match.column], writable = source.writable && source.options.kind === 'text' && value?.kind === 'text' && !source.columns[match.column].generated; if (writable !== match.replaceable) throw Error(text.worker);
-    if (source.options.kind !== 'text') { if (match.ranges.length || (source.options.kind === 'null' ? value?.kind !== 'null' : value !== undefined || row.index !== undefined)) throw Error(text.worker); occurrences++; }
+    if (source.options.kind !== 'text') {
+      if (match.ranges.length || !matchesSqliteFindValue(source.options.kind, row, match.column)) throw Error(text.worker);
+      occurrences++;
+    }
     else { if (!value || value.kind === 'null' || !match.ranges.length) throw Error(text.worker); let previousEnd = -1, previousStart = -1;
       for (const range of match.ranges) { if (!range || Object.keys(range).sort().join(',') !== 'end,start' || !Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start || range.end > value.value.length || [range.start, range.end].some(at => at > 0 && at < value.value.length && value.value.charCodeAt(at) >= 0xdc00 && value.value.charCodeAt(at) <= 0xdfff && value.value.charCodeAt(at - 1) >= 0xd800 && value.value.charCodeAt(at - 1) <= 0xdbff) || range.start < previousEnd || range.start === previousStart || source.options.wholeCell && (range.start !== 0 || range.end !== value.value.length)) throw Error(text.worker); previousStart = range.start; previousEnd = range.end; occurrences++; }
     }

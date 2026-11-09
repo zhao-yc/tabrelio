@@ -5,7 +5,7 @@ import { tableGridZh as text } from './locales/tableGrid.zh-CN';
 import { joinPageText, PageTextSize, type PageTextSpan } from './pageFindText';
 
 export const pageFindLimits = { query: 512, replacement: 4096, bytes: 16 * 1024 * 1024, matches: 50_000, memory: 128 * 1024 * 1024, timeoutMs: 1500, startupMs: 8000 } as const;
-export interface PageFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; captureReplacement?: boolean; }
+export interface PageFindOptions { kind: 'text' | 'empty' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; captureReplacement?: boolean; }
 export interface PageCellMatch { rowId: string; key: string; ranges: { start: number; end: number }[]; }
 export interface PageOccurrence { rowId: string; key: string; range?: { start: number; end: number }; occurrence: number; }
 export interface PageTextPatch { rowId: string; key: string; before: string; after: string; }
@@ -64,7 +64,7 @@ export function nextPageOccurrenceAfterReplacement(rows: readonly DraftRow[], ke
   return index < 0 ? 0 : index;
 }
 
-/** 使用完整自有原值扫描当前页，NULL/DEFAULT 独立于文字，二进制不转成预览匹配。 */
+/** 使用完整自有原值扫描当前页，空字符串、NULL 和 DEFAULT 各自独立，二进制不参与文字匹配。 */
 export function findPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions): PageCellMatch[] {
   if (options.regex) throw new Error(text.workerRequired);
   if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
@@ -97,7 +97,10 @@ function scanPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[]
     if (row.deleted) continue;
     for (const key of keys) {
       const value = ownCell(row.data, key);
-      if (options.kind !== 'text') { if ((options.kind === 'null' && value === null) || (options.kind === 'default' && row.inserted && value === undefined)) matches.push({ rowId: row.id, key, ranges: [] }); }
+      if (options.kind !== 'text') {
+        if ((options.kind === 'empty' && value === '') || (options.kind === 'null' && value === null) ||
+            (options.kind === 'default' && row.inserted && value === undefined)) matches.push({ rowId: row.id, key, ranges: [] });
+      }
       else if (value !== null && value !== undefined && typeof value !== 'object') {
         const source = String(value), size = new PageTextSize(); budget(scanned + source.length); size.append({ value: source, start: 0, end: source.length }); scanned += size.utf8; budget(scanned);
         const ranges: PlannedMatch['ranges'] = [];

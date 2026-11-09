@@ -281,6 +281,21 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await find.getByRole('button', { name: queryResultFindZh.uncheckRows, exact: true }).click();
     await expect(check('9007199254740993')).not.toBeChecked();
     await expect(check('9007199254740994')).toBeChecked();
+    await expect(note('9007199254740994')).toHaveText('');
+    await check('9007199254740994').uncheck();
+    await check('9007199254740993').check();
+    const kind = find.getByRole('combobox').filter({
+      has: page.getByRole('option', { name: queryResultFindZh.modes.empty, exact: true }),
+    });
+    await kind.selectOption('empty');
+    await expect(find.getByLabel(tableGridZh.query, { exact: true })).toBeDisabled();
+    await find.getByRole('button', { name: queryResultFindZh.checkRows, exact: true }).click();
+    await expect(check('9007199254740992')).not.toBeChecked();
+    await expect(check('9007199254740993')).toBeChecked();
+    await expect(check('9007199254740994')).toBeChecked();
+    await find.getByRole('button', { name: queryResultFindZh.uncheckRows, exact: true }).click();
+    await expect(check('9007199254740993')).toBeChecked();
+    await expect(check('9007199254740994')).not.toBeChecked();
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

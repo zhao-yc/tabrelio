@@ -39,10 +39,12 @@ describe('页内查找和替换草稿', () => {
     expect(findPageCells([first], ['text'], { ...options, column: 'amount' })).toHaveLength(0);
   });
   it('文字 NULL、真正 NULL、空串和新增 DEFAULT 不混淆或继承原型值', () => {
-    const draft: DraftRow = { id: 'new', data: { text: 'NULL', empty: '', nullable: null }, inserted: true, deleted: false };
-    const keys = ['text', 'empty', 'nullable', '__proto__', 'constructor'];
+    const draft: DraftRow = { id: 'new', data: { text: 'NULL', empty: '', nullable: null, spaces: ' ', binary: { type: 'binary', base64: '' } }, inserted: true, deleted: false };
+    const keys = ['text', 'empty', 'nullable', 'spaces', 'binary', '__proto__', 'constructor'];
     expect(findPageCells([draft], keys, { ...options, query: 'NULL' }).map(match => match.key)).toEqual(['text']);
     expect(findPageCells([draft], keys, { ...options, kind: 'null' }).map(match => match.key)).toEqual(['nullable']);
+    expect(findPageCells([draft], keys, { ...options, kind: 'empty', query: '' })).toEqual([{ rowId: 'new', key: 'empty', ranges: [] }]);
+    expect(() => previewPageReplacement([draft], keys, { ...options, kind: 'empty' }, '新', info, 4)).toThrow();
     expect(findPageCells([draft], keys, { ...options, kind: 'default' }).map(match => match.key)).toEqual(['__proto__', 'constructor']);
   });
   it('Unicode匹配用原串坐标，前缀İ不会导致替换错位', () => {

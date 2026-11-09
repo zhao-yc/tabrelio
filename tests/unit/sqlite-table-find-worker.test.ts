@@ -28,6 +28,19 @@ describe('SQLite查找Worker Client与opaque替换计划', () => {
     const f = fixture(), pending = f.client.find(f.page, f.rows, options()); await f.flush(); const port = f.ports[0]; expect(port.postMessage).not.toHaveBeenCalled(); port.ready(); expect(port.postMessage).toHaveBeenCalledTimes(1); port.complete(); const found = await pending; expect(port.terminate).toHaveBeenCalledTimes(1); expect(found.status).toBe('ready'); if (found.status !== 'ready') throw Error('未查到'); expect(Object.isFrozen(found)).toBe(true); expect(Object.isFrozen(found.matches[0])).toBe(true); const plan = await f.preview(found); expect(f.ports).toHaveLength(2); expect(f.ports[1].terminate).toHaveBeenCalledTimes(1); expect(plan).toEqual({ changedCells: 2, changedRows: 2 });
     expect(sqliteTextReplacementPlanPreview(plan, f.page, f.rows)).toEqual([{ rowId: 'row-0', column: 0, before: 'aa', after: 'bb' }, { rowId: 'row-1', column: 0, before: 'aa', after: 'bb' }]);
   });
+  it('接纳真实空文本回包，拒绝伪装成空字符串命中的空 BLOB', async () => {
+    const f = fixture();
+    f.rows[0].values[0] = { kind: 'text', value: '' };
+    f.rows[1].values[0] = { kind: 'blob', value: '' };
+    const query = options({ kind: 'empty', query: '' });
+    expect((await f.find(query)).matches).toEqual([{ rowId: 'row-0', column: 0, ranges: [], replaceable: false }]);
+    const pending = f.client.find(f.page, f.rows, query);
+    await f.flush();
+    const port = f.ports.at(-1)!;
+    port.ready();
+    port.respond({ status: 'ready', operation: 'find', matches: [{ rowId: 'row-1', column: 0, ranges: [], replaceable: false }] });
+    expect(await pending).toMatchObject({ status: 'blocked', message: text.worker });
+  });
   it('完整计数与前10预览分离，Values一次消费且返回独立clone', async () => {
     const f = fixture(12), found = await f.find(), plan = await f.preview(found); const preview = sqliteTextReplacementPlanPreview(plan, f.page, f.rows); expect(preview).toHaveLength(10); preview[0].after = '篡改'; expect(plan.changedCells).toBe(12); const patches = sqliteTextReplacementPlanValues(plan, f.page, f.rows); expect(patches).toHaveLength(12); expect(patches[0].after).toBe('bb'); expect(() => sqliteTextReplacementPlanValues(plan, f.page, f.rows)).toThrow(text.stale); expect(() => sqliteTextReplacementPlanPreview(plan, f.page, f.rows)).toThrow(text.stale);
   });

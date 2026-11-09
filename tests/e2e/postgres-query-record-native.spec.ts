@@ -84,8 +84,9 @@ test('PostgreSQL 表页查找批量勾选命中且排除字段名模式', async 
   const config = isolatedConnection(), observer = new Client(config);
   try {
     await observer.connect();
-    await observer.query(`CREATE TABLE public.find_checked (id int PRIMARY KEY, note text, auxiliary text);
-      INSERT INTO public.find_checked VALUES (1,'标记','标记'),(2,'保留',NULL),(3,'标记',NULL),(4,NULL,NULL)`);
+    await observer.query(`CREATE TABLE public.find_checked (id int PRIMARY KEY, note text, auxiliary text, payload bytea);
+      INSERT INTO public.find_checked VALUES (1,'标记','标记',NULL),(2,'保留',NULL,NULL),(3,'标记',NULL,NULL),
+      (4,'',NULL,NULL),(5,' ',NULL,decode('','hex')),(6,NULL,NULL,NULL)`);
     await loadQuery(config, '', 'find_checked');
     const tab = page.locator('.postgres-table-tab:visible'), grid = tab.getByRole('grid');
     const check = (id: number) => grid.getByRole('gridcell', { name: String(id), exact: true }).locator('..').getByRole('checkbox');
@@ -100,8 +101,15 @@ test('PostgreSQL 表页查找批量勾选命中且排除字段名模式', async 
     await panel.getByRole('button', { name: resultFind.uncheckRows, exact: true }).click();
     for (const row of [1, 3]) await expect(check(row)).not.toBeChecked();
     await expect(check(2)).toBeChecked();
-    await panel.getByLabel(findText.mode, { exact: true }).selectOption('field');
+    const mode = panel.getByLabel(findText.mode, { exact: true });
+    await mode.selectOption('field');
     await expect(select).toHaveCount(0);
+    await mode.selectOption('empty');
+    await expect(panel.getByLabel(findText.query, { exact: true })).toHaveCount(0);
+    await select.click();
+    await expect(check(4)).toBeChecked();
+    for (const row of [1, 3, 5, 6]) await expect(check(row)).not.toBeChecked();
+    await expect(check(2)).toBeChecked();
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
