@@ -3,7 +3,8 @@ import { copyInsertSqlLimits as limits } from '../shared/copyInsertSql';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import type { DraftRow } from './dataChanges';
 import { changedDraftHistoryBytes, draftHistoryLimits } from './draftHistory';
-import { parseCell } from './lib';
+import { ownCell, parseCell } from './lib';
+import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
 import { assertRecordBatchFields, recordBatchCellBytes, sameRecordBatchRow } from './recordDuplicateBatch';
 import { recordCopyMetadataReason, type RecordCopyPage } from './recordCopySource';
 import { recordInputLimits, recordReadonlyReason, recordTargetKey, type RecordContext, type RecordInput } from './recordViews';
@@ -105,6 +106,29 @@ export function prepareBatchFill(assignments: readonly BatchFillAssignment[], ro
     if (preparedBytes * ids.size + 2 > limits.inputBytes) throw Error(text.budget);
     values.set(column.name, value);
   }
+  return applyBatchFill(values, rows, ids);
+}
+
+/** 同列复制使用原协议值，避免精确数字或 BLOB 经输入文本重新解析。 */
+export function prepareBatchFillFromRow(keys: readonly string[], source: DraftRow, rows: DraftRow[],
+  ids: ReadonlySet<string>, context: RecordContext): DraftRow[] {
+  const columns = new Map(batchFillColumns(context).map(column => [column.name, column]));
+  if (!keys.length || keys.length > limits.columns) throw Error(text.assignments);
+  const values = new Map<string, DraftRow['data'][string]>();
+  let preparedBytes = 0;
+  for (const key of keys) {
+    const column = columns.get(key), value = ownCell(source.data, key);
+    if (value === undefined) throw Error(rangeText.missing);
+    if (!column || value === null && !column.nullable) throw Error(rangeText.target);
+    preparedBytes += bytes(key) + bytes(value) + 4;
+    if (preparedBytes * ids.size + 2 > limits.inputBytes) throw Error(text.budget);
+    values.set(key, value);
+  }
+  return applyBatchFill(values, rows, ids);
+}
+
+/** 原批量草稿和撤销预算共用，只有整组通过后才分配已修改的行。 */
+function applyBatchFill(values: ReadonlyMap<string, DraftRow['data'][string]>, rows: DraftRow[], ids: ReadonlySet<string>): DraftRow[] {
   let total = 2, history = 128; const replacements = new Map<string, DraftRow>();
   for (const row of rows) if (ids.has(row.id)) {
     const data = Object.fromEntries(Object.entries(row.data).map(([key, old]) => [key, values.has(key) ? values.get(key)! : old]));

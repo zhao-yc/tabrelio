@@ -1,12 +1,10 @@
 import { useState } from 'react';
 import { errorMessage } from '../lib';
+import type { GridRangeFillInput, GridRangeFillKind } from '../gridRangeFill';
 import { gridRangeFillZh as text } from '../locales/gridRangeFill.zh-CN';
 import { zh } from '../locales/zh-CN';
 import type { GridCellRectangle } from '../useGridCellRange';
 import { ErrorBox, Field } from './ui';
-
-export type GridRangeFillKind = 'text' | 'null' | 'integer' | 'real';
-export interface GridRangeFillInput { kind: GridRangeFillKind; value: string; }
 
 /** 输入只授权当前矩形，提交仍由表页复核并一次性暂存。 */
 export function GridRangeFill({ rectangle, typed, onStage }: {
@@ -24,8 +22,10 @@ export function GridRangeFill({ rectangle, typed, onStage }: {
     <Field label={text.kind}><select value={kind} onChange={event => setKind(event.target.value as GridRangeFillKind)}>
       <option value="text">{text.text}</option><option value="null">{text.null}</option>
       {typed && <><option value="integer">{text.integer}</option><option value="real">{text.real}</option></>}
+      {rectangle.bottom > rectangle.top && <><option value="down">{text.down}</option><option value="up">{text.up}</option></>}
     </select></Field>
-    {kind !== 'null' && <Field label={text.value}><textarea autoFocus value={value} onChange={event => setValue(event.target.value)}/></Field>}
+    {(kind === 'text' || kind === 'integer' || kind === 'real') &&
+      <Field label={text.value}><textarea autoFocus value={value} onChange={event => setValue(event.target.value)}/></Field>}
     <button type="button" onClick={() => {
       try { onStage(rectangle, { kind, value }); setOpen(undefined); }
       catch (reason) { setError(errorMessage(reason)); }

@@ -174,6 +174,21 @@ test('MySQL 表页按矩形填充字面值，只暂存且可一步撤销', async
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   await expect(start).toHaveText('😀old前old后old');
   await expect(end).toHaveText('无匹配');
+  for (const [direction, expected] of [['down', ['😀old前old后old', 'OLD']], ['up', ['', '无匹配']]] as const) {
+    await start.click();
+    await end.click({ modifiers: ['Shift'] });
+    await page.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    for (const row of [2, 3]) {
+      await expect(await cell('note', row)).toHaveText(expected[0]);
+      await expect(await cell('other', row)).toHaveText(expected[1]);
+    }
+    await end.click();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+    await expect(start).toHaveText('😀old前old后old');
+    await expect(end).toHaveText('无匹配');
+  }
   expect(await calls()).toEqual([]);
 });
 

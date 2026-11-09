@@ -20,7 +20,8 @@ import { gridCellRangeClass, useGridCellRange, type GridCellRectangle } from '..
 import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
-import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
+import { GridRangeFill } from './GridRangeFill';
+import { gridRangeFillSource, type GridRangeFillInput } from '../gridRangeFill';
 import { fitGridRangePaste } from '../gridRangePaste';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
@@ -156,7 +157,7 @@ import { tableCopyMetadataKey, type TableCopyPageSources } from '../../shared/ta
 import { PasteInsertIntent, preparePasteInsert, type PasteInsertPlan } from '../pasteInsert';
 import { PasteInsertDialog } from './PasteInsertDialog';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
-import { BatchFillIntent, prepareBatchFill, type BatchFillAssignment } from '../recordBatchFill';
+import { BatchFillIntent, prepareBatchFill, prepareBatchFillFromRow, type BatchFillAssignment } from '../recordBatchFill';
 import type { RecordInput } from '../recordViews';
 import { TableBatchFillDialog } from './TableBatchFillDialog';
 import { recordBatchFillZh } from '../locales/recordBatchFill.zh-CN';
@@ -1864,6 +1865,14 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     const target = cellRange.capture(rectangle);
     if (!target || !editable) throw Error(rangeFillText.stale);
     const { kind, value } = input;
+    if (kind === 'down' || kind === 'up') {
+      const plan = gridRangeFillSource(target, kind, row => row.deleted);
+      if (plan.rows.some(row => target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
+      const next = prepareBatchFillFromRow(target.keys, plan.source, rows, new Set(plan.rows.map(row => row.id)), getRecordContext());
+      if (next !== rows) setRows(next);
+      setError('');
+      return;
+    }
     if ((kind !== 'text' && kind !== 'null') ||
         target.rows.some(row => row.deleted || target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
     const next = prepareBatchFill(target.keys.map(column => ({ column, input: { mode: kind, text: value } })),

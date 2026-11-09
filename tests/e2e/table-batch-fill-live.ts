@@ -129,7 +129,9 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
           const row = (code: string) => table.locator('.results-grid [role="row"]').filter({ has: page.getByRole('gridcell', { name: code, exact: true }) });
           /** 只匹配列名直接文本，排除紧邻的small类型文字；仍从实际列头读取网格坐标。 */
           async function cell(source: Locator, key: 'note') {
-            const index = await checked(() => table.getByRole('columnheader').filter({ has: page.locator(`xpath=.//span[@class="data-header"]/span[text()="${key}"]`) }).getAttribute('aria-colindex'));
+            const index = await checked(() => table.getByRole('columnheader').filter({
+              has: page.locator(`xpath=.//span[@class="grid-header-detail-name"][text()="${key}"]`),
+            }).getAttribute('aria-colindex'));
             if (!index || !/^\d+$/.test(index)) throw Error('批量填充缺少实际列坐标');
             return source.locator(`[role="gridcell"][aria-colindex="${index}"]`);
           }

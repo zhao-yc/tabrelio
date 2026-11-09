@@ -5,6 +5,8 @@ import { postgresBatchFillZh as text } from './locales/postgresBatchFill.zh-CN';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, postgresBatchValueValid } from './postgresBatchSelection';
 import { postgresClipboardFieldValue } from './postgresGridPaste';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
+import { gridRangeFillSource, type GridRangeFillDirection } from './gridRangeFill';
+import type { GridRangeTarget } from './useGridCellRange';
 
 /** 矩形只转换一次统一值，再交给既有的原行账本和批量字段校验。 */
 export function postgresRangeFillChanges(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
@@ -16,6 +18,24 @@ export function postgresRangeFillChanges(page: PostgresTablePage, columns: reado
     return { column: column.key, value: postgresClipboardFieldValue(value, column) };
   });
   const selected = new Set(Array.from({ length: count }, (_, index) => start + index));
+  return postgresBatchFillChanges(page, columns, selected, fields, prior);
+}
+
+/** 来源优先取本地字段草稿，目的行继续按原主键及已保留的行版本暂存。 */
+export function postgresRangeFillFromRow(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
+  range: GridRangeTarget<DataRow>, direction: GridRangeFillDirection, prior: (key: string) => PostgresTableChange | undefined) {
+  const plan = gridRangeFillSource(range, direction, (_, index) => {
+    const key = page.rowKeys?.[index];
+    return !key || prior(key)?.kind === 'delete';
+  });
+  const source = prior(page.rowKeys![plan.sourceIndex]);
+  const fields = columns.map(column => {
+    const staged = source?.kind === 'update' ? source.fields.find(field => field.column === column.key)?.value : undefined;
+    const value = staged ?? postgresClipboardFieldValue(ownCell(plan.source, column.key), column);
+    if (value.mode === 'default') throw Error(rangeText.missing);
+    return { column: column.key, value };
+  });
+  const selected = new Set(plan.rows.map((_, index) => plan.startRow + index));
   return postgresBatchFillChanges(page, columns, selected, fields, prior);
 }
 

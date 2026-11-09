@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import * as jsxRuntime from 'react/jsx-runtime';
 import ts from 'typescript';
 import { expect, it } from 'vitest';
+import { GridHeaderDetails } from '../../src/renderer/components/GridHeaderDetails';
 
 /** 从生产列头及专项函数取真实代码，仅替换定位端口，不加载Playwright或桌面。 */
 function declaration(file: string, match: (node: ts.Node) => boolean): string {
@@ -19,7 +20,11 @@ it('生产note列头紧邻text类型且有同名前缀列时，专项仍选择no
   /** 真实JSX生成列头，保留列名与类型之间没有空白的失败条件。 */
   function markup(name: string) {
     const exports: Record<string, any> = {};
-    runInNewContext(compile(`exports.render = (${header});`), { exports, column: { name, key: name, type: 'text' }, info: { primaryKey: [] }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('列头不应加载额外模块'); } });
+    runInNewContext(compile(`exports.render = (${header});`), {
+      exports, GridHeaderDetails, showFieldType: true, showFieldComment: false, headerFields: new Map(),
+      column: { name, key: name, type: 'text' }, info: { primaryKey: [] },
+      require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('列头不应加载额外模块'); },
+    });
     return renderToStaticMarkup(exports.render());
   }
   const headers = [{ html: markup('note_extra'), index: '3' }, { html: markup('note'), index: '4' }];
@@ -29,8 +34,8 @@ it('生产note列头紧邻text类型且有同名前缀列时，专项仍选择no
     expect(role).toBe('columnheader');
     return { filter({ has }: { has: { selector: string } }) { return { async getAttribute(name: string) {
       // RAM端口只接纳本专项的直接文本XPath；从真实渲染取直接列名，不模拟浏览器XPath引擎。
-      expect(has.selector).toBe('xpath=.//span[@class="data-header"]/span[text()="note"]'); expect(name).toBe('aria-colindex');
-      const candidates = headers.filter(header => /<span>([^<]*)<small class="column-type">/.exec(header.html)?.[1] === 'note');
+      expect(has.selector).toBe('xpath=.//span[@class="grid-header-detail-name"][text()="note"]'); expect(name).toBe('aria-colindex');
+      const candidates = headers.filter(header => /<span class="grid-header-detail-name">([^<]*)<\/span>/.exec(header.html)?.[1] === 'note');
       expect(candidates).toHaveLength(1); expect(candidates[0]).toBe(headers[1]); return candidates[0].index;
     } }; } };
   } };

@@ -15,7 +15,7 @@ import { sqliteEditValueSchema, type SqliteTableEditPreviewInput } from '../../s
 import type { GridRangeTarget } from '../useGridCellRange';
 import type { GridPasteShape } from '../gridRangePaste';
 import { gridRangePasteZh as rangePasteText } from '../locales/gridRangePaste.zh-CN';
-import type { GridRangeFillInput } from './GridRangeFill';
+import { gridRangeFillSource, type GridRangeFillInput } from '../gridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { SqliteEditWorkspace, type SqliteWorkspaceFill, type SqliteWorkspaceRecordEdit } from '../sqliteEditWorkspace';
 import { sqliteEditWorkspaceZh as workspaceText } from '../locales/sqliteEditWorkspace.zh-CN';
@@ -1384,17 +1384,22 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         editor.view.rows !== editRows || range.rows.some((row, index) => editRows[range.startRow + index] !== row))
       throw Error(rangeFillText.stale);
     if (range.rows.some(row => row.deleted)) throw Error(rangeFillText.target);
-    const value = sqliteEditValueSchema.parse(input.kind === 'null' ? { kind: 'null' } : { kind: input.kind, value: input.value });
+    const from = input.kind === 'down' || input.kind === 'up' ? gridRangeFillSource(range, input.kind, row => row.deleted) : undefined;
+    const entered = from ? undefined : input.kind === 'null' ? { kind: 'null' } : { kind: input.kind, value: input.value };
     const fields = range.keys.map(key => {
       const column = Number(key.slice(1)), field = source.columns[column], type = field?.declaredType.toUpperCase();
+      const original = from ? from.source.values[column] : entered;
+      if (original === undefined) throw Error(rangeFillText.missing);
+      const value = sqliteEditValueSchema.parse(original);
       if (!field || !projection.some(item => item.index === column) || field.primary || field.generated ||
           source.locator.columns.includes(field.name) || value.kind === 'null' && !field.nullable ||
           source.strict && value.kind !== 'null' && type !== 'ANY' &&
-          (value.kind === 'text' ? type !== 'TEXT' : value.kind === 'integer' ? type !== 'INT' && type !== 'INTEGER' : type !== 'REAL'))
+          (value.kind === 'text' ? type !== 'TEXT' : value.kind === 'integer' ? type !== 'INT' && type !== 'INTEGER' :
+            value.kind === 'blob' ? type !== 'BLOB' : type !== 'REAL'))
         throw Error(rangeFillText.target);
       return { column, value };
     });
-    editor.fillRows(range.rows.map(row => row.id), fields);
+    editor.fillRows((from?.rows ?? range.rows).map(row => row.id), fields);
     setValidation('');
   }
   /** 输入窗口固定原锚点，不随焦点移动改写目标；原editor仍是已接管草稿的授权来源。 */

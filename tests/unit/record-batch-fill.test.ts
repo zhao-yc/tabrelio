@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BatchFillIntent, batchFillColumns, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
+import { BatchFillIntent, batchFillColumns, prepareBatchFillFromRow, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
 import { DraftHistory } from '../../src/renderer/draftHistory';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo, TablePage } from '../../src/shared/contracts';
@@ -19,6 +19,21 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('同列填充使用来源草稿的精确值，不修改来源或复用其字节对象', () => {
+    const { rows, context, ids } = fixture();
+    const source = rows[2];
+    source.data.note = null;
+    source.data.num = '18446744073709551615.123456789012345678901234567890';
+    source.data.bin = { type: 'binary', base64: 'AQ==' };
+    const next = prepareBatchFillFromRow(['note', 'num', 'bin'], source, rows, ids, context);
+    expect(next[2]).toBe(source);
+    expect(next[0].data).toMatchObject({ note: null, num: source.data.num, bin: source.data.bin });
+    expect(next[0].data.bin).not.toBe(source.data.bin);
+    expect(next[0].data.bin).not.toBe(next[1].data.bin);
+    expect(() => prepareBatchFillFromRow(['id'], source, rows, ids, context)).toThrow();
+    delete source.data.note;
+    expect(() => prepareBatchFillFromRow(['note'], source, rows, ids, context)).toThrow('DEFAULT');
+  });
   it('四种typed字段整组暂存为一步，精度和原JSON词法保持，二进制包装逐行独立', () => {
     const f = fixture(), before = structuredClone(f.rows), assignments: BatchFillAssignment[] = [
       { column: 'note', input: { mode: 'null', text: '' } },

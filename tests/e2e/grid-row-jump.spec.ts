@@ -31,7 +31,7 @@ import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop,
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 /** 使用独立应用配置和合成 SQLite 数据，查询与浏览均走正式引擎。 */
-async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;') {
+async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixtureSql = '') {
   await quitDesktop();
   const id = 'row-jump-offline', databasePath = join(dataDir, 'grid-row-jump.sqlite');
   const database = new DatabaseSync(databasePath);
@@ -40,6 +40,7 @@ async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;') {
       WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM seq WHERE i<180)
       INSERT INTO subject SELECT i, '记录 ' || i FROM seq;
       CREATE VIEW subject_view AS SELECT id,name FROM subject ORDER BY id;`);
+    if (fixtureSql) database.exec(fixtureSql);
   } finally { database.close(); }
   const require = createRequire(join(process.cwd(), 'package.json'));
   const store = await LocalStore.open(join(dataDir, 'dbark.sqlite'), require.resolve('sql.js/dist/sql-wasm.wasm'), { available: () => false, encrypt: value => value, decrypt: value => value });
@@ -506,6 +507,46 @@ test('SQLite 矩形可填充同值并一次撤销，包含定位键时拒绝整�
   await table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true }).click();
   await expect(first).toBeVisible();
   await expect(second).toBeVisible();
+  expect(readFileSync(database)).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 向下和向上填充保留整数、文本、字节与 NULL，可整步撤销', async () => {
+  await seed(undefined, 'ALTER TABLE subject ADD COLUMN exact_value INTEGER;' +
+    'ALTER TABLE subject ADD COLUMN payload BLOB;' +
+    "UPDATE subject SET name='000123', exact_value=9223372036854775807, payload=X'00FF' WHERE id=1;" +
+    "UPDATE subject SET name=NULL, exact_value=-9223372036854775808, payload=X'AB' WHERE id=3;");
+  const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const first = table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true }).locator('..');
+  const form = table.getByRole('region', { name: rangeFill.open, exact: true });
+  const header = table.getByRole('columnheader').filter({
+    has: page.locator('.grid-header-detail-name').filter({ hasText: /^name$/ }),
+  });
+  const column = await header.getAttribute('aria-colindex');
+  expect(column).toMatch(/^\d+$/);
+  async function select() {
+    await first.locator('[role="gridcell"][aria-colindex="' + column + '"]').click();
+    for (const key of ['Right', 'Right', 'Down', 'Down']) await page.keyboard.press('Shift+Arrow' + key);
+    await expect(table.locator('.grid-cell-in-range')).toHaveCount(9);
+  }
+  const read = async () => JSON.parse((await readGridRangeClipboard(page)).sqlite).rows;
+  await select();
+  const original = await read();
+  expect(original[0]).toEqual([{ kind: 'text', value: '000123' }, { kind: 'integer', value: '9223372036854775807' }, { kind: 'blob', value: '00ff' }]);
+  expect(original[2]).toEqual([{ kind: 'null' }, { kind: 'integer', value: '-9223372036854775808' }, { kind: 'blob', value: 'ab' }]);
+  for (const [direction, index] of [['down', 0], ['up', 2]] as const) {
+    await table.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
+    await expect(form.getByRole('textbox', { name: rangeFill.value, exact: true })).toHaveCount(0);
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    await select();
+    expect(await read()).toEqual(Array(3).fill(original[index]));
+    await table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true }).click();
+    await select();
+    expect(await read()).toEqual(original);
+  }
   expect(readFileSync(database)).toEqual(before);
   expect(pageErrors).toEqual([]);
 });

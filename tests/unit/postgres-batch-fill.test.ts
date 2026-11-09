@@ -3,7 +3,7 @@ import type { PostgresTableChange, PostgresTableColumn, PostgresTablePage } from
 import { capturePostgresCheckedFill, planPostgresCheckedFill } from '../../src/renderer/postgresCheckedFill';
 import { retainPostgresCheckedPages, postgresCheckedPagePins } from '../../src/renderer/postgresCheckedPages';
 import type { PostgresDraftEntry } from '../../src/shared/postgresTableDraft';
-import { postgresBatchFillChanges, postgresRangeFillChanges } from '../../src/renderer/postgresBatchFill';
+import { postgresBatchFillChanges, postgresRangeFillChanges, postgresRangeFillFromRow } from '../../src/renderer/postgresBatchFill';
 
 const column = (key: string, options: Partial<PostgresTableColumn> = {}): PostgresTableColumn => ({
   key, name: key, type: 'text', primary: false, generated: false, binary: false, nullable: true, defaultValue: false, ...options,
@@ -19,6 +19,23 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 勾选记录批量填充', () => {
+  it('首尾行分别作为来源，保留原二进制和草稿 NULL，拒绝 DEFAULT 或待删除行', () => {
+    const range = { startRow: 0, rows: page.rows, keys: ['c1', 'c2'] };
+    const visible = [columns[1], columns[2]];
+    const prior = (key: string): PostgresTableChange | undefined => key === '一' ? {
+      kind: 'update', row: 0, fields: [{ column: 'c1', value: { mode: 'null' } }],
+    } : undefined;
+    expect(postgresRangeFillFromRow(page, visible, range, 'down', prior)).toEqual([{
+      kind: 'update', row: 1, fields: [{ column: 'c1', value: { mode: 'null' } }, { column: 'c2', value: { mode: 'binary', value: '00ff' } }],
+    }]);
+    expect(postgresRangeFillFromRow(page, visible, range, 'up', prior)).toEqual([{
+      kind: 'update', row: 0, fields: [{ column: 'c1', value: { mode: 'text', value: '乙' } }, { column: 'c2', value: { mode: 'null' } }],
+    }]);
+    expect(() => postgresRangeFillFromRow(page, visible, range, 'down', key => key === '一' ? {
+      kind: 'update', row: 0, fields: [{ column: 'c1', value: { mode: 'default' } }],
+    } : undefined)).toThrow('DEFAULT');
+    expect(() => postgresRangeFillFromRow(page, visible, range, 'up', key => key === '一' ? { kind: 'delete', row: 0 } : undefined)).toThrow();
+  });
   it('矩形填充保留字面 NULL 和原草稿其它字段，拒绝受保护字段或待删除记录', () => {
     const prior: PostgresTableChange = { kind: 'update', row: 1, fields: [{ column: 'c2', value: { mode: 'default' } }] };
     const changes = postgresRangeFillChanges(page, [columns[1]], 1, 1, 'NULL', () => prior);

@@ -34,6 +34,7 @@ import { postgresReferencePickerZh as referenceText } from '../locales/postgresR
 import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTableRecordView';
 import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
+import type { GridRangeFillInput } from '../gridRangeFill';
 import type { GridRangeTarget } from '../useGridCellRange';
 import { gridRangePasteZh as rangePasteText } from '../locales/gridRangePaste.zh-CN';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
@@ -67,7 +68,7 @@ import { postgresColumnStatisticsZh } from '../locales/postgresColumnStatistics.
 import type { PostgresColumnReadSource } from '../postgresColumnRead';
 import { PostgresColumnStatisticsDialog } from './PostgresColumnStatisticsDialog';
 import { PostgresBatchFillDialog } from './PostgresBatchFillDialog';
-import { postgresBatchFillChanges, postgresRangeFillChanges } from '../postgresBatchFill';
+import { postgresBatchFillChanges, postgresRangeFillChanges, postgresRangeFillFromRow } from '../postgresBatchFill';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, type PostgresBatchRow } from '../postgresBatchSelection';
 import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
 import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
@@ -1098,7 +1099,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     return { column, rowKey, original, fields: prior?.kind === 'update' ? prior.fields : [] };
   }
 
-  function fillGridRange(range: GridRangeTarget<DataRow>, value: string | null) {
+  function fillGridRange(range: GridRangeTarget<DataRow>, input: GridRangeFillInput) {
     if (!page || !canEditGrid || !findIsCurrent() || recordInput.current ||
         range.rows.some((row, index) => page.rows[range.startRow + index] !== row)) throw Error(rangeFillText.stale);
     const columns = range.keys.map(key => {
@@ -1106,8 +1107,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       if (!column) throw Error(rangeFillText.stale);
       return column;
     });
-    const changes = postgresRangeFillChanges(page, columns, range.startRow, range.rows.length, value,
-      key => draftRef.current.find(entry => entry.rowKey === key)?.change);
+    const prior = (key: string) => draftRef.current.find(entry => entry.rowKey === key)?.change;
+    const { kind, value } = input;
+    if (kind === 'integer' || kind === 'real') throw Error(rangeFillText.target);
+    const changes = kind === 'down' || kind === 'up' ? postgresRangeFillFromRow(page, columns, range, kind, prior)
+      : postgresRangeFillChanges(page, columns, range.startRow, range.rows.length, kind === 'null' ? null : value, prior);
     if (changes.length && !stageChanges(changes)) throw Error(rangeFillText.stale);
     setError('');
     setMessage('');
