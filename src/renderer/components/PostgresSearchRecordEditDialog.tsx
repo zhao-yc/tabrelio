@@ -8,6 +8,8 @@ import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import { postgresClipboardFieldValue } from '../postgresGridPaste';
 import { postgresQueryRangeFillChanges } from '../postgresBatchFill';
+import { postgresFindPlan, postgresFindRows } from '../postgresTableFind';
+import type { PageTextPatch } from '../pageFindReplace';
 import { postgresBatchDuplicateChanges, postgresBatchDuplicatePlan } from '../postgresRecordDuplicate';
 import { PostgresBatchEditDialog } from './PostgresBatchEditDialog';
 import type { GridRangeFillInput } from '../gridRangeFill';
@@ -36,7 +38,8 @@ export interface PostgresQueryCellEdit {
 export type PostgresQueryRangeEdit = {
   columnIndices: number[];
   startRow: number;
-} & ({ kind: 'paste'; matrix: ClipboardCell[][] } | { kind: 'fill'; input: GridRangeFillInput });
+} & ({ kind: 'paste'; matrix: ClipboardCell[][] } | { kind: 'fill'; input: GridRangeFillInput }) |
+  { kind: 'replace'; positions: number[]; patches: (Omit<PageTextPatch, 'key'> & { columnIndex: number })[] };
 type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: never; cell?: never; visible?: never; isCurrent?: never } |
   { table?: never; recordRef?: never; queryRecord: PostgresQueryRecordIntent; cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit;
     visible: boolean; isCurrent(): boolean });
@@ -53,6 +56,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
     : adding ? { title: queryText.addTitle, hint: queryText.addHint, discard: queryText.addDiscard }
     : duplicating ? { title: queryText.duplicateTitle, hint: queryText.duplicateHint, discard: queryText.duplicateDiscard }
     : range?.kind === 'paste' ? { title: queryText.pasteTitle, hint: queryText.pasteHint, discard: queryText.pasteDiscard }
+    : range?.kind === 'replace' ? { title: queryText.replaceTitle, hint: queryText.replaceScope, discard: queryText.replaceDiscard }
     : range ? { title: queryText.fillTitle, hint: queryText.fillHint, discard: queryText.fillDiscard } : undefined;
   const [table, setTable] = useState(initialTable ?? '');
   const labels = queryRecord ? { title: queryText.edit, hint: queryText.editHint, stale: queryText.editStale, back: queryText.editBack, discard: queryText.editDiscard }
@@ -113,20 +117,31 @@ export function PostgresSearchRecordEditDialog(props: Props) {
             if (!active || !current()) throw Error(labels.stale);
             setPreview(next);
           } else if (range) {
-            const columns = range.columnIndices.map(index => {
-              const column = result.columns.find(item => item.key === loaded.columnKeys[index]);
-              if (!column) throw Error(labels.stale);
-              if (range.kind === 'paste' && column.generated) throw Error(pasteText.generated(column.name));
-              return column;
-            });
-            if (new Set(columns).size !== columns.length) throw Error(queryText.rangeDuplicateColumn);
-            const changes: RecordUpdate[] = range.kind === 'fill' ? postgresQueryRangeFillChanges(result, columns, range.input) :
-              range.matrix.map((values, row) => ({
-                kind: 'update', row,
-                fields: values.map((value, index) => ({
-                  column: columns[index].key, value: postgresClipboardFieldValue(value, columns[index]),
-                })),
-              }));
+            let changes: RecordUpdate[];
+            if (range.kind === 'replace') {
+              const patches = range.patches.map(({ columnIndex, ...patch }) => {
+                const key = loaded.columnKeys[columnIndex];
+                if (!key) throw Error(labels.stale);
+                return { ...patch, key };
+              });
+              const noDraft = () => undefined;
+              changes = postgresFindPlan(result, postgresFindRows(result, noDraft), result.columns, patches, noDraft).changes;
+            } else {
+              const columns = range.columnIndices.map(index => {
+                const column = result.columns.find(item => item.key === loaded.columnKeys[index]);
+                if (!column) throw Error(labels.stale);
+                if (range.kind === 'paste' && column.generated) throw Error(pasteText.generated(column.name));
+                return column;
+              });
+              if (new Set(columns).size !== columns.length) throw Error(queryText.rangeDuplicateColumn);
+              changes = range.kind === 'fill' ? postgresQueryRangeFillChanges(result, columns, range.input) :
+                range.matrix.map((values, row) => ({
+                  kind: 'update', row,
+                  fields: values.map((value, index) => ({
+                    column: columns[index].key, value: postgresClipboardFieldValue(value, columns[index]),
+                  })),
+                }));
+            }
             if (!changes.length) throw Error(queryText.fillUnchanged);
             const request = postgresTablePreviewSchema.parse({ ...target, table: loaded.table, pageToken: result.pageToken, changes });
             const next = await invoke('postgres.table.preview', request);
@@ -245,7 +260,8 @@ export function PostgresSearchRecordEditDialog(props: Props) {
         <tbody>{page.rows.map((row, index) => <tr key={index}>{keys.map(key =>
           <td key={key.key}>{cellPreview(ownCell(row, key.key))}</td>)}</tr>)}</tbody></table>}
       {page && draft?.map((change, index) => <div key={index}>
-        {range && change.kind === 'update' && <strong>{queryText.rangeRow(range.startRow + change.row + 1)}</strong>}
+        {range && change.kind === 'update' &&
+          <strong>{queryText.rangeRow((range.kind === 'replace' ? range.positions[change.row] : range.startRow + change.row) + 1)}</strong>}
         {duplicating && <strong>{queryText.duplicateRow(index + 1)}</strong>}
         <dl>{change.fields.map(field => <div key={field.column}>
           <dt>{page.columns.find(column => column.key === field.column)?.name}</dt>

@@ -22,6 +22,9 @@ import { postgresClipboardInput, postgresGridPasteMatrix } from '../postgresGrid
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import type { GridRangeTarget } from '../useGridCellRange';
 import type { GridRangeFillInput } from '../gridRangeFill';
+import type { PageTextPatch } from '../pageFindReplace';
+import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh-CN';
+import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTableFindPanel';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
 import type { UiCommandId } from '../../shared/uiCommands';
@@ -57,7 +60,7 @@ import { prepareQueryResultOrganization, QueryResultHistory } from '../queryResu
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
-import { ResultsGrid } from './ResultsGrid';
+import { ResultsGrid, type GridFindTarget } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { FullQueryExportDialog, type FullQueryExportSource } from './FullQueryExportDialog';
 import { postgresCurrentQueryExportSource } from '../../shared/postgresQueryExport';
@@ -1289,6 +1292,54 @@ export function PostgresQueryTab({
   const canDuplicateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.insert === true;
   const canAddQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.newRecord === true;
   const joinTarget = outcome?.postgresQueryRecordJoinTarget;
+  const [replaceView, setReplaceView] = useState<{ binding: ResultSelectionBinding; request: PostgresFindRequest }>();
+  const replaceKeys = useMemo(() => new Set(outcome?.postgresQueryReplaceColumns?.map(index => result?.columns[index]?.key)), [outcome, result]);
+  const replaceWritable = useCallback((column: ResultColumn) => replaceKeys.has(column.key), [replaceKeys]);
+  const canReplaceResult = !!binding?.rows.length && canUpdateQueryRecord && !!visibleColumns?.some(replaceWritable);
+  const activeReplace = canReplaceResult && binding && replaceView?.binding === binding ? replaceView : undefined;
+  const replaceRows = useMemo(() => activeReplace?.binding.rows.map((data, index) =>
+    ({ id: String(index), data, inserted: false, deleted: false })) ?? [], [activeReplace]);
+  function replaceCurrent() {
+    return !!activeReplace && resultCurrent() && !document.querySelector(appModalSelector);
+  }
+  function openResultReplace() {
+    if (binding && canReplaceResult && resultCurrent() && !document.querySelector(appModalSelector))
+      setReplaceView({ binding, request: { replace: true } });
+  }
+
+  /** 同一原列可以重复投影。整批替换只保留一份相同的原字段更新。 */
+  function planQueryReplace(patches: readonly PageTextPatch[]) {
+    if (!replaceCurrent() || !activeReplace || !result) throw Error(originsText.editStale);
+    const { rows, visibleColumns } = activeReplace.binding;
+    const byKey = new Map(visibleColumns.map(column => [column.key, column]));
+    const planned = new Map<string, { row: number; column: ResultColumn; columnIndex: number; before: string; after: string }>();
+    for (const { rowId, key, before, after } of patches) {
+      const row = Number(rowId), column = byKey.get(key), columnIndex = result.columns.findIndex(item => item.key === key);
+      const origin = origins?.[columnIndex];
+      if (!column || !replaceWritable(column) || !origin || !Number.isSafeInteger(row) || String(row) !== rowId || !rows[row] ||
+          ownCell(rows[row], key) !== before) throw Error(originsText.editStale);
+      if (before === after) continue;
+      const identity = row + ':' + origin.attribute;
+      const previous = planned.get(identity);
+      if (previous && (previous.before !== before || previous.after !== after)) throw Error(originsText.editStale);
+      if (!previous) planned.set(identity, { row, column, columnIndex, before, after });
+    }
+    const changes = [...planned.values()];
+    if (!changes.length) throw Error(findText.noChange);
+    const positions = [...new Set(changes.map(patch => patch.row))].sort((a, b) => a - b);
+    if (positions.length > postgresTableLimits.changes) throw Error(originsText.replaceLimit);
+    return { patches: changes, positions };
+  }
+
+  function stageQueryReplace(owner: object, plan: ReturnType<typeof planQueryReplace>) {
+    if (!activeReplace || owner !== activeReplace.binding || !replaceCurrent()) throw Error(originsText.editStale);
+    const { positions } = plan, indices = new Map(positions.map((row, index) => [row, index]));
+    const rows = positions.map(row => activeReplace.binding.rows[row]);
+    const patches = plan.patches.map(({ row, columnIndex, before, after }) =>
+      ({ rowId: String(indices.get(row)), columnIndex, before, after }));
+    if (!openQueryRecords(rows, { range: { kind: 'replace', positions, patches } })) throw Error(originsText.editStale);
+    setReplaceView(undefined);
+  }
   function writableQueryColumn(index: number) {
     const origin = origins?.[index];
     return !!origin && (joinTarget === undefined || origin.relation === joinTarget);
@@ -1966,6 +2017,29 @@ export function PostgresQueryTab({
     });
     return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery]);
+  const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
+    <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding}
+      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
+      isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
+      onShowMatchingRows={binding ? changeMatchView : undefined}
+      onExportRange={binding ? result => {
+        if (!resultCurrent() || document.querySelector(appModalSelector)) return;
+        exportOpen.current = true;
+        setExportView({ result, selected: false, scope: 'rectangle' });
+      } : undefined}
+      onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
+      onCellEdit={canUpdateQueryRecord ? editQueryCell : undefined}
+      onCellPaste={canUpdateQueryRecord ? pasteQueryCells : undefined}
+      onFillRange={canUpdateQueryRecord ? fillQueryCells : undefined}
+      filterDialect="postgresql"
+      onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
+      onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
+      onStatistics={binding ? openResultStatistics : undefined}
+      onHistoryTravel={binding && historyBinding ? travelResultHistory : undefined}
+      sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
+      onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
+  ) : null;
+
   return (
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
       onKeyDownCapture={event => {
@@ -2140,6 +2214,7 @@ export function PostgresQueryTab({
                 {canDuplicateQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
                   title={originsText.duplicateLimit} onClick={() => openCheckedQueryRows('insert')}>{originsText.duplicateChecked}</button>}
                 {canAddQueryRecord && <button disabled={locked} onClick={() => openQueryRecords([], { operation: 'new' })}>{originsText.add}</button>}
+                {canReplaceResult && <button disabled={locked} aria-expanded={!!activeReplace} onClick={openResultReplace}>{originsText.replace}</button>}
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
                   onClick={() => openResultFilter()}>{filterText.open}</button>
                 {!!filterView?.rules.length && <>
@@ -2194,26 +2269,12 @@ export function PostgresQueryTab({
               result.columns.length ? (
                 <div className="query-result-with-details">
                   <div className="query-result-grid" inert={!!recordEdit?.cell}>
-                    <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
-                      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
-                      isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
-                      onShowMatchingRows={binding ? changeMatchView : undefined}
-                      onExportRange={binding ? result => {
-                        if (!resultCurrent() || document.querySelector(appModalSelector)) return;
-                        exportOpen.current = true;
-                        setExportView({ result, selected: false, scope: 'rectangle' });
-                      } : undefined}
-                      onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
-                      onCellEdit={canUpdateQueryRecord ? editQueryCell : undefined}
-                      onCellPaste={canUpdateQueryRecord ? pasteQueryCells : undefined}
-                      onFillRange={canUpdateQueryRecord ? fillQueryCells : undefined}
-                      filterDialect="postgresql"
-                      onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
-                      onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
-                      onStatistics={binding ? openResultStatistics : undefined}
-                      onHistoryTravel={binding && historyBinding ? travelResultHistory : undefined}
-                      sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
-                      onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
+                    <PostgresTableFindPanel request={activeReplace?.request} scope={binding ?? scope}
+                      enabled={!!activeReplace} writable={canReplaceResult} rows={replaceRows} columns={visibleColumns ?? result.columns}
+                      replaceWritable={replaceWritable} scopeDescription={originsText.replaceScope} shortcuts={false}
+                      isCurrent={replaceCurrent} anchor={() => undefined} onOpen={openResultReplace}
+                      onClose={() => setReplaceView(undefined)} onPreview={planQueryReplace} onStage={stageQueryReplace}
+                      renderGrid={renderResultGrid}/>
                   </div>
                   {currentRowDetail && <QueryRowDetailsPanel controller={rowDetails} view={currentRowDetail}
                     isCurrent={() => rowDetailCurrent(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail} />}

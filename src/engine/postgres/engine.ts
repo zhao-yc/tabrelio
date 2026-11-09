@@ -1169,6 +1169,8 @@ export class PostgresEngine {
             if (Object.values(capabilities).some(Boolean))
               session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
                 identity: confirmed.identity, table, result, relationOid: oid, origins: targets, capabilities,
+                replaceColumns: capabilities.update ? targets.flatMap((column, index) =>
+                  column && confirmed.textAttributes.has(column.attribute) ? [index] : []) : [],
                 ...(joined ? { joined: true } : {}) };
           }
         }
@@ -1225,6 +1227,7 @@ export class PostgresEngine {
       ...(session.queryRecord ? { postgresQueryRecordExecution: session.queryRecord.executionId,
         postgresQueryRecordCapabilities: session.queryRecord.capabilities } : {}),
       ...(session.queryRecord?.joined ? { postgresQueryRecordJoinTarget: session.queryRecord.relationOid } : {}),
+      ...(session.queryRecord?.replaceColumns.length ? { postgresQueryReplaceColumns: session.queryRecord.replaceColumns } : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */

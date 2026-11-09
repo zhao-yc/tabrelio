@@ -1,3 +1,4 @@
+import type { ResultColumn } from '../shared/contracts';
 import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../shared/postgresTable';
 import type { DraftRow } from './dataChanges';
 import { ownCell } from './lib';
@@ -29,8 +30,8 @@ export function postgresFindWritable(column: PostgresTableColumn): boolean {
 }
 
 export interface PostgresFindPlan {
-  changes: PostgresTableChange[];
-  patches: { row: number; column: PostgresTableColumn; before: string; after: string }[];
+  changes: Extract<PostgresTableChange, { kind: 'update' }>[];
+  patches: { row: number; column: ResultColumn; before: string; after: string }[];
 }
 
 /** 核对线程返回的原文及可写列，再把整批结果合并到现有更新草稿。 */
@@ -56,7 +57,7 @@ export function postgresFindPlan(page: PostgresTablePage, rows: readonly DraftRo
     patches.push({ row, column, before, after });
   }
   if (!grouped.size) throw Error(text.noChange);
-  const changes: PostgresTableChange[] = [];
+  const changes: PostgresFindPlan['changes'] = [];
   for (const [row, fields] of grouped) {
     const key = page.rowKeys?.[row];
     if (!key) throw Error(text.stale);

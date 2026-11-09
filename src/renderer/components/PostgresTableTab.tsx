@@ -42,7 +42,7 @@ import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.z
 import { postgresRecordTransferZh as transferText } from '../locales/postgresRecordTransfer.zh-CN';
 import { capturePostgresRecordTransfer, postgresTransferChanges, samePostgresTransferTable, usePostgresRecordTransfer, type PostgresRecordTransfer } from '../postgresRecordTransfer';
 import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTableFindPanel';
-import { postgresFindPlan, postgresFindRows, type PostgresFindPlan } from '../postgresTableFind';
+import { postgresFindPlan, postgresFindRows, postgresFindWritable, type PostgresFindPlan } from '../postgresTableFind';
 import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh-CN';
 import { useUiCommandScope } from '../uiCommands';
 import { openFocusedGridRowJump } from './GridRowJump';
@@ -1631,7 +1631,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         projectionCurrent={() => !!page.exportToken && issued.current === page.exportToken && layoutScope.current.current()}
         moves={moves} onMove={moveRecord} onDirty={changeRecordInput} onStage={stageRecordView}/>}
       {page ? <div className="pg-record-grid-host" hidden={recordView}><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
-        rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent}
+        rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent} replaceWritable={postgresFindWritable}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
         onOpen={openFind} onClose={() => setFindRequest(undefined)} onStage={stageFind}
         onPreview={patches => {

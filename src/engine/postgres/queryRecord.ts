@@ -157,6 +157,7 @@ export interface PostgresQueryRecordSource {
   origins: PostgresColumnReference[];
   capabilities: NonNullable<QueryOutcome['postgresQueryRecordCapabilities']>;
   joined?: true;
+  replaceColumns: number[];
 }
 
 /** 在原查询会话按其搜索路径确认真正的关系、有效主键及物理文件。 */
@@ -166,17 +167,22 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
      FROM pg_catalog.pg_index i, LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality)
      WHERE i.indrelid=c.oid AND i.indisprimary AND i.indisvalid AND k.ordinality<=i.indnkeyatts), '[]'),
     pg_catalog.has_table_privilege(c.oid, 'UPDATE'), pg_catalog.has_table_privilege(c.oid, 'DELETE'),
-    pg_catalog.has_table_privilege(c.oid, 'INSERT')
+    pg_catalog.has_table_privilege(c.oid, 'INSERT'),
+    COALESCE((SELECT pg_catalog.jsonb_agg(a.attnum)::text FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+        AND a.attidentity <> 'a' AND a.atttypid IN (25, 1042, 1043)), '[]')
     FROM pg_catalog.pg_class c WHERE c.oid=$2::oid AND c.oid=pg_catalog.to_regclass($1)::oid
       AND c.relkind='r' AND c.relpersistence IN ('p','u') AND NOT c.relispartition AND NOT c.relhasrules
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhparent=c.oid)`,
     [relation, String(oid)], budget(), undefined, 'extended');
   const row = result.rows[0];
   if (result.truncated || result.rows.length !== 1 || typeof row.c0 !== 'string' ||
-      typeof row.c1 !== 'string' || typeof row.c2 !== 'string') return;
+      typeof row.c1 !== 'string' || typeof row.c2 !== 'string' || typeof row.c6 !== 'string') return;
   const keys: unknown = JSON.parse(row.c2);
+  const textAttributes: unknown = JSON.parse(row.c6);
   if (Array.isArray(keys) && keys.every(key => Number.isSafeInteger(key) && key > 0))
     return { keys: keys as number[], identity: JSON.stringify([row.c0, row.c1, keys]),
+      textAttributes: new Set<number>(Array.isArray(textAttributes) ? textAttributes : []),
       capabilities: { update: row.c3 === 't', delete: row.c4 === 't', insert: row.c5 === 't' } };
 }
 

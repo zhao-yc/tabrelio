@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import type { PostgresTableColumn } from '../../shared/postgresTable';
+import type { ResultColumn } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
 import { cellPreview, errorMessage } from '../lib';
 import { pageFindLimits, pageOccurrences, type PageFindOptions, type PageOccurrence, type PageTextPatch } from '../pageFindReplace';
 import { PageFindWorkerClient } from '../pageFindWorkerClient';
-import { postgresFindWritable, type PostgresFindPlan } from '../postgresTableFind';
+import type { PostgresFindPlan } from '../postgresTableFind';
 import { postgresTableFindZh as text } from '../locales/postgresTableFind.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { ErrorBox } from './ui';
@@ -12,18 +12,22 @@ import type { GridFindTarget } from './ResultsGrid';
 
 export interface PostgresFindRequest { replace: boolean; }
 type Mode = 'text' | 'null' | 'field';
-interface Props {
+type Review = Pick<PostgresFindPlan, 'patches'>;
+interface Props<Column extends ResultColumn, Plan extends Review> {
   request?: PostgresFindRequest; scope: object; pageKey?: string; enabled: boolean; writable: boolean; rows: DraftRow[];
-  columns: PostgresTableColumn[]; isCurrent(): boolean; anchor(): GridFindTarget | undefined;
+  columns: Column[]; isCurrent(): boolean; anchor(): GridFindTarget | undefined;
+  replaceWritable(column: Column): boolean;
+  shortcuts?: boolean; scopeDescription?: string;
   onOpen(replace: boolean): void; onClose(): void;
-  onPreview(patches: readonly PageTextPatch[]): PostgresFindPlan;
-  onStage(scope: object, plan: PostgresFindPlan): void;
+  onPreview(patches: readonly PageTextPatch[]): Plan;
+  onStage(scope: object, plan: Plan): void;
   renderGrid(target?: GridFindTarget, highlights?: ReadonlySet<string>): ReactNode;
 }
 
 /** 数据使用现有有界工作线程，字段名在本地目录中匹配。每次更换来源都撤销旧替换计划。 */
-export function PostgresTableFindPanel(props: Props) {
-  const { request, scope, pageKey, enabled, writable, rows, columns, isCurrent, anchor, onOpen, onClose, onPreview, onStage, renderGrid } = props;
+export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends Review>(props: Props<Column, Plan>) {
+  const { request, scope, pageKey, enabled, writable, rows, columns, isCurrent, anchor, replaceWritable,
+    shortcuts = true, scopeDescription = text.scope, onOpen, onClose, onPreview, onStage, renderGrid } = props;
   const [mode, setMode] = useState<Mode>('text'), [column, setColumn] = useState('');
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
   const [regex, setRegex] = useState(false), [capture, setCapture] = useState(false);
@@ -41,7 +45,7 @@ export function PostgresTableFindPanel(props: Props) {
   const [preparing, setPreparing] = useState<typeof snapshot>();
   const [result, setResult] = useState<{ snapshot: typeof snapshot; hits: PageOccurrence[]; error?: string }>();
   const [position, setPosition] = useState<{ snapshot: typeof snapshot; index: number }>();
-  const [preview, setPreview] = useState<{ snapshot: typeof snapshot; replacement: string; plan: PostgresFindPlan; only?: PageOccurrence }>();
+  const [preview, setPreview] = useState<{ snapshot: typeof snapshot; replacement: string; plan: Plan; only?: PageOccurrence }>();
   const [error, setError] = useState('');
   const found = result?.snapshot === snapshot ? result : undefined;
   const chosen = position?.snapshot === snapshot ? position.index : -1;
@@ -107,7 +111,7 @@ export function PostgresTableFindPanel(props: Props) {
   const target = useMemo(() => hit ? { row: Number(hit.rowId), key: hit.key } : undefined, [hit, position]);
   const marks = useMemo(() => request && highlight && found ? new Set(found.hits.map(match => match.rowId + ':' + match.key)) : undefined,
     [request, highlight, found]);
-  const replaceKeys = useMemo(() => new Set(columns.filter(postgresFindWritable).map(column => column.key)), [columns]);
+  const replaceKeys = useMemo(() => new Set(columns.filter(replaceWritable).map(column => column.key)), [columns, replaceWritable]);
   const hasWritable = canReplace && found?.hits.some(hit => hit.range && replaceKeys.has(hit.key));
   const oneWritable = canReplace && hit?.range && replaceKeys.has(hit.key);
 
@@ -155,7 +159,7 @@ export function PostgresTableFindPanel(props: Props) {
     const findShortcut = key === 'f' && modifier && !event.altKey;
     const replaceShortcut = writable && (key === 'h' && event.ctrlKey && !event.metaKey && !event.altKey ||
       (key === 'f' || event.code === 'KeyF') && event.metaKey && event.altKey && !event.ctrlKey);
-    if (!event.shiftKey && (findShortcut || replaceShortcut)) {
+    if (shortcuts && !event.shiftKey && (findShortcut || replaceShortcut)) {
       event.preventDefault(); event.stopPropagation();
       if (!event.repeat) onOpen(replaceShortcut);
     } else if (request && !modifier && !event.altKey && (key === 'f3' || key === 'enter' && event.target === queryInput.current)) {
@@ -203,11 +207,11 @@ export function PostgresTableFindPanel(props: Props) {
       <div className="query-result-find-status">
         {enabled && canSearch && !composing && !found?.error && <span role="status">{pending ? text.preparing : !found ? text.searching : found.hits.length ? text.ready(found.hits.length, chosen) : text.noMatch}</span>}
         {hit && <span>{text.location(Number(hit.rowId), columns.find(column => column.key === hit.key)?.name ?? hit.key)}</span>}
-        <span className="muted">{text.scope}</span>
+        <span className="muted">{scopeDescription}</span>
       </div>
       <ErrorBox message={error || found?.error || ''}/>
       {review && <section className="pg-find-review" aria-label={text.review}>
-        <p>{text.reviewCount(review.plan.patches.length, review.plan.changes.length)}</p>
+        <p>{text.reviewCount(review.plan.patches.length, new Set(review.plan.patches.map(patch => patch.row)).size)}</p>
         <dl>{review.plan.patches.slice(0, 12).map(patch => <div key={patch.row + ':' + patch.column.key}>
           <dt>{text.location(patch.row, patch.column.name)}</dt>
           <dd>{text.before}　{cellPreview(patch.before)}</dd><dd>{text.after}　{cellPreview(patch.after)}</dd>

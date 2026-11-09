@@ -8,6 +8,7 @@ import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { gridRangeFillZh as fillText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { postgresBatchDuplicateZh as duplicateText } from '../../src/renderer/locales/postgresBatchDuplicate.zh-CN';
 import { postgresBatchEditZh as batchText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
+import { postgresTableFindZh as findText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -664,6 +665,58 @@ test('PostgreSQL JOIN 仅可编辑明确定位的首张表，重复主键和自�
     await rerun('SELECT p.id, p.note, s.note AS 侧注 FROM join_main.subject p JOIN join_side.subject s ON p.side_id<=s.id;');
     await expect(cell('主表已匹配')).toHaveCount(2);
     await expect(edit).toBeHidden();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 查询文本替换按原字段去重，保留计算列和查询范围外记录', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.query_replace (
+      id bigint PRIMARY KEY, note text, tag varchar(64), auto_text text GENERATED ALWAYS AS (note || '标记') STORED);
+      INSERT INTO public.query_replace(id,note,tag) VALUES (1,'旧甲-旧甲','旧甲'), (2,'旧乙','保留'), (3,'旧乙','旧乙')`);
+    await loadQuery(config, `SELECT id, note AS 同名, upper(note) AS 同名, note AS 重复, tag, auto_text
+      FROM public.query_replace WHERE id < 3 ORDER BY id DESC;`);
+    const query = page.locator('.postgres-query:visible');
+    await query.getByRole('button', { name: postgresZh.execute, exact: true }).click();
+    const replace = query.getByRole('button', { name: text.replace, exact: true });
+    await expect(replace).toBeEnabled();
+    await query.getByRole('columnheader', { name: 'id' }).click();
+    await replace.click();
+    const panel = query.getByRole('region', { name: findText.title, exact: true });
+    const read = async () => (await observer.query('SELECT id::text, note, tag, auto_text FROM public.query_replace ORDER BY id')).rows;
+    const before = await read();
+    await panel.getByRole('checkbox', { name: findText.regex, exact: true }).check();
+    await panel.getByRole('checkbox', { name: findText.captures, exact: true }).check();
+    await panel.getByLabel(findText.query, { exact: true }).fill('(旧)([甲乙])');
+    await panel.getByLabel(findText.replacement, { exact: true }).fill('$2新');
+    const review = panel.getByRole('region', { name: findText.review, exact: true });
+    await panel.getByRole('button', { name: findText.one, exact: true }).click();
+    await expect(review).toContainText(findText.reviewCount(1, 1));
+    await expect(review).toContainText('甲新-旧甲');
+    await review.getByRole('button', { name: findText.cancel, exact: true }).click();
+    expect(await read()).toEqual(before);
+    await panel.getByRole('button', { name: findText.all, exact: true }).click();
+    await expect(review).toContainText(findText.reviewCount(3, 2));
+    await expect(review).toContainText('甲新-甲新');
+    await review.getByRole('button', { name: tableText.stage, exact: true }).click();
+    const preview = page.getByRole('dialog', { name: text.replaceTitle, exact: true });
+    await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."query_replace" SET "note" = $1, "tag" = $2');
+    await expect(preview.locator('dt')).toHaveText(['note', 'tag', 'note']);
+    expect(await read()).toEqual(before);
+    const apply = preview.getByRole('button', { name: tableText.apply, exact: true });
+    await expect(apply).toBeDisabled();
+    await info.attach('PostgreSQL查询文本替换预览', { body: await page.screenshot(), contentType: 'image/png' });
+    await preview.getByRole('checkbox', { name: text.rangeConfirm(2), exact: true }).check();
+    await apply.click();
+    await expect(preview).toBeHidden();
+    expect(await read()).toEqual([
+      { id: '1', note: '甲新-甲新', tag: '甲新', auto_text: '甲新-甲新标记' },
+      { id: '2', note: '乙新', tag: '保留', auto_text: '乙新标记' },
+      before[2],
+    ]);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
