@@ -120,6 +120,7 @@ import { readSqliteClipboard } from '../sqliteTableClipboard';
 import { sqliteTableRangePasteZh as sqlitePasteText } from '../locales/sqliteTableRangePaste.zh-CN';
 import type { GridRangeFillInput } from '../gridRangeFill';
 import type { SqliteQueryRangeFill } from '../sqliteQueryRangeFill';
+import { planSqliteQueryReplace, sqliteQueryReplacementRows, type SqliteQueryReplacePlan } from '../sqliteQueryReplace';
 import { gridRangeFillZh } from '../locales/gridRangeFill.zh-CN';
 import type { SqliteQueryInlineCell } from './SqliteQueryInlineCellEditor';
 import { SqliteSearchRecordEditDialog, type SqliteQueryRangePaste } from './SqliteSearchRecordEditDialog';
@@ -330,7 +331,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [showPinSql, setShowPinSql] = useState<{ result: QueryResult; statement: string; taskId: string; connectionVersion: number; pinId: string; resultIndex: number } | null>(null);
   const [recordEdit, setRecordEdit] = useState<{ table: string; source: SqliteQueryRecordInput; rangeFill?: SqliteQueryRangeFill;
     rangePaste?: SqliteQueryRangePaste; deletePositions?: readonly number[]; duplicatePositions?: readonly number[];
-    job: WorkspaceBusyLease; cell?: SqliteQueryInlineCell & { key: string; row: DataRow } }>();
+    rangeReplace?: SqliteQueryReplacePlan; job: WorkspaceBusyLease; cell?: SqliteQueryInlineCell & { key: string; row: DataRow } }>();
   useEffect(() => () => { recordEdit?.job.release(); }, [recordEdit]);
   const [recordRelation, setRecordRelation] = useState<{
     request: SqliteTablePageInput & { queryRecord: Extract<SqliteQueryRecordInput, { rowIndex: number }> };
@@ -1506,36 +1507,52 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setQueryRowSql({ result: sourceResult, job: acquireWorkspaceBusy(tab.id), keyed: sqlite ? !!recordTable : mysqlRelationAvailable,
       request: { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current, rowIndices } });
   }
-  const [replaceView, setReplaceView] = useState<{ binding: ResultSelectionBinding; request: MysqlQueryReplaceColumnsInput;
-    panel: PostgresFindRequest; fields?: ReadonlyMap<string, string> }>();
-  const canReplaceResult = mysqlRelationAvailable && !sourceResult?.truncated && !!selectionBinding?.rows.length && !!visibleColumns.length;
+  const [replaceView, setReplaceView] = useState<{ binding: ResultSelectionBinding; sessionId: string; executionId: string;
+    lookup?: MysqlQueryReplaceColumnsInput; panel: PostgresFindRequest; fields?: ReadonlyMap<string, string> }>();
+  const sqliteReplaceColumns = recordEditTable && sourceResult?.sqliteStorage ? outcome?.sqliteQueryReplaceColumns : undefined;
+  const canReplaceResult = (mysqlRelationAvailable || !!sqliteReplaceColumns?.length) && !sourceResult?.truncated &&
+    !!selectionBinding?.rows.length && !!visibleColumns.length;
   const activeReplace = canReplaceResult && replaceView?.binding === selectionBinding ? replaceView : undefined;
-  const replaceLookup = activeReplace && !activeReplace.fields ? activeReplace : undefined;
+  const replaceLookup = activeReplace?.lookup && !activeReplace.fields ? activeReplace : undefined;
   const replaceRows = useMemo(() => activeReplace?.fields ? activeReplace.binding.rows.map((data, index) =>
     ({ id: String(index), data, inserted: false, deleted: false })) : [], [activeReplace]);
+  const sqliteReplaceRows = useMemo(() => activeReplace?.fields && !activeReplace.lookup
+    ? sqliteQueryReplacementRows(activeReplace.binding.result, activeReplace.fields) : undefined, [activeReplace]);
   const replaceWritable = useCallback((column: ResultColumn) => activeReplace?.fields?.has(column.key) === true, [activeReplace]);
-  const closeMysqlReplace = () => setReplaceView(undefined);
-  function mysqlReplaceCurrent(view = activeReplace): boolean {
-    return !!view && sessionRef.current === view.request.sessionId && task.current === view.request.executionId &&
+  const closeResultReplace = () => setReplaceView(undefined);
+  function resultReplaceCurrent(view = activeReplace): boolean {
+    return !!view && sessionRef.current === view.sessionId && task.current === view.executionId &&
       resultSelectionAllowed(view.binding) && queryMenuCurrent();
   }
-  function openMysqlReplace(): void {
-    if (!canReplaceResult || !selectionBinding || !sessionRef.current || !resultSelectionAllowed(selectionBinding) || !queryMenuCurrent()) return;
+  function openResultReplace(): void {
+    if (!canReplaceResult || !selectionBinding || !sourceResult || !sessionRef.current ||
+        !resultSelectionAllowed(selectionBinding) || !queryMenuCurrent()) return;
     setError('');
-    setReplaceView({ binding: selectionBinding, panel: { replace: true },
-      request: { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current, taskId: uid() } });
+    const owner = { binding: selectionBinding, panel: { replace: true }, sessionId: sessionRef.current, executionId: task.current };
+    if (sqliteReplaceColumns) {
+      const keys = new Set(selectionBinding.visibleColumns.map(column => column.key));
+      const fields = new Map(sqliteReplaceColumns.flatMap(index => {
+        const column = sourceResult.columns[index], origin = resultOrigins?.[index];
+        return column && keys.has(column.key) && origin?.database === 'main' && origin.table === recordEditTable
+          ? [[column.key, origin.column] as const] : [];
+      }));
+      if (!fields.size) { setError(originsText.replaceUnavailable); return; }
+      setReplaceView({ ...owner, fields });
+    } else setReplaceView({ ...owner,
+      lookup: { connectionId: tab.connectionId, sessionId: owner.sessionId, executionId: owner.executionId, taskId: uid() } });
   }
   useEffect(() => {
-    if (!replaceLookup) return;
+    const lookup = replaceLookup?.lookup;
+    if (!replaceLookup || !lookup) return;
     let active = true, reading = false;
     void (async () => {
       try {
         await Promise.resolve();
         if (!active) return;
         reading = true;
-        const columns = await invoke('mysql.queryReplaceColumns', replaceLookup.request);
+        const columns = await invoke('mysql.queryReplaceColumns', lookup);
         reading = false;
-        if (!active || !mysqlReplaceCurrent(replaceLookup)) return;
+        if (!active || !resultReplaceCurrent(replaceLookup)) return;
         const keys = new Set(replaceLookup.binding.visibleColumns.map(column => column.key));
         const fields = new Map(columns.flatMap(({ index, field }) => {
           const key = sourceResult?.columns[index]?.key;
@@ -1544,7 +1561,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         if (!fields.size) throw Error(mysqlBatchText.replaceUnavailable);
         setReplaceView(view => view === replaceLookup ? { ...view, fields } : view);
       } catch (reason) {
-        if (active && mysqlReplaceCurrent(replaceLookup)) {
+        if (active && resultReplaceCurrent(replaceLookup)) {
           setError(errorMessage(reason));
           setReplaceView(view => view === replaceLookup ? undefined : view);
         }
@@ -1555,17 +1572,22 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     })();
     return () => {
       active = false;
-      if (reading) void invoke('query.cancel', { taskId: replaceLookup.request.taskId }).catch(() => undefined);
+      if (reading) void invoke('query.cancel', { taskId: lookup.taskId }).catch(() => undefined);
     };
   }, [replaceLookup]);
-  function previewMysqlReplace(patches: readonly PageTextPatch[]) {
-    if (!activeReplace?.fields || !mysqlReplaceCurrent()) throw Error(mysqlBatchText.stale);
-    return planMysqlQueryReplace(activeReplace.binding.rows, activeReplace.binding.visibleColumns, activeReplace.fields, patches);
+  function previewResultReplace(patches: readonly PageTextPatch[]) {
+    if (!activeReplace?.fields || !resultReplaceCurrent()) throw Error(sqlite ? originsText.editStale : mysqlBatchText.stale);
+    const { binding, fields } = activeReplace;
+    return sqliteReplaceRows ? { kind: 'sqlite' as const, ...planSqliteQueryReplace(sqliteReplaceRows, binding.visibleColumns, fields, patches) }
+      : { kind: 'mysql' as const, ...planMysqlQueryReplace(binding.rows, binding.visibleColumns, fields, patches) };
   }
-  function stageMysqlReplace(owner: object, plan: ReturnType<typeof planMysqlQueryReplace>): void {
-    if (!activeReplace || owner !== activeReplace.binding || !mysqlReplaceCurrent()) throw Error(mysqlBatchText.stale);
-    startMysqlQueryBatch(plan.positions, { kind: 'replace', patches: plan.changes }, plan.keys);
-    closeMysqlReplace();
+  function stageResultReplace(owner: object, plan: ReturnType<typeof previewResultReplace>): void {
+    if (!activeReplace || owner !== activeReplace.binding || !resultReplaceCurrent()) throw Error(sqlite ? originsText.editStale : mysqlBatchText.stale);
+    if (plan.kind === 'sqlite') {
+      if (!startQueryRecords(plan.positions.map(index => activeReplace.binding.rows[index]), { rangeReplace: plan }))
+        throw Error(originsText.editStale);
+    } else startMysqlQueryBatch(plan.positions, { kind: 'replace', patches: plan.changes }, plan.keys);
+    closeResultReplace();
   }
   /** 查询排序只改变视图次序，回查使用原执行中准确的行对象。 */
   function openMysqlRelation(direction: 'parent' | 'children' | 'edit'): void {
@@ -1653,12 +1675,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setRecordEdit({ table: sqliteInsertTable, job, source: { sessionId: sessionRef.current, taskId: task.current, operation: 'insert' } });
   }
 
-  function startQueryRecords(rows: readonly DataRow[], { cell, rangeFill, rangePaste, deletePositions, duplicatePositions }: {
+  function startQueryRecords(rows: readonly DataRow[], { cell, rangeFill, rangePaste, deletePositions, duplicatePositions, rangeReplace }: {
     cell?: SqliteQueryInlineCell & { key: string; row: DataRow };
     rangeFill?: SqliteQueryRangeFill;
     rangePaste?: SqliteQueryRangePaste;
     deletePositions?: readonly number[];
     duplicatePositions?: readonly number[];
+    rangeReplace?: SqliteQueryReplacePlan;
   } = {}): boolean {
     if (!recordEditTable || !sourceResult || !sessionRef.current || !queryOwnerCurrent() || !rowDetailAllowed(detailBinding)) return false;
     // 本地筛选和排序保留原行对象，网格索引不能直接用于主进程原结果。
@@ -1666,9 +1689,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (!rowIndices.length || rowIndices.some(index => index < 0) || new Set(rowIndices).size !== rowIndices.length) return false;
     const identity = { sessionId: sessionRef.current, taskId: task.current };
     const source: SqliteQueryRecordInput = duplicatePositions ? { ...identity, rowIndices, operation: 'duplicate' }
-      : rangeFill || rangePaste || deletePositions ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
+      : rangeFill || rangePaste || deletePositions || rangeReplace ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
     const job = acquireWorkspaceBusy(tab.id);
-    setRecordEdit({ table: recordEditTable, job, source, cell, rangeFill, rangePaste, deletePositions, duplicatePositions });
+    setRecordEdit({ table: recordEditTable, job, source, cell, rangeFill, rangePaste, deletePositions, duplicatePositions, rangeReplace });
     return true;
   }
   /** 显示行号仅供审阅。提交读取当前勾选对应的原行对象和独立快照。 */
@@ -2688,7 +2711,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   title={rowDetailsText.choose} onClick={() => openMysqlRelation(direction)}>{mysqlRelationText[direction]}</button>)}
 {mysqlRelationAvailable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlJoinColumns ? mysqlEditText.editJoin : mysqlEditText.edit}</button>}
-{canReplaceResult && <button disabled={!!replaceLookup} onClick={openMysqlReplace}>{mysqlBatchText.replaceOpen}</button>}
+{canReplaceResult && <button disabled={!!replaceLookup} onClick={openResultReplace}>{sqlite ? originsText.replaceOpen : mysqlBatchText.replaceOpen}</button>}
 {canPrepareQueryRowSql && <button disabled={queryRowSqlCount > copyInsertSqlLimits.rows ||
   !queryRowSqlCount && (!activeDetailRow || activeDetailRow.binding !== detailBinding)}
   onClick={openQueryRowSql}>{queryRowSqlText.open}</button>}
@@ -2792,11 +2815,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         onClear={() => changeMatchView()}/>}
       <div className="result-body" role="region" aria-label={zh.query.text016} tabIndex={-1}>{!pin && outcome?.sqliteExplain ? <SqliteExplainPlanView key={task.current} outcome={outcome} busy={busy} isCurrent={queryMenuCurrent}/> : !pin && outcome?.analysis ? <QueryAnalyzeView key={task.current} plan={outcome.analysis} outcome={outcome} fileActions busy={busy}/> : !pin && outcome?.explain ? <ExplainPlanView key={task.current} outcome={outcome} fileActions fileBusy={busy} busy={busy || !sessionId} onText={() => void runQuery(explainSource.current, 'explain-text')}/> : result?.columns.length ? <div className="query-result-with-details">
       <PostgresTableFindPanel host={{ className: 'query-result-grid', inert: !!(recordEdit?.cell || mysqlRelation?.cell) }} request={activeReplace?.fields ? activeReplace.panel : undefined} scope={selectionBinding ?? visibleColumns}
-        enabled={!!activeReplace?.fields} writable={!!activeReplace?.fields} rows={replaceRows} columns={visibleColumns}
-        replaceWritable={replaceWritable} scopeDescription="" replaceScopeDescription={mysqlBatchText.replaceScope} shortcuts={false}
-        isCurrent={() => mysqlReplaceCurrent()} anchor={() => undefined} onOpen={openMysqlReplace} onClose={closeMysqlReplace}
-        onPreview={previewMysqlReplace} onStage={stageMysqlReplace}
-        renderGrid={(findTarget?: GridFindTarget, findMarks?: ReadonlySet<string>) => <ResultsGrid findTarget={findTarget} findMarks={findMarks} rowJump rowHeight={layoutMatches ? columnLayout?.layout.rowHeight : undefined} sqliteSource={result} key={pin?.id ?? `current-${resultIndex}`} columns={visibleColumns} rows={result.rows} frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={resultColumnWidths} onColumnWidthsChange={resizeResultColumns} binarySourceIdentity={[...resultContext,result,filterView,sortView]} binaryIsCurrent={() => alive.current && !busyRef.current && task.current === resultContext[3]} sort={sortView?.rules ? [...sortView.rules] : []} onSortChange={sortBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? sortResult : undefined} sortReasons={sortBinding?.reasons} onHistoryTravel={travelResultHistory} onFilterCell={filterBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openCellFilter : undefined} onFilterSelected={filterBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openSelectedFilter : undefined} onStatistics={selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openResultStatistics : undefined} selectionScope={selectionBinding} onSelectionChange={selectResultRows} onShowMatchingRows={changeMatchView} onExportRange={exportGridRange} isCurrent={() => resultSelectionAllowed(selectionBinding)} onActiveRowIndexChange={selectActiveDetailRow} onCellEdit={recordEditTable || mysqlRelationAvailable ? editQueryCell : undefined} onFillRange={(recordEditTable || mysqlRelationAvailable) && selectionBinding ? fillQueryRange : undefined} onCellPaste={(recordEditTable || mysqlRelationAvailable) && selectionBinding ? pasteQueryRange : undefined} restoreCell={restoreEditedCell}/>}/>{currentRowDetail && <QueryRowDetailsPanel controller={rowDetails} view={currentRowDetail} isCurrent={() => rowDetailAllowed(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail}/>}</div> : result ? <Empty title={zh.query.text023} text={sqliteReceipt ? undefined : formatText(zh.query.text024, result.affectedRows ?? 0, result.insertId ? formatText(zh.query.text025, result.insertId) : '', result.warningCount ? formatText(zh.query.text026, result.warningCount) : '')}/> : <Empty title={zh.query.text027} text={zh.query.text028}><div className="key-tip"><kbd>Ctrl / ⌘</kbd><span>+</span><kbd>Enter</kbd></div></Empty>}</div></div></div><div className="tab-status">{result?.columns.length && result.warningCount !== undefined ? <span aria-label={queryWarningsZh.count(result.warningCount)}>{queryWarningsZh.count(result.warningCount)}</span> : null}<span>{result ? formatText(zh.query.text029, result.rows.length, result.truncated ? zh.query.text030 : '') : zh.query.text031}</span>{busy ? <Spinner text={zh.query.text018}/> : outcome && (!sqlite || !pin) && <span className="muted small">{sqlite ? sqliteZh.executionElapsed(outcome.elapsedMs) : outcome.elapsedMs + zh.query.text019}</span>}<span className="grow"/>{!busy&&completionStatus!=='idle'&&<span className="muted small" aria-label="SQL 补全状态" title={completionStatusInfo[completionStatus].hint}>{completionStatusInfo[completionStatus].text}</span>}{(transaction || !transactionKnown) && <span className="warning-text" title={!transactionKnown ? parameterZh.transactionUnknownHint : undefined}><LockKeyhole size={12}/>{transactionKnown ? zh.query.text032 : parameterZh.transactionUnknown}</span>}<button disabled={busy || transaction || !transactionKnown} onClick={() => void transactionAction('begin')}>{zh.common.transactionBegin}</button><button disabled={busy || (!transaction && transactionKnown)} onClick={() => void transactionAction('commit')}><Check size={12}/>{zh.common.transactionCommit}</button><button disabled={busy || (!transaction && transactionKnown)} onClick={() => void transactionAction('rollback')}><RotateCcw size={12}/>{zh.common.transactionRollback}</button></div>{sessionObjects&&<SessionObjectsDialog sessionId={sessionId} database={completionSession?.databaseKnown?completionSession.database??undefined:undefined} busy={busy} onRead={readTemporaryObject} onClose={()=>setSessionObjects(false)}/ >}{recoveryDialog}{databaseSwitchDialog&&<QueryDatabaseSwitchDialog intent={databaseSwitchDialog} onLoad={()=>loadDatabaseSwitchChoices(databaseSwitchDialog)} onApply={database=>applyDatabaseSwitch(databaseSwitchDialog,database)} onClose={()=>closeDatabaseSwitch(databaseSwitchDialog)}/ >}{closeRequest && !archiveOutcome && closePhase === 'choose' && <QueryCloseDialog title={tab.title} onCancel={() => finishClose(false)} onDiscard={() => finishClose(true)} onKeep={closeKeepingDraft} onSave={beginCloseSave}/ >}{closeRequest && !archiveOutcome && closePhase === 'save' && createPortal(<QueryBindingDialog initialName={queryName} bound={!!tab.sourceBinding} onSave={saveAndClose} onClose={() => finishClose(false)}/>, document.body)}{save && <QueryBindingDialog initialName={queryName} bound={!!tab.sourceBinding} onSave={async (action, name, group) => { await saveQuery(action, name, group); }} onClose={() => {invalidateResultSelection();setSave(false);}}/>}{resultSqlPreview && <Modal title={resultSqlPreview.pinId ? zh.query.pinSource : zh.query.resultSqlTitle} wide onClose={closeResultSql}><div className="modal-content"><p>{zh.query.resultSqlHint}</p><SqlEditor value={resultSqlPreview.statement} dialect={connection?.dialect} height={280} readOnly/></div><footer className="modal-footer"><span className="grow"/><button onClick={closeResultSql}>{zh.common.close}</button></footer></Modal>}{snippets && <SnippetsDialog initialSql={snippets.initialSql} startWithDraft={snippets.create} onInsert={insertSnippet} onClose={() => {invalidateResultSelection();setSnippets(null);}}/ >}{warningsDialog && <QueryWarningsDialog report={warningsDialog.report} onClose={() => closeWarningsReport(warningsDialog)}/ >}{transactionSettingsDialog && <QueryTransactionSettingsDialog intent={transactionSettingsDialog.intent} connectionName={transactionSettingsDialog.connectionName} onRead={taskId => requestTransactionSettings(transactionSettingsDialog.intent, taskId)} onApply={input => requestTransactionSettings(transactionSettingsDialog.intent, input.taskId, input)} onAutocommit={input => requestAutocommit(transactionSettingsDialog.intent, input)} onClose={() => closeTransactionSettings(transactionSettingsDialog.intent)}/>}{analyzeDialog && <QueryAnalyzeConfirmDialog source={analyzeDialog.intent.source} connectionName={analyzeDialog.connectionName} databaseLabel={analyzeDialog.databaseLabel} invalidReason={analyzeInvalid || undefined} onConfirm={() => void confirmAnalyze(analyzeDialog.intent)} onClose={() => closeAnalyze(analyzeDialog.intent)}/ >}{parameterSource !== null && <QueryParametersDialog key={sqlite ? sqliteParameterDialog?.id : undefined} source={parameterSource} loadNames={sqlite ? () => loadParameterNames(sqliteParameterDialog ?? undefined) : loadParameterNames} reuse={parameterReusePort.current ?? undefined} ownerId={sqliteParameterDialog?.intent ? sqliteParameterDialog.id : undefined} syntaxHint={sqliteParameterDialog?.intent ? parameterZh.sqliteCurrentHint : undefined} onExecute={parameters => submitParameterQuery(parameterSource, parameters, sqlite ? sqliteParameterDialog ?? undefined : undefined)} onClose={() => closeParameters(sqlite ? sqliteParameterDialog ?? undefined : undefined)}/ >}{sqliteFullExport && <FullQueryExportDialog source={sqliteFullExport} onClose={() => setSqliteFullExport(null)}/>}{streamExportSource !== null && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb') && <QueryStreamExportDialog dialect={connection.dialect} sessionBusy={busy} source={streamExportSource} loadNames={loadStreamParameterNames} onExecute={runStreamExport} onCancel={cancelStreamExport} onClose={() => { if (!busyRef.current) setStreamExportSource(null); }}/ >}{activeColumnLease&&<QueryResultColumnsDialog binding={activeColumnLease.binding} initial={activeColumnLease.initial} owner={activeColumnLease.owner} isCurrent={()=>columnManagerCurrent(activeColumnLease)} onApply={layout=>applyColumnLayout(activeColumnLease,layout)} onClose={()=>closeColumnManager(activeColumnLease)}/ >}{activePresetLease&&<QueryResultPresetsDialog key={activePresetLease.owner} connectionId={tab.connectionId} value={activePresetLease.value} owner={activePresetLease.owner} isCurrent={()=>presetManagerCurrent(activePresetLease)} matches={value=>queryResultMemoryMatches(value,viewSource,visibleColumns)} onApply={value=>applyResultPreset(activePresetLease,value)} onClose={()=>closeResultPresets(activePresetLease)}/ >}{activeStatisticsLease&&<QueryResultStatisticsDialog key={activeStatisticsLease.owner} sqliteSource={activeStatisticsLease.source} columns={activeStatisticsLease.columns} rows={activeStatisticsLease.rows} initialColumn={activeStatisticsLease.column} selectedIndices={activeStatisticsLease.indices} truncated={activeStatisticsLease.truncated} owner={activeStatisticsLease.owner} isCurrent={()=>statisticsCurrent(activeStatisticsLease)} onClose={()=>closeResultStatistics(activeStatisticsLease)} onFilter={node=>filterFromStatistics(activeStatisticsLease,node)}/ >}{activeComparisonLease&&<QueryResultComparisonDialog key={activeComparisonLease.owner} pins={activeComparisonLease.pins} owner={activeComparisonLease.owner} isCurrent={()=>comparisonCurrent(activeComparisonLease)} onClose={()=>closeResultComparison(activeComparisonLease)}/ >}{resultInsertSource && <ResultInsertDialog intent={resultInsertSource} initialConnectionId={tab.connectionId} onActivity={resultInsertActivityChange} onClose={() => closeResultInsert(resultInsertSource)} onCommitted={output => useWorkspace.getState().notify(resultInsertZh.committed(output.rows))} onCleanupError={message => useWorkspace.getState().notify(resultInsertZh.cleanupFailed + message, true)}/>}{recordEdit && <SqliteSearchRecordEditDialog connectionId={tab.connectionId} table={recordEdit.table} queryRecord={recordEdit.source} cell={recordEdit.cell} rangeFill={recordEdit.rangeFill} rangePaste={recordEdit.rangePaste} deletePositions={recordEdit.deletePositions} duplicatePositions={recordEdit.duplicatePositions} visible={settings.activeTabId === tab.id}
+        enabled={!!activeReplace?.fields} writable={!!activeReplace?.fields} rows={replaceRows} replacementRows={sqliteReplaceRows} columns={visibleColumns}
+        replaceWritable={replaceWritable} scopeDescription="" replaceScopeDescription={sqlite ? originsText.replaceScope : mysqlBatchText.replaceScope} shortcuts={false}
+        isCurrent={() => resultReplaceCurrent()} anchor={() => undefined} onOpen={openResultReplace} onClose={closeResultReplace}
+        onPreview={previewResultReplace} onStage={stageResultReplace}
+        renderGrid={(findTarget?: GridFindTarget, findMarks?: ReadonlySet<string>) => <ResultsGrid findTarget={findTarget} findMarks={findMarks} rowJump rowHeight={layoutMatches ? columnLayout?.layout.rowHeight : undefined} sqliteSource={result} key={pin?.id ?? `current-${resultIndex}`} columns={visibleColumns} rows={result.rows} frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={resultColumnWidths} onColumnWidthsChange={resizeResultColumns} binarySourceIdentity={[...resultContext,result,filterView,sortView]} binaryIsCurrent={() => alive.current && !busyRef.current && task.current === resultContext[3]} sort={sortView?.rules ? [...sortView.rules] : []} onSortChange={sortBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? sortResult : undefined} sortReasons={sortBinding?.reasons} onHistoryTravel={travelResultHistory} onFilterCell={filterBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openCellFilter : undefined} onFilterSelected={filterBinding && selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openSelectedFilter : undefined} onStatistics={selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease ? openResultStatistics : undefined} selectionScope={selectionBinding} onSelectionChange={selectResultRows} onShowMatchingRows={changeMatchView} onExportRange={exportGridRange} isCurrent={() => resultSelectionAllowed(selectionBinding)} onActiveRowIndexChange={selectActiveDetailRow} onCellEdit={recordEditTable || mysqlRelationAvailable ? editQueryCell : undefined} onFillRange={(recordEditTable || mysqlRelationAvailable) && selectionBinding ? fillQueryRange : undefined} onCellPaste={(recordEditTable || mysqlRelationAvailable) && selectionBinding ? pasteQueryRange : undefined} restoreCell={restoreEditedCell}/>}/>{currentRowDetail && <QueryRowDetailsPanel controller={rowDetails} view={currentRowDetail} isCurrent={() => rowDetailAllowed(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail}/>}</div> : result ? <Empty title={zh.query.text023} text={sqliteReceipt ? undefined : formatText(zh.query.text024, result.affectedRows ?? 0, result.insertId ? formatText(zh.query.text025, result.insertId) : '', result.warningCount ? formatText(zh.query.text026, result.warningCount) : '')}/> : <Empty title={zh.query.text027} text={zh.query.text028}><div className="key-tip"><kbd>Ctrl / ⌘</kbd><span>+</span><kbd>Enter</kbd></div></Empty>}</div></div></div><div className="tab-status">{result?.columns.length && result.warningCount !== undefined ? <span aria-label={queryWarningsZh.count(result.warningCount)}>{queryWarningsZh.count(result.warningCount)}</span> : null}<span>{result ? formatText(zh.query.text029, result.rows.length, result.truncated ? zh.query.text030 : '') : zh.query.text031}</span>{busy ? <Spinner text={zh.query.text018}/> : outcome && (!sqlite || !pin) && <span className="muted small">{sqlite ? sqliteZh.executionElapsed(outcome.elapsedMs) : outcome.elapsedMs + zh.query.text019}</span>}<span className="grow"/>{!busy&&completionStatus!=='idle'&&<span className="muted small" aria-label="SQL 补全状态" title={completionStatusInfo[completionStatus].hint}>{completionStatusInfo[completionStatus].text}</span>}{(transaction || !transactionKnown) && <span className="warning-text" title={!transactionKnown ? parameterZh.transactionUnknownHint : undefined}><LockKeyhole size={12}/>{transactionKnown ? zh.query.text032 : parameterZh.transactionUnknown}</span>}<button disabled={busy || transaction || !transactionKnown} onClick={() => void transactionAction('begin')}>{zh.common.transactionBegin}</button><button disabled={busy || (!transaction && transactionKnown)} onClick={() => void transactionAction('commit')}><Check size={12}/>{zh.common.transactionCommit}</button><button disabled={busy || (!transaction && transactionKnown)} onClick={() => void transactionAction('rollback')}><RotateCcw size={12}/>{zh.common.transactionRollback}</button></div>{sessionObjects&&<SessionObjectsDialog sessionId={sessionId} database={completionSession?.databaseKnown?completionSession.database??undefined:undefined} busy={busy} onRead={readTemporaryObject} onClose={()=>setSessionObjects(false)}/ >}{recoveryDialog}{databaseSwitchDialog&&<QueryDatabaseSwitchDialog intent={databaseSwitchDialog} onLoad={()=>loadDatabaseSwitchChoices(databaseSwitchDialog)} onApply={database=>applyDatabaseSwitch(databaseSwitchDialog,database)} onClose={()=>closeDatabaseSwitch(databaseSwitchDialog)}/ >}{closeRequest && !archiveOutcome && closePhase === 'choose' && <QueryCloseDialog title={tab.title} onCancel={() => finishClose(false)} onDiscard={() => finishClose(true)} onKeep={closeKeepingDraft} onSave={beginCloseSave}/ >}{closeRequest && !archiveOutcome && closePhase === 'save' && createPortal(<QueryBindingDialog initialName={queryName} bound={!!tab.sourceBinding} onSave={saveAndClose} onClose={() => finishClose(false)}/>, document.body)}{save && <QueryBindingDialog initialName={queryName} bound={!!tab.sourceBinding} onSave={async (action, name, group) => { await saveQuery(action, name, group); }} onClose={() => {invalidateResultSelection();setSave(false);}}/>}{resultSqlPreview && <Modal title={resultSqlPreview.pinId ? zh.query.pinSource : zh.query.resultSqlTitle} wide onClose={closeResultSql}><div className="modal-content"><p>{zh.query.resultSqlHint}</p><SqlEditor value={resultSqlPreview.statement} dialect={connection?.dialect} height={280} readOnly/></div><footer className="modal-footer"><span className="grow"/><button onClick={closeResultSql}>{zh.common.close}</button></footer></Modal>}{snippets && <SnippetsDialog initialSql={snippets.initialSql} startWithDraft={snippets.create} onInsert={insertSnippet} onClose={() => {invalidateResultSelection();setSnippets(null);}}/ >}{warningsDialog && <QueryWarningsDialog report={warningsDialog.report} onClose={() => closeWarningsReport(warningsDialog)}/ >}{transactionSettingsDialog && <QueryTransactionSettingsDialog intent={transactionSettingsDialog.intent} connectionName={transactionSettingsDialog.connectionName} onRead={taskId => requestTransactionSettings(transactionSettingsDialog.intent, taskId)} onApply={input => requestTransactionSettings(transactionSettingsDialog.intent, input.taskId, input)} onAutocommit={input => requestAutocommit(transactionSettingsDialog.intent, input)} onClose={() => closeTransactionSettings(transactionSettingsDialog.intent)}/>}{analyzeDialog && <QueryAnalyzeConfirmDialog source={analyzeDialog.intent.source} connectionName={analyzeDialog.connectionName} databaseLabel={analyzeDialog.databaseLabel} invalidReason={analyzeInvalid || undefined} onConfirm={() => void confirmAnalyze(analyzeDialog.intent)} onClose={() => closeAnalyze(analyzeDialog.intent)}/ >}{parameterSource !== null && <QueryParametersDialog key={sqlite ? sqliteParameterDialog?.id : undefined} source={parameterSource} loadNames={sqlite ? () => loadParameterNames(sqliteParameterDialog ?? undefined) : loadParameterNames} reuse={parameterReusePort.current ?? undefined} ownerId={sqliteParameterDialog?.intent ? sqliteParameterDialog.id : undefined} syntaxHint={sqliteParameterDialog?.intent ? parameterZh.sqliteCurrentHint : undefined} onExecute={parameters => submitParameterQuery(parameterSource, parameters, sqlite ? sqliteParameterDialog ?? undefined : undefined)} onClose={() => closeParameters(sqlite ? sqliteParameterDialog ?? undefined : undefined)}/ >}{sqliteFullExport && <FullQueryExportDialog source={sqliteFullExport} onClose={() => setSqliteFullExport(null)}/>}{streamExportSource !== null && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb') && <QueryStreamExportDialog dialect={connection.dialect} sessionBusy={busy} source={streamExportSource} loadNames={loadStreamParameterNames} onExecute={runStreamExport} onCancel={cancelStreamExport} onClose={() => { if (!busyRef.current) setStreamExportSource(null); }}/ >}{activeColumnLease&&<QueryResultColumnsDialog binding={activeColumnLease.binding} initial={activeColumnLease.initial} owner={activeColumnLease.owner} isCurrent={()=>columnManagerCurrent(activeColumnLease)} onApply={layout=>applyColumnLayout(activeColumnLease,layout)} onClose={()=>closeColumnManager(activeColumnLease)}/ >}{activePresetLease&&<QueryResultPresetsDialog key={activePresetLease.owner} connectionId={tab.connectionId} value={activePresetLease.value} owner={activePresetLease.owner} isCurrent={()=>presetManagerCurrent(activePresetLease)} matches={value=>queryResultMemoryMatches(value,viewSource,visibleColumns)} onApply={value=>applyResultPreset(activePresetLease,value)} onClose={()=>closeResultPresets(activePresetLease)}/ >}{activeStatisticsLease&&<QueryResultStatisticsDialog key={activeStatisticsLease.owner} sqliteSource={activeStatisticsLease.source} columns={activeStatisticsLease.columns} rows={activeStatisticsLease.rows} initialColumn={activeStatisticsLease.column} selectedIndices={activeStatisticsLease.indices} truncated={activeStatisticsLease.truncated} owner={activeStatisticsLease.owner} isCurrent={()=>statisticsCurrent(activeStatisticsLease)} onClose={()=>closeResultStatistics(activeStatisticsLease)} onFilter={node=>filterFromStatistics(activeStatisticsLease,node)}/ >}{activeComparisonLease&&<QueryResultComparisonDialog key={activeComparisonLease.owner} pins={activeComparisonLease.pins} owner={activeComparisonLease.owner} isCurrent={()=>comparisonCurrent(activeComparisonLease)} onClose={()=>closeResultComparison(activeComparisonLease)}/ >}{resultInsertSource && <ResultInsertDialog intent={resultInsertSource} initialConnectionId={tab.connectionId} onActivity={resultInsertActivityChange} onClose={() => closeResultInsert(resultInsertSource)} onCommitted={output => useWorkspace.getState().notify(resultInsertZh.committed(output.rows))} onCleanupError={message => useWorkspace.getState().notify(resultInsertZh.cleanupFailed + message, true)}/>}{recordEdit && <SqliteSearchRecordEditDialog connectionId={tab.connectionId} table={recordEdit.table} queryRecord={recordEdit.source} cell={recordEdit.cell} rangeFill={recordEdit.rangeFill} rangePaste={recordEdit.rangePaste} deletePositions={recordEdit.deletePositions} duplicatePositions={recordEdit.duplicatePositions} rangeReplace={recordEdit.rangeReplace} visible={settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && queryOwnerCurrent() && recordEdit.source.sessionId === sessionRef.current && recordEdit.source.taskId === task.current}
         onDirty={() => { /* 整个编辑对话框占用原标签，关闭时由记录编辑器核对本地修改。 */ }}
         onDone={committed => {
@@ -2805,7 +2828,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
             retiredRecordTask.current = recordEdit.source.taskId;
             useWorkspace.getState().notify('operation' in recordEdit.source ?
               (recordEdit.source.operation === 'duplicate' ? originsText.duplicateCommitted : originsText.insertCommitted) :
-              recordEdit.deletePositions ? originsText.deleteCommitted : originsText.editCommitted);
+              recordEdit.deletePositions ? originsText.deleteCommitted : recordEdit.rangeReplace ? originsText.replaceCommitted : originsText.editCommitted);
           }
           recordEdit.job.release();
           setRecordEdit(undefined);

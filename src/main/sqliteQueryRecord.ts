@@ -10,7 +10,7 @@ type Token = ReturnType<typeof sqliteDefinitionTokens>[number];
 type Projection = 'column' | 'expression' | { wildcard?: string };
 interface QueryTable { name: string; alias: string }
 export interface SqliteQueryRecordTarget { tables: QueryTable[]; projection: Projection[]; usingColumns: number }
-export interface SqliteQueryRecordSchema { version: string; keys: string[]; width: number }
+export interface SqliteQueryRecordSchema { version: string; keys: string[]; width: number; writable: string[] }
 const word = (token: Token | undefined, value: string) => token?.kind === 'id' && !token.quoted && fold(token.value) === value;
 const symbol = (token: Token | undefined, value: string) => token?.kind === 'symbol' && token.value === value;
 const blocked = () => Error('SQLite 查询结果无法核验为当前原记录，请重新执行查询');
@@ -153,17 +153,20 @@ export async function sqliteQueryRecordSchema(driver: SqliteDriverSession, table
   let row: readonly SqliteValue[] | undefined;
   await driver.execute("SELECT schema_version, EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE name=? COLLATE NOCASE AND type IN ('table','view')), " +
     "(SELECT json_group_array(name ORDER BY pk) FROM pragma_table_xinfo(?, 'main') WHERE pk>0), " +
-    "(SELECT count(*) FROM pragma_table_xinfo(?, 'main') WHERE hidden<>1) FROM pragma_schema_version " +
+    "(SELECT count(*) FROM pragma_table_xinfo(?, 'main') WHERE hidden<>1), " +
+    "(SELECT json_group_array(name ORDER BY cid) FROM pragma_table_xinfo(?, 'main') WHERE hidden=0 AND pk=0) FROM pragma_schema_version " +
     "WHERE EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name=? COLLATE NOCASE AND type='table' AND substr(name,1,7)<>'sqlite_')",
-    { parameters: [table, table, table, table], maxRows: 1, onBatch: batch => { row = batch.rows[0]; } });
-  const [version, shadow, rawKeys, count] = row ?? [];
+    { parameters: [table, table, table, table, table], maxRows: 1, onBatch: batch => { row = batch.rows[0]; } });
+  const [version, shadow, rawKeys, count, rawWritable] = row ?? [];
   if (!version || typeof version !== 'object' || version.type !== 'integer' ||
       !shadow || typeof shadow !== 'object' || shadow.type !== 'integer' || shadow.value !== '0' || typeof rawKeys !== 'string' ||
-      !count || typeof count !== 'object' || count.type !== 'integer') return;
+      !count || typeof count !== 'object' || count.type !== 'integer' || typeof rawWritable !== 'string') return;
   const width = Number(count.value);
   const keys: unknown = JSON.parse(rawKeys);
-  if (Number.isSafeInteger(width) && width > 0 && Array.isArray(keys) && keys.every(key => typeof key === 'string'))
-    return { version: version.value, keys, width };
+  const writable: unknown = JSON.parse(rawWritable);
+  if (Number.isSafeInteger(width) && width > 0 && Array.isArray(keys) && keys.every(key => typeof key === 'string') &&
+      Array.isArray(writable) && writable.every(name => typeof name === 'string'))
+    return { version: version.value, keys, width, writable };
 }
 
 /** 同一主表键在可见结果中只能出现一次，SQLite 存储类与精确值共同构成身份。 */

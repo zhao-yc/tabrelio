@@ -15,6 +15,7 @@ type Mode = 'text' | 'null' | 'field';
 type Review = Pick<PostgresFindPlan, 'patches'>;
 interface Props<Column extends ResultColumn, Plan extends Review> {
   request?: PostgresFindRequest; scope: object; pageKey?: string; enabled: boolean; writable: boolean; rows: DraftRow[];
+  replacementRows?: DraftRow[];
   host?: { className: string; inert?: boolean };
   columns: Column[]; isCurrent(): boolean; anchor(): GridFindTarget | undefined;
   replaceWritable(column: Column): boolean;
@@ -27,7 +28,7 @@ interface Props<Column extends ResultColumn, Plan extends Review> {
 
 /** 数据使用现有有界工作线程，字段名在本地目录中匹配。每次更换来源都撤销旧替换计划。 */
 export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends Review>(props: Props<Column, Plan>) {
-  const { request, scope, pageKey, enabled, writable, rows, columns, isCurrent, anchor, replaceWritable, host,
+  const { request, scope, pageKey, enabled, writable, rows, replacementRows, columns, isCurrent, anchor, replaceWritable, host,
     shortcuts = true, scopeDescription = text.scope, replaceScopeDescription = text.replaceScope, onOpen, onClose, onPreview, onStage, renderGrid } = props;
   const [mode, setMode] = useState<Mode>('text'), [column, setColumn] = useState('');
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
@@ -39,8 +40,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const stageButton = useRef<HTMLButtonElement>(null);
   const client = useRef<PageFindWorkerClient>(undefined);
   const resume = useRef<{ request: PostgresFindRequest; pageKey?: string; query: string; hit: PageOccurrence; end: number }>(undefined);
-  const snapshot = useMemo(() => ({ request, scope, enabled, rows, columns, mode, column, query, sensitive, whole, regex, composing }),
-    [request, scope, enabled, rows, columns, mode, column, query, sensitive, whole, regex, composing]);
+  const snapshot = useMemo(() => ({ request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, regex, composing }),
+    [request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, regex, composing]);
   const latest = useRef(snapshot); latest.current = snapshot;
   const runningPreview = useRef<{ snapshot: typeof snapshot }>(undefined);
   const [preparing, setPreparing] = useState<typeof snapshot>();
@@ -113,8 +114,11 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const marks = useMemo(() => request && highlight && found ? new Set(found.hits.map(match => match.rowId + ':' + match.key)) : undefined,
     [request, highlight, found]);
   const replaceKeys = useMemo(() => new Set(columns.filter(replaceWritable).map(column => column.key)), [columns, replaceWritable]);
-  const hasWritable = canReplace && found?.hits.some(hit => hit.range && replaceKeys.has(hit.key));
-  const oneWritable = canReplace && hit?.range && replaceKeys.has(hit.key);
+  const replacementById = useMemo(() => replacementRows && new Map(replacementRows.map(row => [row.id, row.data])), [replacementRows]);
+  const canReplaceHit = (target: PageOccurrence) => !!target.range && replaceKeys.has(target.key) &&
+    (!replacementById || typeof replacementById.get(target.rowId)?.[target.key] === 'string');
+  const hasWritable = canReplace && found?.hits.some(canReplaceHit);
+  const oneWritable = canReplace && hit && canReplaceHit(hit);
 
   function jump(direction: -1 | 1) {
     if (!found?.hits.length || !isCurrent() || composing || locked) return;
@@ -134,7 +138,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
     setPreparing(snapshot);
     setError('');
     try {
-      const result = await client.current.run({ operation: 'previewText', rows, keys: [...replaceKeys],
+      const result = await client.current.run({ operation: 'previewText', rows: replacementRows ?? rows, keys: [...replaceKeys],
         options: { ...options, captureReplacement: regex && capture }, replacement, generation: 0, only });
       if (runningPreview.current !== job || latest.current !== snapshot || !isCurrent()) return;
       if (result.status === 'blocked') setError(result.message);

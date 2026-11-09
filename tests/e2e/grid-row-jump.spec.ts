@@ -22,6 +22,8 @@ import { queryResultFilterZh as filterText } from '../../src/renderer/locales/qu
 import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
 import { sqliteResultOriginsZh as originsText } from '../../src/renderer/locales/sqliteResultOrigins.zh-CN';
 import { sqliteTableEditZh as sqliteEditText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
+import { postgresTableFindZh as replaceText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
+import { postgresTableZh as replaceTableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { queryRowSqlZh as rowSqlText } from '../../src/renderer/locales/queryRowSql.zh-CN';
 import { sqliteRelationZh as relationText } from '../../src/renderer/locales/sqliteRelation.zh-CN';
 import { sqliteReferenceZh as parentText } from '../../src/renderer/locales/sqliteReference.zh-CN';
@@ -696,6 +698,97 @@ test('SQLite 查询新增拒绝结构漂移，原执行新增能力只能暂存�
     expect(observer.prepare('SELECT * FROM insert_guard').all()).toEqual([]);
     expect(pageErrors).toEqual([]);
   } finally { observer.close(); }
+});
+
+test('SQLite JOIN 查询替换原生文本，去重投影并回滚并发冲突', async ({}, info) => {
+  await seed(`SELECT p.id AS 编号,p.note AS 正文,p.note AS 重复,p.mixed AS 混合,p.derived AS 生成,
+       upper(p.note) AS 计算,l.note AS 连接
+     FROM replace_subject p LEFT JOIN replace_side l ON l.id=p.id WHERE p.id<3 ORDER BY p.id DESC;`,
+    `CREATE TABLE replace_subject(id INTEGER PRIMARY KEY,note TEXT,mixed,guard TEXT,
+       derived TEXT GENERATED ALWAYS AS (note || '生成') STORED);
+     INSERT INTO replace_subject VALUES(1,'旧12',12,'甲隐藏'),(2,'旧12','12','乙隐藏'),(3,'旧12','12','范围外');
+     CREATE TABLE replace_side(id INTEGER PRIMARY KEY,note TEXT);
+     INSERT INTO replace_side VALUES(1,'旧12');`);
+  const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+  try {
+    const query = page.locator('.query-tab:visible'), panel = query.getByRole('region', { name: replaceText.title, exact: true });
+    const review = panel.getByRole('region', { name: replaceText.review, exact: true });
+    const preview = page.getByRole('dialog', { name: originsText.replaceTitle, exact: true });
+    const sql = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+    const apply = preview.getByRole('button', { name: originsText.replaceApply, exact: true });
+    const all = panel.getByRole('button', { name: replaceText.all, exact: true });
+    const one = panel.getByRole('button', { name: replaceText.one, exact: true });
+    const column = panel.getByLabel(replaceText.column, { exact: true });
+    const execute = async () => {
+      await query.locator('.query-execute-split > button.primary').click();
+      await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+      const sort = query.getByRole('columnheader').filter({ hasText: /^编号/ });
+      if (!await sort.getByLabel(resultSort.ascending).isVisible()) await sort.click();
+      await expect(sort.getByLabel(resultSort.ascending)).toBeVisible();
+    };
+    const open = async (pattern: string, replacement: string) => {
+      await (await navigationMenuItem(query, { name: originsText.replaceOpen, exact: true })).click();
+      await expect(panel).toBeVisible();
+      await panel.getByRole('checkbox', { name: replaceText.regex, exact: true }).check();
+      await panel.getByRole('checkbox', { name: replaceText.captures, exact: true }).check();
+      await panel.getByLabel(replaceText.query, { exact: true }).fill(pattern);
+      await panel.getByLabel(replaceText.replacement, { exact: true }).fill(replacement);
+    };
+    const stage = () => review.getByRole('button', { name: replaceTableText.stage, exact: true }).click();
+    const submit = async () => {
+      await expect(apply).toBeDisabled();
+      await preview.getByRole('checkbox', { name: originsText.replaceConfirm, exact: true }).check();
+      await apply.click();
+    };
+    const rows = () => db.prepare('SELECT id,note,mixed,typeof(mixed) AS type,guard,derived FROM replace_subject ORDER BY id').all();
+    const links = () => db.prepare('SELECT * FROM replace_side').all();
+    const before = rows(), beforeLinks = links();
+    await execute();
+    await open('(旧)?(12)', '$2新');
+    for (const label of ['连接', '计算', '生成']) {
+      await column.selectOption({ label });
+      await expect(panel.getByRole('status')).toContainText(/共 [12] 处/);
+      await expect(all).toBeDisabled();
+      await expect(one).toBeDisabled();
+    }
+    await column.selectOption({ label: '混合' });
+    await expect(panel.getByRole('status')).toContainText('共 2 处');
+    await expect(one).toBeDisabled();
+    await all.click();
+    await expect(review).toContainText(replaceText.reviewCount(1, 1));
+    await review.getByRole('button', { name: replaceText.cancel, exact: true }).click();
+    await column.selectOption('');
+    await all.click();
+    await expect(review).toContainText(replaceText.reviewCount(3, 2));
+    expect(rows()).toEqual(before);
+    await stage();
+    await expect(sql).toContainText('UPDATE "main"."replace_subject"');
+    await expect(preview.getByText(originsText.replaceRows([0, 1]), { exact: true })).toBeVisible();
+    const statements = await sql.textContent();
+    expect(statements?.match(/UPDATE /g)).toHaveLength(2);
+    expect(statements?.match(/"mixed"=/g)).toHaveLength(1);
+    expect(statements).not.toContain('replace_side');
+    expect(rows()).toEqual(before);
+    await info.attach('SQLite查询结果文本替换', { body: await page.screenshot(), contentType: 'image/png' });
+    await submit();
+    await expect(preview).toBeHidden();
+    const updated = [{ ...before[0], note: '12新', derived: '12新生成' },
+      { ...before[1], note: '12新', mixed: '12新', derived: '12新生成' }, before[2]];
+    expect(rows()).toEqual(updated);
+    expect(links()).toEqual(beforeLinks);
+
+    await execute();
+    await open('(12)(新)', '$1变');
+    await all.click();
+    await stage();
+    await expect(sql).toContainText('12变');
+    db.exec("UPDATE replace_subject SET guard='外部变更' WHERE id=2");
+    await submit();
+    await expect(preview.getByRole('alert')).toContainText('SQLite原记录已被其他操作修改');
+    expect(rows()).toEqual([updated[0], { ...updated[1], guard: '外部变更' }, updated[2]]);
+    expect(links()).toEqual(beforeLinks);
+    expect(pageErrors).toEqual([]);
+  } finally { db.close(); }
 });
 
 test('SQLite 查询复制勾选记录可逐条修订并在唯一约束失败时整批回滚', async ({}, info) => {

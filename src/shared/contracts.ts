@@ -116,6 +116,8 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   /** 最新一次可回查的单表结果目标，读取和编辑均须由 Main 校验原行和主键。 */
   sqliteQueryRecordTable?: string;
   sqliteQueryInsertTable?: string;
+  /** 已核对的主表普通非主键字段位置，仍须按每格原生存储类判定替换资格。 */
+  sqliteQueryReplaceColumns?: number[];
   sqliteQueryComputedColumns?: number[];
   sqliteQueryJoined?: true;
   sqliteQueryRowSql?: true;

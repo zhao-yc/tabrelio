@@ -293,16 +293,22 @@ export class SqliteQuerySession {
       const original = completed.sqliteResultOrigins?.[0];
       const proof = candidate && schemas && identity && original && results.length === 1 && outcome.transaction === false
         ? sqliteQueryRecordOrigins(candidate, schemas, results[0], original) : undefined;
+      let replaceColumns: number[] = [];
       if (proof && identity && schemas && JSON.stringify(await sourceSchemas()) === JSON.stringify(schemas) && !operation.cancelled) {
         const { table, origins, keyed } = proof;
         const insertable = !proof.joined && !results[0].truncated && !this.driver.readOnly;
         this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schemas[0].version, result: results[0], origins, keyed,
           ...(insertable ? { insertable: true as const } : {}) };
+        if (keyed && !results[0].truncated && !this.driver.readOnly) {
+          const writable = new Set(schemas[0].writable);
+          replaceColumns = origins.flatMap((origin, index) => origin && writable.has(origin.column) ? [index] : []);
+        }
       }
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
       return { ...completed, ...displayTitles(results.length),
         ...(this.recordSource?.keyed ? { sqliteQueryRecordTable: this.recordSource.table } : {}),
         ...(this.recordSource?.insertable ? { sqliteQueryInsertTable: this.recordSource.table } : {}),
+        ...(replaceColumns.length ? { sqliteQueryReplaceColumns: replaceColumns } : {}),
         ...(this.recordSource && proof?.joined ? { sqliteQueryJoined: true as const } : {}),
         ...(this.recordSource && proof?.computed.length ? { sqliteQueryComputedColumns: proof.computed, sqliteResultOrigins: [proof.displayOrigins] } : {}),
         ...(this.recordSource?.result.rows.length && !this.recordSource.result.truncated ? { sqliteQueryRowSql: true as const } : {}),

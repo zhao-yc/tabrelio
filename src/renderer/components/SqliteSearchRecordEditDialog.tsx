@@ -8,6 +8,7 @@ import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN'
 import { SqliteTablePreviewDialog, SqliteTableValueDialog } from './SqliteTableEditDialog';
 import { sqliteQueryRecordIndices, type SqliteQueryRecordInput } from '../../shared/sqliteTableBrowse';
 import { stageSqliteQueryRangeFill, type SqliteQueryRangeFill } from '../sqliteQueryRangeFill';
+import { stageSqliteQueryReplace, type SqliteQueryReplacePlan } from '../sqliteQueryReplace';
 import type { SqliteOriginalValue } from '../../shared/sqliteTableEdit';
 import { SqliteQueryInlineCellEditor, type SqliteQueryInlineCell } from './SqliteQueryInlineCellEditor';
 import { SqlitePasteRangeDialog } from './SqlitePasteRangeDialog';
@@ -34,7 +35,8 @@ export interface SqliteQueryRangePaste {
 
 type Props = BaseProps & ({ recordRef: string; queryRecord?: never; isCurrent?: never } |
   { recordRef?: never; queryRecord: SqliteQueryRecordInput; isCurrent(): boolean; cell?: SqliteQueryInlineCell; rangeFill?: SqliteQueryRangeFill;
-    rangePaste?: SqliteQueryRangePaste; deletePositions?: readonly number[]; duplicatePositions?: readonly number[]; visible?: boolean });
+    rangePaste?: SqliteQueryRangePaste; rangeReplace?: SqliteQueryReplacePlan;
+    deletePositions?: readonly number[]; duplicatePositions?: readonly number[]; visible?: boolean });
 
 /** 只编辑已核验的原行，沿用表页签发的编辑快照和原有预览提交链。 */
 export function SqliteSearchRecordEditDialog(props: Props) {
@@ -44,6 +46,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
   const cell = props.queryRecord ? props.cell : undefined;
   const rangeFill = props.queryRecord ? props.rangeFill : undefined;
   const rangePaste = props.queryRecord ? props.rangePaste : undefined;
+  const rangeReplace = props.queryRecord ? props.rangeReplace : undefined;
   const deletePositions = props.queryRecord ? props.deletePositions : undefined;
   const duplicatePositions = props.queryRecord ? props.duplicatePositions : undefined;
   const [pasteAnchor, setPasteAnchor] = useState<SqlitePasteAnchor>();
@@ -51,6 +54,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
   const labels = inserting ? { title: queryText.insertOpen, hint: queryText.insertHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : duplicating ? { title: queryText.duplicateTitle, hint: queryText.duplicateHint, discard: queryText.duplicateDiscard, back: queryText.editBack, stale: queryText.editStale }
     : deletePositions ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
+    : rangeReplace ? { title: queryText.replaceTitle, hint: queryText.replaceHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : rangeFill || rangePaste ? { title: rangePaste ? pasteText.title : queryText.rangeTitle, hint: rangePaste ? queryText.pasteHint : queryText.rangeHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
     : { title: text.edit, hint: text.editHint, discard: text.editDiscard, back: text.editBack, stale: text.editStale };
@@ -119,11 +123,13 @@ export function SqliteSearchRecordEditDialog(props: Props) {
             },
           });
           editor.current = instance;
-          if (rangeFill || deletePositions) {
+          if (rangeFill || deletePositions || rangeReplace) {
             if (deletePositions) {
               // 先暂存已核验的整批原行。预览和明确确认沿用编辑器的事务入口。
               if (deletePositions.length !== limit || instance.removeRows(instance.view.rows.map(row => row.id)) !== limit)
                 throw Error(labels.stale);
+            } else if (rangeReplace) {
+              if (!stageSqliteQueryReplace(instance, rangeReplace)) throw Error(queryText.replaceNoChange);
             } else if (rangeFill && !stageSqliteQueryRangeFill(instance, rangeFill)) throw Error(queryText.rangeUnchanged);
             accepted = true;
             setPreview(true);
@@ -162,7 +168,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         callbacks.current.onDirty(false);
       }
     };
-  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste, deletePositions, duplicatePositions, inserting, duplicating]);
+  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste, rangeReplace, deletePositions, duplicatePositions, inserting, duplicating]);
 
   function close() {
     if (closeWork.current || editor.current?.busy) return;
@@ -201,11 +207,13 @@ export function SqliteSearchRecordEditDialog(props: Props) {
     review={deletePositions ? { title: labels.title, hint: labels.hint, details: queryText.deleteRows(deletePositions),
       confirmation: queryText.deleteConfirm, submit: queryText.deleteApply, danger: true }
       : duplicatePositions ? { title: labels.title, hint: labels.hint, details: queryText.duplicateRows(duplicatePositions),
-        confirmation: queryText.duplicateConfirm, submit: queryText.duplicateApply, close: queryText.duplicateBack } : undefined}
+        confirmation: queryText.duplicateConfirm, submit: queryText.duplicateApply, close: queryText.duplicateBack }
+      : rangeReplace ? { title: labels.title, hint: labels.hint, details: queryText.replaceRows(rangeReplace.positions),
+        confirmation: queryText.replaceConfirm, submit: queryText.replaceApply } : undefined}
     current={() => editor.current === instance && !closingRef.current}
     onApply={() => void instance.apply()} onStop={() => instance.stop()}
     onClose={() => {
-      if (rangeFill || rangePaste || deletePositions || !instance.view.valid || instance.view.unknown) { close(); return; }
+      if (rangeFill || rangePaste || rangeReplace || deletePositions || !instance.view.valid || instance.view.unknown) { close(); return; }
       instance.closePreview();
       // 副本作为一次追加暂存。退回表单时撤销这一步，表单继续保留各条副本输入。
       if (copies) instance.undo();

@@ -105,6 +105,7 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     const taskId = randomUUID();
     const outcome = await execute(harness, 'SELECT s.id AS key, s.note FROM main.subject AS s WHERE s.id = 1 ORDER BY s.id;', { taskId });
     expect(outcome.sqliteQueryRecordTable).toBe('subject');
+    expect(outcome.sqliteQueryReplaceColumns).toEqual([1]);
     expect(harness.session.queryRecord(taskId, 'subject').result.rows).toEqual([{ c0: '1', c1: '原记录' }]);
     for (const sql of ['SELECT note FROM subject', 'SELECT * FROM shown',
       'SELECT a.id, a.note FROM subject a JOIN subject b ON a.id=b.id',
@@ -123,6 +124,7 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     const outcome = await execute(harness, 'SELECT id, note FROM subject', { taskId });
     expect(outcome.sqliteQueryRecordTable).toBe('subject');
     expect(outcome.sqliteQueryInsertTable).toBeUndefined();
+    expect(outcome.sqliteQueryReplaceColumns).toBeUndefined();
     expect(harness.session.queryRecord(taskId, 'subject', false).result.rows).toEqual([{ c0: '1', c1: '只读原值' }]);
     expect(() => harness.session.queryRecord(taskId, 'subject')).toThrow(/已失效/);
   });
@@ -158,7 +160,7 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     const taskId = randomUUID();
     const left = await execute(harness, `SELECT s.note AS 重名, p.*, upper(p.note) AS 重名, s.*
       FROM subject p LEFT OUTER JOIN main.side AS s ON (s.id=p.id) ORDER BY p.id DESC;`, { taskId });
-    expect(left).toMatchObject({ sqliteQueryRecordTable: 'subject', sqliteQueryJoined: true, sqliteQueryComputedColumns: [3] });
+    expect(left).toMatchObject({ sqliteQueryRecordTable: 'subject', sqliteQueryJoined: true, sqliteQueryComputedColumns: [3], sqliteQueryReplaceColumns: [2] });
     expect(left.results[0].rows[0]).toMatchObject({ c0: null, c1: '9007199254740993' });
     expect(left.sqliteResultOrigins?.[0]?.map(origin => origin?.table ?? null)).toEqual(
       ['side', 'subject', 'subject', null, 'side', 'side', 'side']);
