@@ -1,7 +1,7 @@
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultCopyCell } from './queryResultHeaderCopy';
 import { captureQueryResultCellFilter } from './queryResultCellFilter';
-import { queryResultFilterLimits, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
+import { queryResultFilterLimits, queryResultMemberFilterNode, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
 import { queryResultSelectedFilterZh as text } from './locales/queryResultSelectedFilter.zh-CN';
 import { queryResultFilterZh } from './locales/queryResultFilter.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
@@ -125,18 +125,9 @@ export function currentQueryResultSelectedFilter(capture: QueryResultSelectedFil
   } catch { binding.invalid = true; return false; }
 }
 
-/** NULL与非NULL列表保持独立语义；混合时生成OR子组，由父级整体AND追加并审阅草稿。 */
-export function queryResultSelectedFilterNode(capture: QueryResultSelectedFilterCapture): QueryResultFilterRule | QueryResultFilterGroup {
+/** 确认捕获仍属于原结果后，生成通用的集合筛选草稿。 */
+export function queryResultSelectedFilterNode(capture: QueryResultSelectedFilterCapture, exclude = false): QueryResultFilterRule | QueryResultFilterGroup {
   const binding = bindings.get(capture);
   if (!binding || !currentQueryResultSelectedFilter(capture, binding.columns, binding.rows)) throw Error(text.stale);
-  const nullable: QueryResultFilterRule = Object.freeze({ column: capture.key, operator: 'null', value: '' });
-  if (binding.sqlite) {
-    const children: QueryResultFilterRule[] = binding.sqlite.groups.map(group => Object.freeze({ column: capture.key, operator: 'in', value: '', values: group.values, sqliteType: group.type }));
-    if (capture.hasNull) children.push(nullable);
-    if (!children.length) throw Error(text.unavailable);
-    return children.length === 1 ? children[0] : Object.freeze({ mode: 'OR', children: Object.freeze(children) });
-  }
-  if (!capture.values.length) return nullable;
-  const member: QueryResultFilterRule = Object.freeze({ column: capture.key, operator: 'in', value: '', values: Object.freeze([...capture.values]) });
-  return capture.hasNull ? Object.freeze({ mode: 'OR', children: Object.freeze([member, nullable]) }) : member;
+  return queryResultMemberFilterNode(capture.key, capture.values, capture.hasNull, exclude, binding.sqlite?.groups);
 }

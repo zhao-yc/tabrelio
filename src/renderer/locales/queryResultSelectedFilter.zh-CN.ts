@@ -1,6 +1,7 @@
 export const queryResultSelectedFilterZh = {
   open: '勾选值加入筛选',
   range: '选区值加入筛选',
+  rangeExclude: '从结果排除选区值',
   hint: '使用当前列中已勾选行的完整原值，与已有条件整体按 AND 组合。NULL 使用独立分组，先审阅草稿再应用，不重发 SQL。',
   unavailable: '取值需要可靠的原行列身份及可比较的原值。SQLite 字节使用完整十六进制，其它字节或未知类型只支持全部为 NULL 的取值。',
   budget: '取值超过 128 种（含 NULL）、100000 行、1024 列、单值 4096 字符或总原文 8 Mi 单元预算；没有截断或应用部分值。',

@@ -1530,7 +1530,7 @@ test('SQLite 表和视图从单列选区包含或排除原值，按明确应用�
 
 test('SQLite 单列选区原值筛选区分 NULL 和空串，独立于勾选并保留排序', async ({}, info) => {
   await seed(`SELECT id, '相邻列' AS v, CASE id WHEN 1 THEN NULL WHEN 2 THEN '' WHEN 3 THEN 'NULL'
-    WHEN 4 THEN '其他' ELSE '' END AS v FROM subject WHERE id <= 5 ORDER BY id;`);
+    WHEN 4 THEN 2 ELSE '' END AS v FROM subject WHERE id <= 5 ORDER BY id;`);
   const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
   await query.locator('.query-execute-split > button.primary').click();
   await expect(query.getByText(filterText.counts(5, 5), { exact: true })).toBeVisible();
@@ -1541,16 +1541,18 @@ test('SQLite 单列选区原值筛选区分 NULL 和空串，独立于勾选并�
   const idColumn = await id.getAttribute('aria-colindex');
   const ids = grid.locator('[role="gridcell"][aria-colindex="' + idColumn + '"]');
   await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
-  const rows = (name: string) => grid.getByRole('gridcell', { name, exact: true }).locator('..');
+  const rows = (name: string) => ids.filter({ hasText: new RegExp('^' + name + '$') }).locator('..');
   await rows('3').getByRole('checkbox').check();
   const valueColumn = await grid.getByRole('columnheader', { name: /^v\b/ }).nth(1).getAttribute('aria-colindex');
   const start = rows('2').locator('[role="gridcell"][aria-colindex="' + valueColumn + '"]');
   const action = page.getByRole('menuitem', { name: selectedFilterText.range, exact: true });
+  const exclude = page.getByRole('menuitem', { name: selectedFilterText.rangeExclude, exact: true });
   await start.click();
   await page.keyboard.press('Shift+ArrowLeft');
   await page.keyboard.press('Shift+F10');
   await expect(page.getByRole('menu')).toBeVisible();
   await expect(action).toHaveCount(0);
+  await expect(exclude).toHaveCount(0);
   await page.keyboard.press('Escape');
   await start.click();
   await page.keyboard.press('Shift+ArrowDown');
@@ -1569,6 +1571,25 @@ test('SQLite 单列选区原值筛选区分 NULL 和空串，独立于勾选并�
   await expect(ids).toHaveText(['5', '2', '1']);
   await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
   await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  await start.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await start.click({ button: 'right' });
+  await exclude.click();
+  await expect(filtering.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('notIn');
+  await expect(filtering.getByLabel(filterText.operator + ' 2', { exact: true })).toHaveValue('notType');
+  await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  await info.attach('SQLite查询排除选区值草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  await filtering.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['4', '3']);
+  await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
+  await expect(ids).toHaveText(['5', '4', '3', '2', '1']);
+  const mixed = rows('5').locator('[role="gridcell"][aria-colindex="' + valueColumn + '"]');
+  await mixed.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await mixed.click({ button: 'right' });
+  await exclude.click();
+  await filtering.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['3', '1']);
   expect(await executions()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });

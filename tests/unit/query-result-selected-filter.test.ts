@@ -22,6 +22,30 @@ const rule = (value: string, enabled?: boolean): QueryResultFilterRule => ({ col
 const group = (mode: 'AND' | 'OR', ...children: (QueryResultFilterRule | QueryResultFilterGroup)[]): QueryResultFilterGroup => ({ mode, children });
 
 describe('勾选值完整原文捕获及正式筛选', () => {
+  it.each([
+    { selected: [0], remaining: [1, 2, 3] },
+    { selected: [1], remaining: [0, 2, 3] },
+    { selected: [0, 1], remaining: [2, 3] },
+  ])('按完整补集排除 $selected，区分 NULL、空字符串和文本 NULL', ({ selected, remaining }) => {
+    const f = fixture([null, '', 'NULL', '其它'], 'TEXT', selected);
+    const node = queryResultSelectedFilterNode(f.capture(), true);
+    expect(controller(f.columns, f.rows, appendQueryResultFilterNode(group('AND'), node)).view.sourceIndices).toEqual(remaining);
+  });
+
+  it('SQLite 排除多个存储类型时保留其它类型和未选的 NULL', () => {
+    const columns = [{ key: 'k', name: '值', type: 'SQLITE' }];
+    const values: CellValue[] = ['2', '2', '2', '3', '', 'NULL', { type: 'binary', base64: 'Mg==' }, null];
+    const rows = values.map(k => ({ k }));
+    const source: QueryResult = { columns, rows, elapsedMs: 1, truncated: false, statement: 'RAM来源',
+      sqliteStorage: { version: 1, rows: ['i', 'r', 't', 'i', 't', 't', 'b', 'n'] } };
+    for (const [selected, expected] of [[[0, 4], [1, 2, 3, 5, 6, 7]], [[0, 4, 7], [1, 2, 3, 5, 6]]] as const) {
+      const capture = captureQueryResultSelectedFilter(columns, rows, { row: rows[0], index: 0, column: columns[0] }, new Set<number>(selected), source);
+      const filter = new QueryResultFilter(), binding = filter.bind(source, [])!;
+      const node = queryResultSelectedFilterNode(capture, true);
+      expect(filter.applyExpression(binding, filter.view(binding)!, appendQueryResultFilterNode(group('AND'), node)).sourceIndices).toEqual(expected);
+    }
+  });
+
   it('按显示位置去重，保留空串/NULL字样/逗号换行，活动格不自动加入勾选', () => {
     const f = fixture(['未勾活动值', 'NULL', '', '  A,\n"原文"  ', 'NULL'], 'TEXT', [4, 3, 2, 1]);
     const captured = f.capture(), node = queryResultSelectedFilterNode(captured);

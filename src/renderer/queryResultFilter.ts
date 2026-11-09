@@ -81,6 +81,28 @@ function freezeExpression(shape:FilterShape,rules:readonly Readonly<QueryResultF
 }
 /** 草稿替换也先核完整条件树预算，不扫描结果或提前应用筛选。 */
 export function assertQueryResultFilterExpressionBudget(expression:QueryResultFilterGroup):void{prepareExpression(expression);}
+
+/** 选区、勾选和不同值窗口共用集合语义。类型化 NOT IN 须并入 SQLite 的其它存储类型。 */
+export function queryResultMemberFilterNode(column: string, values: readonly string[], hasNull: boolean, exclude: boolean,
+  sqliteGroups?: readonly { type: SqliteResultFilterType; values: readonly string[] }[]): QueryResultFilterRule | QueryResultFilterGroup {
+  const nullable: QueryResultFilterRule = Object.freeze({ column, operator: 'null', value: '' });
+  const notNull: QueryResultFilterRule = Object.freeze({ ...nullable, operator: 'notNull' });
+  if (!values.length) return exclude ? notNull : nullable;
+  const member = (members: readonly string[], sqliteType?: SqliteResultFilterType): QueryResultFilterRule =>
+    Object.freeze({ column, operator: exclude ? 'notIn' : 'in', value: '', values: Object.freeze([...members]),
+      ...(sqliteType ? { sqliteType } : {}) });
+  const combine = (mode: 'AND' | 'OR', children: (QueryResultFilterRule | QueryResultFilterGroup)[]) =>
+    children.length === 1 ? children[0] : Object.freeze({ mode, children: Object.freeze(children) });
+  const nonNull = sqliteGroups ? sqliteGroups.map(({ type, values }) => {
+    const rule = member(values, type);
+    return exclude ? combine('OR', [rule, Object.freeze({ ...nullable, operator: 'notType', sqliteType: type })]) : rule;
+  }) : [member(values)];
+  if (!exclude) return combine('OR', hasNull ? [...nonNull, nullable] : nonNull);
+  const remaining = combine('AND', nonNull);
+  if (!hasNull) return combine('OR', [remaining, nullable]);
+  return sqliteGroups ? remaining : combine('AND', [remaining, notNull]);
+}
+
 /** 为已有完整表达式追加AND节点；保留原OR括号与停用原文，最终树先整体核预算再成为草稿。 */
 export function appendQueryResultFilterNode(expression:QueryResultFilterGroup,node:QueryResultFilterRule|QueryResultFilterGroup):QueryResultFilterGroup{
   const previous=prepareExpression(expression),addition=prepareExpression({mode:'AND',children:[node]}),offset=previous.rules.length;

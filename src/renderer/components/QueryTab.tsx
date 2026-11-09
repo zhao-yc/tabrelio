@@ -1822,13 +1822,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     try{const capture=captureQueryResultCellFilter(visibleColumns,result.rows,cell,result),seed=appendQueryResultFilterNode(filterView.expression,queryResultCellFilterNode(capture,operator));showFilterPanel(seed);}catch(reason){setError(errorMessage(reason));}
   }
   /** 勾选核对父级接纳的索引，矩形核对网格原选区。结构检查通过才打开草稿。 */
-  function openSelectedFilter(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean):void{
+  function openSelectedFilter(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false):void{
     const current=()=>!!result&&resultSelectionAllowed(selectionBinding)&&
       (rangeCurrent ? rangeCurrent() : resultSelection.matchesIndices(selectionBinding,capture.indices))&&
       currentQueryResultSelectedFilter(capture,visibleColumns,result.rows,result);
     if(!filterBinding||!filterView||!current())return;
     try{
-      const seed=appendQueryResultFilterNode(filterView.expression,queryResultSelectedFilterNode(capture));
+      const seed=appendQueryResultFilterNode(filterView.expression,queryResultSelectedFilterNode(capture, exclude));
       if(current())showFilterPanel(seed);
     }catch(reason){setError(errorMessage(reason));}
   }

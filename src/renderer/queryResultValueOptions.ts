@@ -3,6 +3,7 @@ import type { QueryResultFilterGroup, QueryResultFilterRule } from '../shared/qu
 import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterKind, queryResultFilterLiteral, type SortDialect } from './queryResultSort';
 import { queryResultValueOptionsZh as text } from './locales/queryResultValueOptions.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
+import { queryResultMemberFilterNode } from './queryResultFilter';
 import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
 
 export const queryResultValueOptionsLimits = Object.freeze({ rows: 100000, columns: 1024, entries: 2000, members: 128, valueUnits: 4096, units: 8 * 1024 * 1024, textWork: 32 * 1024 * 1024 });
@@ -157,20 +158,8 @@ export function queryResultValueOptionsNode(capture: QueryResultValueOptions, id
     if (literal === null) nullable = true; else values.push(literal);
     if (entry.sqliteType && literal !== null) { let group = groups.get(entry.sqliteType); if (!group) { group = []; groups.set(entry.sqliteType, group); } group.push(literal); }
   }
-  /** 输出仅包含原共享契约字段，冻结自有树与成员数组。 */
-  const rule = (operator: QueryResultFilterRule['operator']): QueryResultFilterRule => Object.freeze({ column: capture.column.key, operator, value: '', ...(operator === 'in' || operator === 'notIn' ? { values: Object.freeze(values) } : {}) });
-  if (!values.length) return rule(mode === 'include' ? 'null' : 'notNull');
-  if (capture.column.type === 'SQLITE') {
-    /** 排除混合类型用各类型补集的AND；未勾NULL时单独保留NULL，不能遗漏其它存储类。 */
-    const group = (mode: 'AND' | 'OR', children: readonly (QueryResultFilterRule | QueryResultFilterGroup)[]): QueryResultFilterRule | QueryResultFilterGroup => children.length === 1 ? children[0] : Object.freeze({ mode, children: Object.freeze(children) });
-    const typed = [...groups].map(([sqliteType, values]) => Object.freeze({ column: capture.column.key, operator: mode === 'include' ? 'in' as const : 'notIn' as const, value: '', values: Object.freeze(values), sqliteType }));
-    if (mode === 'include') return group('OR', [...typed, ...(nullable ? [rule('null')] : [])]);
-    const complements = typed.map(leaf => group('OR', [leaf, Object.freeze({ column: capture.column.key, operator: 'notType' as const, value: '', sqliteType: leaf.sqliteType })]));
-    const nonnull = group('AND', complements);
-    return nullable ? nonnull : group('OR', [nonnull, rule('null')]);
-  }
-  if (mode === 'include' && !nullable) return rule('in');
-  return Object.freeze({ mode: mode === 'include' || !nullable ? 'OR' : 'AND', children: Object.freeze([rule(mode === 'include' ? 'in' : 'notIn'), rule(mode === 'include' || !nullable ? 'null' : 'notNull')]) });
+  const sqliteGroups = capture.column.type === 'SQLITE' ? [...groups].map(([type, values]) => ({ type, values })) : undefined;
+  return queryResultMemberFilterNode(capture.column.key, values, nullable, mode === 'exclude', sqliteGroups);
 }
 /** 仅搜索标签和原字面值；完整返回编号供界面分页，搜索预算失败不返回部分结果。 */
 export function searchQueryResultValueOptions(capture: QueryResultValueOptions, query: string, order: QueryResultValueOptionsOrder = 'source'): readonly number[] {

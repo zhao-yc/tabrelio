@@ -1518,13 +1518,13 @@ export function PostgresQueryTab({
   }
 
   /** 取值须绑定当前勾选或单列矩形，原行列核验后才打开审核草稿。 */
-  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean) {
+  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false) {
     const current = () => !!binding && resultCurrent() &&
       (rangeCurrent ? rangeCurrent() : resultSelection.matchesIndices(binding, capture.indices)) &&
       currentQueryResultSelectedFilter(capture, binding.visibleColumns, binding.rows);
     if (!current()) return;
     try {
-      const node = queryResultSelectedFilterNode(capture);
+      const node = queryResultSelectedFilterNode(capture, exclude);
       if (current()) openResultFilter(node);
     }
     catch (reason) { setError(errorMessage(reason)); }

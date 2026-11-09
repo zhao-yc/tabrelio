@@ -13,6 +13,7 @@ import { queryResultFindZh as resultFind } from '../../src/renderer/locales/quer
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
+import { navigationMenuItem } from './navigation-menu';
 import { primaryKeyCopyZh as keyCopy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { updateSqlCopyZh as updateCopy } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
 import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
@@ -410,6 +411,19 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     await expect(cell(sequence[0])).toBeVisible();
     await expect(cell(sequence[1])).toBeVisible();
     await expect(cell(sequence[2])).toHaveCount(0);
+    await (await navigationMenuItem(query, { name: queryResultFilterZh.clear, exact: true })).click();
+    await expect(cell(sequence[2])).toBeVisible();
+    await cell(sequence[0]).click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(endpoint).toBeFocused();
+    await endpoint.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: queryResultSelectedFilterZh.rangeExclude, exact: true }).press('Enter');
+    await expect(filter.getByLabel(queryResultFilterZh.operator + ' 1', { exact: true })).toHaveValue('notIn');
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(cell(sequence[0])).toHaveCount(0);
+    await expect(cell(sequence[1])).toHaveCount(0);
+    await expect(cell(sequence[2])).toBeVisible();
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

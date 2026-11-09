@@ -9,6 +9,7 @@ import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh
 import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { tableSelectedFilterZh } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
+import { navigationMenuItem } from './navigation-menu';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_MYSQL_QUERY_RELATION_NATIVE !== '1', '仅使用本轮隔离网络实库');
@@ -166,6 +167,16 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(cell('18446744073709551615')).toBeVisible();
     await expect(cell('18446744073709551613')).toBeVisible();
     await expect(cell('13')).toHaveCount(0);
+    await (await navigationMenuItem(query, { name: queryResultFilterZh.clear, exact: true })).click();
+    await expect(cell('13')).toBeVisible();
+    await select('18446744073709551615', 1);
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: queryResultSelectedFilterZh.rangeExclude, exact: true }).press('Enter');
+    await expect(filter.getByLabel(queryResultFilterZh.operator + ' 1', { exact: true })).toHaveValue('notIn');
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(cell('18446744073709551615')).toHaveCount(0);
+    await expect(cell('18446744073709551613')).toHaveCount(0);
+    await expect(cell('13')).toBeVisible();
     await observer.query(`UPDATE ${table} SET note=NULL WHERE id=9007199254740992`);
     await page.locator('[data-workspace-tab-id="table-batch"]').getByRole('button', { name: '选区筛选表', exact: true }).click();
     const tableTab = page.locator('.table-tab:visible'), tableGrid = tableTab.getByRole('grid');
