@@ -1762,6 +1762,19 @@ export function PostgresQueryTab({
   useEffect(() => {
     if (!editorInstance || !editable || workspace.settings.activeTabId !== tab.id) return;
     let active = true;
+    // 右键与原生菜单走同一编辑命令。旧右键项不能操作已切换或重建的模型。
+    const menuModel = editorInstance.getModel();
+    const editActions = (['sql-toggle-comment', 'sql-uppercase', 'sql-lowercase', ...sqlLineCommandIds] as const)
+      .map((id, order) => editorInstance.addAction({
+        id: `dbark-postgres-${id}:${uid()}`, label: uiCommandLabels[id],
+        precondition: id === 'sql-uppercase' || id === 'sql-lowercase' ? 'editorHasSelection && !editorReadonly' : '!editorReadonly',
+        contextMenuGroupId: order < 3 ? 'modification' : 'modification-lines',
+        contextMenuOrder: order < 3 ? 2 + order : order - 3,
+        run: () => {
+          if (active && editor.current === editorInstance && editorInstance.getModel() === menuModel && !resultsOnly)
+            return commands[id]?.run();
+        },
+      }));
     const action = editorInstance.addAction({
       id: `dbark-postgres-selection-to-snippet:${uid()}`, label: uiCommandLabels['sql-selection-to-snippet'],
       precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
@@ -1779,7 +1792,7 @@ export function PostgresQueryTab({
       precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.69,
       run: () => { if (active && canOpenStatementQuery) navigation.open('duplicate'); },
     });
-    return () => { active = false; action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
+    return () => { active = false; for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery]);
   return (
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}

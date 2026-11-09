@@ -2021,8 +2021,12 @@ test('PostgreSQL 原生菜单在活动查询中查找、替换、导航、编辑
   await command('sql-goto-bracket');
   await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 2, column: 14});
   await command('sql-select-bracket');
+  await expect.poll(async () => (await inspectModel()).selected).toBe('(1 + 2)');
+  await expect.poll(() => enabled('sql-uppercase')).toBe(true);
 
   await modelSelection(1, 1);
+  // 选区决定菜单可用性。等待主进程应用新选区的状态，再调用注释项。
+  await expect.poll(() => enabled('sql-uppercase')).toBe(false);
   await command('sql-toggle-comment');
   await expect.poll(body).toBe(sql.replace('--紧邻', '紧邻'));
   await undo();
@@ -2055,6 +2059,42 @@ test('PostgreSQL 原生菜单在活动查询中查找、替换、导航、编辑
   await expect.poll(body).toBe('保留另一草稿');
   await page.locator('.tab-strip [data-workspace-tab-id="pg-original"]').getByRole('button', {name: '菜单保存的 PostgreSQL 查询', exact: true}).click();
   await expect.poll(body).toBe(sql);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 编辑器右键切换注释、转换大小写及编辑行可一次撤销', async () => {
+  const first = '--紧邻注释😀', second = 'select 2;', last = 'SELECT 3;';
+  const sql = [first, second, last].join('\n');
+  await prepare({ id: '', name: '离线右键编辑', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db' }, sql);
+  const original = await inspectModel();
+  async function editFromMenu(id: UiCommandId, lineNumber: number, column: number, expected: string) {
+    const point = await editor().evaluate((element, position) => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const bounds = instance?.getDomNode()?.getBoundingClientRect(), visible = instance?.getScrolledVisiblePosition(position);
+      if (!bounds || !visible) throw Error('当前编辑器未显示目标行');
+      return { x: bounds.x + visible.left, y: bounds.y + visible.top + visible.height / 2 };
+    }, { lineNumber, column });
+    await page.mouse.click(point.x, point.y, { button: 'right' });
+    const menu = page.locator('.monaco-menu-container:visible');
+    await menu.getByRole('menuitem', { name: uiCommandLabels[id], exact: true }).click({ delay: 120 });
+    await expect.poll(async () => (await inspectModel()).sql).toBe(expected);
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(inspectModel).toMatchObject({ sql, identity: original.identity });
+  }
+  await modelSelection(1, 3);
+  await editFromMenu('sql-toggle-comment', 1, 4, [first.slice(2), second, last].join('\n'));
+  await modelSelection(2, 1, 7);
+  await editFromMenu('sql-uppercase', 2, 4, [first, 'SELECT 2;', last].join('\n'));
+  await modelSelection(3, 1, 7);
+  await editFromMenu('sql-lowercase', 3, 4, [first, second, 'select 3;'].join('\n'));
+  await modelSelection(2, 4);
+  await editFromMenu('sql-duplicate-lines', 2, 4, [first, second, second, last].join('\n'));
+  await editFromMenu('sql-move-lines-up', 2, 4, [second, first, last].join('\n'));
+  await editFromMenu('sql-move-lines-down', 2, 4, [first, last, second].join('\n'));
+  await editFromMenu('sql-delete-lines', 2, 4, [first, last].join('\n'));
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
