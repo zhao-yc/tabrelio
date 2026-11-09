@@ -104,6 +104,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   function escape(event: KeyboardEvent): void {
     if (!topmost() || escapeTargetsQueryResultFind(event, host.current)) return;
+    // 菜单和选区先处理 Escape，避免从捕获阶段关闭整个快照。
+    if (event.target instanceof Element && ownDialog()?.contains(event.target) &&
+        event.target.closest('[data-grid-cell-menu], [role="gridcell"].grid-cell-in-range')) return;
     event.stopPropagation();
     close();
   }
@@ -182,11 +185,11 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     if (!editable() || !filterBinding || !filterView || filter.view(filterBinding) !== filterView) return;
     openOverlay({ kind: 'filter', binding: filterBinding, initial: filterView }, trigger);
   }
-  /** 勾选绑定当前排序、筛选及查找后的显示行，草稿追加到完整快照的既有条件。 */
-  function openCheckedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false): void {
-    if (rangeCurrent || !loaded || !displayed || !filterBinding || !filterView || !filterTrigger.current) return;
+  /** 选区和勾选各核自己的显示范围，草稿追加到完整快照的既有条件。 */
+  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, exclude = false): void {
+    if (!loaded || !displayed || !filterBinding || !filterView || !filterTrigger.current) return;
     const current = () => editable() && loadedRef.current === loaded && filter.view(filterBinding) === filterView &&
-      exportSelection.matchesIndices(binding, capture.indices) &&
+      (rangeCurrent ? rangeCurrent() : exportSelection.matchesIndices(binding, capture.indices)) &&
       currentQueryResultSelectedFilter(capture, displayed.columns, displayed.rows, displayed);
     if (!current()) return;
     try {
@@ -290,7 +293,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
         <ResultsGrid columns={displayed.columns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
-          filterDialect={dialect} onFilterSelected={filterView ? openCheckedFilter : undefined}
+          ownDialog={ownDialog} filterDialect={dialect} onFilterSelected={filterView ? openSelectedFilter : undefined}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>

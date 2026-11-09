@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { CellKeyDownArgs, CellKeyboardEvent, CellMouseArgs, CellMouseEvent, DataGridHandle } from 'react-data-grid';
-import { appModalSelector } from './modalSelectors';
+import { gridDialogCurrent } from './modalSelectors';
 import { maxClipboardCells } from './gridClipboard';
 import { zh } from './locales/zh-CN';
 import { gridRangePasteZh as pasteText } from './locales/gridRangePaste.zh-CN';
@@ -31,7 +31,7 @@ export function readGridCellRange<Row, Key, Value>(rectangle: GridCellRectangle,
 
 /** 矩形只绑定当前行数组、可见字段和网格来源。虚拟化只决定绘制，不决定范围。 */
 export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly string[], source: unknown, columnOffset: number,
-  grid: RefObject<DataGridHandle | null>, current: () => boolean) {
+  grid: RefObject<DataGridHandle | null>, current: () => boolean, ownDialog?: () => Element | undefined) {
   const scope = useMemo(() => ({}), [rows, keys, source, columnOffset]);
   const live = useRef<{ scope: object; active?: Point; anchor?: Point; focus?: Point; rectangle?: GridCellRectangle }>({ scope });
   if (live.current.scope !== scope) live.current = { scope };
@@ -77,7 +77,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
       // 网格每次渲染都会刷新操作句柄，DOM 与选区代次才标识原网格。
       const handle = grid.current;
       if (handle?.element !== element || !element.isConnected || live.current.scope !== scope ||
-          element.ownerDocument.querySelector(appModalSelector) || !committedCurrent.current()) return;
+          !gridDialogCurrent(element, ownDialog) || !committedCurrent.current()) return;
       stopDrag();
       select(anchor, focus);
       handle.setActivePosition({ rowIdx: focus.row, idx: focus.column + columnOffset }, { shouldFocus: true });
@@ -104,7 +104,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     const target = event.target;
     return live.current.scope === scope && !event.defaultPrevented && !event.isGridDefaultPrevented() &&
       target instanceof HTMLElement && !target.isContentEditable && !!target.closest('[role="gridcell"]') &&
-      !target.closest('input,textarea,select,button,[role="textbox"]') && !target.ownerDocument.querySelector(appModalSelector);
+      !target.closest('input,textarea,select,button,[role="textbox"]') && gridDialogCurrent(target, ownDialog);
   }
 
   function mouse(args: CellMouseArgs<Row>, event: CellMouseEvent) {
@@ -129,7 +129,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
         drag.current = startGridCellRangeDrag({
           grid: element, start: event.nativeEvent, rowCount: rows.length, columnCount: keys.length, columnOffset,
           current: () => live.current.scope === scope && grid.current?.element === element && element.isConnected &&
-            !element.ownerDocument.querySelector(appModalSelector) && committedCurrent.current(),
+            gridDialogCurrent(element, ownDialog) && committedCurrent.current(),
           extend: focus => {
             if (!samePoint(live.current.focus ?? active, focus)) select(active, focus);
           },

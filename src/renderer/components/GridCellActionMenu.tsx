@@ -1,13 +1,13 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { appModalSelector } from '../modalSelectors';
+import { gridDialogCurrent } from '../modalSelectors';
 import { gridQuickValueZh } from '../locales/gridQuickValue.zh-CN';
 import { useWorkspace } from '../store';
 import '../sidebarContextMenu.css';
 
 export interface GridCellAction { label: string; disabled?: boolean; run(): void; }
 interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; current(): boolean; focusTarget?(): HTMLElement | undefined; }
-interface Owner extends Request { cell: HTMLElement; grid: HTMLElement; scrollLeft: number; scrollTop: number; x: number; y: number; }
+interface Owner extends Request { cell: HTMLElement; grid: HTMLElement; dialog?: Element; scrollLeft: number; scrollTop: number; x: number; y: number; }
 
 export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat: boolean; keyCode: number; nativeEvent: { isComposing: boolean } }): boolean {
   const key = event.key.toLowerCase();
@@ -15,7 +15,7 @@ export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat
 }
 
 /** 菜单归属按物理格、工作区和调用方数据快照共同核对。动作失效时关闭，禁止迟到点击。 */
-export function useGridCellActionMenu() {
+export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
   const [owner, setOwner] = useState<Owner>();
   const active = useRef<Owner | undefined>(undefined);
 
@@ -40,22 +40,28 @@ export function useGridCellActionMenu() {
     const cell = target.closest<HTMLElement>(request.targetRole ? '[role="columnheader"]' : '[role="gridcell"]'), row = cell?.closest('[role="row"]');
     if (!cell || !row || cell.closest('[role="grid"]') !== grid) return false;
     const rowIndex = row.getAttribute('aria-rowindex'), columnIndex = cell.getAttribute('aria-colindex');
+    const dialog = ownDialog?.();
+    if (ownDialog && !dialog) return false;
     const state = useWorkspace.getState(), tab = state.settings.tabs.find(item => item.id === state.settings.activeTabId);
-    if (!tab) return false;
-    const version = state.connectionVersions[tab.connectionId];
+    if (!dialog && !tab) return false;
+    const version = tab && state.connectionVersions[tab.connectionId];
     const current = () => {
-      const now = useWorkspace.getState();
       try {
-        return now.settings.activeTabId === tab.id && now.settings.tabs.find(item => item.id === tab.id) === tab &&
-          now.connectionVersions[tab.connectionId] === version && !now.activeJobs[tab.id] &&
-          cell.isConnected && cell.closest('[role="grid"]') === grid && cell.closest('[role="row"]') === row &&
+        if (dialog) {
+          if (ownDialog?.() !== dialog) return false;
+        } else {
+          const now = useWorkspace.getState();
+          if (!tab || now.settings.activeTabId !== tab.id || now.settings.tabs.find(item => item.id === tab.id) !== tab ||
+              now.connectionVersions[tab.connectionId] !== version || now.activeJobs[tab.id]) return false;
+        }
+        return cell.isConnected && cell.closest('[role="grid"]') === grid && cell.closest('[role="row"]') === row &&
           row.getAttribute('aria-rowindex') === rowIndex && cell.getAttribute('aria-colindex') === columnIndex &&
-          !document.querySelector(appModalSelector) && request.current();
+          gridDialogCurrent(cell, ownDialog) && request.current();
       } catch { return false; }
     };
     if (!current()) return false;
     const rect = cell.getBoundingClientRect();
-    const next = { ...request, ...(point ?? { x: rect.left, y: rect.bottom }), cell, grid,
+    const next = { ...request, ...(point ?? { x: rect.left, y: rect.bottom }), cell, grid, dialog,
       scrollLeft: grid.scrollLeft, scrollTop: grid.scrollTop, current };
     active.current = next;
     setOwner(next);
@@ -100,7 +106,7 @@ function GridCellMenu({ owner, close, choose }: { owner: Owner; close(focus: boo
       window.removeEventListener('resize', dismiss);
     };
   }, [owner]);
-  return createPortal(<div ref={menu} role="menu" aria-label={owner.label ?? gridQuickValueZh.context} tabIndex={-1} className="sidebar-context-menu"
+  return createPortal(<div ref={menu} role="menu" data-grid-cell-menu aria-label={owner.label ?? gridQuickValueZh.context} tabIndex={-1} className="sidebar-context-menu"
     style={{ left: owner.x, top: owner.y }} onContextMenu={event => event.preventDefault()} onKeyDown={event => {
       if (event.key === 'Escape' || event.key === 'Tab') {
         event.preventDefault(); event.stopPropagation(); close(true);
@@ -116,5 +122,5 @@ function GridCellMenu({ owner, close, choose }: { owner: Owner; close(focus: boo
     <div className="sidebar-context-menu-title" title={owner.title}>{owner.title}</div>
     {owner.actions.map(action => <button type="button" role="menuitem" key={action.label} disabled={action.disabled}
       onClick={() => choose(action)}>{action.label}</button>)}
-  </div>, document.body);
+  </div>, owner.dialog ?? document.body);
 }
