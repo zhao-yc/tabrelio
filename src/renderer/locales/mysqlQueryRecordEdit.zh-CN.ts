@@ -1,0 +1,12 @@
+export const mysqlQueryRecordEditZh = {
+  edit: '编辑查询原记录',
+  hint: '核对查询原行和完整字段值后编辑。请预览 SQL 并明确确认提交。',
+  stale: '查询原记录或连接已变化，请重新查询。',
+  preview: '预览查询原记录修改',
+  confirm: '确认提交这条查询原记录的修改',
+  apply: '提交查询原记录修改',
+  back: '返回查询结果',
+  discard: '放弃这条查询原记录的本地修改并返回？',
+  readOnly: '当前账号没有此字段的更新权限。',
+  committed: '查询原记录已提交。重新执行查询可查看最新结果。',
+} as const;

@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { FieldPacket } from 'mysql2';
 import type { ManagedConnection } from '../../src/engine/connection';
 import type { QueryResult, TableInfo } from '../../src/shared/contracts';
-import { mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget } from '../../src/engine/mysqlQueryRelation';
+import { mysqlQueryEditRowDigest, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget } from '../../src/engine/mysqlQueryRelation';
 import { SessionObjects } from '../../src/engine/sessionObjects';
 import { validateCommand } from '../../src/shared/validation';
 
@@ -38,6 +39,9 @@ describe('MySQL 查询关联原行', () => {
     const source = { executionId: 'run', context: 'context', database: 'db', table: 't', columns: ['id', 'label'], result };
     const select = mysqlQueryRelationSelect(source, info, 0);
     expect(select.sql).toContain(' AS DECIMAL(65,0)');
+    const lock = mysqlQueryRelationSelect(source, info, 0, true);
+    expect(lock.sql).toBe(select.sql + ' FOR UPDATE');
+    expect(lock.searchKey.params).toEqual(['9007199254740993', '9007199254740993']);
     const page = { rows: [{ id: '9007199254740993', label: '原值' }], columns: [], page: 1, pageSize: 1, hasMore: false };
     expect(select.verify(page)).toEqual(page.rows[0]);
     expect(() => select.verify({ ...page, rows: [{ ...page.rows[0], label: '已修改' }] })).toThrow(/无法核验/);
@@ -46,5 +50,25 @@ describe('MySQL 查询关联原行', () => {
     expect(validateCommand('mysql.queryRelation', request)).toEqual(request);
     for (const extra of [{ table: 't' }, { values: ['1'] }, { sql: 'SELECT id FROM t' }, { rowIndex: -1 }])
       expect(() => validateCommand('mysql.queryRelation', { ...request, ...extra })).toThrow();
+    expect(validateCommand('mysql.queryRecordEdit', request)).toEqual(request);
+    expect(() => validateCommand('mysql.queryRecordEdit', { ...request, table: 't' })).toThrow();
+  });
+
+  it('编辑仅接纳单条更新并核对未投影字段的完整原值', () => {
+    const info = { columns: [{ name: 'id' }, { name: 'guard' }] } as TableInfo;
+    const before = { id: '9007199254740993', guard: 1.0000000000000002 };
+    expect(mysqlQueryEditRowDigest(info, before)).toBe(mysqlQueryEditRowDigest(info, { guard: before.guard, id: before.id }));
+    expect(mysqlQueryEditRowDigest(info, before)).not.toBe(mysqlQueryEditRowDigest(info, { ...before, guard: 1.0000000000000004 }));
+    expect(() => mysqlQueryEditRowDigest(info, { id: before.id })).toThrow();
+    expect(() => mysqlQueryEditRowDigest(info, { ...before, extra: null })).toThrow();
+    const update = { kind: 'update', before, values: { guard: 2 } };
+    const input = { connectionId: 'conn', database: 'db', table: 't', queryRecord: { sessionId: 'session', token: randomUUID() }, changes: [update] };
+    for (const command of ['table.preview', 'table.apply'] as const) {
+      const request = command === 'table.apply' ? { ...input, taskId: 'submit', previewId: randomUUID() } : input;
+      expect(validateCommand(command, request)).toEqual(request);
+      for (const extra of [{ changes: [update, update] }, { changes: [{ kind: 'insert', values: { id: '1' } }] },
+        { changes: [{ ...update, values: {} }] }, { searchRecordRef: randomUUID() }, { queryRecord: { ...input.queryRecord, table: 'forged' } }])
+        expect(() => validateCommand(command, { ...request, ...extra })).toThrow();
+    }
   });
 });

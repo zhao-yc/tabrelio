@@ -315,6 +315,8 @@ export interface CommandMap {
   'postgres.queryRecordPage': { input: import('./postgresQueryRecord').PostgresQueryRecordPageInput;
     output: { table: string; page: import('./postgresTable').PostgresTablePage; columnKeys: (string | null)[] } };
   'mysql.queryRelation': { input: import('./mysqlQueryRelation').MysqlQueryRelationInput; output: { info: TableInfo; row: DataRow } };
+  'mysql.queryRecordEdit': { input: import('./mysqlQueryRelation').MysqlQueryRelationInput;
+    output: { info: TableInfo; row: DataRow; token: string; writable: string[] } };
   'mysql.resultOriginOpen': { input: import('./mysqlResultOrigins').MysqlResultOriginOpenInput;
     output: { database: string; table: string } };
   'postgres.resultOrigins': { input: import('./postgresResultOrigins').PostgresResultOriginsInput; output: import('./postgresResultOrigins').PostgresResultOrigin[] };
@@ -535,8 +537,8 @@ export interface CommandMap {
   'table.statistics': { input: import('./tableStatistics').TableStatisticsInput; output: import('./tableStatistics').TableStatisticsOutput };
   'table.valueOptions': { input: import('./tableValueOptions').TableValueOptionsInput; output: import('./tableValueOptions').TableValueOptionsOutput };
   'table.exportFiltered': { input: import('./tableFilteredExport').TableFilteredExportInput; output: import('./tableFilteredExport').TableFilteredExportOutput };
-  'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; searchRecordRef?: string }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
-  'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string; previewId?: string; searchRecordRef?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
+  'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; searchRecordRef?: string; queryRecord?: import('./mysqlQueryRelation').MysqlQueryRecordRef }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
+  'table.apply': { input: CommandMap['table.preview']['input'] & { taskId: string; previewId?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };
   'schema.apply': { input: { connectionId: string; database: string; sql: string; taskId: string }; output: QueryOutcome };
   'schema.compare': { input: SchemaCompareInput; output: SchemaCompareResult };

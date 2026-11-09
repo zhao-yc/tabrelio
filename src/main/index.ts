@@ -2180,17 +2180,21 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const incomingReferenceRead = command === 'table.incomingReferences' || command === 'table.childReferencePage';
   const incomingReferenceRevision = incomingReferenceRead ? store.connectionRevision() : undefined;
   if (incomingReferenceRead && shuttingDown) throw Error('客户端正在退出，不能读取子记录');
-  const mysqlQuerySourceRead = command === 'mysql.queryRelation' || command === 'mysql.resultOriginOpen';
-  const mysqlQuerySourceSession = mysqlQuerySourceRead ? sessions.get(input.sessionId) : undefined;
-  const mysqlQuerySourceRevision = mysqlQuerySourceRead ? store.connectionRevision() : undefined;
+  const mysqlFocusedEdit = (command === 'table.preview' || command === 'table.apply') ? input.queryRecord : undefined;
+  const mysqlQuerySourceRead = command === 'mysql.queryRelation' || command === 'mysql.resultOriginOpen' || command === 'mysql.queryRecordEdit' ||
+    command === 'table.preview' && !!mysqlFocusedEdit;
+  const mysqlQuerySource = mysqlQuerySourceRead || !!mysqlFocusedEdit;
+  const mysqlQuerySourceSessionId = mysqlFocusedEdit?.sessionId ?? input.sessionId;
+  const mysqlQuerySourceSession = mysqlQuerySource ? sessions.get(mysqlQuerySourceSessionId) : undefined;
+  const mysqlQuerySourceRevision = mysqlQuerySource ? store.connectionRevision() : undefined;
   const assertMysqlQuerySource = () => {
     columnsMain.assertCapturedOwner(columns);
     connectionConfig.assertAvailable(input.connectionId);
     if (shuttingDown || store.connectionRevision() !== mysqlQuerySourceRevision || !mysqlQuerySourceSession?.mysqlOwner ||
-        sessions.get(input.sessionId) !== mysqlQuerySourceSession || mysqlQuerySourceSession.connectionId !== input.connectionId ||
+        sessions.get(mysqlQuerySourceSessionId) !== mysqlQuerySourceSession || mysqlQuerySourceSession.connectionId !== input.connectionId ||
         !columnsMain.sharesDocumentOwner(mysqlQuerySourceSession.mysqlOwner, columns!)) throw Error('MySQL／MariaDB 原查询窗口或连接已变化');
   };
-  if (mysqlQuerySourceRead) assertMysqlQuerySource();
+  if (mysqlQuerySource) assertMysqlQuerySource();
   // 统计只发布原连接修订的完整结果，退出或改目标后不显示迟到聚合。
   const tableStatisticsRead = command === 'table.statistics';
   const tableStatisticsRevision = tableStatisticsRead ? store.connectionRevision() : undefined;
@@ -2447,7 +2451,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       });
     }
     case 'schema.compare': input = { ...input, sourceProfile: store.resolveConnection(input.source.connectionId), targetProfile: store.resolveConnection(input.target.connectionId) }; break;
-    case 'table.incomingReferences':case 'table.childReferencePage':case 'mysql.queryRelation':case 'mysql.resultOriginOpen':
+    case 'table.incomingReferences':case 'table.childReferencePage':case 'mysql.queryRelation':case 'mysql.resultOriginOpen':case 'mysql.queryRecordEdit':
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'table.statistics':
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
@@ -3139,7 +3143,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let filteredExportLease: TableFilteredExportMainLease | undefined;
   let sentToEngine = false;
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
-  const focusedTableEdit = (command === 'table.preview' || command === 'table.apply') && input.searchRecordRef;
+  const focusedTableEdit = mysqlFocusedEdit ? 'query:' + JSON.stringify(mysqlFocusedEdit) :
+    (command === 'table.preview' || command === 'table.apply') ? input.searchRecordRef : undefined;
   if (focusedTableEdit) columnsMain.assertCapturedOwner(columns);
   const focusedTableOwner = focusedTableEdit ? columns!.owner.document : undefined;
   try {
@@ -3188,7 +3193,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'schema.databaseDefaultEncoding.apply' || command === 'schema.tableCreate.apply' || command === 'schema.tableCopyData.apply') structureTokens.delete(input.previewToken);
     if (command === 'table.apply') {
       if (focusedTableEdit) columnsMain.assertCapturedOwner(columns);
-      const binding = tableApplyReceipts.prepare(input.taskId, input.previewId, { connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, input.searchRecordRef, focusedTableOwner);
+      const binding = tableApplyReceipts.prepare(input.taskId, input.previewId, { connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, focusedTableEdit, focusedTableOwner);
       const linked = { ...tasks.get(input.taskId)!, tableApplyReceiptId: binding.operationId };
       store.saveTask(linked); tasks.set(input.taskId, linked);
       input = { ...input, tableApplyBinding: binding };
@@ -3207,7 +3212,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     sqliteEditLease?.beforeSend(); sqlitePreview?.check();
     if (tableFilteredExport) tableFilteredExportSubmitted = true;
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!();
-    if (mysqlQuerySourceRead) assertMysqlQuerySource();
+    if (mysqlQuerySource) assertMysqlQuerySource();
     if (querySessionOwner) columnsMain.assertCapturedOwner(querySessionOwner);
     if (command === 'sessions.close' && session?.postgres) session.postgres.closing = true;
     sentToEngine = true;
@@ -3277,7 +3282,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'table.preview' && previewConnectionRevision !== store.connectionRevision()) throw Error('连接配置自预览开始后已变化，请重新预览');
     if (command === 'table.preview') {
       if (focusedTableEdit) columnsMain.assertCapturedOwner(columns);
-      return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result, input.searchRecordRef, focusedTableOwner) };
+      return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result, focusedTableEdit, focusedTableOwner) };
     }
     if (structurePurpose === 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) publishDatabaseDrop(input, result, columns!);
     if (structurePurpose !== 'columns' && structurePurpose !== 'tableChecks' && structurePurpose !== 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) {
@@ -3652,7 +3657,7 @@ else {
         if (sqliteQueryRead) columns = columnsMain.capture(event);
         if (payload.command === 'search.recordEditRead' ||
             (payload.command === 'table.preview' || payload.command === 'table.apply') &&
-            !!payload.input && typeof payload.input === 'object' && 'searchRecordRef' in payload.input) columns = columnsMain.capture(event);
+            !!payload.input && typeof payload.input === 'object' && ('searchRecordRef' in payload.input || 'queryRecord' in payload.input)) columns = columnsMain.capture(event);
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'result.renderInsertSql' || payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['table.exportFiltered', 'sqlite.tableExport', 'sqlite.queryExport', 'sqlite.workbookExport', 'postgres.workbookExport', 'mysql.workbookExport'].includes(tasks.get(payload.input.taskId)?.kind ?? '') && tableFilteredExports.has(payload.input.taskId);
@@ -3678,7 +3683,8 @@ else {
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
             payload.command === 'postgres.completion' || payload.command === 'postgres.resultOrigins' || payload.command === 'postgres.queryRecordPage' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
-            payload.command === 'sessions.open' || payload.command === 'mysql.queryRelation' || payload.command === 'mysql.resultOriginOpen') columns = columnsMain.capture(event);
+            payload.command === 'sessions.open' || payload.command === 'mysql.queryRelation' || payload.command === 'mysql.resultOriginOpen' ||
+            payload.command === 'mysql.queryRecordEdit') columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);

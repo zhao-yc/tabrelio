@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import type { FieldPacket } from 'mysql2';
 import type { CellValue, DataRow, QueryResult, TableInfo, TablePage } from '../shared/contracts';
 import type { DataSearchColumnMetadata } from '../shared/dataSearch';
 import type { SqlLexicalMode } from '../shared/queryParameters';
-import { buildDataSearchRecordWhere } from './dataSearchRecords';
+import { buildDataSearchRecordWhere, recordDefinitionDigest } from './dataSearchRecords';
 import { identifier, inlineParameters, qualified, serializeCell } from './sql';
 import { tableDefinitionTokens, type TableDefinitionToken } from './tableColumnDefinition';
 import type { ManagedConnection } from './connection';
@@ -73,7 +74,7 @@ export function mysqlQueryRelationSource(managed: ManagedConnection, target: Non
 }
 
 /** 数值主键沿用精确十进制绑定，避免以双精度字符串比较相邻 BIGINT。 */
-export function mysqlQueryRelationSelect(source: MysqlQueryRelationSource, info: TableInfo, index: number) {
+export function mysqlQueryRelationSelect(source: MysqlQueryRelationSource, info: TableInfo, index: number, lock = false) {
   const original = source.result.rows[index], names = info.columns.map(column => column.name);
   if (!original || info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' || !info.primaryKey.length ||
       info.database !== source.database || info.name !== source.table || source.columns.some(column => !names.includes(column))) throw blocked();
@@ -92,12 +93,26 @@ export function mysqlQueryRelationSelect(source: MysqlQueryRelationSource, info:
     keyValues.push(typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : value);
   }
   const where = buildDataSearchRecordWhere({ keyColumns }, keyValues);
+  const searchKey = { sql: where.sql, params: where.params.map(serializeCell) };
   const sql = inlineParameters('SELECT ' + names.map(identifier).join(',') + ' FROM ' + qualified(info.database, info.name) +
-    ' WHERE ' + where.sql + ' LIMIT 2', where.params.map(serializeCell));
-  return { sql, verify(page: TablePage): DataRow {
+    ' WHERE ' + where.sql + ' LIMIT 2' + (lock ? ' FOR UPDATE' : ''), searchKey.params);
+  return { sql, searchKey, verify(page: TablePage): DataRow {
     const row = page.rows[0];
     if (!row || page.rows.length !== 1 || page.hasMore || [...values].some(([column, value]) =>
       !Object.hasOwn(row, column) || JSON.stringify(row[column]) !== JSON.stringify(value))) throw blocked();
     return row;
   } };
+}
+
+/** 只保留原行及结构摘要。列顺序取可信目录，缺列或多列均不能伪造相同的完整原值。 */
+export function mysqlQueryEditRowDigest(info: TableInfo, row: DataRow): string {
+  if (Object.keys(row).length !== info.columns.length || info.columns.some(column => !Object.hasOwn(row, column.name))) throw blocked();
+  return createHash('sha256').update(JSON.stringify(info.columns.map(column => row[column.name]))).digest('hex');
+}
+
+export function mysqlQueryEditSchemaDigest(managed: ManagedConnection, info: TableInfo): string {
+  if (managed.sqlMode === undefined || !info.primaryKey.length || info.primaryKey.length !== info.editableKey.length ||
+      info.primaryKey.some((name, index) => name !== info.editableKey[index])) throw blocked();
+  return createHash('sha256').update(JSON.stringify([info.columns, info.primaryKey,
+    recordDefinitionDigest(info.ddl, managed.sqlMode, managed.status.dialect)])).digest('hex');
 }

@@ -127,6 +127,8 @@ import { SqliteQueryRelationDialog } from './SqliteQueryRelationDialog';
 import { sqliteRelationZh as relationText } from '../locales/sqliteRelation.zh-CN';
 import { openSqliteRelatedTable } from '../openSqliteRelatedTable';
 import { MysqlQueryRelationDialog } from './MysqlQueryRelationDialog';
+import { MysqlSearchRecordEditDialog } from './MysqlSearchRecordEditDialog';
+import { mysqlQueryRecordEditZh as mysqlEditText } from '../locales/mysqlQueryRecordEdit.zh-CN';
 import { mysqlQueryRelationZh as mysqlRelationText } from '../locales/mysqlQueryRelation.zh-CN';
 import type { MysqlQueryRelationInput } from '../../shared/mysqlQueryRelation';
 import { SqliteResultOriginsDialog } from './SqliteResultOriginsDialog';
@@ -323,7 +325,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }>();
   useEffect(() => () => { recordRelation?.job.release(); }, [recordRelation]);
   const [mysqlRelation, setMysqlRelation] = useState<{
-    request: MysqlQueryRelationInput; direction: 'parent' | 'children'; result: QueryResult; job: WorkspaceBusyLease;
+    request: MysqlQueryRelationInput; direction: 'parent' | 'children' | 'edit'; result: QueryResult; job: WorkspaceBusyLease;
   }>();
   useEffect(() => () => { mysqlRelation?.job.release(); }, [mysqlRelation]);
   const retiredRecordTask = useRef<string | undefined>(undefined);
@@ -1452,9 +1454,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setRecordRelation(current => current === view ? undefined : current);
   }
 
-  const mysqlRelationAvailable = !pin && !transaction && transactionKnown && !queryRunning && !busy && outcome?.mysqlQueryRelation === true;
+  const mysqlRelationAvailable = !pin && !transaction && transactionKnown && !queryRunning && !busy &&
+    retiredRecordTask.current !== task.current && outcome?.mysqlQueryRelation === true;
   /** 查询排序只改变视图次序，回查使用原执行中准确的行对象。 */
-  function openMysqlRelation(direction: 'parent' | 'children'): void {
+  function openMysqlRelation(direction: 'parent' | 'children' | 'edit'): void {
     if (!mysqlRelationAvailable || !sourceResult || !sessionRef.current || !activeDetailRow ||
         activeDetailRow.binding !== detailBinding || !queryOwnerCurrent() || !rowDetailAllowed(detailBinding)) return;
     const rowIndex = sourceResult.rows.indexOf(activeDetailRow.binding.rows[activeDetailRow.index]);
@@ -1462,6 +1465,17 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const job = acquireWorkspaceBusy(tab.id);
     setMysqlRelation({ result: sourceResult, direction, job, request: { connectionId: tab.connectionId, sessionId: sessionRef.current,
       executionId: task.current, rowIndex, taskId: uid() } });
+  }
+
+  function mysqlRecordCurrent(view: NonNullable<typeof mysqlRelation>): boolean {
+    return view.job.owns() && queryOwnerCurrent() && relationResult.current === view.result &&
+      sessionRef.current === view.request.sessionId && task.current === view.request.executionId;
+  }
+
+  function closeMysqlRecord(view: NonNullable<typeof mysqlRelation>, committed = false): void {
+    if (committed) retiredRecordTask.current = view.request.executionId;
+    view.job.release();
+    setMysqlRelation(current => current === view ? undefined : current);
   }
   function startQueryRecords(rows: readonly DataRow[], { cell, rangeFill, rangePaste }: {
     cell?: SqliteQueryInlineCell & { key: string; row: DataRow };
@@ -2465,7 +2479,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   title={rowDetailsText.choose} onClick={openQueryRelation}>{relationText.entry}</button>}
 {mysqlRelationAvailable && (['parent', 'children'] as const).map(direction => <button key={direction}
   disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
-  title={rowDetailsText.choose} onClick={() => openMysqlRelation(direction)}>{mysqlRelationText[direction]}</button>)}</ActionMenuSection>
+  title={rowDetailsText.choose} onClick={() => openMysqlRelation(direction)}>{mysqlRelationText[direction]}</button>)}
+{mysqlRelationAvailable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
+  title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlEditText.edit}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
 {sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={memoryText.hint} onClick={rememberResultOrganization}>{memoryText.save}</button></>:null}{resultMemory&&<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)} title={queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)?memoryText.scope:memoryText.mismatch} onClick={applyRememberedOrganization}>{memoryText.apply}</button><button disabled={!rememberedOrganizationCanDiscard()} onClick={discardRememberedOrganization}>{memoryText.clear}</button></>}<div className="action-menu-field" role="group" aria-label={zh.app.text020}><label className="inline-field">{zh.query.text020}<input aria-label={zh.query.text021} type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => useWorkspace.getState().updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/>{zh.query.text022}</label></div></ActionMenuSection>
@@ -2531,13 +2547,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           setOriginDialog(undefined);
           workspace.openTab({ ...target, kind: 'table', title: target.table, connectionId: tab.connectionId });
         }} />}
-      {mysqlRelation && <MysqlQueryRelationDialog request={mysqlRelation.request} direction={mysqlRelation.direction}
-        current={() => mysqlRelation.job.owns() && queryOwnerCurrent() && relationResult.current === mysqlRelation.result &&
-          sessionRef.current === mysqlRelation.request.sessionId && task.current === mysqlRelation.request.executionId}
-        onClose={() => {
-          mysqlRelation.job.release();
-          setMysqlRelation(current => current === mysqlRelation ? undefined : current);
-        }} />}
+      {mysqlRelation && (mysqlRelation.direction === 'edit' ?
+        <MysqlSearchRecordEditDialog connectionId={tab.connectionId} queryRecord={mysqlRelation.request}
+          isCurrent={() => mysqlRecordCurrent(mysqlRelation)} onDirty={() => { /* 查询标签由编辑租约占用，表单自行确认丢弃。 */ }}
+          onDone={committed => closeMysqlRecord(mysqlRelation, committed)} /> :
+        <MysqlQueryRelationDialog request={mysqlRelation.request} direction={mysqlRelation.direction}
+          current={() => mysqlRecordCurrent(mysqlRelation)} onClose={() => closeMysqlRecord(mysqlRelation)} />)}
       {recordRelation && <SqliteQueryRelationDialog request={recordRelation.request}
         current={() => queryRelationCurrent(recordRelation)} onClose={() => closeQueryRelation(recordRelation)}
         onOpen={output => {

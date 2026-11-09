@@ -51,7 +51,7 @@ import { validateExcelMapping } from '../shared/excelTransfer';
 import { mappedImportValue, validateLosslessImport } from './losslessImport';
 import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
-import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, NetworkConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
+import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, NetworkConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, SqlPreview, TableDesign, TableInfo, TaskEvent } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
 import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type SqlLexicalMode } from '../shared/queryParameters';
 import { canonicalReference, validateReferenceValues } from '../shared/references';
@@ -64,8 +64,8 @@ import type { TableStatisticsInput } from '../shared/tableStatistics';
 import { incomingReferenceLimits, incomingReferenceMessages, type IncomingReferencesInput, type ChildReferencePageInput } from '../shared/incomingReferences';
 import { connect, execute, type ManagedConnection } from './connection';
 import { completionQuery } from './completionQuery';
-import { mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
-import { mysqlQueryRelationSchema } from '../shared/mysqlQueryRelation';
+import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
+import { mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
 import { mysqlResultOriginOpenSchema } from '../shared/mysqlResultOrigins';
 import { MysqlResultOrigins, mysqlResultOriginCatalogAllowed, readMysqlResultOrigin } from './mysqlResultOrigins';
 import * as metadata from './metadata';
@@ -143,6 +143,11 @@ import { readFileImportKeyCatalog } from './fileImportConflictCatalog';
 import { createFileImportConflictEvidence, finishFileImportConflictEvidence, importFileWithConflict, type FileImportConflictControl, type FileImportConflictEvidence } from './fileImportConflict';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
+interface MysqlQueryEditSnapshot {
+  token: string; source: MysqlQueryRelationSource; rowIndex: number; expires: number; claimed: boolean;
+  schemaDigest: string; rowDigest: string; writable: string[];
+  searchKey: ReturnType<typeof mysqlQueryRelationSelect>['searchKey'];
+}
 interface ConflictImportLease { connectionId: string; controller: AbortController; done: Promise<void>; phase: 'connecting' | 'running' | 'closing'; evidence: FileImportConflictEvidence; }
 interface RunningTask {
   id: string; managed: ManagedConnection; cancelled: boolean; inFlight: boolean; generation: number;
@@ -179,6 +184,7 @@ export class Engine {
   private readonly profiles = new Map<string, NetworkConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly queryRelationSources = new WeakMap<ManagedConnection, MysqlQueryRelationSource>();
+  private readonly queryEdits = new WeakMap<ManagedConnection, MysqlQueryEditSnapshot>();
   private readonly resultOriginSources = new WeakMap<ManagedConnection, {
     executionId: string; context: string; origins: NonNullable<QueryOutcome['mysqlResultOrigins']>;
   }>();
@@ -679,11 +685,13 @@ export class Engine {
         this.assertFile(input);
         return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => {
           this.queryRelationSources.delete(managed);
+          this.queryEdits.delete(managed);
           this.resultOriginSources.delete(managed);
           return this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string });
         }));
       }
-      case 'mysql.queryRelation': return this.readQueryRelation(input);
+      case 'mysql.queryRelation':
+      case 'mysql.queryRecordEdit': return this.readQueryRelation(input, command === 'mysql.queryRecordEdit');
       case 'mysql.resultOriginOpen': return this.openResultOrigin(input);
       case 'query.confirmInsertExport':this.insertConfirmations.confirm({taskId:input.taskId,previewToken:input.previewToken,confirmation:input.confirmation});return;
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
@@ -868,13 +876,16 @@ export class Engine {
         this.copySourceProfile(input);
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => verifyTableDraft({ managed, ...control }, input as TableDraftVerifyInput), undefined, '核对待恢复草稿原行', true);
       }
-      case 'table.preview': return this.withConnection(input.connectionId, async managed => {
-        if (!input.searchRecordRef) return buildChanges(await metadata.tableInfo(managed, input.database, input.table), input.changes);
-        const locator = { connectionId: input.connectionId, taskId: randomUUID(), recordRef: input.searchRecordRef };
-        const { info } = await this.dataSearchRecords.readEdit({ managed, checkCancelled: () => {}, commandStarted: () => () => {} }, locator,
-          { database: input.database, table: input.table, changes: input.changes });
-        return buildChanges(info, input.changes, { binaryText: 'cast', searchKey: this.dataSearchRecords.editKey(locator) });
-      });
+      case 'table.preview': {
+        if (input.queryRecord) return this.previewQueryEdit(input);
+        return this.withConnection(input.connectionId, async managed => {
+          if (!input.searchRecordRef) return buildChanges(await metadata.tableInfo(managed, input.database, input.table), input.changes);
+          const locator = { connectionId: input.connectionId, taskId: randomUUID(), recordRef: input.searchRecordRef };
+          const { info } = await this.dataSearchRecords.readEdit({ managed, checkCancelled: () => {}, commandStarted: () => () => {} }, locator,
+            { database: input.database, table: input.table, changes: input.changes });
+          return buildChanges(info, input.changes, { binaryText: 'cast', searchKey: this.dataSearchRecords.editKey(locator) });
+        });
+      }
       case 'table.apply': return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '提交数据修改', task => this.applyChanges(task, input)));
       case 'schema.preview': return this.withConnection(input.connectionId, async managed => {
         const design = input.design as TableDesign;
@@ -1845,9 +1856,8 @@ export class Engine {
     if (values && [...values.keys()].some(name => !used.has(name))) throw new Error('脚本执行结束后发现未使用的多余参数；动态模式下无法提前确定全部参数边界');
   }
 
-  /** 同一原执行的行才可回查，完整原值在独立只读事务读取并核对。 */
-  private async readQueryRelation(input: Input): Promise<CommandMap['mysql.queryRelation']['output']> {
-    const { profile, ...raw } = input, request = mysqlQueryRelationSchema.parse(raw);
+  /** 浏览与编辑均绑定同一连接、会话、执行和原行位置。 */
+  private queryRelationScope(request: Omit<MysqlQueryRelationInput, 'taskId'>) {
     const session = this.sessions.get(request.sessionId), source = session && this.queryRelationSources.get(session.managed);
     const current = () => {
       const managed = session?.managed;
@@ -1858,7 +1868,40 @@ export class Engine {
         throw Error('MySQL／MariaDB 原查询结果已失效或会话正在执行，请重新查询');
     };
     current();
-    if (!source || !profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId)
+    return { session: session!, source: source!, current };
+  }
+
+  /** 行读取保持在同一事务，提交路径额外锁定实际命中的一行。 */
+  private async readQueryOriginal(context: StructureTaskContext, source: MysqlQueryRelationSource, rowIndex: number, lock = false) {
+    const { managed } = context;
+    const read = <T>(sql: string, values: (string | number | boolean | null | Buffer)[] = []) => completionQuery<T>(managed, context, sql, values);
+    await read('SELECT 1 FROM ' + qualified(source.database, source.table) + ' LIMIT 0');
+    const info = await metadata.tableInfo(managed, source.database, source.table, read);
+    const selected = mysqlQueryRelationSelect(source, info, rowIndex, lock);
+    const ended = context.commandStarted();
+    let page;
+    try { page = await this.readPage(managed, selected.sql, 1, 1, false, true); }
+    finally { ended(); }
+    return { info, row: selected.verify(page), searchKey: selected.searchKey };
+  }
+
+  /** 使用服务器实际列权限，查询编辑不需要额外的实例管理权限。 */
+  private async queryEditWritable(context: StructureTaskContext, info: TableInfo): Promise<string[]> {
+    const { rows } = await completionQuery<{ name: string; privileges: string }[]>(context.managed, context,
+      'SELECT COLUMN_NAME AS name, PRIVILEGES AS privileges FROM information_schema.COLUMNS ' +
+      'WHERE BINARY TABLE_SCHEMA=BINARY ? AND BINARY TABLE_NAME=BINARY ? ORDER BY ORDINAL_POSITION LIMIT 1025', [info.database, info.name]);
+    if (rows.length !== info.columns.length || rows.some((row, index) => row.name !== info.columns[index].name || typeof row.privileges !== 'string'))
+      throw Error('无法确认查询原表的字段权限');
+    const writable = rows.filter((row, index) => !info.columns[index].generated && row.privileges.split(',').includes('update')).map(row => row.name);
+    if (!writable.length) throw Error('当前账号没有查询原表的字段更新权限');
+    return writable;
+  }
+
+  /** 同一原执行的行才可回查，完整原值在独立只读事务读取并核对。 */
+  private async readQueryRelation(input: Input, editing: boolean) {
+    const { profile, ...raw } = input, request = mysqlQueryRelationSchema.parse(raw);
+    const { source, current, session } = this.queryRelationScope(request);
+    if (!profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId)
       throw Error('缺少原查询记录的可信连接');
     this.copySourceProfile(input);
     const result = await this.withIndependentTask(request.connectionId, request.taskId, async (managed, control) => {
@@ -1867,21 +1910,68 @@ export class Engine {
       await read('SET SESSION lock_wait_timeout = 5');
       await read('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
       await read('START TRANSACTION READ ONLY');
-      const relation = qualified(source.database, source.table);
-      await read('SELECT 1 FROM ' + relation + ' LIMIT 0');
-      const info = await metadata.tableInfo(managed, source.database, source.table, read);
-      const selected = mysqlQueryRelationSelect(source, info, request.rowIndex);
-      const ended = control.commandStarted();
-      let page;
-      try { page = await this.readPage(managed, selected.sql, 1, 1, false, true); }
-      finally { ended(); }
-      const row = selected.verify(page);
+      const context = { managed, ...control };
+      const { info, row, searchKey } = await this.readQueryOriginal(context, source, request.rowIndex);
+      const edit: MysqlQueryEditSnapshot | undefined = editing ? {
+        token: randomUUID(), source, rowIndex: request.rowIndex, expires: Date.now() + 5 * 60 * 1000, claimed: false,
+        schemaDigest: mysqlQueryEditSchemaDigest(managed, info), rowDigest: mysqlQueryEditRowDigest(info, row),
+        writable: await this.queryEditWritable(context, info), searchKey,
+      } : undefined;
       await read('ROLLBACK');
       current();
-      return { info, row };
+      return { info, row, edit };
     }, undefined, '核对查询原记录', true);
     current();
-    return result;
+    const { info, row, edit } = result;
+    if (!edit) return { info, row };
+    if (this.queryEdits.get(session.managed)?.claimed) throw Error('查询原记录仍有提交操作');
+    this.queryEdits.set(session.managed, edit);
+    return { info, row, token: edit.token, writable: edit.writable };
+  }
+
+  /** 编辑引用只接纳同一结果的唯一原行和服务器签发的字段范围。 */
+  private queryEditScope(input: Input) {
+    const ref = mysqlQueryRecordRefSchema.parse(input.queryRecord);
+    const session = this.sessions.get(ref.sessionId), edit = session && this.queryEdits.get(session.managed);
+    const change: RowChange | undefined = input.changes[0];
+    if (!edit || edit.claimed || edit.token !== ref.token || edit.expires <= Date.now() || input.searchRecordRef ||
+        input.database !== edit.source.database || input.table !== edit.source.table || input.changes.length !== 1 ||
+        change?.kind !== 'update' || !Object.keys(change.values).length || Object.keys(change.values).some(name => !edit.writable.includes(name)))
+      throw Error('查询原记录编辑引用或字段范围已变化，请重新打开编辑');
+    const scope = this.queryRelationScope({ connectionId: input.connectionId, sessionId: ref.sessionId, executionId: edit.source.executionId, rowIndex: edit.rowIndex });
+    const current = () => {
+      scope.current();
+      if (this.queryEdits.get(scope.session.managed) !== edit || edit.expires <= Date.now()) throw Error('查询原记录编辑已失效');
+    };
+    current();
+    return { ...scope, edit, current, change };
+  }
+
+  private async verifyQueryEdit(context: StructureTaskContext, scope: ReturnType<Engine['queryEditScope']>, lock = false) {
+    scope.current();
+    const { info, row } = await this.readQueryOriginal(context, scope.source, scope.edit.rowIndex, lock);
+    const { edit, change } = scope;
+    if (mysqlQueryEditSchemaDigest(context.managed, info) !== edit.schemaDigest ||
+        mysqlQueryEditRowDigest(info, row) !== edit.rowDigest || mysqlQueryEditRowDigest(info, change.before) !== edit.rowDigest)
+      throw Error('查询原记录或表结构已变化，请重新打开编辑');
+    const writable = await this.queryEditWritable(context, info);
+    if (Object.keys(change.values).some(name => !writable.includes(name))) throw Error('查询原记录的字段更新权限已变化');
+    scope.current();
+    return info;
+  }
+
+  private async previewQueryEdit(input: Input): Promise<SqlPreview> {
+    const scope = this.queryEditScope(input);
+    return this.withConnection(input.connectionId, async managed => {
+      if (managed.queryRowContext !== scope.source.context) throw Error('原查询与预览的服务器或会话设置已变化');
+      await execute(managed, 'SET SESSION lock_wait_timeout = 5');
+      await execute(managed, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await execute(managed, 'START TRANSACTION READ ONLY');
+      const info = await this.verifyQueryEdit({ managed, checkCancelled: () => {}, report: () => {}, commandStarted: () => () => {} }, scope);
+      await execute(managed, 'ROLLBACK');
+      scope.current();
+      return buildChanges(info, [scope.change], { binaryText: 'cast', searchKey: scope.edit.searchKey });
+    }, undefined, true);
   }
 
   /** 从本会话最新完整结果按序号取原目标；渲染端不能提交要跳转的库表或字段。 */
@@ -1912,6 +2002,7 @@ export class Engine {
   private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean): Promise<QueryOutcome> {
     if (!failureMode) return this.queryScriptStop(task, sql, maxRows, parameters, currentStatement);
     this.queryRelationSources.delete(task.managed);
+    this.queryEdits.delete(task.managed);
     this.resultOriginSources.delete(task.managed);
     const capture = task.resultOrigins = new MysqlResultOrigins();
     const outcome = continueOnError === true ? await this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings) :
@@ -2365,35 +2456,50 @@ export class Engine {
     let info: import('../shared/contracts').TableInfo;
     const locator = input.searchRecordRef ? { connectionId: input.connectionId, taskId: task.id, recordRef: input.searchRecordRef } : undefined;
     let searchKey: ReturnType<DataSearchRecords['editKey']> | undefined;
+    let queryEdit: ReturnType<Engine['queryEditScope']> | undefined;
+    const consumeQueryEdit = () => {
+      if (queryEdit && this.queryEdits.get(queryEdit.session.managed) === queryEdit.edit) this.queryEdits.delete(queryEdit.session.managed);
+    };
     try {
-      if (locator) {
+      if (input.queryRecord) {
+        queryEdit = this.queryEditScope(input);
+        queryEdit.edit.claimed = true;
+        if (task.managed.queryRowContext !== queryEdit.source.context) throw Error('原查询与提交的服务器或会话设置已变化');
+        searchKey = queryEdit.edit.searchKey;
+        await this.statement(task, 'SET SESSION lock_wait_timeout = 5, innodb_lock_wait_timeout = 5');
+      } else if (locator) {
         searchKey = this.dataSearchRecords.editKey(locator);
         await this.statement(task, "SET SESSION time_zone = '+00:00'");
         await this.statement(task, 'SET SESSION lock_wait_timeout = 5, innodb_lock_wait_timeout = 5');
       }
       info = await metadata.tableInfo(task.managed, input.database, input.table);
+      if (queryEdit && mysqlQueryEditSchemaDigest(task.managed, info) !== queryEdit.edit.schemaDigest)
+        throw Error('查询原表结构已变化，请重新打开编辑');
     }
     catch (error) {
+      consumeQueryEdit();
       if (binding) this.emit({ taskId: task.id, status: 'running', progress: 0, message: '提交前检查未完成', tableApply: { operationId: binding.operationId, sequence: 1, phase: 'terminal', reason: 'validation', evidence } });
       throw error;
     }
-    return applyTableTransaction(info, input.changes, {
+    try { return await applyTableTransaction(info, input.changes, {
       evidence, operationId: binding?.operationId, expectedPlan: binding?.plan, searchKey,
-      checkCancelled: () => this.checkCancelled(task), broken: () => task.managed.broken, cancelled: () => task.cancelled,
+      checkCancelled: () => { this.checkCancelled(task); queryEdit?.current(); }, broken: () => task.managed.broken, cancelled: () => task.cancelled,
       send: (sql, params, ack) => this.statement(task, sql, params, ack),
       lockInfo: async () => {
+        const context = {
+          managed: task.managed, checkCancelled: () => this.checkCancelled(task), report: () => {},
+          commandStarted: () => { task.inFlight = true; task.generation++; return () => { task.inFlight = false; }; },
+        };
+        if (queryEdit) return this.verifyQueryEdit(context, queryEdit, true);
         await this.statement(task, 'SELECT 1 FROM ' + qualified(input.database, input.table) + ' LIMIT 0');
         if (!locator) return metadata.tableInfo(task.managed, input.database, input.table);
-        const { info } = await this.dataSearchRecords.verifyEdit({
-          managed: task.managed, checkCancelled: () => this.checkCancelled(task),
-          commandStarted: () => { task.inFlight = true; task.generation++; return () => { task.inFlight = false; }; },
-        }, locator,
-        { database: input.database, table: input.table, changes: input.changes }, true);
+        const { info } = await this.dataSearchRecords.verifyEdit(context, locator,
+          { database: input.database, table: input.table, changes: input.changes }, true);
         return info;
       },
       rollback: async () => (await execute<ResultSetHeader>(task.managed, 'ROLLBACK')).rows,
       emit: progress => this.emit({ taskId: task.id, status: 'running', progress: 0, message: progress.phase === 'committing' ? '正在确认提交，暂不能取消' : '数据提交结果请查看提交记录', tableApply: progress })
-    });
+    }); } finally { consumeQueryEdit(); }
   }
 
   /** Excel 在写入前重验完整工作表、指纹与目标映射，再复用文件导入的分批事务和参数绑定。 */

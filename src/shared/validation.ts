@@ -153,7 +153,7 @@ import { queryParameterTypes, validateQueryParameters } from './queryParameters'
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
-import { mysqlQueryRelationSchema } from './mysqlQueryRelation';
+import { mysqlQueryRelationSchema, mysqlQueryRecordRefSchema } from './mysqlQueryRelation';
 import { mysqlResultOriginOpenSchema } from './mysqlResultOrigins';
 import { queryExcelEncodingMessage, queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
@@ -288,6 +288,12 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
   try { assertSqlKeywordCaseWrite(raw as { sqlKeywordCase?: unknown }); assertQueryLayoutWrite(raw as { tabs?: unknown }); assertQueryFileSourceSettings(raw as { tabs?: unknown }); assertObjectBrowserTabs(raw as { tabs?: unknown }); }
   catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '查询布局无效' }); }
 });
+const tableChangeShape = { ...target, changes, searchRecordRef: z.uuid().optional(), queryRecord: mysqlQueryRecordRefSchema.optional() };
+const checkTableChangeSource = (input: z.infer<typeof tableChangeSchema>, context: z.RefinementCtx) => {
+  if (input.queryRecord && (input.searchRecordRef || input.changes.length !== 1 || input.changes[0].kind !== 'update' || !Object.keys(input.changes[0].values).length))
+    context.addIssue({ code: 'custom', message: '查询原记录只允许修改准确的一条已存在记录' });
+};
+const tableChangeSchema = z.object(tableChangeShape).strict();
 
 export const commandSchemas: Record<Command, z.ZodType> = {
   'record.templates.list': recordTemplateTargetSchema, 'record.templates.save': recordTemplateSaveSchema, 'record.templates.rename': recordTemplateRenameSchema, 'record.templates.delete': recordTemplateSelectSchema, 'record.templates.read': recordTemplateSelectSchema,
@@ -297,6 +303,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.resultOrigins': postgresResultOriginsSchema,
   'postgres.queryRecordPage': postgresQueryRecordPageSchema,
   'mysql.queryRelation': mysqlQueryRelationSchema,
+  'mysql.queryRecordEdit': mysqlQueryRelationSchema,
   'mysql.resultOriginOpen': mysqlResultOriginOpenSchema,
   'postgres.storage.read': postgresStorageReadSchema,
   'postgres.storage.detail': postgresStorageDetailSchema,
@@ -625,7 +632,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     try { validateReferenceValues(input.matchValues); } catch (error) { context.addIssue({ code: 'custom', path: ['matchValues'], message: error instanceof Error ? error.message : '关联值无效' }); }
   })),
   'table.applyReceipt.list': tableApplyReceiptListSchema, 'table.applyReceipt.detail': z.object({ operationId: z.uuid() }).strict(),
-  'table.preview': z.object({ ...target, changes, searchRecordRef: z.uuid().optional() }).strict(), 'table.apply': z.object({ ...target, changes, taskId: id, previewId: z.uuid().optional(), searchRecordRef: z.uuid().optional() }).strict(),
+  'table.preview': tableChangeSchema.superRefine(checkTableChangeSource),
+  'table.apply': tableChangeSchema.extend({ taskId: id, previewId: z.uuid().optional() }).superRefine(checkTableChangeSource),
   'schema.preview': z.object({ connectionId: id, design: z.object({ database: name, name, originalName: name.optional(), engine: name, charset: name, comment: z.string(), columns: z.array(z.object({ name, originalName: name.optional(), type: name, nullable: z.boolean(), defaultValue: z.string().nullable().optional(), autoIncrement: z.boolean(), comment: z.string() }).strict()).min(1).max(1000), indexes: z.array(index), foreignKeys: z.array(foreignKey) }).strict() }).strict(),
   'schema.apply': z.object({ connectionId: id, database: z.string().max(256), sql: text.min(1), taskId: id }).strict(),
   'schema.columns.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id, includeEncodingFacts: z.boolean().optional() }).strict(),
