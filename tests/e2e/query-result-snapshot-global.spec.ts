@@ -23,6 +23,7 @@ function register(): void {
   const { queryResultSortZh: sortText } = require('../../src/renderer/locales/queryResultSort.zh-CN') as typeof import('../../src/renderer/locales/queryResultSort.zh-CN');
   const { queryResultFilterZh: filterText } = require('../../src/renderer/locales/queryResultFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultFilter.zh-CN');
   const { queryResultSelectedFilterZh: selectedFilterText } = require('../../src/renderer/locales/queryResultSelectedFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultSelectedFilter.zh-CN');
+  const { queryResultStatisticsZh: statisticsText } = require('../../src/renderer/locales/queryResultStatistics.zh-CN') as typeof import('../../src/renderer/locales/queryResultStatistics.zh-CN');
   const { queryResultComparisonZh: comparisonText } = require('../../src/renderer/locales/queryResultComparison.zh-CN') as typeof import('../../src/renderer/locales/queryResultComparison.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
@@ -239,6 +240,16 @@ function register(): void {
       await step(() => expect(viewer.getByText(filterText.counts(2, 0), { exact: true })).toBeVisible());
       await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
+      const exactBig = grid.getByRole('gridcell', { name: '18446744073709551615', exact: true });
+      await step(() => exactBig.click({ button: 'right' }));
+      await step(() => viewer.getByRole('menuitem', { name: filterText.cellNotEquals, exact: true }).click());
+      await step(() => expect(checkedFilter.getByLabel(filterText.column + ' 1', { exact: true })).toHaveValue('big'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('ne'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('18446744073709551615'));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行']));
+      await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
       const applySearch = async () => {
         await step(() => viewer.getByRole('combobox', { name: findText.columns, exact: true }).selectOption({ label: findText.columnOption('重复列', 2) }));
         await step(() => input.fill('构造键安全'));
@@ -263,6 +274,23 @@ function register(): void {
       await step(() => expect(match).toBeVisible());
       await step(() => expect(other).toHaveCount(0));
       if (mode === 'save') await step(async () => info.attach('离线结果快照匹配视图', { body: await page.screenshot(), contentType: 'image/png' }));
+
+      await step(() => match.locator('..').getByRole('checkbox').check());
+      await step(() => match.click());
+      await step(() => viewer.getByRole('button', { name: statisticsText.open, exact: true }).click());
+      const statistics = page.getByRole('dialog', { name: statisticsText.title, exact: true });
+      await step(() => expect(statistics.getByLabel(statisticsText.column, { exact: true })).toHaveValue('constructor'));
+      await step(() => expect(statistics.getByLabel(statisticsText.scope, { exact: true })).toHaveValue('selected'));
+      await step(() => statistics.getByRole('button', { name: statisticsText.frequency, exact: true }).click());
+      await step(() => expect(statistics.getByText(statisticsText.frequencyCount(1), { exact: true })).toBeVisible());
+      if (mode === 'save') await step(async () => info.attach('离线快照列值分布', { body: await page.screenshot(), contentType: 'image/png' }));
+      await step(() => statistics.getByRole('button', { name: statisticsText.frequencyFilter, exact: true }).click());
+      await step(() => expect(statistics).toBeHidden());
+      await step(() => expect(checkedFilter.getByLabel(filterText.column + ' 1', { exact: true })).toHaveValue('constructor'));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
+      await step(() => expect(viewer.getByText(findText.matchViewCount(1, 2), { exact: true })).toBeVisible());
 
       // 全局BLOB只读展示，不暴露依赖查询会话的独立原字节文件操作；Esc只关闭最内层。
       await step(() => grid.evaluate(element => { element.scrollLeft = element.scrollWidth; }));
