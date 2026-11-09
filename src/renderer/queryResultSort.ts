@@ -1,3 +1,4 @@
+import { postgresTemporalOrder, type PostgresTemporalKind } from './postgresResultTemporal';
 import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultSortRule } from '../shared/queryResultPresets';
 export type { QueryResultSortRule } from '../shared/queryResultPresets';
@@ -7,7 +8,7 @@ import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultCo
 
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
-type SortKind = Kind | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
+type SortKind = Kind | PostgresTemporalKind | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
 export type SortDialect = 'postgresql';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
@@ -39,7 +40,7 @@ function kind(type: string): Kind | undefined {
 }
 /** 仅明确文本类型可选择大小写比较；不从单元格外观或列名猜测。 */
 export function queryResultSortSupportsIgnoreCase(column: ResultColumn): boolean { return kind(column.type) === 'text' || column.type === 'SQLITE'; }
-/** PostgreSQL 数值与布尔值按原协议类型准入，现有筛选与统计继续用原类型合同。 */
+/** PostgreSQL 按原协议 OID 对应的类型名准入，时序不复用 MySQL 的 TIME/零日期规则。 */
 function sortKind(column: Pick<ResultColumn, 'type'>, dialect?: SortDialect): SortKind | undefined {
   if (dialect !== 'postgresql') return column.type === 'SQLITE' ? 'sqlite' : kind(column.type);
   switch (column.type) {
@@ -48,6 +49,11 @@ function sortKind(column: Pick<ResultColumn, 'type'>, dialect?: SortDialect): So
     case 'REAL': case 'DOUBLE PRECISION': return 'postgresFloat';
     case 'BOOLEAN': return 'postgresBoolean';
     case 'TEXT': case 'VARCHAR': case 'CHAR': return 'text';
+    case 'DATE': return 'pgDate';
+    case 'TIME': return 'pgTime';
+    case 'TIMETZ': return 'pgTimeTz';
+    case 'TIMESTAMP': return 'pgTimestamp';
+    case 'TIMESTAMPTZ': return 'pgTimestampTz';
   }
 }
 /** 入口和面板共用准确说明，不能把UTF-8固定本地序误称数据库COLLATE或原MySQL文本序。 */
@@ -150,6 +156,14 @@ export function queryResultSortKind(type: string, dialect?: SortDialect) {
 function valueUnits(value: CellValue, sqlite: boolean): number { return typeof value === 'string' ? value.length : sqlite && value && typeof value === 'object' ? value.base64.length : 1; }
 /** 原类型标记是唯一准入凭据；BLOB与文本键在分配前受单值上限约束。 */
 function scalarKey(value: CellValue, type: Exclude<SortKind, 'sqlite'>, column: ResultColumn): Key {
+  switch (type) {
+    case 'pgDate': case 'pgTime': case 'pgTimeTz': case 'pgTimestamp': case 'pgTimestampTz': {
+      if (value === null) return null;
+      if (typeof value !== 'string' || value.length > queryResultSortLimits.valueUnits) throw Error(text.postgresTemporalValue);
+      const order = postgresTemporalOrder(value, type);
+      return typeof order === 'bigint' ? exact(String(order), true) : order;
+    }
+  }
   if (type === 'postgresBoolean') {
     if (value === null) return null;
     if (value === 'f') return 0;

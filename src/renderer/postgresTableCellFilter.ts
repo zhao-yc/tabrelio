@@ -32,18 +32,15 @@ export function postgresTableCellFilterDraft(cell: QueryResultCopyCell, columns:
   return filterDraftFromRule(rule);
 }
 
-/** PostgreSQL 数值按原文本精确比较；无时区时序走现有原字段比较器。 */
+/** 将目录声明映射到协议时序类型，复用结果的微秒和偏移比较。 */
 export function postgresTableRangeFilterDraft(first: QueryResultCopyCell, last: QueryResultCopyCell, columns: readonly ResultColumn[], rows: readonly DataRow[]) {
   const left = postgresTableCellFilterDraft(first, columns, rows, 'gte');
   const right = postgresTableCellFilterDraft(last, columns, rows, 'gte');
   const column = first.column!;
   if (column !== last.column) throw Error(text.unavailable);
   const declared = column.type.toUpperCase();
-  const temporal = /^(DATE|TIME|TIMESTAMP)(?:\(\d+\))?(?: WITHOUT TIME ZONE)?$/.exec(declared);
-  const type = temporal ? temporal[1] : declared.replace(/\(\d+,\s*-?\d+\)$/, '');
-  // 避免推断不同偏移、日期显示格式和超出本地比较范围的时间值。
-  if (!temporal && !/^(SMALLINT|INTEGER|BIGINT|NUMERIC|REAL|DOUBLE PRECISION)$/.test(type)) throw Error(text.unavailable);
-  const [value, upperValue] = orderedTableRange({ ...column, type: type === 'TIMESTAMP' && temporal ? 'DATETIME' : type },
-    left.value, right.value, temporal ? undefined : 'postgresql');
+  const temporal = /^(TIME|TIMESTAMP)(?:\(\d+\))? (WITH|WITHOUT) TIME ZONE$/.exec(declared);
+  const type = temporal ? temporal[2] === 'WITH' ? temporal[1] + 'TZ' : temporal[1] : declared.replace(/\(\d+,\s*-?\d+\)$/, '');
+  const [value, upperValue] = orderedTableRange({ ...column, type }, left.value, right.value, 'postgresql');
   return { ...left, operator: 'BETWEEN' as const, value, upperValue };
 }

@@ -28,10 +28,21 @@ describe('PostgreSQL 结果筛选', () => {
     const choices=captureQueryResultValueOptions(f.source.columns,f.source.rows,f.source.columns[0],undefined,'postgresql');
     expect(choices.entries.find(entry=>entry.literal==='NaN')?.count).toBe(2);
   });
+  it('时区时间按同一时刻等值，区间保持微秒并排除 NULL', () => {
+    const lower = '2026-11-05 10:00:00.000001+00';
+    const upper = '2026-11-05 11:00:00.000002+01';
+    const f = fixture('TIMESTAMPTZ', [lower, upper, '2026-11-05 12:00:00.000001+02',
+      '2026-11-05 10:00:00.000003Z', '-infinity', null], 'postgresql');
+    expect(f.apply([rule('eq', '2026-11-05T05:00:00.000001-05')]).sourceIndices).toEqual([0, 2]);
+    expect(f.apply([{ ...rule('between', lower), upper }]).sourceIndices).toEqual([0, 1, 2]);
+    const previous = f.filter.view(f.binding);
+    expect(() => f.apply([rule('gt', '2026-11-05 10:00:00')])).toThrow();
+    expect(f.filter.view(f.binding)).toBe(previous);
+  });
   it('布尔、浮点原文和未知类型分别使用准确条件', () => {
     expect(fixture('BOOLEAN',['t','f',null],'postgresql').apply([rule('eq','TRUE')]).sourceIndices).toEqual([0]);
     expect(fixture('DOUBLE PRECISION',['1e-300','-Infinity',null],'postgresql').apply([rule('gt','-inf')]).sourceIndices).toEqual([0]);
-    const unknown=fixture('TIMESTAMPTZ',['2026-11-05 10:00:00+00',null],'postgresql');
+    const unknown=fixture('INTERVAL',['2026-11-05 10:00:00+00',null],'postgresql');
     expect(unknown.apply([rule('null')]).sourceIndices).toEqual([1]);
     expect(()=>unknown.apply([rule('gt','2026-11-05')])).toThrow(text.invalid);
   });

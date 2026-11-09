@@ -37,7 +37,15 @@ describe('PostgreSQL 固定结果匹配键', () => {
     });
   });
 
-  it.each(['REAL', 'DOUBLE PRECISION', 'BYTEA', 'TIMESTAMP'])('%s 可作为对比值但不作为 PostgreSQL 匹配键', type => {
+  it('同一时刻的不同偏移可匹配，仍区分相邻微秒', () => {
+    const metadata = [{ key: 'moment', name: '日期', type: 'TIMESTAMPTZ' }];
+    const left = source([['2026-11-01 01:00:00.000001-04'], ['2026-11-01 01:00:00.000002-04']], metadata);
+    const right = source([['2026-11-01 05:00:00.000002+00'], ['2026-11-01 05:00:00.000001+00']], metadata);
+    const result = finish(new QueryResultComparisonScan(captureQueryResultComparison(left, right, ['moment'], 'postgresql')));
+    expect(result).toMatchObject({ equal: 2, rows: [{ kind: 'equal', rightIndex: 1 }, { kind: 'equal', rightIndex: 0 }] });
+  });
+
+  it.each(['REAL', 'DOUBLE PRECISION', 'BYTEA', 'INTERVAL'])('%s 可作为对比值但不作为 PostgreSQL 匹配键', type => {
     const metadata = [{ key: 'id', name: '字段', type }];
     expect(queryResultComparisonKeyReason(metadata[0], 'postgresql')).toBe(text.postgresKeyUnsupported);
     expect(() => captureQueryResultComparison(source([], metadata), source([], metadata), ['id'], 'postgresql'))

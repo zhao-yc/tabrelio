@@ -50,6 +50,67 @@ async function loadQuery({ port, user, database, password }: ReturnType<typeof i
   await page.reload();
 }
 
+test('PostgreSQL 查询结果 ISO 时间排序及区间和服务器顺序一致', async ({}, info) => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`ALTER DATABASE "${config.database}" SET TimeZone TO 'America/New_York';
+      ALTER DATABASE "${config.database}" SET DateStyle TO 'ISO, YMD';
+      CREATE TABLE public.temporal_order (id int PRIMARY KEY, moment timestamptz, zoned timetz);
+      INSERT INTO public.temporal_order VALUES
+        (1,'2026-11-01 01:00:00.000002-04','01:00:00+00'),
+        (2,'2026-11-01 01:00:00.000001-05','03:00:00+02'),
+        (3,'2026-11-01 01:00:00.000001-04','00:59:59.999999+00'),
+        (4,'-infinity','00:00:00+05'),(5,'infinity','24:00:00+00'),(6,NULL,NULL)`);
+    const order = async (column: 'moment' | 'zoned') => (await observer.query(
+      'SELECT id FROM public.temporal_order ORDER BY ' + column + ', id DESC')).rows.map(row => String(row.id));
+    await loadQuery(config, 'SELECT id, moment, zoned FROM public.temporal_order ORDER BY id DESC;');
+    const query = page.locator('.postgres-query:visible'), grid = query.getByRole('grid');
+    await query.getByRole('button', { name: postgresZh.execute, exact: true }).click();
+    const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+    await expect(ids).toHaveText(['6', '5', '4', '3', '2', '1']);
+    await grid.getByRole('columnheader', { name: /^zoned/ }).click();
+    await expect(ids).toHaveText(await order('zoned'));
+    await grid.getByRole('columnheader', { name: /^moment/ }).click();
+    await expect(ids).toHaveText(await order('moment'));
+    const lower = '2026-11-01 01:00:00.000002-04', upper = '2026-11-01 01:00:00.000001-05';
+    const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'query.execute').map(task => task.id));
+    const before = await tasks();
+    const settleGridFocus = async (cell: ReturnType<typeof grid.getByRole>) => {
+      await expect(cell).toBeFocused();
+      await cell.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    };
+    await grid.getByRole('gridcell', { name: upper, exact: true }).click();
+    await page.keyboard.press('Shift+ArrowUp');
+    await settleGridFocus(grid.getByRole('gridcell', { name: lower, exact: true }));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: queryResultSelectedFilterZh.rangeBetween, exact: true }).press('Enter');
+    const filter = query.getByRole('region', { name: queryResultFilterZh.title, exact: true });
+    await expect(filter.getByLabel(queryResultFilterZh.lower + ' 1', { exact: true })).toHaveValue(lower);
+    await expect(filter.getByLabel(queryResultFilterZh.upper + ' 1', { exact: true })).toHaveValue(upper);
+    await info.attach('PostgreSQL日期时间区间', { body: await page.screenshot(), contentType: 'image/png' });
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    const expected = (await observer.query('SELECT id FROM public.temporal_order WHERE moment BETWEEN $1 AND $2 ORDER BY moment', [lower, upper])).rows.map(row => String(row.id));
+    expect(expected).toEqual(['1', '2']);
+    await expect(ids).toHaveText(expected);
+    expect(await tasks()).toEqual(before);
+
+    await loadQuery(config, '', 'temporal_order');
+    const table = page.locator('.postgres-table-tab:visible'), tableGrid = table.getByRole('grid');
+    await tableGrid.getByRole('gridcell', { name: lower, exact: true }).click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await settleGridFocus(tableGrid.getByRole('gridcell', { name: upper, exact: true }));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: tableSelectedFilterZh.rangeNotBetween, exact: true }).press('Enter');
+    await expect(table.getByLabel(zh.table.filterRangeStart, { exact: true })).toHaveValue(lower);
+    await expect(table.getByLabel(zh.table.filterRangeEnd, { exact: true })).toHaveValue(upper);
+    await table.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await table.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(tableGrid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['3', '4', '5']);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
 test('PostgreSQL 表页文本和数值快捷筛选保留字面及精确语义', async () => {
   const config = isolatedConnection(), observer = new Client(config);
   try {

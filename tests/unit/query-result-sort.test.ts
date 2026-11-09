@@ -30,8 +30,20 @@ describe('PostgreSQL 已返回行的类型与空值顺序', () => {
     ]).sourceIndices).toEqual([1, 2, 0, 3]);
     expect(f.source.rows.map(row => row.k)).toEqual(['t', 'f', 't', null]);
   });
+  it.each([
+    ['DATE', ['10000-01-01', '0001-12-31 BC', '0002-01-01 BC', '9999-12-31', '0001-01-01', 'infinity', '-infinity'], [6, 2, 1, 4, 3, 0, 5]],
+    ['TIMESTAMP', ['294276-12-31 23:59:59.999999', '294276-12-31 23:59:59.999998', '0001-12-31 23:59:59.999999 BC', '0001-01-01 00:00:00'], [2, 3, 1, 0]],
+    ['TIMESTAMPTZ', ['2026-01-01 00:00:00.000001+01', '2025-12-31 23:00:00.000001+00', '2025-12-31 23:00:00.000002+00', '2025-12-31 23:00:32+00:00:32'], [3, 0, 1, 2]],
+    ['TIME', ['24:00:00', '23:59:59.999999', '00:00:00.000001', '00:00:00'], [3, 2, 1, 0]],
+    ['TIMETZ', ['01:00:00+00', '03:00:00+02', '00:59:59.999999+00', '00:00:00+05'], [3, 2, 1, 0]],
+  ] as const)('%s 保留日期、微秒和偏移排序', (type, values, expected) => {
+    const f = fixture(type, [...values], 'postgresql');
+    expect(f.sort().sourceIndices).toEqual(expected);
+    expect(f.source.rows.map(row => row.k)).toEqual(values);
+  });
+
   it('保留未支持类型与异常值的整列拒绝，原视图不变', () => {
-    for (const [type, value] of [['DOUBLE PRECISION', '1e999'], ['BOOLEAN', 'true'], ['TIMESTAMPTZ', '2026-11-05 10:00:00+00']]) {
+    for (const [type, value] of [['DOUBLE PRECISION', '1e999'], ['BOOLEAN', 'true'], ['TIMESTAMPTZ', '05/11/2026 10:00:00 CET'], ['DATE', '1900-02-29'], ['TIME', '24:00:00.000001'], ['TIMESTAMPTZ', '2026-11-05 10:00:00']]) {
       const f = fixture(type, [value], 'postgresql');
       expect(f.binding.reasons.get('k')).toBeTruthy();
       expect(() => f.sort()).toThrow();

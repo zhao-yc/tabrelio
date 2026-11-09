@@ -2,7 +2,7 @@ export const queryResultStatisticsZh = {
   open: '列统计', title: '列统计', close: '关闭', cancel: '取消统计',
   column: '统计列', scope: '统计范围', all: '当前结果全部行', selected: '当前结果勾选行',
   hint: 'NULL 单独计数且不计入不同值；文本按 UTF-16 代码单元比较，不使用数据库 collation；时间只比较原字段，不做时区换算。',
-  postgresHint: 'NULL 单独计数。整数和 NUMERIC 保留原精度，浮点使用返回值近似统计。文本采用本地顺序，日期时间、字节及未知类型只计数。',
+  postgresHint: 'NULL 单独计数。整数和 NUMERIC 保留原精度，浮点使用返回值近似统计。文本采用本地顺序，ISO 日期时间可比较极值，字节及未知类型只计数。',
   postgresNonFinite: '含 NaN 或无穷值，仅提供计数、极值与值分布。',
   notice: '统计当前筛选后的已返回行，不代表全表。',
   sqliteHint: '按原逐格类型统计；数值先于文本、文本先于字节，文本按固定 UTF-8 字节序比较，不使用数据库 collation。数值相等的 INTEGER／REAL 合并不同值，TEXT 与 BLOB 分开；字节极值显示完整 HEX。仅非 NULL 值全部为有限数值时计算合计和平均值；这是本地原值统计，不等同于 SQLite 的 SUM／AVG 隐式转换。',

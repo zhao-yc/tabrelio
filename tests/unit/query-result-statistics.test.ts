@@ -44,6 +44,15 @@ describe('PostgreSQL 当前结果列统计', () => {
     expect(queryResultFrequencyFilters(frequency, [frequency.entries[0]])).toMatchObject({ operator: 'eq', value: 'NaN' });
   });
 
+  it('ISO 时间极值保留原文，等值时刻合并分布', () => {
+    const first = '2026-11-01 01:00:00.000001-04', last = '2026-11-01 01:00:00.000002-05';
+    const f = fixture('TIMESTAMPTZ', [first, last, '2026-11-01 05:00:00.000001+00', null], undefined, 'postgresql');
+    const result = finish(new QueryResultStatisticsScan(f.capture, true));
+    expect(result).toMatchObject({ min: first, max: last, distinct: 2, nulls: 1 });
+    expect(result.frequency?.entries[0]).toMatchObject({ kind: 'temporal', label: first, count: 2 });
+    expect(result.sum).toBeUndefined();
+  });
+
   it('浮点使用有界有限比较值，布尔值可以分布但不做数值合计', () => {
     const numbers = fixture('REAL', ['0e+999999999', '1.25e+2'], undefined, 'postgresql');
     expect(finish(numbers.scan)).toMatchObject({ sum: '125', average: '62.5', floatInput: true, approximate: true });
