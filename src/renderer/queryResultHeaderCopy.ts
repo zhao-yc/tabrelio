@@ -1,5 +1,6 @@
-import type { CellValue, DataRow, ResultColumn } from '../shared/contracts';
+import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import { cellClipboardType, encodeClipboard, maxClipboardCells } from './gridClipboard';
+import { encodeSqliteResultClipboard, sqliteCellClipboardType } from './sqliteTableClipboard';
 import { zh } from './locales/zh-CN';
 import { queryResultCopyZh as text } from './locales/queryResultCopy.zh-CN';
 
@@ -7,13 +8,13 @@ export interface QueryResultCopyCell { index: number; row: DataRow; column?: Res
 type CopyMode = 'headers' | 'column';
 type ReadTableValue = (row: DataRow, key: string) => CellValue | undefined;
 /** 含列名复制保持现有格式；列名仅作表头，重复和空别名不参与字段定位。 */
-export function encodeQueryResultWithHeaders(columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>, cell?: QueryResultCopyCell) {
-  return encodeQueryResultCopy('headers', columns, rows, indices, cell);
+export function encodeQueryResultWithHeaders(columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>, cell?: QueryResultCopyCell, source?: QueryResult) {
+  return encodeQueryResultCopy('headers', columns, rows, indices, cell, undefined, source);
 }
 
 /** 单列仅复制当前显示范围中的数据值，活动列必须仍在可见列中。 */
-export function encodeQueryResultColumn(columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>, cell?: QueryResultCopyCell) {
-  return encodeQueryResultCopy('column', columns, rows, indices, cell);
+export function encodeQueryResultColumn(columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>, cell?: QueryResultCopyCell, source?: QueryResult) {
+  return encodeQueryResultCopy('column', columns, rows, indices, cell, undefined, source);
 }
 
 /** 表页使用当前展示值。表头仅进入外部 TSV，内部粘贴只消费类型化数据行。 */
@@ -24,7 +25,7 @@ export function encodeTableGridCopy(mode: CopyMode, columns: ResultColumn[], row
 
 /** 两种复制共用准确行列定位、结果值校验及总单元格上限。 */
 function encodeQueryResultCopy(mode: CopyMode, columns: ResultColumn[], rows: DataRow[], indices: ReadonlySet<number>,
-  cell?: QueryResultCopyCell, readTableValue?: ReadTableValue) {
+  cell?: QueryResultCopyCell, readTableValue?: ReadTableValue, source?: QueryResult) {
   if (!columns.length || columns.length > maxClipboardCells) throw Error(text.invalid);
   const keys = columns.map(column => column.key);
   if (keys.some(key => typeof key !== 'string' || !key.length) || new Set(keys).size !== keys.length || columns.some(column => typeof column.name !== 'string')) throw Error(text.invalid);
@@ -47,11 +48,13 @@ function encodeQueryResultCopy(mode: CopyMode, columns: ResultColumn[], rows: Da
     if (value === undefined) throw Error(text.invalid);
     return value;
   }));
-  return encodeClipboard(values, readTableValue ? names : undefined);
+  const content = encodeClipboard(values, readTableValue ? names : undefined);
+  const sqlite = encodeSqliteResultClipboard(source, rows, positions, visible.map(column => column.key));
+  return sqlite === undefined ? content : { ...content, sqlite };
 }
 
-/** 只在显式按钮点击的同步 copy 事件写原两种格式；无主进程、SQL、焦点或异步补偿入口。 */
-export function writeQueryResultClipboard(content: ReturnType<typeof encodeClipboard>, current: () => boolean, target: Document = document): void {
+/** 只在显式按钮点击的同步 copy 事件写兼容格式与可用的 SQLite 原生数据；无主进程、SQL、焦点或异步补偿入口。 */
+export function writeQueryResultClipboard(content: ReturnType<typeof encodeClipboard> & { sqlite?: string }, current: () => boolean, target: Document = document): void {
   if (!current()) throw Error(text.invalid);
   let copied = false, failure: unknown;
   const copy = (event: ClipboardEvent) => {
@@ -62,6 +65,7 @@ export function writeQueryResultClipboard(content: ReturnType<typeof encodeClipb
       if (!event.clipboardData) throw Error(text.unavailable);
       event.clipboardData.setData('text/plain', content.text);
       event.clipboardData.setData(cellClipboardType, content.typed);
+      if (content.sqlite !== undefined) event.clipboardData.setData(sqliteCellClipboardType, content.sqlite);
       copied = true;
     } catch (reason) { failure = reason; }
   };

@@ -15,7 +15,7 @@ import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
-import { cellClipboardType, copyGridCells, copyGridCellValue, copyGridColumnNames, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridColumnNames, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
 import { saveGridCell } from '../gridCellFile';
 import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { fitGridColumnWidths, gridResizeHandleColumn } from '../gridColumnFit';
@@ -29,6 +29,7 @@ import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.z
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
+import { encodeSqliteResultClipboard, sqliteCellClipboardType } from '../sqliteTableClipboard';
 import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
@@ -251,7 +252,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
         });
       } else {
         const encode = mode === 'headers' ? encodeQueryResultWithHeaders : encodeQueryResultColumn;
-        writeQueryResultClipboard(encode(columns, rows, selectedRows, activeCopyCell), current);
+        writeQueryResultClipboard(encode(columns, rows, selectedRows, activeCopyCell, sqliteSource), current);
       }
     } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
@@ -345,6 +346,22 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
 
+  /** 普通 TSV 和通用 MIME 沿用原表示，原生 SQLite 类型只作为额外的粘贴来源。 */
+  function gridCopyData(indices: readonly number[], keys: readonly string[], headers?: readonly string[]) {
+    if (indices.length * keys.length + (headers?.length ?? 0) > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
+    const content = encodeClipboard(indices.map(index => keys.map(key => copyValue(rows[index], key))), headers);
+    const sqlite = encodeSqliteResultClipboard(sqliteSource, rows, indices, keys);
+    return (data: Pick<DataTransfer, 'setData'>) => {
+      data.setData('text/plain', content.text);
+      data.setData(cellClipboardType, content.typed);
+      if (sqlite !== undefined) data.setData(sqliteCellClipboardType, sqlite);
+    };
+  }
+
+  function rangeCopyIndices(target: GridRangeTarget<DataRow>): number[] {
+    return target.rows.flatMap((row, index) => skipRowInInversion?.(row) ? [] : [target.startRow + index]);
+  }
+
   function openCellActions(row: DataRow | undefined, rowIdx: number, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const located = locateCell(row, rowIdx, key, target);
     if (!located || key === undefined || skipRowInInversion?.(located.cell.row)) return false;
@@ -356,19 +373,23 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     const filter = cellMenuFilters?.(cell), actions = [...(filter?.actions ?? [])];
     if ((rowJump || hasResultTools || tableCopy) && tableCopy?.enabled !== false) {
       actions.unshift({ label: quickValueText.copyCell, disabled: !!presentCell?.(cell.row, key)?.copyError, run: () => {
-        try { copyGridCellValue(copyValue(cell.row, key), current); }
+        try { writeTableClipboardEvent(current, gridCopyData([cell.index], [key])); }
         catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       } });
       if (rectangle) actions.unshift(...gridRangeCopyActions(format => {
         try {
-          const tabular = format === 'csv' || format === 'json';
-          const labels = format === 'csv' ? csvCopyText : jsonCopyText;
-          const content = cellRange.copyRectangle(rectangle, tabular
-            ? (row, key) => readTabularCopyValue(row, key, labels.invalid) : copyValue, skipRowInInversion);
-          if (!content?.values.length) return;
-          const names = content.columns.map(key => columns.find(column => column.key === key)!.name);
-          if (tabular) copyGridRangeText(names, content.values, format, current, value => value);
-          else copyGridCells(content.values, current, format === 'headers' ? names : undefined);
+          if (format === 'csv' || format === 'json') {
+            const labels = format === 'csv' ? csvCopyText : jsonCopyText;
+            const content = cellRange.copyRectangle(rectangle, (row, key) => readTabularCopyValue(row, key, labels.invalid), skipRowInInversion);
+            if (content?.values.length) copyGridRangeText(content.columns.map(key => columns.find(column => column.key === key)!.name),
+              content.values, format, current, value => value);
+            return;
+          }
+          const range = cellRange.capture(rectangle, null);
+          if (!range) return;
+          const indices = rangeCopyIndices(range);
+          if (indices.length) writeTableClipboardEvent(current, gridCopyData(indices, range.keys,
+            format === 'headers' ? range.keys.map(key => columns.find(column => column.key === key)!.name) : undefined));
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       }));
     }
@@ -527,16 +548,15 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     event.preventDefault();
     if(!actionCurrent()||!rowIndexes.has(row)||!selectedRows.size&&!columns.some(item=>item.key===column.key))return;
     try {
-      const selected = rangeCurrent() ? cellRange.copy(row, column.key, copyValue, skipRowInInversion) : undefined;
-      if (selected && !selected.values.length) return;
-      let values = selected?.values;
-      if (!values) {
-        if(selectedRows.size*columns.length>maxClipboardCells)throw Error(zh.clipboard.copyLimit);
-        const indices=[...selectedRows].sort((a,b)=>a-b);
-        if(indices.some(index=>!Number.isSafeInteger(index)||index<0||index>=rows.length))return;
-        values=indices.length?indices.map(index=>columns.map(column=>copyValue(rows[index],column.key))):[[copyValue(row,column.key)]];
+      const selected = rangeCurrent() ? cellRange.copyTarget(row, column.key) : undefined;
+      if (selected) {
+        const indices = rangeCopyIndices(selected);
+        if (indices.length) gridCopyData(indices, selected.keys)(event.clipboardData);
+        return;
       }
-      const content=encodeClipboard(values);event.clipboardData.setData('text/plain',content.text);event.clipboardData.setData(cellClipboardType,content.typed);
+      const indices = selectedRows.size ? [...selectedRows].sort((a, b) => a - b) : [rowIndexes.get(row)!];
+      if (indices.some(index => !Number.isSafeInteger(index) || index < 0 || index >= rows.length)) return;
+      gridCopyData(indices, selectedRows.size ? columns.map(item => item.key) : [column.key])(event.clipboardData);
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
   const fitHeader = onColumnResize || onColumnWidthsChange ? fitHeaderColumn : undefined;

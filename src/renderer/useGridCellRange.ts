@@ -155,6 +155,13 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return readGridCellRange(bounds(anchor, focus), rows, keys, read, skip);
   }
 
+  /** 复制的准确端点可交给调用方读取原存储类型；离开端点继续使用既有单格或勾选行为。 */
+  function copyTarget(row: Row, column: string): GridRangeTarget<Row> | undefined {
+    const { rectangle: selected, focus } = live.current;
+    if (!selected || !focus || rows[focus.row] !== row || keys[focus.column] !== column) return;
+    return capture(selected, null);
+  }
+
   /** 表单只能消费打开时的准确矩形；换页、重排及清除后即使坐标相同也须重开。 */
   function capture(selected: GridCellRectangle, cellLimit: number | null = maxClipboardCells): GridRangeTarget<Row> | undefined {
     if (!rectangleCurrent(selected)) return;
@@ -193,7 +200,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return grid.current?.element?.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? undefined;
   }
 
-  return { rectangle, mouse, key, clearValueKey, move, copy, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
+  return { rectangle, mouse, key, clearValueKey, move, copy, copyTarget, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
 }
 
 const arrowDirections = new Map<string, Point>([

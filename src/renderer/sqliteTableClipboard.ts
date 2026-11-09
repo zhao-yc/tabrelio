@@ -1,4 +1,7 @@
 import { encodeClipboard, decodeClipboard, cellClipboardType, type ClipboardCell } from './gridClipboard';
+import type { DataRow, QueryResult } from '../shared/contracts';
+import { sqliteResultCellMatches } from '../shared/sqliteResultStorage';
+import { gridRangeSqliteStorage } from './gridRangeExport';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteEditValueSchema, type SqliteOriginalValue } from '../shared/sqliteTableEdit';
 import { sqliteTableClipboardZh as text } from './locales/sqliteTableClipboard.zh-CN';
@@ -83,6 +86,27 @@ function fromGeneric(value: ClipboardCell): SqliteClipboardCell {
   const binary = object(value, ['type', 'base64']); if (binary.type !== 'binary' || typeof binary.base64 !== 'string' || binary.base64.length > 65536 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(binary.base64)) throw Error(text.invalid);
   let decoded: string; try { decoded = atob(binary.base64); } catch { throw Error(text.invalid); } if (btoa(decoded) !== binary.base64) throw Error(text.invalid); return nativeCell({ kind: 'blob', value: [...decoded].map(byte => byte.charCodeAt(0).toString(16).padStart(2, '0')).join('') });
 }
+/** 只补充 SQLite 原生剪贴板格式；无类型、无法完整编码或超限时保留普通复制。 */
+export function encodeSqliteResultClipboard(source: QueryResult | undefined, rows: DataRow[], positions: readonly number[],
+  keys: readonly string[]): string | undefined {
+  const readStorage = gridRangeSqliteStorage(source, rows);
+  if (!readStorage || !positions.length || !keys.length || positions.length > sqliteClipboardLimits.copyRows ||
+      keys.length > sqliteClipboardLimits.columns || positions.length * keys.length > sqliteClipboardLimits.cells) return;
+  try {
+    const values: SqliteClipboardCell[][] = positions.map(index => keys.map(key => {
+      const row = rows[index], field = row && Object.getOwnPropertyDescriptor(row, key);
+      const code = row && readStorage(row, key, index);
+      if (!field || !('value' in field) || !code || !sqliteResultCellMatches(code, field.value)) throw Error(text.invalid);
+      const value = field.value;
+      if (code === 'n') return { kind: 'null' };
+      if (code === 'b') return fromGeneric(value);
+      return { kind: code === 'i' ? 'integer' : code === 'r' ? 'real' : 'text', value };
+    }));
+    // 同名或空别名是合法查询结果；仅复制按位置排列的原值，不把来源标题作为粘贴映射。
+    return encodeSqliteClipboard(values).sqlite;
+  } catch { return undefined; }
+}
+
 /** 普通TSV沿通用引号语法解析，但逐字符和逐分隔符先核更小的SQLite粘贴预算。 */
 function plainValues(source: string): SqliteClipboardCell[][] {
   const result: SqliteClipboardCell[][] = []; let row: SqliteClipboardCell[] = [], value = '', quoted = false, cells = 0, width: number | undefined;

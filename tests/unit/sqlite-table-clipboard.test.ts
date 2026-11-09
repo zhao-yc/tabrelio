@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { QueryResult } from '../../src/shared/contracts';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
-import { sqliteCellClipboardType, sqliteClipboardLimits, encodeSqliteClipboard, writeSqliteClipboardData, readSqliteClipboard, decodeSqliteClipboard, defaultSqlitePasteMapping, prepareSqlitePaste, sqlitePastePlanValues, type SqliteClipboardCell, type SqlitePasteMapping } from '../../src/renderer/sqliteTableClipboard';
+import { sqliteCellClipboardType, sqliteClipboardLimits, encodeSqliteClipboard, encodeSqliteResultClipboard, writeSqliteClipboardData, readSqliteClipboard, decodeSqliteClipboard, defaultSqlitePasteMapping, prepareSqlitePaste, sqlitePastePlanValues, type SqliteClipboardCell, type SqlitePasteMapping } from '../../src/renderer/sqliteTableClipboard';
 import { sqliteTableClipboardZh as text } from '../../src/renderer/locales/sqliteTableClipboard.zh-CN';
 
 const cell = (value: string): SqliteClipboardCell => ({ kind: 'text', value });
@@ -15,6 +16,22 @@ function generic(rows: unknown[][], version = 1) { return JSON.stringify({ versi
 
 
 describe('SQLite三MIME复制及严格来源解码', () => {
+  it('查询复制按当前行列位置保留原生类型，缺失或失配时省略整份原生包', () => {
+    const rows = [{ id: '9223372036854775807', note: '0007', value: '-0' },
+      { id: '9223372036854775807', note: null, value: { type: 'binary' as const, base64: 'AP8=' } }];
+    const columns = Object.keys(rows[0]).map(key => ({ key, name: '同名', type: 'SQLITE' }));
+    const source: QueryResult = { rows, columns, truncated: false, elapsedMs: 0, statement: '',
+      sqliteStorage: { version: 1, rows: ['itr', 'tnb'] } };
+    const packet = encodeSqliteResultClipboard(source, rows, [1, 0], ['value', 'id', 'note']);
+    expect(JSON.parse(packet!)).toEqual({ version: 1, rows: [
+      [{ kind: 'blob', value: '00ff' }, { kind: 'text', value: '9223372036854775807' }, { kind: 'null' }],
+      [{ kind: 'real', value: '-0' }, { kind: 'integer', value: '9223372036854775807' }, { kind: 'text', value: '0007' }],
+    ] });
+    expect(encodeSqliteResultClipboard(source, [...rows], [0], ['id'])).toBeUndefined();
+    expect(encodeSqliteResultClipboard(source, rows, [0], ['unknown'])).toBeUndefined();
+    expect(encodeSqliteResultClipboard({ ...source, sqliteStorage: { version: 1, rows: ['nnn', 'tnb'] } },
+      rows, [0, 1], ['id'])).toBeUndefined();
+  });
   it('含列名的文本仍保留原生类型化行和列映射', () => {
     const values: SqliteClipboardCell[][] = [[{ kind: 'integer', value: '9223372036854775807' }, { kind: 'null' }, undefined]];
     const columns = ['id', '空值', '默认'];

@@ -42,7 +42,7 @@ import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop,
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 /** 使用独立应用配置和合成 SQLite 数据，查询与浏览均走正式引擎。 */
-async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixtureSql = '') {
+async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixtureSql = '', additionalQuery?: string) {
   await quitDesktop();
   const id = 'row-jump-offline', databasePath = join(dataDir, 'grid-row-jump.sqlite');
   const database = new DatabaseSync(databasePath);
@@ -59,6 +59,7 @@ async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixt
     store.saveConnection({ id, dialect: 'sqlite', name: '行号定位测试', group: '', color: '#123456', sqlite: { filePath: realpathSync(databasePath), readOnly: false, busyTimeoutMs: 1000 } });
     store.saveSettings({ ...store.settings(), pageSize: 100, activeTabId: 'q-jump', tabs: [
       { id: 'q-jump', kind: 'query', title: '查询定位', connectionId: id, sql },
+      ...(additionalQuery ? [{ id: 'q-copy-source', kind: 'query' as const, title: '复制来源', connectionId: id, sql: additionalQuery }] : []),
       { id: 't-jump', kind: 'table', title: '表格定位', connectionId: id, database: 'main', table: 'subject' },
       { id: 'v-jump', kind: 'table', title: '视图定位', connectionId: id, database: 'main', table: 'subject_view' },
     ] });
@@ -414,6 +415,72 @@ test('SQLite 查询矩形粘贴保留原生类型并按排序后的选区提交'
   expect(tasks.filter(task => task.kind === 'query.execute')).toHaveLength(2);
   expect(tasks.filter(task => task.kind === 'sqlite.tablePage' && task.status === 'completed')).toHaveLength(2);
   expect(tasks.filter(task => task.kind === 'sqlite.tableEdit.apply').map(task => task.sqliteWrite?.phase)).toEqual(['committed', 'committed']);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 查询复制与粘贴跨标签保留原生类型和精确值', async ({}, info) => {
+  await seed('SELECT id, qty, name, payload FROM subject WHERE id BETWEEN 178 AND 179 ORDER BY id;',
+    'ALTER TABLE subject ADD qty INTEGER DEFAULT 0; ALTER TABLE subject ADD payload BLOB;',
+    `SELECT 2 AS seq, -9223372036854775808 AS 同名, NULL AS 同名, X'' AS 同名
+    UNION ALL SELECT 1, 9223372036854775807, '0007', X'00ff';`);
+  const query = page.locator('.query-tab:visible');
+  const grid = query.locator('.query-result-grid').getByRole('grid');
+  const run = () => query.locator('.query-execute-split > button.primary').click();
+  const activate = (id: string, title: string) => page.locator(`[data-workspace-tab-id="${id}"]`)
+    .getByRole('button', { name: title, exact: true }).click();
+
+  await activate('q-copy-source', '复制来源');
+  await run();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^seq/ });
+  const first = grid.getByRole('gridcell', { name: '9223372036854775807', exact: true });
+  await expect(first).toBeVisible();
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  await first.click();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await expect(query.locator('.grid-cell-in-range')).toHaveCount(6);
+  const packet = await readGridRangeClipboard(page);
+  const matrix = [
+    [{ kind: 'integer', value: '9223372036854775807' }, { kind: 'text', value: '0007' }, { kind: 'blob', value: '00ff' }],
+    [{ kind: 'integer', value: '-9223372036854775808' }, { kind: 'null' }, { kind: 'blob', value: '' }],
+  ];
+  expect(JSON.parse(packet.sqlite)).toEqual({ version: 1, rows: matrix });
+  expect(JSON.parse(packet.typed).rows[0][0]).toBe('9223372036854775807');
+  expect(packet.text).toContain('0007');
+  await first.click({ button: 'right' });
+  const menuPacket = await readGridMenuClipboard(page, page.getByRole('menuitem', { name: rangeCopy.withHeaders, exact: true }));
+  expect(JSON.parse(menuPacket.sqlite)).toEqual({ version: 1, rows: matrix });
+  expect(menuPacket.text).toMatch(/^同名\t同名\t同名\r?\n/);
+
+  await activate('q-jump', '查询定位');
+  await run();
+  await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+    .filter(task => task.kind === 'query.execute' && task.status === 'completed').length)).toBe(2);
+  const target = grid.getByRole('row').filter({ has: page.getByRole('gridcell', { name: '178', exact: true }) });
+  await target.getByRole('gridcell', { name: '0', exact: true }).click();
+  await pasteGridRangeClipboard(page, menuPacket);
+  const input = page.getByRole('dialog', { name: sqlitePaste.title, exact: true });
+  await input.getByRole('button', { name: sqlitePaste.preview, exact: true }).click();
+  const oldNew = input.getByRole('table', { name: sqlitePaste.previewRows, exact: true });
+  await expect(oldNew).toContainText('9223372036854775807');
+  await expect(oldNew).toContainText('0007');
+  await expect(oldNew).toContainText('00ff');
+  await info.attach('SQLite查询复制粘贴类型对照', { body: await page.screenshot(), contentType: 'image/png' });
+  await input.getByRole('button', { name: sqlitePaste.stage, exact: true }).click();
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toBeVisible();
+  await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+  await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+  try {
+    expect(db.prepare('SELECT id,CAST(qty AS TEXT) AS qty,name,hex(payload) AS payload,typeof(payload) AS kind FROM subject WHERE id BETWEEN 178 AND 179 ORDER BY id').all()).toEqual([
+      { id: 178, qty: '9223372036854775807', name: '0007', payload: '00FF', kind: 'blob' },
+      { id: 179, qty: '-9223372036854775808', name: null, payload: '', kind: 'blob' },
+    ]);
+  } finally { db.close(); }
   expect(pageErrors).toEqual([]);
 });
 
@@ -1617,13 +1684,15 @@ test('查询结果可复制尚未渲染的列值，倒序勾选仍沿显示顺�
     await expect(cell(179).locator('..').getByRole('checkbox')).not.toBeChecked();
     const result = await page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { transfers: DataTransfer[] } }).__headerCopyTest.transfers.map(data => ({
       text: data.getData('text/plain'), rows: JSON.parse(data.getData('application/x-dbark-cells')).rows,
+      native: JSON.parse(data.getData('application/x-dbark-sqlite-cells')).rows,
     })));
     const values = Array.from({ length: 180 }, (_, index) => String(180 - index));
     const inverted = values.filter(value => value !== '180' && value !== '178');
+    const integerRows = (items: string[]) => items.map(value => [{ kind: 'integer', value }]);
     expect(result).toEqual([
-      { text: values.join('\n'), rows: values.map(value => [value]) },
-      { text: '180\n178', rows: [['180'], ['178']] },
-      { text: inverted.join('\n'), rows: inverted.map(value => [value]) },
+      { text: values.join('\n'), rows: values.map(value => [value]), native: integerRows(values) },
+      { text: '180\n178', rows: [['180'], ['178']], native: integerRows(['180', '178']) },
+      { text: inverted.join('\n'), rows: inverted.map(value => [value]), native: integerRows(inverted) },
     ]);
     expect(await tasks()).toEqual(before);
     expect(pageErrors).toEqual([]);
