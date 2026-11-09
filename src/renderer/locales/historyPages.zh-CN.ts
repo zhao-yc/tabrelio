@@ -1,4 +1,5 @@
 export const historyPagesZh={
+ sort:'执行历史排序',sortRecent:'最近执行',sortOldest:'最早执行',sortSlowest:'耗时从长到短',sortFastest:'耗时从短到长',
  durationRange:'执行耗时范围',minDuration:'最短耗时（毫秒）',maxDuration:'最长耗时（毫秒）',clearDuration:'清除耗时范围',
  durationHint:'按记录耗时筛选，单位为整数毫秒（0–9007199254740991），两端均包含；留空不限。修改后请重新搜索。',
  durationInvalid:'耗时请输入0到9007199254740991的整数毫秒，不接受负号、小数或指数。',durationOrder:'最短耗时不能大于最长耗时；两端均包含，允许相等。',

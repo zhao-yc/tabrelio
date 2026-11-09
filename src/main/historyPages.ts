@@ -4,13 +4,13 @@ import { savedQueryOriginContext, type QuerySaveContent } from '../shared/queryB
 import{LocalSqlPages}from'./localSqlPages';
 import{parseHistoryRecord}from'./historyPageMatch';
 
-interface HistoryStore{historyPageRevision():string;historyPageNext(after:HistoryPagePosition|undefined,input:HistoryPageInput):{id:string;startedAt:string;connectionId:string;raw:string|null;hasMore:boolean}|null;historyRaw(id:string):string|undefined;queryConnectionExists(id:string):boolean}
+interface HistoryStore{historyPageRevision():string;historyPageNext(after:HistoryPagePosition|undefined,input:HistoryPageInput):(HistoryPagePosition & {raw:string|null;hasMore:boolean})|null;historyRaw(id:string):string|undefined;queryConnectionExists(id:string):boolean}
 
 /** 执行历史与查询列表拥有独立页句柄；只读操作不写任务/历史或建立数据库连接。 */
 export class HistoryPages extends LocalSqlPages<HistoryPageInput,HistoryPageEntry,HistoryPagePosition>{
  constructor(private readonly store:HistoryStore,workerPath:string){super({
   label:'执行历史',parse:raw=>historyPageInputSchema.parse(raw),revision:()=>store.historyPageRevision(),
-  next:(after,input)=>{const record=store.historyPageNext(after,input);return record?{...record,orderValue:record.startedAt,position:{id:record.id,startedAt:record.startedAt,connectionId:record.connectionId}}:null;},
+  next:(after,input)=>{const record=store.historyPageNext(after,input);return record?{...record,orderValue:record.startedAt,position:{id:record.id,startedAt:record.startedAt,connectionId:record.connectionId,durationKey:record.durationKey}}:null;},
   match:(matcher,record,input)=>matcher.summarizeHistory(record.id,record.raw!,input,record.position)
  },workerPath);}
  /** 完整内容仅在明确打开时读取，并对所见摘要重核，不能替换成后来的历史。 */

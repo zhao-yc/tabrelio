@@ -17,7 +17,7 @@ export const historyDeleteText = Object.freeze({
 const id = z.string().min(1).max(200), digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const historyDeleteReferenceSchema = z.object({ id, digest }).strict();
 export type HistoryDeleteReference = z.infer<typeof historyDeleteReferenceSchema>;
-export const historyDeleteFiltersSchema = historyPageInputSchema.omit({ taskId: true, onError: true });
+export const historyDeleteFiltersSchema = historyPageInputSchema.omit({ taskId: true, onError: true, sort: true });
 export type HistoryDeleteFilters = z.infer<typeof historyDeleteFiltersSchema>;
 export const historyDeletePreviewInputSchema = z.object({
   taskId: z.string().uuid(),

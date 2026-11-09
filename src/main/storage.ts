@@ -70,6 +70,12 @@ const savedQueryNameKey = `CASE WHEN length(CAST(data AS BLOB)) <= ${savedQueryS
   THEN CASE WHEN json_type(data,'$.name')='text' AND length(CAST(json_extract(data,'$.name') AS BLOB)) <= 1024
     THEN CAST(json_extract(data,'$.name') AS BLOB) ELSE X'' END ELSE X'' END`;
 
+// 统一用有限双精度键，保证取回 SQLite 游标后能原样绑定。坏记录仍由原全文校验报告。
+const historyDurationValue = "CAST(json_extract(data,'$.elapsedMs') AS REAL)";
+const historyDurationKey = `CASE WHEN length(CAST(data AS BLOB)) <= ${savedQuerySearchLimits.recordBytes} AND json_valid(data)
+  THEN CASE WHEN json_type(data,'$.elapsedMs') IN ('integer','real') AND ${historyDurationValue} BETWEEN -${Number.MAX_VALUE} AND ${Number.MAX_VALUE}
+    THEN ${historyDurationValue} ELSE 0.0 END ELSE 0.0 END`;
+
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
   private connectionRevisionValue = 0;
@@ -132,6 +138,7 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS history_started_id ON history(started_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
         CREATE INDEX IF NOT EXISTS history_connection_started_id ON history(connection_id COLLATE BINARY,started_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
+        CREATE INDEX IF NOT EXISTS history_duration_started_id ON history((${historyDurationKey}),started_at COLLATE BINARY,id COLLATE BINARY);
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workbench (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, data TEXT NOT NULL);
@@ -1169,13 +1176,36 @@ export class LocalStore {
     this.historyRevisionValue++;
     return references.length;
   }
-  /** 原始时间与ID复合键分页，范围用参数绑定；一次只交付一条完整记录。 */
-  historyPageNext(after:HistoryPagePosition|undefined,input:HistoryPageInput):{id:string;startedAt:string;connectionId:string;raw:string|null;hasMore:boolean}|null{
+  /** 同耗时再按原时间和编号排序，续页复用同一组键。保留策略仍按原执行时间。 */
+  historyPageNext(after: HistoryPagePosition | undefined, input: HistoryPageInput): (HistoryPagePosition & { raw: string | null; hasMore: boolean }) | null {
     const conditions:string[]=[],params:SqlValue[]=[savedQuerySearchLimits.recordBytes];
     if(input.scope.kind!=='all'){conditions.push('connection_id COLLATE BINARY=?');params.push(input.scope.kind==='connection'?input.scope.connectionId:'');}
-    if(after){conditions.push('(started_at COLLATE BINARY,id COLLATE BINARY)<(?,?)');params.push(after.startedAt,after.id);}
-    const statement=this.db.prepare('SELECT id,connection_id,started_at,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM history '+(conditions.length?'WHERE '+conditions.join(' AND ')+' ':'')+'ORDER BY started_at COLLATE BINARY DESC,id COLLATE BINARY DESC LIMIT 2');
-    try{statement.bind(params);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),startedAt:String(row.started_at),connectionId:String(row.connection_id),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}
+    const byDuration = input.sort === 'slowest' || input.sort === 'fastest';
+    const ascending = input.sort === 'oldest' || input.sort === 'fastest';
+    const direction = ascending ? 'ASC' : 'DESC';
+    const comparison = ascending ? '>' : '<';
+    const durationKey = `(${historyDurationKey})`;
+    if (after) {
+      const ordered = 'started_at COLLATE BINARY,id COLLATE BINARY';
+      if (byDuration) {
+        if (after.durationKey === undefined) throw Error('执行历史耗时排序位置无效，请刷新列表');
+        conditions.push(`${durationKey}${comparison}=?`, `(${durationKey},${ordered})${comparison}(?,?,?)`);
+        params.push(after.durationKey, after.durationKey);
+      } else conditions.push(`(${ordered})${comparison}(?,?)`);
+      params.push(after.startedAt, after.id);
+    }
+    const columns = byDuration ? `,${durationKey} AS duration_key` : '';
+    const leadingOrder = byDuration ? `${durationKey} ${direction},` : '';
+    const statement = this.db.prepare('SELECT id,connection_id,started_at,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data' + columns +
+      ' FROM history ' + (conditions.length ? 'WHERE ' + conditions.join(' AND ') + ' ' : '') +
+      `ORDER BY ${leadingOrder}started_at COLLATE BINARY ${direction},id COLLATE BINARY ${direction} LIMIT 2`);
+    try {
+      statement.bind(params);
+      if (!statement.step()) return null;
+      const row = statement.getAsObject();
+      return { id: String(row.id), startedAt: String(row.started_at), connectionId: String(row.connection_id),
+        raw: typeof row.data === 'string' ? row.data : null, ...(typeof row.duration_key === 'number' ? { durationKey: row.duration_key } : {}), hasMore: statement.step() };
+    } finally { statement.free(); }
   }
   /** 显式打开或查看错误才读取单条当前原文，不把全量正文带进列表。 */
   historyRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM history WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('执行历史记录超过128MiB');return raw;}finally{statement.free();}}

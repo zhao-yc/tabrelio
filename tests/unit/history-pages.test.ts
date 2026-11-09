@@ -33,6 +33,14 @@ beforeEach(async()=>{directory=mkdtempSync(join(tmpdir(),'dbark-test-historypage
 afterEach(async()=>{await service?.close();for(const worker of workers)expect(worker.threadId).toBe(-1);store?.close();removeDirectory(directory);});
 
 describe('历史概要和严格协议',()=>{
+ it('只允许在历史首批设置排序，续页和清理范围不接受排序字段', () => {
+  for (const sort of ['recent', 'oldest', 'slowest', 'fastest'] as const)
+   expect(validateCommand('history.page', request({ sort }))).toMatchObject({ sort });
+  expect(() => validateCommand('history.page', { ...request(), sort: 'elapsed_ms' })).toThrow();
+  expect(() => validateCommand('history.pageContinue', { taskId: randomUUID(), cursor: randomUUID(), sort: 'slowest' })).toThrow();
+  const { taskId, onError, ...filters } = request({ sort: 'slowest' });
+  expect(() => validateCommand('history.deletePreview', { taskId, scope: { kind: 'filtered', filters } })).toThrow();
+ });
  it('历史另存只接受本地记录引用和支持的编码', () => {
   const ref = { id: 'h', digest: 'a'.repeat(64), encoding: 'utf16le' };
   expect(validateCommand('history.exportSql', ref)).toEqual(ref);
@@ -75,6 +83,49 @@ describe('真实SQLite与工作线程历史分页',()=>{
 });
 
 describe('历史打开、保留上限和真实持久化',()=>{
+ it('真实 SQLite 按原耗时、时间和编号跨批排序，旧库及损坏记录继续可读', async () => {
+  const database = () => (store as unknown as { db: Database }).db;
+  database().run('DROP INDEX history_duration_started_id');
+  insert(history({ id: 'bad' }), '{损坏记录');
+  const entries = Array.from({ length: 58 }, (_, index) => history({
+   id: `sort-${String(index).padStart(2, '0')}`, connectionId: index % 5 ? 'source' : 'other',
+   startedAt: `2026-10-15T0${index % 2}:00:00.000Z`,
+   elapsedMs: index < 49 ? 1.125 : [0, 1.25, 1e21, Number.MAX_VALUE][index % 4],
+  }));
+  for (const entry of entries) store.addHistory(entry);
+  await service.close(); store.close();
+  store = await LocalStore.open(join(directory, 'test.sqlite'), require.resolve('sql.js/dist/sql-wasm.wasm'), protector);
+  service = new HistoryPages(store, workerPath);
+  expect(database().exec('PRAGMA user_version')[0].values[0][0]).toBe(9);
+  const indexSql = String(database().exec("SELECT sql FROM sqlite_master WHERE name='history_duration_started_id'")[0].values[0][0]);
+  const key = indexSql.slice(indexSql.indexOf('((CASE') + 1, indexSql.lastIndexOf(',started_at COLLATE BINARY'));
+  const plan = JSON.stringify(database().exec(`EXPLAIN QUERY PLAN SELECT id FROM history WHERE ${key} >= 1 ORDER BY ${key},started_at COLLATE BINARY,id COLLATE BINARY LIMIT 2`));
+  expect(plan).toMatch(/SEARCH history USING (?:COVERING )?INDEX history_duration_started_id/);
+  expect(plan).not.toContain('TEMP B-TREE');
+  for (const sort of ['slowest', 'fastest', 'oldest', 'recent'] as const) {
+   const duration = sort === 'slowest' || sort === 'fastest';
+   const direction = sort === 'slowest' || sort === 'recent' ? -1 : 1;
+   const expected = [...entries].sort((a, b) => direction * ((duration ? Math.sign(a.elapsedMs - b.elapsedMs) : 0) ||
+    Buffer.compare(Buffer.from(a.startedAt), Buffer.from(b.startedAt)) || Buffer.compare(Buffer.from(a.id), Buffer.from(b.id))));
+   let page = await service.start(request({ sort }));
+   const ids = page.items.map(item => item.entry.id);
+   while (page.cursor) {
+    page = await service.next({ taskId: randomUUID(), cursor: page.cursor });
+    ids.push(...page.items.map(item => item.entry.id));
+   }
+   expect(ids).toEqual(expected.map(entry => entry.id));
+   expect(page).toMatchObject({ scanned: 59, matched: 58, failed: 1 });
+  }
+  let filtered = await service.start(request({ sort: 'slowest', scope: { kind: 'connection', connectionId: 'source' }, durationRange: { minMs: 1, maxMs: 2 } }));
+  const matches = [...filtered.items];
+  while (filtered.cursor) {
+   filtered = await service.next({ taskId: randomUUID(), cursor: filtered.cursor });
+   matches.push(...filtered.items);
+  }
+  expect(matches.map(item => item.entry.id).sort()).toEqual(entries.filter(entry => entry.connectionId === 'source' && entry.elapsedMs >= 1 && entry.elapsedMs <= 2).map(entry => entry.id));
+  expect(store.historyRaw('bad')).toBe('{损坏记录');
+  for (const entry of entries) expect(store.historyRaw(entry.id)).toBe(JSON.stringify(entry));
+ });
  it('保存内容准确区分四类历史上下文，并拒绝失效来源与陈旧摘要', async () => {
   store.saveConnection(profile());
   const contexts = [

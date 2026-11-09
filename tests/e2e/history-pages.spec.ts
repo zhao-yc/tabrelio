@@ -98,6 +98,39 @@ test('查询内历史按活动标签连接打开，分页保持范围，全局�
  expect(pageErrors).toEqual([]);
 });
 
+test('执行历史按原始耗时跨批次排序并保留筛选和勾选', async () => {
+ const entries = Array.from({ length: 28 }, (_, index) => entry({
+  id: `sort-${String(index).padStart(2, '0')}`, elapsedMs: (index * 11) % 28 + 0.25,
+  startedAt: `2026-10-15T00:${String(index).padStart(2, '0')}:00Z`,
+ }));
+ await seed(store => { for (const record of entries) store.addHistory(record); });
+ await open();
+ const order = dialog().getByLabel(text.sort, { exact: true });
+ const cards = dialog().locator('.history-card');
+ const ids = () => cards.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-history-id')));
+ const selected = dialog().locator('[data-history-id="sort-23"]').getByRole('checkbox');
+ await expect(order).toHaveValue('recent');
+ await expect.poll(ids).toEqual([...entries].reverse().slice(0, 25).map(record => record.id));
+ await selected.check();
+ const slowest = [...entries].sort((a, b) => b.elapsedMs - a.elapsedMs);
+ await order.selectOption('slowest');
+ await expect.poll(ids).toEqual(slowest.slice(0, 25).map(record => record.id));
+ await expect(selected).toHaveCount(0);
+ await dialog().getByRole('button', { name: text.next, exact: true }).click();
+ await expect.poll(ids).toEqual(slowest.slice(25).map(record => record.id));
+ await expect(selected).toBeChecked();
+ await order.selectOption('fastest');
+ await expect.poll(ids).toEqual([...slowest].reverse().slice(0, 25).map(record => record.id));
+ await expect(selected).toBeChecked();
+ await dialog().getByLabel(text.minDuration, { exact: true }).fill('10');
+ await search('');
+ await expect.poll(ids).toEqual([...slowest].reverse().slice(0, 25).filter(record => record.elapsedMs >= 10).map(record => record.id));
+ await order.selectOption('oldest');
+ await expect.poll(ids).toEqual(entries.slice(0, 25).filter(record => record.elapsedMs >= 10).map(record => record.id));
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('保存查询按名称和更新时间跨批次排序，保留已勾选项', async () => {
  const names = Array.from({ length: 28 }, (_, index) => `查询 ${String(index).padStart(2, '0')}`);
  await seed(store => {
