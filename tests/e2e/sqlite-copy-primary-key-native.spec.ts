@@ -1,8 +1,10 @@
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { desktop, page, dataDir, expect, test, confirmOwnedDesktopExit, retainOwnedDesktopResources, pageErrors } from './desktop-fixture';
 import { primaryKeyCopyZh as copy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
+import { updateSqlCopyZh as update } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
+import { deleteSqlCopyZh as remove } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
 import { sqliteTableEditZh as edit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { expectPrimaryKeyQueryDraft } from './primary-key-query-draft';
 
@@ -31,6 +33,7 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     finally { db.close(); }
   }
   const baseline = read('SELECT note FROM ' + target);
+  const originalBytes = readFileSync(path);
   try {
     await desktop.evaluate(({ dialog, BrowserWindow }, path) => {
       const original = dialog.showOpenDialog;
@@ -124,6 +127,11 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     await field.getByLabel(edit.value('scope'), { exact: true }).fill('仅本地新键');
     await field.getByRole('button', { name: edit.saveInput, exact: true }).click();
     await cell('TEXT · 仅本地新键').click();
+    for (const action of [update.open, remove.open]) {
+      await button(action).click();
+      await expect(tab.getByRole('alert')).toContainText('草稿');
+      await expect(page.locator('.tab-strip [data-workspace-tab-id]')).toHaveCount(4);
+    }
     await button(copy.action).click();
     expect((await captured()).at(-1)).toEqual(first);
     const beforeDirty = await tasks();
@@ -134,6 +142,30 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     await expect(cell('TEXT · 仅本地新键')).toBeVisible();
     expect(read('SELECT note FROM ' + target)).toEqual(baseline);
     await button(edit.undo).click();
+
+    const predicate = first.text.split('\nWHERE ')[1];
+    const deletePrefix = 'DELETE FROM "main".' + target + '\nWHERE ';
+    const deletes = batch.text.split('\nWHERE ')[1].slice(0, -1).split('\n   OR ')
+      .map(condition => deletePrefix + condition + ';').join('\n');
+    for (const [labels, sql] of [
+      [update, 'UPDATE "main".' + target + '\nSET "note" = \'目标甲\'\nWHERE ' + predicate],
+      [remove, deletes],
+    ] as const) {
+      if (labels === remove) {
+        await check('目标甲').check();
+        await check('目标乙').check();
+        await cell('TEXT · 交叉键').click();
+      } else await cell('TEXT · 目标甲').click();
+      const noExecution = await tasks();
+      await button(labels.open).click();
+      await expectPrimaryKeyQueryDraft('copy', sql);
+      await expect(page.getByRole('button', { name: labels.queryTitle(table), exact: true })).toBeVisible();
+      expect(await tasks()).toEqual(noExecution);
+      expect(await history()).toEqual(historyBefore);
+      expect(await captured()).toHaveLength(3);
+      expect(readFileSync(path)).toEqual(originalBytes);
+      await open('copy', '原主键查询');
+    }
 
     await open('copy-readonly', '只读原表');
     await cell('目标甲').click();
@@ -147,6 +179,8 @@ test('SQLite 复制复合原主键查询，沿索引排序规则匹配原记录'
     await expect(cell('目标甲')).toBeVisible();
     await expect(button(copy.action)).toHaveCount(0);
     await expect(button(copy.open)).toHaveCount(0);
+    await expect(button(update.open)).toHaveCount(0);
+    await expect(button(remove.open)).toHaveCount(0);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

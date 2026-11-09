@@ -85,7 +85,7 @@ import { TableSortPanel } from './TableSortPanel';
 import { tableSortZh as sortText } from '../locales/tableSort.zh-CN';
 import { validateTableSort, tableSortFromGrid } from '../tableSort';
 import { queryDatabasePatch } from '../../shared/queryContext';
-import { openPrimaryKeyQueryDraft } from '../openPrimaryKeyQueryDraft';
+import { openRowSqlDraft, type RowSqlKind } from '../openRowSqlDraft';
 import { TablePresetPanel } from './TablePresetPanel';
 import { createPresetDialogGuard } from '../tablePresetDialogs';
 import { validateTablePresetColumns, type TablePresetConfiguration } from '../../shared/tablePresets';
@@ -1701,7 +1701,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制 SQL 和打开查询草稿共享原页租约。活动页或勾选变更时撤销旧入口。 */
-  function handlePrimaryKeyQuery(destination: 'clipboard' | 'draft' | 'update' | 'delete') {
+  function handleRowSql(kind: RowSqlKind, destination: 'clipboard' | 'draft') {
     const current = () => tableToolbarCurrent() && !insertCopyBlockedRef.current && !restoredDraftView &&
       !externalStaleRef.current && !activeGridEditor.current && !record.hasInput() &&
       rowsRef.current === rows && selectedRowsRef.current === selectedRows && selectionRef.current === selection &&
@@ -1710,18 +1710,18 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     try {
       const ids = selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
       const context = getRecordContext();
-      const prepare = destination === 'delete' ? prepareCopyDeleteSql : destination === 'update' ? prepareCopyUpdateSql : prepareCopyPrimaryKeyQuery;
+      const prepare = { select: prepareCopyPrimaryKeyQuery, update: prepareCopyUpdateSql, delete: prepareCopyDeleteSql }[kind];
       const sql = prepare(context, copyPage.current, page, rows, ids);
       if (destination === 'draft') {
         if (onOpenGeneratedQuery && current()) {
-          openPrimaryKeyQueryDraft(context.target, sql, onOpenGeneratedQuery);
+          openRowSqlDraft(context.target, kind, sql, onOpenGeneratedQuery);
           setError('');
         }
         return;
       }
       writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
       setError('');
-      setDuplicateNotice(destination === 'delete' ? deleteSqlCopyZh.copied : destination === 'update' ? updateSqlCopyZh.copied : primaryKeyCopyZh.copied);
+      setDuplicateNotice({ select: primaryKeyCopyZh.copied, update: updateSqlCopyZh.copied, delete: deleteSqlCopyZh.copied }[kind]);
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
   }
   const primaryKeyQueryDisabled = insertCopyBlockedRef.current || restoredDraftView || !!copyMetadataReason || (!selection && !selectedRows.size);
@@ -2145,13 +2145,19 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selectedRows.size} onClick={() => copyRowsAsInsert(true)}>{copyInsertSqlZh.selected}</button>
 {info?.objectKind === 'table' && !!info.primaryKey.length && <>
   <button title={primaryKeyCopyZh.hint} disabled={primaryKeyQueryDisabled}
-    onClick={() => handlePrimaryKeyQuery('clipboard')}>{primaryKeyCopyZh.action}</button>
+    onClick={() => handleRowSql('select', 'clipboard')}>{primaryKeyCopyZh.action}</button>
   <button title={updateSqlCopyZh.hint} disabled={primaryKeyQueryDisabled}
-    onClick={() => handlePrimaryKeyQuery('update')}>{updateSqlCopyZh.action}</button>
+    onClick={() => handleRowSql('update', 'clipboard')}>{updateSqlCopyZh.action}</button>
   <button title={deleteSqlCopyZh.hint} disabled={primaryKeyQueryDisabled}
-    onClick={() => handlePrimaryKeyQuery('delete')}>{deleteSqlCopyZh.action}</button>
-  {onOpenGeneratedQuery && <button title={primaryKeyCopyZh.openHint} disabled={primaryKeyQueryDisabled}
-    onClick={() => handlePrimaryKeyQuery('draft')}>{primaryKeyCopyZh.open}</button>}
+    onClick={() => handleRowSql('delete', 'clipboard')}>{deleteSqlCopyZh.action}</button>
+  {onOpenGeneratedQuery && <>
+    <button title={primaryKeyCopyZh.openHint} disabled={primaryKeyQueryDisabled}
+      onClick={() => handleRowSql('select', 'draft')}>{primaryKeyCopyZh.open}</button>
+    <button title={updateSqlCopyZh.openHint} disabled={primaryKeyQueryDisabled}
+      onClick={() => handleRowSql('update', 'draft')}>{updateSqlCopyZh.open}</button>
+    <button title={deleteSqlCopyZh.openHint} disabled={primaryKeyQueryDisabled}
+      onClick={() => handleRowSql('delete', 'draft')}>{deleteSqlCopyZh.open}</button>
+  </>}
 </>}</ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.transfer}><button title={headerCopyText.hint} disabled={blocked || externalStale || gridEditing || record.hasInput() || (!selection && !selectedRows.size)} onClick={() => copyTableData('headers')}>{headerCopyText.action}</button>
 <button title={headerCopyText.namesHint} disabled={blocked || externalStale || gridEditing || record.hasInput() || !page || !visibleColumns.length} onClick={() => copyTableData('names')}>{headerCopyText.names}</button>

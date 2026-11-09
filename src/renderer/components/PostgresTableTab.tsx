@@ -97,7 +97,7 @@ import { buildPostgresTableQueryTemplate, type PostgresTemplateSource } from '..
 import type { TableQueryTemplateKind, TableQueryTemplateOptions } from '../tableQueryTemplate';
 import { tableQueryTemplateZh as sqlTemplateText } from '../locales/tableQueryTemplate.zh-CN';
 import { tableFilteredSelectZh as filteredSelectText } from '../locales/tableFilteredSelect.zh-CN';
-import { openPrimaryKeyQueryDraft } from '../openPrimaryKeyQueryDraft';
+import { openRowSqlDraft } from '../openRowSqlDraft';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import { useTableCheckedExport } from '../tableCheckedExport';
 import { projectQueryResultRows } from '../queryResultColumns';
@@ -1620,7 +1620,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           ? indices => postgresCopyDeleteSql(target.table, page, indices, draftRef.current) : undefined}
         primaryKeySql={!page.truncated && isPostgresSqlExportRelation(page.relationKind) && page.primaryKey?.length
           ? indices => postgresCopyPrimaryKeyQuery(target.table, page, indices) : undefined}
-        onOpenPrimaryKeyQuery={sql => openPrimaryKeyQueryDraft(target, sql)}
+        onOpenRowSql={(kind, sql) => openRowSqlDraft(target, kind, sql)}
         presentCell={draftGrid?.cell} skipRowInInversion={draftGrid?.isDeleted}
         renderRowSelectionAction={(selected, current, tools) =>
           <div className="pg-table-controls pg-batch-actions">
