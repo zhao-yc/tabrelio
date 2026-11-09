@@ -145,7 +145,7 @@ import { createFileImportConflictEvidence, finishFileImportConflictEvidence, imp
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
 interface MysqlQueryEditSnapshot {
   token: string; source: MysqlQueryRelationSource; expires: number; claimed: boolean;
-  schemaDigest: string; columns: TableInfo['columns']; writable: string[]; batch: boolean;
+  schemaDigest: string; columns: TableInfo['columns']; writable: string[]; batch: boolean; operation: 'update' | 'delete';
   rows: Map<string, { rowIndex: number; searchKey: ReturnType<typeof mysqlQueryRelationSelect>['searchKey'] }>;
 }
 interface ConflictImportLease { connectionId: string; controller: AbortController; done: Promise<void>; phase: 'connecting' | 'running' | 'closing'; evidence: FileImportConflictEvidence; }
@@ -1900,6 +1900,17 @@ export class Engine {
     return rows.filter((row, index) => !info.columns[index].generated && row.privileges.split(',').includes('update')).map(row => row.name);
   }
 
+  /** 由服务器核对当前角色的实际删除权限。普通 EXPLAIN 只生成计划，不执行 DELETE。 */
+  private async requireQueryDeletePrivilege(context: StructureTaskContext, info: TableInfo): Promise<void> {
+    try {
+      await completionQuery(context.managed, context, 'EXPLAIN DELETE FROM ' + qualified(info.database, info.name) + ' WHERE 1=0', []);
+    } catch (error) {
+      if (['ER_TABLEACCESS_DENIED_ERROR', 'ER_COLUMNACCESS_DENIED_ERROR', 'ER_DBACCESS_DENIED_ERROR'].includes((error as { code?: string }).code ?? ''))
+        throw Error('当前账号没有查询原表的删除权限');
+      throw error;
+    }
+  }
+
   /** 同一原执行的行才可回查，完整原值在独立只读事务读取并核对。 */
   private async readQueryRelation(input: Input, kind: 'relation' | 'record' | 'batch') {
     const { profile, ...raw } = input;
@@ -1908,7 +1919,8 @@ export class Engine {
     const request = batch ?? single!;
     const rowIndices = batch?.rowIndices ?? [single!.rowIndex];
     const columnIndex = single && 'columnIndex' in single && typeof single.columnIndex === 'number' ? single.columnIndex : undefined;
-    const columnIndices = batch?.columnIndices ?? (columnIndex === undefined ? undefined : [columnIndex]);
+    const deleting = !!batch && 'operation' in batch;
+    const columnIndices = batch && 'columnIndices' in batch ? batch.columnIndices : (columnIndex === undefined ? undefined : [columnIndex]);
     const { source, current, session } = this.queryRelationScope({ ...request, rowIndex: rowIndices[0] });
     // 原行和原字段只按原执行的协议序号定位，排序及显示别名不能扩大写入范围。
     const columns = columnIndices?.map(index => source.columns[index]);
@@ -1927,12 +1939,12 @@ export class Engine {
       const rows: DataRow[] = [], snapshots: MysqlQueryEditSnapshot['rows'] = new Map();
       let edit: MysqlQueryEditSnapshot | undefined;
       if (kind !== 'relation') {
-        const writable = await this.queryEditWritable(context, info);
+        const writable = deleting ? [] : await this.queryEditWritable(context, info);
         if (columns?.some(name => !writable.includes(name) || kind === 'batch' && (info.primaryKey.includes(name) ||
             info.columns.some(field => field.name === name && /\bauto_increment\b/i.test(field.extra)))))
           throw Error('当前查询字段不可编辑，请核对字段是否为定位键、生成列以及账号的列级更新权限');
-        if (!writable.length) throw Error('当前账号没有查询原表的字段更新权限');
-        edit = { token: randomUUID(), source, expires: 0, claimed: false, batch: kind === 'batch',
+        if (!deleting && !writable.length) throw Error('当前账号没有查询原表的字段更新权限');
+        edit = { token: randomUUID(), source, expires: 0, claimed: false, batch: kind === 'batch', operation: deleting ? 'delete' : 'update',
           schemaDigest: mysqlQueryEditSchemaDigest(managed, info), columns: info.columns, writable: columns ?? writable, rows: snapshots };
       }
       let bytes = 0;
@@ -1949,6 +1961,8 @@ export class Engine {
         rows.push(row);
       }
       await read('ROLLBACK');
+      // 两种服务器都会在只读事务中拒绝解释 DELETE，先结束完整原值读取，再做权限探测。
+      if (deleting) await this.requireQueryDeletePrivilege(context, info);
       current();
       return { info, rows, edit };
     }, undefined, '核对查询原记录', true);
@@ -1969,17 +1983,17 @@ export class Engine {
     const invalid = () => Error('查询原记录编辑引用或字段范围已变化，请重新打开编辑');
     if (!edit || edit.claimed || edit.token !== ref.token || edit.expires <= Date.now() || input.searchRecordRef ||
         input.database !== edit.source.database || input.table !== edit.source.table || !changes.length || changes.length > edit.rows.size ||
+        edit.operation !== (ref.operation ?? 'update') || edit.operation === 'delete' && changes.length !== edit.rows.size ||
         edit.batch && Buffer.byteLength(JSON.stringify(changes)) > 2 * mysqlQueryBatchLimits.bytes)
       throw invalid();
     const seen = new Set<string>();
-    const updates: Extract<RowChange, { kind: 'update' }>[] = [];
     const searchKeys = changes.map(change => {
-      if (change.kind !== 'update' || !Object.keys(change.values).length || Object.keys(change.values).some(name => !edit.writable.includes(name)))
+      if (change.kind === 'insert' || change.kind !== edit.operation || change.kind === 'update' &&
+          (!Object.keys(change.values).length || Object.keys(change.values).some(name => !edit.writable.includes(name))))
         throw invalid();
       const digest = mysqlQueryEditRowDigest(edit, change.before), original = edit.rows.get(digest);
       if (!original || seen.has(digest)) throw invalid();
       seen.add(digest);
-      updates.push(change);
       return original.searchKey;
     });
     const rowIndex = edit.rows.values().next().value!.rowIndex;
@@ -1989,7 +2003,7 @@ export class Engine {
       if (this.queryEdits.get(scope.session.managed) !== edit || edit.expires <= Date.now()) throw Error('查询原记录编辑已失效');
     };
     current();
-    return { ...scope, edit, current, changes: updates, options: edit.batch ? { searchKeys } : { searchKey: searchKeys[0] } };
+    return { ...scope, edit, current, changes, options: edit.batch ? { searchKeys } : { searchKey: searchKeys[0] } };
   }
 
   private async verifyQueryEdit(context: StructureTaskContext, scope: ReturnType<Engine['queryEditScope']>, lock = false) {
@@ -1997,13 +2011,17 @@ export class Engine {
     const { edit, changes } = scope;
     const info = await this.readQueryTableInfo(context, scope.source);
     if (mysqlQueryEditSchemaDigest(context.managed, info) !== edit.schemaDigest) throw Error('查询原记录或表结构已变化，请重新打开编辑');
+    if (edit.operation === 'delete' && lock) await this.requireQueryDeletePrivilege(context, info);
     for (const [digest, { rowIndex }] of edit.rows) {
       scope.current();
       const { row } = await this.readQueryOriginal(context, scope.source, info, rowIndex, lock);
       if (mysqlQueryEditRowDigest(info, row) !== digest) throw Error('查询原记录或表结构已变化，请重新打开编辑');
     }
-    const writable = await this.queryEditWritable(context, info);
-    if (changes.some(change => Object.keys(change.values).some(name => !writable.includes(name)))) throw Error('查询原记录的字段更新权限已变化');
+    if (edit.operation === 'update') {
+      const writable = await this.queryEditWritable(context, info);
+      if (changes.some(change => change.kind === 'update' && Object.keys(change.values).some(name => !writable.includes(name))))
+        throw Error('查询原记录的字段更新权限已变化');
+    }
     scope.current();
     return info;
   }
@@ -2015,8 +2033,10 @@ export class Engine {
       await execute(managed, 'SET SESSION lock_wait_timeout = 5');
       await execute(managed, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
       await execute(managed, 'START TRANSACTION READ ONLY');
-      const info = await this.verifyQueryEdit({ managed, checkCancelled: () => {}, report: () => {}, commandStarted: () => () => {} }, scope);
+      const context = { managed, checkCancelled: () => {}, report: () => {}, commandStarted: () => () => {} };
+      const info = await this.verifyQueryEdit(context, scope);
       await execute(managed, 'ROLLBACK');
+      if (scope.edit.operation === 'delete') await this.requireQueryDeletePrivilege(context, info);
       scope.current();
       return buildChanges(info, scope.changes, { binaryText: 'cast', ...scope.options });
     }, undefined, true);

@@ -89,4 +89,21 @@ describe('MySQL 查询关联原行', () => {
     expect(buildChanges(info, changes, { searchKeys }).statements.map(item => item.params)).toEqual(ids.map(id => ['新值', id, '原值']));
     expect(() => buildChanges(info, changes, { searchKeys: searchKeys.slice(1) })).toThrow('批量写入定位不完整');
   });
+
+  it('删除请求按勾选行签发，预览与提交都拒绝混合操作和跨模式令牌', () => {
+    const scope = { connectionId: 'conn', sessionId: 'session', executionId: 'run', taskId: 'read', rowIndices: [3, 0] };
+    const deletion = { ...scope, operation: 'delete' };
+    expect(validateCommand('mysql.queryBatchEdit', deletion)).toEqual(deletion);
+    for (const extra of [{ columnIndices: [1] }, { rowIndices: [] }, { rowIndices: [0, 0] }, { operation: 'update' }])
+      expect(() => validateCommand('mysql.queryBatchEdit', { ...deletion, ...extra })).toThrow();
+    const change = { kind: 'delete', before: { id: '9007199254740993' } };
+    const queryRecord = { sessionId: scope.sessionId, token: randomUUID(), operation: 'delete' };
+    for (const command of ['table.preview', 'table.apply'] as const) {
+      const request = { connectionId: scope.connectionId, database: 'db', table: 't', queryRecord, changes: [change],
+        ...(command === 'table.apply' ? { taskId: 'apply', previewId: randomUUID() } : {}) };
+      expect(validateCommand(command, request)).toEqual(request);
+      expect(() => validateCommand(command, { ...request, queryRecord: { sessionId: scope.sessionId, token: queryRecord.token } })).toThrow();
+      expect(() => validateCommand(command, { ...request, changes: [change, { ...change, kind: 'update', values: { id: '1' } }] })).toThrow();
+    }
+  });
 });

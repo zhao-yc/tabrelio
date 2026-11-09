@@ -12,7 +12,7 @@ import { batchFillColumns, prepareBatchFill, prepareBatchFillAcross, prepareBatc
 import { recordBatchCellBytes } from './recordDuplicateBatch';
 import type { RecordContext } from './recordViews';
 
-export type MysqlQueryBatchInput = { kind: 'paste'; matrix: ClipboardCell[][] } | { kind: 'fill'; input: GridRangeFillInput };
+export type MysqlQueryBatchInput = { kind: 'paste'; matrix: ClipboardCell[][] } | { kind: 'fill'; input: GridRangeFillInput } | { kind: 'delete' };
 
 /** 原生粘贴的内容必须在事件内同步捕获；等尺寸选区也可重复一个值。 */
 export function mysqlQueryPasteMatrix(data: Pick<DataTransfer, 'types' | 'getData'>, shape?: GridPasteShape): ClipboardCell[][] {
@@ -26,6 +26,7 @@ export function mysqlQueryPasteMatrix(data: Pick<DataTransfer, 'types' | 'getDat
 
 /** 使用数据库返回的完整值作为草稿基线，方向填充也从同一已核对快照取值。 */
 export function mysqlQueryBatchChanges(info: TableInfo, originals: DataRow[], columns: string[], operation: MysqlQueryBatchInput) {
+  if (operation.kind === 'delete') return originals.map(before => ({ kind: 'delete' as const, before }));
   const context: RecordContext = { target: { connectionId: '', database: info.database, table: info.name }, generation: 0,
     connectionVersion: 0, info, loaded: true, stale: false, busy: false };
   const rows = originals.map((data, index): DraftRow => ({ id: String(index), data, original: data, inserted: false, deleted: false }));

@@ -334,7 +334,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }>();
   useEffect(() => () => { mysqlRelation?.job.release(); }, [mysqlRelation]);
   const [mysqlBatch, setMysqlBatch] = useState<{ request: MysqlQueryBatchEditInput; operation: MysqlQueryBatchInput;
-    result: QueryResult; job: WorkspaceBusyLease; firstRow: number; anchor: { row: DataRow; key: string } }>();
+    result: QueryResult; job: WorkspaceBusyLease; displayRows: number[]; anchor?: { row: DataRow; key: string } }>();
   useEffect(() => () => { mysqlBatch?.job.release(); }, [mysqlBatch]);
   const retiredRecordTask = useRef<string | undefined>(undefined);
   const [restoreEditedCell, setRestoreEditedCell] = useState<{ row: DataRow; key: string }>();
@@ -1492,21 +1492,35 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setMysqlRelation(current => current === view ? undefined : current);
   }
 
-  /** 显示顺序只决定矩形坐标，提交用原执行的行列序号和独立读回的完整记录。 */
-  function openMysqlQueryBatch(range: GridRangeTarget<DataRow>, operation: MysqlQueryBatchInput): void {
-    if (!mysqlRelationAvailable || !result || !sourceResult || !sessionRef.current || !queryOwnerCurrent() ||
-        !resultSelectionAllowed(selectionBinding) || range.rows.some((row, index) => result.rows[range.startRow + index] !== row))
+  /** 显示顺序只决定预览坐标，提交用原执行的行列序号和独立读回的完整记录。 */
+  function startMysqlQueryBatch(displayIndices: number[], operation: MysqlQueryBatchInput, keys: readonly string[] = []): void {
+    if (!mysqlRelationAvailable || !result || !sourceResult || !sessionRef.current || !queryOwnerCurrent() || !resultSelectionAllowed(selectionBinding))
       throw Error(mysqlBatchText.stale);
-    if (!range.rows.length || !range.keys.length || range.rows.length > mysqlQueryBatchLimits.rows ||
-        range.rows.length * range.keys.length > mysqlQueryBatchLimits.cells) throw Error(gridRangeFillZh.limit);
-    const rowIndices = range.rows.map(row => sourceResult.rows.indexOf(row));
-    const columnIndices = range.keys.map(key => sourceResult.columns.findIndex(column => column.key === key));
+    if (!displayIndices.length || displayIndices.length > mysqlQueryBatchLimits.rows ||
+        operation.kind !== 'delete' && (!keys.length || displayIndices.length * keys.length > mysqlQueryBatchLimits.cells))
+      throw Error(gridRangeFillZh.limit);
+    const rowIndices = displayIndices.map(index => sourceResult.rows.indexOf(result.rows[index]));
+    const columnIndices = keys.map(key => sourceResult.columns.findIndex(column => column.key === key));
     if (rowIndices.some(index => index < 0) || columnIndices.some(index => index < 0)) throw Error(mysqlBatchText.stale);
     const job = acquireWorkspaceBusy(tab.id);
-    setMysqlBatch({ request: { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current,
-      taskId: uid(), rowIndices, columnIndices }, operation, job, result: sourceResult, firstRow: range.startRow + 1,
-      anchor: { row: range.rows[0], key: range.keys[0] } });
+    const owner = { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current, taskId: uid(), rowIndices };
+    const key = keys[0] ?? visibleColumns[0]?.key;
+    setMysqlBatch({ request: operation.kind === 'delete' ? { ...owner, operation: 'delete' } : { ...owner, columnIndices },
+      operation, job, result: sourceResult, displayRows: displayIndices.map(index => index + 1),
+      anchor: key ? { row: result.rows[displayIndices[0]], key } : undefined });
     setError('');
+  }
+
+  function openMysqlQueryBatch(range: GridRangeTarget<DataRow>, operation: Exclude<MysqlQueryBatchInput, { kind: 'delete' }>): void {
+    if (!result || range.rows.some((row, index) => result.rows[range.startRow + index] !== row)) throw Error(mysqlBatchText.stale);
+    startMysqlQueryBatch(range.rows.map((_, index) => range.startRow + index), operation, range.keys);
+  }
+
+  function openMysqlQueryDelete(): void {
+    const indices = resultSelection.checkedIndices(selectionBinding);
+    if (!indices.length || indices.length > mysqlQueryBatchLimits.rows) return;
+    try { startMysqlQueryBatch(indices, { kind: 'delete' }); }
+    catch (reason) { setError(errorMessage(reason)); }
   }
 
   function closeMysqlBatch(view: NonNullable<typeof mysqlBatch>, committed: boolean): void {
@@ -2528,7 +2542,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   title={rowDetailsText.choose} onClick={() => openMysqlRelation(direction)}>{mysqlRelationText[direction]}</button>)}
 {mysqlRelationAvailable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
-  title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlEditText.edit}</button>}</ActionMenuSection>
+  title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlEditText.edit}</button>}
+{mysqlRelationAvailable && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
+  title={mysqlBatchText.deleteLimit} onClick={openMysqlQueryDelete}>{mysqlBatchText.deleteChecked}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
 {sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={memoryText.hint} onClick={rememberResultOrganization}>{memoryText.save}</button></>:null}{resultMemory&&<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)} title={queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)?memoryText.scope:memoryText.mismatch} onClick={applyRememberedOrganization}>{memoryText.apply}</button><button disabled={!rememberedOrganizationCanDiscard()} onClick={discardRememberedOrganization}>{memoryText.clear}</button></>}<div className="action-menu-field" role="group" aria-label={zh.app.text020}><label className="inline-field">{zh.query.text020}<input aria-label={zh.query.text021} type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => useWorkspace.getState().updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/>{zh.query.text022}</label></div></ActionMenuSection>
@@ -2601,7 +2617,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           onDone={committed => closeMysqlRecord(mysqlRelation, committed)} /> :
         <MysqlQueryRelationDialog request={mysqlRelation.request} direction={mysqlRelation.direction}
           current={() => mysqlRecordCurrent(mysqlRelation)} onClose={() => closeMysqlRecord(mysqlRelation)} />)}
-      {mysqlBatch && <MysqlQueryBatchEditDialog request={mysqlBatch.request} operation={mysqlBatch.operation} firstRow={mysqlBatch.firstRow}
+      {mysqlBatch && <MysqlQueryBatchEditDialog request={mysqlBatch.request} operation={mysqlBatch.operation} displayRows={mysqlBatch.displayRows}
         isCurrent={() => mysqlRecordCurrent(mysqlBatch)} onDone={committed => closeMysqlBatch(mysqlBatch, committed)}/>}
       {recordRelation && <SqliteQueryRelationDialog request={recordRelation.request}
         current={() => queryRelationCurrent(recordRelation)} onClose={() => closeQueryRelation(recordRelation)}
