@@ -15,6 +15,23 @@ function input(data: ResultExportData = resultExportData(result())): ResultExpor
   return { fileToken: 'export-token', format: 'json', encoding: 'utf8', taskId: 'result-export', result: data };
 }
 describe('已返回结果导出的可信边界', () => {
+  it('勾选范围保留显示索引，清空后勾回同一行也不能复活旧凭据', () => {
+    const source = result(), selection = new ResultExportSelection(), binding = selection.bind(source, [])!;
+    const event = { scope: binding, rows: source.rows, columns: source.columns, indices: new Set([0]) };
+    expect(selection.select(binding, event)).toBe(true);
+    const checked = selection.checkedRows(binding)!;
+    expect(checked.indices).toEqual([0]);
+    expect(Object.isFrozen(checked.indices)).toBe(true);
+    expect(checked.isCurrent()).toBe(true);
+    expect(selection.select(binding, { ...event, indices: new Set() })).toBe(true);
+    expect(selection.checkedRows(binding)).toBeUndefined();
+    expect(selection.select(binding, event)).toBe(true);
+    expect(checked.isCurrent()).toBe(false);
+    expect(selection.checkedRows(binding)?.isCurrent()).toBe(true);
+    selection.invalidate();
+    expect(selection.checkedRows(binding)).toBeUndefined();
+  });
+
   it('结果包只接收有序已返回数据，拒绝 SQL、路径和累计超限', () => {
     const first = { sourceOrdinal: 1, label: '原结果', result: resultExportData(result()) };
     const options = { fileToken: 'zip', taskId: 'archive', encoding: 'utf8', entries: [first] };

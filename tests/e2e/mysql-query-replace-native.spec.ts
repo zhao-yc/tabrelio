@@ -105,6 +105,18 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询文�
     await expect(panel.getByRole('button', { name: find.all, exact: true })).toBeDisabled();
     await column.selectOption('');
     await panel.getByLabel(tableFindFilterZh.edge, { exact: true }).selectOption('end');
+    const selectedOnly = panel.getByRole('checkbox', { name: find.checkedOnly, exact: true });
+    const checkedRow = query.getByRole('gridcell', { name: '9007199254740993', exact: true }).locator('..').getByRole('checkbox');
+    await checkedRow.check();
+    await selectedOnly.check();
+    await panel.getByRole('button', { name: find.all, exact: true }).click();
+    await expect(review).toContainText(find.reviewCount(1, 1));
+    await expect(review).toContainText('乙新');
+    await expect(review).not.toContainText('甲新');
+    await checkedRow.uncheck();
+    await expect(review).toBeHidden();
+    await expect(panel.getByRole('status')).toHaveText(find.checkedEmpty);
+    await selectedOnly.uncheck();
     await panel.getByRole('button', { name: find.all, exact: true }).click();
     await expect(review).toContainText(find.reviewCount(3, 2));
     await expect(review).toContainText('旧甲-甲新');

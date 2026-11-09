@@ -16,6 +16,7 @@ export function resultExportData(result: ResultExportData): ResultExportData {
 }
 
 export interface ResultGridSelection { scope: object; rows: QueryResult['rows']; columns: QueryResult['columns']; indices: ReadonlySet<number> }
+export interface ResultCheckedRows { readonly indices: readonly number[]; isCurrent(): boolean }
 export interface ResultSelectionBinding {
   result: QueryResult; rows: QueryResult['rows']; columns: QueryResult['columns']; rowRefs: QueryResult['rows'];
   visibleColumns: QueryResult['columns']; visibleRefs: QueryResult['columns'];
@@ -36,7 +37,7 @@ function selectionCell(row: QueryResult['rows'][number], key: string): CellValue
 /** 勾选只属于一个准确结果和显示代次；失效后旧网格回调不能重新领取新结果。 */
 export class ResultExportSelection {
   private binding?: ResultSelectionBinding;
-  private selection?: { binding: ResultSelectionBinding; indices: number[]; data: ResultExportData; sourceValues: CellValue[][]; sqliteCodes?: string[] };
+  private selection?: { binding: ResultSelectionBinding; indices: readonly number[]; checked: ResultCheckedRows; data: ResultExportData; sourceValues: CellValue[][]; sqliteCodes?: string[] };
   /** 新执行或显式切换在setState之前撤销，不能等待effect清空。 */
   invalidate(): void { this.binding = undefined; this.selection = undefined; }
   /** 渲染时同步比对实际对象、数组与元数据；A→B→A也获得新的绑定。 */
@@ -87,7 +88,9 @@ export class ResultExportSelection {
     const data = projectQueryResultRows(binding.result,binding.visibleColumns,indices);
     validateResultExportData(data);
     const sqliteRows = binding.result.sqliteStorage?.rows;
-    this.selection = { binding, indices, data: structuredClone(data), sourceValues,
+    const checked: ResultCheckedRows = Object.freeze({ indices: Object.freeze(indices),
+      isCurrent: () => this.selection?.checked === checked && this.current(binding) });
+    this.selection = { binding, indices, checked, data: structuredClone(data), sourceValues,
       sqliteCodes: sqliteRows && indices.map(index => sqliteRows[index]) };
     return true;
   }
@@ -101,6 +104,10 @@ export class ResultExportSelection {
   /** 批量原行操作使用已接纳的显示索引，不把导出投影当作原行。 */
   checkedIndices(binding: ResultSelectionBinding | undefined): number[] {
     return this.current(binding) && this.selection?.binding === binding ? [...this.selection.indices] : [];
+  }
+  /** 持有本次勾选的只读凭据。取消后勾回同一行也会生成新凭据。 */
+  checkedRows(binding: ResultSelectionBinding | undefined): ResultCheckedRows | undefined {
+    if (this.current(binding) && this.selection?.binding === binding) return this.selection.checked;
   }
   /** 父级只证明本代已接纳的非空有序索引；不修改选择，也不返回私有数组引用。 */
   matchesIndices(binding: ResultSelectionBinding | undefined, indices: readonly number[]): boolean {

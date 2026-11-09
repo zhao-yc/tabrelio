@@ -15,6 +15,7 @@ import { tableFindFilterRule } from '../tableFindFilter';
 import { tableFindFilterZh as filterText } from '../locales/tableFindFilter.zh-CN';
 import type { TableFindEdge } from '../tableFindPattern';
 import { TableFindEdgeSelect } from './TableFindEdgeSelect';
+import type { ResultCheckedRows } from '../resultExport';
 
 export interface PostgresFindRequest { replace: boolean; }
 type Mode = 'text' | 'empty' | 'null' | 'field';
@@ -22,6 +23,7 @@ type Review = Pick<PostgresFindPlan, 'patches'>;
 interface Props<Column extends ResultColumn, Plan extends Review> {
   request?: PostgresFindRequest; scope: object; pageKey?: string; enabled: boolean; writable: boolean; rows: DraftRow[];
   replacementRows?: DraftRow[];
+  replaceSelection?: ResultCheckedRows | null;
   host?: { className: string; inert?: boolean };
   columns: Column[]; isCurrent(): boolean; anchor(): GridFindTarget | undefined;
   replaceWritable(column: Column): boolean;
@@ -36,21 +38,26 @@ interface Props<Column extends ResultColumn, Plan extends Review> {
 
 /** 数据使用现有有界工作线程，字段名在本地目录中匹配。每次更换来源都撤销旧替换计划。 */
 export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends Review>(props: Props<Column, Plan>) {
-  const { request, scope, pageKey, enabled, writable, rows, replacementRows, columns, isCurrent, anchor, replaceWritable, host,
+  const { request, scope, pageKey, enabled, writable, rows, replacementRows, replaceSelection, columns, isCurrent, anchor, replaceWritable, host,
     shortcuts = true, scopeDescription = text.scope, replaceScopeDescription = text.replaceScope, onOpen, onClose, onPreview, onStage, onMatchRows, onStageFilter, renderGrid } = props;
   const [mode, setMode] = useState<Mode>('text'), [column, setColumn] = useState('');
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
   const [regex, setRegex] = useState(false), [capture, setCapture] = useState(false);
   const [sensitive, setSensitive] = useState(false), [whole, setWhole] = useState(false), [highlight, setHighlight] = useState(true);
   const [edge, setEdge] = useState<TableFindEdge>();
+  const [checkedRequest, setCheckedRequest] = useState<PostgresFindRequest>();
+  const checkedOnly = !!request && checkedRequest === request;
+  const checked = checkedOnly ? replaceSelection : undefined;
+  const searchRows = useMemo(() => checkedOnly ? checked?.indices.map(index => rows[index]) ?? [] : rows, [checkedOnly, checked, rows]);
+  const writableRows = useMemo(() => replacementRows && (checkedOnly ? checked?.indices.map(index => replacementRows[index]) ?? [] : replacementRows), [checkedOnly, checked, replacementRows]);
   const [composing, setComposing] = useState(false);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null);
   const modeInput = useRef<HTMLSelectElement>(null);
   const stageButton = useRef<HTMLButtonElement>(null);
   const client = useRef<PageFindWorkerClient>(undefined);
   const resume = useRef<{ request: PostgresFindRequest; pageKey?: string; query: string; hit: PageOccurrence; end: number }>(undefined);
-  const snapshot = useMemo(() => ({ request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, edge, regex, composing }),
-    [request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, edge, regex, composing]);
+  const snapshot = useMemo(() => ({ request, scope, enabled, searchRows, writableRows, checkedOnly, checked, columns, mode, column, query, sensitive, whole, edge, regex, composing }),
+    [request, scope, enabled, searchRows, writableRows, checkedOnly, checked, columns, mode, column, query, sensitive, whole, edge, regex, composing]);
   const latest = useRef(snapshot); latest.current = snapshot;
   const runningPreview = useRef<{ snapshot: typeof snapshot }>(undefined);
   const [preparing, setPreparing] = useState<typeof snapshot>();
@@ -63,7 +70,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const review = preview?.snapshot === snapshot && preview.replacement === replacement ? preview : undefined;
   const hit = found?.hits[chosen];
   const needsQuery = mode === 'text' || mode === 'field';
-  const canSearch = !needsQuery || !!query;
+  const emptyChecked = checkedOnly && !searchRows.length && mode !== 'field';
+  const canSearch = (!needsQuery || !!query) && !emptyChecked;
   const kind = mode === 'field' ? 'text' : mode;
   const replaceVisible = request?.replace && mode !== 'field' && findKindAllowsReplacement(kind);
   const canReplace = writable && enabled && replaceVisible;
@@ -72,6 +80,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const options: PageFindOptions = { kind, query, caseSensitive: sensitive, wholeCell: whole, edge: mode === 'text' ? edge : undefined, regex: mode === 'text' && regex, column: column || undefined };
   const findFilter = onStageFilter && mode !== 'field'
     ? tableFindFilterRule(options, columns.find(item => item.key === column), 'postgresql') : undefined;
+  // 勾选索引仍使用原显示位置，变化会撤销在途扫描和预览；空范围不会退回全结果。
+  const rowsCurrent = () => !checkedOnly || !!checked?.isCurrent();
 
   useEffect(() => {
     if (!request || !enabled) return;
@@ -86,7 +96,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   useEffect(() => {
     if (!request || !enabled || !canSearch || composing) return;
     let cancelled = false;
-    const accepts = () => !cancelled && latest.current === snapshot && isCurrent();
+    const accepts = () => !cancelled && latest.current === snapshot && isCurrent() && (mode === 'field' || rowsCurrent());
     const selected = anchor();
     const next = resume.current;
     resume.current = undefined;
@@ -115,7 +125,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         return;
       }
       client.current ??= new PageFindWorkerClient(() => new Worker(new URL('../pageFind.worker.ts', import.meta.url), { type: 'module' }));
-      const answer = await client.current.run({ operation: 'find', rows, keys, options: { ...options, kind: mode }, generation: 0 });
+      const answer = await client.current.run({ operation: 'find', rows: searchRows, keys, options: { ...options, kind: mode }, generation: 0 });
       if (!accepts()) return;
       if (answer.status === 'ready' && answer.operation === 'find') publish(pageOccurrences(answer.matches));
       else if (answer.status === 'blocked') setResult({ snapshot, hits: [], error: answer.message });
@@ -127,7 +137,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const marks = useMemo(() => request && highlight && found ? new Set(found.hits.map(match => match.rowId + ':' + match.key)) : undefined,
     [request, highlight, found]);
   const replaceKeys = useMemo(() => new Set(columns.filter(replaceWritable).map(column => column.key)), [columns, replaceWritable]);
-  const replacementById = useMemo(() => replacementRows && new Map(replacementRows.map(row => [row.id, row.data])), [replacementRows]);
+  const replacementById = useMemo(() => writableRows && new Map(writableRows.map(row => [row.id, row.data])), [writableRows]);
   const canReplaceHit = (target: PageOccurrence) => {
     if (!target.range || !replaceKeys.has(target.key)) return false;
     if (!replacementById) return true;
@@ -153,7 +163,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   }
 
   async function makePreview(only?: PageOccurrence) {
-    if (!canReplace || !found || !client.current || !isCurrent() || composing || locked || latest.current !== snapshot ||
+    if (!canReplace || !found || !client.current || !isCurrent() || !rowsCurrent() || composing || locked || latest.current !== snapshot ||
         runningPreview.current?.snapshot === snapshot) return;
     if (/[\u0000\uD800-\uDFFF]/u.test(replacement)) { setError(text.invalidValue); return; }
     const job = { snapshot };
@@ -161,9 +171,9 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
     setPreparing(snapshot);
     setError('');
     try {
-      const result = await client.current.run({ operation: 'previewText', rows: replacementRows ?? rows, keys: [...replaceKeys],
+      const result = await client.current.run({ operation: 'previewText', rows: writableRows ?? searchRows, keys: [...replaceKeys],
         options: { ...options, captureReplacement: mode === 'text' && regex && capture }, replacement, generation: 0, only });
-      if (runningPreview.current !== job || latest.current !== snapshot || !isCurrent()) return;
+      if (runningPreview.current !== job || latest.current !== snapshot || !isCurrent() || !rowsCurrent()) return;
       if (result.status === 'blocked') setError(result.message);
       else if (result.operation === 'previewText') setPreview({ snapshot, replacement, only, plan: onPreview(result.patches) });
     } catch (reason) {
@@ -233,6 +243,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
       {replaceVisible && <div className="query-result-find-toolbar">
         <input ref={replacementInput} data-query-result-replace-input aria-label={text.replacement} value={replacement} maxLength={pageFindLimits.replacement} disabled={!canReplace || locked}
           onChange={event => { setReplacement(event.target.value); setError(''); }}/>
+        {replaceSelection !== undefined && <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!canReplace || locked}
+          onChange={event => { setCheckedRequest(event.target.checked ? request : undefined); setError(''); }}/>{text.checkedOnly}</label>}
         {mode === 'text' && regex && <label className="check"><input type="checkbox" checked={capture} disabled={!canReplace || locked}
           onChange={event => { setCapture(event.target.checked); setError(''); }}/>{text.captures}</label>}
         <button type="button" disabled={!oneWritable || locked} onClick={() => void makePreview(hit)}>{text.one}</button>
@@ -241,6 +253,8 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         <span className="muted small">{replaceScopeDescription}</span>
       </div>}
       <div className="query-result-find-status">
+        {emptyChecked && <span role="status">{text.checkedEmpty}</span>}
+        {checkedOnly && !emptyChecked && mode !== 'field' && <span>{text.checkedScope(searchRows.length)}</span>}
         {enabled && canSearch && !composing && !found?.error && <span role="status">{pending ? text.preparing : !found ? text.searching : found.hits.length ? text.ready(found.hits.length, chosen) : text.noMatch}</span>}
         {hit && <span>{text.location(Number(hit.rowId), columns.find(column => column.key === hit.key)?.name ?? hit.key)}</span>}
         <span className="muted">{scopeDescription}</span>
@@ -255,7 +269,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         {review.plan.patches.length > 12 && <p>{text.more(review.plan.patches.length - 12)}</p>}
         <button type="button" onClick={() => setPreview(undefined)}>{text.cancel}</button>
         <button ref={stageButton} type="button" className="primary" disabled={!canReplace} onClick={() => {
-          if (latest.current !== snapshot || !isCurrent()) return;
+          if (latest.current !== snapshot || !isCurrent() || !rowsCurrent()) return;
           try {
             onStage(scope, review.plan);
             if (review.only?.range) {

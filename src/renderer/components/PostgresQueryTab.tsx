@@ -2339,6 +2339,7 @@ export function PostgresQueryTab({
                   <div className="query-result-grid" inert={!!recordEdit?.cell}>
                     <PostgresTableFindPanel request={activeReplace?.request} scope={binding ?? scope}
                       enabled={!!activeReplace} writable={canReplaceResult} rows={replaceRows} columns={visibleColumns ?? result.columns}
+                      replaceSelection={activeReplace ? resultSelection.checkedRows(activeReplace.binding) ?? null : undefined}
                       replaceWritable={replaceWritable} scopeDescription={originsText.replaceScope} shortcuts={false}
                       isCurrent={replaceCurrent} anchor={() => undefined} onOpen={openResultReplace}
                       onClose={() => setReplaceView(undefined)} onPreview={planQueryReplace} onStage={stageQueryReplace}
