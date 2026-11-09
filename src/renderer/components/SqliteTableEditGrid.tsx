@@ -40,7 +40,7 @@ import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
+interface Props { showFieldType?: boolean; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor, range?: GridRangeTarget<SqliteDraftRow>): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
 export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selected, initialCheckedRows, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFillRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight }: Props) {
   const height = readGridRowHeight(rowHeight);
@@ -301,7 +301,13 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     if (target?.tagName === 'INPUT' || target?.tagName === 'BUTTON' || !anchor) { setError(activeCell.current.reason || rangeText.anchorRequired); return; }
     if (naturalOrder ? anchor.columns !== undefined : anchor.columns !== order) { setError(rangeText.stale); return; }
     if (!rows.includes(anchor.row) || anchor.row.deleted || !page.columns[anchor.column] || page.columns[anchor.column].generated || page.edit.columns[anchor.column]?.generated) { setError(rangeText.stale); return; }
-    try { onPaste(event.clipboardData, anchor); setError(''); } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeText.invalid); }
+    try {
+      const range = cellRange.pasteTarget(anchor.row, 'c' + anchor.column);
+      if (range) onPaste(event.clipboardData, anchor, range);
+      else onPaste(event.clipboardData, anchor);
+      setError('');
+    }
+    catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeText.invalid); }
   }
   /** 前两列是辅助列，测宽只交给实际显示字段对应的布局键。 */
   function fitHeaderColumn(event: MouseEvent): void {

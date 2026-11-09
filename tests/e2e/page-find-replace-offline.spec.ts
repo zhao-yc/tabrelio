@@ -7,7 +7,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
-import { gridCellCenter, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridCellCenter, pasteGridRangeClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
 const errors: string[] = [];
@@ -110,6 +111,26 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   await page.mouse.up();
   await expect(to).toBeFocused();
   expect(await readGridRangeClipboard(page)).toEqual(payload);
+  expect(await calls()).toEqual([]);
+});
+
+test('MySQL 粘贴从矩形左上角写入等尺寸内容，拒绝尺寸不符且可一步撤销', async () => {
+  const start = await cell('note', 2), end = await cell('other', 3);
+  await start.click();
+  await end.click({ modifiers: ['Shift'] });
+  await expect(end).toBeFocused();
+  await pasteGridRangeClipboard(page, '甲\t乙');
+  await expect(page.getByRole('alert')).toContainText(selectionPaste.shape(2, 2));
+  await expect(start).toHaveText('😀old前old后old');
+  await pasteGridRangeClipboard(page, '甲\t乙\n丙\t丁');
+  await expect(start).toHaveText('甲');
+  await expect(await cell('other', 2)).toHaveText('乙');
+  await expect(await cell('note', 3)).toHaveText('丙');
+  await expect(end).toHaveText('丁');
+  await end.click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await expect(start).toHaveText('😀old前old后old');
+  await expect(end).toHaveText('无匹配');
   expect(await calls()).toEqual([]);
 });
 

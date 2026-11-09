@@ -35,6 +35,7 @@ import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTabl
 import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
 import type { GridRangeTarget } from '../useGridCellRange';
+import { gridRangePasteZh as rangePasteText } from '../locales/gridRangePaste.zh-CN';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import { postgresRecordTransferZh as transferText } from '../locales/postgresRecordTransfer.zh-CN';
@@ -1064,15 +1065,21 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   }
 
   /** 只消费当前页剪贴板计划，读取、预览和提交由既有按钮独立触发。 */
-  function stageGridPaste(start: string, source: { plain: string; typed?: string }, cell?: QueryResultCopyCell, owner?: object) {
+  function stageGridPaste(start: string, source: { plain: string; typed?: string }, cell?: QueryResultCopyCell, owner?: object,
+    range?: GridRangeTarget<DataRow>) {
     if (!page?.pageToken || issued.current !== page.pageToken || !layoutScope.current.current() || lease.current ||
       inlineOwner.current || requiresRefresh || pasteOwner.current !== owner) throw Error(pasteText.expired);
     if (cell) {
       if (!canEditGrid || !cell.column || page.rows[cell.index] !== cell.row || !gridLayout.columns.some(column => column === cell.column) ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) throw Error(pasteText.expired);
     } else if (!owner || owner !== cellScope || !page.capabilities.insert) throw Error(pasteText.expired);
-    const changes = postgresGridPasteChanges(page, gridLayout.columns, start, source, cell?.index,
-      key => draftRef.current.find(entry => entry.rowKey === key)?.change);
+    if (range) {
+      const first = gridLayout.columns.findIndex(column => column.key === range.keys[0]);
+      if (!cell || first < 0 || range.rows.some((row, index) => page.rows[range.startRow + index] !== row) ||
+          range.keys.some((key, index) => gridLayout.columns[first + index]?.key !== key)) throw Error(rangePasteText.stale);
+    }
+    const changes = postgresGridPasteChanges(page, gridLayout.columns, range?.keys[0] ?? start, source, range?.startRow ?? cell?.index,
+      key => draftRef.current.find(entry => entry.rowKey === key)?.change, range ? { rows: range.rows.length, columns: range.keys.length } : undefined);
     if (!stageChanges(changes)) throw Error(pasteText.expired);
     if (owner) closePasteAppend(owner);
     setError('');
@@ -1727,9 +1734,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         onFillRange={canEditGrid ? fillGridRange : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
-        onCellPaste={(cell, data) => {
+        onCellPaste={(cell, data, range) => {
           if (!canEditGrid || !cell.column) return;
-          try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell); }
+          try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell, undefined, range); }
           catch (reason) { setError(errorMessage(reason)); }
         }}
         frozenKeys={gridLayout.frozenKeys} freezeColumns={headerFreeze} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onColumnWidthsChange={resizeLayout}

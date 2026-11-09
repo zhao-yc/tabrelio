@@ -3,6 +3,7 @@ import type { CellKeyDownArgs, CellKeyboardEvent, CellMouseArgs, CellMouseEvent,
 import { appModalSelector } from './modalSelectors';
 import { maxClipboardCells } from './gridClipboard';
 import { zh } from './locales/zh-CN';
+import { gridRangePasteZh as pasteText } from './locales/gridRangePaste.zh-CN';
 import { startGridCellRangeDrag, type GridRangePoint as Point } from './gridCellRangeDrag';
 
 export interface GridCellRectangle { top: number; bottom: number; left: number; right: number; }
@@ -143,7 +144,17 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
       keys: keys.slice(selected.left, selected.right + 1) };
   }
 
-  return { rectangle, mouse, key, move, copy, capture };
+  /** 有选区时拒绝失效端点，不能把原本的选区粘贴降级为普通单格起点粘贴。 */
+  function pasteTarget(row: Row, key: string): GridRangeTarget<Row> | undefined {
+    const { scope: owned, rectangle: selected, focus } = live.current;
+    if (owned !== scope) throw Error(pasteText.stale);
+    if (!selected) return;
+    const target = capture(selected);
+    if (!target || !focus || rows[focus.row] !== row || keys[focus.column] !== key) throw Error(pasteText.stale);
+    return target;
+  }
+
+  return { rectangle, mouse, key, move, copy, capture, pasteTarget };
 }
 
 const arrowDirections = new Map<string, Point>([

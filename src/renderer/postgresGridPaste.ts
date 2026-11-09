@@ -1,5 +1,6 @@
 import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../shared/postgresTable';
-import { cellClipboardType, decodeClipboard, type ClipboardCell } from './gridClipboard';
+import { cellClipboardType, decodeClipboard, encodeClipboard, maxClipboardCells, type ClipboardCell } from './gridClipboard';
+import { fitGridRangePaste, type GridPasteShape } from './gridRangePaste';
 import { postgresGridPasteZh as text } from './locales/postgresGridPaste.zh-CN';
 
 export function postgresClipboardInput(data: Pick<DataTransfer, 'getData' | 'types'> | null) {
@@ -32,8 +33,11 @@ export function postgresClipboardFieldValue(value: ClipboardCell, column: Postgr
 export function postgresGridPasteChanges(
   page: PostgresTablePage, columns: readonly PostgresTableColumn[], startKey: string,
   source: { typed?: string; plain: string }, startRow?: number, prior?: (key: string) => PostgresTableChange | undefined,
+  shape?: GridPasteShape,
 ): PostgresTableChange[] {
-  const matrix = decodeClipboard(source.typed ?? '', source.plain, { maximum: postgresTableLimits.changes, message: text.rowLimit });
+  const decoded = decodeClipboard(source.typed ?? '', source.plain, { maximum: postgresTableLimits.changes, message: text.rowLimit });
+  const matrix = shape ? fitGridRangePaste(decoded, shape, { rows: postgresTableLimits.changes, cells: maxClipboardCells }) : decoded;
+  if (matrix !== decoded) encodeClipboard(matrix);
   const width = matrix[0]?.length ?? 0;
   if (!width || matrix.some(row => row.length !== width)) throw Error(text.rectangle);
   const startColumn = columns.findIndex(column => column.key === startKey);

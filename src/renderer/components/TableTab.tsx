@@ -18,6 +18,7 @@ import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle } from '../useGridCellRange';
 import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
+import { fitGridRangePaste } from '../gridRangePaste';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
@@ -1920,8 +1921,16 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (!editable || blocked || referenceDialog) return row;
     if (record.hasInput()) { setError(recordViewZh.resolveInput); return row; }
     try {
-      const values = decodeClipboard(event.clipboardData.getData(cellClipboardType), event.clipboardData.getData('text/plain'));
-      const updated = pasteCells(rows, visibleKeys, row.id, column.key, values, new Set(info!.columns.filter(item => item.generated).map(item => item.name)));
+      const target = cellRange.pasteTarget(row, column.key);
+      let values = decodeClipboard(event.clipboardData.getData(cellClipboardType), event.clipboardData.getData('text/plain'));
+      if (target) {
+        const original = values;
+        values = fitGridRangePaste(original, { rows: target.rows.length, columns: target.keys.length });
+        // 单值铺满仍受原类型化剪贴板的累计字节限制。
+        if (values !== original) encodeClipboard(values);
+      }
+      const updated = pasteCells(rows, visibleKeys, target?.rows[0].id ?? row.id, target?.keys[0] ?? column.key,
+        values, new Set(info!.columns.filter(item => item.generated).map(item => item.name)));
       pendingPaste.current = updated; setError(''); return updated.find(item => item.id === row.id)!;
     } catch (reason) { setError(errorMessage(reason)); return row; }
   }

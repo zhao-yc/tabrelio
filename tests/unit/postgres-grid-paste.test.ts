@@ -13,6 +13,15 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 网格粘贴', () => {
+  it('矩形选区接受等尺寸内容或单格铺满，尺寸不符不产生计划', () => {
+    const shape = { rows: 2, columns: 1 };
+    expect(postgresGridPasteChanges(page, [note], note.key, { plain: '甲\n乙' }, 0, undefined, shape))
+      .toEqual(['甲', '乙'].map((value, row) => ({ kind: 'update', row, fields: [{ column: note.key, value: { mode: 'text', value } }] })));
+    const { typed } = encodeClipboard([[null]]);
+    expect(postgresGridPasteChanges(page, [note], note.key, { plain: '', typed }, 0, undefined, shape))
+      .toEqual([0, 1].map(row => ({ kind: 'update', row, fields: [{ column: note.key, value: { mode: 'null' } }] })));
+    expect(() => postgresGridPasteChanges(page, [note], note.key, { plain: '甲\t乙' }, 0, undefined, shape)).toThrow(/2 行 × 1 列/);
+  });
   it('覆盖从可见列位置开始，保留旧草稿的其他字段与类型', () => {
     const source = encodeClipboard([['9007199254740993', null], ['9007199254740994', '']]);
     expect(postgresGridPasteChanges(page, [binary, base, note], base.key, { typed: source.typed, plain: source.text }, 0, key =>

@@ -13,6 +13,8 @@ import { sqliteTableDraftZh as draftFileText } from '../locales/sqliteTableDraft
 import type { SqliteDraftRestored, SqliteTableDraftDocument } from '../../shared/sqliteTableDraft';
 import { sqliteEditValueSchema, type SqliteTableEditPreviewInput } from '../../shared/sqliteTableEdit';
 import type { GridRangeTarget } from '../useGridCellRange';
+import type { GridPasteShape } from '../gridRangePaste';
+import { gridRangePasteZh as rangePasteText } from '../locales/gridRangePaste.zh-CN';
 import type { GridRangeFillInput } from './GridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { SqliteEditWorkspace, type SqliteWorkspaceFill, type SqliteWorkspaceRecordEdit } from '../sqliteEditWorkspace';
@@ -135,7 +137,7 @@ import '../sqliteTableBrowse.css';
 interface FullExportOwner { intent: SqliteTableExportIntent; acquiring: boolean; lease?: WorkspaceBusyLease; }
 interface ImportOwner { source: SqliteTableImportSource; page: SqliteTablePage; acquiring: boolean; dirty: boolean; refreshed: boolean; lease?: WorkspaceBusyLease; }
 interface EditInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; row: SqliteDraftRow; column?: number; duplicate?: { source: SqliteDuplicateSource; valid: boolean }; }
-interface RangeInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; anchor: SqlitePasteAnchor; valid: boolean; source?: SqliteClipboardSource; }
+interface RangeInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; anchor: SqlitePasteAnchor; valid: boolean; source?: SqliteClipboardSource; shape?: GridPasteShape; projection?: string; }
 interface PasteInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; valid: boolean; source?: SqliteClipboardSource;
   transfer?: { snapshot: PostgresRecordTransfer; engine: SqliteTransferEngine; values: ReturnType<typeof queryToSqliteValues> }; }
 interface FindInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; valid: boolean; preview: boolean; staging: boolean; retiringPreview?: string; seed?: SqliteTableFindSeed; }
@@ -374,6 +376,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   useEffect(() => { layout.sync(); });
   useEffect(() => { setLayoutDialog(undefined); }, [layoutScope]);
   const projection = useMemo(() => sqliteLayoutProjection(names, layoutView.preferences), [layoutNamesKey, layoutView.preferences]);
+  const pasteProjection = projection.map(item => item.index).join(',');
+  const pasteProjectionRef = useRef(pasteProjection); pasteProjectionRef.current = pasteProjection;
   const shownColumns = useRef<ResultColumn[]>([]);
   const displayColumns = useMemo(() => {
     const next = page ? projection.map(column => page.result.columns[column.index]) : [];
@@ -1387,21 +1391,35 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   /** 输入窗口固定原锚点，不随焦点移动改写目标；原editor仍是已接管草稿的授权来源。 */
   function rangeCurrent(ticket: RangeInputTicket): boolean {
     if (rangeRef.current !== ticket || !ticket.valid) return false;
+    if (ticket.projection !== undefined && ticket.projection !== pasteProjectionRef.current) {
+      ticket.valid = false;
+      return false;
+    }
     const workspace = useWorkspace.getState();
     try {
       if (editorRef.current === ticket.editor && ticket.editor.page === ticket.page && ticket.editor.view.rows === ticket.rows && ticket.rows.includes(ticket.anchor.row) && !ticket.anchor.row.deleted && Number.isInteger(ticket.anchor.column) && ticket.anchor.column >= 0 && ticket.anchor.column < ticket.page.columns.length && !ticket.page.columns[ticket.anchor.column].generated && ticket.editor.canEdit() && latest.current.active && workspace.settings.activeTabId === tab.id && !workspace.activeJobs[tab.id] && document.querySelectorAll('[role="dialog"], [role="alertdialog"]').length <= 1) return true;
     } catch { /* 无法确认原范围时不转交任何值。 */ }
     ticket.valid = false; return false;
   }
-  /** Ctrl/Cmd+V按原活动单元格位置覆盖，新增记录仍须明确选择独立菜单。 */
-  function openRange(data?: Pick<DataTransfer, 'types' | 'getData'>, supplied = rangeCellRef.current): void {
+  /** 沿用原活动格权限，选区只更改左上角和尺寸，不改变预览与暂存授权。 */
+  function openRange(data?: Pick<DataTransfer, 'types' | 'getData'>, supplied = rangeCellRef.current,
+    selection?: GridRangeTarget<SqliteDraftRow>): void {
     if (!editActionCurrent() || !available() || rangeRef.current || pasteRef.current || inputRef.current || previewRef.current) return;
     try {
       const caret = rangeCellRef.current;
       if (!supplied || !caret || supplied.row !== caret.row || supplied.column !== caret.column || supplied.columns !== caret.columns || !editRows.includes(supplied.row) || supplied.row.deleted || !Number.isInteger(supplied.column) || supplied.column < 0 || supplied.column >= renderedEditor!.page.columns.length || renderedEditor!.page.columns[supplied.column].generated) throw Error(rangeText.anchorRequired);
       const source = data ? readSqliteClipboard(data) : undefined;
       if (!editActionCurrent() || !available() || rangeCellRef.current !== caret) return;
-      const editor = renderedEditor!, ticket: RangeInputTicket = { id: uid(), editor, page: editor.page, rows: editor.view.rows, anchor: { row: caret.row, column: caret.column, ...(caret.columns ? { columns: caret.columns } : {}) }, valid: true, ...(source ? { source } : {}) };
+      const editor = renderedEditor!;
+      const row = selection?.rows[0] ?? caret.row, column = selection ? Number(selection.keys[0].slice(1)) : caret.column;
+      const projected = projection.findIndex(item => item.index === column);
+      if (selection && (row.deleted || !editor.page.columns[column] || editor.page.columns[column].generated || projected < 0 ||
+          selection.rows.some((item, index) => editRows[selection.startRow + index] !== item) ||
+          selection.keys.some((key, index) => key !== 'c' + projection[projected + index]?.index))) throw Error(rangePasteText.stale);
+      const shape = selection ? { rows: selection.rows.length, columns: selection.keys.length } : undefined;
+      const ticket: RangeInputTicket = { id: uid(), editor, page: editor.page, rows: editor.view.rows,
+        anchor: { row, column, ...(caret.columns ? { columns: caret.columns } : {}) }, valid: true, source, shape,
+        projection: selection ? pasteProjection : undefined };
       rangeRef.current = ticket; editor.inputOpen(true); setRangeOpen(ticket);
     } catch (reason) { setValidation(errorMessage(reason)); }
   }
@@ -1413,6 +1431,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   /** 准确范围计划由editor整批复核后一次覆盖本地草稿，不直接发送SQL。 */
   function stageRange(ticket: RangeInputTicket, plan: SqliteRangePastePlan): void {
     if (!rangeCurrent(ticket)) throw Error(rangeText.stale);
+    if (ticket.shape && (plan.rows !== ticket.shape.rows || plan.width !== ticket.shape.columns))
+      throw Error(rangePasteText.shape(ticket.shape.rows, ticket.shape.columns));
     const values = sqliteRangePastePlanValues(plan, ticket.page, ticket.rows, ticket.anchor);
     if (ticket.anchor.columns) ticket.editor.pasteCells(ticket.anchor.row.id, ticket.anchor.column, values, plan.columns.map(name => ticket.page.columns.findIndex(column => column.name === name)));
     else ticket.editor.pasteCells(ticket.anchor.row.id, ticket.anchor.column, values);
@@ -1619,7 +1639,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {fullExport && <SqliteTableExportDialog intent={fullExport.intent} onActivity={delta => fullExportActivity(fullExport, delta)} onClose={() => closeAllExport(fullExport)} onCleanupError={message => useWorkspace.getState().notify(message, true)} onCommitted={(output, _changed, content) => useWorkspace.getState().notify(content === 'structure' ? exportText.structureCommittedChanged : exportText.committedChanged(output.rows))}/>}
     {tableImport && <SqliteTableImportDialog key={tableImport.source.id} source={tableImport.source} onActivity={delta => importActivity(tableImport, delta)} onDirtyChange={dirty => importDirty(tableImport, dirty)} onClose={() => closeImport(tableImport)} onCommitted={(output, changed) => imported(tableImport, output, changed)} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {exportData && <ResultExportDialog result={exportData.result} tabId={tab.id} scope={exportData.scope} allowSql={false} onClose={() => setExportData(null)}/>}
-    {rangeOpen && <SqlitePasteRangeDialog key={rangeOpen.id} page={rangeOpen.page} rows={rangeOpen.rows} anchor={rangeOpen.anchor} initial={rangeOpen.source} current={() => rangeCurrent(rangeOpen)} onStage={plan => stageRange(rangeOpen, plan)} onClose={() => closeRange(rangeOpen)}/>}
+    {rangeOpen && <SqlitePasteRangeDialog key={rangeOpen.id} page={rangeOpen.page} rows={rangeOpen.rows} anchor={rangeOpen.anchor} initial={rangeOpen.source} shape={rangeOpen.shape} current={() => rangeCurrent(rangeOpen)} onStage={plan => stageRange(rangeOpen, plan)} onClose={() => closeRange(rangeOpen)}/>}
     {pasteOpen && (pasteOpen.transfer ? <SqliteRecordTransferDialog key={pasteOpen.id} page={pasteOpen.page}
       targetName={profile?.name ?? tab.connectionId} engine={pasteOpen.transfer.engine} snapshot={pasteOpen.transfer.snapshot} values={pasteOpen.transfer.values}
       current={() => pasteCurrent(pasteOpen)} onStage={plan => stagePaste(pasteOpen, plan)} onClose={() => closePaste(pasteOpen)}/>

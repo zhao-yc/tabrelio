@@ -19,7 +19,9 @@ import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sq
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
-import { gridCellCenter, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridCellCenter, pasteGridRangeClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
+import { sqliteTableRangePasteZh as sqlitePaste } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -298,6 +300,34 @@ test('SQLite 矩形可填充同值并一次撤销，包含定位键时拒绝整�
   await page.keyboard.press('Shift+ArrowDown');
   await stage();
   await expect(table.getByRole('gridcell', { name: 'TEXT · 统一草稿', exact: true })).toHaveCount(2);
+  await expect(table.getByRole('gridcell', { name: 'TEXT · 记录 3', exact: true })).toBeVisible();
+  await table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true }).click();
+  await expect(first).toBeVisible();
+  await expect(second).toBeVisible();
+  expect(readFileSync(database)).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 粘贴按矩形左上角预览并暂存，单值可铺满且尺寸不符时拒绝', async () => {
+  await seed();
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const first = table.getByRole('gridcell', { name: 'TEXT · 记录 1', exact: true });
+  const second = table.getByRole('gridcell', { name: 'TEXT · 记录 2', exact: true });
+  const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  await first.click();
+  await page.keyboard.press('Shift+ArrowDown');
+  await expect(second).toBeFocused();
+  await pasteGridRangeClipboard(page, '一\t二');
+  const modal = page.getByRole('dialog', { name: sqlitePaste.title, exact: true });
+  await expect(modal.getByText(selectionPaste.target(2, 1), { exact: true })).toBeVisible();
+  await modal.getByRole('button', { name: sqlitePaste.preview, exact: true }).click();
+  await expect(modal.getByRole('alert')).toContainText(selectionPaste.shape(2, 1));
+  await modal.getByRole('textbox', { name: sqlitePaste.source, exact: true }).fill('铺满');
+  await modal.getByRole('button', { name: sqlitePaste.preview, exact: true }).click();
+  await expect(modal.getByText(sqlitePaste.changedCounts(2, 1, 2), { exact: true })).toBeVisible();
+  await modal.getByRole('button', { name: sqlitePaste.stage, exact: true }).click();
+  await expect(table.getByRole('gridcell', { name: 'TEXT · 铺满', exact: true })).toHaveCount(2);
   await expect(table.getByRole('gridcell', { name: 'TEXT · 记录 3', exact: true })).toBeVisible();
   await table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true }).click();
   await expect(first).toBeVisible();

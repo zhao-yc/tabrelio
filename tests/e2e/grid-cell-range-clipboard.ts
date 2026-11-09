@@ -20,3 +20,14 @@ export function readGridRangeClipboard(page: Page) {
     };
   });
 }
+
+/** 隔离系统剪贴板，只向当前数据格派发粘贴事件。 */
+export function pasteGridRangeClipboard(page: Page, value: string) {
+  return page.evaluate(text => {
+    const active = document.activeElement;
+    if (active?.getAttribute('role') !== 'gridcell') throw Error('粘贴前未聚焦数据格');
+    const data = new DataTransfer();
+    data.setData('text/plain', text);
+    active.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+  }, value);
+}
