@@ -27,6 +27,10 @@ export interface ManagedConnection {
   /** ERR 包没有状态位，保留上次状态供展示，但不能把它当作错误后的实时真值。 */
   transactionStateKnown?: boolean;
   noBackslashEscapesKnown?: boolean;
+  /** 会话级设置被用户修改后，不再用默认独立连接解释查询原值。 */
+  queryRowContext?: string;
+  /** 仅流式 SELECT 的同一物理结果可确认原表投影。 */
+  queryRelationStatement?: { sql: string; direct: boolean };
   /** 独立只读任务可在建连、元数据和读取阶段取消整个连接。 */
   signal?: AbortSignal;
   /** 结束数据库会话并释放附属 SSH 隧道，可以重复调用。 */
@@ -96,7 +100,7 @@ export function observeSessionState(managed: ManagedConnection, packet: SessionS
   const previousStatus = managed.serverStatus;
   const previousEscapesKnown = managed.noBackslashEscapesKnown;
   // 目录是辅助信息，其解析/预算异常绝不能改变已经执行的SQL结果。
-  try{if(packet.sql&&!(Number(packet.serverStatus)&8))managed.sessionObjects?.observe(packet.sql,managed.completionDatabase?.known?managed.completionDatabase.database??undefined:undefined,{noBackslashEscapes:previousMode===undefined?Boolean((previousStatus??0)&512):previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'),noBackslashEscapesKnown:previousMode!==undefined||previousEscapesKnown!==false,ansiQuotes:previousMode?.split(',').includes('ANSI_QUOTES')??false,ansiQuotesKnown:previousMode!==undefined},managed.status.dialect,packet.warningStatus);}catch{managed.sessionObjects?.invalidate();}
+  try{if(packet.sql&&!(Number(packet.serverStatus)&8))managed.sessionObjects?.observe(packet.sql,managed.completionDatabase?.known?managed.completionDatabase.database??undefined:undefined,{noBackslashEscapes:previousMode===undefined?Boolean((previousStatus??0)&512):previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'),noBackslashEscapesKnown:previousMode!==undefined||previousEscapesKnown!==false,ansiQuotes:previousMode?.split(',').includes('ANSI_QUOTES')??false,ansiQuotesKnown:previousMode!==undefined},managed.status.dialect,packet.warningStatus,managed.queryRelationStatement?.sql===packet.sql&&managed.queryRelationStatement.direct);}catch{managed.sessionObjects?.invalidate();}
   observeCompletionDatabase(managed,packet,{noBackslashEscapes:previousMode===undefined?Boolean((previousStatus??0)&512):previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'),noBackslashEscapesKnown:previousMode!==undefined||previousEscapesKnown!==false,ansiQuotes:previousMode?.split(',').includes('ANSI_QUOTES')??false,ansiQuotesKnown:previousMode!==undefined});
   if (packet.serverStatus !== undefined) { managed.serverStatus = packet.serverStatus; managed.transactionStateKnown = true; }
   const variables = packet.stateChanges?.systemVariables ?? {};
@@ -115,16 +119,21 @@ export function observeSessionState(managed: ManagedConnection, packet: SessionS
   }
   // 五个基线服务器实测：关闭 tracker 自身时没有任何变量报告，CALL/EXECUTE 也可隐藏这种变化。
   // 对不透明控制语句不能凭缺少事件猜测“模式没变”；NBE 位也可能过时，须使用四候选扫描器。
-  if (packet.sql && !(Number(packet.serverStatus) & 8) && !Object.hasOwn(variables, 'sql_mode')) {
+  if (packet.sql && !(Number(packet.serverStatus) & 8)) {
     try {
       const words = sqlExecutableWords(packet.sql, { noBackslashEscapes: previousMode === undefined ? Boolean((previousStatus ?? 0) & 512) : previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'), noBackslashEscapesKnown: previousMode !== undefined || previousEscapesKnown !== false, ansiQuotes: previousMode?.split(',').includes('ANSI_QUOTES') ?? false, ansiQuotesKnown: previousMode !== undefined });
       const control = words[0];
-      if (control === 'CALL' || control === 'EXECUTE' || (control === 'SET' && words.some(word => ['SQL_MODE', 'SESSION_TRACK_SYSTEM_VARIABLES'].includes(word)))) {
+      if (['SET', 'CALL', 'EXECUTE', 'RESET', 'CHANGE'].includes(control)) managed.queryRowContext = undefined;
+      if (!Object.hasOwn(variables, 'sql_mode') &&
+          (control === 'CALL' || control === 'EXECUTE' || (control === 'SET' && words.some(word => ['SQL_MODE', 'SESSION_TRACK_SYSTEM_VARIABLES'].includes(word))))) {
         managed.sqlMode = undefined;
         managed.noBackslashEscapesKnown = false;
         if (!Object.hasOwn(variables, 'session_track_system_variables')) managed.sqlModeTracking = undefined;
       }
-    } catch { managed.sqlMode = undefined; managed.sqlModeTracking = undefined; managed.noBackslashEscapesKnown = false; }
+    } catch {
+      managed.queryRowContext = undefined;
+      if (!Object.hasOwn(variables, 'sql_mode')) { managed.sqlMode = undefined; managed.sqlModeTracking = undefined; managed.noBackslashEscapesKnown = false; }
+    }
   }
   // 出现矛盾后持续未知，不能让下一份同样过时的 EOF 重新获得词法解析的信任。
   if (managed.sqlMode !== undefined && packet.serverStatus !== undefined && Boolean(packet.serverStatus & 512) !== managed.sqlMode.split(',').includes('NO_BACKSLASH_ESCAPES')) {
@@ -297,7 +306,8 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
     });
     if (ssh) { ssh.on('error', () => { managed.broken = true; active.destroy(); }); ssh.on('close', () => { managed.broken = true; active.destroy(); }); }
     // 仅在新会话建立时读取模式；此时尚无用户语句的 ROW_COUNT/警告需要保留。
-    const result = await execute<{ version: string; sqlMode: string;currentDatabase:string|null;identifierCase:number }[]>(managed, 'SELECT VERSION() AS version, @@SESSION.sql_mode AS sqlMode,DATABASE() AS currentDatabase,@@lower_case_table_names AS identifierCase');
+    const result = await execute<{ version: string; sqlMode: string;currentDatabase:string|null;identifierCase:number; host: string; port: number; serverId: number; account: string; timeZone: string }[]>(managed,
+      'SELECT VERSION() AS version, @@SESSION.sql_mode AS sqlMode,DATABASE() AS currentDatabase,@@lower_case_table_names AS identifierCase, @@hostname AS host, @@port AS port, @@server_id AS serverId, CURRENT_USER() AS account, @@SESSION.time_zone AS timeZone');
     managed.status.version = result.rows[0].version;
     managed.status.dialect = /mariadb/i.test(managed.status.version) ? 'mariadb' : 'mysql';
     managed.sqlMode = result.rows[0].sqlMode;
@@ -309,6 +319,9 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
     managed.sqlMode = result.rows[0].sqlMode;
     managed.sqlModeTracking = true;
     managed.noBackslashEscapesKnown = true;
+    const { host, port, serverId, account, timeZone, version, sqlMode } = result.rows[0];
+    if (host && account && timeZone && Number.isSafeInteger(Number(port)) && Number.isSafeInteger(Number(serverId)))
+      managed.queryRowContext = JSON.stringify([host, port, serverId, account, timeZone, version, sqlMode]);
     resources.seal();
     return managed;
   } catch (error) {

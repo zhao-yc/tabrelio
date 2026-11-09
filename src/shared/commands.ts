@@ -14,6 +14,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.completion': true,
   'postgres.resultOrigins': true,
   'postgres.queryRecordPage': true,
+  'mysql.queryRelation': true,
   'postgres.compareData.batchPreview': true, 'postgres.compareData.batchApply': true, 'postgres.compareData.syncPreview': true, 'postgres.compareData.syncApply': true,
   'mysql.compareData.batchPreview': true, 'mysql.compareData.batchApply': true,
   'mysql.compareData.syncPreview': true, 'mysql.compareData.syncApply': true,

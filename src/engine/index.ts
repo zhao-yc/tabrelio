@@ -63,6 +63,9 @@ import type { TableValueOptionsInput } from '../shared/tableValueOptions';
 import type { TableStatisticsInput } from '../shared/tableStatistics';
 import { incomingReferenceLimits, incomingReferenceMessages, type IncomingReferencesInput, type ChildReferencePageInput } from '../shared/incomingReferences';
 import { connect, execute, type ManagedConnection } from './connection';
+import { completionQuery } from './completionQuery';
+import { mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
+import { mysqlQueryRelationSchema } from '../shared/mysqlQueryRelation';
 import * as metadata from './metadata';
 import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
@@ -151,6 +154,8 @@ interface RunningTask {
   databaseSwitchConfirmed?: boolean;
   continueOnErrorMode?: boolean;
   collectWarningsMode?: boolean;
+  relationFields?: FieldPacket[];
+  relationTarget?: ReturnType<typeof mysqlQueryRelationTarget>;
   sqlFileImport?: SqlFileImportEvidence;
   fileImportConflict?: FileImportConflictEvidence;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
@@ -170,6 +175,7 @@ export class Engine {
   private readonly conflictImports = new Map<string, ConflictImportLease>();
   private readonly profiles = new Map<string, NetworkConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
+  private readonly queryRelationSources = new WeakMap<ManagedConnection, MysqlQueryRelationSource>();
   private readonly tasks = new Map<string, RunningTask>();
   private readonly insertConfirmations=new QueryInsertConfirmations();
   private closing = false;
@@ -665,8 +671,12 @@ export class Engine {
       case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement, 'query', input.continueOnError, input.collectWarnings), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.exportStream': {
         this.assertFile(input);
-        return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string })));
+        return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => {
+          this.queryRelationSources.delete(managed);
+          return this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string });
+        }));
       }
+      case 'mysql.queryRelation': return this.readQueryRelation(input);
       case 'query.confirmInsertExport':this.insertConfirmations.confirm({taskId:input.taskId,previewToken:input.previewToken,confirmation:input.confirmation});return;
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
         const mode = await this.sqlMode(managed);
@@ -829,18 +839,23 @@ export class Engine {
           return result;
         }, undefined, '读取关联子记录', true);
       }
-      case 'table.referencePage': return this.withIndependentTask(input.connectionId, input.taskId, async managed => {
+      case 'table.referencePage': return this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => {
         if (input.matchValues !== undefined) validateReferenceValues(input.matchValues);
-        const source = await metadata.tableInfo(managed, input.database, input.table);
+        const read = <T>(sql: string, values: (string | number | boolean | null | Buffer)[] = []) => completionQuery<T>(managed, control, sql, values);
+        const source = await metadata.tableInfo(managed, input.database, input.table, read);
         const matches = source.foreignKeys.filter(key => key.name.toLowerCase() === String(input.foreignKeyName).toLowerCase());
         if (matches.length !== 1) throw new Error('外键已不存在或名称不明确，请刷新表结构');
         const current = matches[0];
-        const target = await metadata.tableInfo(managed, current.referencedDatabase, current.referencedTable);
+        const target = await metadata.tableInfo(managed, current.referencedDatabase, current.referencedTable, read);
         const foreignKey = canonicalReference(source, current, target);
         const sql = buildReferencePageSql(target, foreignKey, input.matchValues, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
-        const page = await this.readPage(managed, sql, input.page, input.pageSize, target.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+        // 关联页必须等待命令和连接各自的真实终态，不能在 QUIT 刚发送时发布结果。
+        const ended = control.commandStarted();
+        let page;
+        try { page = await this.readPage(managed, sql, input.page, input.pageSize, target.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)), true); }
+        finally { ended(); }
         return { source, foreignKey, target, page };
-      });
+      }, undefined, '读取外键引用记录', true);
       case 'table.draftVerify': {
         this.copySourceProfile(input);
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => verifyTableDraft({ managed, ...control }, input as TableDraftVerifyInput), undefined, '核对待恢复草稿原行', true);
@@ -1822,8 +1837,48 @@ export class Engine {
     if (values && [...values.keys()].some(name => !used.has(name))) throw new Error('脚本执行结束后发现未使用的多余参数；动态模式下无法提前确定全部参数边界');
   }
 
+  /** 同一原执行的行才可回查，完整原值在独立只读事务读取并核对。 */
+  private async readQueryRelation(input: Input): Promise<CommandMap['mysql.queryRelation']['output']> {
+    const { profile, ...raw } = input, request = mysqlQueryRelationSchema.parse(raw);
+    const session = this.sessions.get(request.sessionId), source = session && this.queryRelationSources.get(session.managed);
+    const current = () => {
+      const managed = session?.managed;
+      if (!session || this.sessions.get(request.sessionId) !== session || session.connectionId !== request.connectionId ||
+          !managed || managed.broken || session.busy || managed.transactionStateKnown !== true || managed.serverStatus === undefined ||
+          (managed.serverStatus & 1) !== 0 || !source || this.queryRelationSources.get(managed) !== source ||
+          managed.queryRowContext !== source.context || source.executionId !== request.executionId || !source.result.rows[request.rowIndex])
+        throw Error('MySQL／MariaDB 原查询结果已失效或会话正在执行，请重新查询');
+    };
+    current();
+    if (!source || !profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId)
+      throw Error('缺少原查询记录的可信连接');
+    this.copySourceProfile(input);
+    const result = await this.withIndependentTask(request.connectionId, request.taskId, async (managed, control) => {
+      if (managed.queryRowContext !== source.context) throw Error('原查询与回查连接的服务器或会话设置已变化');
+      const read = <T>(sql: string, values: (string | number | boolean | null | Buffer)[] = []) => completionQuery<T>(managed, control, sql, values);
+      await read('SET SESSION lock_wait_timeout = 5');
+      await read('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await read('START TRANSACTION READ ONLY');
+      const relation = qualified(source.database, source.table);
+      await read('SELECT 1 FROM ' + relation + ' LIMIT 0');
+      const info = await metadata.tableInfo(managed, source.database, source.table, read);
+      const selected = mysqlQueryRelationSelect(source, info, request.rowIndex);
+      const ended = control.commandStarted();
+      let page;
+      try { page = await this.readPage(managed, selected.sql, 1, 1, false, true); }
+      finally { ended(); }
+      const row = selected.verify(page);
+      await read('ROLLBACK');
+      current();
+      return { info, row };
+    }, undefined, '核对查询原记录', true);
+    current();
+    return result;
+  }
+
   /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
   private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean): Promise<QueryOutcome> {
+    this.queryRelationSources.delete(task.managed);
     if (continueOnError === true) return this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings);
     if (collectWarnings === true) return this.queryScriptWithWarnings(task, sql, maxRows, parameters, currentStatement, failureMode);
     const started = performance.now();
@@ -1832,10 +1887,15 @@ export class Engine {
     // 限额由整项任务共享，防止很多结果集或大 BLOB 绕过单结果集行数限制。
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
     let executed = 0, sourceRange: QueryFailureSourceRange | undefined;
+    let relationTarget: ReturnType<typeof mysqlQueryRelationTarget>;
     try {
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw new Error('参数查询必须提供参数列表');
-      for await (const { statement, template } of this.queryStatements(task, sql, parameters, currentStatement, failureMode ? range => { sourceRange = range ? { ...range } : undefined; } : undefined)) {
+      for await (const { statement, template, mode } of this.queryStatements(task, sql, parameters, currentStatement, failureMode ? range => { sourceRange = range ? { ...range } : undefined; } : undefined)) {
+        relationTarget = executed === 0 && task.managed.queryRowContext && task.managed.transactionStateKnown === true &&
+          task.managed.serverStatus !== undefined && (task.managed.serverStatus & 1) === 0
+          ? mysqlQueryRelationTarget(statement, mode, task.managed.status.dialect) : undefined;
+        task.relationTarget = relationTarget;
         try { results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined)); }
         catch (error) {
           if (!values) throw error;
@@ -1867,7 +1927,10 @@ export class Engine {
       task.managed.broken = true; task.managed.connection.destroy();
       this.emit({ taskId: task.id, status: 'running', progress: 99, message: 'SQL 已执行，但无法确认当前事务状态；会话已断开，请重新连接并核对结果，不要直接重复写操作。' });
     }
-    return { results, elapsedMs: performance.now() - started, transactionOpen };
+    const source = relationTarget && task.relationFields && executed === 1 && results.length === 1 && transactionOpen === false &&
+      !task.cancelled && !task.managed.broken ? mysqlQueryRelationSource(task.managed, relationTarget, task.relationFields, results[0], task.id) : undefined;
+    if (source) this.queryRelationSources.set(task.managed, source);
+    return { results, elapsedMs: performance.now() - started, transactionOpen, ...(source ? { mysqlQueryRelation: true as const } : {}) };
   }
 
   /** 显式警告模式仍首错即停；采集与用户SQL分开计事实，默认路径不进入此分支。 */
@@ -2126,6 +2189,9 @@ export class Engine {
     // 显式继续时仅保留已有有界rows；整条成功后才发布，CALL中途ERR不会泄露部分结果。
     const report = (event: TaskEvent) => { if (!continuing) this.emit(event); };
     let nextImplicitResult = 0;
+    const relationTarget = task.relationTarget;
+    const relationStatement = relationTarget ? { sql, direct: false } : undefined;
+    if (relationStatement) task.managed.queryRelationStatement = relationStatement;
     /** 按服务器结果序号分配结果容器，超过任务预算后不再保留后续结果。 */
     const ensure = (index: number): QueryResult | undefined => {
       if (discarded.has(index)) return;
@@ -2186,6 +2252,10 @@ export class Engine {
           finishRowsWarning(); activeRowsIndex = resultIndex;
           nextImplicitResult = resultIndex + 1;
           const result = ensure(resultIndex); if (!result) return;
+          if (relationStatement && relationTarget && !offset && resultIndex === 0 && fields.length <= 1024) {
+            task.relationFields = fields;
+            relationStatement.direct = !!mysqlQueryRelationOrigin(task.managed, relationTarget, fields);
+          }
           result.columns = this.columns(fields);
           const bytes = Buffer.byteLength(JSON.stringify(result.columns));
           if (bytes > budget.remainingBytes) { result.columns = []; result.truncated = true; }
@@ -2235,7 +2305,10 @@ export class Engine {
       }
       task.serverStatus = task.managed.serverStatus;
       return results.filter(Boolean);
-    } finally { task.inFlight = false; await task.cancelPending; }
+    } finally {
+      if (task.managed.queryRelationStatement === relationStatement) task.managed.queryRelationStatement = undefined;
+      task.inFlight = false; await task.cancelPending;
+    }
   }
 
   /** 任一更新/删除未精确命中一行即视为冲突，整批回滚；FOUND_ROWS 允许原值回写。 */

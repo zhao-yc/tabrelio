@@ -126,6 +126,9 @@ import { SqliteSearchRecordEditDialog, type SqliteQueryRangePaste } from './Sqli
 import { SqliteQueryRelationDialog } from './SqliteQueryRelationDialog';
 import { sqliteRelationZh as relationText } from '../locales/sqliteRelation.zh-CN';
 import { openSqliteRelatedTable } from '../openSqliteRelatedTable';
+import { MysqlQueryRelationDialog } from './MysqlQueryRelationDialog';
+import { mysqlQueryRelationZh as mysqlRelationText } from '../locales/mysqlQueryRelation.zh-CN';
+import type { MysqlQueryRelationInput } from '../../shared/mysqlQueryRelation';
 import { SqliteResultOriginsDialog } from './SqliteResultOriginsDialog';
 import { sqliteResultOriginsZh as originsText } from '../locales/sqliteResultOrigins.zh-CN';
 import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
@@ -317,6 +320,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     result: QueryResult; job: WorkspaceBusyLease;
   }>();
   useEffect(() => () => { recordRelation?.job.release(); }, [recordRelation]);
+  const [mysqlRelation, setMysqlRelation] = useState<{
+    request: MysqlQueryRelationInput; direction: 'parent' | 'children'; result: QueryResult; job: WorkspaceBusyLease;
+  }>();
+  useEffect(() => () => { mysqlRelation?.job.release(); }, [mysqlRelation]);
   const retiredRecordTask = useRef<string | undefined>(undefined);
   const [restoreEditedCell, setRestoreEditedCell] = useState<{ row: DataRow; key: string }>();
   const [originDialog, setOriginDialog] = useState<{ outcome: QueryOutcome; index: number }>();
@@ -1352,7 +1359,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   },[sourceResult,columnLayout,layoutMatches]);
   const frozenKeys=useMemo(()=>sourceResult&&layoutMatches&&columnLayout?frozenQueryResultKeys(sourceResult.columns,columnLayout.layout):[],[sourceResult,columnLayout,layoutMatches]);
   const resultColumnWidths = layoutMatches ? columnLayout?.layout.widths : undefined;
-  const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!recordEdit||!!recordRelation||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
+  const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!recordEdit||!!recordRelation||!!mysqlRelation||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
   const failureLocator = failureSource.current;
   // SQLite筛选明确选择原存储类，先筛选再排序；所有消费者共用同一最终视图与租约。
   const filterBinding=resultFilter.bind(viewSource,resultContext,visibleColumns);
@@ -1427,6 +1434,18 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function closeQueryRelation(view: NonNullable<typeof recordRelation>): void {
     view.job.release();
     setRecordRelation(current => current === view ? undefined : current);
+  }
+
+  const mysqlRelationAvailable = !pin && !transaction && transactionKnown && !queryRunning && !busy && outcome?.mysqlQueryRelation === true;
+  /** 查询排序只改变视图次序，回查使用原执行中准确的行对象。 */
+  function openMysqlRelation(direction: 'parent' | 'children'): void {
+    if (!mysqlRelationAvailable || !sourceResult || !sessionRef.current || !activeDetailRow ||
+        activeDetailRow.binding !== detailBinding || !queryOwnerCurrent() || !rowDetailAllowed(detailBinding)) return;
+    const rowIndex = sourceResult.rows.indexOf(activeDetailRow.binding.rows[activeDetailRow.index]);
+    if (rowIndex < 0) return;
+    const job = acquireWorkspaceBusy(tab.id);
+    setMysqlRelation({ result: sourceResult, direction, job, request: { connectionId: tab.connectionId, sessionId: sessionRef.current,
+      executionId: task.current, rowIndex, taskId: uid() } });
   }
   function startQueryRecords(rows: readonly DataRow[], { cell, rangeFill, rangePaste }: {
     cell?: SqliteQueryInlineCell & { key: string; row: DataRow };
@@ -2423,7 +2442,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)} title={rowDetailsText.choose} onClick={openRowDetail}>{rowDetailsText.open}</button>{recordEditTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   onClick={openQueryRecord}>{originsText.editRecord}</button>}
 {recordTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
-  title={rowDetailsText.choose} onClick={openQueryRelation}>{relationText.entry}</button>}</ActionMenuSection>
+  title={rowDetailsText.choose} onClick={openQueryRelation}>{relationText.entry}</button>}
+{mysqlRelationAvailable && (['parent', 'children'] as const).map(direction => <button key={direction}
+  disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
+  title={rowDetailsText.choose} onClick={() => openMysqlRelation(direction)}>{mysqlRelationText[direction]}</button>)}</ActionMenuSection>
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
 {sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={memoryText.hint} onClick={rememberResultOrganization}>{memoryText.save}</button></>:null}{resultMemory&&<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)} title={queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)?memoryText.scope:memoryText.mismatch} onClick={applyRememberedOrganization}>{memoryText.apply}</button><button disabled={!rememberedOrganizationCanDiscard()} onClick={discardRememberedOrganization}>{memoryText.clear}</button></>}<div className="action-menu-field" role="group" aria-label={zh.app.text020}><label className="inline-field">{zh.query.text020}<input aria-label={zh.query.text021} type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => useWorkspace.getState().updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/>{zh.query.text022}</label></div></ActionMenuSection>
@@ -2466,6 +2488,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         onApply={keyword => !columnLeaseRef.current && resultSelectionAllowed(selectionBinding) &&
           keywordFilter.apply(keyword, invalidateResultSelection)} />}
       {recordEditTable && <span className="muted small">{originsText.inlineHint}</span>}
+      {mysqlRelation && <MysqlQueryRelationDialog request={mysqlRelation.request} direction={mysqlRelation.direction}
+        current={() => mysqlRelation.job.owns() && queryOwnerCurrent() && relationResult.current === mysqlRelation.result &&
+          sessionRef.current === mysqlRelation.request.sessionId && task.current === mysqlRelation.request.executionId}
+        onClose={() => {
+          mysqlRelation.job.release();
+          setMysqlRelation(current => current === mysqlRelation ? undefined : current);
+        }} />}
       {recordRelation && <SqliteQueryRelationDialog request={recordRelation.request}
         current={() => queryRelationCurrent(recordRelation)} onClose={() => closeQueryRelation(recordRelation)}
         onOpen={output => {

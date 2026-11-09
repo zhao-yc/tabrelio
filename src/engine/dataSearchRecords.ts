@@ -22,7 +22,7 @@ const same=(column:string)=>'CAST('+column+' AS BINARY)=CAST(? AS BINARY)';
 function knownIdentityFailure(error:unknown):DataSearchNavigationReason|undefined{const failure=error as {code?:string;errno?:number};if([1044,1142,1143,1227].includes(failure?.errno??0))return'identity-permission';if([1054,1109,1146].includes(failure?.errno??0))return'identity-unproven';}
 type Parameter=ReturnType<typeof deserializeCell>;
 /** 原生键条件保留索引查找，再核精确表示；不能为避免精度损失而把常用主键退化为整表扫描。 */
-export function buildDataSearchRecordWhere(metadata:DataSearchTargetMetadata,keyValues:readonly CellValue[],epochs?:readonly(string|null)[]){
+export function buildDataSearchRecordWhere(metadata:{keyColumns:readonly Pick<DataSearchTargetMetadata['keyColumns'][number],'name'|'binary'|'dataType'>[]},keyValues:readonly CellValue[],epochs?:readonly(string|null)[]){
  if(!metadata.keyColumns.length||keyValues.length!==metadata.keyColumns.length)throw Error('可靠定位键不完整');const conditions:string[]=[],params:Parameter[]=[];
  metadata.keyColumns.forEach((column,index)=>{
   const name=identifier(column.name),value=keyValues[index];if(value===null)throw Error('可靠键不能包含NULL');

@@ -33,6 +33,17 @@ describe('入向目录二进制keyset及有界双目录', () => {
     expect(relations).toHaveLength(1); expect(relations[0]).toMatchObject({ database: '子`库', table: '子表', foreignKey }); expect(relations[0].digest).toMatch(/^[a-f0-9]{64}$/);
     expect(assembleIncomingReferenceRelations(source, 'b'.repeat(64), selected, parts, rules)[0].digest).not.toBe(relations[0].digest);
   });
+  it('动作目录缺项时要求真实子表定义与有序键列完全一致', () => {
+    const { source, foreignKey } = tables(), { parts } = catalog();
+    const definition = { range: { start: 0, end: 1 }, rawSql: '', name: foreignKey.name, childColumnNames: foreignKey.columns,
+      parentTarget: { database: source.database, table: source.name }, parentColumnNames: foreignKey.referencedColumns,
+      onUpdate: 'CASCADE' as const, onDelete: 'RESTRICT' as const, opaqueReasons: [] as string[] };
+    const key = JSON.stringify([selected[0].database, selected[0].table, selected[0].foreignKeyName]);
+    const assemble = (value: typeof definition) => assembleIncomingReferenceRelations(source, 'a'.repeat(64), selected, parts, [], new Map([[key, value]]));
+    expect(assemble(definition)[0].foreignKey).toEqual(foreignKey);
+    expect(() => assemble({ ...definition, childColumnNames: [...definition.childColumnNames].reverse() })).toThrow();
+    expect(() => assemble({ ...definition, opaqueReasons: ['不明确'] })).toThrow();
+  });
   it.each(['columnName', 'ordinal', 'parentPosition', 'constraintSchema', 'parentDatabase', 'parentTable', 'parentColumn'] as const)('缺项/序位/父子映射%s不能被另一目录补成正确关系', field => {
     const { source } = tables(), { parts, rules } = catalog(); const row = parts[1] as Record<string, unknown>;
     const replacements = { columnName: parts[0].columnName, ordinal: '01', parentPosition: 0, constraintSchema: 'other', parentDatabase: 'other', parentTable: 'other', parentColumn: 'missing' }; row[field] = replacements[field];

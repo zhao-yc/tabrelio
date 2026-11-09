@@ -18,9 +18,10 @@ function managed(signal?: AbortSignal): ManagedConnection {
   const query = vi.fn((options: { sql: string }) => {
     queried.push(options.sql); const emitter = new EventEmitter(); const stream = Readable.from(values);
     Object.assign(emitter, { stream: () => stream });
+    stream.once('close', () => emitter.emit('end'));
     queueMicrotask(() => emitter.emit('fields', [{ name: 'Id', columnType: 3 }])); return emitter;
   });
-  return { profile, signal, connection: { query, destroy: vi.fn() }, close: vi.fn(async () => undefined), status: { version: '模拟', dialect: 'mysql' }, broken: false } as unknown as ManagedConnection;
+  return { profile, signal, connection: Object.assign(new EventEmitter(), { query, destroy: vi.fn() }), close: vi.fn(async () => undefined), status: { version: '模拟', dialect: 'mysql' }, broken: false } as unknown as ManagedConnection;
 }
 beforeEach(async () => {
   queried = []; values = [[1]]; events = []; mocks.connect.mockReset().mockImplementation(async (_p, _db, signal) => managed(signal));
@@ -29,7 +30,9 @@ beforeEach(async () => {
 });
 describe('独立关联查询生命周期', () => {
   it('仅从服务器外键决定目标，readonly源可查看且映射列规范化', async () => {
+    const independent = managed(); mocks.connect.mockResolvedValueOnce(independent);
     const result = await engine.handle('table.referencePage', input); expect(result.foreignKey.columns).toEqual(['Id']); expect(result.foreignKey.referencedColumns).toEqual(['Id']);
+    expect(independent.close).toHaveBeenCalledExactlyOnceWith({ strict: true });
     expect(queried[0]).toContain('`server_db`.`Parent`'); expect(mocks.tableInfo.mock.calls.map(([, db, name]) => [db, name])).toEqual([['source_db','Child'],['server_db','Parent']]); expect(events.at(-1)?.status).toBe('completed');
   });
   it('元数据失败不得降级成无筛选父页', async () => { mocks.tableInfo.mockRejectedValueOnce(new Error('权限不足')); await expect(engine.handle('table.referencePage', input)).rejects.toThrow('权限不足'); expect(queried).toEqual([]); expect(events.at(-1)?.status).toBe('failed'); });

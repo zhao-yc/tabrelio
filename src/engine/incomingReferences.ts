@@ -4,8 +4,9 @@ import { incomingReferenceLimits as limits, incomingReferenceMessages as text, t
 import { canonicalReference } from '../shared/references';
 import { definitionOmittingSqlModes, type TableDefinitionContext } from '../shared/tableColumnPatches';
 import { tableInfo, type MetadataQuery } from './metadata';
-import { inlineParameters, serializeCell } from './sql';
+import { inlineParameters, qualified, serializeCell } from './sql';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
+import { readTableForeignKeyDefinition, type ParsedForeignKey } from './tableForeignKeyDefinition';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 
 type Tuple = { database: string; table: string; foreignKeyName: string };
@@ -15,6 +16,7 @@ const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toStr
 const equal = (field: string, value: string) => `CAST(${field} AS BINARY)=CAST(${literal(value)} AS BINARY)`;
 const key = (value: Tuple) => JSON.stringify([value.database, value.table, value.foreignKeyName]);
 const validName = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 64 && !value.includes('\0') && !/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u.test(value);
+const ruleFields = ['databaseName', 'tableName', 'foreignKeyName', 'parentDatabase', 'parentTable', 'uniqueName', 'matchOption', 'onUpdate', 'onDelete'] as const;
 /** 目录名以实际UTF8二进制序比较，不使用本机语言排序或数组位置作为身份。 */
 export function compareIncomingReferenceTuple(a: Tuple, b: Tuple): number { for (const field of ['database', 'table', 'foreignKeyName'] as const) { const value = Buffer.compare(Buffer.from(a[field]), Buffer.from(b[field])); if (value) return value; } return 0; }
 function tuple(value: unknown): Tuple {
@@ -95,23 +97,34 @@ export function incomingReferenceRulesSql(selected: Tuple[]): string {
   return `SELECT r.CONSTRAINT_SCHEMA AS databaseName,r.TABLE_NAME AS tableName,r.CONSTRAINT_NAME AS foreignKeyName,r.UNIQUE_CONSTRAINT_SCHEMA AS parentDatabase,r.REFERENCED_TABLE_NAME AS parentTable,r.UNIQUE_CONSTRAINT_NAME AS uniqueName,r.MATCH_OPTION AS matchOption,r.UPDATE_RULE AS onUpdate,r.DELETE_RULE AS onDelete FROM information_schema.REFERENTIAL_CONSTRAINTS r WHERE ${selectedWhere(selected, 'r.', 'CONSTRAINT_SCHEMA')} ORDER BY BINARY r.CONSTRAINT_SCHEMA,BINARY r.TABLE_NAME,BINARY r.CONSTRAINT_NAME LIMIT 51`;
 }
 /** 两套真实目录必须一一对应，复合列完整有序，缺规则或未知动作不能被当成不存在。 */
-export function assembleIncomingReferenceRelations(source: TableInfo, sourceDigest: string, selected: Tuple[], partsValue: unknown, rulesValue: unknown): IncomingReferenceRelation[] {
+export function assembleIncomingReferenceRelations(source: TableInfo, sourceDigest: string, selected: Tuple[], partsValue: unknown, rulesValue: unknown,
+  definitions: ReadonlyMap<string, ParsedForeignKey> = new Map()): IncomingReferenceRelation[] {
   const parts = rows(partsValue, ['databaseName', 'tableName', 'foreignKeyName', 'constraintSchema', 'columnName', 'ordinal', 'parentPosition', 'parentDatabase', 'parentTable', 'parentColumn'], limits.rows);
-  const rules = rows(rulesValue, ['databaseName', 'tableName', 'foreignKeyName', 'parentDatabase', 'parentTable', 'uniqueName', 'matchOption', 'onUpdate', 'onDelete'], limits.relations);
+  const rules = rows(rulesValue, ruleFields, limits.relations);
   if (Buffer.byteLength(JSON.stringify([source, parts, rules])) > limits.bytes || new Set(selected.map(key)).size !== selected.length) throw Error(text.budget);
   const selectedKeys = new Set(selected.map(key)), grouped = new Map<string, Row[]>(), ruleMap = new Map<string, Row>();
   const rowTuple = (row: Row) => tuple({ database: row.databaseName, table: row.tableName, foreignKeyName: row.foreignKeyName });
   for (const row of parts) { const identity = key(rowTuple(row)); if (!selectedKeys.has(identity)) throw Error(text.invalid); const list = grouped.get(identity) ?? []; list.push(row); grouped.set(identity, list); }
   for (const row of rules) { const identity = key(rowTuple(row)); if (!selectedKeys.has(identity) || ruleMap.has(identity)) throw Error(text.invalid); ruleMap.set(identity, row); }
   return selected.map(item => {
-    const values = grouped.get(key(item)), rule = ruleMap.get(key(item));
-    if (!values?.length || values.length > limits.parts || !rule || rule.parentDatabase !== source.database || rule.parentTable !== source.name || !validName(rule.uniqueName) || !['NONE', 'SIMPLE'].includes(String(rule.matchOption)) || !['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'].includes(String(rule.onUpdate)) || !['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'].includes(String(rule.onDelete))) throw Error(text.invalid);
+    const values = grouped.get(key(item)), rule = ruleMap.get(key(item)), definition = definitions.get(key(item));
+    if (!values?.length || values.length > limits.parts) throw Error(text.invalid);
+    const actions = ['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'];
+    if (rule ? rule.parentDatabase !== source.database || rule.parentTable !== source.name || !validName(rule.uniqueName) ||
+        !['NONE', 'SIMPLE'].includes(String(rule.matchOption)) :
+        !definition || definition.opaqueReasons.length || definition.name !== item.foreignKeyName ||
+        definition.parentTarget?.database !== source.database || definition.parentTarget?.table !== source.name ||
+        definition.childColumnNames.length !== values.length || definition.parentColumnNames.length !== values.length ||
+        values.some((row, index) => row.columnName !== definition.childColumnNames[index] || row.parentColumn !== definition.parentColumnNames[index]))
+      throw Error(text.invalid);
+    const onUpdate = rule ? rule.onUpdate : definition?.onUpdate, onDelete = rule ? rule.onDelete : definition?.onDelete;
+    if (typeof onUpdate !== 'string' || !actions.includes(onUpdate) || typeof onDelete !== 'string' || !actions.includes(onDelete)) throw Error(text.invalid);
     const positions = new Set<number>(), childColumns = new Set<string>(), parentColumns = new Set<string>();
     for (const [index, row] of values.entries()) {
       if (row.constraintSchema !== item.database || row.parentDatabase !== source.database || row.parentTable !== source.name || !validName(row.columnName) || !validName(row.parentColumn) || !/^[1-9]\d*$/.test(String(row.ordinal)) || Number(row.ordinal) !== index + 1 || !/^[1-9]\d*$/.test(String(row.parentPosition)) || Number(row.parentPosition) > limits.parts || positions.has(Number(row.parentPosition)) || childColumns.has(row.columnName) || parentColumns.has(row.parentColumn) || !source.columns.some(column => column.name === row.parentColumn)) throw Error(text.invalid);
       positions.add(Number(row.parentPosition)); childColumns.add(row.columnName); parentColumns.add(row.parentColumn);
     }
-    const foreignKey: ForeignKeyInfo = { name: item.foreignKeyName, columns: values.map(row => row.columnName as string), referencedDatabase: source.database, referencedTable: source.name, referencedColumns: values.map(row => row.parentColumn as string), onUpdate: rule.onUpdate as string, onDelete: rule.onDelete as string };
+    const foreignKey: ForeignKeyInfo = { name: item.foreignKeyName, columns: values.map(row => row.columnName as string), referencedDatabase: source.database, referencedTable: source.name, referencedColumns: values.map(row => row.parentColumn as string), onUpdate, onDelete };
     return { database: item.database, table: item.table, foreignKey, digest: hash([sourceDigest, item.database, item.table, foreignKey]) };
   });
 }
@@ -119,8 +132,37 @@ export function assembleIncomingReferenceRelations(source: TableInfo, sourceDige
 export async function readIncomingRelations(context: StructureTaskContext, source: TableInfo, sourceDigest: string, selected: Tuple[]): Promise<IncomingReferenceRelation[]> {
   if (!selected.length) return [];
   const parts = (await structureTaskQuery(context, incomingReferencePartsSql(selected))).rows; active(context);
-  const rules = (await structureTaskQuery(context, incomingReferenceRulesSql(selected))).rows; active(context);
-  return assembleIncomingReferenceRelations(source, sourceDigest, selected, parts, rules);
+  const rules = rows((await structureTaskQuery(context, incomingReferenceRulesSql(selected))).rows, ruleFields, limits.relations);
+  active(context);
+  const definitions = new Map<string, ParsedForeignKey>();
+  if (context.managed.status.dialect === 'mariadb' && rules.length < selected.length) {
+    // MariaDB 的 SELECT 账号可能能读键列与 SHOW CREATE，却看不到动作目录。只以已知子表的真实定义补动作，并与键列逐项核对。
+    const present = new Set(rules.map(rule => key(tuple({ database: rule.databaseName, table: rule.tableName, foreignKeyName: rule.foreignKeyName }))));
+    const tables = new Map<string, ParsedForeignKey[]>();
+    let bytes = 0;
+    for (const item of selected) {
+      if (present.has(key(item))) continue;
+      const name = qualified(item.database, item.table);
+      let candidates = tables.get(name);
+      if (!candidates) {
+        const [row, extra] = (await structureTaskQuery<Record<string, unknown>[]>(context, 'SHOW CREATE TABLE ' + name)).rows;
+        active(context);
+        const ddl = row?.['Create Table'];
+        if (extra || typeof ddl !== 'string') throw Error(text.invalid);
+        bytes += Buffer.byteLength(ddl);
+        if (bytes > limits.bytes) throw Error(text.budget);
+        const document = parseTableColumnDefinition(ddl, modeOf(context));
+        if (document.table !== item.table) throw Error(text.invalid);
+        const parsed = readTableForeignKeyDefinition(document, item.database, context.managed.status.version);
+        if (!parsed.complete) throw Error(text.invalid);
+        candidates = parsed.foreignKeys;
+        tables.set(name, candidates);
+      }
+      const definition = candidates.find(candidate => candidate.name === item.foreignKeyName);
+      if (definition) definitions.set(key(item), definition);
+    }
+  }
+  return assembleIncomingReferenceRelations(source, sourceDigest, selected, parts, rules, definitions);
 }
 /** 每页重核父结构并返回全部可见目录的续页游标；不把权限过滤结果声称为全局清单。 */
 export async function readIncomingReferences(context: StructureTaskContext, input: IncomingReferencesInput): Promise<IncomingReferencesOutput> {
