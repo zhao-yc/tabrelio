@@ -1114,7 +1114,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (kind === 'left' || kind === 'right') changes = postgresRangeFillAcross(page, columns, range, kind, prior);
     else if (kind === 'sequence') changes = postgresRangeFillSequence(page, columns, range, input, prior);
     else if (kind === 'down' || kind === 'up') changes = postgresRangeFillFromRow(page, columns, range, kind, prior);
-    else changes = postgresRangeFillChanges(page, columns, range.startRow, range.rows.length, kind === 'null' ? null : value, prior);
+    else changes = postgresRangeFillChanges(page, columns, range.startRow, range.rows.length, kind === 'null' ? null : value, prior,
+      kind === 'text' && input.onlyNull);
     if (changes.length && !stageChanges(changes)) throw Error(rangeFillText.stale);
     setError('');
     setMessage('');

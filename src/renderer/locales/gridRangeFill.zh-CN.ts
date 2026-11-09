@@ -3,6 +3,8 @@ export const gridRangeFillZh = {
   clear: '将选区设为 SQL NULL',
   stage: '暂存选区填充',
   value: '填充值',
+  onlyNull: '仅填充 SQL NULL',
+  noNull: '选区中没有可填充的 SQL NULL。',
   kind: '填充值类型',
   text: '文本',
   null: 'SQL NULL',

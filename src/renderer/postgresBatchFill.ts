@@ -20,7 +20,7 @@ export function postgresQueryRangeFillChanges(page: PostgresTablePage, columns: 
   if (kind === 'sequence') return postgresRangeFillSequence(page, columns, range, input, noDraft);
   if (kind === 'up' || kind === 'down') return postgresRangeFillFromRow(page, columns, range, kind, noDraft);
   if (kind === 'left' || kind === 'right') return postgresRangeFillAcross(page, columns, range, kind, noDraft);
-  return postgresRangeFillChanges(page, columns, 0, page.rows.length, kind === 'null' ? null : value, noDraft);
+  return postgresRangeFillChanges(page, columns, 0, page.rows.length, kind === 'null' ? null : value, noDraft, kind === 'text' && input.onlyNull);
 }
 
 const postgresIntegerBits = new Map([['smallint', 16], ['integer', 32], ['bigint', 64]]);
@@ -43,7 +43,7 @@ export function postgresRangeFillSequence(page: PostgresTablePage, columns: read
 
 /** 矩形只转换一次统一值，再交给既有的原行账本和批量字段校验。 */
 export function postgresRangeFillChanges(page: PostgresTablePage, columns: readonly PostgresTableColumn[],
-  start: number, count: number, value: string | null, prior: (key: string) => PostgresTableChange | undefined) {
+  start: number, count: number, value: string | null, prior: (key: string) => PostgresTableChange | undefined, onlyNull = false) {
   if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 1 || start + count > page.rows.length ||
       count > postgresTableLimits.changes) throw Error(rangeText.target);
   const fields = columns.map(column => {
@@ -51,7 +51,7 @@ export function postgresRangeFillChanges(page: PostgresTablePage, columns: reado
     return { column: column.key, value: postgresClipboardFieldValue(value, column) };
   });
   const selected = new Set(Array.from({ length: count }, (_, index) => start + index));
-  return postgresBatchFillChanges(page, columns, selected, fields, prior);
+  return postgresBatchFillChanges(page, columns, selected, fields, prior, onlyNull);
 }
 
 /** 来源优先取本地字段草稿，目的行继续按原主键及已保留的行版本暂存。 */
@@ -101,14 +101,22 @@ export function postgresRangeFillAcross(page: PostgresTablePage, columns: readon
 
 /** 以明确的勾选行、原行键和可见列构造整批草稿。其它字段及已暂存行版本由原工作区保留。 */
 export function postgresBatchFillChanges(page: PostgresTablePage, visible: readonly PostgresTableColumn[],
-  selected: ReadonlySet<number>, fields: readonly PostgresTableField[], prior: (key: string) => PostgresTableChange | undefined): RecordUpdate[] {
+  selected: ReadonlySet<number>, fields: readonly PostgresTableField[], prior: (key: string) => PostgresTableChange | undefined,
+  onlyNull = false): RecordUpdate[] {
   if (!page.capabilities.update) throw Error(text.rows);
   const rows = postgresBatchRows(page, selected, prior);
   assertPostgresBatchFillFields(visible.filter(column => page.columns.includes(column)), fields);
-  return rows.flatMap(({ index: row, original, previous }) => {
-    const next = postgresFilledFields(original, fields, previous);
+  const changes = rows.flatMap(({ index: row, original, previous }): RecordUpdate[] => {
+    const targets = onlyNull ? fields.filter(({ column }) => {
+      // 原行的 NULL 若已被草稿覆盖，应保留草稿，含 DEFAULT。
+      const staged = previous?.kind === 'update' ? previous.fields.find(field => field.column === column)?.value : undefined;
+      return staged ? staged.mode === 'null' : ownCell(original, column) === null;
+    }) : fields;
+    const next = postgresFilledFields(original, targets, previous);
     return next ? [{ kind: 'update', row, fields: next }] : [];
   });
+  if (onlyNull && !changes.length) throw Error(rangeText.noNull);
+  return changes;
 }
 
 export function assertPostgresBatchFillFields(columns: readonly PostgresTableColumn[], fields: readonly PostgresTableField[]): void {

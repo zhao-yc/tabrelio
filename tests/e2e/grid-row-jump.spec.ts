@@ -1099,6 +1099,74 @@ test('SQLite JOIN 查询删除勾选主表记录在冲突或外键失败时整�
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 仅填充原生 NULL，表页一步撤销且查询预览保留空串和文本 NULL', async ({}, info) => {
+  await seed('SELECT id, name, mirror FROM subject WHERE id <= 3 ORDER BY id;',
+    "ALTER TABLE subject ADD mirror TEXT; UPDATE subject SET name=NULL, mirror='保留' WHERE id=1;" +
+    "UPDATE subject SET name='NULL' WHERE id=2; UPDATE subject SET name='', mirror='' WHERE id=3;");
+  const database = join(dataDir, 'grid-row-jump.sqlite');
+  const read = () => {
+    const db = new DatabaseSync(database, { readOnly: true });
+    try { return db.prepare('SELECT name, mirror FROM subject WHERE id <= 3 ORDER BY id').all(); }
+    finally { db.close(); }
+  };
+  const select = async (owner: Locator, rowIndex = 2, count = 3) => {
+    const grid = owner.getByRole('grid');
+    const col = await grid.getByRole('columnheader').filter({ hasText: /^name/ }).getAttribute('aria-colindex');
+    await grid.locator('[role="row"][aria-rowindex="' + rowIndex + '"] [role="gridcell"][aria-colindex="' + col + '"]').click();
+    await page.keyboard.press('Shift+ArrowRight');
+    for (let index = 1; index < count; index++) await page.keyboard.press('Shift+ArrowDown');
+  };
+  const fill = async (owner: Locator) => {
+    await owner.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    const form = owner.getByRole('region', { name: rangeFill.open, exact: true });
+    await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('补齐');
+    await form.getByRole('checkbox', { name: rangeFill.onlyNull, exact: true }).check();
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    return form;
+  };
+  const original = read();
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  await select(table);
+  await fill(table);
+  await select(table);
+  const typed = async () => JSON.parse((await readGridRangeClipboard(page)).sqlite).rows;
+  const string = (value: string) => ({ kind: 'text', value });
+  expect(await typed()).toEqual([
+    [string('补齐'), string('保留')], [string('NULL'), string('补齐')], [string(''), string('')],
+  ]);
+  expect(read()).toEqual(original);
+  const undo = table.getByRole('button', { name: '撤销 SQLite 草稿', exact: true });
+  await undo.click();
+  await select(table);
+  expect(await typed()).toEqual([
+    [{ kind: 'null' }, string('保留')], [string('NULL'), { kind: 'null' }], [string(''), string('')],
+  ]);
+  await select(table, 4, 1);
+  await expect((await fill(table)).getByRole('alert')).toHaveText(rangeFill.noNull);
+  await expect(undo).toBeDisabled();
+
+  await page.locator('[data-workspace-tab-id="q-jump"]').getByRole('button', { name: '查询定位', exact: true }).click();
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  await select(query);
+  await fill(query);
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  const sql = await preview.getByLabel('SQLite 修改 SQL 预览', { exact: true }).textContent();
+  expect(sql?.match(/UPDATE /g)).toHaveLength(2);
+  expect(sql).toContain('SET "name"=');
+  expect(sql).toContain('SET "mirror"=');
+  expect(read()).toEqual(original);
+  await info.attach('SQLite查询仅填充SQLNULL预览', { body: await page.screenshot(), contentType: 'image/png' });
+  await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+  await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  expect(read()).toEqual([
+    { name: '补齐', mirror: '保留' }, { name: 'NULL', mirror: '补齐' }, { name: '', mirror: '' },
+  ]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 整数序列检查溢出、一步撤销并按查询显示顺序提交', async ({}, info) => {
   await seed('SELECT id, qty FROM subject ORDER BY id DESC LIMIT 3;',
     'ALTER TABLE subject ADD qty INTEGER; UPDATE subject SET qty = 1000 + id;');

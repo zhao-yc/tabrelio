@@ -133,6 +133,24 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
       { ...beforeSequence[1], rank_value: '18446744073709551613' },
       beforeSequence[2],
     ]);
+    await observer.query(`UPDATE ${table} SET note = CASE id
+      WHEN 9007199254740992 THEN NULL WHEN 9007199254740993 THEN 'NULL' ELSE '' END`);
+    await execute('18446744073709551615');
+    const beforeNullFill = await read();
+    const noteColumn = await grid.getByRole('columnheader').filter({ hasText: /^同名/ }).first().getAttribute('aria-colindex');
+    await cell('9007199254740992').locator('..').locator('[role="gridcell"][aria-colindex="' + noteColumn + '"]').click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await query.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('补齐');
+    await form.getByRole('checkbox', { name: rangeFill.onlyNull, exact: true }).check();
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    await review(fill);
+    await expect(fill.getByRole('table').getByRole('row')).toHaveCount(2);
+    expect(await read()).toEqual(beforeNullFill);
+    await submit(fill);
+    await expect(fill).toBeHidden();
+    expect(await read()).toEqual([{ ...beforeNullFill[0], note: '补齐' }, ...beforeNullFill.slice(1)]);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

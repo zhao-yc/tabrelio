@@ -92,8 +92,11 @@ export class BatchFillIntent {
 }
 
 /** 为已验证的本地选区生成新行，跨页时同样只解析一次输入并共用整组选区的预算。 */
-export function prepareBatchFill(assignments: readonly BatchFillAssignment[], rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext): DraftRow[] {
-  const columns = batchFillColumns(context), values = new Map<string, DraftRow['data'][string]>(); let preparedBytes = 0;
+export function prepareBatchFill(assignments: readonly BatchFillAssignment[], rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext,
+  onlyNull = false): DraftRow[] {
+  const columns = batchFillColumns(context), values = new Map<string, DraftRow['data'][string]>();
+  const selected = onlyNull ? rows.filter(row => ids.has(row.id)) : undefined;
+  let preparedBytes = 2;
   if (!Array.isArray(assignments) || !assignments.length || assignments.length > columns.length || assignments.length > limits.columns) throw Error(text.assignments);
   for (const assignment of assignments) {
     if (!assignment || values.has(assignment.column)) throw Error(text.assignments);
@@ -104,11 +107,20 @@ export function prepareBatchFill(assignments: readonly BatchFillAssignment[], ro
     if (/^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(column.type) && !['binary', 'null'].includes(input.mode)) throw Error(text.column);
     const value = parseCell(input.text, input.mode as 'text' | 'json' | 'binary' | 'null');
     // 已准备字段就是最终线路的必要下界；扇出必超预算时不继续解析后续大值或分配行。
-    preparedBytes += bytes(column.name) + bytes(value) + 4;
-    if (preparedBytes * ids.size + 2 > limits.inputBytes) throw Error(text.budget);
+    const count = selected?.filter(row => ownCell(row.data, column.name) === null).length ?? ids.size;
+    preparedBytes += (bytes(column.name) + bytes(value) + 4) * count;
+    if (preparedBytes > limits.inputBytes) throw Error(text.budget);
     values.set(column.name, value);
   }
-  return applyBatchFill(values, rows, ids);
+  if (!onlyNull) return applyBatchFill(values, rows, ids);
+  // 只认当前草稿中的真实 NULL，缺失字段仍交给数据库的 DEFAULT。
+  const next = applyBatchRowPatches(rows, row => {
+    if (!ids.has(row.id)) return;
+    const targets = [...values].filter(([key]) => ownCell(row.data, key) === null);
+    if (targets.length) return Object.fromEntries(targets);
+  });
+  if (next === rows) throw Error(rangeText.noNull);
+  return next;
 }
 
 /** 同列复制使用原协议值，避免精确数字或 BLOB 经输入文本重新解析。 */

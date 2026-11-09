@@ -19,6 +19,24 @@ const page: PostgresTablePage = {
 };
 
 describe('PostgreSQL 勾选记录批量填充', () => {
+  it('仅填充当前 NULL，优先判断草稿并保留 DEFAULT 与其它字段', () => {
+    const mirror = column('mirror');
+    const current = { ...page, columns: [...columns, mirror],
+      rows: [{ ...page.rows[0], c1: null, mirror: '已填写' }, { ...page.rows[1], mirror: null }] };
+    const prior = (key: string): PostgresTableChange | undefined => key === '一' ? {
+      kind: 'update', row: 0, fields: [
+        { column: 'c1', value: { mode: 'default' } },
+        { column: 'mirror', value: { mode: 'null' } },
+      ],
+    } : undefined;
+    expect(postgresRangeFillChanges(current, [columns[1], mirror], 0, 2, '补齐', prior, true)).toEqual([
+      { kind: 'update', row: 0, fields: [
+        { column: 'c1', value: { mode: 'default' } },
+        { column: 'mirror', value: { mode: 'text', value: '补齐' } },
+      ] },
+      { kind: 'update', row: 1, fields: [{ column: 'mirror', value: { mode: 'text', value: '补齐' } }] },
+    ]);
+  });
   it('查询选区使用快照行序，省略同值，拒绝更新主键或生成列', () => {
     expect(postgresQueryRangeFillChanges(page, [columns[1]], { kind: 'text', value: '甲' })).toEqual([
       { kind: 'update', row: 1, fields: [{ column: 'c1', value: { mode: 'text', value: '甲' } }] },

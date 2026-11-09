@@ -2,8 +2,8 @@ import { sqliteEditValueSchema, sqliteTableEditLimits, type SqliteEditValue } fr
 import { gridRangeFillColumns, gridRangeFillSource, type GridRangeFillInput } from './gridRangeFill';
 import { gridRangeFillZh as text } from './locales/gridRangeFill.zh-CN';
 import { sqliteColumnAcceptsTransferValue } from './sqliteRecordTransfer';
-import { prepareSqliteFill, stageSqliteIntegerSequence } from './sqliteTableFill';
-import type { SqliteTableEditor } from './sqliteTableEditor';
+import { prepareSqliteFill, stageSqliteIntegerSequence, stageSqliteNullFill } from './sqliteTableFill';
+import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
 
 export interface SqliteQueryRangeFill {
   columns: string[];
@@ -29,14 +29,13 @@ export function stageSqliteQueryRangeFill(editor: SqliteTableEditor, { columns, 
   if (affectedRows.length * targets.length > sqliteTableEditLimits.cells) throw Error(text.limit);
   const entered = side || vertical ? undefined : sqliteEditValueSchema.parse(input.kind === 'null'
     ? { kind: 'null' } : { kind: input.kind, value: input.value });
-  const patches = affectedRows.map(row => ({
-    rowId: row.id,
-    fields: targets.map(column => {
-      const value: SqliteEditValue = entered ?? sqliteEditValueSchema.parse(side ? row.values[side.source] : vertical?.source.values[column]);
-      const field = edit.columns[column];
-      if (!sqliteColumnAcceptsTransferValue(field, !!edit.strict, value, !!(side || vertical))) throw Error(text.incompatible(field.name));
-      return { column, value };
-    }),
-  }));
+  const fieldsFor = (row: SqliteDraftRow) => targets.map(column => {
+    const value: SqliteEditValue = entered ?? sqliteEditValueSchema.parse(side ? row.values[side.source] : vertical?.source.values[column]);
+    const field = edit.columns[column];
+    if (!sqliteColumnAcceptsTransferValue(field, !!edit.strict, value, !!(side || vertical))) throw Error(text.incompatible(field.name));
+    return { column, value };
+  });
+  if (input.onlyNull && entered && entered.kind !== 'null') return stageSqliteNullFill(editor, rows, fieldsFor(rows[0]));
+  const patches = affectedRows.map(row => ({ rowId: row.id, fields: fieldsFor(row) }));
   return editor.editRecords(prepareSqliteFill(page, rows, affectedRows), patches);
 }

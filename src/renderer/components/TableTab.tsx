@@ -1888,7 +1888,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if ((kind !== 'text' && kind !== 'null') ||
         target.rows.some(row => row.deleted || !row.inserted && target.keys.some(key => !Object.hasOwn(row.data, key)))) throw Error(rangeFillText.target);
     const next = prepareBatchFill(target.keys.map(column => ({ column, input: { mode: kind, text: value } })),
-      rows, new Set(target.rows.map(row => row.id)), getRecordContext());
+      rows, new Set(target.rows.map(row => row.id)), getRecordContext(), kind === 'text' && input.onlyNull);
     if (next !== rows) setRows(next);
     setError('');
   }

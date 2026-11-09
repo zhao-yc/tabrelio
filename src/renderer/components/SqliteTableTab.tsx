@@ -89,7 +89,7 @@ import { sqliteHeaderSortFromGrid, sqliteHeaderSortToGrid, type SqliteHeaderSort
 import { parsePageJump, parseTablePageSize } from '../tableFilters';
 import { prepareSqliteDuplicate, sqliteDuplicateSourceCurrent, type SqliteDuplicateSource } from '../sqliteTableDuplicate';
 import type { SqliteCheckedRows } from '../sqliteTableSelection';
-import { prepareSqliteFill, sqliteFillSourceCurrent, stageSqliteIntegerSequence, type SqliteFillSource, type SqliteFillField } from '../sqliteTableFill';
+import { prepareSqliteFill, sqliteFillSourceCurrent, stageSqliteIntegerSequence, stageSqliteNullFill, type SqliteFillSource, type SqliteFillField } from '../sqliteTableFill';
 import { SqliteTableFillDialog } from './SqliteTableFillDialog';
 import { sqliteTableFillZh as fillText } from '../locales/sqliteTableFill.zh-CN';
 import { SqliteFilteredSelectIntent, type SqliteFilteredSelectPlan } from '../sqliteFilteredSelectUi';
@@ -1427,7 +1427,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         throw Error(rangeFillText.target);
       return { column, value };
     });
-    editor.fillRows((from?.rows ?? range.rows).map(row => row.id), fields);
+    if (input.onlyNull && !from && input.kind !== 'null') stageSqliteNullFill(editor, range.rows, fields);
+    else editor.fillRows((from?.rows ?? range.rows).map(row => row.id), fields);
     setValidation('');
   }
   /** 输入窗口固定原锚点，不随焦点移动改写目标；原editor仍是已接管草稿的授权来源。 */

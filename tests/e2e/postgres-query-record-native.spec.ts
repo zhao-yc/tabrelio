@@ -371,6 +371,26 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     expect(await read()).toEqual(afterRight);
     await submit(3);
     expect((await read()).map(row => row.qty)).toEqual(sequence);
+    await observer.query("UPDATE public.query_fill SET note = CASE id WHEN 2 THEN NULL WHEN 3 THEN '' ELSE 'NULL' END");
+    await execute.click();
+    await expect(cell('2')).toBeVisible();
+    if (!await idHeader.getByLabel(queryResultSortZh.ascending).isVisible()) await idHeader.click();
+    const beforeNullFill = await read();
+    const noteColumn = await query.getByRole('columnheader').filter({ hasText: /^note/ }).getAttribute('aria-colindex');
+    await cell('2').locator('..').locator('[role="gridcell"][aria-colindex="' + noteColumn + '"]').click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await query.getByRole('button', { name: fillText.open, exact: true }).click();
+    await form.getByRole('textbox', { name: fillText.value, exact: true }).fill('补齐');
+    await form.getByRole('checkbox', { name: fillText.onlyNull, exact: true }).check();
+    await form.getByRole('button', { name: fillText.stage, exact: true }).click();
+    await expectPreview();
+    await expect(preview.locator('dd')).toHaveText(['补齐']);
+    expect(await read()).toEqual(beforeNullFill);
+    await submit(1);
+    const afterNullFill = await read();
+    expect(afterNullFill[0]).toMatchObject({ note: '补齐' });
+    expect(afterNullFill.slice(1)).toEqual(beforeNullFill.slice(1));
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

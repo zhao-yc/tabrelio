@@ -106,7 +106,7 @@ export function mysqlQueryBatchChanges(info: TableInfo, originals: DataRow[], co
     } else {
       if (kind !== 'text' && kind !== 'null') throw Error(rangeText.target);
       next = prepareBatchFill(columns.map(column => ({ column, input: { mode: kind, text: value } })),
-        rows, new Set(rows.map(row => row.id)), context);
+        rows, new Set(rows.map(row => row.id)), context, kind === 'text' && operation.input.onlyNull);
     }
   }
   const changes = collectChanges(next);

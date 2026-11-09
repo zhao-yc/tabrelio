@@ -4,7 +4,7 @@ import type { GridCellRectangle, GridRangeTarget } from './useGridCellRange';
 export type GridRangeFillDirection = 'down' | 'up';
 export type GridRangeFillSide = 'left' | 'right';
 export type GridRangeFillKind = 'text' | 'null' | 'integer' | 'real' | 'sequence' | GridRangeFillDirection | GridRangeFillSide;
-export interface GridRangeFillInput { kind: GridRangeFillKind; value: string; step?: string; }
+export interface GridRangeFillInput { kind: GridRangeFillKind; value: string; step?: string; onlyNull?: true; }
 
 /** 等差序列的极值必在端点，先检查字段范围，再按显示行号生成精确整数。 */
 export function gridRangeIntegerSequence(input: GridRangeFillInput, count: number, bits = 64, unsigned = false) {

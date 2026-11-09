@@ -19,6 +19,20 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('仅填充当前草稿中的 NULL，保留空串和新增草稿 DEFAULT', () => {
+    const { rows, context } = fixture();
+    rows[0].data.note = null;
+    rows[1].data.note = '';
+    rows[2].data.note = 'NULL';
+    const inserted: DraftRow = { id: '待默认', data: {}, inserted: true, deleted: false };
+    const current = [...rows, inserted], ids = new Set(current.map(row => row.id));
+    const assignments: BatchFillAssignment[] = [{ column: 'note', input: { mode: 'text', text: '补齐' } }];
+    const next = prepareBatchFill(assignments, current, ids, context, true);
+    expect(next.map(row => row.data.note)).toEqual(['补齐', '', 'NULL', undefined]);
+    expect(next.slice(1).every((row, index) => row === current[index + 1])).toBe(true);
+    expect(() => prepareBatchFill(assignments, next, ids, context, true)).toThrow(/没有可填充/);
+    expect(rows[0].data.note).toBeNull();
+  });
   it('序列按字段位宽一次生成草稿，保护选区外记录和不可编辑字段', () => {
     const { rows, info, context } = fixture();
     info.columns[2].type = 'SMALLINT(5) UNSIGNED';

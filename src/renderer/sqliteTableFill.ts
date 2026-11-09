@@ -1,5 +1,5 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
-import { sqliteTableEditLimits, type SqliteOriginalValue } from '../shared/sqliteTableEdit';
+import { sqliteTableEditLimits, type SqliteEditValue, type SqliteOriginalValue } from '../shared/sqliteTableEdit';
 import type { SqliteDraftRow, SqliteTableEditor } from './sqliteTableEditor';
 import { sqliteTableEditZh as text } from './locales/sqliteTableEdit.zh-CN';
 import { gridRangeFillZh as rangeText } from './locales/gridRangeFill.zh-CN';
@@ -21,6 +21,17 @@ export function stageSqliteIntegerSequence(editor: SqliteTableEditor, selected: 
   return editor.editRecords(prepareSqliteFill(page, editor.view.rows, selected), selected.map((row, index) => ({
     rowId: row.id, fields: [{ column, value: { kind: 'integer', value: valueAt(index) } }],
   })));
+}
+
+/** 只为当前值为原生 NULL 的目标格生成差异，保留文本、空串和 DEFAULT。 */
+export function stageSqliteNullFill(editor: SqliteTableEditor, selected: readonly SqliteDraftRow[],
+  fields: readonly { column: number; value: SqliteEditValue }[]): number {
+  const patches = selected.flatMap(row => {
+    const targets = fields.filter(({ column }) => row.values[column]?.kind === 'null');
+    return targets.length ? [{ rowId: row.id, fields: targets }] : [];
+  });
+  if (!patches.length) throw Error(rangeText.noNull);
+  return editor.editRecords(prepareSqliteFill(editor.page, editor.view.rows, selected), patches);
 }
 
 export interface SqliteFillField { column: number; value: SqliteOriginalValue | undefined; }
