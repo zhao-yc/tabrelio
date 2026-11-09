@@ -5,6 +5,7 @@ import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
+import { gridRangeCopyActions } from '../gridRangeCopy';
 import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { DataGrid, SelectColumn, renderCheckbox, renderHeaderCell, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
@@ -275,9 +276,19 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     const index = key?.startsWith('c') ? Number(key.slice(1)) : -1, edit = page.edit;
     if (!row || key === undefined || row.deleted || !order.includes(index) || edit?.kind !== 'editable' || disabled || !baseCurrent(row)) return false;
     const column = edit.columns[index], raw = row.values[index];
+    const rectangle = cellRange.at(row, rows.indexOf(row), key);
     const current = () => source.current === owner && checkedContext.current?.owner === owner &&
-      !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal();
-    return cellActionMenu.open(target, grid.current?.element, { title: column.name, current, actions: [
+      !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal() &&
+      (!rectangle || cellRange.rectangleCurrent(rectangle));
+    return cellActionMenu.open(target, grid.current?.element, { title: column.name, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
+      ...(rectangle ? gridRangeCopyActions(headers => {
+        try {
+          const selected = cellRange.copyRectangle(rectangle, (item, key) => item.values[Number(key.slice(1))], item => item.deleted);
+          if (!selected?.values.length) return;
+          const content = encodeSqliteClipboard(selected.values, selected.columns.map(key => page.columns[Number(key.slice(1))].name), headers);
+          writeTableClipboardEvent(current, data => writeSqliteClipboardData(data, content));
+        } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
+      }) : []),
       { label: quickValueText.copyCell, run: () => {
         try {
           const content = clipboardContent([], row, key);

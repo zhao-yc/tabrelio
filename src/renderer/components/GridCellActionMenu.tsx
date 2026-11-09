@@ -6,8 +6,8 @@ import { useWorkspace } from '../store';
 import '../sidebarContextMenu.css';
 
 export interface GridCellAction { label: string; disabled?: boolean; run(): void; }
-interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; current(): boolean; }
-interface Owner extends Request { cell: HTMLElement; x: number; y: number; }
+interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; current(): boolean; focusTarget?(): HTMLElement | undefined; }
+interface Owner extends Request { cell: HTMLElement; grid: HTMLElement; scrollLeft: number; scrollTop: number; x: number; y: number; }
 
 export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat: boolean; keyCode: number; nativeEvent: { isComposing: boolean } }): boolean {
   const key = event.key.toLowerCase();
@@ -23,7 +23,7 @@ export function useGridCellActionMenu() {
     if (!request || active.current !== request) return;
     active.current = undefined;
     setOwner(undefined);
-    if (focus && request.current()) request.cell.focus({ preventScroll: true });
+    if (focus && request.current()) (request.focusTarget?.() ?? request.cell).focus({ preventScroll: true });
   }
 
   useLayoutEffect(() => { if (owner && !owner.current()) close(owner); });
@@ -55,7 +55,8 @@ export function useGridCellActionMenu() {
     };
     if (!current()) return false;
     const rect = cell.getBoundingClientRect();
-    const next = { ...request, ...(point ?? { x: rect.left, y: rect.bottom }), cell, current };
+    const next = { ...request, ...(point ?? { x: rect.left, y: rect.bottom }), cell, grid,
+      scrollLeft: grid.scrollLeft, scrollTop: grid.scrollTop, current };
     active.current = next;
     setOwner(next);
     return true;
@@ -79,17 +80,22 @@ function GridCellMenu({ owner, close, choose }: { owner: Owner; close(focus: boo
     element.style.top = `${Math.max(8, Math.min(owner.y, window.innerHeight - rect.height - 8))}px`;
     (element.querySelector<HTMLElement>('button:not(:disabled)') ?? element).focus({ preventScroll: true });
     const outside = (event: Event) => { if (!(event.target instanceof Node) || !element.contains(event.target)) closeRef.current(false); };
+    // 打开前滚动的事件可能延迟派发。仅滚动位置实际变化时关闭菜单。
+    const scroll = (event: Event) => {
+      if (event.target === owner.grid && owner.grid.scrollLeft === owner.scrollLeft && owner.grid.scrollTop === owner.scrollTop) return;
+      outside(event);
+    };
     const dismiss = () => closeRef.current(false);
     const observer = new MutationObserver(() => { if (!owner.current()) dismiss(); });
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['role', 'aria-rowindex', 'aria-colindex'] });
     document.addEventListener('pointerdown', outside, true);
-    document.addEventListener('scroll', outside, true);
+    document.addEventListener('scroll', scroll, true);
     window.addEventListener('blur', dismiss);
     window.addEventListener('resize', dismiss);
     return () => {
       observer.disconnect();
       document.removeEventListener('pointerdown', outside, true);
-      document.removeEventListener('scroll', outside, true);
+      document.removeEventListener('scroll', scroll, true);
       window.removeEventListener('blur', dismiss);
       window.removeEventListener('resize', dismiss);
     };

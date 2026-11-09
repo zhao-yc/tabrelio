@@ -75,7 +75,13 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   }
 
   function mouse(args: CellMouseArgs<Row>, event: CellMouseEvent) {
-    if (live.current.scope !== scope || !current() || event.button !== 0) return;
+    if (live.current.scope !== scope || !current()) return;
+    // RDG 默认会在右键按下时移动活动格；选区内开菜单应保留原端点。
+    if (event.button === 2 && at(args.row, args.rowIdx, args.column.key) && allowed(event)) {
+      event.preventDefault(); event.preventGridDefault();
+      return;
+    }
+    if (event.button !== 0) return;
     stopDrag();
     const active = position(args.row, args.rowIdx, args.column.key), anchor = live.current.anchor ?? live.current.active;
     if (event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && active && anchor && allowed(event)) {
@@ -154,7 +160,26 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return target;
   }
 
-  return { rectangle, mouse, key, move, copy, capture, pasteTarget };
+  function rectangleCurrent(selected: GridCellRectangle): boolean {
+    return live.current.scope === scope && live.current.rectangle === selected && !drag.current && committedCurrent.current();
+  }
+
+  /** 仅在物理点击的数据格位于矩形内时提供选区动作。 */
+  function at(row: Row, rowIndex: number, key: string): GridCellRectangle | undefined {
+    const selected = live.current.rectangle, point = position(row, rowIndex, key);
+    if (!selected || !point || !rectangleCurrent(selected)) return;
+    if (gridCellRangeClass(selected, point.row, point.column)) return selected;
+  }
+
+  function copyRectangle<Value>(selected: GridCellRectangle, read: (row: Row, key: string) => Value, skip?: (row: Row) => boolean) {
+    if (rectangleCurrent(selected)) return readGridCellRange(selected, rows, keys, read, skip);
+  }
+
+  function focusTarget() {
+    return grid.current?.element?.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? undefined;
+  }
+
+  return { rectangle, mouse, key, move, copy, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
 }
 
 const arrowDirections = new Map<string, Point>([

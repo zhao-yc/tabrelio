@@ -19,7 +19,9 @@ import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sq
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
-import { gridCellCenter, pasteGridRangeClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridCellCenter, pasteGridRangeClipboard, readGridMenuClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
+import { gridQuickValueZh as cellCopy } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 import { sqliteTableRangePasteZh as sqlitePaste } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
@@ -275,6 +277,50 @@ test('查询结果和 SQLite 表页可选择并复制矩形区域，保留勾选
   await page.mouse.up();
   await expect(destination).toBeFocused();
   expect((await readGridRangeClipboard(page)).sqlite).toBe(payload.sqlite);
+  expect(pageErrors).toEqual([]);
+});
+
+test('查询和 SQLite 可从选区内打开复制菜单，表头只进入文本并恢复端点焦点', async () => {
+  await seed();
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const first = query.getByRole('gridcell', { name: '180', exact: true });
+  const end = query.getByRole('gridcell', { name: '记录 179', exact: true });
+  const menu = page.getByRole('menu');
+  const copy = (label: string) => readGridMenuClipboard(page, menu.getByRole('menuitem', { name: label, exact: true }));
+  await first.click();
+  await end.click({ modifiers: ['Shift'] });
+  await first.click({ button: 'right' });
+  await expect(menu.getByRole('menuitem', { name: cellCopy.copyCell, exact: true })).toBeVisible();
+  const queryCopy = await copy(rangeCopy.withHeaders);
+  expect(queryCopy.text).toBe('id\tname\n180\t记录 180\n179\t记录 179');
+  expect(JSON.parse(queryCopy.typed).rows).toEqual([['180', '记录 180'], ['179', '记录 179']]);
+  await expect(end).toBeFocused();
+  await first.click({ button: 'right' });
+  await expect(menu).toBeVisible();
+  await query.getByRole('grid').evaluate(grid => { grid.scrollTop += 96; });
+  await expect(menu).toHaveCount(0);
+  await query.getByRole('grid').evaluate(grid => { grid.scrollTop = 0; });
+  await query.getByRole('gridcell', { name: '178', exact: true }).click({ button: 'right' });
+  await expect(menu.getByRole('menuitem', { name: rangeCopy.copy, exact: true })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  const sqliteEnd = table.getByRole('gridcell', { name: 'TEXT · 记录 2', exact: true });
+  await table.getByRole('gridcell', { name: 'INTEGER · 1', exact: true }).click();
+  await sqliteEnd.click({ modifiers: ['Shift'] });
+  await page.keyboard.press('Shift+F10');
+  const withHeaders = await copy(rangeCopy.withHeaders);
+  expect(withHeaders.text).toBe('id\tname\n1\t记录 1\n2\t记录 2');
+  expect(JSON.parse(withHeaders.sqlite)).toMatchObject({ columns: ['id', 'name'], rows: [
+    [{ kind: 'integer', value: '1' }, { kind: 'text', value: '记录 1' }],
+    [{ kind: 'integer', value: '2' }, { kind: 'text', value: '记录 2' }],
+  ] });
+  await expect(sqliteEnd).toBeFocused();
+  await page.keyboard.press('Shift+F10');
+  const plain = await copy(rangeCopy.copy);
+  expect(plain).toEqual({ ...withHeaders, text: '1\t记录 1\n2\t记录 2' });
   expect(pageErrors).toEqual([]);
 });
 

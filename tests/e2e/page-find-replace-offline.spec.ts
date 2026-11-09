@@ -7,7 +7,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
-import { gridCellCenter, pasteGridRangeClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridCellCenter, pasteGridRangeClipboard, readGridMenuClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { gridRangePasteZh as selectionPaste } from '../../src/renderer/locales/gridRangePaste.zh-CN';
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
@@ -111,6 +112,11 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   await page.mouse.up();
   await expect(to).toBeFocused();
   expect(await readGridRangeClipboard(page)).toEqual(payload);
+  await from.click({ button: 'right' });
+  const withHeaders = await readGridMenuClipboard(page, page.getByRole('menuitem', { name: rangeCopy.withHeaders, exact: true }));
+  expect(withHeaders.text).toBe('note\tother\n😀old前old后old\tOLD\n\t无匹配');
+  expect(withHeaders.typed).toBe(payload.typed);
+  await expect(to).toBeFocused();
   expect(await calls()).toEqual([]);
 });
 

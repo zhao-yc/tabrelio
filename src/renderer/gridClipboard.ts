@@ -248,7 +248,12 @@ export function writeTableClipboardEvent(current: () => boolean, write: (data: D
 
 /** 菜单只复制命中的一格，沿用网格键盘复制的文本和类型化格式。 */
 export function copyGridCellValue(value: ClipboardCell, current: () => boolean): void {
-  const content = encodeClipboard([[value]]);
+  copyGridCells([[value]], current);
+}
+
+/** 列名仅进入外部制表符文本，内部类型化数据仍可直接粘贴。 */
+export function copyGridCells(values: ClipboardCell[][], current: () => boolean, headers?: readonly string[]): void {
+  const content = encodeClipboard(values, headers);
   writeTableClipboardEvent(current, data => {
     data.setData('text/plain', content.text);
     data.setData(cellClipboardType, content.typed);

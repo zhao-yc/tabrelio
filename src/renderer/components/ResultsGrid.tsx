@@ -15,7 +15,7 @@ import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
-import { cellClipboardType, copyGridCellValue, copyGridColumnNames, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridCells, copyGridCellValue, copyGridColumnNames, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
 import { saveGridCell } from '../gridCellFile';
 import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { fitGridColumnWidths, gridResizeHandleColumn } from '../gridColumnFit';
@@ -29,6 +29,7 @@ import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.z
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { gridCellRangeClass, useGridCellRange, type GridRangeTarget } from '../useGridCellRange';
+import { gridRangeCopyActions } from '../gridRangeCopy';
 import { GridRangeFill } from './GridRangeFill';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import type { QueryResultFindScan } from '../queryResultFind';
@@ -306,7 +307,9 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     const located = locateCell(row, rowIdx, key, target);
     if (!located || key === undefined || skipRowInInversion?.(located.cell.row)) return false;
     const { cell } = located, column = cell.column!;
+    const rectangle = cellRange.at(cell.row, rowIdx, key);
     const current = () => actionCurrent() && tableCopy?.isCurrent() !== false && rows[cell.index] === cell.row && !skipRowInInversion?.(cell.row) &&
+      (!rectangle || cellRange.rectangleCurrent(rectangle)) &&
       !document.querySelector(appModalSelector);
     const filter = cellMenuFilters?.(cell), actions = [...(filter?.actions ?? [])];
     if ((rowJump || hasResultTools || tableCopy) && tableCopy?.enabled !== false) {
@@ -314,6 +317,13 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
         try { copyGridCellValue(copyValue(cell.row, key), current); }
         catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       } });
+      if (rectangle) actions.unshift(...gridRangeCopyActions(headers => {
+        try {
+          const content = cellRange.copyRectangle(rectangle, copyValue, skipRowInInversion);
+          if (content?.values.length) copyGridCells(content.values, current, headers
+            ? content.columns.map(key => columns.find(column => column.key === key)!.name) : undefined);
+        } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
+      }));
     }
     if (onFilterCell) try {
       const capture = captureQueryResultCellFilter(columns, rows, cell, sqliteSource, filterDialect);
@@ -332,7 +342,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       actions.push({ label: gridCellFileZh.action, disabled: value == null,
         run: () => { void saveGridCell(() => copyValue(cell.row, key), current); } });
     }
-    return cellActionMenu.open(target, gridRef.current?.element, { title: column.name, label: filter?.label, actions, current }, point);
+    return cellActionMenu.open(target, gridRef.current?.element, { title: column.name, label: filter?.label, actions, current,
+      focusTarget: rectangle ? cellRange.focusTarget : undefined }, point);
   }
 
   /** 只消费焦点所在的原始数据格，文本编辑控件继续使用系统粘贴。 */

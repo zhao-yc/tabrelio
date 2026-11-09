@@ -17,6 +17,7 @@ import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle } from '../useGridCellRange';
+import { gridRangeCopyActions } from '../gridRangeCopy';
 import { GridRangeFill, type GridRangeFillInput } from './GridRangeFill';
 import { fitGridRangePaste } from '../gridRangePaste';
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
@@ -36,7 +37,7 @@ import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease, type Works
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
 import { collectChanges, newDraftRow, type DraftRow } from '../dataChanges';
-import { cellClipboardType, copyGridCellValue, copyGridColumnNames, decodeClipboard, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridCells, copyGridCellValue, copyGridColumnNames, decodeClipboard, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
@@ -1993,14 +1994,22 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   function openCellActions(row: DraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     if (!row || key === undefined || !visibleKeys.includes(key) || !cellActionCurrent(row)) return false;
+    const rectangle = cellRange.at(row, rows.indexOf(row), key);
     const filters = [];
     if (canSeedCellFilter && info) try {
       tableCellFilterDraft(info.columns, rows, visibleKeys, { rowId: row.id, key });
       filters.push({ label: cellFilterText.equal, run: () => stageMenuCellFilter.current(false, { row, key }) },
         { label: cellFilterText.exclude, run: () => stageMenuCellFilter.current(true, { row, key }) });
     } catch { /* 未经原值校验的格不提供筛选项。 */ }
-    const current = () => cellActionCurrent(row);
-    return cellActionMenu.open(target, grid.current?.element, { title: key, current, actions: [
+    const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
+    return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
+      ...(rectangle ? gridRangeCopyActions(headers => {
+        try {
+          const selected = cellRange.copyRectangle(rectangle, (item, key) => ownCell(item.data, key), item => item.deleted);
+          if (selected?.values.length) copyGridCells(selected.values, current, headers
+            ? selected.columns.map(key => visibleColumns.find(column => column.key === key)!.name) : undefined);
+        } catch (reason) { if (current()) setError(errorMessage(reason)); }
+      }) : []),
       { label: quickValueText.copyCell, run: () => {
         try { copyGridCellValue(ownCell(row.data, key), current); }
         catch (reason) { if (current()) setError(errorMessage(reason)); }
