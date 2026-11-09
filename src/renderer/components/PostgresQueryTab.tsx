@@ -306,6 +306,7 @@ export function PostgresQueryTab({
     result: QueryResult; scope: Scope; job: ReturnType<typeof acquireWorkspaceBusy>;
     cell?: PostgresQueryCellEdit;
     range?: PostgresQueryRangeEdit;
+    deletePositions?: readonly number[];
   }>();
   const retiredRecordExecution = useRef<string | undefined>(undefined);
   useEffect(() => () => { recordEdit?.job.release(); }, [recordEdit]);
@@ -1386,8 +1387,8 @@ export function PostgresQueryTab({
     return !!origin && (joinTarget === undefined || origin.relation === joinTarget);
   }
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
-  function openQueryRecords(rows: readonly DataRow[], { cell, range, operation }: {
-    cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; operation?: 'delete' | 'insert' | 'new';
+  function openQueryRecords(rows: readonly DataRow[], { cell, range, operation, deletePositions }: {
+    cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; operation?: 'delete' | 'insert' | 'new'; deletePositions?: readonly number[];
   } = {}): boolean {
     const original = session.current;
     if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding) ||
@@ -1400,7 +1401,7 @@ export function PostgresQueryTab({
     const source: PostgresQueryRecordIntent = operation === 'new' ? { ...identity, operation }
       : operation ? { ...identity, rowIndices, operation }
       : range ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
-    setRecordEdit({ result, scope, job, cell, range, source });
+    setRecordEdit({ result, scope, job, cell, range, source, deletePositions });
     setError('');
     return true;
   }
@@ -1410,7 +1411,9 @@ export function PostgresQueryTab({
     if (!binding || !resultCurrent()) return;
     const checked = resultSelection.checkedIndices(binding);
     if (!checked.length || checked.length > postgresTableLimits.changes) return;
-    openQueryRecords(checked.map(index => binding.rows[index]), { operation });
+    openQueryRecords(checked.map(index => binding.rows[index]), {
+      operation, deletePositions: operation === 'delete' ? checked.map(index => index + 1) : undefined,
+    });
   }
 
   function editQueryCell(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
@@ -2261,8 +2264,8 @@ export function PostgresQueryTab({
                     if (activeDetailRow && activeDetailRow.binding === detailBinding)
                       openQueryRecords([activeDetailRow.binding.rows[activeDetailRow.index]]);
                   }}>{joinTarget === undefined ? originsText.edit : originsText.editJoin}</button>}
-                {canDeleteQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
-                  title={originsText.deleteLimit} onClick={() => openCheckedQueryRows('delete')}>{originsText.deleteChecked}</button>}
+                {canDeleteQueryRecord && <button className="danger" disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
+                  title={originsText.deleteLimit} onClick={() => openCheckedQueryRows('delete')}>{joinTarget === undefined ? originsText.deleteChecked : originsText.deleteCheckedJoin}</button>}
                 {canDuplicateQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
                   title={originsText.duplicateLimit} onClick={() => openCheckedQueryRows('insert')}>{originsText.duplicateChecked}</button>}
                 {canAddQueryRecord && <button disabled={locked} onClick={() => openQueryRecords([], { operation: 'new' })}>{originsText.add}</button>}
@@ -2385,7 +2388,7 @@ export function PostgresQueryTab({
       {recordReference && <PostgresQueryReferenceDialog request={recordReference.request} direction={recordReference.direction}
         isCurrent={() => queryReferenceCurrent(recordReference)} onClose={() => closeQueryReference(recordReference)} />}
       {recordEdit && <PostgresSearchRecordEditDialog connectionId={tab.connectionId} database={recordEdit.scope.database} queryRecord={recordEdit.source}
-        cell={recordEdit.cell} range={recordEdit.range} visible={workspace.settings.activeTabId === tab.id}
+        cell={recordEdit.cell} range={recordEdit.range} deletePositions={recordEdit.deletePositions} visible={workspace.settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && same(recordEdit.scope) && session.current?.id === recordEdit.source.sessionId &&
           selectedResultRef.current === recordEdit.result && !closeRef.current && useWorkspace.getState().settings.activeTabId === tab.id}
         onDirty={() => { /* 原编辑窗口全程持有标签占用，放弃草稿由对话框确认。 */ }}

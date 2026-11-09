@@ -1167,7 +1167,8 @@ export class PostgresEngine {
             if (confirmed.rowSql && (!joined || rowsEditable))
               rowSql = postgresQueryRowSql(confirmed.rowSql, targets, confirmed.keys, rowsEditable);
             const capabilities = { update: rowsEditable && confirmed.capabilities.update,
-              delete: !joined && rowsEditable && confirmed.capabilities.delete,
+              // 截断的 JOIN 结果无法排除未返回行再次引用同一主键。
+              delete: rowsEditable && confirmed.capabilities.delete && (!joined || !result.truncated),
               insert: !joined && rowsEditable && confirmed.capabilities.insert, newRecord: !joined && confirmed.capabilities.insert,
               reference: rowsEditable && confirmed.capabilities.reference };
             if (Object.values(capabilities).some(Boolean))

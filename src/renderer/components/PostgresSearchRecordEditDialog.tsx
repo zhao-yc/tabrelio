@@ -42,12 +42,13 @@ export type PostgresQueryRangeEdit = {
   { kind: 'replace'; positions: number[]; patches: (Omit<PageTextPatch, 'key'> & { columnIndex: number })[] };
 type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: never; cell?: never; visible?: never; isCurrent?: never } |
   { table?: never; recordRef?: never; queryRecord: PostgresQueryRecordIntent; cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit;
-    visible: boolean; isCurrent(): boolean });
+    deletePositions?: readonly number[]; visible: boolean; isCurrent(): boolean });
 
 /** 独立于工作台表页的原行编辑，迟到的快照与提交回执分别清理和报告。 */
 export function PostgresSearchRecordEditDialog(props: Props) {
   const { connectionId, database, table: initialTable, recordRef, focusColumn, queryRecord, cell } = props;
   const range = 'range' in props ? props.range : undefined;
+  const deletePositions = 'deletePositions' in props ? props.deletePositions : undefined;
   const requestedOperation = queryRecord?.operation ?? 'update';
   const adding = requestedOperation === 'new';
   const operation = adding ? 'insert' : requestedOperation;
@@ -109,7 +110,8 @@ export function PostgresSearchRecordEditDialog(props: Props) {
           if (duplicating) {
             setDuplicate(postgresBatchDuplicatePlan(result, new Set(result.rows.map((_, index) => index)), () => undefined));
           } else if (deleting) {
-            if (!result.primaryKey?.length || result.primaryKey.some(name => !result.columns.some(column => column.name === name)))
+            if (deletePositions?.length !== result.rows.length ||
+                !result.primaryKey?.length || result.primaryKey.some(name => !result.columns.some(column => column.name === name)))
               throw Error(labels.stale);
             const request = postgresTablePreviewSchema.parse({ ...target, table: loaded.table, pageToken: result.pageToken,
               changes: result.rows.map((_, row) => ({ kind: 'delete', row })) });
@@ -175,7 +177,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       if (token.current) { void release(token.current); token.current = undefined; }
       callbacks.current.onDirty(false);
     };
-  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId, cell, range, operation]);
+  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId, cell, range, operation, deletePositions]);
 
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
@@ -256,9 +258,12 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       <p>{bulkLabels?.hint ?? labels.hint}</p>
       {busy && <Spinner text={text.reading}/>}
       <ErrorBox message={error}/>
-      {keys && page && <table className="dense-table"><thead><tr>{keys.map(key => <th key={key.key}>{key.name}</th>)}</tr></thead>
-        <tbody>{page.rows.map((row, index) => <tr key={index}>{keys.map(key =>
-          <td key={key.key}>{cellPreview(ownCell(row, key.key))}</td>)}</tr>)}</tbody></table>}
+      {keys && page && deletePositions && <>
+        <p>{queryText.deleteTarget(table)}</p>
+        <table className="dense-table"><thead><tr><th scope="col">{queryText.deleteRow}</th>{keys.map(key => <th key={key.key} scope="col">{key.name}</th>)}</tr></thead>
+          <tbody>{page.rows.map((row, index) => <tr key={index}><td>{deletePositions[index]}</td>{keys.map(key =>
+            <td key={key.key}>{cellPreview(ownCell(row, key.key))}</td>)}</tr>)}</tbody></table>
+      </>}
       {page && draft?.map((change, index) => <div key={index}>
         {range && change.kind === 'update' &&
           <strong>{queryText.rangeRow((range.kind === 'replace' ? range.positions[change.row] : range.startRow + change.row) + 1)}</strong>}

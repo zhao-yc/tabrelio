@@ -354,40 +354,66 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
   } finally { await observer.end(); }
 });
 
-test('PostgreSQL 查询按勾选原主键删除，拒绝并发变更并整批回滚外键失败', async ({}, info) => {
+for (const join of ['', 'LEFT JOIN', 'INNER JOIN'] as const) test(`PostgreSQL ${join || '单表'}查询按勾选原主键删除并验证整批回滚`, async ({}, info) => {
   const config = isolatedConnection();
   const observer = new Client(config);
+  const schema = 'query_delete_' + (join === 'LEFT JOIN' ? 'left' : join ? 'inner' : 'single');
+  const user = schema + '_user';
+  const table = schema + '.subject', linked = schema + '.linked', reference = schema + '.detail',
+    attempt = schema + '.attempt', audit = schema + '.audit';
   try {
     await observer.connect();
     const password = randomBytes(32).toString('hex');
-    await observer.query(`CREATE ROLE query_delete_user LOGIN PASSWORD '${password}';
-      CREATE TABLE public.query_delete (tenant text, id bigint, note text, guard text, PRIMARY KEY (tenant,id));
-      INSERT INTO public.query_delete VALUES ('区甲', 2, '待删甲', '保护'),
+    await observer.query(`CREATE SCHEMA ${schema};
+      CREATE ROLE ${user} LOGIN PASSWORD '${password}';
+      CREATE TABLE ${table} (tenant text, id bigint, note text, guard text, PRIMARY KEY (tenant,id));
+      INSERT INTO ${table} VALUES ('区甲', 2, '待删甲', '保护'),
         ('区甲', 3, '保留同区', '保护'), ('区乙', 2, '保留同号', '保护'),
         ('区乙', 9223372036854775807, '待删乙', '保护');
-      CREATE TABLE public.query_delete_ref (tenant text, id bigint,
-        CONSTRAINT guarded_query_delete FOREIGN KEY (tenant,id) REFERENCES public.query_delete);
-      INSERT INTO public.query_delete_ref VALUES ('区乙', 9223372036854775807);
-      CREATE SEQUENCE public.query_delete_attempt;
-      CREATE FUNCTION public.count_query_delete_attempt() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+      CREATE TABLE ${reference} (tenant text, id bigint,
+        CONSTRAINT guarded_query_delete FOREIGN KEY (tenant,id) REFERENCES ${table});
+      INSERT INTO ${reference} VALUES ('区乙', 9223372036854775807);
+      CREATE TABLE ${audit} (tenant text, id bigint);
+      CREATE SEQUENCE ${attempt};
+      CREATE FUNCTION ${schema}.count_attempt() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
         SET search_path TO pg_catalog AS
-        $$ BEGIN PERFORM nextval('public.query_delete_attempt'); RETURN OLD; END $$;
-      CREATE TRIGGER count_query_delete_attempt BEFORE DELETE ON public.query_delete
-        FOR EACH ROW EXECUTE FUNCTION public.count_query_delete_attempt();
-      GRANT SELECT, DELETE ON public.query_delete TO query_delete_user`);
-    await loadQuery({ ...config, user: 'query_delete_user', password },
-      'SELECT tenant AS 区域, id AS 编号, note AS 备注 FROM public.query_delete ORDER BY id DESC, tenant DESC;');
+        $$ BEGIN
+          PERFORM nextval('${attempt}');
+          INSERT INTO ${audit} VALUES (OLD.tenant, OLD.id);
+          RETURN OLD;
+        END $$;
+      CREATE TRIGGER count_attempt BEFORE DELETE ON ${table}
+        FOR EACH ROW EXECUTE FUNCTION ${schema}.count_attempt();
+      GRANT USAGE ON SCHEMA ${schema} TO ${user};
+      GRANT SELECT, DELETE ON ${table} TO ${user}`);
+    if (join) {
+      await observer.query(`CREATE TABLE ${linked} (id bigint PRIMARY KEY, note text);
+        INSERT INTO ${linked} VALUES (2,'连接内容'),(3,'连接同区');
+        GRANT SELECT ON ${linked} TO ${user}`);
+      if (join === 'INNER JOIN') await observer.query(`INSERT INTO ${linked} VALUES (9223372036854775807,'连接乙')`);
+    }
+    await loadQuery({ ...config, user, password }, `SELECT p.tenant AS 区域, p.id AS 编号, p.note AS 备注
+      ${join ? ', l.note AS 连接备注' : ''} FROM ${table} p ${join ? `${join} ${linked} l ON p.id=l.id` : ''}
+      ORDER BY p.id DESC, p.tenant DESC;`);
     const query = page.locator('.postgres-query:visible');
     const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
-    const remove = query.getByRole('button', { name: text.deleteChecked, exact: true });
+    const remove = query.getByRole('button', { name: join ? text.deleteCheckedJoin : text.deleteChecked, exact: true });
     const preview = page.getByRole('dialog', { name: text.deleteTitle, exact: true });
-    const read = async () => (await observer.query('SELECT tenant, id::text, note, guard FROM public.query_delete ORDER BY tenant,id')).rows;
+    const read = async () => (await observer.query(`SELECT tenant, id::text, note, guard FROM ${table} ORDER BY tenant,id`)).rows;
+    const readLinks = async () => (await observer.query(`SELECT id::text, note FROM ${linked} ORDER BY id`)).rows;
+    const readAudit = async () => (await observer.query(`SELECT tenant, id::text FROM ${audit} ORDER BY tenant,id`)).rows;
     const before = await read();
+    const beforeLinks = join ? await readLinks() : undefined;
     const stage = async () => {
-      for (const name of ['待删乙', '待删甲']) await query.getByRole('gridcell', { name, exact: true }).locator('..').getByRole('checkbox').check();
+      const rows = ['待删甲', '待删乙'].map(name => query.getByRole('gridcell', { name, exact: true }).locator('..'));
+      const positions = await Promise.all(rows.map(async row => String(Number(await row.getAttribute('aria-rowindex')) - 1)));
+      for (const row of rows.slice().reverse()) await row.getByRole('checkbox').check();
       await remove.click();
-      await expect(preview.locator('pre')).toContainText('DELETE FROM ONLY "public"."query_delete"');
-      await expect(preview.locator('tbody td')).toHaveText(['区甲', '2', '区乙', '9223372036854775807']);
+      const target = '"' + schema + '"."subject"';
+      await expect(preview.locator('pre')).toContainText('DELETE FROM ONLY ' + target);
+      await expect(preview.locator('pre')).not.toContainText('"linked"');
+      await expect(preview.getByText(text.deleteTarget(target), { exact: true })).toBeVisible();
+      await expect(preview.locator('tbody td')).toHaveText([positions[0], '区甲', '2', positions[1], '区乙', '9223372036854775807']);
     };
     const submit = async () => {
       const apply = preview.getByRole('button', { name: text.deleteApply, exact: true });
@@ -416,14 +442,15 @@ test('PostgreSQL 查询按勾选原主键删除，拒绝并发变更并整批回
     };
 
     await run();
-    await expect(query.getByRole('button', { name: text.edit, exact: true })).toBeHidden();
+    await expect(query.getByRole('button', { name: join ? text.editJoin : text.edit, exact: true })).toBeHidden();
     await expect(remove).toBeDisabled();
     await stage();
     expect(await read()).toEqual(before);
-    await observer.query("UPDATE public.query_delete SET guard='外部改动' WHERE tenant='区乙' AND id=9223372036854775807");
+    await observer.query(`UPDATE ${table} SET guard='外部改动' WHERE tenant='区乙' AND id=9223372036854775807`);
     await submit();
     await expect(preview.locator('.error-box')).toContainText('原记录已被修改、删除或替换，整批未写入');
-    expect((await observer.query('SELECT is_called FROM public.query_delete_attempt')).rows[0].is_called).toBe(false);
+    expect((await observer.query(`SELECT is_called FROM ${attempt}`)).rows[0].is_called).toBe(false);
+    expect(await readAudit()).toEqual([]);
     expect(await read()).toHaveLength(4);
     await discard();
 
@@ -432,18 +459,32 @@ test('PostgreSQL 查询按勾选原主键删除，拒绝并发变更并整批回
     const current = await read();
     await submit();
     await expect(preview.locator('.error-box')).toContainText('guarded_query_delete');
-    expect((await observer.query('SELECT last_value::int FROM public.query_delete_attempt')).rows[0].last_value).toBe(2);
+    expect((await observer.query(`SELECT last_value::int FROM ${attempt}`)).rows[0].last_value).toBe(2);
+    expect(await readAudit()).toEqual([]);
     expect(await read()).toEqual(current);
     await discard();
 
-    await observer.query('DELETE FROM public.query_delete_ref');
+    await observer.query(`DELETE FROM ${reference}`);
+    if (join) {
+      await stage();
+      await observer.query(`REVOKE DELETE ON ${table} FROM ${user}`);
+      await submit();
+      await expect(preview.locator('.error-box')).toContainText('权限已变化');
+      expect(await read()).toEqual(current);
+      expect(await readAudit()).toEqual([]);
+      await discard();
+      await observer.query(`GRANT DELETE ON ${table} TO ${user}`);
+      await run();
+    }
     await stage();
     expect(await read()).toEqual(current);
-    await info.attach('PostgreSQL查询勾选删除预览', { body: await page.screenshot(), contentType: 'image/png' });
+    await info.attach(`PostgreSQL${join ? join.replace(' ', '') : '单表'}查询勾选删除预览`, { body: await page.screenshot(), contentType: 'image/png' });
     await submit();
     await expect(preview).toBeHidden();
     await expect(remove).toBeHidden();
     expect(await read()).toEqual(current.filter(row => row.note.startsWith('保留')));
+    expect(await readAudit()).toEqual(current.filter(row => row.note.startsWith('待删')).map(({ tenant, id }) => ({ tenant, id })));
+    if (join) expect(await readLinks()).toEqual(beforeLinks);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
@@ -677,7 +718,7 @@ test('PostgreSQL 可从空结果向无主键来源表新增，预览后结构变
   } finally { await observer.end(); }
 });
 
-test('PostgreSQL JOIN 仅可编辑明确定位的首张表，重复主键和自连接保持只读', async ({}, info) => {
+test('PostgreSQL JOIN 只写入明确定位的首张表，重复主键和自连接保持只读', async ({}, info) => {
   const config = isolatedConnection();
   const observer = new Client(config);
   try {
@@ -692,9 +733,11 @@ test('PostgreSQL JOIN 仅可编辑明确定位的首张表，重复主键和自�
     const query = page.locator('.postgres-query:visible');
     const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
     const edit = query.getByRole('button', { name: text.editJoin, exact: true });
+    const remove = query.getByRole('button', { name: text.deleteCheckedJoin, exact: true });
     const cell = (name: string) => query.getByRole('gridcell', { name, exact: true });
     await execute.click();
     await expect(edit).toBeVisible();
+    await expect(remove).toBeDisabled();
     for (const name of [text.add, text.deleteChecked, text.duplicateChecked])
       await expect(query.getByRole('button', { name, exact: true })).toBeHidden();
     const inline = page.getByRole('region', { name: tableText.cellEdit('note'), exact: true });
@@ -728,11 +771,12 @@ test('PostgreSQL JOIN 仅可编辑明确定位的首张表，重复主键和自�
       { id: '1', note: '右表原值' }, { id: '2', note: '右表第二行' },
     ]);
 
-    const rerun = async (sql: string) => {
-      await page.evaluate(async sql => {
+    const rerun = async (sql: string, resultLimit?: number) => {
+      await page.evaluate(async ({ sql, resultLimit }) => {
         const settings = await window.dbark.invoke('settings.get', {});
-        await window.dbark.invoke('settings.save', { ...settings, tabs: settings.tabs.map(tab => tab.id === 'pg-query-record' ? { ...tab, sql } : tab) });
-      }, sql);
+        await window.dbark.invoke('settings.save', { ...settings, resultLimit: resultLimit ?? settings.resultLimit,
+          tabs: settings.tabs.map(tab => tab.id === 'pg-query-record' ? { ...tab, sql } : tab) });
+      }, { sql, resultLimit });
       await page.reload();
       await execute.click();
     };
@@ -745,9 +789,16 @@ test('PostgreSQL JOIN 仅可编辑明确定位的首张表，重复主键和自�
     await rerun('SELECT p.id, p.note, s.note AS 侧注 FROM join_main.subject p JOIN join_main.subject s ON p.id=s.id;');
     await expect(cell('只更新主表')).toHaveCount(2);
     await expect(edit).toBeHidden();
+    await expect(remove).toBeHidden();
     await rerun('SELECT p.id, p.note, s.note AS 侧注 FROM join_main.subject p JOIN join_side.subject s ON p.side_id<=s.id;');
     await expect(cell('主表已匹配')).toHaveCount(2);
     await expect(edit).toBeHidden();
+    await expect(remove).toBeHidden();
+    await rerun('SELECT p.id, p.note, s.note AS 侧注 FROM join_main.subject p LEFT JOIN join_side.subject s ON p.side_id=s.id ORDER BY p.id;', 1);
+    await expect(edit).toBeVisible();
+    await expect(cell('主表已匹配')).toBeVisible();
+    await expect(cell('只更新主表')).toHaveCount(0);
+    await expect(remove).toBeHidden();
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
