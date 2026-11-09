@@ -8,6 +8,7 @@ import type { StatementNavigationPanelProps } from './components/StatementNaviga
 import { statementNavigationZh as text } from './locales/statementNavigation.zh-CN';
 import { invoke } from './lib';
 import { useWorkspace } from './store';
+import { extractStatementSelection } from './statementNavigationExtract';
 
 interface Target {
   instance: monaco.editor.IStandaloneCodeEditor;
@@ -29,7 +30,7 @@ interface Navigation {
 
 /** 目录和单次导航都绑定原编辑器与会话。清理先撤权，迟到线程无法移动继任草稿的光标。 */
 export function usePostgresStatementNavigation(capture: () => Target | undefined,
-  openDraft: (instance: Target['instance'], range: NavigableStatement) => void): Navigation {
+  openDraft: (instance: Target['instance'], ranges: readonly NavigableStatement[], fromDirectory?: boolean) => void): Navigation {
   const owner = useRef<Owner | undefined>(undefined);
   const [view, setView] = useState<StatementNavigationView>();
   const [busy, setBusy] = useState(false);
@@ -72,7 +73,7 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
       const range = direction
         ? adjacentNavigableStatement(original.source, ranges, offset, direction, 'postgresql')
         : ranges[currentNavigableStatement(original.source, ranges, offset, 'postgresql')];
-      if (range && action === 'duplicate') openDraft(original.instance, range);
+      if (range && action === 'duplicate') openDraft(original.instance, [range]);
       else if (range) apply(original, range, action === 'select');
       else useWorkspace.getState().notify(direction === -1 ? text.noPrevious : direction === 1 ? text.noNext : text.noCurrent);
     }
@@ -132,6 +133,10 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
     onNavigate(index, select) {
       const range = original.ranges?.[index];
       if (range && original.controller?.current()) apply(original, range, select);
+    },
+    onExtract(ranges, destination) {
+      if (original.controller) extractStatementSelection(original.controller, ranges, destination,
+        () => openDraft(original.instance, ranges, true));
     },
     onRefresh: () => open(),
     onCancel: () => original.controller?.stop(),

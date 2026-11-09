@@ -51,7 +51,7 @@ describe('查询复制意图与既有正文桥', () => {
     f.select([1, 1]);
     const analysis = analyzeStatementNavigation(script, 'mysql');
     if (analysis.status !== 'ready') throw Error('例程语句定位失败');
-    await new QueryDuplicateIntent(f.ports, 'statement', analysis.statements[1]).run();
+    await new QueryDuplicateIntent(f.ports, 'statement', [analysis.statements[1]]).run();
     const draft = f.open.mock.calls[0][0];
     expect(draft.title).toBe('已保存查询（当前语句）');
     if (terminated) expect(draft.sql).toBe('DELIMITER $$\n' + body + '$$\nDELIMITER ;');
@@ -65,13 +65,27 @@ describe('查询复制意图与既有正文桥', () => {
     const end = f.model.value.length - 1;
     f.select([2, 2]);
     const intent = new QueryDuplicateIntent({ ...f.ports, database: () => gate.promise }, 'statement',
-      { start: 0, end, delimiterStart: end, delimiterEnd: end + 1 });
+      [{ start: 0, end, delimiterStart: end, delimiterEnd: end + 1 }]);
     const result = intent.run();
     f.select([3, 3]);
     f.select([2, 2]);
     gate.resolve({ state: 'known', database: null });
     await expect(result).rejects.toThrow('已变化');
     expect(f.open).not.toHaveBeenCalled();
+    f.close();
+  });
+  it('非连续语句原序合并，多个光标不影响明确目录勾选', async () => {
+    const f = selectionFixture();
+    const sql = "SELECT '甲;';\nSELECT '排除';\nSELECT 3;";
+    f.editor.nativeInput(sql);
+    f.select([2, 2], [5, 5]);
+    const analysis = analyzeStatementNavigation(sql, 'sqlite');
+    if (analysis.status !== 'ready') throw Error('无法创建测试目录');
+    const [first, , third] = analysis.statements;
+    expect(() => new QueryDuplicateIntent(f.ports, 'statements', [third, first])).toThrow('已变化');
+    await new QueryDuplicateIntent(f.ports, 'statements', [first, third]).run();
+    expect(f.open.mock.calls[0][0]).toMatchObject({ title: '已保存查询（勾选语句）', sql: "SELECT '甲;';\nSELECT 3;" });
+    expect(f.editor.edits).toEqual([]);
     f.close();
   });
   it('选区原文独立建草稿，仍刷新原全文且保留原来源和版本', async () => {

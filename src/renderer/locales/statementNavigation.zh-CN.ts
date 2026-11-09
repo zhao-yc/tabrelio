@@ -8,6 +8,11 @@ export const statementNavigationZh = {
   search: '搜索语句正文', empty: '没有匹配的语句。', total: (count: number) => `共 ${count} 条语句`,
   position: (index: number, line: number) => `第 ${index + 1} 条 · 第 ${line} 行`,
   select: '选中正文', refresh: '刷新语句导航', cancel: '取消读取', close: '关闭语句导航', previous: '上一页', next: '下一页', page: (page: number, pages: number) => `${page} / ${pages}`,
+  check: (index: number) => `勾选第 ${index + 1} 条语句`,
+  checked: (count: number) => `已勾选 ${count} 条`,
+  copyChecked: '复制勾选语句', openChecked: '在新查询中打开勾选语句', clearChecked: '清除勾选',
+  copied: (count: number) => `已复制 ${count} 条语句`,
+  copyUnavailable: '未能复制勾选语句，请重试。',
   reasons: {
     input: '脚本包含无效字符或导航输入无效。', budget: '脚本或语句数量超过导航预算，请缩小脚本。', mode: '当前模式不确定，无法确认一致的语句边界。',
     script: '无法确认完整脚本的语句边界，请检查引号、注释、分隔符或触发器正文。', context: '原会话状态尚未确认，请核对后刷新。',

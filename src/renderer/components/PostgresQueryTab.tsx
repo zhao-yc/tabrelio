@@ -1644,8 +1644,9 @@ export function PostgresQueryTab({
     }, 0);
   }
   /** 复制只读取原草稿和固定数据库上下文，沿既有意图保护新建未绑定的独立查询。 */
-  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statement?: NavigableStatement) {
-    if (duplicateIntent.current || expectedEditor !== editor.current || (mode === 'selection' || mode === 'statement') && resultsOnly || !commandEditor()) return;
+  async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statements?: readonly NavigableStatement[]) {
+    if (duplicateIntent.current || expectedEditor !== editor.current ||
+        (mode === 'selection' || mode === 'statement' || mode === 'statements') && resultsOnly || !commandEditor()) return;
     let intent: QueryDuplicateIntent | undefined;
     try {
       intent = new QueryDuplicateIntent({
@@ -1690,7 +1691,7 @@ export function PostgresQueryTab({
           workspace.openTab(candidate);
         },
         chooseTarget: onChooseQueryTarget,
-      }, mode, statement);
+      }, mode, statements);
       duplicateIntent.current = intent;
       setDuplicating(true);
       await intent.run();
@@ -1716,7 +1717,7 @@ export function PostgresQueryTab({
     return { ...target, sessionId: original?.id, current: () =>
       available() && !files.isBusy() && currentTab() === draft && session.current === original &&
       editor.current === target.instance && !target.instance.getRawOptions().readOnly };
-  }, (instance, range) => { void duplicateQuery('statement', instance, range); });
+  }, (instance, ranges, fromDirectory) => { void duplicateQuery(fromDirectory ? 'statements' : 'statement', instance, ranges); });
   const canNavigate = editable && !navigation.busy;
   const canOpenStatementQuery = canNavigate && canDuplicateQuery && !resultsOnly;
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {

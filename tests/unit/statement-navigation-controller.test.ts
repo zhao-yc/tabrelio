@@ -24,6 +24,23 @@ it('无会话检查不建立连接或读缓存，原输入只在线程分析中�
   expect(f.result.status).toBe('ready'); expect(f.state).not.toHaveBeenCalled(); expect(f.create).toHaveBeenCalledOnce(); expect(f.analyze).toHaveBeenCalledExactlyOnceWith(source, 'mysql', {}, expect.any(AbortSignal)); expect(f.decorate).toHaveBeenCalledExactlyOnceWith(f.result); expect(f.views.at(-1)).toEqual({ busy: false, result: f.result }); expect(f.dispose).toHaveBeenCalledOnce();
   f.controller.dispose(); expect(f.release).toHaveBeenCalledOnce(); expect(f.dispose).toHaveBeenCalledOnce();
 });
+it('只接受当前目录原范围，刷新所得同坐标范围和失效结果都不能发布', async () => {
+  const first = fixture(), second = fixture(), publish = vi.fn();
+  await first.controller.start();
+  await second.controller.start();
+  if (first.result.status !== 'ready' || second.result.status !== 'ready') throw Error('无法创建测试目录');
+  const original = first.result.statements[0];
+  first.controller.extract([original], publish);
+  expect(publish).toHaveBeenCalledExactlyOnceWith(source, 'mysql', expect.any(Function));
+  second.controller.extract([original], publish);
+  first.change(false);
+  first.change(true);
+  first.controller.extract([original], publish);
+  expect(publish).toHaveBeenCalledOnce();
+  expect(publish.mock.calls[0][2]()).toBe(false);
+  first.controller.dispose();
+  second.controller.dispose();
+});
 it('只读取原会话前后缓存，模式来自原session且没有执行／重连能力', async () => {
   const f = fixture('original-session'); await f.controller.start(); expect(f.state.mock.calls).toEqual([['original-session'], ['original-session']]); expect(f.analyze).toHaveBeenCalledExactlyOnceWith(source, 'mysql', mode, expect.any(AbortSignal)); expect(f.decorate).toHaveBeenCalledOnce(); f.controller.dispose();
 });

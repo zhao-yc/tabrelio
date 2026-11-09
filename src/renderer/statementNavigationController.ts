@@ -1,6 +1,6 @@
 import type { CompletionSessionState } from '../shared/sqlCompletion';
 import type { CompletionLexicalMode } from '../shared/completionLexical';
-import { validStatementNavigationResult, type StatementNavigationDialect, type StatementNavigationResult } from '../shared/statementNavigation';
+import { validStatementNavigationResult, type NavigableStatement, type StatementNavigationDialect, type StatementNavigationResult } from '../shared/statementNavigation';
 import { sameCompletionState } from './completionContext';
 
 export interface StatementNavigationView { busy: boolean; result?: StatementNavigationResult; }
@@ -38,6 +38,15 @@ export class StatementNavigationController {
   current(): boolean {
     if (!this.dead && !this.disposed) { try { if (!this.ports.current()) this.dead = true; } catch { this.dead = true; } }
     return !this.dead && !this.disposed && !this.abort.signal.aborted;
+  }
+
+  /** 只允许消费这份目录签发的原范围，刷新后即使行号相同也须重新勾选。 */
+  extract(selected: readonly NavigableStatement[],
+    publish: (source: string, dialect: StatementNavigationDialect, current: () => boolean) => void): void {
+    const result = this.view.result;
+    if (!selected.length || result?.status !== 'ready' || selected.some(range => !result.statements.includes(range))) return;
+    const current = () => this.view.result === result && this.current();
+    if (current()) publish(this.source, this.ports.dialect, current);
   }
 
   /** 只发布相同owner的有界状态，原SQL不进入组件状态或错误消息。 */

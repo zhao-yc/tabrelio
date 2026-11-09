@@ -9,6 +9,7 @@ export const queryDuplicateZh = {
   selectionSuffix: '（选区）', selectionRequired: '请选择一段非空 SQL，再打开新查询。',
   statementHint: '按光标定位语句并打开独立草稿，沿用原连接和数据库',
   statementSuffix: '（当前语句）',
+  statementsSuffix: '（勾选语句）',
   unavailable: '当前查询不可复制，请等待编辑器就绪并确认连接仍有效。',
   changed: '原查询、连接或编辑器已变化，本次未新建查询，请重新复制。',
   contextUnknown: '当前默认库尚未明确，请先确认数据库上下文再复制查询。',
