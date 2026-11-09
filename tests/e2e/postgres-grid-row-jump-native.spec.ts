@@ -4,6 +4,8 @@ import { gridRowJumpZh as jump } from '../../src/renderer/locales/gridRowJump.zh
 import { gridRowSelectionZh as selection } from '../../src/renderer/locales/gridRowSelection.zh-CN';
 import { postgresTableZh as table } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresTableFindZh as find } from '../../src/renderer/locales/postgresTableFind.zh-CN';
+import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
+import { readGridRangeClipboard } from './grid-cell-range-clipboard';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_POSTGRES_GRID_ROW_JUMP_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
@@ -57,7 +59,7 @@ test('PostgreSQL 表和只读视图跳到本页行并保留活动列、勾选和
     await expect(input).toHaveCount(0);
     await editorInput.fill('本地草稿');
     await editor.getByRole('button', { name: table.stage, exact: true }).click();
-    await cell('本地草稿').click();
+    await cell('本地草稿').focus();
     await expect(cell('记录 60')).toHaveCount(0);
     const before = await tasks();
     await page.keyboard.press('Control+g');
@@ -70,6 +72,21 @@ test('PostgreSQL 表和只读视图跳到本页行并保留活动列、勾选和
       item.click(item, windows[0], {} as Electron.KeyboardEvent);
     });
     await go('1', '本地草稿');
+    await expect(firstChecked).toBeChecked();
+    const selectNote = async () => {
+      await grid.getByRole('columnheader').filter({ hasText: /^note/ }).focus();
+      await page.keyboard.press('Shift+F10');
+      await page.getByRole('menuitem', { name: rangeCopy.selectColumn, exact: true }).press('Enter');
+    };
+    await selectNote();
+    await expect(cell('本地草稿')).toBeFocused();
+    expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows).toEqual([
+      ['本地草稿'], ...Array.from({ length: 59 }, (_, i) => ['记录 ' + (i + 2)]),
+    ]);
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: rangeCopy.selectRow, exact: true }).press('Enter');
+    await expect(cell('1')).toBeFocused();
+    expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows).toEqual([['1', '本地草稿']]);
     await expect(firstChecked).toBeChecked();
     expect(await tasks()).toEqual(before);
     expect((await observer.query('SELECT note FROM public.jump_rows WHERE id = 1')).rows).toEqual([{ note: '记录 1' }]);
@@ -92,8 +109,14 @@ test('PostgreSQL 表和只读视图跳到本页行并保留活动列、勾选和
     await expect(button(selection.clear)).toBeDisabled();
     await button(table.remove).click();
     await expect(cell('记录 61').locator('.pg-grid-deleted')).toBeVisible();
+    await selectNote();
+    await expect(cell('记录 61')).toBeFocused();
+    expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows).toEqual(
+      Array.from({ length: 59 }, (_, i) => ['记录 ' + (i + 62)]),
+    );
     const second = cell('62').locator('..').getByRole('checkbox');
-    await second.check();
+    await second.press('Space');
+    await expect(second).toBeChecked();
     const selectionTasks = await tasks();
     await button(selection.invert).click();
     await expect(cell('61').locator('..').getByRole('checkbox')).not.toBeChecked();

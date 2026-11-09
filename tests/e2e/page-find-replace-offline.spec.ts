@@ -136,6 +136,26 @@ test('表页支持从右下向左上选择矩形并复制，排除相邻二进�
   expect(await calls()).toEqual([]);
 });
 
+test('MySQL 表页从列标题和数据格选中整列与整行，不修改草稿', async () => {
+  const action = (name: string) => page.getByRole('menuitem', { name, exact: true });
+  const note = await cell('note', 2), other = await cell('other', 3);
+  const checked = other.locator('..').getByRole('checkbox');
+  await checked.check();
+  await page.getByRole('columnheader').filter({ hasText: /^note/ }).click({ button: 'right' });
+  await action(rangeCopy.selectColumn).click();
+  await expect(note).toBeFocused();
+  expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows).toEqual([['😀old前old后old'], ['']]);
+  await other.click({ button: 'right' });
+  await action(rangeCopy.selectRow).click();
+  await expect(await cell('id', 3)).toBeFocused();
+  expect(JSON.parse((await readGridRangeClipboard(page)).typed).rows[0].slice(0, 3))
+    .toEqual(['9007199254740993124', '', '无匹配']);
+  await expect(page.locator('.grid-cell-in-range')).toHaveCount(6);
+  await expect(checked).toBeChecked();
+  expect(await calls()).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
 test('MySQL 粘贴从矩形左上角写入等尺寸内容，拒绝尺寸不符且可一步撤销', async () => {
   const start = await cell('note', 2), end = await cell('other', 3);
   await start.click();

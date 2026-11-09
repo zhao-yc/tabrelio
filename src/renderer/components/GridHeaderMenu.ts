@@ -16,6 +16,7 @@ interface HeaderMenuSource {
   current(): boolean;
   canSort(key: string): boolean;
   applySort(next: readonly SortColumn[], current: () => boolean): void;
+  selectColumn?(index: number): GridCellAction | undefined;
   freeze?: GridHeaderFreeze;
   frozenThrough?: string;
 }
@@ -43,7 +44,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       const now = latest.current;
       return now.owner === source.owner && now.grid() === grid && now.column(index)?.key === column.key && now.current();
     };
-    return { grid, column, current };
+    return { grid, column, index, current };
   }
 
   /** 菜单和快捷键共用排序快照，读取或确认草稿期间仍核对原列和规则。 */
@@ -63,8 +64,10 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   function open(target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const captured = captureColumn(target, '[role="columnheader"]');
     if (!captured) return false;
-    const { grid, column, current } = captured;
+    const { grid, column, index, current } = captured;
     const actions: GridCellAction[] = [];
+    const selectColumn = source.selectColumn?.(index);
+    if (selectColumn) actions.push(selectColumn);
     const sort = captureSort(column.key, current);
     if (sort) {
       actions.push({ label: text.asc, disabled: sort.initial === 'ASC', run: () => sort.apply('ASC') },

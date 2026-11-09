@@ -4,6 +4,7 @@ import { appModalSelector } from './modalSelectors';
 import { maxClipboardCells } from './gridClipboard';
 import { zh } from './locales/zh-CN';
 import { gridRangePasteZh as pasteText } from './locales/gridRangePaste.zh-CN';
+import { gridRangeCopyZh as rangeText } from './locales/gridRangeCopy.zh-CN';
 import { startGridCellRangeDrag, type GridRangePoint as Point } from './gridCellRangeDrag';
 import type { GridRangeFillKind } from './gridRangeFill';
 
@@ -66,6 +67,37 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     const rectangle = bounds(anchor, focus);
     live.current = { scope, active: focus, anchor, focus, rectangle };
     setShown({ scope, rectangle });
+  }
+
+  /** 整行列仍使用原矩形端点。将焦点放到首格，使键盘复制立即获得准确选区。 */
+  function spanAction(label: string, anchor: Point, focus: Point) {
+    const element = grid.current?.element;
+    if (!element || live.current.scope !== scope || !committedCurrent.current()) return;
+    return { label, run() {
+      // 网格每次渲染都会刷新操作句柄，DOM 与选区代次才标识原网格。
+      const handle = grid.current;
+      if (handle?.element !== element || !element.isConnected || live.current.scope !== scope ||
+          element.ownerDocument.querySelector(appModalSelector) || !committedCurrent.current()) return;
+      stopDrag();
+      select(anchor, focus);
+      handle.setActivePosition({ rowIdx: focus.row, idx: focus.column + columnOffset }, { shouldFocus: true });
+      // 草稿刷新会清除逻辑端点，网格却可能保留同一活动格。用真实坐标判断是否要归还菜单焦点。
+      const cell = focusTarget();
+      if (Number(cell?.getAttribute('aria-colindex')) === focus.column + columnOffset + 1 &&
+          Number(cell?.closest('[role="row"]')?.getAttribute('aria-rowindex')) === focus.row + 2) {
+        cell?.focus({ preventScroll: true });
+      }
+    } };
+  }
+
+  function selectColumnAction(column: number) {
+    if (!rows.length || keys[column] === undefined) return;
+    return spanAction(rangeText.selectColumn, { row: rows.length - 1, column }, { row: 0, column });
+  }
+
+  function selectRowAction(row: Row, rowIndex: number, key: string) {
+    if (!position(row, rowIndex, key)) return;
+    return spanAction(rangeText.selectRow, { row: rowIndex, column: keys.length - 1 }, { row: rowIndex, column: 0 });
   }
 
   function allowed(event: CellKeyboardEvent | CellMouseEvent): boolean {
@@ -204,7 +236,8 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return grid.current?.element?.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? undefined;
   }
 
-  return { rectangle, mouse, key, fillValueKey, move, copy, copyTarget, capture, pasteTarget, at, copyRectangle, rectangleCurrent, focusTarget };
+  return { rectangle, mouse, key, fillValueKey, move, copy, copyTarget, capture, pasteTarget, at, copyRectangle, rectangleCurrent,
+    focusTarget, selectColumnAction, selectRowAction };
 }
 
 const arrowDirections = new Map<string, Point>([

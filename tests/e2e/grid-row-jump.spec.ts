@@ -1877,6 +1877,72 @@ test('查询和 SQLite 可从选区内打开复制菜单，表头只进入文本
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询选中同名列或整行，复制虚拟结果并保留勾选', async ({}, info) => {
+  await seed('SELECT id AS 同名, name AS 同名 FROM subject ORDER BY id DESC;');
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const action = (name: string) => page.getByRole('menuitem', { name, exact: true });
+  await query.locator('.query-execute-split > button.primary').click();
+  const first = grid.getByRole('gridcell', { name: '记录 180', exact: true });
+  const second = grid.getByRole('gridcell', { name: '记录 179', exact: true });
+  await expect(first).toBeVisible();
+  const checked = second.locator('..').getByRole('checkbox');
+  await checked.check();
+  await expect(grid.getByRole('gridcell', { name: '记录 1', exact: true })).toHaveCount(0);
+  const before = await tasks();
+  await first.click();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^同名/ }).nth(1);
+  await header.focus();
+  await page.keyboard.press('Shift+F10');
+  await action(rangeCopy.selectColumn).press('Enter');
+  await expect(first).toBeFocused();
+  const column = JSON.parse((await readGridRangeClipboard(page)).sqlite);
+  expect(column.rows).toEqual(Array.from({ length: 180 }, (_, i) => [{ kind: 'text', value: '记录 ' + (180 - i) }]));
+  await expect(checked).toBeChecked();
+  await info.attach('SQLite查询同名列选区', { body: await page.screenshot(), contentType: 'image/png' });
+
+  await second.click({ button: 'right' });
+  await action(rangeCopy.selectRow).click();
+  await expect(grid.getByRole('gridcell', { name: '179', exact: true })).toBeFocused();
+  expect(JSON.parse((await readGridRangeClipboard(page)).sqlite).rows).toEqual([
+    [{ kind: 'integer', value: '179' }, { kind: 'text', value: '记录 179' }],
+  ]);
+  await expect(checked).toBeChecked();
+  await page.keyboard.press('Escape');
+  await expect(grid.locator('.grid-cell-in-range')).toHaveCount(0);
+  expect((await tasks()).map(task => task.id)).toEqual(before.map(task => task.id));
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 表和视图整列选择限当前页，换页清除旧矩形', async () => {
+  await seed();
+  for (const [tab, title, typed] of [['t-jump', '表格定位', true], ['v-jump', '视图定位', false]] as const) {
+    await page.locator('[data-workspace-tab-id="' + tab + '"]').getByRole('button', { name: title, exact: true }).click();
+    const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+    const header = grid.getByRole('columnheader').filter({ hasText: /^name/ });
+    const name = (n: number) => grid.getByRole('gridcell', { name: (typed ? 'TEXT · ' : '') + '记录 ' + n, exact: true });
+    const selectColumn = async () => {
+      await header.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: rangeCopy.selectColumn, exact: true }).click();
+    };
+    await expect(name(1)).toBeVisible();
+    await selectColumn();
+    await expect(name(1)).toBeFocused();
+    expect(JSON.parse((await readGridRangeClipboard(page)).sqlite).rows).toEqual(
+      Array.from({ length: 100 }, (_, i) => [{ kind: 'text', value: '记录 ' + (i + 1) }]),
+    );
+    await table.getByRole('button', { name: browseText.next, exact: true }).click();
+    await expect(name(101)).toBeVisible();
+    await expect(grid.locator('.grid-cell-in-range')).toHaveCount(0);
+    await selectColumn();
+    await expect(name(101)).toBeFocused();
+    expect(JSON.parse((await readGridRangeClipboard(page)).sqlite).rows).toEqual(
+      Array.from({ length: 80 }, (_, i) => [{ kind: 'text', value: '记录 ' + (i + 101) }]),
+    );
+  }
+  expect(pageErrors).toEqual([]);
+});
+
 test('语句目录分别打开查询按原序建立独立标签，超限整批拒绝', async () => {
   const statements = Array.from({ length: 21 }, (_, index) => `SELECT '语句 ${index}; 🚢';`);
   await seed(statements.join('\n'));

@@ -274,6 +274,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     column: index => page.result.columns[order[index - 2]],
     sort: sort ?? [], current: () => !disabled && baseCurrent() && noModal(),
     canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
+    selectColumn: index => cellRange.selectColumnAction(index - 2),
     freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,
   });
   const quickValue = useRef(onQuickValue); quickValue.current = onQuickValue;
@@ -292,11 +293,13 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     const index = key?.startsWith('c') ? Number(key.slice(1)) : -1, edit = page.edit;
     if (!row || key === undefined || row.deleted || !order.includes(index) || edit?.kind !== 'editable' || disabled || !baseCurrent(row)) return false;
     const column = edit.columns[index], raw = row.values[index];
-    const rectangle = cellRange.at(row, rows.indexOf(row), key);
+    const rowIndex = rows.indexOf(row);
+    const rectangle = cellRange.at(row, rowIndex, key), selectRow = cellRange.selectRowAction(row, rowIndex, key);
     const current = () => source.current === owner && checkedContext.current?.owner === owner &&
       !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal() &&
       (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: column.name, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
+      ...(selectRow ? [selectRow] : []),
       ...(rectangle ? gridRangeCopyActions(format => {
         try {
           const selected = cellRange.copyRectangle(rectangle, (item, key) => item.values[Number(key.slice(1))], item => item.deleted);

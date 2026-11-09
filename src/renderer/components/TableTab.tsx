@@ -2018,7 +2018,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   function openCellActions(row: DraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     if (!row || key === undefined || !visibleKeys.includes(key) || !cellActionCurrent(row)) return false;
-    const rectangle = cellRange.at(row, rows.indexOf(row), key);
+    const rowIndex = rows.indexOf(row);
+    const rectangle = cellRange.at(row, rowIndex, key), selectRow = cellRange.selectRowAction(row, rowIndex, key);
     const filters = [];
     if (canSeedCellFilter && info) try {
       tableCellFilterDraft(info.columns, rows, visibleKeys, { rowId: row.id, key });
@@ -2027,6 +2028,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     } catch { /* 未经原值校验的格不提供筛选项。 */ }
     const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
+      ...(selectRow ? [selectRow] : []),
       ...(rectangle ? gridRangeCopyActions(format => {
         try {
           const selected = cellRange.copyRectangle(rectangle, (item, key) => ownCell(item.data, key), item => item.deleted);
@@ -2140,6 +2142,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     owner: sortScope, grid: () => grid.current?.element, column: index => visibleColumns[index - 1],
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
+    selectColumn: index => cellRange.selectColumnAction(index - 1),
     frozenThrough: frozenKeys.at(-1), freeze: {
       current: () => !!page && !externalStale && !preferencesLoading && !preferencesLock.current,
       // 和布局窗口共享同一草稿，保存仍由用户从布局入口触发。

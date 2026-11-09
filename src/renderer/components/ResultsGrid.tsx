@@ -113,6 +113,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const gridRef = useRef<DataGridHandle | null>(null);
   const rangeKeys = useMemo(() => columns.map(column => column.key), [columns]);
   const rangeScope = useMemo(() => ({}), [scope, presentCell]);
+  const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
+  const rangeTools = !onActiveRowChange && (rowJump || hasResultTools || !!tableCopy);
   const rangeCurrent = () => !onActiveRowChange && actionCurrent() && tableCopy?.enabled !== false && tableCopy?.isCurrent() !== false;
   const cellRange = useGridCellRange(rows, rangeKeys, rangeScope, onActiveRowChange ? 0 : 1, gridRef, rangeCurrent);
   useLayoutEffect(() => {
@@ -392,6 +394,8 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
             format === 'headers' ? range.keys.map(key => columns.find(column => column.key === key)!.name) : undefined));
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       }));
+      const selectRow = rangeTools ? cellRange.selectRowAction(cell.row, rowIdx, key) : undefined;
+      if (selectRow) actions.unshift(selectRow);
     }
     if (rectangle && onFillRange) actions.push(...gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)));
     if (rectangle && onExportRange) actions.push({ label: rangeExportText.action, run: () => {
@@ -565,10 +569,12 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     column: index => columns[index - (onActiveRowChange ? 0 : 1)],
     sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
     current: actionCurrent, canSort: key => !!onSortChange && !sortReasons?.get(key), applySort: changeSortColumns,
+    selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
     freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,
   });
-  const grid = onCellPaste || fitHeader || onSortChange || freezeColumns ? <div style={{ display: 'contents' }}
-    {...(onSortChange || freezeColumns ? headerMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
+  const hasHeaderMenu = onSortChange || freezeColumns || rangeTools;
+  const grid = onCellPaste || fitHeader || hasHeaderMenu ? <div style={{ display: 'contents' }}
+    {...(hasHeaderMenu ? headerMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。
   const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&
@@ -600,7 +606,6 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     });
     return encode(columns, selected, (row, key) => readTabularCopyValue(row, key, labels.invalid));
   }
-  const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
   const canSelectRows = !onActiveRowChange && (rowJump || hasResultTools);
   const rowSelectionKey = (row: DataRow, index: number) => skipRowInInversion?.(row) ? undefined : index;
   const rowSelectionCurrent = () => tableCopy?.enabled !== false && selectedRowsRef.current === selectionBefore && rowJumpIsCurrent();
