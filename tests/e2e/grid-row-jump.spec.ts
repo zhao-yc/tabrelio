@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
@@ -14,6 +14,7 @@ import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { sqliteTableFindZh as sqliteFind } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { tableCheckedExportZh as collectText } from '../../src/renderer/locales/tableCheckedExport.zh-CN';
@@ -324,6 +325,74 @@ test('查询和 SQLite 可从选区内打开复制菜单，表头只进入文本
   await page.keyboard.press('Shift+F10');
   const plain = await copy(rangeCopy.copy);
   expect(plain).toEqual({ ...withHeaders, text: '1\t记录 1\n2\t记录 2' });
+  expect(pageErrors).toEqual([]);
+});
+
+test('语句目录按原序保存三种编码，取消、失效和 SQLite 源文件目标均不写入', async () => {
+  const first = "SELECT '语句甲;原文';", third = "SELECT '语句丙';";
+  await seed(first + "\nSELECT '排除';\n" + third);
+  const database = join(dataDir, 'grid-row-jump.sqlite'), before = readFileSync(database);
+  const query = page.locator('.query-tab:visible');
+  await (await navigationMenuItem(query, { name: navigationText.entry, exact: true })).click();
+  const panel = query.getByRole('region', { name: navigationText.title, exact: true });
+  const save = panel.getByRole('button', { name: navigationText.saveChecked, exact: true });
+  const encoding = panel.getByRole('combobox', { name: navigationText.scriptEncoding, exact: true });
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(3));
+  await expect(save).toBeDisabled();
+  await panel.getByRole('checkbox', { name: navigationText.check(2), exact: true }).check();
+  await panel.getByRole('checkbox', { name: navigationText.check(0), exact: true }).check();
+  async function choose(path?: string, delayed = false) {
+    // 只替换系统路径选择，保留文件令牌、编码及原子写入的正式 IPC。
+    await desktop.evaluate(({ dialog, BrowserWindow }, input) => {
+      const original = dialog.showSaveDialog;
+      const scope = globalThis as typeof globalThis & { __releaseStatementSave?: () => void };
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        dialog.showSaveDialog = original;
+        const options = args.at(-1) as Electron.SaveDialogOptions;
+        if (args[0] !== BrowserWindow.getAllWindows()[0] || options.defaultPath !== input.name ||
+            !options.filters?.[0]?.extensions.includes('sql')) throw Error('只允许本例勾选语句保存');
+        if (input.delayed) await new Promise<void>(resolve => { scope.__releaseStatementSave = resolve; });
+        return input.path ? { canceled: false, filePath: input.path } : { canceled: true, filePath: '' };
+      }) as typeof original;
+    }, { path, delayed, name: navigationText.scriptFile });
+  }
+  const expected = first + '\n' + third;
+  for (const kind of ['utf8', 'utf16le', 'gb18030'] as const) {
+    const name = kind + '.sql', output = join(dataDir, name);
+    await encoding.selectOption(kind);
+    await choose(output);
+    await save.click();
+    await expect(page.getByText(navigationText.saved(name), { exact: true })).toBeVisible();
+    const bytes = readFileSync(output);
+    if (kind === 'utf16le') expect([...bytes.subarray(0, 2)]).toEqual([255, 254]);
+    const decoded = new TextDecoder(kind === 'utf8' ? 'utf-8' : kind === 'utf16le' ? 'utf-16le' : 'gb18030', { fatal: true }).decode(bytes);
+    expect(decoded.replaceAll('\r\n', '\n')).toBe(expected);
+  }
+  await choose();
+  await save.click();
+  await expect(save).toBeEnabled();
+
+  await choose(database);
+  await save.click();
+  await expect(page.getByText('导出目标属于已保存的SQLite数据库或日志文件，请选择其他文件', { exact: true })).toBeVisible();
+  expect(readFileSync(database)).toEqual(before);
+
+  const stale = join(dataDir, '过期.sql');
+  await choose(stale, true);
+  await save.click();
+  await expect.poll(() => desktop.evaluate(() => !!(globalThis as typeof globalThis & { __releaseStatementSave?: () => void }).__releaseStatementSave)).toBe(true);
+  await expect(save).toBeDisabled();
+  await panel.getByRole('button', { name: navigationText.refresh, exact: true }).click();
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(3));
+  await desktop.evaluate(() => {
+    const scope = globalThis as typeof globalThis & { __releaseStatementSave?: () => void };
+    scope.__releaseStatementSave?.();
+    delete scope.__releaseStatementSave;
+  });
+  await expect(page.getByText(navigationText.reasons.stale, { exact: true })).toBeVisible();
+  expect(existsSync(stale)).toBe(false);
+  expect(readFileSync(database)).toEqual(before);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
 

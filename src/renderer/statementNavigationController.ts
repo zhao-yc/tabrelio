@@ -41,12 +41,12 @@ export class StatementNavigationController {
   }
 
   /** 只允许消费这份目录签发的原范围，刷新后即使行号相同也须重新勾选。 */
-  extract(selected: readonly NavigableStatement[],
-    publish: (source: string, dialect: StatementNavigationDialect, current: () => boolean) => void): void {
+  extract<T>(selected: readonly NavigableStatement[],
+    publish: (source: string, dialect: StatementNavigationDialect, current: () => boolean) => T): T | undefined {
     const result = this.view.result;
     if (!selected.length || result?.status !== 'ready' || selected.some(range => !result.statements.includes(range))) return;
     const current = () => this.view.result === result && this.current();
-    if (current()) publish(this.source, this.ports.dialect, current);
+    if (current()) return publish(this.source, this.ports.dialect, current);
   }
 
   /** 只发布相同owner的有界状态，原SQL不进入组件状态或错误消息。 */

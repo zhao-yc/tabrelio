@@ -135,7 +135,7 @@ export function usePostgresStatementNavigation(capture: () => Target | undefined
       if (range && original.controller?.current()) apply(original, range, select);
     },
     onExtract(ranges, destination) {
-      if (original.controller) extractStatementSelection(original.controller, ranges, destination,
+      if (original.controller) return extractStatementSelection(original.controller, ranges, destination,
         () => openDraft(original.instance, ranges, true));
     },
     onRefresh: () => open(),

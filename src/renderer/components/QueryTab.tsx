@@ -1839,9 +1839,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (!binding || !range || !binding.controller.current()) return;
     applyStatementRange(binding, range, select);
   }
-  function extractNavigationStatements(ranges: readonly NavigableStatement[], destination: StatementSelectionDestination): void {
+  function extractNavigationStatements(ranges: readonly NavigableStatement[], destination: StatementSelectionDestination) {
     const binding = navigationIntent.current;
-    if (binding) extractStatementSelection(binding.controller, ranges, destination,
+    if (binding) return extractStatementSelection(binding.controller, ranges, destination,
       () => { void duplicateQuery('statements', binding.instance, ranges); });
   }
   /** 单次选中先解绑原监听，再应用选区，避免把自己的选区变更误认作用户取消。 */

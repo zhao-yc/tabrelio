@@ -937,7 +937,10 @@ async function cancelFileImportPreflights(): Promise<void> {
 async function writeSelectedQuery(input: { fileToken: string; sql: string; encoding: QueryFileEncoding }): Promise<void> {
   const path = resolveFileToken(files, input.fileToken, 'export', 'sql');
   const release = await exportReservations.acquire(path);
-  try { await writeQueryFile(path, input.sql, input.encoding); } finally { release(); }
+  try {
+    await assertSqliteExportDestination(path, store.connections());
+    await writeQueryFile(path, input.sql, input.encoding);
+  } finally { release(); }
 }
 
 /** 文件任务先持久化固定概要，禁止复用任何既有任务编号，不借用数据库连接。 */

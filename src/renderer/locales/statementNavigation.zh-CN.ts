@@ -11,6 +11,8 @@ export const statementNavigationZh = {
   check: (index: number) => `勾选第 ${index + 1} 条语句`,
   checked: (count: number) => `已勾选 ${count} 条`,
   copyChecked: '复制勾选语句', openChecked: '在新查询中打开勾选语句', clearChecked: '清除勾选',
+  saveChecked: '另存勾选语句', scriptEncoding: '勾选语句文件编码', scriptFile: '勾选语句.sql',
+  saved: (name: string) => `已另存勾选语句到 ${name}`,
   copied: (count: number) => `已复制 ${count} 条语句`,
   copyUnavailable: '未能复制勾选语句，请重试。',
   reasons: {
