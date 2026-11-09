@@ -20,6 +20,15 @@ describe('SQLite表浏览严格合同及动态类型条件', () => {
     expect(publicCommands['sqlite.tablePage']).toBe(true); expect(validateCommand('sqlite.tablePage', base)).toEqual(base);
     for (const value of [{ ...base, database: 'other' }, { ...base, sql: 'DELETE FROM subject' }, { ...base, filePath: '外部文件' }, { ...base, profile: { dialect: 'sqlite' } }, { ...base, offset: -1 }, { ...base, offset: 1000000001 }, { ...base, limit: 1001 }]) expect(sqliteTablePageSchema.safeParse(value).success).toBe(false);
   });
+  it('只读定位仅接受一个原查询行，不与其它行定位或筛选混用', () => {
+    const queryRecord = { sessionId: 'session', taskId: 'execution', rowIndex: 9 };
+    const selection = { ...base, limit: 1, queryRecord };
+    expect(validateCommand('sqlite.tablePage', selection)).toEqual(selection);
+    for (const patch of [{ limit: 2 }, { offset: 1 }, { searchRecordRef: 'd616897e-495d-4930-b36d-2dacbf2bf5bf' },
+      { queryRecord: { sessionId: 'session', taskId: 'execution', rowIndices: [9] } },
+      { filters: [{ column: 'x', operator: 'isNull' }] }, { queryRecord: { ...queryRecord, value: '猜测外键' } }])
+      expect(sqliteTablePageSchema.safeParse({ ...selection, ...patch }).success).toBe(false);
+  });
   it('末页仅接受明确模式，行数换算保留空集、整页和偏移边界', () => {
     expect(validateCommand('sqlite.tablePage', { ...base, lastPage: true })).toEqual({ ...base, lastPage: true });
     for (const patch of [{ offset: 1, lastPage: true }, { lastPage: false }, { matchingRows: '100', lastPage: true }]) expect(sqliteTablePageSchema.safeParse({ ...base, ...patch }).success).toBe(false);

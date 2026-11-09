@@ -96,6 +96,15 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     }
   });
 
+  it('只读会话可回查原行，但不能借此请求原行编辑', async () => {
+    const path = fixture(), database = new DatabaseSync(path);
+    try { database.exec("INSERT INTO subject VALUES (1, '只读原值')"); } finally { database.close(); }
+    const harness = await open(path, undefined, true), taskId = randomUUID();
+    expect((await execute(harness, 'SELECT id, note FROM subject', { taskId })).sqliteQueryRecordTable).toBe('subject');
+    expect(harness.session.queryRecord(taskId, 'subject', false).result.rows).toEqual([{ c0: '1', c1: '只读原值' }]);
+    expect(() => harness.session.queryRecord(taskId, 'subject')).toThrow(/已失效/);
+  });
+
   it('原生结果来源按结果和列位置对齐，别名和计算表达式不冒充源字段', async () => {
     const harness = await open(fixture());
     const outcome = await execute(harness, `CREATE VIEW visible AS SELECT id,note FROM subject;

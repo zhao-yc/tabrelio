@@ -2628,9 +2628,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         columns!.sqliteReadPublication = () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(input.connectionId); if (shuttingDown || store.connectionRevision() !== revision) throw Error('SQLite只读操作的原窗口或连接配置已变化，请重新读取'); };
       }
       if (command === 'sqlite.tablePage' && input.queryRecord) {
-        const session = sessions.get(input.queryRecord.sessionId);
-        if (!session?.sqliteOwner || session.connectionId !== input.connectionId || !columns ||
-            !columnsMain.sharesDocumentOwner(session.sqliteOwner, columns)) throw Error('SQLite 原查询会话不属于当前窗口或连接');
+        const { connectionId, queryRecord: { sessionId } } = input, session = sessions.get(sessionId);
+        const checkSession = () => {
+          if (!session?.sqliteOwner || sessions.get(sessionId) !== session || session.connectionId !== connectionId || !columns ||
+              !columnsMain.sharesDocumentOwner(session.sqliteOwner, columns)) throw Error('SQLite 原查询会话不属于当前窗口或连接');
+        };
+        checkSession();
+        if (input.editing !== true) {
+          const revision = store.connectionRevision();
+          columns!.sqliteReadPublication = () => {
+            columnsMain.assertCapturedOwner(columns); checkSession(); connectionConfig.assertAvailable(connectionId);
+            if (shuttingDown || store.connectionRevision() !== revision) throw Error('SQLite 查询原行的窗口或连接已变化');
+          };
+        }
       }
       if (input.editing === true) sqlitePage = sqliteEdits.page(columns!, input);
       break;
@@ -3623,6 +3633,9 @@ else {
         if (sqliteCreateRequest) columns = columnsMain.capture(event);
         const sqliteEditRequest = payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('sqlite.tableEdit.') || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' && 'editing' in payload.input && payload.input.editing === true || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['sqlite.tableEdit.apply', 'sqliteDraftFiles.restore'].includes(tasks.get(payload.input.taskId)?.kind ?? '');
         if (sqliteEditRequest) columns = columnsMain.capture(event);
+        const sqliteQueryRead = payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' &&
+          'queryRecord' in payload.input && !sqliteEditRequest;
+        if (sqliteQueryRead) columns = columnsMain.capture(event);
         if (payload.command === 'search.recordEditRead' ||
             (payload.command === 'table.preview' || payload.command === 'table.apply') &&
             !!payload.input && typeof payload.input === 'object' && 'searchRecordRef' in payload.input) columns = columnsMain.capture(event);
@@ -3670,6 +3683,7 @@ else {
           if (payload.command.startsWith('postgres.table.layout.')) { if (!columns?.postgresLayoutPublication) throw Error('PostgreSQL 列布局缺少原请求发布门'); columns.postgresLayoutPublication(); }
           if (payload.command === 'sqlite.relationships') { if (!columns?.sqliteRelationshipsPublication) throw Error('SQLite关系图缺少原窗口发布门'); columns.sqliteRelationshipsPublication(); }
           if (payload.command === 'sqlite.valueOptions') { if (!columns?.sqliteValueOptionsPublication) throw Error('SQLite不同值缺少原窗口发布门'); columns.sqliteValueOptionsPublication(); }
+          if (sqliteQueryRead) { if (!columns?.sqliteReadPublication) throw Error('SQLite 查询原行缺少发布门'); columns.sqliteReadPublication(); }
           if (payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript' || payload.command === 'sqlite.view.inspectQuery' || payload.command === 'sqlite.view.dependencies') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }
           if (payload.command === 'queries.copySql' || payload.command === 'history.copySql') columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }

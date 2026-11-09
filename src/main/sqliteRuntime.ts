@@ -519,7 +519,7 @@ export class SqliteRuntime {
     const input = sqliteTablePageSchema.parse(source), profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
     this.assertTarget(connection, profile);
     if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
-    if (input.queryRecord && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑查询原记录');
+    if (input.queryRecord && input.editing && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑查询原记录');
     if (input.searchRecordRef && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑搜索命中');
     const task: BrowseTask = { kind: 'browse', connection, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
     const work = this.track(connection, () => this.browse(task, input, profile)); task.active = work;
@@ -605,7 +605,7 @@ export class SqliteRuntime {
       if (!queryInput || !queryPage) return;
       const session = this.session(queryInput.sessionId);
       if (session.connection !== task.connection || session.pending || session.userHandoff) throw Error('SQLite 原查询会话不属于当前连接或正在执行');
-      return session.query.queryRecord(queryInput.taskId, queryPage.table);
+      return session.query.queryRecord(queryInput.taskId, queryPage.table, queryPage.editing === true);
     };
     const aggregate = task.purpose === 'statistics' ? ('column' in input ? 'SQLite字段概况' : 'SQLite匹配行数') : undefined;
     try {

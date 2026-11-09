@@ -104,9 +104,11 @@ export const sqliteTablePageSchema = z.object({
   sort: z.array(z.object({ column: name, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
 }).strict().superRefine((input, context) => {
   if (input.queryRecord && input.searchRecordRef) context.addIssue({ code: 'custom', message: 'SQLite 原记录来源不能同时指定' });
-  if ((input.queryRecord || input.searchRecordRef) && (!input.editing || input.offset !== 0 || input.limit !== (input.queryRecord ? sqliteQueryRecordIndices(input.queryRecord).length : 1) || input.lastPage || input.relation ||
+  if ((input.queryRecord || input.searchRecordRef) && (input.offset !== 0 || input.limit !== (input.queryRecord ? sqliteQueryRecordIndices(input.queryRecord).length : 1) || input.lastPage || input.relation ||
       input.filters.length || input.sort.length || input.mode !== 'and'))
-    context.addIssue({ code: 'custom', message: '原记录编辑只允许读取指定的查询行或搜索命中' });
+    context.addIssue({ code: 'custom', message: '原记录只允许读取指定的查询行或搜索命中' });
+  if (!input.editing && (input.searchRecordRef || input.queryRecord && 'rowIndices' in input.queryRecord))
+    context.addIssue({ code: 'custom', message: '只读定位只允许读取一条明确指定的查询原记录' });
   if (input.lastPage && input.offset !== 0) context.addIssue({ code: 'custom', path: ['offset'], message: 'SQLite末页请求不能指定偏移' });
   if (new Set(input.sort.map(sort => sort.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '排序列不能重复' });
   if (input.filters.reduce((size, filter) => size + (filter.value?.value.length ?? 0) + (filter.secondValue?.value.length ?? 0) + (filter.values?.reduce((total, value) => total + value.value.length, 0) ?? 0) + (filter.selectedValues?.reduce((total, value) => total + (value.kind === 'null' ? 0 : value.value.length), 0) ?? 0), 0) > 131072) context.addIssue({ code: 'custom', message: 'SQLite筛选值总量超过预算' });

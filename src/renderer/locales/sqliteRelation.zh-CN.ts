@@ -1,5 +1,6 @@
 export const sqliteRelationZh = {
   entry: '浏览 SQLite 关联记录', title: 'SQLite 关联浏览器', parents: '查看当前记录的父记录', children: '查看当前记录的子记录',
+  queryLoading: '正在核对查询结果的原记录…',
   back: '返回上个浏览位置', forward: '前进到下个浏览位置', nextParents: '继续查看选中记录的父记录', nextChildren: '继续查看选中记录的子记录',
   close: '关闭关联浏览器', stop: '停止关联读取', constraint: '当前关联声明', path: '关联浏览路径',
   hint: '使用已保存原值逐层只读浏览，本地草稿保留。方向、声明和历史位置切换不自动查询，请明确读取。',

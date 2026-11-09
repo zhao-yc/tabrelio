@@ -66,10 +66,10 @@ export class SqliteQuerySession {
   }
 
   /** 只允许使用本会话最新成功结果的原始行位置，外部不能提交列值或定位 SQL。 */
-  queryRecord(taskId: string, table: string): SqliteQueryRecordSource {
+  queryRecord(taskId: string, table: string, editing = true): SqliteQueryRecordSource {
     this.available(this.sessionId);
     const source = this.recordSource;
-    if (!source || source.taskId !== taskId || source.table !== table || this.driver.transaction !== false)
+    if (!source || source.taskId !== taskId || source.table !== table || this.driver.transaction !== false || editing && this.driver.readOnly)
       throw Error('SQLite 原查询结果已失效或当前会话有事务，请重新查询');
     return source;
   }
@@ -250,7 +250,7 @@ export class SqliteQuerySession {
           transactionOpen: transaction, scriptReport: report, ...(failure ? {failure} : {})};
       }
       const identity = this.driver.identity;
-      const candidate = !options.explainView && identity && !this.driver.readOnly && this.driver.transaction === false
+      const candidate = !options.explainView && identity && this.driver.transaction === false
         ? sqliteQueryRecordTable(sql) : undefined;
       const schema = candidate ? await sqliteQueryRecordSchema(this.driver, candidate).catch(() => undefined) : undefined;
       if (operation.cancelled) throw new SqliteDriverError('SQLite 查询已取消', 'SQLITE_CANCELLED', this.driver.transaction, 0, this.driver.isClosed);

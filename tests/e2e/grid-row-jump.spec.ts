@@ -20,6 +20,10 @@ import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/lo
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
 import { sqliteResultOriginsZh as originsText } from '../../src/renderer/locales/sqliteResultOrigins.zh-CN';
+import { sqliteRelationZh as relationText } from '../../src/renderer/locales/sqliteRelation.zh-CN';
+import { sqliteReferenceZh as parentText } from '../../src/renderer/locales/sqliteReference.zh-CN';
+import { sqliteIncomingZh as childText } from '../../src/renderer/locales/sqliteIncoming.zh-CN';
+import { sqliteRelatedTableZh as relatedText } from '../../src/renderer/locales/sqliteRelatedTable.zh-CN';
 import { decodeQueryCsvZip } from '../helpers/queryCsvZip';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
@@ -42,7 +46,7 @@ import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop,
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 /** 使用独立应用配置和合成 SQLite 数据，查询与浏览均走正式引擎。 */
-async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixtureSql = '', additionalQuery?: string) {
+async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixtureSql = '', additionalQuery?: string, readOnly = false) {
   await quitDesktop();
   const id = 'row-jump-offline', databasePath = join(dataDir, 'grid-row-jump.sqlite');
   const database = new DatabaseSync(databasePath);
@@ -56,7 +60,7 @@ async function seed(sql = 'SELECT id, name FROM subject ORDER BY id DESC;', fixt
   const require = createRequire(join(process.cwd(), 'package.json'));
   const store = await LocalStore.open(join(dataDir, 'dbark.sqlite'), require.resolve('sql.js/dist/sql-wasm.wasm'), { available: () => false, encrypt: value => value, decrypt: value => value });
   try {
-    store.saveConnection({ id, dialect: 'sqlite', name: '行号定位测试', group: '', color: '#123456', sqlite: { filePath: realpathSync(databasePath), readOnly: false, busyTimeoutMs: 1000 } });
+    store.saveConnection({ id, dialect: 'sqlite', name: '行号定位测试', group: '', color: '#123456', sqlite: { filePath: realpathSync(databasePath), readOnly, busyTimeoutMs: 1000 } });
     store.saveSettings({ ...store.settings(), pageSize: 100, activeTabId: 'q-jump', tabs: [
       { id: 'q-jump', kind: 'query', title: '查询定位', connectionId: id, sql },
       ...(additionalQuery ? [{ id: 'q-copy-source', kind: 'query' as const, title: '复制来源', connectionId: id, sql: additionalQuery }] : []),
@@ -224,6 +228,61 @@ test('SQLite 查询从排序后的结果编辑正确原行并拒绝陈旧行', a
   const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
   expect(tasks.filter(task => task.kind === 'query.execute')).toHaveLength(2);
   expect(tasks.filter(task => task.kind === 'sqlite.tableEdit.apply')).toHaveLength(1);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 只读查询结果可沿复合外键浏览父子记录并打开独立关联页', async ({}, info) => {
+  await seed('SELECT tenant AS 区, id AS 编号, note AS 名称 FROM fk_subject ORDER BY id DESC;', `
+    CREATE TABLE fk_parent (tenant TEXT COLLATE NOCASE, id INTEGER, note TEXT, PRIMARY KEY (tenant, id)) WITHOUT ROWID;
+    CREATE TABLE fk_subject (tenant TEXT COLLATE NOCASE, id INTEGER, parent_id INTEGER, note TEXT,
+      PRIMARY KEY (tenant, id), FOREIGN KEY (tenant, parent_id) REFERENCES fk_parent (tenant, id)) WITHOUT ROWID;
+    CREATE TABLE fk_leaf (id INTEGER PRIMARY KEY, tenant TEXT, subject_id INTEGER, note TEXT,
+      FOREIGN KEY (tenant, subject_id) REFERENCES fk_subject (tenant, id));
+    INSERT INTO fk_parent VALUES ('Alpha', 9007199254740993, '准确父甲'), ('Beta', 9007199254740993, '无关父乙');
+    INSERT INTO fk_subject VALUES ('alpha', 2, 9007199254740993, '所选甲'), ('beta', 3, 9007199254740993, '所选乙');
+    INSERT INTO fk_leaf VALUES (1, 'ALPHA', 2, '子记录甲'), (2, 'BETA', 3, '无关子乙');
+  `, undefined, true);
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const row = grid.getByRole('gridcell', { name: '所选甲', exact: true });
+  const dialog = page.getByRole('dialog', { name: relationText.title, exact: true });
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const browse = async () => {
+    await row.click();
+    await (await navigationMenuItem(query, { name: relationText.entry, exact: true })).click();
+  };
+  const button = (name: string) => dialog.getByRole('button', { name, exact: true });
+  await query.locator('.query-execute-split > button.primary').click();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^编号/ });
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  await expect(row.locator('..')).toHaveAttribute('aria-rowindex', '2');
+  await browse();
+  await button(parentText.catalog).click();
+  await button(parentText.read).click();
+  const results = dialog.getByRole('grid');
+  await expect(results).toContainText('准确父甲');
+  await expect(results).not.toContainText('无关父乙');
+  await expect(results).toContainText('9007199254740993');
+  await info.attach('SQLite查询结果外键关联', { body: await page.screenshot(), contentType: 'image/png' });
+  await button(relationText.children).click();
+  await button(childText.catalog).click();
+  await button(childText.read).click();
+  await expect(results).toContainText('子记录甲');
+  await expect(results).not.toContainText('无关子乙');
+  await button(relatedText.open).click();
+  const related = page.locator('.sqlite-table-tab:visible').getByRole('grid');
+  await expect(related).toContainText('子记录甲');
+  await expect(related).not.toContainText('无关子乙');
+  await page.locator('[data-workspace-tab-id="q-jump"]').getByRole('button', { name: '查询定位', exact: true }).click();
+  const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+  try { db.exec("UPDATE fk_subject SET note='并发改写' WHERE id=2"); } finally { db.close(); }
+  await browse();
+  await expect(dialog.getByRole('alert')).toContainText('SQLite 查询结果无法核验为当前原记录');
+  await button(relationText.close).click();
+  await expect(dialog).toBeHidden();
+  const recorded = await tasks();
+  expect(recorded.filter(task => task.kind === 'query.execute')).toHaveLength(1);
+  expect(recorded.filter(task => task.kind.startsWith('sqlite.tableEdit.'))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
 

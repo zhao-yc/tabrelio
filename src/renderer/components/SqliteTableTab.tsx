@@ -19,8 +19,9 @@ import { gridRangeFillColumns, gridRangeFillSource, type GridRangeFillInput } fr
 import { gridRangeFillZh as rangeFillText } from '../locales/gridRangeFill.zh-CN';
 import { SqliteEditWorkspace, type SqliteWorkspaceFill, type SqliteWorkspaceRecordEdit } from '../sqliteEditWorkspace';
 import { sqliteEditWorkspaceZh as workspaceText } from '../locales/sqliteEditWorkspace.zh-CN';
-import { isSqliteRelatedTabId, sqliteRelatedTabPrefix } from '../../shared/sqliteRelatedTab';
-import { sqliteRelatedTableScope, registerSqliteRelatedTable, sqliteRelatedTableRelation, sqliteRelatedTargetGuard, watchSqliteRelatedScope, type SqliteRelatedTableScope } from '../sqliteRelatedTable';
+import { isSqliteRelatedTabId } from '../../shared/sqliteRelatedTab';
+import { sqliteRelatedTableScope, type SqliteRelatedTableScope } from '../sqliteRelatedTable';
+import { openSqliteRelatedTable } from '../openSqliteRelatedTable';
 import { sqliteRelatedTableZh as relatedText } from '../locales/sqliteRelatedTable.zh-CN';
 import type { SqliteIncomingOutput } from '../../shared/sqliteIncoming';
 import { SqliteRelationDialog } from './SqliteRelationDialog';
@@ -499,12 +500,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       // 只移交已校验子页的typed关联；新标签有独立生命周期，不继承或改写源页草稿。
       owner.open = output => {
         if (!owner.current() || owner.lease || output.request.connectionId !== tab.connectionId || output.request.incoming !== 'page') return false;
-        if (useWorkspace.getState().settings.tabs.length >= 100) throw Error('标签已达到100个，请先关闭不需要的标签');
-        const relation = sqliteRelatedTableRelation(output), id = sqliteRelatedTabPrefix + uid(), childTable = output.request.childTable;
-        if (!owner.current()) return false;
-        const scope = registerSqliteRelatedTable(id, relation, sqliteRelatedTargetGuard(useWorkspace.getState, { id, connectionId: tab.connectionId, table: childTable, profile, version }));
-        try { useWorkspace.getState().openTab({ id, kind: 'table', title: relatedText.title(childTable), connectionId: tab.connectionId, database: 'main', table: childTable }); watchSqliteRelatedScope(scope, useWorkspace.subscribe); if (!scope.current()) throw Error(relatedText.expired); }
-        catch (failure) { scope.invalidate(); throw failure; }
+        openSqliteRelatedTable(output, { connectionId: tab.connectionId, profile, version });
         if (referenceRef.current === owner) { owner.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } return true;
       };
       referenceRef.current = owner; setReferenceOpen(owner); setValidation('');
