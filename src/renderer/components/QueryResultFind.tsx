@@ -9,11 +9,11 @@ import '../queryResultFind.css';
 
 interface Run { owner: object; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
-interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; children: ReactNode; }
+interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; children: ReactNode; }
 const regexErrors: Partial<Record<QueryResultFindPhase, string>> = text.regexErrors;
 
 /** 查找栏与快捷键仅包住当前结果Grid；私有代次负责取消，绝不注册全局快捷键。 */
-export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, children }: Props) {
+export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, onMatchingRows, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
@@ -81,6 +81,11 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     if (!active.run.scan.current() || run.current !== active.run) return;
     active.run.index = index; setView({ run: active.run, progress, index }); onHit({ scan: active.run.scan, match });
   }
+  function changeMatchingRows(checked: boolean) {
+    if (!panelCurrent() || !active || run.current !== active.run) return;
+    const indices = active.run.scan.matchingRows();
+    if (indices?.size) onMatchingRows(indices, checked);
+  }
   /** 快捷键只在本包围元素中冒泡；输入法、Alt组合及其它按键均交还原控件。 */
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.nativeEvent.isComposing || event.altKey || !own()) return;
@@ -91,6 +96,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     else if (visible && event.target === input.current && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); navigate(event.shiftKey ? -1 : 1); }
   }
   const progress = active?.progress;
+  const canCheckMatches = available && progress?.phase === 'complete' && progress.count > 0;
   const status = usesText && !query ? text.empty : !active ? text.stopped : progress?.phase === 'invalid' ? text.invalid :
     progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
       (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
@@ -113,6 +119,8 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
         <label className="check"><input type="checkbox" checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{text.highlightAll}</label>
         <button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button>
         <button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button>
+        <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches} onClick={() => changeMatchingRows(true)}>{text.checkRows}</button>
+        <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches} onClick={() => changeMatchingRows(false)}>{text.uncheckRows}</button>
         <button type="button" aria-label={text.close} onClick={close}>×</button>
       </>}
     </div>

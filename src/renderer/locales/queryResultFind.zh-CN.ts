@@ -1,5 +1,7 @@
 export const queryResultFindZh = {
   highlightAll: '高亮所有匹配',
+  checkRows: '勾选匹配行', uncheckRows: '取消匹配行勾选',
+  checkRowsHint: '查找完整结束后，只调整命中行的勾选。',
   open: '查找结果', input: '在当前结果中查找', sensitive: '区分大小写', previous: '上一个匹配', next: '下一个匹配', close: '关闭结果查找',
   columns: '查找列范围', allColumns: '全部可见列', columnOption: (name: string, position: number) => `第 ${position} 列 · ${name || '未命名'}`,
   mode: '结果查找方式', modes: { contains: '包含文字', whole: '整格匹配', null: 'SQL NULL', empty: '空字符串', regex: '正则表达式' },

@@ -44,6 +44,11 @@ export class QueryResultFindScan {
   progress(): QueryResultFindProgress { this.current(); return { phase: this.phase, count: this.matches.length, scannedCells: this.cursor, totalCells: this.rowCount * this.scanColumnCount }; }
   /** 每格一个命中，位置只在同一活代次有效；导航不能使用已撤销快照。 */
   match(index: number): QueryResultFindMatch | undefined { return this.current() && Number.isSafeInteger(index) && index >= 0 ? this.matches[index] : undefined; }
+  /** 只有完整结果才能用于批量勾选；同一原行的多个匹配单元格只消费一次。 */
+  matchingRows(): ReadonlySet<number> | undefined {
+    if (!this.current() || this.phase !== 'complete') return;
+    return new Set(this.matches.map(match => match.row));
+  }
   /** 网格已核对扫描归属。仅按有界命中索引取样，每个渲染单元格无需重新检查列布局。 */
   hasMatch(row: number, column: number): boolean {
     return row >= 0 && row < this.rowCount && column >= 0 && column < this.keys.length &&
@@ -79,9 +84,10 @@ export class QueryResultFindScan {
       for (const hit of result.hits) {
         const { row, column } = this.position(this.cursor++);
         if (hit) this.addMatch(row, column);
-        if (this.matches.length >= queryResultFindLimits.hits) { this.phase = 'limited'; break; }
+        if (this.matches.length >= queryResultFindLimits.hits) break;
       }
-      if (this.phase === 'searching' && this.cursor === total) this.phase = 'complete';
+      if (this.cursor === total) this.phase = 'complete';
+      else if (this.matches.length >= queryResultFindLimits.hits) this.phase = 'limited';
       if (this.phase !== 'searching') this.regex.dispose();
       return this.progress();
     } catch { return this.failRegex('regex-worker'); }
@@ -135,7 +141,11 @@ export class QueryResultFindScan {
         }
         if (found) this.addMatch(row, column);
         if (complete) { this.cursor++; cells++; this.offset = 0; this.text = undefined; }
-        if (this.matches.length >= queryResultFindLimits.hits) { this.phase = 'limited'; this.text = undefined; break; }
+        if (this.matches.length >= queryResultFindLimits.hits) {
+          if (this.cursor < total) this.phase = 'limited';
+          this.text = undefined;
+          break;
+        }
       }
       if (this.phase === 'searching' && this.cursor === total) this.phase = 'complete';
     } catch { this.cancel(); }

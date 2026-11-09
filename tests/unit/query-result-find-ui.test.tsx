@@ -83,6 +83,28 @@ it('新文字/关闭重开撤销旧扫描与导航；超限及无匹配不会保
   await search('x'.repeat(257)); await settle(); expect(document.body.textContent).toContain(text.invalid); expect(button(text.next).disabled).toBe(true); expect(vi.getTimerCount()).toBe(0);
 });
 
+it('匹配行操作只消费完成的当前代次，旧按钮不能重放或修改其它勾选', async () => {
+  (window as any).dbark = { invoke: vi.fn(async () => undefined) };
+  store.setState({ settings: { theme: 'light' } as any }); container();
+  const rows = [{ a: 'match', b: 'match' }, { a: 'other', b: '' }], onSelectionChange = vi.fn(() => true);
+  await act(async () => root!.render(<Grid columns={cols} rows={rows} selectionScope={{}} isCurrent={() => true} onSelectionChange={onSelectionChange}/>));
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await act(async () => latestGrid().onSelectedRowsChange(new Set([1])));
+  await click(text.open);
+  await search('match');
+  expect(button(text.checkRows).disabled).toBe(true);
+  await settle();
+  const stale = callback(button(text.checkRows));
+  await click(text.checkRows);
+  expect(latestGrid().selectedRows).toEqual(new Set([1, 0]));
+  await click(text.uncheckRows);
+  expect(latestGrid().selectedRows).toEqual(new Set([1]));
+  await search('missing'); await settle();
+  await act(async () => stale());
+  expect(latestGrid().selectedRows).toEqual(new Set([1]));
+  expect(onSelectionChange).toHaveBeenCalledTimes(3);
+});
+
 /** 原查询端口只返回合成常量；选择/导出/设置全部走RAM原UI命令，不实际执行SQL或文件。 */
 async function mountQuery() {
   commands = []; exports = [];

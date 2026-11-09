@@ -145,6 +145,41 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
   expect(pageErrors).toEqual([]);
 });
 
+test('查询结果查找可勾选匹配行并供复制和导出使用', async () => {
+  await seed('SELECT id, name, name AS 对照 FROM subject ORDER BY id DESC;');
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const row = (id: number) => query.getByRole('gridcell', { name: String(id), exact: true }).locator('..').getByRole('checkbox');
+  await row(179).check();
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const before = await tasks();
+  await query.getByRole('button', { name: resultFind.open, exact: true }).click();
+  const input = query.getByRole('textbox', { name: resultFind.input, exact: true });
+  const status = query.locator('.query-result-find-status').getByRole('status');
+  const check = query.getByRole('button', { name: resultFind.checkRows, exact: true });
+  const uncheck = query.getByRole('button', { name: resultFind.uncheckRows, exact: true });
+  const copiedText = async () => (await readGridMenuClipboard(page, query.getByRole('button', { name: queryResultCopyZh.action, exact: true }))).text.replaceAll('\r\n', '\n');
+  await expect(check).toBeDisabled();
+  await query.getByRole('combobox', { name: resultFind.mode, exact: true }).selectOption({ label: resultFind.modes.regex });
+  await input.fill('^记录 (?:180|1)$');
+  await expect(status).toHaveText(resultFind.count(4, -1));
+  await check.click();
+  await expect(row(180)).toBeChecked();
+  await expect(row(179)).toBeChecked();
+  await expect(await copiedText()).toBe('id\tname\t对照\n180\t记录 180\t记录 180\n179\t记录 179\t记录 179\n1\t记录 1\t记录 1');
+  await input.press('Shift+F3');
+  await expect(row(1)).toBeChecked();
+  await uncheck.click();
+  await expect(row(1)).not.toBeChecked();
+  await expect(await copiedText()).toBe('id\tname\t对照\n179\t记录 179\t记录 179');
+  await check.click();
+  await (await navigationMenuItem(query, { name: zh.resultExport.selectedTitle, exact: true })).click();
+  const dialog = page.getByRole('dialog', { name: zh.resultExport.selectedTitle, exact: true });
+  await expect(dialog.getByText('仅导出已返回结果中勾选的 3 行', { exact: true })).toBeVisible();
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果正则在线程查找、超时清除命中并可重新搜索', async () => {
   await seed("SELECT id, CASE id WHEN 180 THEN 'aaaa' WHEN 178 THEN replace(hex(zeroblob(20000)), '0', 'a') || '!' ELSE name END AS 内容 FROM subject ORDER BY id DESC;");
   const query = page.locator('.query-tab:visible');

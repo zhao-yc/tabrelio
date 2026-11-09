@@ -43,6 +43,7 @@ describe('已返回结果的有界字面查找', () => {
     const scan = new QueryResultFindScan(rows, columns, 'same', true, () => true);
     expect(finish(scan)).toMatchObject({ phase: 'complete', count: 3, scannedCells: 4 });
     expect(positions(scan)).toEqual([{ row: 0, column: 0 }, { row: 0, column: 1 }, { row: 1, column: 1 }]);
+    expect(scan.matchingRows()).toEqual(new Set([0, 1]));
     expect(scan.hasMatch(0, 0)).toBe(true);
     expect(scan.hasMatch(0, 1)).toBe(true);
     expect(scan.hasMatch(1, 0)).toBe(false);
@@ -83,12 +84,17 @@ describe('已返回结果的有界字面查找', () => {
     let read = 0;
     const rows: DataRow[] = Array.from({ length: limits.hits + 1 }, () => Object.defineProperty({}, 'a', { get() { read++; return 'hit'; } }));
     const scan = new QueryResultFindScan(rows, columns.slice(0, 1), 'hit', true, () => true);
+    expect(scan.matchingRows()).toBeUndefined();
     expect(finish(scan)).toMatchObject({ phase: 'limited', count: limits.hits }); expect(read).toBe(limits.hits);
     expect(scan.hasMatch(limits.hits - 1, 0)).toBe(true);
     expect(scan.hasMatch(limits.hits, 0)).toBe(false);
     expect(scan.match(limits.hits)).toBeUndefined();
+    expect(scan.matchingRows()).toBeUndefined();
     const invalid = new QueryResultFindScan(rows, columns, 'x'.repeat(limits.queryUnits + 1), false, () => true);
     expect(invalid.step()).toMatchObject({ phase: 'invalid', count: 0 }); expect(read).toBe(limits.hits);
+    const complete = new QueryResultFindScan(rows.slice(0, limits.hits), columns.slice(0, 1), 'hit', true, () => true);
+    expect(finish(complete).phase).toBe('complete');
+    expect(complete.matchingRows()?.size).toBe(limits.hits);
   });
 
   it('归属或数组结构失效永久撤销；恢复或迟到step/match不能复活', () => {
