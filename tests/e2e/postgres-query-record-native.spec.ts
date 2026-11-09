@@ -361,3 +361,66 @@ test('PostgreSQL 查询按勾选原主键删除，拒绝并发变更并整批回
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
+
+test('PostgreSQL 带计算列的查询只修改原字段，重复主键结果保持只读', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.query_projection(id bigint PRIMARY KEY, note text);
+      INSERT INTO public.query_projection VALUES (2, '另外值'), (9223372036854775807, '原记录甲');
+      CREATE SEQUENCE public.query_projection_reads`);
+    await loadQuery(config, `SELECT nextval('public.query_projection_reads') AS 次数,
+      substring(note FROM 1 FOR 2) AS 同名, note AS 同名, id, (note IS DISTINCT FROM '无') AS 差异
+      FROM public.query_projection ORDER BY id DESC;`);
+    const query = page.locator('.postgres-query:visible');
+    const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
+    const edit = query.getByRole('button', { name: text.edit, exact: true });
+    const cell = (name: string) => query.getByRole('gridcell', { name, exact: true });
+    await execute.click();
+    await expect(edit).toBeVisible();
+    const inline = page.getByRole('region', { name: tableText.cellEdit('note'), exact: true });
+    await cell('原记').click();
+    await page.keyboard.press('F2');
+    await expect(cell('原记')).toBeFocused();
+    await expect(inline).toBeHidden();
+    await page.keyboard.press('Shift+ArrowRight');
+    await query.locator('[role="gridcell"]:focus').evaluate(element => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData('text/plain', '拒绝\t拒绝');
+      element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }));
+    });
+    await expect(query.getByText(text.expressionReadOnly, { exact: true })).toBeVisible();
+
+    await cell('原记录甲').dblclick();
+    const input = inline.getByRole('textbox', { name: tableText.value, exact: true });
+    await expect(input).toHaveValue('原记录甲');
+    await input.fill('修改后');
+    await info.attach('PostgreSQL含计算列的结果编辑', { body: await page.screenshot(), contentType: 'image/png' });
+    await input.press('Enter');
+    const preview = page.getByRole('dialog', { name: tableText.preview, exact: true });
+    await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."query_projection" SET "note" = $1');
+    const readCount = async () => (await observer.query('SELECT last_value::int FROM public.query_projection_reads')).rows[0].last_value;
+    expect(await readCount()).toBe(2);
+    await preview.getByRole('checkbox', { name: recordText.postgresConfirm, exact: true }).check();
+    await preview.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(preview).toBeHidden();
+    expect((await observer.query('SELECT id::text, note FROM public.query_projection ORDER BY id')).rows).toEqual([
+      { id: '2', note: '另外值' }, { id: '9223372036854775807', note: '修改后' },
+    ]);
+    expect(await readCount()).toBe(2);
+
+    await page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      await window.dbark.invoke('settings.save', { ...settings, tabs: settings.tabs.map(tab => tab.id === 'pg-query-record' ? {
+        ...tab, sql: 'SELECT id, note, generate_series(1,2) AS 展开 FROM public.query_projection ORDER BY id DESC;',
+      } : tab) });
+    });
+    await page.reload();
+    await execute.click();
+    await expect(cell('修改后')).toHaveCount(2);
+    await expect(edit).toBeHidden();
+    await expect(query.getByRole('button', { name: text.deleteChecked, exact: true })).toBeHidden();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { postgresQueryRecordTable } from '../../src/engine/postgres/queryRecord';
+import type { QueryResult } from '../../src/shared/contracts';
+import { postgresQueryHasUniqueKeys, postgresQueryRecordTable } from '../../src/engine/postgres/queryRecord';
 import { postgresQueryRecordPageSchema } from '../../src/shared/postgresQueryRecord';
 
 describe('PostgreSQL 查询原记录', () => {
@@ -9,18 +10,37 @@ describe('PostgreSQL 查询原记录', () => {
     expect(postgresQueryRecordTable('SELECT a.* FROM "Mixed" AS a LIMIT 3', true)).toEqual({ name: 'Mixed' });
   });
 
+  it('表达式内 FROM、FOR 和标点不会被认成顶层关系子句', () => {
+    expect(postgresQueryRecordTable(
+      "SELECT substring(t.note FROM 1 FOR 2), t.note IS NOT DISTINCT FROM 'x', ARRAY[1,2], t.id FROM public.x t", true))
+      .toEqual({ schema: 'public', name: 'x' });
+    expect(postgresQueryRecordTable('SELECT $$FROM other;$$ AS literal, id FROM "真实表"', true)).toEqual({ name: '真实表' });
+  });
+
   it.each([
     'SELECT a.id FROM x a JOIN x b ON a.id=b.id',
     'SELECT a.id FROM x a, y b',
     'SELECT id FROM (SELECT id FROM x) t',
     'SELECT id FROM x UNION ALL SELECT id FROM x',
-    'SELECT count(id) FROM x',
+    'SELECT id, coalesce(count(*) OVER (), 0) FROM x',
     'SELECT id FROM x GROUP BY id',
     'SELECT DISTINCT id FROM x',
     'SELECT id FROM x WHERE EXISTS (SELECT id FROM y)',
     'SELECT id FROM x; SELECT id FROM y',
-  ])('拒绝超出单表直接投影的 SQL %s', sql => {
+  ])('拒绝不属于可定位单表范围的 SQL %s', sql => {
     expect(postgresQueryRecordTable(sql, true)).toBeUndefined();
+  });
+
+  it('复合主键按真实列位置保留精度，并拒绝返回值重复或缺少主键', () => {
+    const result: QueryResult = {
+      columns: ['derived', 'first', 'second'].map(key => ({ key, name: '同名', type: '' })),
+      rows: [{ derived: 'A', first: '9223372036854775806', second: '区' }, { derived: 'B', first: '9223372036854775807', second: '区' }],
+      elapsedMs: 1, truncated: false, statement: '',
+    };
+    const origins = [null, { relation: 5, attribute: 2 }, { relation: 5, attribute: 4 }];
+    expect(postgresQueryHasUniqueKeys(result, origins, [4, 2])).toBe(true);
+    expect(postgresQueryHasUniqueKeys(result, origins, [1, 2])).toBe(false);
+    expect(postgresQueryHasUniqueKeys({ ...result, rows: [result.rows[0], { ...result.rows[0], derived: 'B' }] }, origins, [4, 2])).toBe(false);
   });
 
   it('只接收原执行和行位置，拒绝调用方提交 SQL 或表名', () => {

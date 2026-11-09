@@ -1300,6 +1300,7 @@ export function PostgresQueryTab({
     const source: PostgresQueryRecordIntent = deleting ? { ...identity, rowIndices, operation: 'delete' }
       : range ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
     setRecordEdit({ result, scope, job, cell, range, source });
+    setError('');
     return true;
   }
 
@@ -1308,7 +1309,7 @@ export function PostgresQueryTab({
     if (!binding || !canDeleteQueryRecord || !resultCurrent()) return;
     const checked = resultSelection.checkedIndices(binding);
     if (!checked.length || checked.length > postgresTableLimits.changes) return;
-    if (openQueryRecords(checked.map(index => binding.rows[index]), { deleting: true })) setError('');
+    openQueryRecords(checked.map(index => binding.rows[index]), { deleting: true });
   }
 
   function editQueryCell(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
@@ -1317,7 +1318,7 @@ export function PostgresQueryTab({
     const raw = ownCell(cell.row, column.key);
     if (raw !== null && typeof raw !== 'string') return false;
     const columnIndex = result?.columns.findIndex(item => item.key === column.key) ?? -1;
-    if (columnIndex < 0) return false;
+    if (columnIndex < 0 || !origins?.[columnIndex]) return false;
     return openQueryRecords([cell.row], { cell: { columnIndex, anchor, typed } });
   }
 
@@ -1334,13 +1335,13 @@ export function PostgresQueryTab({
         selected.keys.some((key, index) => key !== columns[index]?.key))) throw Error(originsText.editStale);
     const columnIndices = columns.map(column => result.columns.findIndex(origin => origin.key === column.key));
     if (columnIndices.some(index => index < 0)) throw Error(originsText.editStale);
+    if (columnIndices.some(index => !origins?.[index])) throw Error(originsText.expressionReadOnly);
     return { rows, columnIndices, startRow };
   }
 
   function fillQueryCells(selected: GridRangeTarget<DataRow>, input: GridRangeFillInput) {
     const { rows, columnIndices, startRow } = queryRangeAt(selected.startRow, selected.keys[0], selected.rows.length, selected.keys.length, selected);
     if (!openQueryRecords(rows, { range: { kind: 'fill', columnIndices, startRow, input } })) throw Error(originsText.editStale);
-    setError('');
   }
 
   /** 同步消费剪贴板事件，矩形确认仍由当前查询执行的快照负责。 */
@@ -1353,7 +1354,6 @@ export function PostgresQueryTab({
         matrix.length, matrix[0].length, selected);
       if (!openQueryRecords(rows, { range: { kind: 'paste', columnIndices, matrix, startRow } }))
         throw Error(originsText.editStale);
-      setError('');
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 侧栏翻行只访问当前显示行，旧侧栏回调必须通过同一视图校验。 */

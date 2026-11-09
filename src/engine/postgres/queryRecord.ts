@@ -13,19 +13,28 @@ const identifier = (token: Token | undefined) => token?.kind === 'word' ? token.
 const blocked = () => Error('PostgreSQL 查询原记录无法核验，请重新执行查询');
 const budget = () => ({ rows: 2, bytes: 8 * 1024 * 1024 });
 
-/** 只接受单一直接表引用及直接列投影，拒绝自连接、聚合和复合查询造成的原行歧义。 */
+/** 只识别单一普通 FROM 目标。表达式可保留在投影中，写入来源仍由协议元数据决定。 */
 export function postgresQueryRecordTable(sql: string, standardStrings: boolean): { schema?: string; name: string } | undefined {
   if (sql.length > 262144) return;
   const tokens = scanPostgresEditorTokens(sql, 16384, standardStrings)?.filter(token => token.kind !== 'blocked' || token.text !== 'comment');
   if (!tokens || !keyword(tokens[0], 'select')) return;
   if (punct(tokens.at(-1), ';')) tokens.pop();
-  if (tokens.slice(1).some(token => punct(token, ';') || ['select', 'union', 'intersect', 'except', 'group', 'having', 'window', 'into', 'for'].some(word => keyword(token, word)))) return;
-  const from = tokens.findIndex(token => keyword(token, 'from'));
-  if (from < 2) return;
-  const projection = tokens.slice(1, from);
-  if (keyword(projection[0], 'all')) projection.shift();
-  if (!projection.length || keyword(projection[0], 'distinct') ||
-      projection.some(token => !identifier(token) && !['.', '*', ','].some(value => punct(token, value)))) return;
+  if (keyword(tokens[1], 'distinct')) return;
+  const closing: string[] = [];
+  let from = -1;
+  for (let index = 1; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (punct(token, ';') || keyword(token, 'select') || keyword(token, 'over') && punct(tokens[index - 1], ')')) return;
+    if (punct(token, '(') || punct(token, '[')) closing.push(token.text === '(' ? ')' : ']');
+    else if (punct(token, ')') || punct(token, ']')) {
+      if (closing.pop() !== token.text) return;
+    } else if (!closing.length) {
+      if (['union', 'intersect', 'except', 'group', 'having', 'window', 'into', 'for'].some(word => keyword(token, word))) return;
+      // IS [NOT] DISTINCT FROM 是比较运算符，不是关系子句。
+      if (from < 0 && keyword(token, 'from') && !keyword(tokens[index - 1], 'distinct')) from = index;
+    }
+  }
+  if (closing.length || from <= (keyword(tokens[1], 'all') ? 2 : 1)) return;
   let i = from + 1;
   const first = identifier(tokens[i++]);
   if (!first || ['only', 'lateral'].some(word => keyword(tokens[i - 1], word))) return;
@@ -43,13 +52,30 @@ export function postgresQueryRecordTable(sql: string, standardStrings: boolean):
   return { schema, name };
 }
 
+/** 拒绝同一主键在返回结果中出现多次，覆盖集合返回函数扩行等情形。 */
+export function postgresQueryHasUniqueKeys(result: QueryResult, origins: readonly PostgresColumnReference[], keys: readonly number[]): boolean {
+  if (!keys.length) return false;
+  const columns = keys.map(key => result.columns[origins.findIndex(origin => origin?.attribute === key)]?.key);
+  if (columns.some(key => key === undefined)) return false;
+  const seen = new Set<string>();
+  for (const row of result.rows) {
+    const values = columns.map(key => row[key]);
+    if (values.some(value => typeof value !== 'string' && (!value || typeof value !== 'object'))) return false;
+    const id = JSON.stringify(values);
+    if (seen.has(id)) return false;
+    seen.add(id);
+  }
+  return true;
+}
+
 export interface PostgresQueryRecordSource {
   executionId: string;
   server: string;
   identity: string;
   table: NonNullable<ReturnType<typeof postgresQueryRecordTable>>;
   result: QueryResult;
-  origins: NonNullable<PostgresColumnReference>[];
+  relationOid: number;
+  origins: PostgresColumnReference[];
   capabilities: { update: boolean; delete: boolean };
 }
 
@@ -77,11 +103,12 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
 export async function resolvePostgresQueryRecord(connection: PostgresConnection, source: PostgresQueryRecordSource) {
   if (connection.serverIdentity !== source.server) throw blocked();
   const origins = await readPostgresResultOrigins(connection, source.origins);
-  const first = origins[0];
+  const first = origins.find(origin => origin !== null);
   if (!first?.canOpen || first.table !== source.table.name || source.table.schema && first.schema !== source.table.schema ||
-      origins.some(origin => !origin || origin.schema !== first.schema || origin.table !== first.table)) throw blocked();
+      origins.some((origin, index) => source.origins[index] && (!origin || origin.schema !== first.schema || origin.table !== first.table)))
+    throw blocked();
   return { table: postgresIdentifier(first.schema) + '.' + postgresIdentifier(first.table),
-    columns: origins.map(origin => origin!.column) };
+    columns: origins.map(origin => origin?.column ?? null) };
 }
 
 function parameter(value: CellValue): string | Buffer {
@@ -96,11 +123,11 @@ function sameCell(before: CellValue, after: CellValue): boolean {
     : Object.is(before, after);
 }
 
-/** 主键定位后按原投影原文核对，再捕获整行的 ctid/xmin；写入沿用现有原行保护。 */
+/** 只核对协议指向原表的投影值，不重新执行计算表达式。写入沿用整行版本保护。 */
 export async function verifyPostgresQueryEdit(connection: PostgresConnection, source: PostgresQueryRecordSource,
   rowIndices: readonly number[], resolved: Awaited<ReturnType<typeof resolvePostgresQueryRecord>>,
   relation: { oid: string; sql: string; keys: string[] }) {
-  const oid = String(source.origins[0].relation);
+  const oid = String(source.relationOid);
   if (relation.oid !== oid || relation.sql !== resolved.table || !relation.keys.length) throw blocked();
   const checkServer = async (current: PostgresConnection) => {
     if (current.serverIdentity !== source.server ||
@@ -109,14 +136,15 @@ export async function verifyPostgresQueryEdit(connection: PostgresConnection, so
   await checkServer(connection);
   const locked = await resolvePostgresQueryRecord(connection, source);
   if (locked.table !== resolved.table || locked.columns.some((column, index) => column !== resolved.columns[index])) throw blocked();
-  const fields = locked.columns.map(postgresIdentifier);
+  const fields = locked.columns.flatMap((column, index) => column === null ? [] :
+    [{ column: postgresIdentifier(column), key: source.result.columns[index].key }]);
   const keys = relation.keys.map(key => {
     const position = resolved.columns.indexOf(key);
     if (position < 0) throw Error('PostgreSQL 查询结果需要包含原表的完整主键');
     return source.result.columns[position].key;
   });
   const where = relation.keys.map((key, index) => postgresIdentifier(key) + ' = $' + (index + 1)).join(' AND ');
-  const sql = 'SELECT tableoid::text, ctid::text, xmin::text, ' + fields.join(', ') +
+  const sql = 'SELECT tableoid::text, ctid::text, xmin::text, ' + fields.map(field => field.column).join(', ') +
     ' FROM ONLY ' + relation.sql + ' WHERE ' + where + ' LIMIT 2';
   const originals: PostgresReferenceRowVersion[] = [];
   for (const index of rowIndices) {
@@ -125,7 +153,7 @@ export async function verifyPostgresQueryEdit(connection: PostgresConnection, so
     const found = await connection.query(sql, keys.map(key => parameter(row[key])), budget(), undefined, 'extended');
     const original = found.rows[0];
     if (found.truncated || found.rows.length !== 1 || original.c0 !== oid || typeof original.c1 !== 'string' || typeof original.c2 !== 'string' ||
-        source.result.columns.some((column, i) => !sameCell(row[column.key], original['c' + (i + 3)]))) throw blocked();
+        fields.some((field, i) => !sameCell(row[field.key], original['c' + (i + 3)]))) throw blocked();
     originals.push({ tableOid: oid, tid: original.c1, version: original.c2 });
   }
   return { originals, checkServer };

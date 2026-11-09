@@ -13,6 +13,7 @@ export const postgresResultOriginsZh = {
   edit: '编辑查询原记录',
   cellHint: '双击单元格或按 F2 就地编辑，也可从活动单元格或矩形选区粘贴。',
   cellReadOnly: '此字段无法在结果网格就地编辑。可返回查询结果并打开原记录表单。',
+  expressionReadOnly: '选区包含计算列或无法定位原字段的列，请缩小范围后再修改。',
   editHint: '核对完整主键和查询已返回字段后读取原记录。修改需要预览并确认提交。',
   editStale: 'PostgreSQL 原查询结果或连接已变化，请重新查询。',
   editBack: '返回查询结果',

@@ -1,5 +1,6 @@
 import { postgresQueryRecordPageSchema } from '../../shared/postgresQueryRecord';
-import { postgresQueryRecordIdentity, postgresQueryRecordTable, resolvePostgresQueryRecord, verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
+import { postgresQueryHasUniqueKeys, postgresQueryRecordIdentity, postgresQueryRecordTable, resolvePostgresQueryRecord,
+  verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
 import { postgresResultOriginsSchema } from '../../shared/postgresResultOrigins';
 import { postgresColumnReferences, readPostgresResultOrigins } from './resultOrigins';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
@@ -1145,21 +1146,22 @@ export class PostgresEngine {
       }
       if (report && !report.stopReason) report.reachedEnd = true;
       const references = resultOrigins[0], result = results[0];
+      const origin = references?.find(reference => reference !== null);
       const currentState = session.managed.state();
       if (!estimate && !analysisSql && !report?.errors.length && !task.cancelled && count === 1 && result?.postgresCommand === 'SELECT' &&
           result.rows.length && references?.length === result.columns.length && session.managed.serverIdentity &&
           originalState.transactionKnown && !originalState.transactionOpen && currentState.transactionKnown && !currentState.transactionOpen &&
-          references.every(origin => origin && origin.attribute > 0 && origin.relation === references[0]?.relation)) {
+          origin && references.every(reference => !reference || reference.attribute > 0 && reference.relation === origin.relation)) {
         const table = postgresQueryRecordTable(result.statement, session.managed.standardStrings);
         if (table) {
           const qualified = (table.schema ? postgresIdentifier(table.schema) + '.' : '') + postgresIdentifier(table.name);
           // 目录读取失败只撤销原记录编辑能力，不改写用户已完成的查询结果。
-          const oid = references[0]!.relation;
+          const oid = origin.relation;
           const confirmed = await postgresQueryRecordIdentity(session.managed, qualified, oid).catch(() => undefined);
           if (confirmed && (confirmed.capabilities.update || confirmed.capabilities.delete) && !task.cancelled && !session.managed.broken &&
-              confirmed.keys.every(key => references.some(origin => origin?.attribute === key))) {
+              postgresQueryHasUniqueKeys(result, references, confirmed.keys)) {
             session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
-              identity: confirmed.identity, table, result, origins: references.filter(origin => origin !== null), capabilities: confirmed.capabilities };
+              identity: confirmed.identity, table, result, relationOid: oid, origins: references, capabilities: confirmed.capabilities };
           }
         }
       }
@@ -1295,7 +1297,7 @@ export class PostgresEngine {
             (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, rowIndices, resolved, relation), current, operation);
           // 结果可以重复使用同一个别名，原表字段键只按已核验的来源位置返回。
           const keys = new Map(page.columns.map(column => [column.name, column.key]));
-          return { table: resolved.table, page, columnKeys: resolved.columns.map(name => keys.get(name) ?? null) };
+          return { table: resolved.table, page, columnKeys: resolved.columns.map(name => name === null ? null : keys.get(name) ?? null) };
         });
       }
       case 'postgres.resultOrigins': {
