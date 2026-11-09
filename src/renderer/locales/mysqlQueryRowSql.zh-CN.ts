@@ -1,0 +1,16 @@
+export const mysqlQueryRowSqlZh = {
+  open: '生成原表记录 SQL',
+  title: '查询结果原表 SQL',
+  kind: '语句类型',
+  select: '按主键 SELECT',
+  insert: 'INSERT',
+  update: 'UPDATE',
+  delete: 'DELETE',
+  scope: (rows: number) => `根据本次查询的 ${rows} 条记录生成语句。赋值仅使用直接返回的原表字段。`,
+  prepare: '生成 SQL',
+  reading: '正在核对原表和查询记录',
+  copy: '复制 SQL',
+  copied: '已复制原表记录 SQL',
+  draft: '打开查询草稿',
+  close: '返回查询结果',
+} as const;

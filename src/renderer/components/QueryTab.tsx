@@ -134,6 +134,11 @@ import { mysqlQueryBatchLimits, type MysqlQueryBatchEditInput, type MysqlQueryRe
 import { MysqlQueryBatchEditDialog } from './MysqlQueryBatchEditDialog';
 import { mysqlQueryPasteMatrix, planMysqlQueryReplace, type MysqlQueryBatchInput } from '../mysqlQueryBatchEdit';
 import { mysqlQueryBatchEditZh as mysqlBatchText } from '../locales/mysqlQueryBatchEdit.zh-CN';
+import { copyInsertSqlLimits } from '../../shared/copyInsertSql';
+import type { MysqlQueryRowSqlInput } from '../../shared/mysqlQueryRowSql';
+import { mysqlQueryRowSqlZh as mysqlRowSqlText } from '../locales/mysqlQueryRowSql.zh-CN';
+import { MysqlQueryRowSqlDialog } from './MysqlQueryRowSqlDialog';
+import { openRowSqlDraft } from '../openRowSqlDraft';
 import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTableFindPanel';
 import type { PageTextPatch } from '../pageFindReplace';
 import { captureQueryInlineCellAnchor, type QueryInlineCellAnchor } from '../queryInlineCellAnchor';
@@ -338,6 +343,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [mysqlBatch, setMysqlBatch] = useState<{ request: MysqlQueryBatchEditInput; operation: MysqlQueryBatchInput;
     result: QueryResult; job: WorkspaceBusyLease; displayRows: number[]; anchor?: { row: DataRow; key: string } }>();
   useEffect(() => () => { mysqlBatch?.job.release(); }, [mysqlBatch]);
+  const [mysqlRowSql, setMysqlRowSql] = useState<{ request: Omit<MysqlQueryRowSqlInput, 'kind' | 'taskId'>;
+    result: QueryResult; job: WorkspaceBusyLease; keyed: boolean }>();
+  useEffect(() => () => { mysqlRowSql?.job.release(); }, [mysqlRowSql]);
   const retiredRecordTask = useRef<string | undefined>(undefined);
   const [restoreEditedCell, setRestoreEditedCell] = useState<{ row: DataRow; key: string }>();
   const [originDialog, setOriginDialog] = useState<{ outcome: QueryOutcome; index: number; mysql?: { sessionId: string; executionId: string } }>();
@@ -1387,7 +1395,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   },[sourceResult,columnLayout,layoutMatches]);
   const frozenKeys=useMemo(()=>sourceResult&&layoutMatches&&columnLayout?frozenQueryResultKeys(sourceResult.columns,columnLayout.layout):[],[sourceResult,columnLayout,layoutMatches]);
   const resultColumnWidths = layoutMatches ? columnLayout?.layout.widths : undefined;
-  const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!activeMysqlOrigins||!!recordEdit||!!recordRelation||!!mysqlRelation||!!mysqlBatch||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
+  const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||!!archiveOutcome||!!activeOrigins||!!activeMysqlOrigins||!!recordEdit||!!recordRelation||!!mysqlRelation||!!mysqlBatch||!!mysqlRowSql||save||!!resultSqlPreview||!!snippets||parameterSource!==null||streamExportSource!==null||!!sqliteFullExport||sessionObjects||recovery||!!databaseSwitchDialog;
   const failureLocator = failureSource.current;
   // SQLite筛选明确选择原存储类，先筛选再排序；所有消费者共用同一最终视图与租约。
   const filterBinding=resultFilter.bind(viewSource,resultContext,visibleColumns);
@@ -1469,6 +1477,30 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const mysqlInsertAvailable = mysqlSourceAvailable && outcome?.mysqlQueryInsert === true;
   const mysqlJoinColumns = outcome?.mysqlQueryJoinColumns;
   const mysqlComputedColumns = outcome?.mysqlQueryComputedColumns;
+  const canPrepareMysqlRowSql = (mysqlRelationAvailable || mysqlInsertAvailable) && !!sourceResult?.rows.length && !sourceResult.truncated;
+  const mysqlRowSqlCount = resultSelection.count(selectionBinding);
+  function closeMysqlRowSql(view: NonNullable<typeof mysqlRowSql>): void {
+    view.job.release();
+    setMysqlRowSql(current => current === view ? undefined : current);
+  }
+  function mysqlRowSqlCurrent(view: NonNullable<typeof mysqlRowSql>): boolean {
+    return view.job.owns() && queryOwnerCurrent() && relationResult.current === view.result &&
+      sessionRef.current === view.request.sessionId && task.current === view.request.executionId;
+  }
+  useEffect(() => { if (mysqlRowSql && !mysqlRowSqlCurrent(mysqlRowSql)) closeMysqlRowSql(mysqlRowSql); });
+  /** 勾选优先。显示排序后的行对象映射回原执行的序号，不接收网格显示值。 */
+  function openMysqlRowSql(): void {
+    if (!canPrepareMysqlRowSql || !sourceResult || !selectionBinding || !sessionRef.current ||
+        !resultSelectionAllowed(selectionBinding) || !queryMenuCurrent()) return;
+    const checked = resultSelection.checkedIndices(selectionBinding);
+    const positions = checked.length ? checked : activeDetailRow && activeDetailRow.binding === detailBinding &&
+      rowDetailAllowed(detailBinding) ? [activeDetailRow.index] : [];
+    if (!positions.length || positions.length > copyInsertSqlLimits.rows) return;
+    const rowIndices = positions.map(position => sourceResult.rows.indexOf(selectionBinding.rows[position]));
+    if (rowIndices.some(index => index < 0) || new Set(rowIndices).size !== rowIndices.length) return;
+    setMysqlRowSql({ result: sourceResult, job: acquireWorkspaceBusy(tab.id), keyed: mysqlRelationAvailable,
+      request: { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current, rowIndices } });
+  }
   const [replaceView, setReplaceView] = useState<{ binding: ResultSelectionBinding; request: MysqlQueryReplaceColumnsInput;
     panel: PostgresFindRequest; fields?: ReadonlyMap<string, string> }>();
   const canReplaceResult = mysqlRelationAvailable && !sourceResult?.truncated && !!selectionBinding?.rows.length && !!visibleColumns.length;
@@ -2625,6 +2657,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {mysqlRelationAvailable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlJoinColumns ? mysqlEditText.editJoin : mysqlEditText.edit}</button>}
 {canReplaceResult && <button disabled={!!replaceLookup} onClick={openMysqlReplace}>{mysqlBatchText.replaceOpen}</button>}
+{canPrepareMysqlRowSql && <button disabled={mysqlRowSqlCount > copyInsertSqlLimits.rows ||
+  !mysqlRowSqlCount && (!activeDetailRow || activeDetailRow.binding !== detailBinding)}
+  onClick={openMysqlRowSql}>{mysqlRowSqlText.open}</button>}
 {mysqlRelationAvailable && !mysqlJoinColumns && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
   title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('delete')}>{mysqlBatchText.deleteChecked}</button>}
 {mysqlRelationAvailable && !mysqlJoinColumns && <button disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
@@ -2705,6 +2740,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           current={() => mysqlRecordCurrent(mysqlRelation)} onClose={() => closeMysqlRecord(mysqlRelation)} />)}
       {mysqlBatch && <MysqlQueryBatchEditDialog request={mysqlBatch.request} operation={mysqlBatch.operation} displayRows={mysqlBatch.displayRows}
         isCurrent={() => mysqlRecordCurrent(mysqlBatch)} onDone={committed => closeMysqlBatch(mysqlBatch, committed)}/>}
+      {mysqlRowSql && <MysqlQueryRowSqlDialog request={mysqlRowSql.request} keyed={mysqlRowSql.keyed}
+        isCurrent={() => mysqlRowSqlCurrent(mysqlRowSql)} onClose={() => closeMysqlRowSql(mysqlRowSql)}
+        onDraft={(kind, prepared) => {
+          if (!mysqlRowSqlCurrent(mysqlRowSql)) return;
+          openRowSqlDraft({ connectionId: tab.connectionId, database: prepared.database, table: prepared.table }, kind, prepared.sql);
+          closeMysqlRowSql(mysqlRowSql);
+        }}/>}
       {recordRelation && <SqliteQueryRelationDialog request={recordRelation.request}
         current={() => queryRelationCurrent(recordRelation)} onClose={() => closeQueryRelation(recordRelation)}
         onOpen={output => {

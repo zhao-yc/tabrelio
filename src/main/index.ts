@@ -2181,7 +2181,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const incomingReferenceRevision = incomingReferenceRead ? store.connectionRevision() : undefined;
   if (incomingReferenceRead && shuttingDown) throw Error('客户端正在退出，不能读取子记录');
   const mysqlFocusedEdit = (command === 'table.preview' || command === 'table.apply') ? input.queryRecord : undefined;
-  const mysqlQuerySourceRead = command === 'mysql.queryRelation' || command === 'mysql.resultOriginOpen' || command === 'mysql.queryRecordEdit' || command === 'mysql.queryBatchEdit' || command === 'mysql.queryReplaceColumns' ||
+  const mysqlQuerySourceRead = command === 'mysql.queryRelation' || command === 'mysql.resultOriginOpen' || command === 'mysql.queryRecordEdit' || command === 'mysql.queryBatchEdit' || command === 'mysql.queryReplaceColumns' || command === 'mysql.queryRowSql' ||
     command === 'table.preview' && !!mysqlFocusedEdit;
   const mysqlQuerySource = mysqlQuerySourceRead || !!mysqlFocusedEdit;
   const mysqlQuerySourceSessionId = mysqlFocusedEdit?.sessionId ?? input.sessionId;
@@ -2451,7 +2451,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       });
     }
     case 'schema.compare': input = { ...input, sourceProfile: store.resolveConnection(input.source.connectionId), targetProfile: store.resolveConnection(input.target.connectionId) }; break;
-    case 'table.incomingReferences':case 'table.childReferencePage':case 'mysql.queryRelation':case 'mysql.resultOriginOpen':case 'mysql.queryRecordEdit':case 'mysql.queryBatchEdit':case 'mysql.queryReplaceColumns':
+    case 'table.incomingReferences':case 'table.childReferencePage':case 'mysql.queryRelation':case 'mysql.resultOriginOpen':case 'mysql.queryRecordEdit':case 'mysql.queryBatchEdit':case 'mysql.queryReplaceColumns':case 'mysql.queryRowSql':
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'table.statistics':
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
@@ -3684,7 +3684,8 @@ else {
             payload.command === 'postgres.completion' || payload.command === 'postgres.resultOrigins' || payload.command === 'postgres.queryRecordPage' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
             payload.command === 'sessions.open' || payload.command === 'mysql.queryRelation' || payload.command === 'mysql.resultOriginOpen' ||
-            payload.command === 'mysql.queryRecordEdit' || payload.command === 'mysql.queryBatchEdit' || payload.command === 'mysql.queryReplaceColumns') columns = columnsMain.capture(event);
+            payload.command === 'mysql.queryRecordEdit' || payload.command === 'mysql.queryBatchEdit' || payload.command === 'mysql.queryReplaceColumns' ||
+            payload.command === 'mysql.queryRowSql') columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);

@@ -66,6 +66,8 @@ import { connect, execute, type ManagedConnection } from './connection';
 import { completionQuery } from './completionQuery';
 import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryKeysUnique, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
 import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, mysqlQueryReplaceableColumn, mysqlQueryReplaceColumnsSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
+import { mysqlQueryRowSqlMessages, mysqlQueryRowSqlSchema } from '../shared/mysqlQueryRowSql';
+import { buildMysqlQueryRowSql } from './mysqlQueryRowSql';
 import { mysqlResultOriginOpenSchema } from '../shared/mysqlResultOrigins';
 import { MysqlResultOrigins, mysqlResultOriginCatalogAllowed, readMysqlResultOrigin } from './mysqlResultOrigins';
 import * as metadata from './metadata';
@@ -694,6 +696,7 @@ export class Engine {
       case 'mysql.queryRecordEdit': return this.readQueryRelation(input, 'record');
       case 'mysql.queryBatchEdit': return this.readQueryRelation(input, 'batch');
       case 'mysql.queryReplaceColumns': return this.readMysqlQueryReplaceColumns(input);
+      case 'mysql.queryRowSql': return this.prepareMysqlQueryRowSql(input);
       case 'mysql.resultOriginOpen': return this.openResultOrigin(input);
       case 'query.confirmInsertExport':this.insertConfirmations.confirm({taskId:input.taskId,previewToken:input.previewToken,confirmation:input.confirmation});return;
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
@@ -1963,6 +1966,28 @@ export class Engine {
     }, undefined, '核对查询文本字段', true);
     current();
     return columns;
+  }
+
+  /** 只在独立只读事务检查来源目录，不获取写权限，也不执行生成的 SQL。 */
+  private async prepareMysqlQueryRowSql(input: Input): Promise<CommandMap['mysql.queryRowSql']['output']> {
+    const { profile, ...raw } = input, request = mysqlQueryRowSqlSchema.parse(raw);
+    const { source, current } = this.queryRelationScope(request);
+    if (!profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId || source.result.truncated)
+      throw Error(mysqlQueryRowSqlMessages.source);
+    this.copySourceProfile(input);
+    const sql = await this.withIndependentTask(request.connectionId, request.taskId, async (managed, control) => {
+      if (managed.queryRowContext !== source.context) throw Error(mysqlQueryRowSqlMessages.stale);
+      const read = (sql: string) => completionQuery(managed, control, sql, []);
+      await read('SET SESSION lock_wait_timeout = 5');
+      await read('START TRANSACTION READ ONLY');
+      const info = await this.readQueryTableInfo({ managed, ...control }, source);
+      current();
+      const sql = buildMysqlQueryRowSql(source, info, request);
+      await read('ROLLBACK');
+      return sql;
+    }, undefined, '生成查询记录 SQL', true);
+    current();
+    return { database: source.database, table: source.table, sql };
   }
 
   /** 由服务器核对当前角色的实际删除权限。普通 EXPLAIN 只生成计划，不执行 DELETE。 */

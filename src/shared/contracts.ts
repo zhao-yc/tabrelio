@@ -324,6 +324,8 @@ export interface CommandMap {
     output: { info: TableInfo; rows: DataRow[]; token: string; columns: string[] } };
   'mysql.queryReplaceColumns': { input: import('./mysqlQueryRelation').MysqlQueryReplaceColumnsInput;
     output: import('./mysqlQueryRelation').MysqlQueryReplaceColumn[] };
+  'mysql.queryRowSql': { input: import('./mysqlQueryRowSql').MysqlQueryRowSqlInput;
+    output: { database: string; table: string; sql: string } };
   'mysql.resultOriginOpen': { input: import('./mysqlResultOrigins').MysqlResultOriginOpenInput;
     output: { database: string; table: string } };
   'postgres.resultOrigins': { input: import('./postgresResultOrigins').PostgresResultOriginsInput; output: import('./postgresResultOrigins').PostgresResultOrigin[] };
