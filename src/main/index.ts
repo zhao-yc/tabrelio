@@ -68,7 +68,7 @@ import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { connectionOrganizationZh } from '../shared/connectionOrganization.zh-CN';
 import { tableCreateMessages } from '../shared/tableCreate';
 import { assertQueryDatabaseSwitchOutput, queryDatabaseSwitchMessages } from '../shared/queryDatabaseSwitch';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell } from 'electron';
 import { ApplicationMenu, isApplicationMenuDocument } from './applicationMenu';
 import { copyInsertSql } from './copyInsertSql';
 import { join, basename, extname } from 'node:path';
@@ -2123,6 +2123,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'queryFileSources.open' || command === 'queryFileSources.save' || command === 'queryFileSources.saveAs' || command === 'queryFileSources.checkExternal' || command === 'queryFileSources.reload') registerQueryFileSourceTask(input.taskId, command);
     return queryFileOperation(async () => {
       switch (command) {
+        case 'queryFileSources.handoff': return queryFileSources.handoff(input, scope);
         case 'queryFileSources.checkExternal': return queryFileSources.checkExternal(input, scope);
         case 'queryFileSources.reload': return queryFileSources.reload(input, scope);
         case 'queryFileSources.discardReload': return queryFileSources.discardReload(input, scope);
@@ -3581,7 +3582,11 @@ else {
         for (const [token, value] of structureTokens) if (ids.includes(value.connectionId)) structureTokens.delete(token);
       },
     });
-    queryFileSources = new QueryFileSources({ store, report: taskEvent, reserve: path => exportReservations.acquire(path), choose: async (mode, name) => {
+    queryFileSources = new QueryFileSources({ store, report: taskEvent, reserve: path => exportReservations.acquire(path), handoff: async (action, path) => {
+      if (action === 'open') return (await shell.openPath(path)) === '';
+      shell.showItemInFolder(path);
+      return true;
+    }, choose: async (mode, name) => {
       if (!window) throw Error('文件选择窗口已关闭');
       const filters = [{ name: 'SQL文件', extensions: ['sql'] }];
       if (mode === 'open') { const result = await dialog.showOpenDialog(window, { title: '打开SQL文件', properties: ['openFile'], filters }); return result.canceled ? undefined : result.filePaths[0]; }

@@ -5,6 +5,7 @@ export const sqlEditorZoomCommandIds = ['sql-editor-zoom-in', 'sql-editor-zoom-o
 /** 沙箱预加载只依赖纯白名单，不引入校验器、文件系统或数据库运行时。 */
 export const uiCommandIds = [
   'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file',
+  'open-bound-sql-external', 'reveal-bound-sql-file',
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-goto-bracket', 'sql-select-bracket', 'sql-toggle-comment', 'sql-toggle-block-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
   ...sqlLineCommandIds, 'sql-selection-to-snippet', 'sql-clipboard-stack', 'sql-copy-quoted',
   'editor-font', ...sqlEditorZoomCommandIds, 'editor-word-wrap', 'editor-line-numbers', 'editor-match-brackets', 'editor-sql-folding', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',

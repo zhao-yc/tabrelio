@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import type { LocalStore } from './storage';
 import type { QueryFileEncoding, TaskEvent } from '../shared/contracts';
 import type { TaskCancelState } from '../shared/taskCancelState';
 import { queryFileSourceOpenSchema, queryFileSourceSaveSchema, queryFileSourceSaveAsSchema, queryFileSourceStatusSchema, queryFileSourceReleaseSchema, queryFileSourceCancelSchema, sameQueryFileSource, type QueryFileSourceRef, type QueryFileSourceOpenInput, type QueryFileSourceOpenResult, type QueryFileSourceSaveInput, type QueryFileSourceSaveAsInput, type QueryFileSourceSaveResult, type QueryFileSourceStatusInput, type QueryFileSourceStatus, type QueryFileSourceReleaseInput, type QueryFileSourceBlocked, type QueryFileSourceCancelInput, type QueryFileSourceProgress } from '../shared/queryFileSources';
 import { queryFileSourceView, type PrivateQueryFileSource } from './queryFileSourceRecords';
 import { queryRecentFilesSchema, queryRecentFileForgetSchema, type QueryRecentFileView } from '../shared/queryFileSources';
+import { canOpenBoundSqlFile, queryFileSourceHandoffSchema, type QueryFileSourceHandoffInput, type QueryFileSourceHandoffResult } from '../shared/queryFileSources';
 import { queryRecentFileView } from './queryFileRecents';
 import { QueryFileSourceFailure, assertQueryFileVersion, encodeBoundQueryFile, decodeSourceSnapshot, queryFileSqlDigest, queryFileBom, queryFileEol, queryFileIsMissing, queryFileTargetAbsent, writeBoundQueryFile, type QueryFileSnapshot } from './queryFileSourceFiles';
 
@@ -23,6 +24,7 @@ export interface QueryFileSourceHost {
   choose(mode: 'open' | 'save', name?: string): Promise<string | undefined>;
   reserve(path: string): Promise<() => void>;
   report(event: TaskEvent): void;
+  handoff?(action: QueryFileSourceHandoffInput['action'], path: string): Promise<boolean>;
 }
 interface Active { cancelled: boolean; source?: QueryFileSourceRef; tabId: string; taskId: string; document: object; context?: Context; phase: QueryFileSourceProgress['phase']; done: Promise<void>; finish(): void; }
 interface Context { expected?: PrivateQueryFileSource; previousSql: string; connectionId: string; wrote: 'no' | 'yes' | 'unknown'; check(): void; report(phase: QueryFileSourceProgress['phase'], bytes?: number, total?: number): void; }
@@ -32,6 +34,7 @@ export class QueryFileSources {
   private readonly reloadPreviews = new Map<string, { id: string; scope: object; token: object; generation: number | undefined; source: QueryFileSourceRef; draft: string; snapshot: Omit<QueryFileSnapshot, 'bytes'>; expires: number }>();
   private readonly active = new Map<string, Active>();
   private readonly runningTasks = new Map<string, Active>();
+  private readonly handoffs = new Set<string>();
   constructor(private readonly host: QueryFileSourceHost, private readonly now = Date.now) {}
 
   /** 导航/崩溃仅撤销当前活动意图，不宽删已保存文档的重启授权。 */
@@ -69,7 +72,7 @@ export class QueryFileSources {
     };
     try {
       scope.assertCurrent();
-      if (this.active.has(tabId)) throw new QueryFileSourceFailure('busy', '此查询的文件操作尚未收尾，请等待');
+      if (this.active.has(tabId) || this.handoffs.has(tabId)) throw new QueryFileSourceFailure('busy', '此查询的文件操作尚未收尾，请等待');
       const document = this.document(tabId), expected = this.source(tabId);
       if (requireRef && !sameQueryFileSource(expected?.ref, ref)) throw new QueryFileSourceFailure('stale-source', '文件来源已变化，请重新读取来源状态');
       if (expected && expected.connectionId !== document.tab.connectionId) throw new QueryFileSourceFailure('document-changed', '来源不再属于当前查询文档');
@@ -241,6 +244,45 @@ export class QueryFileSources {
       if (source.connectionId !== document.tab.connectionId || input.source && !sameQueryFileSource(source.ref, input.source)) throw new QueryFileSourceFailure('stale-source', '文件来源已变化，请重新获取状态');
       return { state: 'bound', binding: queryFileSourceView(source) };
     } catch (error) { return this.failure(error, 'no'); }
+  }
+  /** 只移交原授权的磁盘文件。正文可能被外部原地编辑，改动后的磁盘版本仍可定位或打开。 */
+  async handoff(raw: QueryFileSourceHandoffInput, scope: QueryFileSourceScope): Promise<QueryFileSourceHandoffResult> {
+    const { tabId, source: ref, action } = queryFileSourceHandoffSchema.parse(raw);
+    if (this.active.has(tabId) || this.handoffs.has(tabId)) {
+      return this.failure(new QueryFileSourceFailure('busy', '此查询的文件操作尚未收尾，请等待'), 'no');
+    }
+    this.handoffs.add(tabId);
+    try {
+      scope.assertCurrent();
+      const document = this.document(tabId), source = this.source(tabId);
+      if (!source || !sameQueryFileSource(source.ref, ref)) throw new QueryFileSourceFailure('stale-source', '文件来源已变化，请重新读取来源状态');
+      const check = () => {
+        try { scope.assertCurrent(); } catch { throw new QueryFileSourceFailure('document-changed', reloadText.changed); }
+        const current = this.document(tabId);
+        if (current.token !== document.token || current.tab.connectionId !== source.connectionId || !sameQueryFileSource(this.source(tabId)?.ref, ref)) {
+          throw new QueryFileSourceFailure('document-changed', reloadText.changed);
+        }
+      };
+      check();
+      const name = basename(source.path);
+      if (action === 'open' && (!canOpenBoundSqlFile(name) || process.platform === 'win32' && name.includes(':'))) {
+        throw new QueryFileSourceFailure('permission', '只能用默认应用打开扩展名为 .sql 的文件');
+      }
+      const parent = await queryFileParent(source.path, check);
+      if (source.parent && !sameQueryFileParent(source.parent, parent)) throw new QueryFileSourceFailure('identity-changed', reloadText.identity);
+      const canonical = await realpath(source.path); check();
+      if (canonical !== source.path || !sameQueryFileParent(parent, await queryFileParent(source.path, check))) {
+        throw new QueryFileSourceFailure('identity-changed', reloadText.identity);
+      }
+      const stat = await lstat(source.path, { bigint: true }); check();
+      if (!stat.isFile() || stat.nlink !== 1n || String(stat.dev) !== source.identity.dev || String(stat.ino) !== source.identity.ino) {
+        throw new QueryFileSourceFailure('identity-changed', reloadText.identity);
+      }
+      // 从最后一次身份复核直接交给系统。系统接口接收路径，外部进程仍可在此后移动文件。
+      if (!await this.host.handoff?.(action, source.path)) throw new QueryFileSourceFailure('io', action === 'open' ? '系统未能用默认应用打开 SQL 文件，请检查文件关联' : '系统未能定位 SQL 文件');
+      return { state: 'requested' };
+    } catch (error) { return this.failure(error, 'no', true); }
+    finally { this.handoffs.delete(tabId); }
   }
   /** 仅取消同一原文档的精确任务，替换提交点之后不承诺可撤销；等待物理资源收尾。 */
   async cancel(raw: QueryFileSourceCancelInput, scope: QueryFileSourceScope): Promise<{ cancelled: boolean }> {

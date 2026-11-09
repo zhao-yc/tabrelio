@@ -41,6 +41,12 @@ export const queryFileSourceSaveSchema = z.object({ tabId, taskId, source: query
 export const queryFileSourceSaveAsSchema = z.object({ tabId, taskId, source: queryFileSourceRefSchema.optional(), sql, encoding, bom: z.enum(['none', 'utf8', 'utf16le']), eol }).strict().refine(value => value.bom === 'none' || value.bom === value.encoding, 'BOM与编码不匹配');
 export const queryFileSourceStatusSchema = z.object({ tabId, source: queryFileSourceRefSchema.optional() }).strict();
 export const queryFileSourceReleaseSchema = z.object({ tabId, source: queryFileSourceRefSchema }).strict();
+export const queryFileSourceHandoffSchema = queryFileSourceReleaseSchema.extend({ action: z.enum(['open', 'reveal']) });
+export type QueryFileSourceHandoffInput = z.infer<typeof queryFileSourceHandoffSchema>;
+export type QueryFileSourceHandoffResult = { state: 'requested' } | QueryFileSourceBlocked;
+
+/** 系统默认应用只接收 SQL 扩展名。文件选择器在部分系统上允许切换过滤条件。 */
+export function canOpenBoundSqlFile(name: string): boolean { return name.length > 4 && name.toLowerCase().endsWith('.sql'); }
 export const queryFileSourceCancelSchema = z.object({ tabId, taskId }).strict();
 export type QueryFileSourceOpenInput = z.infer<typeof queryFileSourceOpenSchema>;
 export type QueryFileSourceSaveInput = z.infer<typeof queryFileSourceSaveSchema>;

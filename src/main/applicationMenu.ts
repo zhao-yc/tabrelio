@@ -55,6 +55,7 @@ export class ApplicationMenu {
       { label: text.file, submenu: [
         item('new-connection', 'CmdOrCtrl+Shift+N'), item('new-query', 'CmdOrCtrl+N'), separator,
         item('open-sql-file', 'CmdOrCtrl+O'), item('recent-sql-file'), item('save-query', 'CmdOrCtrl+S'), item('save-sql-file', 'CmdOrCtrl+Shift+S'), separator,
+        item('open-bound-sql-external'), item('reveal-bound-sql-file'), separator,
         item('connections-transfer'), item('connections-organize'), ...(!mac ? [separator, { label: text.quit, role: 'quit' } as MenuItemConstructorOptions] : [])
       ] },
       { label: text.edit, submenu: [

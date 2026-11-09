@@ -2,9 +2,11 @@ import { QueryFileReloadDialog } from './QueryFileReloadDialog';
 import { queryFileReloadZh } from '../../shared/queryFileReload.zh-CN';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { FileDown, FolderOpen } from 'lucide-react';
+import { ExternalLink, FileDown, FolderOpen, LocateFixed } from 'lucide-react';
 import type { QueryFileEncoding } from '../../shared/contracts';
 import type { QueryFileBom, QueryFileEolPolicy } from '../../shared/queryFileSources';
+import { canOpenBoundSqlFile } from '../../shared/queryFileSources';
+import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import type { WorkspaceTab } from '../store';
 import { useWorkspace } from '../store';
 import { errorMessage } from '../lib';
@@ -55,6 +57,8 @@ export function QueryFileSourceCaption({ tab, files, compact = false }: { tab: W
 export function QueryFileActions({ tab, files, renderActions }: { tab: WorkspaceTab; files: QueryFileSourceController; renderActions?(actions: ReactNode): ReactNode }) {
   const [mode, setMode] = useState<'open' | 'save' | 'recent' | null>(null);
   const activeTabId = useWorkspace(state => state.settings.activeTabId), connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
+  const canReveal = !!files.view && !files.busy && !mode && !files.problem;
+  const canOpenExternal = canReveal && canOpenBoundSqlFile(files.view!.name);
   /** 文件命令由常驻控制器接收；菜单关闭不会卸载原文件选择器或收尾作业。 */
   function chooseMode(next: 'open' | 'save' | 'recent'): void {
     if (files.isBusy()) return;
@@ -65,10 +69,16 @@ export function QueryFileActions({ tab, files, renderActions }: { tab: Workspace
     'open-sql-file': { enabled: !files.busy, run: () => chooseMode('open') },
     'save-sql-file': { enabled: !files.busy, run: () => chooseMode('save') },
     'recent-sql-file': { enabled: !files.busy, run: () => chooseMode('recent') },
+    'open-bound-sql-external': { enabled: canOpenExternal, run: () => void files.handoff('open') },
+    'reveal-bound-sql-file': { enabled: canReveal, run: () => void files.handoff('reveal') },
   }, { active: activeTabId === tab.id, contextKey: JSON.stringify([tab.connectionId, connectionVersion, tab.fileSourceBinding?.id, tab.fileSourceBinding?.revision, !!mode, files.busy]) });
   useEffect(() => { if (files.problem) setMode(null); }, [files.problem]);
   const problem = files.problem;
-  const actions = <>{tab.fileSourceBinding && <button disabled={files.busy} onClick={() => void files.checkExternal()}>{queryFileReloadZh.check}</button>}<button disabled={files.busy} title={text.open} aria-label={text.open} onClick={() => chooseMode('open')}><FolderOpen size={15}/></button><button disabled={files.busy} title={text.recent} aria-label={text.recent} onClick={() => chooseMode('recent')}>{text.recent}</button><button disabled={files.busy} title={text.saveAs} aria-label={text.saveAs} onClick={() => chooseMode('save')}><FileDown size={15}/></button></>;
+  const actions = <>{tab.fileSourceBinding && <>
+    <button disabled={files.busy} onClick={() => void files.checkExternal()}>{queryFileReloadZh.check}</button>
+    <button disabled={!canOpenExternal} title={text.externalOpenHint} aria-label={uiCommandLabels['open-bound-sql-external']} onClick={() => void files.handoff('open')}><ExternalLink size={15}/></button>
+    <button disabled={!canReveal} title={text.revealHint} aria-label={uiCommandLabels['reveal-bound-sql-file']} onClick={() => void files.handoff('reveal')}><LocateFixed size={15}/></button>
+  </>}<button disabled={files.busy} title={text.open} aria-label={text.open} onClick={() => chooseMode('open')}><FolderOpen size={15}/></button><button disabled={files.busy} title={text.recent} aria-label={text.recent} onClick={() => chooseMode('recent')}>{text.recent}</button><button disabled={files.busy} title={text.saveAs} aria-label={text.saveAs} onClick={() => chooseMode('save')}><FileDown size={15}/></button></>;
   return <>{renderActions ? renderActions(actions) : actions}{files.reloadActive && createPortal(<QueryFileReloadDialog files={files}/>, document.body)}{mode === 'recent' ? <RecentQueryFilesDialog files={files} onClose={() => setMode(null)}/> : mode && <QueryFilesDialog mode={mode} files={files} onClose={() => setMode(null)}/>}
     {files.busy && files.task && !mode && !problem && <QueryFileTaskProgress task={files.task}/>}
     {problem && createPortal(<Modal title={text.recovery} onClose={() => { if (!files.isBusy()) files.dismiss(); }}><div className="modal-content"><ErrorBox message={problem.message}/>{files.busy && files.task && <QueryFileTaskProgress task={files.task}/>}<p>{problem.wrote === 'no' ? text.wroteNo : problem.wrote === 'yes' ? text.wroteYes : text.wroteUnknown}</p><p className="muted small">{text.rereadHint}</p></div><footer className="modal-footer">{files.busy && <Spinner/>}<button disabled={files.busy} onClick={files.dismiss}>{zh.common.cancel}</button><span className="grow"/><button disabled={files.busy} onClick={() => { files.dismiss(); setMode('open'); }}>{text.chooseAgain}</button>{tab.fileSourceBinding && <button disabled={files.busy} onClick={() => void files.reread()}>{text.reread}</button>}<button disabled={files.busy} onClick={() => { files.dismiss(); setMode('save'); }}>{text.saveAs}</button></footer></Modal>, document.body)}

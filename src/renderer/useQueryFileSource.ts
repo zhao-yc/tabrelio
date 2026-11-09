@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { QueryFileEncoding } from '../shared/contracts';
-import type { QueryFileBom, QueryFileEolPolicy, QueryFileSourceBlocked, QueryFileSourceView } from '../shared/queryFileSources';
+import type { QueryFileBom, QueryFileEolPolicy, QueryFileSourceBlocked, QueryFileSourceHandoffInput, QueryFileSourceView } from '../shared/queryFileSources';
 import { queryFileSourceHasChanges, sameQueryFileSource } from '../shared/queryFileSources';
 import { QueryFileTaskOperation, type QueryFileTaskState } from './queryFileTasks';
 import { acquireWorkspaceBusy, beginQueryFileOpen, flushSettings, useWorkspace, type WorkspaceTab, type QueryFileOpenLease } from './store';
@@ -231,10 +231,33 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
     } catch { intent.work?.finish({ state: 'blocked', message: reloadText.changed, wrote: 'no' }); if (reloadIntent.current === intent && ownsView()) setProblem({ state: 'blocked', reason: 'document-changed', message: reloadText.changed, wrote: 'no' }); return false; }
     finally { releaseReload(intent); }
   }
+  /** 系统打开与定位只使用当前标签的来源引用，不接管编辑器模型或保存草稿到文件。 */
+  async function handoff(action: QueryFileSourceHandoffInput['action']) {
+    const ownsActiveTab = () => ownsView() && useWorkspace.getState().settings.activeTabId === tab.id;
+    const snapshot = current(), source = snapshot?.fileSourceBinding;
+    if (!snapshot || !source || active.current || !ownsActiveTab() || !sameQueryFileSource(source, metadata?.ref)) return;
+    const lease = new QuerySourceLease(snapshot, current, changed => useWorkspace.subscribe(changed), ownsActiveTab);
+    active.current = true;
+    setBusy(true);
+    try {
+      await flushSettings();
+      if (!lease.current()) return;
+      const result = await invoke('queryFileSources.handoff', { tabId: tab.id, source, action });
+      if (!lease.current()) return;
+      if (result.state === 'blocked') useWorkspace.getState().notify(result.message, true);
+      else useWorkspace.getState().notify(action === 'open' ? text.externalOpenRequested : text.revealRequested);
+    } catch {
+      if (lease.current()) useWorkspace.getState().notify(text.handoffUnavailable, true);
+    } finally {
+      lease.dispose();
+      active.current = false;
+      if (ownsView()) setBusy(false);
+    }
+  }
   /** 列表与移除只走Main的元数据接口，路径留在展示状态，不写入settings或localStorage。 */
   async function recent() { await flushSettings(); if (!ownsView() || !current()) throw Error(text.changed); return invoke('queryFileSources.recent', { tabId: tab.id }); }
   /** 明确移除历史不释放当前文件来源，不读取或删除实际文件。 */
   async function forgetRecent(recentId: string) { await flushSettings(); if (!ownsView() || !current()) throw Error(text.changed); return invoke('queryFileSources.forgetRecent', { tabId: tab.id, recentId }); }
-  return { view: metadata, dirty, busy, task, problem, save, open, recent, forgetRecent, reread, reloadPreview, reloadActive, reloadApplying, checkExternal, confirmReload, cancelReload, dismiss: () => setProblem(undefined), isBusy: () => active.current };
+  return { view: metadata, dirty, busy, task, problem, save, open, recent, forgetRecent, reread, handoff, reloadPreview, reloadActive, reloadApplying, checkExternal, confirmReload, cancelReload, dismiss: () => setProblem(undefined), isBusy: () => active.current };
 }
 export type QueryFileSourceController = ReturnType<typeof useQueryFileSource>;

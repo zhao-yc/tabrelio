@@ -7,7 +7,7 @@ import type { QueryFileCheckInput, QueryFileCheckResult, QueryFileReloadInput, Q
 import type { SqliteCompletionInput, SqliteCompletionOutput } from './sqliteCompletion';
 import type { UiCommandInvocation, UiMenuState, ObjectCategory } from './uiCommands';
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
-import type { QueryRecentFileView } from './queryFileSources';
+import type { QueryRecentFileView, QueryFileSourceHandoffInput, QueryFileSourceHandoffResult } from './queryFileSources';
 import type { SnippetTransferDecision, SnippetTransferPreview, SnippetTransferResult } from './snippetTransfer';
 import type { TableCopyDataGetInput, TableCopyDataGetOutput, TableCopyDataPreviewInput, TableCopyDataPreviewOutput, TableCopyDataApplyInput, TableCopyDataApplyOutput, TableCopyDataReleaseInput } from './tableCopyData';
 import type { TableCreateGetInput, TableCreateGetOutput, TableCreatePreviewInput, TableCreatePreviewOutput, TableCreateApplyInput, TableCreateApplyOutput, TableCreateReleaseInput } from './tableCreate';
@@ -199,6 +199,7 @@ export interface CommandMap {
   'queryFileSources.status': { input: QueryFileSourceStatusInput; output: QueryFileSourceStatus };
   'queryFileSources.cancel': { input: QueryFileSourceCancelInput; output: { cancelled: boolean } };
   'queryFileSources.release': { input: QueryFileSourceReleaseInput; output: { released: boolean } };
+  'queryFileSources.handoff': { input: QueryFileSourceHandoffInput; output: QueryFileSourceHandoffResult };
   'workbench.get': { input: Record<string, never>; output: WorkbenchSnapshot };
   'queryExportProfiles.list': { input: import('./fullQueryExportProfiles').FullQueryExportProfileScope; output: import('./fullQueryExportProfiles').FullQueryExportProfile[] };
   'queryExportProfiles.mutate': { input: import('./fullQueryExportProfiles').FullQueryExportProfileMutation; output: import('./fullQueryExportProfiles').FullQueryExportProfile[] };

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import iconv from 'iconv-lite';
 import type { FileChoice, TaskRecord } from '../../src/shared/contracts';
@@ -8,7 +8,10 @@ import { beginQueryFileSaveObservation } from '../helpers/queryFileSaveObservati
 
 type Encoding = 'utf8' | 'utf16le' | 'gb18030';
 interface NativeFileCall { mode: 'open' | 'save'; title?: string; defaultPath?: string; filters?: { name: string; extensions: string[] }[]; }
-declare global { var __dbarkQueryFileCalls: NativeFileCall[]; }
+declare global {
+  var __dbarkQueryFileCalls: NativeFileCall[];
+  var __dbarkQueryFileShellCalls: { action: 'open' | 'reveal'; path: string }[];
+}
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const source = "-- 中文文件往返\nSELECT '9223372036854775807', '12.00000000000000000001', '🚢';\n";
 
@@ -112,6 +115,62 @@ async function fileError(operation: 'read' | 'write', fileToken: string, sql = s
 }
 
 test.describe('离线 SQL 文件打开与另存', () => {
+  test('打开与定位关联 SQL 文件使用磁盘版本并拒绝同名替换', async ({}, testInfo) => {
+    await openOfflineQuery();
+    const menuState = (id: string) => desktop.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled, id);
+    await expect.poll(() => menuState('reveal-bound-sql-file')).toBe(false);
+    const path = join(dataDir, '磁盘脚本.SQL');
+    await writeFile(path, source);
+    const canonical = await realpath(path);
+    await chooseNativeFile('open', path);
+    const modal = await fileDialog('open', 'utf8');
+    await (await navigationMenuItem(modal, { name: '选择并打开 SQL 文件', exact: true })).click();
+    await expect(modal).toBeHidden();
+    const draft = 'SELECT 2 AS draft;';
+    await writeEditor(draft);
+    const tabs = await storedTabs(2), bound = tabs.at(-1)!;
+    expect(bound).toMatchObject({ sql: draft, fileSourceBinding: { revision: 1 } });
+
+    // 只观察系统边界；真实 Main 会话、文件身份核对和 IPC 都保持运行。
+    await desktop.evaluate(({ shell }) => {
+      globalThis.__dbarkQueryFileShellCalls = [];
+      shell.openPath = async path => { globalThis.__dbarkQueryFileShellCalls.push({ action: 'open', path }); return ''; };
+      shell.showItemInFolder = path => { globalThis.__dbarkQueryFileShellCalls.push({ action: 'reveal', path }); };
+    });
+    const calls = () => desktop.evaluate(() => globalThis.__dbarkQueryFileShellCalls);
+    const diskSql = 'SELECT 3 AS disk_version;';
+    await writeFile(path, diskSql);
+    const query = page.locator('.query-tab:visible');
+    const openDisk = await navigationMenuItem(query, { name: '用默认应用打开磁盘文件', exact: true });
+    await expect(openDisk).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath('bound-query-file-actions.png') });
+    await openDisk.click();
+    await expect(page.getByText('已请求系统用默认应用打开 SQL 文件。', { exact: true })).toBeVisible();
+    await expect.poll(() => menuState('reveal-bound-sql-file')).toBe(true);
+    await desktop.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('reveal-bound-sql-file');
+      const windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('定位命令所属窗口失效');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    });
+    await expect(page.getByText('已请求系统定位 SQL 文件。', { exact: true })).toBeVisible();
+    const dispatched = [{ action: 'open', path: canonical }, { action: 'reveal', path: canonical }];
+    expect(await calls()).toEqual(dispatched);
+    expect(await readFile(path, 'utf8')).toBe(diskSql);
+    expect(await storedTabs(2)).toEqual(tabs);
+
+    // 保留原 inode 后创建同名文件，确保拒绝依据是物理身份，而非仅正文不同。
+    await rename(path, join(dataDir, '保留原文件.sql'));
+    const replacement = 'SELECT 4 AS replacement;';
+    await writeFile(path, replacement);
+    await (await navigationMenuItem(query, { name: '定位 SQL 文件', exact: true })).click();
+    await expect(page.getByText(/源文件或父目录身份无法确认/)).toBeVisible();
+    expect(await calls()).toEqual(dispatched);
+    expect(await readFile(path, 'utf8')).toBe(replacement);
+    expect(await storedTabs(2)).toEqual(tabs);
+    await expectNoSqlExecution([{ kind: 'queryFileSources.open', status: 'completed' }]);
+  });
+
   test('UTF BOM 和 GB18030 文件打开为独立标签，取消不覆盖原查询且不执行 SQL', async ({}, testInfo) => {
     await openOfflineQuery();
     const originalSql = "SELECT '原查询不能被文件覆盖' AS original_query;";

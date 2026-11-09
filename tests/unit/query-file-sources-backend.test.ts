@@ -40,6 +40,29 @@ async function fixture(bytes = Buffer.from('select 1;\n'), tabIds = ['one']) {
 function opened(result: QueryFileSourceOpenResult): QueryFileSourceView { expect(result.state).toBe('opened'); if (result.state !== 'opened') throw Error(JSON.stringify(result)); return result.binding; }
 function saved(result: QueryFileSourceSaveResult): QueryFileSourceView { expect(result.state).toBe('saved'); if (result.state !== 'saved') throw Error(JSON.stringify(result)); return result.binding; }
 
+it('系统移交严格绑定来源，拒绝伪造路径、旧修订与可执行扩展名', async () => {
+  const f = await fixture();
+  const dispatched: { action: string; path: string }[] = [];
+  const service = new QueryFileSources({ ...f.host, handoff: async (action, path) => {
+    dispatched.push({ action, path });
+    return action === 'reveal';
+  } });
+  const binding = opened(await service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope));
+  const request = { tabId: 'one', source: binding.ref, action: 'open' } as const;
+  expect(() => validateCommand('queryFileSources.handoff', { ...request, path: f.path })).toThrow();
+  expect(await service.handoff({ ...request, source: { ...binding.ref, revision: binding.ref.revision + 1 } }, f.scope)).toMatchObject({ state: 'blocked', reason: 'stale-source' });
+  expect(await service.handoff(request, f.scope)).toMatchObject({ state: 'blocked', reason: 'io', message: expect.stringContaining('默认应用') });
+  expect(dispatched.splice(0)).toEqual([{ action: 'open', path: binding.displayPath }]);
+
+  const executable = join(f.directory, 'shell-fixture.cmd');
+  writeFileSync(executable, 'select 2;');
+  f.choose(executable);
+  const other = opened(await service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope));
+  expect(await service.handoff({ ...request, source: other.ref }, f.scope)).toMatchObject({ state: 'blocked', reason: 'permission' });
+  expect(await service.handoff({ ...request, action: 'reveal', source: other.ref }, f.scope)).toEqual({ state: 'requested' });
+  expect(dispatched).toEqual([{ action: 'reveal', path: other.displayPath }]);
+});
+
 describe('最近SQL文件真实Main/SQLite/文件接线（仅本clone合成文件）', () => {
   it('旧schema9无缓存表时兼容补齐既有关联，启动与列出都不探测已删除的SQL文件', async () => {
     const f = await fixture(); const binding = opened(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope)); f.store.close(); stores.delete(f.store);

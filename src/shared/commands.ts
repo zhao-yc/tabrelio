@@ -166,6 +166,7 @@ export const publicCommands: Record<Command, true> = {
   'result.presets.list': true, 'result.presets.save': true, 'result.presets.rename': true, 'result.presets.delete': true, 'result.presets.read': true,
   'queryFileSources.recent': true, 'queryFileSources.forgetRecent': true,
   'queryFileSources.checkExternal': true, 'queryFileSources.reload': true, 'queryFileSources.discardReload': true,
+  'queryFileSources.handoff': true,
   'queryFileSources.cancel': true, 'queryFileSources.open': true, 'queryFileSources.save': true, 'queryFileSources.saveAs': true, 'queryFileSources.status': true, 'queryFileSources.release': true,
   'table.presets.list':true,'table.presets.save':true,'table.presets.delete':true,'table.presets.apply':true,
   'serverMonitor.read': true,
