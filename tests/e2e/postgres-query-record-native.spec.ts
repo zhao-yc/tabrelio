@@ -49,12 +49,13 @@ async function loadQuery({ port, user, database, password }: ReturnType<typeof i
   await page.reload();
 }
 
-test('PostgreSQL 表页文本快捷筛选按字面排除且保留原 NULL 语义', async () => {
+test('PostgreSQL 表页文本和数值快捷筛选保留字面及精确语义', async () => {
   const config = isolatedConnection(), observer = new Client(config);
   try {
     await observer.connect();
-    await observer.query(`CREATE TABLE public.filter_text (id bigint PRIMARY KEY, note varchar(60));
-      INSERT INTO public.filter_text VALUES (1,'A%_'),(2,'前A%_后'),(3,'a%_'),(4,'普通'),(5,NULL)`);
+    await observer.query(`CREATE TABLE public.filter_text (id bigint PRIMARY KEY, note varchar(60), metric numeric(30,4));
+      INSERT INTO public.filter_text VALUES (1,'A%_',NULL),(2,'前A%_后',NULL),
+      (3,'a%_',9007199254740993.0001),(4,'普通',9007199254740993.0002),(5,NULL,NULL)`);
     await loadQuery(config, '', 'filter_text');
     const tab = page.locator('.postgres-table-tab:visible'), grid = tab.getByRole('grid');
     const cell = (name: string) => grid.getByRole('gridcell', { name, exact: true });
@@ -64,7 +65,16 @@ test('PostgreSQL 表页文本快捷筛选按字面排除且保留原 NULL 语义
     await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
     await expect(cell('前A%_后')).toBeVisible();
     await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
-    await expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['3', '4']);
+    const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+    await expect(ids).toHaveText(['3', '4']);
+    await cell('9007199254740993.0002').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: queryResultFilterZh.cellBounds.lt, exact: true }).click();
+    await expect(tab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('<');
+    await expect(tab.getByLabel(zh.table.text011, { exact: true })).toHaveValue('9007199254740993.0002');
+    await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(ids).toHaveText(['3', '4']);
+    await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(ids).toHaveText(['3']);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

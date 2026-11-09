@@ -56,7 +56,9 @@ export function captureSqliteCellFilter(page: SqliteTablePage, index: number, co
   /** NULL生成明确的IS NULL/IS NOT NULL；其余值先走原严格typed条件合同。 */
   function draft(mode: TableCellFilterMode, id: string): SqliteFilterDraft {
     if (!check()) throw Error(text.unavailable);
-    if (typeof mode !== 'boolean' && (value.kind !== 'text' || !value.value)) throw Error(text.unsupported);
+    if (mode === 'contains' || mode === 'notContains') {
+      if (value.kind !== 'text' || !value.value) throw Error(text.unsupported);
+    } else if (typeof mode !== 'boolean' && value.kind !== 'integer' && value.kind !== 'real') throw Error(text.unsupported);
     const filter = value.kind === 'null' ? { column: name, operator: mode ? 'notNull' as const : 'isNull' as const } :
       { column: name, operator: typeof mode === 'boolean' ? mode ? 'ne' as const : 'eq' as const : mode, value: { ...value } };
     if (!sqliteTableFilterSchema.safeParse(filter).success) throw Error(text.unsupported);

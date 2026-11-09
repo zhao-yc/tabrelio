@@ -2,8 +2,12 @@ import type { ColumnInfo } from '../shared/contracts';
 import type { DraftRow } from './dataChanges';
 import { emptyFilterDraft, filterRuleFromDraft, type FilterDraft } from './tableFilters';
 import { tableCellFilterZh as text } from './locales/tableCellFilter.zh-CN';
+import { cellBoundOperators } from './queryResultCellFilter';
+import { queryResultFilterZh } from './locales/queryResultFilter.zh-CN';
 
-export type TableCellFilterMode = boolean | 'contains' | 'notContains';
+export type TableCellFilterMode = boolean | 'contains' | 'notContains' | typeof cellBoundOperators[number];
+export const tableCellBoundSymbols = { lt: '<', lte: '<=', gt: '>', gte: '>=' } as const;
+export const tableCellBoundActions = cellBoundOperators.map(mode => [mode, queryResultFilterZh.cellBounds[mode]] as const);
 
 /** 只复制已加载原格的标量；不读getter、不把二进制当文本、不把精确字符串转为数值。 */
 export function tableCellFilterDraft(columns: readonly ColumnInfo[], rows: readonly DraftRow[], visible: readonly string[], selection: { rowId: string; key: string } | undefined, mode: TableCellFilterMode = false): FilterDraft {
@@ -18,9 +22,14 @@ export function tableCellFilterDraft(columns: readonly ColumnInfo[], rows: reado
   if (cell !== null && typeof cell !== 'string' && typeof cell !== 'boolean' && typeof cell !== 'number' || typeof cell === 'number' && (!Number.isFinite(cell) || Number.isInteger(cell) && !Number.isSafeInteger(cell))) throw Error(text.unavailable);
   let operator: FilterDraft['operator'];
   if (typeof mode === 'boolean') operator = cell === null ? mode ? 'IS NOT NULL' : 'IS NULL' : mode ? '!=' : '=';
-  else {
+  else if (mode === 'contains' || mode === 'notContains') {
     if (typeof cell !== 'string' || !cell || !/^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT)\b/i.test(fields[0].type)) throw Error(text.unavailable);
     operator = mode === 'contains' ? 'CONTAINS' : 'NOT CONTAINS';
+  } else {
+    // 数字外观不能证明字段支持有序比较。只认可实际数值和日期时间声明。
+    if (!(typeof cell === 'number' || typeof cell === 'string' && cell.length) ||
+        !/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FIXED|FLOAT|DOUBLE|REAL|YEAR|DATE|DATETIME|TIMESTAMP|TIME)\b/i.test(fields[0].type)) throw Error(text.unavailable);
+    operator = tableCellBoundSymbols[mode];
   }
   const draft: FilterDraft = { ...emptyFilterDraft(selection.key), operator, value: cell === null ? '' : typeof cell === 'boolean' ? cell ? '1' : '0' : String(cell) };
   // 复用正式手工条件的单值预算及字段准入；这里不修改既有条件、不创建SQL。

@@ -59,7 +59,7 @@ import { validateSqlitePresetProfile, type SqliteTablePresetProfile, type Sqlite
 import { captureSqliteCellFilter, sqliteCheckedFilterDraft, type SqliteCellFilterSource } from '../sqliteTableCellFilter';
 import { sqliteTableCellFilterZh as cellFilterText } from '../locales/sqliteTableCellFilter.zh-CN';
 import { tableCellFilterZh as textCellFilterText } from '../locales/tableCellFilter.zh-CN';
-import type { TableCellFilterMode } from '../tableCellFilter';
+import { tableCellBoundActions, type TableCellFilterMode } from '../tableCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { SqliteTableFilters } from './SqliteTableFilters';
 import type { SqliteTableRebuildTarget } from '../../shared/sqliteTableRebuild';
@@ -831,6 +831,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
           { label: textCellFilterText.contains, run: () => appendMenuFilter.current('contains', source) },
           { label: textCellFilterText.notContains, run: () => appendMenuFilter.current('notContains', source) },
         ] : []),
+        ...(source.value.kind === 'integer' || source.value.kind === 'real' ?
+          tableCellBoundActions.map(([mode, label]) => ({ label, run: () => appendMenuFilter.current(mode, source) })) : []),
       ] };
     } catch { return; }
   }

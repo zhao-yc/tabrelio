@@ -47,6 +47,7 @@ import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh
 import { useUiCommandScope } from '../uiCommands';
 import { openFocusedGridRowJump } from './GridRowJump';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
+import { tableCellBoundActions } from '../tableCellFilter';
 import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
@@ -712,6 +713,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         actions.push({ label: cellFilterText.contains, run: () => apply('contains') },
           { label: cellFilterText.notContains, run: () => apply('notContains') });
       } catch { /* 非文本或空值只保留原等值入口。 */ }
+      try {
+        postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows, 'gte');
+        actions.push(...tableCellBoundActions.map(([mode, label]) => ({ label, run: () => apply(mode) })));
+      } catch { /* 无可靠有序类型时省略边界。 */ }
       return { label: cellFilterText.context, actions };
     } catch { return; }
   }

@@ -1552,6 +1552,34 @@ test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', asyn
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 表页快捷数值边界匹配跨页原生整数', async ({}, info) => {
+  await seed(undefined, `ALTER TABLE subject ADD COLUMN metric;
+    UPDATE subject SET metric=CASE id WHEN 1 THEN 9007199254740992 WHEN 2 THEN 9007199254740993
+      WHEN 3 THEN '9007199254740993' WHEN 4 THEN 9007199254740994.0 WHEN 120 THEN 9007199254740994 END;`);
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+  const id = (value: number) => grid.getByRole('gridcell', { name: 'INTEGER · ' + value, exact: true });
+  const metric = (value: number) => id(value).locator('..').getByRole('gridcell').last();
+  await expect(id(1)).toBeVisible();
+  await metric(3).click({ button: 'right' });
+  const action = page.getByRole('menuitem', { name: filterText.cellBounds.gte, exact: true });
+  await expect(page.getByRole('menuitem', { name: tableCellFilterZh.contains, exact: true })).toBeVisible();
+  await expect(action).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await metric(2).click({ button: 'right' });
+  await action.click();
+  await expect(table.getByLabel(browseText.filterOperator(1), { exact: true })).toHaveValue('gte');
+  await expect(table.getByLabel(browseText.filterValue(1), { exact: true })).toHaveValue('9007199254740993');
+  await expect(id(1)).toBeVisible();
+  await table.getByLabel(browseText.filterValue(1), { exact: true }).scrollIntoViewIfNeeded();
+  await info.attach('SQLite表页快捷数值边界', { body: await page.screenshot(), contentType: 'image/png' });
+  await table.getByRole('button', { name: browseText.apply, exact: true }).click();
+  await expect(id(120)).toBeVisible();
+  await expect(id(2)).toBeVisible();
+  for (const absent of [1, 3, 4]) await expect(id(absent)).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 单列选区原值筛选区分 NULL 和空串，独立于勾选并保留排序', async ({}, info) => {
   await seed(`SELECT id, '相邻列' AS v, CASE id WHEN 1 THEN NULL WHEN 2 THEN '' WHEN 3 THEN 'NULL'
     WHEN 4 THEN 2 ELSE '' END AS v FROM subject WHERE id <= 5 ORDER BY id;`);
