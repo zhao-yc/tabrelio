@@ -1,4 +1,5 @@
 import { sqlClipboardStackAction } from '../sqlClipboardStack';
+import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryRangeEdit,
   type PostgresQueryRecordIntent } from './PostgresSearchRecordEditDialog';
 import { postgresIdentifier } from '../../shared/postgresSql';
@@ -2019,6 +2020,7 @@ export function PostgresQueryTab({
     parameters: { enabled: canRun, run: openParameters },
     format: { enabled: editable, run: formatQuery },
     'save-query': { enabled: editable, run: openSaveQuery },
+    'sql-copy-quoted': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction(sqlQuotedCopyAction) },
     'sql-clipboard-stack': { enabled: editable && !resultsOnly, run: () => editorAction(sqlClipboardStackAction) },
     'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },
     find: { enabled: (editable || !!binding) && !locked,

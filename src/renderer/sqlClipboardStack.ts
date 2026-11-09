@@ -24,7 +24,7 @@ export class SqlClipboardStack {
 export const sqlClipboardStack = new SqlClipboardStack();
 
 /** 对话框打开时冻结唯一选区与版本，模型或选区改变一次即撤销，禁止覆盖后来编辑。 */
-export function captureSqlClipboardPaste(editor: monaco.editor.IStandaloneCodeEditor, allowed: () => boolean) {
+export function captureSqlClipboardSelection(editor: monaco.editor.IStandaloneCodeEditor, allowed: () => boolean) {
   const model = editor.getModel(), selections = editor.getSelections();
   if (!model || model.isDisposed() || selections?.length !== 1 || !allowed()) return;
   const range = selections[0], version = model.getVersionId();
@@ -41,6 +41,11 @@ export function captureSqlClipboardPaste(editor: monaco.editor.IStandaloneCodeEd
   ];
   return {
     current,
+    selectedText(limit: number): string | undefined {
+      if (!current() || range.isEmpty()) return;
+      if (model.getValueLengthInRange(range) > limit) throw new RangeError('原选区超过读取上限');
+      return model.getValueInRange(range);
+    },
     dispose() { active = false; for (const subscription of subscriptions) subscription.dispose(); },
     paste(text: string): boolean {
       if (!current() || !text.length || text.length > sqlClipboardLimits.entryUnits) return false;

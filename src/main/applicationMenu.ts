@@ -64,7 +64,7 @@ export class ApplicationMenu {
         item('sql-goto-bracket'), item('sql-select-bracket'), separator,
         item('sql-toggle-comment', 'CmdOrCtrl+/'), item('sql-toggle-block-comment'), item('sql-uppercase'), item('sql-lowercase'),
         { label: text.sqlLines, enabled: sqlLineCommandIds.some(id => statuses.get(id)?.enabled === true), submenu: sqlLineCommandIds.map(id => item(id)) },
-        item('sql-selection-to-snippet'), item('sql-clipboard-stack')
+        item('sql-selection-to-snippet'), item('sql-clipboard-stack'), item('sql-copy-quoted')
       ] },
       { label: text.view, submenu: [
         item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), separator,

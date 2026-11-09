@@ -1,4 +1,5 @@
 import { sqlClipboardStackAction } from '../sqlClipboardStack';
+import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { focusQueryResultReplacement, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { sqliteStatementTimeoutMaximumMs, validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
@@ -2623,6 +2624,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     }])),
     'sql-uppercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-uppercase') },
     'sql-lowercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-lowercase') },
+    'sql-copy-quoted': { enabled: !!searchEditor && hasSingleSelection && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
+      run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlQuotedCopyAction)?.run(); } },
     'sql-clipboard-stack': { enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !busyRef.current && !fileSource.isBusy()) return editor.current?.getAction(sqlClipboardStackAction)?.run(); } },
     'sql-selection-to-snippet': { enabled: !!searchEditor && hasSingleSelection && !resultsOnly && !busy && !closeRequest && !fileSource.busy, run: () => createSnippetFromSelection() },

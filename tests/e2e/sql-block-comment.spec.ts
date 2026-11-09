@@ -159,3 +159,77 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
     expect(pageErrors).toEqual([]);
   });
 }
+
+for (const dialect of ['mysql', 'postgresql'] as const) {
+  test(`${dialect} 带引号复制 SQL 保留正文和精确选区，失效时不写剪贴板`, async ({}, info) => {
+    const lines = [String.raw`SELECT '船🚢', "字段", '\n';`, 'SELECT 3;'];
+    const sql = lines.join('\n');
+    await seed(dialect, sql);
+    await page.evaluate(() => {
+      // 只拦本例明确复制，在内存里模拟浏览器的可写事件，不调用系统剪贴板。
+      const copies: string[] = [];
+      Object.assign(window, { __quotedSqlCopies: copies });
+      const original = document.execCommand.bind(document);
+      document.execCommand = (command, ...rest) => {
+        if (command !== 'copy') return original(command, ...rest);
+        const data = new DataTransfer();
+        const event = new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data });
+        document.dispatchEvent(event);
+        if (event.defaultPrevented) copies.push(data.getData('text/plain'));
+        return event.defaultPrevented;
+      };
+    });
+    function model(range?: 'all' | 'first' | 'move') {
+      return activeEditor().evaluate((element, range) => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+        const original = instance?.getModel();
+        if (!instance || !original) throw Error('当前模型不可读');
+        if (range) {
+          if (range !== 'move') instance.focus();
+          instance.setSelection(range === 'all' ? original.getFullModelRange() :
+            { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: range === 'first' ? original.getLineMaxColumn(1) : 1 });
+        }
+        const bounds = instance.getDomNode()!.getBoundingClientRect();
+        const point = instance.getScrolledVisiblePosition({ lineNumber: 1, column: 7 });
+        if (!point) throw Error('无法定位原选区');
+        const selection = instance.getSelection();
+        return { sql: original.getValue(), selection: selection ? original.getValueInRange(selection) : '',
+          x: bounds.x + point.left, y: bounds.y + point.top + point.height / 2 };
+      }, range);
+    }
+    async function openNative() {
+      await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-copy-quoted')?.enabled)).toBe(true);
+      await desktop.evaluate(({ Menu, BrowserWindow }) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById('sql-copy-quoted'), windows = BrowserWindow.getAllWindows();
+        if (!item?.enabled || windows.length !== 1) throw Error('带引号复制原生命令不可用');
+        item.click(item, windows[0], {} as Electron.KeyboardEvent);
+      });
+    }
+    const dialog = page.getByRole('dialog', { name: '带引号复制 SQL', exact: true });
+    const confirm = dialog.getByRole('button', { name: '复制字符串', exact: true });
+    const copies = () => page.evaluate(() => (window as Window & { __quotedSqlCopies?: string[] }).__quotedSqlCopies);
+    const expected = String.raw`'SELECT \'船🚢\', "字段", \'\\n\';\nSELECT 3;'`;
+    await model('all');
+    await openNative();
+    await dialog.getByRole('combobox').selectOption('python');
+    await expect(dialog.locator('pre')).toHaveText(expected);
+    await model('move');
+    await confirm.click();
+    await expect(dialog.getByRole('alert')).toHaveText('原查询编辑器或选区已变化，请重新选择后复制。');
+    expect(await copies()).toEqual([]);
+    await page.keyboard.press('Escape');
+    const first = await model('first');
+    await page.mouse.click(first.x, first.y, { button: 'right' });
+    await page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: '带引号复制 SQL', exact: true }).click({ delay: 120 });
+    await dialog.getByRole('combobox').selectOption('java');
+    await expect(dialog.locator('pre')).toHaveText(JSON.stringify(lines[0]));
+    if (dialect === 'mysql') await page.screenshot({ path: info.outputPath('带引号复制SQL.png') });
+    await confirm.click();
+    await expect(dialog).toBeHidden();
+    expect(await copies()).toEqual([JSON.stringify(lines[0])]);
+    expect(await model()).toMatchObject({ sql, selection: lines[0] });
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}

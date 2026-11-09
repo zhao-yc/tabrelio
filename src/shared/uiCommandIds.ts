@@ -5,7 +5,7 @@ export const sqlLineCommandIds = ['sql-duplicate-lines', 'sql-move-lines-up', 's
 export const uiCommandIds = [
   'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file',
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-goto-bracket', 'sql-select-bracket', 'sql-toggle-comment', 'sql-toggle-block-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
-  ...sqlLineCommandIds, 'sql-selection-to-snippet', 'sql-clipboard-stack',
+  ...sqlLineCommandIds, 'sql-selection-to-snippet', 'sql-clipboard-stack', 'sql-copy-quoted',
   'editor-font', 'editor-word-wrap', 'editor-line-numbers', 'editor-match-brackets', 'editor-sql-folding', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
   'execute', 'execute-selection', 'execute-current', 'execute-all', 'stop', 'format', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation', 'select-current-statement', 'open-current-statement-query', 'previous-statement', 'next-statement',
   'transaction-settings', 'import', 'export', 'schema-compare', 'sqlite-data-compare', 'postgres-data-compare', 'mysql-data-compare', 'structure-search', 'server-monitor', 'postgres-roles', 'backup-archive', 'postgres-table-backup', 'postgres-database-backup', 'postgres-custom-archive', 'postgres-sql-file', 'mysql-sql-file', 'mysql-database-backup',

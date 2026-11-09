@@ -6,8 +6,11 @@ import { editorFontOptions, readEditorFontSize } from '../../shared/editorFont';
 import { editorIndentationOptions, readEditorInsertSpaces, readEditorTabSize } from '../../shared/editorIndentation';
 import { bindEditorIndentation } from '../editorIndentation';
 import { zh } from '../locales/zh-CN';
-import { captureSqlClipboardPaste, sqlClipboardStack, sqlClipboardStackAction } from '../sqlClipboardStack';
+import { captureSqlClipboardSelection, sqlClipboardStack, sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlClipboardStackZh as clipboardText } from '../locales/sqlClipboardStack.zh-CN';
+import { sqlQuotedCopyZh as quotedText } from '../locales/sqlQuotedCopy.zh-CN';
+import { quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuoteFormats, type SqlQuoteFormat } from '../sqlQuotedCopy';
+import { writeTableClipboardEvent } from '../gridClipboard';
 import { ErrorBox, Modal } from './ui';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
@@ -97,10 +100,12 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
   const queryEditor = !!onExecute;
-  type ClipboardRequest = { entries: readonly string[]; intent: NonNullable<ReturnType<typeof captureSqlClipboardPaste>>; unsubscribe(): void };
+  type ClipboardRequest = { intent: NonNullable<ReturnType<typeof captureSqlClipboardSelection>>; unsubscribe(): void } &
+    ({ kind: 'paste'; entries: readonly string[] } | { kind: 'quoted'; sql: string });
   const clipboardRequest = useRef<ClipboardRequest | null>(null), clipboardHost = useRef<HTMLDivElement>(null);
   const [clipboardDialog, setClipboardDialog] = useState<ClipboardRequest>(), [clipboardIndex, setClipboardIndex] = useState(0);
   const [clipboardError, setClipboardError] = useState('');
+  const [quoteFormat, setQuoteFormat] = useState<SqlQuoteFormat>('javascript');
 
   /** 只接纳当前查询编辑器本次复制事件中由 Monaco 写入的文本。 */
   function rememberSql(event: ClipboardEvent<HTMLDivElement>): void {
@@ -117,7 +122,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   }
   function closeClipboard(): void { disposeClipboard(); setClipboardDialog(undefined); }
   /** 绑定打开时的标签、连接配置和编辑器，等待选择时不得切换目标。 */
-  function openClipboard(editor: monaco.editor.IStandaloneCodeEditor): void {
+  function openClipboard(editor: monaco.editor.IStandaloneCodeEditor, kind: ClipboardRequest['kind'] = 'paste'): void {
     if (clipboardRequest.current || document.querySelector(appModalSelector)) return;
     const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === propsRef.current.clipboardTabId);
     if (!tab) return;
@@ -131,17 +136,36 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     };
     if (!allowed()) return;
     editor.focus();
-    const intent = captureSqlClipboardPaste(editor, allowed);
-    if (!intent) { workspace.notify(clipboardText.single, true); return; }
-    const request = { entries: sqlClipboardStack.snapshot(), intent, unsubscribe: useWorkspace.subscribe(intent.current) };
+    const intent = captureSqlClipboardSelection(editor, allowed);
+    if (!intent) { workspace.notify(kind === 'paste' ? clipboardText.single : quotedText.select, true); return; }
+    let sql: string | undefined;
+    if (kind === 'quoted') {
+      try { sql = intent.selectedText(sqlQuotedCopyMaxUnits); }
+      catch { intent.dispose(); workspace.notify(quotedText.tooLarge, true); return; }
+      if (!sql) { intent.dispose(); workspace.notify(quotedText.select, true); return; }
+    }
+    const owner = { intent, unsubscribe: useWorkspace.subscribe(intent.current) };
+    const request: ClipboardRequest = sql ? { ...owner, kind: 'quoted', sql } : { ...owner, kind: 'paste', entries: sqlClipboardStack.snapshot() };
     clipboardRequest.current = request;
     setClipboardIndex(0); setClipboardError(''); setClipboardDialog(request);
   }
-  function pasteClipboard(request: ClipboardRequest): void {
-    if (clipboardRequest.current !== request || Array.from(document.querySelectorAll(appModalSelector))
-      .some(dialog => !clipboardHost.current?.contains(dialog))) return;
+  function clipboardCurrent(request: ClipboardRequest): boolean {
+    return clipboardRequest.current === request && Array.from(document.querySelectorAll(appModalSelector))
+      .every(dialog => clipboardHost.current?.contains(dialog));
+  }
+  function pasteClipboard(request: Extract<ClipboardRequest, { kind: 'paste' }>): void {
+    if (!clipboardCurrent(request)) return;
     if (!request.intent.paste(request.entries[clipboardIndex] ?? '')) { setClipboardError(clipboardText.stale); return; }
     closeClipboard();
+  }
+  /** 只写本次明确选择的格式，失效选区不触发剪贴板事件。 */
+  function copyQuoted(request: Extract<ClipboardRequest, { kind: 'quoted' }>, encoded: string): void {
+    const current = () => clipboardCurrent(request) && request.intent.current();
+    if (!current()) { setClipboardError(quotedText.stale); return; }
+    try { writeTableClipboardEvent(current, data => data.setData('text/plain', encoded)); }
+    catch { setClipboardError(current() ? quotedText.unavailable : quotedText.stale); return; }
+    closeClipboard();
+    useWorkspace.getState().notify(quotedText.copied);
   }
   useEffect(() => {
     const instance = editorRef.current;
@@ -479,11 +503,17 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 4,
       run: () => openClipboard(editor),
     });
+    if (propsRef.current.clipboardTabId) editor.addAction({
+      id: sqlQuotedCopyAction, label: uiCommandLabels['sql-copy-quoted'], precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
+      contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 5,
+      run: () => openClipboard(editor, 'quoted'),
+    });
     if (propsRef.current.onFormat) syncFormatAction();
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);
   };
-  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onCopy={rememberSql} onCut={rememberSql} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}{clipboardDialog && <div ref={clipboardHost}><Modal title={clipboardText.title} onClose={closeClipboard}>
+  const quoted = clipboardDialog?.kind === 'quoted' ? quoteSqlForCode(clipboardDialog.sql, quoteFormat) : '';
+  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onCopy={rememberSql} onCut={rememberSql} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}{clipboardDialog?.kind === 'paste' && <div ref={clipboardHost}><Modal title={clipboardText.title} onClose={closeClipboard}>
     <div className="modal-content">
       <p>{clipboardText.hint}</p>
       {clipboardDialog.entries.length ? <>
@@ -497,5 +527,17 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     <footer className="modal-footer"><button disabled={!clipboardDialog.entries.length} onClick={() => { sqlClipboardStack.clear(); closeClipboard(); }}>{clipboardText.clear}</button><span className="grow"/>
       <button onClick={closeClipboard}>{zh.common.cancel}</button><button className="primary" disabled={!clipboardDialog.entries.length || !!clipboardError}
         onClick={() => pasteClipboard(clipboardDialog)}>{clipboardText.paste}</button></footer>
+  </Modal></div>}{clipboardDialog?.kind === 'quoted' && <div ref={clipboardHost}><Modal title={quotedText.title} onClose={closeClipboard}>
+    <div className="modal-content">
+      <p>{quotedText.hint}</p>
+      <label>{quotedText.format}<select aria-label={quotedText.format} value={quoteFormat} onChange={event => {
+        const format = sqlQuoteFormats.find(value => value === event.target.value);
+        if (format) setQuoteFormat(format);
+      }}>{sqlQuoteFormats.map(format => <option key={format} value={format}>{quotedText.formats[format]}</option>)}</select></label>
+      <pre aria-label={quotedText.preview} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 220, overflow: 'auto' }}>{quoted}</pre>
+      <ErrorBox message={clipboardError}/>
+    </div>
+    <footer className="modal-footer"><span className="grow"/><button onClick={closeClipboard}>{zh.common.cancel}</button>
+      <button className="primary" onClick={() => copyQuoted(clipboardDialog, quoted)}>{quotedText.copy}</button></footer>
   </Modal></div>}</div>;
 }
