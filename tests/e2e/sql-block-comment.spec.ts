@@ -13,7 +13,7 @@ const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const activeEditor = () => page.locator('.query-tab:visible .monaco-editor');
 
 /** 用正式存储准备离线查询和本例专用的 SQLite 文件，实际操作经过原生窗口。 */
-async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql: string) {
+async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql: string, secondQuery?: string) {
   await quitDesktop();
   const id = 'block-comment-offline', database = dialect === 'sqlite' ? 'main' : 'offline_db';
   const require = createRequire(join(process.cwd(), 'package.json'));
@@ -30,8 +30,12 @@ async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql:
     } else {
       store.saveConnection({ ...profile, dialect, database, host: '127.0.0.1', port: 1, user: 'offline' });
     }
+    if (secondQuery !== undefined) store.saveConnection({
+      ...profile, id: 'zoom-other', name: '离线缩放另一个连接', dialect: 'postgresql', host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres',
+    });
     store.saveSettings({ ...store.settings(), activeTabId: id, tabs: [
       { id, kind: 'query', title: '原查询', connectionId: id, database, sql },
+      ...(secondQuery === undefined ? [] : [{ id: 'zoom-other', kind: 'query' as const, title: '另一个查询', connectionId: 'zoom-other', sql: secondQuery }]),
     ] });
   } finally { store.close(); }
   await launchDesktop();
@@ -233,3 +237,75 @@ for (const dialect of ['mysql', 'postgresql'] as const) {
     expect(pageErrors).toEqual([]);
   });
 }
+
+test('SQL 编辑器缩放隔离查询标签、保留选区撤销，重启后回到全局字号', async ({}, info) => {
+  const sql = "SELECT '长脚本🚢';", other = 'SELECT 42;';
+  await seed('mysql', sql, other);
+  const zoomIn = 'sql-editor-zoom-in';
+  const font = () => activeEditor().locator('.view-lines').evaluate(element => getComputedStyle(element).fontSize);
+  const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  const nativeZoom = () => desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor());
+  const selectAll = async () => {
+    await activeEditor().getByRole('textbox').focus();
+    await page.keyboard.press(modifier + '+a');
+  };
+  function readModel() {
+    return activeEditor().evaluate(element => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const model = instance?.getModel(), selection = instance?.getSelection();
+      if (!model || !selection) throw Error('当前模型或选区不可读');
+      return { id: model.id, sql: model.getValue(), selection: model.getValueInRange(selection) };
+    });
+  }
+  async function invokeMenu(command: string) {
+    await expect.poll(() => desktop.evaluate(({ Menu }, command) => Menu.getApplicationMenu()?.getMenuItemById(command)?.enabled, command)).toBe(true);
+    await desktop.evaluate(({ Menu, BrowserWindow }, command) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById(command), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('编辑器缩放原生命令不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }, command);
+  }
+  async function selectTab(title: string) {
+    await page.locator('.tab-strip').getByText(title, { exact: true }).click();
+    await expect(activeEditor().getByRole('textbox')).toBeVisible();
+  }
+  await expect.poll(font).toBe('13px');
+  const initialWindowZoom = await nativeZoom();
+  await activeEditor().getByRole('textbox').focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
+  await page.keyboard.insertText('X');
+  await expect.poll(() => readModel().then(value => value.sql)).toBe(sql + 'X');
+  await selectAll();
+  const original = await readModel();
+  await page.keyboard.press(modifier + '+Alt+Equal');
+  await expect.poll(font).toBe('14px');
+  await invokeMenu(zoomIn);
+  await expect.poll(font).toBe('15px');
+  expect(await readModel()).toEqual(original);
+  expect(await nativeZoom()).toBe(initialWindowZoom);
+  await selectTab('另一个查询');
+  await expect.poll(font).toBe('13px');
+  await activeEditor().getByRole('textbox').focus();
+  await page.keyboard.press(modifier + '+Alt+Minus');
+  await expect.poll(font).toBe('12px');
+  await selectTab('原查询');
+  await expect.poll(font).toBe('15px');
+  await expect(activeEditor().locator('.view-lines')).toContainText('长脚本');
+  await page.screenshot({ path: info.outputPath('SQL编辑器独立缩放.png') });
+  await activeEditor().getByRole('textbox').focus();
+  await page.keyboard.press(modifier + '+z');
+  await expect.poll(() => readModel().then(value => value.sql)).toBe(sql);
+  await page.keyboard.press(modifier + '+Alt+Digit0');
+  await expect.poll(font).toBe('13px');
+  await selectTab('另一个查询');
+  await expect.poll(font).toBe('12px');
+  expect(await nativeZoom()).toBe(initialWindowZoom);
+  expect((await settings()).editorFontSize).toBe(13);
+  await quitDesktop();
+  await launchDesktop();
+  await expect.poll(font).toBe('13px');
+  expect((await settings()).tabs.map(tab => tab.sql)).toEqual([sql, other]);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});

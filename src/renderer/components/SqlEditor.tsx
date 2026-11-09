@@ -13,6 +13,8 @@ import { quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuoteFo
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { ErrorBox, Modal } from './ui';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
+import { sqlEditorZoomCommandIds } from '../../shared/uiCommandIds';
+import { nextSqlEditorZoomOffset, sqlEditorZoomSize } from '../sqlEditorZoom';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
@@ -67,7 +69,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onToggleBlockComment, onSelectCurrent, clipboardTabId, clipboardDisabled = false }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onToggleBlockComment?: () => void | Promise<void>; onSelectCurrent?: () => void; clipboardTabId?: string; clipboardDisabled?: boolean }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onToggleBlockComment, onSelectCurrent, queryTabId, clipboardDisabled = false }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onToggleBlockComment?: () => void | Promise<void>; onSelectCurrent?: () => void; queryTabId?: string; clipboardDisabled?: boolean }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
   const network = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? requestedDialect : undefined;
@@ -80,7 +82,9 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if (network) registerMysqlEditorLanguages(monaco.languages, network);
   }, [requestedDialect, network]);
   const theme = useWorkspace(state => state.settings.theme);
-  const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
+  const baseFontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
+  const [zoomOffset, setZoomOffset] = useState(0);
+  const fontSize = sqlEditorZoomSize(baseFontSize, zoomOffset);
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
   const lineNumbers = useWorkspace<'off' | 'on'>(state => state.settings.editorLineNumbers === false ? 'off' : 'on');
   const matchBrackets = useWorkspace<'never' | 'always'>(state => state.settings.editorMatchBrackets === false ? 'never' : 'always');
@@ -90,7 +94,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
-  const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat, clipboardTabId, clipboardDisabled });
+  const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat, queryTabId, clipboardDisabled });
   const foldingScope = useRef({ dialect: requestedDialect, standardStrings: postgresStandardStrings });
   useLayoutEffect(() => { foldingScope.current = { dialect: requestedDialect, standardStrings: postgresStandardStrings }; });
   const snippetScope = useRef({ dialect: requestedDialect, postgres: postgresCompletion, standardStrings: postgresStandardStrings });
@@ -109,7 +113,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
 
   /** 只接纳当前查询编辑器本次复制事件中由 Monaco 写入的文本。 */
   function rememberSql(event: ClipboardEvent<HTMLDivElement>): void {
-    const editor = editorRef.current, tabId = propsRef.current.clipboardTabId;
+    const editor = editorRef.current, tabId = propsRef.current.queryTabId;
     if (!tabId || useWorkspace.getState().settings.activeTabId !== tabId || !editor?.hasTextFocus() || !contentRef.current?.ready ||
       document.querySelector(appModalSelector) || !event.defaultPrevented || !event.clipboardData.types.includes('vscode-editor-data')) return;
     sqlClipboardStack.remember(event.clipboardData.getData('text/plain'));
@@ -124,12 +128,12 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   /** 绑定打开时的标签、连接配置和编辑器，等待选择时不得切换目标。 */
   function openClipboard(editor: monaco.editor.IStandaloneCodeEditor, kind: ClipboardRequest['kind'] = 'paste'): void {
     if (clipboardRequest.current || document.querySelector(appModalSelector)) return;
-    const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === propsRef.current.clipboardTabId);
+    const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === propsRef.current.queryTabId);
     if (!tab) return;
     const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId];
     const allowed = () => {
       const current = useWorkspace.getState(), props = propsRef.current;
-      return aliveRef.current && editorRef.current === editor && contentRef.current?.ready === true && props.clipboardTabId === tab.id &&
+      return aliveRef.current && editorRef.current === editor && contentRef.current?.ready === true && props.queryTabId === tab.id &&
         !props.clipboardDisabled && !props.readOnly && !editor.getRawOptions().readOnly && current.settings.activeTabId === tab.id &&
         current.settings.tabs.includes(tab) && !!profile && current.connections.includes(profile) &&
         current.connectionVersions[tab.connectionId] === version && !current.activeJobs[tab.id] && !current.queryFileOpenings?.[tab.id];
@@ -197,7 +201,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
   const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), lineNumbers, matchBrackets, renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
   // 只发布已提交的props；并发渲染被取消时不能把未提交回调交给旧模型。
-  useLayoutEffect(() => { propsRef.current = { value, onChange, onReady, readOnly, onFormat, clipboardTabId, clipboardDisabled }; syncFormatAction(); clipboardRequest.current?.intent.current(); });
+  useLayoutEffect(() => { propsRef.current = { value, onChange, onReady, readOnly, onFormat, queryTabId, clipboardDisabled }; syncFormatAction(); clipboardRequest.current?.intent.current(); });
   /** 外部value只能走桥接的受控编辑范围；库不再另行更新value或订阅onChange。 */
   useLayoutEffect(() => { contentRef.current?.sync(); }, [value, readOnly]);
   useLayoutEffect(() => {
@@ -497,17 +501,34 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       keybindings: [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyA],
       run: () => toggleBlockCommentRef.current?.(),
     });
-    if (propsRef.current.clipboardTabId) editor.addAction({
+    if (propsRef.current.queryTabId) editor.addAction({
       id: sqlClipboardStackAction, label: uiCommandLabels['sql-clipboard-stack'], precondition: '!editorReadonly',
       keybindingContext: 'editorTextFocus', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV],
       contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 4,
       run: () => openClipboard(editor),
     });
-    if (propsRef.current.clipboardTabId) editor.addAction({
+    if (propsRef.current.queryTabId) editor.addAction({
       id: sqlQuotedCopyAction, label: uiCommandLabels['sql-copy-quoted'], precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
       contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 5,
       run: () => openClipboard(editor, 'quoted'),
     });
+    if (propsRef.current.queryTabId) {
+      // 保留应用缩放的原快捷键，编辑器快捷键只在此实例的文本区接收。
+      const keys = [monaco.KeyCode.Equal, monaco.KeyCode.Minus, monaco.KeyCode.Digit0];
+      sqlEditorZoomCommandIds.forEach((id, index) => editor.addAction({
+        id, label: uiCommandLabels[id], keybindingContext: 'editorTextFocus',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | keys[index]],
+        contextMenuGroupId: '10_sql_zoom', contextMenuOrder: index,
+        run: () => {
+          const props = propsRef.current, current = useWorkspace.getState();
+          if (!aliveRef.current || widgetRef.current !== widget || !widget.alive || editorRef.current !== editor ||
+              !contentRef.current?.ready || !props.queryTabId || current.settings.activeTabId !== props.queryTabId ||
+              props.clipboardDisabled || document.querySelector(appModalSelector)) return;
+          const base = readEditorFontSize(current.settings.editorFontSize);
+          setZoomOffset(offset => nextSqlEditorZoomOffset(base, offset, id));
+        },
+      }));
+    }
     if (propsRef.current.onFormat) syncFormatAction();
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);
