@@ -16,7 +16,7 @@ import { RecordBatchEditIntent } from '../recordBatchEdit';
 import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
-import { gridCellRangeClass, useGridCellRange, type GridCellRectangle } from '../useGridCellRange';
+import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
@@ -47,12 +47,12 @@ import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.
 import { maxTablePage, parsePageJump, parseTablePageSize, setAllFilterRulesEnabled, type FilterMode, type FilterDraft } from '../tableFilters';
 import { tableLastPageBounds } from '../../shared/tableLastPage';
 import { openNetworkSchemaScript, schemaScriptLabel } from '../schemaScriptNavigation';
-import { tableCellBoundActions, tableCellFilterDraft, type TableCellFilterMode } from '../tableCellFilter';
+import { tableCellBoundActions, tableCellFilterDraft, tableRangeFilterDraft, type TableCellFilterMode } from '../tableCellFilter';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { buildTableSelectedFilter, type TableSelectedFilterProposal } from '../tableSelectedFilter';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import { TableSelectedFilterPanel } from './TableSelectedFilterPanel';
-import { tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFilter';
+import { captureTableRangeBounds, tableRangeFilterActions, type TableRangeFilter } from '../tableRangeFilter';
 import { TableFilterPanel } from './TableFilterPanel';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
 import { tableFilterGroupAfterChange, tableFilterGroupWithMode, tableFilterGroupSummary } from '../tableFilterGroups';
@@ -1066,10 +1066,23 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       selectedFilterRef.current = lease; setSelectedFilter(lease); setError('');
     } catch (reason) { setError(errorMessage(reason)); }
   }
-  const openRangeFilter = useRef<TableRangeFilter<DraftRow>>(() => {});
+  const openRangeFilter = useRef<TableRangeFilter<DraftRow>['members']>(() => {});
   openRangeFilter.current = (range, exclude, current) => {
     openSelectedFilter(exclude, { rowId: range.rows[0].id, key: range.keys[0] }, new Set(range.rows.map(row => row.id)), current);
   };
+  /** 与单格草稿共享门槛。鼠标或键盘菜单都必须持有原页及双格选区。 */
+  function captureRangeBounds(range: GridRangeTarget<DraftRow>, gridCurrent: () => boolean) {
+    if (!info || !canSeedCellFilter) return;
+    const [first, last] = range.rows, [key] = range.keys;
+    // 打开菜单会重渲染本组件；绑定网格快照和表页租约，允许菜单本身的重渲染。
+    const current = () => gridCurrent() && !externalStaleRef.current && !reloadBlocked() &&
+      !collectChanges(rowsRef.current).length && cellActionCurrent(first) && cellActionCurrent(last);
+    return captureTableRangeBounds(() => tableRangeFilterDraft(info.columns, rowsRef.current, visibleKeys, key, first, last), current,
+      (draft, outside) => {
+        setCellFilterSeed({ ...draft, operator: outside ? 'NOT BETWEEN' : 'BETWEEN' });
+        setShowFilter(true);
+      });
+  }
   /** 页、列、原值、勾选或连接变化即永久失效；原提案不能借后来相同值恢复授权。 */
   function selectedFilterCurrent(lease: TableSelectedFilterLease): boolean {
     let valid = false;
@@ -2072,7 +2085,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       } }] : []),
       ...(rectangle && editable ? gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)) : []),
       ...(rectangle && selectedFilterReady ? tableRangeFilterActions(rectangle, () => cellRange.capture(rectangle, null),
-        current, (range, exclude, guard) => openRangeFilter.current(range, exclude, guard)) : []),
+        current, {
+          members: (range, exclude, guard) => openRangeFilter.current(range, exclude, guard),
+          bounds: captureRangeBounds,
+        }) : []),
       { label: quickValueText.copyCell, run: () => {
         try { copyGridCellValue(ownCell(row.data, key), current); }
         catch (reason) { if (current()) setError(errorMessage(reason)); }

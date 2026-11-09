@@ -1,5 +1,5 @@
 import type { FilterMode, FilterRule } from '../shared/contracts';
-import { FILTER_LIMITS, validateFilterRules } from '../shared/filtering';
+import { FILTER_LIMITS, isTableRangeOperator, validateFilterRules } from '../shared/filtering';
 import { zh, formatText } from './locales/zh-CN';
 import { tableFilterEnabledZh as enabledText } from './locales/tableFilterEnabled.zh-CN';
 import { maxTablePage } from '../shared/tableLastPage';
@@ -16,7 +16,7 @@ export const filterOperatorLabels: Record<FilterRule['operator'], string> = {
   '=': zh.table.filterEquals, '!=': zh.table.filterNotEquals, '>': zh.table.filterGreater, '>=': zh.table.filterGreaterOrEqual,
   '<': zh.table.filterLess, '<=': zh.table.filterLessOrEqual, LIKE: zh.table.filterLike, 'NOT LIKE': zh.table.filterNotLike,
   CONTAINS: cellText.containsRule, 'NOT CONTAINS': cellText.notContainsRule,
-  IN: zh.table.filterIn, 'NOT IN': zh.table.filterNotIn, BETWEEN: zh.table.filterBetween,
+  IN: zh.table.filterIn, 'NOT IN': zh.table.filterNotIn, BETWEEN: zh.table.filterBetween, 'NOT BETWEEN': zh.table.filterNotBetween,
   'IS NULL': zh.table.filterIsNull, 'IS NOT NULL': zh.table.filterIsNotNull
 };
 
@@ -50,7 +50,7 @@ export function filterRuleFromDraft(draft: FilterDraft, columns: readonly string
     validateFilterRules([rule]);
     return rule;
   }
-  if (draft.operator === 'BETWEEN') { checkValueLengths([draft.value, draft.upperValue]); return { ...base, values: [draft.value, draft.upperValue] }; }
+  if (isTableRangeOperator(draft.operator)) { checkValueLengths([draft.value, draft.upperValue]); return { ...base, values: [draft.value, draft.upperValue] }; }
   checkValueLengths([draft.value]); return { ...base, value: draft.value };
 }
 
@@ -62,7 +62,7 @@ export function filterDraftFromRule(rule: FilterRule, multiline = false): Filter
     if (multiline && values.some(value => /[\r\n]/.test(value))) return { ...draft, valuesText: JSON.stringify(values, null, 2), valuesJson: true };
     return { ...draft, valuesText: values.join('\n'), includeEmptyString: values.length === 1 && values[0] === '' };
   }
-  if (rule.operator === 'BETWEEN') return { ...draft, value: rule.values?.[0] ?? '', upperValue: rule.values?.[1] ?? '' };
+  if (isTableRangeOperator(rule.operator)) return { ...draft, value: rule.values?.[0] ?? '', upperValue: rule.values?.[1] ?? '' };
   return { ...draft, value: rule.value ?? '' };
 }
 
@@ -100,7 +100,7 @@ export function filterRuleSummary(rule: FilterRule): string {
   const label = `${rule.column} ${filterOperatorLabels[rule.operator]}`;
   if (rule.operator === 'IS NULL' || rule.operator === 'IS NOT NULL') return label;
   if (rule.operator === 'IN' || rule.operator === 'NOT IN') return `${label} · ${formatText(zh.table.filterSetSummary, rule.values?.length ?? 0)} · ${(rule.values ?? []).slice(0, 3).map(filterValueSummary).join(' / ')}`;
-  if (rule.operator === 'BETWEEN') return `${label} ${filterValueSummary(rule.values?.[0] ?? '')} — ${filterValueSummary(rule.values?.[1] ?? '')}`;
+  if (isTableRangeOperator(rule.operator)) return `${label} ${filterValueSummary(rule.values?.[0] ?? '')} — ${filterValueSummary(rule.values?.[1] ?? '')}`;
   return `${label} ${filterValueSummary(rule.value ?? '')}`;
 }
 

@@ -1,3 +1,4 @@
+import { isTableRangeOperator } from '../../shared/filtering';
 import { tableApplyShortcut } from '../tableApplyShortcut';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Pencil, X } from 'lucide-react';
@@ -35,7 +36,7 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
   useEffect(() => { if (seed) { setDraftChanged(true); setDraft({ ...seed }); setEditing(null); setError(''); } }, [seed]);
   useEffect(() => { if (!columns.includes(draft.column)) setDraft(current => ({ ...current, column: columns[0] ?? '' })); }, [columns, draft.column]);
   const isSet = draft.operator === 'IN' || draft.operator === 'NOT IN';
-  const isRange = draft.operator === 'BETWEEN'; const isNull = draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL';
+  const isRange = isTableRangeOperator(draft.operator); const isNull = draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL';
 
   /** 切换条件类型时保留编辑内容，生成规则时仅发送当前运算符需要的值。 */
   function changeDraft(patch: Partial<FilterDraft>) { if (!current()) return; setDraft(current => ({ ...current, ...patch })); setDraftChanged(true); setError(''); }
@@ -87,7 +88,7 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
         <button type="submit" disabled={disabled || !columns.length}>{editing === null ? zh.table.text013 : zh.table.filterSaveCondition}</button>{editing !== null && <button type="button" disabled={disabled} onClick={cancelEdit}>{zh.table.filterCancelEdit}</button>}
       </div>
       {isSet && <div className="filter-set-editor"><textarea rows={3} aria-label={zh.table.filterSetValues} value={draft.valuesText} disabled={disabled} onChange={event => changeDraft({ valuesText: event.target.value })}/>{!draft.valuesJson && <label className="check"><input type="checkbox" checked={draft.includeEmptyString} disabled={disabled} onChange={event => changeDraft({ includeEmptyString: event.target.checked })}/>{zh.table.filterIncludeEmptyString}</label>}</div>}
-      <UsageHelp><p>{isNull ? zh.table.filterNullHint : isRange ? zh.table.filterRangeHint : isSet ? draft.valuesJson ? zh.table.filterSetJson : zh.table.filterSetHint : zh.table.filterScalarHint}</p></UsageHelp>
+      <UsageHelp><p>{isNull ? zh.table.filterNullHint : isRange ? (draft.operator === 'NOT BETWEEN' ? zh.table.filterOutsideRangeHint : zh.table.filterRangeHint) : isSet ? draft.valuesJson ? zh.table.filterSetJson : zh.table.filterSetHint : zh.table.filterScalarHint}</p></UsageHelp>
     </form>
     <ErrorBox message={error}/>
     {filters.length > 0 && <div className="filter-chips editable-filter-chips">{filters.map((filter, index) => <div className={`filter-chip ${editing === index ? 'editing' : ''} ${filter.enabled === false ? 'condition-disabled' : ''}`} key={index}><label className="filter-chip-enabled" title={enabledText.hint}><input type="checkbox" aria-label={enabledText.enabled(index + 1)} checked={filter.enabled !== false} disabled={disabled} onChange={event => changeEnabled(index, event.target.checked)}/><span>{filter.enabled === false ? enabledText.disabledLabel : enabledText.enabledLabel}</span></label><button type="button" className="filter-chip-edit" aria-label={formatText(zh.table.filterEditCondition, index + 1)} title={filterRuleSummary(filter)} disabled={disabled} onClick={() => editCondition(index)}><Pencil size={10}/><span>{filterRuleSummary(filter)}</span></button><button type="button" className="filter-chip-remove" aria-label={formatText(zh.table.filterRemoveCondition, index + 1)} disabled={disabled} onClick={() => removeCondition(index)}><X size={11}/></button></div>)}</div>}

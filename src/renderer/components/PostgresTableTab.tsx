@@ -48,7 +48,8 @@ import { useUiCommandScope } from '../uiCommands';
 import { openFocusedGridRowJump } from './GridRowJump';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { tableCellBoundActions } from '../tableCellFilter';
-import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
+import { captureTableRangeBounds } from '../tableRangeFilter';
+import { postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
@@ -752,6 +753,20 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       setAdvancedFilters(true);
       setError('');
     } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 端点只能来自当前页未被草稿覆盖的可见列，区间草稿沿用高级筛选。 */
+  function captureRangeBounds(range: GridRangeTarget<DataRow>, gridCurrent: () => boolean) {
+    const column = gridLayout.columns.find(item => item.key === range.keys[0]);
+    if (!page || !column) return;
+    const [first, last] = range.rows;
+    const current = () => canFilterCell() && gridCurrent() && !draftGrid?.cell(first, column.key) && !draftGrid?.cell(last, column.key);
+    return captureTableRangeBounds(() => postgresTableRangeFilterDraft(
+      { column, row: first, index: range.startRow }, { column, row: last, index: range.startRow + 1 }, gridLayout.columns, page.rows),
+    current, (draft, outside) => {
+      setCellFilterSeed({ ...draft, operator: outside ? 'NOT BETWEEN' : 'BETWEEN' });
+      setAdvancedFilters(true);
+    });
   }
 
   const canChangeGrid = !recordView && active && writable && pageConnectionVersion === connectionVersion;
@@ -1771,7 +1786,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           if (gridReturn) setGridReturn(undefined);
         }}
         cellMenuFilters={cellMenuEnabled ? cellMenuFilters : undefined}
-        onFilterTableRange={cellMenuEnabled ? openRangeFilter : undefined}
+        onFilterTableRange={cellMenuEnabled ? { members: openRangeFilter, bounds: captureRangeBounds } : undefined}
         onFillRange={canEditGrid ? fillGridRange : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}

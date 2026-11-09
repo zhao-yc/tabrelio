@@ -56,10 +56,11 @@ import type { TablePreferences } from '../../shared/tablePreferences';
 import { sqliteTablePresetsZh as presetText } from '../locales/sqliteTablePresets.zh-CN';
 import { sqlitePresetDraft } from '../sqliteTablePresetDraft';
 import { validateSqlitePresetProfile, type SqliteTablePresetProfile, type SqliteTablePresetQuery } from '../../shared/sqliteTablePresets';
-import { captureSqliteCellFilter, sqliteCheckedFilterDraft, type SqliteCellFilterSource } from '../sqliteTableCellFilter';
+import { captureSqliteCellFilter, sqliteCheckedFilterDraft, sqliteTableRangeFilterDraft, type SqliteCellFilterSource } from '../sqliteTableCellFilter';
 import { sqliteTableCellFilterZh as cellFilterText } from '../locales/sqliteTableCellFilter.zh-CN';
 import { tableCellFilterZh as textCellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { tableCellBoundActions, type TableCellFilterMode } from '../tableCellFilter';
+import { captureTableRangeBounds } from '../tableRangeFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { SqliteTableFilters } from './SqliteTableFilters';
 import type { SqliteTableRebuildTarget } from '../../shared/sqliteTableRebuild';
@@ -857,9 +858,14 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   /** 统一追加类型集合条件。选区和勾选只提供原页索引，实际读取仍需应用。 */
   function appendValueFilter(column: number, indices: readonly number[], exclude: boolean,
     current: () => boolean, rows?: readonly SqliteDraftRow[]): void {
-    if (!page || !current()) return;
+    if (!page) return;
+    appendRangeCondition(() => sqliteCheckedFilterDraft(page, column, indices, exclude, uid(), rows), current);
+  }
+  /** 区间和集合共享条件预算及一次性草稿更新。 */
+  function appendRangeCondition(draft: () => SqliteFilterDraft, current: () => boolean): void {
+    if (!current()) return;
     try {
-      const next = [...filters, sqliteCheckedFilterDraft(page, column, indices, exclude, uid(), rows)];
+      const next = [...filters, draft()];
       sqliteTableDraft({ connectionId: tab.connectionId, database: tab.database, table: tab.table }, limit, mode, next, sort);
       if (!current()) return;
       setFilters(next);
@@ -886,6 +892,20 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     const column = Number(range.keys[0].slice(1));
     appendValueFilter(column, range.rows.map(row => row.index ?? -1), exclude,
       () => editorRef.current === editor && editor.canEdit() && rangeFilterCurrent(column, gridCurrent), range.rows);
+  }
+  /** SQLite 的原存储类型来自捕获的页元数据，两种网格均沿用单格编辑守卫。 */
+  function captureRangeBounds(range: GridRangeTarget<DataRow | SqliteDraftRow>, column: number, gridCurrent: () => boolean) {
+    const editor = renderedEditor;
+    const current = () => rangeFilterCurrent(column, gridCurrent) && editorRef.current === editor;
+    if (!current()) return;
+    try {
+      const [first, last] = range.rows.map((row, i) => captureFilterSource(
+        editor ? (row as SqliteDraftRow).index ?? -1 : range.startRow + i, column, row));
+      return captureTableRangeBounds(() => sqliteTableRangeFilterDraft(first, last, ''), current,
+        (draft, outside) => appendRangeCondition(() => ({
+          ...draft, id: uid(), operator: outside ? 'notBetween' : 'between',
+        }), current));
+    } catch { /* 脏格或缺少原始存储类型时不显示区间入口。 */ }
   }
   /** 方案只属于准确活动表页，不依赖左树选择，也不要求重新建立数据库会话。 */
   function presetCurrent(): boolean {
@@ -1650,7 +1670,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {findOpen && <SqliteTableFindPanel key={findOpen.id} page={findOpen.page} rows={findOpen.rows} seed={findOpen.seed} previewOwner={findOpen.id} focusRequest={findFocus} onHighlights={setFindHighlights} isCurrent={() => findCurrent(findOpen)} onJump={(rowId, column, focus, range) => jumpFind(findOpen, rowId, column, focus, range)} onStage={(plan, seed) => stageFind(findOpen, plan, seed)} onClearHit={() => clearFindHit(findOpen)} onPreviewChange={opened => findPreviewChanged(findOpen, opened)} onClose={() => closeFind(findOpen)}/>}
     {restoredDraftView && <div role="status" className="sqlite-browse-hint"><strong>{draftFileText.restored}</strong><button onClick={() => read(0)} disabled={view.busy || externalBusy || !!cellInput || !!previewOpen}>{draftFileText.leave}</button></div>}
     <ErrorBox message={invalidTarget ? text.unsupported : validation || view.error}/>
-    <div className="sqlite-browse-result">{view.busy ? <div className="empty"><Spinner text={view.stopping ? text.stopping : text.loading}/></div> : page && editView && editView.page === page ? <SqliteTableEditGrid showFieldType={showFieldType} rowHeight={layoutView.preferences.rowHeight} page={page} rows={editView.rows} projection={projection} freezeColumns={headerFreeze} onColumnResize={resizeLayout} fitSource={columnFitSource} disabled={editBlocked || !layoutView.ready} selected={selectedRow} initialCheckedRows={renderedEditor ? drafts.checkedIds(renderedEditor) : undefined} isCurrent={() => editActionCurrent(false) && !!renderedEditor?.canEdit()} onSelect={selectEditRow} onEdit={editRow} onPaste={openRange} onActiveCell={selectPasteCell} onQuickValue={setQuickValueAt} onFillRange={fillGridRange} onExportRange={exportGridRange} onFilterTableRange={appendEditRangeFilter} onFilterCell={selectEditFilterCell} cellMenuFilters={(row, column) => menuFilters(row.index, column, row)} findHit={findHit} findHighlights={visibleFindHighlights} sort={headerSort} onSortChange={sortFromHeader} onCheckedRows={selectCheckedRows} onOpenRowSql={(kind, sql) => { if (available()) openRowSqlDraft(page.target, kind, sql); }}/> : page ? <div className="query-result-with-details"><div className="query-result-grid"><ResultsGrid rowJump headerDetails={sqliteHeaderDetails} rowHeight={layoutView.preferences.rowHeight} columns={displayColumns} rows={page.result.rows} frozenKeys={displayFrozen} freezeColumns={headerFreeze} columnWidths={displayWidths} onColumnResize={resizeLayout} selectionScope={page} sqliteSource={rangeExportSource} onExportRange={exportGridRange} onFilterTableRange={appendReadRangeFilter} isCurrent={() => controller.pageCurrent(page) && available() && !externalBusy} insertSql={page.insertCopy && !drafts.dirty ? indices => sqliteCopyInsertSql(page, indices) : undefined} updateSql={page.primaryKey?.length && !drafts.dirty ? indices => sqliteCopyUpdateSql(page, indices) : undefined} deleteSql={page.primaryKey?.length && !drafts.dirty ? indices => sqliteCopyDeleteSql(page, indices) : undefined} primaryKeySql={page.primaryKey?.length && !drafts.dirty ? indices => sqliteCopyPrimaryKeyQuery(page, indices) : undefined} onOpenRowSql={(kind, sql) => openRowSqlDraft(page.target, kind, sql)} binarySourceIdentity={[tab, profile, version, refreshVersion, page]} binaryIsCurrent={() => latest.current.active && latest.current.tab === tab && latest.current.refreshVersion === refreshVersion && controller.pageCurrent(page) && !editorRef.current && !externalBusy} onActiveCellChange={selectReadFilterCell} cellMenuFilters={cell => menuFilters(cell.index, cell.column ? page.result.columns.indexOf(cell.column) : -1, cell.row)} onSelectionChange={selectReadCheckedRows} onActiveRowIndexChange={detailPage ? selectDetailRow : undefined} sort={headerSort.map(rule => ({ column: rule.columnKey, direction: rule.direction }))} onSortChange={next => sortFromHeader(next.map(rule => ({ columnKey: rule.column, direction: rule.direction })))}/></div>
+    <div className="sqlite-browse-result">{view.busy ? <div className="empty"><Spinner text={view.stopping ? text.stopping : text.loading}/></div> : page && editView && editView.page === page ? <SqliteTableEditGrid showFieldType={showFieldType} rowHeight={layoutView.preferences.rowHeight} page={page} rows={editView.rows} projection={projection} freezeColumns={headerFreeze} onColumnResize={resizeLayout} fitSource={columnFitSource} disabled={editBlocked || !layoutView.ready} selected={selectedRow} initialCheckedRows={renderedEditor ? drafts.checkedIds(renderedEditor) : undefined} isCurrent={() => editActionCurrent(false) && !!renderedEditor?.canEdit()} onSelect={selectEditRow} onEdit={editRow} onPaste={openRange} onActiveCell={selectPasteCell} onQuickValue={setQuickValueAt} onFillRange={fillGridRange} onExportRange={exportGridRange} onFilterTableRange={{ members: appendEditRangeFilter, bounds: (range, current) => captureRangeBounds(range, Number(range.keys[0].slice(1)), current) }} onFilterCell={selectEditFilterCell} cellMenuFilters={(row, column) => menuFilters(row.index, column, row)} findHit={findHit} findHighlights={visibleFindHighlights} sort={headerSort} onSortChange={sortFromHeader} onCheckedRows={selectCheckedRows} onOpenRowSql={(kind, sql) => { if (available()) openRowSqlDraft(page.target, kind, sql); }}/> : page ? <div className="query-result-with-details"><div className="query-result-grid"><ResultsGrid rowJump headerDetails={sqliteHeaderDetails} rowHeight={layoutView.preferences.rowHeight} columns={displayColumns} rows={page.result.rows} frozenKeys={displayFrozen} freezeColumns={headerFreeze} columnWidths={displayWidths} onColumnResize={resizeLayout} selectionScope={page} sqliteSource={rangeExportSource} onExportRange={exportGridRange} onFilterTableRange={{ members: appendReadRangeFilter, bounds: (range, current) => captureRangeBounds(range, page.result.columns.findIndex(item => item.key === range.keys[0]), current) }} isCurrent={() => controller.pageCurrent(page) && available() && !externalBusy} insertSql={page.insertCopy && !drafts.dirty ? indices => sqliteCopyInsertSql(page, indices) : undefined} updateSql={page.primaryKey?.length && !drafts.dirty ? indices => sqliteCopyUpdateSql(page, indices) : undefined} deleteSql={page.primaryKey?.length && !drafts.dirty ? indices => sqliteCopyDeleteSql(page, indices) : undefined} primaryKeySql={page.primaryKey?.length && !drafts.dirty ? indices => sqliteCopyPrimaryKeyQuery(page, indices) : undefined} onOpenRowSql={(kind, sql) => openRowSqlDraft(page.target, kind, sql)} binarySourceIdentity={[tab, profile, version, refreshVersion, page]} binaryIsCurrent={() => latest.current.active && latest.current.tab === tab && latest.current.refreshVersion === refreshVersion && controller.pageCurrent(page) && !editorRef.current && !externalBusy} onActiveCellChange={selectReadFilterCell} cellMenuFilters={cell => menuFilters(cell.index, cell.column ? page.result.columns.indexOf(cell.column) : -1, cell.row)} onSelectionChange={selectReadCheckedRows} onActiveRowIndexChange={detailPage ? selectDetailRow : undefined} sort={headerSort.map(rule => ({ column: rule.columnKey, direction: rule.direction }))} onSortChange={next => sortFromHeader(next.map(rule => ({ columnKey: rule.column, direction: rule.direction })))}/></div>
       {visibleRowDetail && detailPage && <QueryRowDetailsPanel controller={rowDetails} view={visibleRowDetail} sqlitePage={detailPage} pageNavigation={{ previous: sqliteRowDetailPageOffset(detailPage, visibleRowDetail.index, -1) !== undefined, next: sqliteRowDetailPageOffset(detailPage, visibleRowDetail.index, 1) !== undefined, move: moveRowDetailPage }} isCurrent={() => rowDetailsCurrent(visibleRowDetail.binding)} onMove={showRowDetail}
         onClose={current => { if (rowDetailsCurrent(current.binding) && rowDetails.close(current)) setRowDetail(null); }}/>}
       </div> : <Empty title={text.noPage}/>}</div>

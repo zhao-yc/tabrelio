@@ -215,6 +215,26 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(tableCell('13')).toHaveCount(0);
     await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
     await expect(tableCell('18446744073709551613')).toBeVisible();
+    for (const [label, operator, included, excluded] of [
+      [tableSelectedFilterZh.rangeBetween, 'BETWEEN', '18446744073709551613', '13'],
+      [tableSelectedFilterZh.rangeNotBetween, 'NOT BETWEEN', '13', '18446744073709551613'],
+    ] as const) {
+      await tableCell('18446744073709551615').click();
+      await page.keyboard.press('Shift+ArrowDown');
+      await expect(tableCell('18446744073709551613')).toBeFocused();
+      await page.keyboard.press('Shift+F10');
+      await page.getByRole('menuitem', { name: label, exact: true }).click();
+      await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue(operator);
+      await expect(tableTab.getByLabel(zh.table.filterRangeStart, { exact: true })).toHaveValue('18446744073709551613');
+      await expect(tableTab.getByLabel(zh.table.filterRangeEnd, { exact: true })).toHaveValue('18446744073709551615');
+      await expect(tableCell('13')).toBeVisible();
+      await tableTab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+      await expect(tableCell(included)).toBeVisible();
+      await expect(tableCell(excluded)).toHaveCount(0);
+      await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
+      await expect(tableCell('13')).toBeVisible();
+      await expect(tableCell('18446744073709551615')).toBeVisible();
+    }
     const column = await tableGrid.getByRole('columnheader').filter({ hasText: /^note/ }).getAttribute('aria-colindex');
     const note = (id: string) => tableCell(id).locator('..').locator('[role="gridcell"][aria-colindex="' + column + '"]');
     await expect(note('9007199254740993')).toHaveText('NULL');

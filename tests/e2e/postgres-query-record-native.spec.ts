@@ -20,6 +20,7 @@ import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/delete
 import { copyInsertSqlZh as insertCopy } from '../../src/shared/copyInsertSql.zh-CN';
 import { postgresReferencePickerZh as referenceText } from '../../src/renderer/locales/postgresReferencePicker.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
+import { tableSelectedFilterZh } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
 import { tableCellFilterZh } from '../../src/renderer/locales/tableCellFilter.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
@@ -75,6 +76,32 @@ test('PostgreSQL 表页文本和数值快捷筛选保留字面及精确语义', 
     await expect(ids).toHaveText(['3', '4']);
     await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
     await expect(ids).toHaveText(['3']);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 表页双端区间以原精度交给服务器', async () => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.filter_bounds (id int PRIMARY KEY, metric numeric(30,4));
+      INSERT INTO public.filter_bounds VALUES (1,9007199254740993.0003),(2,9007199254740993.0001),
+      (3,9007199254740993.0002),(4,9007199254740993.0004),(5,NULL)`);
+    await loadQuery(config, '', 'filter_bounds');
+    const tab = page.locator('.postgres-table-tab:visible'), grid = tab.getByRole('grid');
+    const cell = (name: string) => grid.getByRole('gridcell', { name, exact: true });
+    const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+    await cell('9007199254740993.0003').click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: tableSelectedFilterZh.rangeNotBetween, exact: true }).click();
+    await expect(tab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('NOT BETWEEN');
+    await expect(tab.getByLabel(zh.table.filterRangeStart, { exact: true })).toHaveValue('9007199254740993.0001');
+    await expect(tab.getByLabel(zh.table.filterRangeEnd, { exact: true })).toHaveValue('9007199254740993.0003');
+    await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(ids).toHaveText(['1', '2', '3', '4', '5']);
+    await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(ids).toHaveText(['4']);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

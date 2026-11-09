@@ -1,4 +1,4 @@
-import { FILTER_LIMITS } from '../../shared/filtering';
+import { isTableRangeOperator, FILTER_LIMITS } from '../../shared/filtering';
 import type { FilterMode } from '../../shared/contracts';
 import { filterOperatorLabels, type FilterDraft } from '../tableFilters';
 import type { ForeignKeyJoinHavingDraft, ForeignKeyJoinHavingTarget } from '../tableForeignKeyJoinHaving';
@@ -12,7 +12,7 @@ export function TableForeignKeyJoinHaving({entries,targets,mode,disabled,onAdd,o
   onAdd():void;onChange(entry:ForeignKeyJoinHavingDraft,patch:{enabled?:boolean;draft?:Partial<FilterDraft>;targetLabel?:string}):void;onRemove(entry:ForeignKeyJoinHavingDraft):void;onClear():void;onMode(mode:FilterMode):void;
 }){
   return <fieldset disabled={disabled} aria-label={text.title}><legend>{text.title}</legend><UsageHelp><p>{text.hint}</p></UsageHelp><label>{text.mode}<select aria-label={text.mode} disabled={disabled} value={mode} onChange={event=>{if(event.target.value==='all'||event.target.value==='any')onMode(event.target.value);}}><option value="all">{text.all}</option><option value="any">{text.any}</option></select></label>
-    {!entries.length&&<p>{text.empty}</p>}{entries.map((entry,index)=>{const n=index+1,draft=entry.draft,set=draft.operator==='IN'||draft.operator==='NOT IN',range=draft.operator==='BETWEEN',nil=draft.operator==='IS NULL'||draft.operator==='IS NOT NULL';return <div key={entry.id}>
+    {!entries.length&&<p>{text.empty}</p>}{entries.map((entry,index)=>{const n=index+1,draft=entry.draft,set=draft.operator==='IN'||draft.operator==='NOT IN',range=isTableRangeOperator(draft.operator),nil=draft.operator==='IS NULL'||draft.operator==='IS NOT NULL';return <div key={entry.id}>
       <div className="filter-inputs"><label><input type="checkbox" aria-label={text.enabled(n)} checked={entry.enabled} disabled={disabled} onChange={event=>onChange(entry,{enabled:event.target.checked})}/>{n}.</label>
       <label>{text.target(n)}<select aria-label={text.target(n)} disabled={disabled} value={draft.column} onChange={event=>{const target=targets.find(target=>target.id===event.target.value);if(target)onChange(entry,{draft:{column:target.id},targetLabel:target.label});}}>{!targets.some(target=>target.id===draft.column)&&<option value={draft.column} disabled>{text.stale(entry.targetLabel)}</option>}{targets.map(target=><option key={target.id} value={target.id}>{target.label}</option>)}</select></label>
       <label>{text.operator(n)}<select aria-label={text.operator(n)} disabled={disabled} value={draft.operator} onChange={event=>{if(Object.hasOwn(filterOperatorLabels,event.target.value))onChange(entry,{draft:{operator:event.target.value as FilterDraft['operator']}});}}>{Object.entries(filterOperatorLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><button type="button" disabled={disabled} aria-label={text.remove(n)} onClick={()=>onRemove(entry)}>×</button></div>

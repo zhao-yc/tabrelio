@@ -4,6 +4,7 @@ import type { SqliteFilterDraft } from './sqliteTableBrowser';
 import type { SqliteDraftRow } from './sqliteTableEditor';
 import { sqliteTableCellFilterZh as text } from './locales/sqliteTableCellFilter.zh-CN';
 import type { TableCellFilterMode } from './tableCellFilter';
+import { compareSqliteResultKeys, sqliteResultComparisonKey } from './sqliteResultCompare';
 
 export interface SqliteCellFilterSource {
   readonly column: string;
@@ -86,4 +87,13 @@ export function sqliteCheckedFilterDraft(page: SqliteTablePage, column: number, 
     values.set(key, value);
   }
   return { id, column: page.columns[column].name, operator: exclude ? 'notOneOf' : 'oneOf', kind: 'text', value: '', selectedValues: [...values.values()] };
+}
+
+/** 同一数值存储类型才有区间；两端走单格来源核验和原生筛选合同。 */
+export function sqliteTableRangeFilterDraft(first: SqliteCellFilterSource, last: SqliteCellFilterSource, id: string): SqliteFilterDraft {
+  const left = first.draft('gte', id), right = last.draft('gte', id);
+  if (left.column !== right.column || left.kind !== right.kind || (left.kind !== 'integer' && left.kind !== 'real')) throw Error(text.unsupported);
+  const code = left.kind === 'integer' ? 'i' : 'r';
+  const compare = compareSqliteResultKeys(sqliteResultComparisonKey(left.value, code)!, sqliteResultComparisonKey(right.value, code)!);
+  return { ...left, operator: 'between', value: compare > 0 ? right.value : left.value, secondValue: compare > 0 ? left.value : right.value };
 }

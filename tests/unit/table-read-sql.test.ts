@@ -21,6 +21,18 @@ describe('原表页筛选与排序共享编译', () => {
       .toBe(`pg_catalog.strpos("note"::text COLLATE pg_catalog."C", $1) ${comparison}`);
     expect(bind).toHaveBeenCalledExactlyOnceWith(value);
   });
+  it('区间外使用两个参数并保留原精度，拒绝一端或三端', () => {
+    const values = ['18446744073709551613', '18446744073709551615'];
+    const filters: FilterRule[] = [{ column: 'id', operator: 'NOT BETWEEN', values }];
+    const bound = 'CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)';
+    expect(buildTableFilterSql(info(), filters)).toEqual({ where: `((\`id\` NOT BETWEEN ${bound} AND ${bound}))`, params: values });
+    const bind = vi.fn((value: string) => '$' + (values.indexOf(value) + 1));
+    expect(postgresTableCondition({ mode: 'all', rules: filters }, name => '"' + name + '"', bind)).toBe('"id" NOT BETWEEN $1 AND $2');
+    expect(bind.mock.calls.flat()).toEqual(values);
+    for (const invalid of [values.slice(1), [...values, '0']]) {
+      expect(() => buildTableFilterSql(info(), [{ ...filters[0], values: invalid }])).toThrow(/2 个边界/);
+    }
+  });
   it.each(['all', 'any'] as const)('旧平铺%s参数与分页SQL逐字节保持，limit仍多取一条', mode => {
     const source = { ...info(), database: 'db', name: 'items' }, filters: FilterRule[] = [{ column: 'id', operator: '=', value: '9007199254740993' }, { column: 'note', operator: 'IS NULL' }];
     expect(buildPageSql(source, 2, 2, filters, [], mode)).toEqual({ sql: `SELECT * FROM \`db\`.\`items\` WHERE ((\`id\` = CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)) ${mode === 'all' ? 'AND' : 'OR'} (\`note\` IS NULL)) ORDER BY \`id\` ASC LIMIT 3 OFFSET 2`, params: ['9007199254740993'] });

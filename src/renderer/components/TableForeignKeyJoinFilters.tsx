@@ -1,5 +1,5 @@
 import type { TableInfo, FilterMode } from '../../shared/contracts';
-import { FILTER_LIMITS } from '../../shared/filtering';
+import { isTableRangeOperator, FILTER_LIMITS } from '../../shared/filtering';
 import { filterOperatorLabels, type FilterDraft } from '../tableFilters';
 import type { ForeignKeyJoinFilterDraft } from '../tableForeignKeyJoinFilters';
 import { tableForeignKeyJoinFilterZh as text } from '../locales/tableForeignKeyJoinFilter.zh-CN';
@@ -15,7 +15,7 @@ export function TableForeignKeyJoinFilters({ child, parent, entries, mode, disab
     {!entries.length && <p>{text.empty}</p>}
     {entries.map((entry, index) => {
       const { draft } = entry, position = index + 1, columns = (entry.side === 'child' ? child : parent).columns;
-      const set = draft.operator === 'IN' || draft.operator === 'NOT IN', range = draft.operator === 'BETWEEN', nil = draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL';
+      const set = draft.operator === 'IN' || draft.operator === 'NOT IN', range = isTableRangeOperator(draft.operator), nil = draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL';
       return <div key={entry.id} className="join-filter-entry">
         <div className="filter-inputs"><label><input type="checkbox" aria-label={text.enabled(position)} checked={entry.enabled} disabled={disabled} onChange={event => onChange(entry, { enabled: event.target.checked })}/>{position}.</label>
           <label>{text.side(position)}<select aria-label={text.side(position)} disabled={disabled} value={entry.side} onChange={event => { const side = event.target.value; if (side === 'child' || side === 'parent') { const names = (side === 'child' ? child : parent).columns.map(column => column.name); onChange(entry, { side, draft: { column: names.includes(draft.column) ? draft.column : names[0] } }); } }}><option value="child">{text.child}</option><option value="parent">{text.parent}</option></select></label>

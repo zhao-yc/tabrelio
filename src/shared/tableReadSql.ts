@@ -1,5 +1,5 @@
 import type { CellValue, ColumnInfo, FilterGroup, FilterMode, FilterRule, SortRule, TableInfo } from './contracts';
-import { copyFilterRules, validateFilterGroup } from './filtering';
+import { copyFilterRules, isTableRangeOperator, validateFilterGroup } from './filtering';
 
 export const tableReadSqlLimits = Object.freeze({ columns: 4096, sorts: 20, sqlBytes: 2 * 1024 * 1024, limit: 100000 });
 export const tableReadSqlText = Object.freeze({
@@ -70,7 +70,7 @@ export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filt
       const literal = parameterLiteral(value); return sql.replace('?', () => literal);
     };
     if (filter.operator === 'IN' || filter.operator === 'NOT IN') return `${column} ${filter.operator} (${filter.values!.map(parameter).join(', ')})`;
-    if (filter.operator === 'BETWEEN') return `${column} BETWEEN ${parameter(filter.values![0])} AND ${parameter(filter.values![1])}`;
+    if (isTableRangeOperator(filter.operator)) return `${column} ${filter.operator} ${parameter(filter.values![0])} AND ${parameter(filter.values![1])}`;
     return `${column} ${filter.operator} ${parameter(filter.value ?? '')}`;
   };
   /** 全停用子树省略，不能让空OR变成真或用缺省谓词放宽其它分支。 */

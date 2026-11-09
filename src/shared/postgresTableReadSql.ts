@@ -1,5 +1,5 @@
 import type { FilterGroup, FilterRule } from './contracts';
-import { validateFilterGroup } from './filtering';
+import { isTableRangeOperator, validateFilterGroup } from './filtering';
 import { postgresTableSortRules, type PostgresTableFilter, type PostgresTablePage, type PostgresTablePageInput } from './postgresTable';
 
 /** 浏览、游标和 COPY 共用条件树，参数或字面量的生成由协议入口决定。 */
@@ -18,8 +18,8 @@ export function postgresTableCondition(filter: PostgresTableFilter | undefined, 
       return `pg_catalog.strpos(${name}::text COLLATE pg_catalog."C", ${bind(rule.value ?? '')}) ${operator === 'CONTAINS' ? '> 0' : '= 0'}`;
     if (operator === 'IN' || operator === 'NOT IN')
       return name + ' ' + operator + ' (' + rule.values!.map(bind).join(', ') + ')';
-    if (operator === 'BETWEEN')
-      return name + ' BETWEEN ' + bind(rule.values![0]) + ' AND ' + bind(rule.values![1]);
+    if (isTableRangeOperator(operator))
+      return name + ' ' + operator + ' ' + bind(rule.values![0]) + ' AND ' + bind(rule.values![1]);
     const left = operator === 'LIKE' || operator === 'NOT LIKE' ? name + '::text' : name;
     return left + ' ' + operator + ' ' + bind(rule.value ?? '');
   }

@@ -1580,6 +1580,45 @@ test('SQLite 表页快捷数值边界匹配跨页原生整数', async ({}, info)
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 表页双端区间匹配跨页原值并忽略其它存储类型', async ({}, info) => {
+  await seed(undefined, `ALTER TABLE subject ADD COLUMN metric;
+    UPDATE subject SET metric=CASE id WHEN 1 THEN 9007199254740994 WHEN 2 THEN 9007199254740992
+      WHEN 3 THEN '9007199254740993' WHEN 4 THEN 9007199254740993.0 WHEN 5 THEN 9007199254740991
+      WHEN 120 THEN 9007199254740993 END;`);
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+  const id = (value: number) => grid.getByRole('gridcell', { name: 'INTEGER · ' + value, exact: true });
+  const metric = (value: number) => id(value).locator('..').getByRole('gridcell').last();
+  const choose = async (row: number) => {
+    await metric(row).click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+F10');
+  };
+  const item = (name: string) => page.getByRole('menuitem', { name, exact: true });
+  await choose(2);
+  await expect(item(tableSelectedFilterText.rangeEntry)).toBeVisible();
+  await expect(item(tableSelectedFilterText.rangeBetween)).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await choose(1);
+  await item(tableSelectedFilterText.rangeNotBetween).click();
+  const operator = table.getByLabel(browseText.filterOperator(1), { exact: true });
+  await expect(operator).toHaveValue('notBetween');
+  await expect(table.getByLabel(browseText.filterValue(1), { exact: true })).toHaveValue('9007199254740992');
+  await expect(table.getByLabel(browseText.filterSecondValue(1), { exact: true })).toHaveValue('9007199254740994');
+  await expect(id(1)).toBeVisible();
+  await table.getByLabel(browseText.filterSecondValue(1), { exact: true }).scrollIntoViewIfNeeded();
+  await info.attach('SQLite表页双端区间草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  const apply = table.getByRole('button', { name: browseText.apply, exact: true });
+  await apply.click();
+  await expect(id(5)).toBeVisible();
+  for (const absent of [1, 2, 3, 4, 6, 120]) await expect(id(absent)).toHaveCount(0);
+  await operator.selectOption('between');
+  await apply.click();
+  for (const included of [1, 2, 120]) await expect(id(included)).toBeVisible();
+  for (const absent of [3, 4, 5, 6]) await expect(id(absent)).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 单列选区原值筛选区分 NULL 和空串，独立于勾选并保留排序', async ({}, info) => {
   await seed(`SELECT id, '相邻列' AS v, CASE id WHEN 1 THEN NULL WHEN 2 THEN '' WHEN 3 THEN 'NULL'
     WHEN 4 THEN 2 ELSE '' END AS v FROM subject WHERE id <= 5 ORDER BY id;`);

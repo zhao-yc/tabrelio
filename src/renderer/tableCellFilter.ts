@@ -1,8 +1,9 @@
-import type { ColumnInfo } from '../shared/contracts';
+import type { ColumnInfo, ResultColumn } from '../shared/contracts';
 import type { DraftRow } from './dataChanges';
 import { emptyFilterDraft, filterRuleFromDraft, type FilterDraft } from './tableFilters';
 import { tableCellFilterZh as text } from './locales/tableCellFilter.zh-CN';
 import { cellBoundOperators } from './queryResultCellFilter';
+import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterLiteral, type SortDialect } from './queryResultSort';
 import { queryResultFilterZh } from './locales/queryResultFilter.zh-CN';
 
 export type TableCellFilterMode = boolean | 'contains' | 'notContains' | typeof cellBoundOperators[number];
@@ -35,4 +36,21 @@ export function tableCellFilterDraft(columns: readonly ColumnInfo[], rows: reado
   // 复用正式手工条件的单值预算及字段准入；这里不修改既有条件、不创建SQL。
   filterRuleFromDraft(draft, columns.map(column => column.name));
   return draft;
+}
+
+/** 仅用解析后的键排列端点；最终提交给服务器的参数仍是完整原文。 */
+export function orderedTableRange(column: ResultColumn, left: string, right: string, dialect?: SortDialect): [string, string] {
+  const key = (value: string) => queryResultFilterKey(column, queryResultFilterLiteral(column, value, dialect), dialect);
+  return compareQueryResultFilterKeys(key(left), key(right)) > 0 ? [right, left] : [left, right];
+}
+
+/** 表格的原列声明与结果协议类型写法不同，先归一已认可的数值和时序类型。 */
+export function tableRangeFilterDraft(columns: readonly ColumnInfo[], rows: readonly DraftRow[], visible: readonly string[], key: string, first: DraftRow, last: DraftRow): FilterDraft {
+  const seed = (row: DraftRow) => tableCellFilterDraft(columns, rows, visible, { rowId: row.id, key }, 'gte');
+  const left = seed(first), right = seed(last);
+  const declared = columns.find(column => column.name === key)!.type;
+  const base = /^[a-z]+/i.exec(declared)?.[0].toUpperCase();
+  const type = base === 'FIXED' ? 'DECIMAL' : base === 'REAL' ? 'DOUBLE' : base!;
+  const [value, upperValue] = orderedTableRange({ key, name: key, type }, left.value, right.value);
+  return { ...left, operator: 'BETWEEN', value, upperValue };
 }

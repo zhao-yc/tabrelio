@@ -3,10 +3,14 @@ import { z } from 'zod';
 
 /** 筛选体积在界面、IPC 与引擎使用相同上限，避免集合展开形成过大的查询。 */
 export const FILTER_LIMITS = { conditions: 30, groups: 16, depth: 8, setValues: 200, valueLength: 4096, totalValues: 1000, totalCharacters: 1_000_000 } as const;
-const operators = new Set(['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'CONTAINS', 'NOT CONTAINS', 'IN', 'NOT IN', 'BETWEEN', 'IS NULL', 'IS NOT NULL']);
+const operators = new Set(['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'CONTAINS', 'NOT CONTAINS', 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN', 'IS NULL', 'IS NOT NULL']);
 const field = z.string().min(1).max(256), value = z.string().max(FILTER_LIMITS.valueLength,`每个筛选值不能超过 ${FILTER_LIMITS.valueLength} 个字符`);
 /** 表页与命名方案共用严格形状，拒绝SQL、认证路径及未知扩展字段。 */
-const filterRuleShape = z.object({ column: field, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','NOT LIKE','CONTAINS','NOT CONTAINS','IN','NOT IN','BETWEEN','IS NULL','IS NOT NULL']), value: value.optional(), values: z.array(value).max(FILTER_LIMITS.setValues,`筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional(), enabled: z.boolean().optional() }).strict();
+/** 两种区间运算共用两个有序参数及同一预算。 */
+export function isTableRangeOperator(operator: FilterRule['operator']): operator is 'BETWEEN' | 'NOT BETWEEN' {
+  return operator === 'BETWEEN' || operator === 'NOT BETWEEN';
+}
+const filterRuleShape = z.object({ column: field, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','NOT LIKE','CONTAINS','NOT CONTAINS','IN','NOT IN','BETWEEN','NOT BETWEEN','IS NULL','IS NOT NULL']), value: value.optional(), values: z.array(value).max(FILTER_LIMITS.setValues,`筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional(), enabled: z.boolean().optional() }).strict();
 export const filterRuleSchema = z.unknown().transform((input, context): FilterRule => {
   try { return filterRuleShape.parse(copyRule(input)); }
   catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选条件无效' }); return z.NEVER; }
@@ -126,11 +130,12 @@ export function validateFilterRules(filters: readonly FilterRule[], filterMode: 
     if (filter.operator === 'IS NULL' || filter.operator === 'IS NOT NULL') {
       if (filter.value !== undefined || filter.values !== undefined) throw new Error('NULL 判断不接受筛选值');
       values = [];
-    } else if (filter.operator === 'IN' || filter.operator === 'NOT IN' || filter.operator === 'BETWEEN') {
+    } else if (filter.operator === 'IN' || filter.operator === 'NOT IN' || isTableRangeOperator(filter.operator)) {
       if (filter.value !== undefined) throw new Error('集合或区间筛选只能使用 values，不能同时传入 value');
-      if (!Array.isArray(filter.values)) throw new Error(filter.operator === 'BETWEEN' ? 'BETWEEN 必须提供恰好 2 个边界值' : `${filter.operator} 必须提供非空集合`);
-      if (filter.operator === 'BETWEEN' && filter.values.length !== 2) throw new Error('BETWEEN 必须提供恰好 2 个边界值');
-      if (filter.operator !== 'BETWEEN' && (!filter.values.length || filter.values.length > FILTER_LIMITS.setValues)) throw new Error(`${filter.operator} 集合必须包含 1～${FILTER_LIMITS.setValues} 个值`);
+      const range = isTableRangeOperator(filter.operator);
+      if (!Array.isArray(filter.values)) throw new Error(range ? `${filter.operator} 必须提供恰好 2 个边界值` : `${filter.operator} 必须提供非空集合`);
+      if (range && filter.values.length !== 2) throw new Error(`${filter.operator} 必须提供恰好 2 个边界值`);
+      if (!range && (!filter.values.length || filter.values.length > FILTER_LIMITS.setValues)) throw new Error(`${filter.operator} 集合必须包含 1～${FILTER_LIMITS.setValues} 个值`);
       values = filter.values;
     } else {
       if (filter.values !== undefined) throw new Error('当前筛选操作只接受单个 value');

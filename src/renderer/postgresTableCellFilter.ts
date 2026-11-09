@@ -3,7 +3,7 @@ import { postgresAdvancedTableFilterSchema } from '../shared/postgresTable';
 import type { QueryResultCopyCell } from './queryResultHeaderCopy';
 import { tableCellFilterZh as text } from './locales/tableCellFilter.zh-CN';
 import { filterDraftFromRule } from './tableFilters';
-import { tableCellBoundSymbols, type TableCellFilterMode } from './tableCellFilter';
+import { orderedTableRange, tableCellBoundSymbols, type TableCellFilterMode } from './tableCellFilter';
 
 /** 只取当前页原格的自有标量，列名和值走正式高级筛选合同。 */
 export function postgresTableCellFilterDraft(cell: QueryResultCopyCell, columns: readonly ResultColumn[], rows: readonly DataRow[], mode: TableCellFilterMode = false) {
@@ -30,4 +30,20 @@ export function postgresTableCellFilterDraft(cell: QueryResultCopyCell, columns:
   const rule: FilterRule = { column: column.name, operator, ...(value === null ? {} : { value: String(value) }) };
   postgresAdvancedTableFilterSchema.parse({ mode: 'all', rules: [rule] });
   return filterDraftFromRule(rule);
+}
+
+/** PostgreSQL 数值按原文本精确比较；无时区时序走现有原字段比较器。 */
+export function postgresTableRangeFilterDraft(first: QueryResultCopyCell, last: QueryResultCopyCell, columns: readonly ResultColumn[], rows: readonly DataRow[]) {
+  const left = postgresTableCellFilterDraft(first, columns, rows, 'gte');
+  const right = postgresTableCellFilterDraft(last, columns, rows, 'gte');
+  const column = first.column!;
+  if (column !== last.column) throw Error(text.unavailable);
+  const declared = column.type.toUpperCase();
+  const temporal = /^(DATE|TIME|TIMESTAMP)(?:\(\d+\))?(?: WITHOUT TIME ZONE)?$/.exec(declared);
+  const type = temporal ? temporal[1] : declared.replace(/\(\d+,\s*-?\d+\)$/, '');
+  // 避免推断不同偏移、日期显示格式和超出本地比较范围的时间值。
+  if (!temporal && !/^(SMALLINT|INTEGER|BIGINT|NUMERIC|REAL|DOUBLE PRECISION)$/.test(type)) throw Error(text.unavailable);
+  const [value, upperValue] = orderedTableRange({ ...column, type: type === 'TIMESTAMP' && temporal ? 'DATETIME' : type },
+    left.value, right.value, temporal ? undefined : 'postgresql');
+  return { ...left, operator: 'BETWEEN' as const, value, upperValue };
 }
