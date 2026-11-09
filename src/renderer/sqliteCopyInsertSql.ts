@@ -4,7 +4,7 @@ import { sqliteInsertIdentifier, sqliteInsertIdentifierKey } from '../shared/res
 import { sqliteInsertLiteral, sqliteInsertRowWriter, type SqliteValue } from '../shared/sqliteInsertLiteral';
 import { sqliteResultCellMatches } from '../shared/sqliteResultStorage';
 import { assertSqliteStorageTypes, type SqliteTablePage } from '../shared/sqliteTableBrowse';
-import { quoteSqliteIdentifier } from '../shared/sqliteReadSql';
+import { joinSqliteConditions, quoteSqliteIdentifier } from '../shared/sqliteReadSql';
 import { primaryKeyCopyZh as keyText } from './locales/primaryKeyCopy.zh-CN';
 import { updateSqlCopyZh as updateText } from './locales/updateSqlCopy.zh-CN';
 import { ownCell } from './lib';
@@ -56,20 +56,13 @@ export function sqliteCopyPrimaryKeyDraftRows(page: SqliteTablePage, rows: reado
   return sqliteCopyPrimaryKeyQuery(page, indices);
 }
 
-/** 大组条件采用平衡分组，避免默认 1000 层表达式上限拒绝满页查询。 */
-function joinConditions(parts: readonly string[], separator: string): string {
-  if (parts.length <= 32) return parts.join(separator);
-  const middle = Math.floor(parts.length / 2);
-  return '(' + joinConditions(parts.slice(0, middle), separator) + separator + joinConditions(parts.slice(middle), separator) + ')';
-}
-
 export function sqliteCopyPrimaryKeyQuery(page: SqliteTablePage, indices: ReadonlySet<number>): string {
   const columns = primaryKeyColumns(page);
   const prefix = 'SELECT * FROM "main".' + quoteSqliteIdentifier(page.target.table) + '\nWHERE ';
   const separator = '\n   OR ';
   const predicates = copyRows(page, indices, columns, keyText, values => primaryKeyCondition(columns, values),
     separator, utf8.encode(prefix).length + 1);
-  const sql = prefix + joinConditions(predicates, separator) + ';';
+  const sql = prefix + joinSqliteConditions(predicates, separator) + ';';
   if (utf8.encode(sql).length > limits.sqlBytes) throw Error(keyText.limit);
   return sql;
 }
@@ -92,7 +85,7 @@ function primaryKeyColumns(page: SqliteTablePage) {
 
 function primaryKeyCondition(columns: readonly { term: string }[], values: readonly SqliteValue[]): string {
   if (values.includes(null)) throw Error(keyText.incomplete);
-  return '(' + joinConditions(values.map((value, index) => columns[index].term + ' = ' + sqliteInsertLiteral(value)), ' AND ') + ')';
+  return '(' + joinSqliteConditions(values.map((value, index) => columns[index].term + ' = ' + sqliteInsertLiteral(value)), ' AND ') + ')';
 }
 
 export function sqliteCopyUpdateDraftRows(page: SqliteTablePage, rows: readonly SqliteDraftRow[]): string {

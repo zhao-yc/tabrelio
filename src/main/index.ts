@@ -2626,6 +2626,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'sqlite.view.inspectQuery':
     case 'sqlite.countRows':
     case 'sqlite.statistics':
+    case 'sqlite.queryRowSql':
     case 'sqlite.tablePage': {
       if (shuttingDown) throw Error('客户端正在退出，不能开始SQLite表浏览');
       connectionConfig.assertAvailable(input.connectionId);
@@ -2642,8 +2643,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         columnsMain.assertCapturedOwner(columns); const revision = store.connectionRevision();
         columns!.sqliteReadPublication = () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(input.connectionId); if (shuttingDown || store.connectionRevision() !== revision) throw Error('SQLite只读操作的原窗口或连接配置已变化，请重新读取'); };
       }
-      if (command === 'sqlite.tablePage' && input.queryRecord) {
-        const { connectionId, queryRecord: { sessionId } } = input, session = sessions.get(sessionId);
+      if (command === 'sqlite.queryRowSql' || command === 'sqlite.tablePage' && input.queryRecord) {
+        const { connectionId } = input, sessionId = input.queryRecord?.sessionId ?? input.sessionId, session = sessions.get(sessionId);
         const checkSession = () => {
           if (!session?.sqliteOwner || sessions.get(sessionId) !== session || session.connectionId !== connectionId || !columns ||
               !columnsMain.sharesDocumentOwner(session.sqliteOwner, columns)) throw Error('SQLite 原查询会话不属于当前窗口或连接');
@@ -3652,7 +3653,7 @@ else {
         if (sqliteCreateRequest) columns = columnsMain.capture(event);
         const sqliteEditRequest = payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('sqlite.tableEdit.') || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' && 'editing' in payload.input && payload.input.editing === true || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['sqlite.tableEdit.apply', 'sqliteDraftFiles.restore'].includes(tasks.get(payload.input.taskId)?.kind ?? '');
         if (sqliteEditRequest) columns = columnsMain.capture(event);
-        const sqliteQueryRead = payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' &&
+        const sqliteQueryRead = payload.command === 'sqlite.queryRowSql' || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' &&
           'queryRecord' in payload.input && !sqliteEditRequest;
         if (sqliteQueryRead) columns = columnsMain.capture(event);
         if (payload.command === 'search.recordEditRead' ||

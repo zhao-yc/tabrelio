@@ -66,7 +66,7 @@ import { connect, execute, type ManagedConnection } from './connection';
 import { completionQuery } from './completionQuery';
 import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryKeysUnique, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
 import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, mysqlQueryReplaceableColumn, mysqlQueryReplaceColumnsSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
-import { mysqlQueryRowSqlMessages, mysqlQueryRowSqlSchema } from '../shared/mysqlQueryRowSql';
+import { mysqlQueryRowSqlMessages, queryRowSqlSchema } from '../shared/queryRowSql';
 import { buildMysqlQueryRowSql } from './mysqlQueryRowSql';
 import { mysqlResultOriginOpenSchema } from '../shared/mysqlResultOrigins';
 import { MysqlResultOrigins, mysqlResultOriginCatalogAllowed, readMysqlResultOrigin } from './mysqlResultOrigins';
@@ -1970,7 +1970,7 @@ export class Engine {
 
   /** 只在独立只读事务检查来源目录，不获取写权限，也不执行生成的 SQL。 */
   private async prepareMysqlQueryRowSql(input: Input): Promise<CommandMap['mysql.queryRowSql']['output']> {
-    const { profile, ...raw } = input, request = mysqlQueryRowSqlSchema.parse(raw);
+    const { profile, ...raw } = input, request = queryRowSqlSchema.parse(raw);
     const { source, current } = this.queryRelationScope(request);
     if (!profile || !['mysql', 'mariadb'].includes(profile.dialect) || profile.id !== request.connectionId || source.result.truncated)
       throw Error(mysqlQueryRowSqlMessages.source);

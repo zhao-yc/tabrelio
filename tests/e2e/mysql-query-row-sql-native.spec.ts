@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, pageErrors } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
-import { mysqlQueryRowSqlZh as text } from '../../src/renderer/locales/mysqlQueryRowSql.zh-CN';
+import { queryRowSqlZh as text } from '../../src/renderer/locales/queryRowSql.zh-CN';
 import { mysqlQueryRecordEditZh } from '../../src/renderer/locales/mysqlQueryRecordEdit.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 

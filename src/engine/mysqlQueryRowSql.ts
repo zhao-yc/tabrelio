@@ -1,12 +1,12 @@
 import { assertCopyInsertSqlInput, copyInsertNumericLiteral, copyInsertSqlLimits } from '../shared/copyInsertSql';
 import { copyInsertSqlZh } from '../shared/copyInsertSql.zh-CN';
 import type { TableInfo } from '../shared/contracts';
-import { mysqlQueryRowSqlMessages as text, type MysqlQueryRowSqlInput } from '../shared/mysqlQueryRowSql';
+import { mysqlQueryRowSqlMessages as text, type QueryRowSqlInput } from '../shared/queryRowSql';
 import { mysqlQueryKeysUnique, mysqlQueryRelationSelect, type MysqlQueryRelationSource } from './mysqlQueryRelation';
 import { identifier, inlineParameters, qualified, typedCellPlaceholder } from './sql';
 
 /** 只用原执行保存的行与可信列序号。SQL 草稿从不隐式重跑原查询或执行写入。 */
-export function buildMysqlQueryRowSql(source: MysqlQueryRelationSource, info: TableInfo, { kind, rowIndices }: Pick<MysqlQueryRowSqlInput, 'kind' | 'rowIndices'>): string {
+export function buildMysqlQueryRowSql(source: MysqlQueryRelationSource, info: TableInfo, { kind, rowIndices }: Pick<QueryRowSqlInput, 'kind' | 'rowIndices'>): string {
   if (source.result.truncated || info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' ||
       info.database !== source.database || info.name !== source.table) throw Error(text.source);
   const target = qualified(info.database, info.name), keyed = kind !== 'insert', assigns = kind === 'insert' || kind === 'update';

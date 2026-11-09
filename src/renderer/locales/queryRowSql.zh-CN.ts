@@ -1,4 +1,4 @@
-export const mysqlQueryRowSqlZh = {
+export const queryRowSqlZh = {
   open: '生成原表记录 SQL',
   title: '查询结果原表 SQL',
   kind: '语句类型',
@@ -13,4 +13,5 @@ export const mysqlQueryRowSqlZh = {
   copied: '已复制原表记录 SQL',
   draft: '打开查询草稿',
   close: '返回查询结果',
+  stale: '查询原行或字段来源已变化，请重新执行查询。',
 } as const;

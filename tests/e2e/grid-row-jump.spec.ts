@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
@@ -20,6 +21,7 @@ import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/lo
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
 import { sqliteResultOriginsZh as originsText } from '../../src/renderer/locales/sqliteResultOrigins.zh-CN';
+import { queryRowSqlZh as rowSqlText } from '../../src/renderer/locales/queryRowSql.zh-CN';
 import { sqliteRelationZh as relationText } from '../../src/renderer/locales/sqliteRelation.zh-CN';
 import { sqliteReferenceZh as parentText } from '../../src/renderer/locales/sqliteReference.zh-CN';
 import { sqliteIncomingZh as childText } from '../../src/renderer/locales/sqliteIncoming.zh-CN';
@@ -180,6 +182,108 @@ test('SQLite 查询显示原生结果列来源并打开原表', async ({}, info)
   await expect(query.getByRole('gridcell', { name: '记录 1', exact: true })).toBeVisible();
   expect(await executions()).toEqual(before);
   expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 查询原表 SQL 保留存储类型并在只读连接打开草稿', async ({}, info) => {
+  const sql = `SELECT p.id AS 编号,p.tenant,p.note AS 正文,p.note AS 重复,p.raw,p.amount,p.auto_text
+    FROM "records?" p WHERE p.id<9007199254740994 ORDER BY p.id DESC;`;
+  const noKey = 'SELECT note AS 无键正文 FROM no_key;';
+  await seed(sql, `CREATE TABLE "records?" (tenant TEXT COLLATE NOCASE, id INTEGER, note TEXT, raw, amount,
+    auto_text TEXT GENERATED ALWAYS AS (note||'派生') STORED, PRIMARY KEY(tenant,id)) WITHOUT ROWID;
+    INSERT INTO "records?"(tenant,id,note,raw,amount) VALUES
+      ('A',9007199254740992,'旧''值'||char(0)||'尾',X'00FF',1.0),
+      ('A',9007199254740993,'第二行',NULL,9e999),('A',9007199254740994,'范围外','原文本',7);
+    CREATE TABLE no_key(note TEXT, omitted TEXT DEFAULT '默认');
+    INSERT INTO no_key(note) VALUES ('无主键');`, noKey, true);
+  const query = page.locator('.query-tab:visible'), dialog = page.getByRole('dialog', { name: rowSqlText.title, exact: true });
+  const grid = query.locator('.query-result-grid').getByRole('grid'), pre = dialog.locator('pre');
+  const execute = async () => {
+    await query.locator('.query-execute-split > button.primary').click();
+    await expect(query.locator('.tab-status').getByText(/^本次总耗时/)).toBeVisible();
+  };
+  const open = async () => (await navigationMenuItem(query, { name: rowSqlText.open, exact: true })).click();
+  const make = async (kind: string, prefix: string) => {
+    await dialog.getByLabel(rowSqlText.kind, { exact: true }).selectOption(kind);
+    await dialog.getByRole('button', { name: rowSqlText.prepare, exact: true }).click();
+    await expect(pre).toContainText(prefix);
+    return (await pre.textContent())!;
+  };
+  const disk = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+  const read = () => {
+    const statement = disk.prepare('SELECT tenant,id,typeof(raw) AS raw_type,hex(raw) AS raw_hex,typeof(amount) AS amount_type,amount,hex(note) AS note_hex FROM "records?" ORDER BY id');
+    statement.setReadBigInts(true);
+    return statement.all();
+  };
+  try {
+    const original = read();
+    await execute();
+    const sort = grid.getByRole('columnheader').filter({ hasText: /^编号/ });
+    await sort.click();
+    await expect(sort.getByLabel(resultSort.ascending)).toBeVisible();
+    for (const id of ['9007199254740993', '9007199254740992'])
+      await grid.getByRole('gridcell', { name: id, exact: true }).locator('..').getByRole('checkbox').check();
+    await open();
+    await expect(dialog).toContainText(rowSqlText.scope(2));
+    const select = await make('select', 'SELECT * FROM "main"."records?"');
+    const insert = await make('insert', 'INSERT INTO "main"."records?"');
+    const update = await make('update', 'UPDATE "main"."records?"');
+    const remove = await make('delete', 'DELETE FROM "main"."records?"');
+    await expect(dialog.getByText('"main"."records?"', { exact: true })).toBeVisible();
+    expect(insert).toContain('("tenant", "id", "note", "raw", "amount")');
+    expect(insert).toContain('char(0)');
+    expect(insert).toContain("X'00ff'");
+    expect(insert).toContain('1.0');
+    expect(insert).toContain('9e999');
+    expect(update).not.toMatch(/SET "id"|auto_text|重复/);
+    expect(read()).toEqual(original);
+    const clipboard = await readGridMenuClipboard(page, dialog.getByRole('button', { name: rowSqlText.copy, exact: true }));
+    expect(clipboard.text).toBe(remove);
+    await info.attach('SQLite查询结果原表SQL', { body: await page.screenshot(), contentType: 'image/png' });
+    await dialog.getByRole('button', { name: rowSqlText.draft, exact: true }).click();
+    await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('settings.get', {})).tabs
+      .filter(tab => tab.title.endsWith('DELETE 草稿')).map(tab => ({ sql: tab.sql, database: tab.database })))).toEqual([{ sql: remove, database: 'main' }]);
+    expect(read()).toEqual(original);
+
+    disk.exec('BEGIN');
+    try {
+      const statement = disk.prepare(select);
+      statement.setReadBigInts(true);
+      expect(statement.all().map(row => row.id).sort()).toEqual([9007199254740992n, 9007199254740993n]);
+      disk.exec(`UPDATE "records?" SET note='待恢复',raw=0,amount=0 WHERE id<9007199254740994;`);
+      disk.exec(update);
+      expect(read()).toEqual(original);
+      disk.exec(remove);
+      expect(read()).toEqual([original[2]]);
+      disk.exec(insert);
+      expect(read()).toEqual(original);
+    } finally { disk.exec('ROLLBACK'); }
+
+    await page.locator('[data-workspace-tab-id="q-copy-source"]').getByRole('button', { name: '复制来源', exact: true }).click();
+    await execute();
+    await grid.getByRole('gridcell', { name: '无主键', exact: true }).click();
+    await open();
+    await expect(dialog.locator('option')).toHaveText([rowSqlText.insert]);
+    expect(await make('insert', 'INSERT INTO "main"."no_key"')).toBe(`INSERT INTO "main"."no_key" ("note") VALUES ('无主键');`);
+    await dialog.getByRole('button', { name: rowSqlText.close, exact: true }).click();
+
+    const executionId = randomUUID(), session = await page.evaluate(async ({ sql, executionId }) => {
+      const { sessionId } = await window.dbark.invoke('sessions.open', { connectionId: 'row-jump-offline', database: 'main' });
+      await window.dbark.invoke('query.execute', { sessionId, sql, taskId: executionId, maxRows: 10 });
+      return sessionId;
+    }, { sql, executionId });
+    try {
+      disk.exec('CREATE TABLE changed_directory(id INTEGER)');
+      const stale = await page.evaluate(async ({ sessionId, executionId, taskId }) => {
+        try {
+          await window.dbark.invoke('sqlite.queryRowSql', { connectionId: 'row-jump-offline', sessionId, executionId, taskId, kind: 'select', rowIndices: [0] });
+          return '';
+        } catch (error) { return String(error); }
+      }, { sessionId: session, executionId, taskId: randomUUID() });
+      expect(stale).toContain('文件或表结构已变化');
+    } finally { await page.evaluate(sessionId => window.dbark.invoke('sessions.close', { sessionId }), session); }
+    expect(read()).toEqual(original);
+    expect(pageErrors).toEqual([]);
+  } finally { disk.close(); }
 });
 
 test('SQLite 查询从排序后的结果编辑正确原行并拒绝陈旧行', async ({}, info) => {

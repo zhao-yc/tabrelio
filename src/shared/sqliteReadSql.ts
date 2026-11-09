@@ -5,6 +5,14 @@ export const sqliteReadSqlLimits = { utf8Bytes: 4 * 1024 * 1024, utf16Bytes: 2 *
 /** 对准确目录标识符逐个引用；问号、引号与注释marker都仅为名称内容。 */
 export function quoteSqliteIdentifier(name: string): string { return '"' + name.replaceAll('"', '""') + '"'; }
 
+/** 平衡分组使批量主键查询的表达式深度不会随记录数线性增加。 */
+export function joinSqliteConditions(parts: readonly string[], separator: string): string {
+  if (parts.length <= 32) return parts.join(separator);
+  const middle = Math.floor(parts.length / 2);
+  return '(' + joinSqliteConditions(parts.slice(0, middle), separator) + separator +
+    joinSqliteConditions(parts.slice(middle), separator) + ')';
+}
+
 /** 固定关联的唯一谓词编译器；调用方负责同事务核对元数据，永不从SQL文本反向截取WHERE。 */
 export function buildSqliteRelationPredicate(relation: NonNullable<SqliteTablePageInput['relation']>, field: (name: string) => string, render: (parameter: SqliteReadParameter) => string): string {
   if (relation.values.some(value => value.kind === 'null')) return '0';

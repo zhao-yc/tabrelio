@@ -16,6 +16,7 @@ export interface SqliteQueryRecordSource {
   taskId: string;
   identity: SqliteFileIdentity;
   schemaVersion: string;
+  keyed: boolean;
   result: QueryResult;
   origins: readonly SqliteResultColumnOrigin[];
 }
@@ -56,13 +57,15 @@ export function sqliteQueryRecordTable(sql: string): string | undefined {
 /** 同时核对 main 目录修订与临时同名对象，后者可以遮蔽未限定的原表。 */
 export async function sqliteQueryRecordSchema(driver: SqliteDriverSession, table: string): Promise<{ version: string; keys: string[] } | undefined> {
   let row: readonly SqliteValue[] | undefined;
-  await driver.execute("SELECT schema_version, EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE name=? COLLATE NOCASE AND type IN ('table','view')), (SELECT json_group_array(name ORDER BY pk) FROM pragma_table_xinfo(?, 'main') WHERE pk>0) FROM pragma_schema_version",
-    { parameters: [table, table], maxRows: 1, onBatch: batch => { row = batch.rows[0]; } });
+  await driver.execute("SELECT schema_version, EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE name=? COLLATE NOCASE AND type IN ('table','view')), " +
+    "(SELECT json_group_array(name ORDER BY pk) FROM pragma_table_xinfo(?, 'main') WHERE pk>0) FROM pragma_schema_version " +
+    "WHERE EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name=? COLLATE NOCASE AND type='table' AND substr(name,1,7)<>'sqlite_')",
+    { parameters: [table, table, table], maxRows: 1, onBatch: batch => { row = batch.rows[0]; } });
   const [version, shadow, rawKeys] = row ?? [];
   if (!version || typeof version !== 'object' || version.type !== 'integer' ||
       !shadow || typeof shadow !== 'object' || shadow.type !== 'integer' || shadow.value !== '0' || typeof rawKeys !== 'string') return;
   const keys: unknown = JSON.parse(rawKeys);
-  if (Array.isArray(keys) && keys.length && keys.every(key => typeof key === 'string')) return { version: version.value, keys };
+  if (Array.isArray(keys) && keys.every(key => typeof key === 'string')) return { version: version.value, keys };
 }
 
 export interface SqliteQueryRecordPredicate {
@@ -83,6 +86,20 @@ export async function sqliteQueryRecordPredicates(driver: SqliteDriverSession, s
 
 function queryRecordPredicate(source: SqliteQueryRecordSource, index: number, primaryKey: NonNullable<SqliteTablePage['primaryKey']>,
   columns: SqliteTablePage['columns']): SqliteQueryRecordPredicate {
+  const values = sqliteQueryRecordValues(source, index, columns);
+  const parameters: SqliteValue[] = [];
+  const where = sqliteQueryRecordKey(values, primaryKey.map(key => key.name), value => {
+    parameters.push(value);
+    return '?';
+  });
+  return { where, parameters, verify(actual: readonly SqliteValue[]) {
+    if (actual.length !== columns.length || columns.some((column, i) =>
+      values.has(column.name) && JSON.stringify(actual[i]) !== JSON.stringify(values.get(column.name)))) throw blocked();
+  } };
+}
+
+/** 按原生存储类还原直接投影；同一原列的多个别名须给出完全相同的值。 */
+export function sqliteQueryRecordValues(source: SqliteQueryRecordSource, index: number, columns: SqliteTablePage['columns']): Map<string, SqliteValue> {
   const { result, origins } = source;
   const row = result.rows[index], storage = result.sqliteStorage?.rows[index];
   if (!row || storage?.length !== result.columns.length) throw blocked();
@@ -100,17 +117,18 @@ function queryRecordPredicate(source: SqliteQueryRecordSource, index: number, pr
     if (values.has(origin.column) && JSON.stringify(values.get(origin.column)) !== JSON.stringify(value)) throw blocked();
     values.set(origin.column, value);
   }
-  const parameters: SqliteValue[] = [];
-  const where = primaryKey.map(({ name }) => {
+  return values;
+}
+
+/** 比较存储类和原值，避免列排序规则或类型亲和性改变要定位的记录。 */
+export function sqliteQueryRecordKey(values: ReadonlyMap<string, SqliteValue>, keys: readonly string[],
+  parameter: (value: SqliteValue) => string): string {
+  if (!keys.length) throw blocked();
+  return keys.map(name => {
     const value = values.get(name);
     if (value === undefined || value === null) throw blocked();
     const storageClass = typeof value === 'string' ? 'text' : value.type === 'binary' ? 'blob' : value.type;
-    parameters.push(storageClass, value);
     const column = quote(name);
-    return '(typeof(' + column + ')=? AND ' + column + ' COLLATE BINARY IS ?)';
+    return '(typeof(' + column + ')=' + parameter(storageClass) + ' AND ' + column + ' COLLATE BINARY IS ' + parameter(value) + ')';
   }).join(' AND ');
-  return { where, parameters, verify(actual: readonly SqliteValue[]) {
-    if (actual.length !== columns.length || columns.some((column, i) =>
-      values.has(column.name) && JSON.stringify(actual[i]) !== JSON.stringify(values.get(column.name)))) throw blocked();
-  } };
 }

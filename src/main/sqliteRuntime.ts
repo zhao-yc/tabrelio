@@ -14,6 +14,8 @@ import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport
 import { createSqliteProcess } from './sqliteProcess';
 import { SqliteQuerySession } from './sqliteQuerySession';
 import { sqliteQueryRecordPredicates, type SqliteQueryRecordSource } from './sqliteQueryRecord';
+import { readSqliteQueryRowSql } from './sqliteQueryRowSql';
+import { queryRowSqlSchema, type QueryRowSqlInput, type QueryRowSqlOutput } from '../shared/queryRowSql';
 import { readSqliteCompletion } from './sqliteCompletion';
 import { readSqliteCatalogDefinition, readSqliteObjectDefinition, sqliteObjectDefinitionDatabase } from './sqliteObjectDefinition';
 import { StructureSearchPages, type StructureSearchState } from '../engine/structureSearchPages';
@@ -100,7 +102,7 @@ interface QueryTask { kind: 'query'; session: Session; active?: Promise<unknown>
 interface DraftRestoreInput { connectionId: string; taskId: string; draft: SqliteTableDraftDocument; }
 interface BrowseTask {
   assertCurrent?(): void;
-  purpose?: 'relationships' | 'statistics' | 'reference' | 'incoming';
+  purpose?: 'relationships' | 'statistics' | 'reference' | 'incoming' | 'row-sql';
   kind: 'browse'; connection: Connection; cancelled: boolean; boundaryCancelled: boolean; cleaning: boolean;
   resource?: Resource; driver?: SqliteDriverSession; active?: Promise<unknown>; cancelWork?: Promise<void>;
   cleanupFailure?: unknown; cancelFailure?: unknown;
@@ -526,6 +528,18 @@ export class SqliteRuntime {
     const retire = () => { task.active = undefined; this.retireBrowse(input.taskId, task); };
     void work.then(retire, retire); return work;
   }
+  /** SQL 草稿生成走原只读任务账本，取消只作用于本次独立驱动。 */
+  private queryRowSql(raw: unknown): Promise<QueryRowSqlOutput> {
+    const input = queryRowSqlSchema.parse(raw), profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
+    this.assertTarget(connection, profile);
+    if (this.tasks.has(input.taskId)) throw Error('SQLite任务编号已经使用');
+    if ([...this.tasks.values()].filter(task => task.kind === 'browse' && task.purpose === 'row-sql').length >= 2) throw Error('SQLite原表SQL生成任务已达并发上限');
+    const task: BrowseTask = { kind: 'browse', purpose: 'row-sql', connection, cancelled: false, boundaryCancelled: false, cleaning: false };
+    this.tasks.set(input.taskId, task);
+    const work = this.track(connection, () => this.browse(task, input, profile)); task.active = work;
+    const retire = () => { task.active = undefined; this.retireBrowse(input.taskId, task); };
+    void work.then(retire, retire); return work;
+  }
   /** 不同值读取复用准确只读资源账本及取消屏障，不创建用户查询会话或编辑快照。 */
   private valueOptions(source: unknown): Promise<SqliteValueOptionsOutput> {
     const input = sqliteValueOptionsInputSchema.parse(source), profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
@@ -593,23 +607,27 @@ export class SqliteRuntime {
   private browse(task: BrowseTask, input: SqliteReferenceInput, profile: SqliteConnectionProfile): Promise<SqliteReferenceOutput>;
   private browse(task: BrowseTask, input: SqliteIncomingInput, profile: SqliteConnectionProfile): Promise<SqliteIncomingOutput>;
   private browse(task: BrowseTask, input: DraftRestoreInput, profile: SqliteConnectionProfile): Promise<SqliteDraftRestored>;
-  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput | SqliteRowCountInput | SqliteReferenceInput | SqliteIncomingInput | DraftRestoreInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored> {
-    let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | undefined, failed = false, failure: unknown;
+  private browse(task: BrowseTask, input: QueryRowSqlInput, profile: SqliteConnectionProfile): Promise<QueryRowSqlOutput>;
+  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput | SqliteRowCountInput | SqliteReferenceInput | SqliteIncomingInput | DraftRestoreInput | QueryRowSqlInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput> {
+    let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput | undefined, failed = false, failure: unknown;
     const searchPage = 'searchRecordRef' in input ? input : undefined;
     const recordRef = searchPage?.searchRecordRef;
     const recordInput = recordRef ? { connectionId: input.connectionId, taskId: input.taskId, recordRef } : undefined;
     let searchEntry: ReturnType<DataSearchReferences['lookup']> | undefined;
     const queryPage = 'queryRecord' in input ? input : undefined, queryInput = queryPage?.queryRecord;
+    const rowSql = 'executionId' in input ? input : undefined;
     let querySource: SqliteQueryRecordSource | undefined;
     const currentQuerySource = () => {
-      if (!queryInput || !queryPage) return;
-      const session = this.session(queryInput.sessionId);
+      const sessionId = rowSql?.sessionId ?? queryInput?.sessionId;
+      if (!sessionId) return;
+      const session = this.session(sessionId);
       if (session.connection !== task.connection || session.pending || session.userHandoff) throw Error('SQLite 原查询会话不属于当前连接或正在执行');
-      return session.query.queryRecord(queryInput.taskId, queryPage.table, queryPage.editing === true);
+      return rowSql ? session.query.queryRowSqlSource(rowSql.executionId) :
+        session.query.queryRecord(queryInput!.taskId, queryPage!.table, queryPage!.editing === true);
     };
     const aggregate = task.purpose === 'statistics' ? ('column' in input ? 'SQLite字段概况' : 'SQLite匹配行数') : undefined;
     try {
-      this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: 'draft' in input ? '正在只读核验SQLite草稿完整原行' : 'incoming' in input ? input.incoming === 'catalog' ? '正在读取SQLite反向外键目录' : '正在读取SQLite关联子记录' : 'reference' in input ? input.reference === 'catalog' ? '正在读取SQLite外键目录' : '正在读取SQLite父记录' : aggregate ? '正在读取' + aggregate : 'tables' in input ? '正在读取SQLite表关系快照' : 'column' in input ? '正在读取SQLite不同值快照' : '正在读取SQLite只读分页快照' });
+      this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: rowSql ? '正在核对 SQLite 查询记录来源' : 'draft' in input ? '正在只读核验SQLite草稿完整原行' : 'incoming' in input ? input.incoming === 'catalog' ? '正在读取SQLite反向外键目录' : '正在读取SQLite关联子记录' : 'reference' in input ? input.reference === 'catalog' ? '正在读取SQLite外键目录' : '正在读取SQLite父记录' : aggregate ? '正在读取' + aggregate : 'tables' in input ? '正在读取SQLite表关系快照' : 'column' in input ? '正在读取SQLite不同值快照' : '正在读取SQLite只读分页快照' });
       this.browseCheck(task);
       querySource = currentQuerySource();
       if (recordInput) {
@@ -625,6 +643,7 @@ export class SqliteRuntime {
       this.browseCheck(task);
       const control = { check: () => this.browseCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: (reason: unknown) => { task.cleanupFailure = reason; } };
       if ('draft' in input) value = await this.edits.restoreDraft(task.driver, input.draft, profile, control);
+      else if ('executionId' in input) value = await readSqliteQueryRowSql(task.driver, querySource!, input, control);
       else if ('incoming' in input) value = await readSqliteIncoming(task.driver, input, control);
       else if ('reference' in input) value = await readSqliteReference(task.driver, input, control);
       else if ('tables' in input) value = await readSqliteRelationships(task.driver, input, control);
@@ -670,7 +689,7 @@ export class SqliteRuntime {
       try { this.options.emit({ taskId: input.taskId, status: cancelled ? 'cancelled' : 'failed', progress: 0, message: cancelled ? 'SQLite表浏览已取消' : failure instanceof Error ? failure.message : 'SQLite表浏览失败' }); } catch { /* 保留原只读结果/资源事实，不因终态通知异常重试。 */ }
       throw failure;
     }
-    try { this.options.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows: value && 'source' in value ? value.page?.result.rows.length : value && 'tables' in value ? value.tables.length : value && 'values' in value ? value.values.length : value && 'result' in value ? value.result.rows.length : undefined, message: 'draft' in input ? 'SQLite草稿原行只读核验完成，尚未提交任何修改' : 'incoming' in input ? 'SQLite关联子记录只读浏览完成' : 'reference' in input ? 'SQLite外键只读浏览完成' : aggregate ? aggregate + '读取完成' : 'tables' in input ? 'SQLite表关系读取完成' : 'column' in input ? 'SQLite不同值读取完成' : 'SQLite只读分页读取完成' }); } catch { /* 数据及准确资源终态已确认，不重放查询。 */ }
+    try { this.options.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows: value && 'source' in value ? value.page?.result.rows.length : value && 'tables' in value ? value.tables.length : value && 'values' in value ? value.values.length : value && 'result' in value ? value.result.rows.length : undefined, message: rowSql ? 'SQLite 查询记录 SQL 已生成' : 'draft' in input ? 'SQLite草稿原行只读核验完成，尚未提交任何修改' : 'incoming' in input ? 'SQLite关联子记录只读浏览完成' : 'reference' in input ? 'SQLite外键只读浏览完成' : aggregate ? aggregate + '读取完成' : 'tables' in input ? 'SQLite表关系读取完成' : 'column' in input ? 'SQLite不同值读取完成' : 'SQLite只读分页读取完成' }); } catch { /* 数据及准确资源终态已确认，不重放查询。 */ }
     return value!;
   }
   /** 打开中没有driver时也只终止本任务准确transport，并等待其真实exit而非猜测PID。 */
@@ -1398,6 +1417,7 @@ export class SqliteRuntime {
         if (!input.claim?.synchronization && !input.claim?.batch) throw Error('SQLite 同步缺少准确的比较预览');
         return this.tableEditApply(input.request, input.claim);
       case 'sqlite.tablePage': return this.tablePage(input);
+      case 'sqlite.queryRowSql': return this.queryRowSql(input);
       case 'sqlite.valueOptions': return this.valueOptions(input);
       case 'sqlite.statistics': return this.statistics(input);
       case 'sqlite.countRows': return this.statistics(input, true);

@@ -67,9 +67,17 @@ export class SqliteQuerySession {
 
   /** 只允许使用本会话最新成功结果的原始行位置，外部不能提交列值或定位 SQL。 */
   queryRecord(taskId: string, table: string, editing = true): SqliteQueryRecordSource {
+    const source = this.queryRowSqlSource(taskId);
+    if (!source.keyed || source.table !== table || editing && this.driver.readOnly)
+      throw Error('SQLite 原查询结果已失效或当前会话有事务，请重新查询');
+    return source;
+  }
+
+  /** SQL 生成可读取无键投影或只读会话，仍要求当前执行且没有活动事务。 */
+  queryRowSqlSource(taskId: string): SqliteQueryRecordSource {
     this.available(this.sessionId);
     const source = this.recordSource;
-    if (!source || source.taskId !== taskId || source.table !== table || this.driver.transaction !== false || editing && this.driver.readOnly)
+    if (!source || source.taskId !== taskId || this.driver.transaction !== false)
       throw Error('SQLite 原查询结果已失效或当前会话有事务，请重新查询');
     return source;
   }
@@ -274,11 +282,14 @@ export class SqliteQuerySession {
       if (schema && candidate && identity && table && results.length === 1 && results[0].rows.length &&
           outcome.transaction === false && foldSqliteCompletionName(table) === foldSqliteCompletionName(candidate) &&
           original?.every(origin => origin?.database === 'main' && origin.table === table) &&
-          schema.keys.every(key => original.some(origin => origin?.column === key)) &&
           (await sqliteQueryRecordSchema(this.driver, candidate).catch(() => undefined))?.version === schema.version && !operation.cancelled)
-        this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schema.version, result: results[0], origins: original };
+        this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schema.version, result: results[0], origins: original,
+          keyed: schema.keys.length > 0 && schema.keys.every(key => original.some(origin => origin?.column === key)) };
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
-      return { ...completed, ...displayTitles(results.length), ...(this.recordSource ? { sqliteQueryRecordTable: this.recordSource.table } : {}), elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
+      return { ...completed, ...displayTitles(results.length),
+        ...(this.recordSource?.keyed ? { sqliteQueryRecordTable: this.recordSource.table } : {}),
+        ...(this.recordSource && !this.recordSource.result.truncated ? { sqliteQueryRowSql: true as const } : {}),
+        elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {
       const cancelled = reason instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(reason.code);
       const message = options.explainView && this.driver.readOnly && reason instanceof SqliteDriverError && reason.code === 'SQLITE_NATIVE_23'

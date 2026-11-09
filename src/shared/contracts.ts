@@ -115,6 +115,7 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   sqliteResultReceipts?: { statementOrdinal?: number; producedRows: number; changedRows: number; sourceRange: import('./queryFailure').QueryFailureSourceRange }[];
   /** 最新一次可回查的单表结果目标，读取和编辑均须由 Main 校验原行和主键。 */
   sqliteQueryRecordTable?: string;
+  sqliteQueryRowSql?: true;
   /** 仅本次 SQLite 完整结果使用，结果及列均按原序号对应；空项表示未取得原生来源。 */
   sqliteResultOrigins?: (SqliteResultColumnOrigin[] | null)[];
 }
@@ -324,8 +325,10 @@ export interface CommandMap {
     output: { info: TableInfo; rows: DataRow[]; token: string; columns: string[] } };
   'mysql.queryReplaceColumns': { input: import('./mysqlQueryRelation').MysqlQueryReplaceColumnsInput;
     output: import('./mysqlQueryRelation').MysqlQueryReplaceColumn[] };
-  'mysql.queryRowSql': { input: import('./mysqlQueryRowSql').MysqlQueryRowSqlInput;
-    output: { database: string; table: string; sql: string } };
+  'mysql.queryRowSql': { input: import('./queryRowSql').QueryRowSqlInput;
+    output: import('./queryRowSql').QueryRowSqlOutput };
+  'sqlite.queryRowSql': { input: import('./queryRowSql').QueryRowSqlInput;
+    output: import('./queryRowSql').QueryRowSqlOutput };
   'mysql.resultOriginOpen': { input: import('./mysqlResultOrigins').MysqlResultOriginOpenInput;
     output: { database: string; table: string } };
   'postgres.resultOrigins': { input: import('./postgresResultOrigins').PostgresResultOriginsInput; output: import('./postgresResultOrigins').PostgresResultOrigin[] };
