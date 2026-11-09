@@ -1,11 +1,12 @@
 import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRecord';
 import { postgresResultOriginsZh as queryText } from '../locales/postgresResultOrigins.zh-CN';
 import { useEffect, useRef, useState } from 'react';
-import { postgresTablePreviewSchema, type PostgresTablePage, type PostgresTablePreview } from '../../shared/postgresTable';
-import { errorMessage, invoke, uid } from '../lib';
+import { postgresTablePreviewSchema, type PostgresTableColumn, type PostgresTablePage, type PostgresTablePreview } from '../../shared/postgresTable';
+import { errorMessage, invoke, ownCell, uid } from '../lib';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { useWorkspace } from '../store';
+import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { PostgresRecordForm, type PostgresEditableRecord } from './PostgresRecordFields';
 import { ErrorBox, Modal, Spinner } from './ui';
 
@@ -18,12 +19,17 @@ interface BaseProps {
 }
 
 type QueryRecord = Pick<PostgresQueryRecordPageInput, 'sessionId' | 'executionId' | 'rowIndex'>;
-type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: never; isCurrent?: never } |
-  { table?: never; recordRef?: never; queryRecord: QueryRecord; isCurrent(): boolean });
+export interface PostgresQueryCellEdit {
+  columnIndex: number;
+  anchor: HTMLElement;
+  typed?: string;
+}
+type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: never; cell?: never; visible?: never; isCurrent?: never } |
+  { table?: never; recordRef?: never; queryRecord: QueryRecord; cell?: PostgresQueryCellEdit; visible: boolean; isCurrent(): boolean });
 
 /** 独立于工作台表页的单行编辑，迟到的快照与提交回执分别清理和报告。 */
 export function PostgresSearchRecordEditDialog(props: Props) {
-  const { connectionId, database, table: initialTable, recordRef, focusColumn, queryRecord } = props;
+  const { connectionId, database, table: initialTable, recordRef, focusColumn, queryRecord, cell } = props;
   const [table, setTable] = useState(initialTable ?? '');
   const labels = queryRecord ? { title: queryText.edit, hint: queryText.editHint, stale: queryText.editStale, back: queryText.editBack, discard: queryText.editDiscard }
     : { title: text.edit, hint: text.postgresEditHint, stale: text.postgresEditStale, back: text.editBack, discard: text.editDiscard };
@@ -35,6 +41,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
     return { profile: state.connections.find(item => item.id === connectionId), version: state.connectionVersions[connectionId] ?? 0 };
   });
   const [page, setPage] = useState<PostgresTablePage & { pageToken: string }>();
+  const [inline, setInline] = useState<{ column: PostgresTableColumn; raw: string | null }>();
   const [draft, setDraft] = useState<PostgresEditableRecord>(), [preview, setPreview] = useState<PostgresTablePreview>();
   const [form, setForm] = useState(false), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [frozen, setFrozen] = useState(false), [confirmed, setConfirmed] = useState(false);
@@ -61,13 +68,24 @@ export function PostgresSearchRecordEditDialog(props: Props) {
         if (!current()) throw Error(labels.stale);
         const loaded = queryRecord
           ? await invoke('postgres.queryRecordPage', { connectionId, database, tabId, ...queryRecord })
-          : { table: initialTable!, page: await invoke('postgres.table.page', { ...target, searchRecordRef: recordRef, limit: 1, offset: 0 }) };
+          : { table: initialTable!, page: await invoke('postgres.table.page', { ...target, searchRecordRef: recordRef, limit: 1, offset: 0 }), columnKeys: [] };
         const result = loaded.page;
         if (result.pageToken && (!active || !current() || result.rows.length !== 1 ||
             result.truncated || result.hasNext || !result.capabilities.update || result.capabilities.insert || result.capabilities.delete))
           await release({ pageToken: result.pageToken, table: loaded.table });
         else if (result.pageToken) {
           token.current = { pageToken: result.pageToken, table: loaded.table };
+          if (cell) {
+            const key = loaded.columnKeys[cell.columnIndex];
+            const column = result.columns.find(item => item.key === key);
+            const raw = column && ownCell(result.rows[0], column.key);
+            if (!column || column.generated || column.binary || (raw !== null && typeof raw !== 'string')) {
+              void release(token.current);
+              token.current = undefined;
+              throw Error(queryText.cellReadOnly);
+            }
+            setInline({ column, raw });
+          }
           setTable(loaded.table);
           setPage({ ...result, pageToken: result.pageToken });
           setForm(true);
@@ -86,7 +104,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       if (token.current) { void release(token.current); token.current = undefined; }
       callbacks.current.onDirty(false);
     };
-  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId]);
+  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId, cell]);
 
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
@@ -106,7 +124,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
     if (!page || !current() || change.kind !== 'update') throw Error(labels.stale);
     const request = { ...target, pageToken: page.pageToken, changes: [change] };
     postgresTablePreviewSchema.parse(request);
-    setDraft(change); setForm(false); setConfirmed(false);
+    setDraft(change); setForm(false); setPreview(undefined); setConfirmed(false);
     void run(async () => {
       const next = await invoke('postgres.table.preview', request);
       if (!current()) throw Error(labels.stale);
@@ -137,6 +155,18 @@ export function PostgresSearchRecordEditDialog(props: Props) {
     });
   }
 
+  if (page && form && cell && inline) {
+    const { column, raw } = inline;
+    const saved = draft?.fields[0]?.value;
+    const initial: PostgresInlineCellValue = saved && saved.mode !== 'binary' ? saved : raw === null ? { mode: 'null' } : { mode: 'text', value: raw };
+    return <PostgresInlineCellEditor anchor={cell.anchor} column={column} originalText={raw ?? ''} initial={initial}
+      typed={draft ? undefined : cell.typed} visible={props.visible} onCancel={() => draft ? setForm(false) : close()}
+      onStage={value => {
+        if (!draft && (value.mode === 'null' && raw === null || value.mode === 'text' && value.value === raw)) { close(); return; }
+        stage({ kind: 'update', row: 0, fields: [{ column: column.key, value }] });
+      }}/>;
+  }
+
   if (page && form) return <PostgresRecordForm page={page} row={0} initial={draft} initialFocus={focusColumn}
     current={() => current() && !pending.current} onSave={stage} onClose={() => draft ? setForm(false) : close()}/>;
 
@@ -156,7 +186,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
     </div>
     <footer className="modal-footer">
       <button disabled={busy} onClick={close}>{labels.back}</button>
-      {draft && !frozen && <button disabled={busy} onClick={() => { setPreview(undefined); setForm(true); }}>{tableText.edit}</button>}
+      {draft && !frozen && <button disabled={busy} onClick={() => { setConfirmed(false); setForm(true); }}>{tableText.edit}</button>}
       {preview && <button className="primary" disabled={busy || frozen || !confirmed} onClick={apply}>{tableText.apply}</button>}
     </footer>
   </Modal>;

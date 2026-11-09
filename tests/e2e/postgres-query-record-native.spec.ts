@@ -8,7 +8,7 @@ import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_POSTGRES_QUERY_RECORD_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
 
-test('PostgreSQL 查询原记录按排序后的选中行定位，预览确认后提交并拒绝陈旧原值', async ({}, info) => {
+test('PostgreSQL 查询单元格按原行及原列定位，预览确认后提交并拒绝陈旧原值', async ({}, info) => {
   const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '', user = process.env.DBARK_POSTGRES_TEST_USER;
   const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
   if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) || user !== database ||
@@ -28,7 +28,7 @@ test('PostgreSQL 查询原记录按排序后的选中行定位，预览确认后
       const settings = await window.dbark.invoke('settings.get', {});
       await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'pg-query-record',
         tabs: [{ id: 'pg-query-record', title: '原记录查询', kind: 'query', connectionId, database,
-          sql: 'SELECT id AS 编号, detail AS 名称, payload FROM public.record_subject ORDER BY id DESC;' }] });
+          sql: 'SELECT id AS 编号, detail AS 同名, payload AS 同名 FROM public.record_subject ORDER BY id DESC;' }] });
     }, { connectionId, database });
     await page.reload();
     const query = page.locator('.postgres-query:visible');
@@ -53,7 +53,27 @@ test('PostgreSQL 查询原记录按排序后的选中行定位，预览确认后
       await form.getByRole('button', { name: tableText.stage, exact: true }).click();
       await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."record_subject"');
     };
-    await stage('确认后更新');
+    const original = cell('原内容');
+    const editor = page.getByRole('region', { name: tableText.cellEdit('detail'), exact: true });
+    const input = editor.getByRole('textbox', { name: tableText.value, exact: true });
+    await original.press('F2');
+    await expect(input).toHaveValue('原内容');
+    await expect(input).toBeFocused();
+    await input.press('Escape');
+    await expect(editor).toBeHidden();
+    await expect(original).toBeFocused();
+
+    await original.dblclick();
+    await expect(input).toBeFocused();
+    await input.fill('确认后更新');
+    await info.attach('PostgreSQL查询结果就地编辑', { body: await page.screenshot(), contentType: 'image/png' });
+    await input.press('Enter');
+    await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."record_subject" SET "detail" = $1');
+    await preview.getByRole('button', { name: tableText.edit, exact: true }).click();
+    await expect(input).toHaveValue('确认后更新');
+    await input.fill('取消二次编辑');
+    await input.press('Escape');
+    await expect(preview.locator('dd')).toHaveText('确认后更新');
     expect((await read()).map(row => row.detail)).toEqual(['另一行', '原内容']);
     const before = await executions();
     const apply = preview.getByRole('button', { name: tableText.apply, exact: true });

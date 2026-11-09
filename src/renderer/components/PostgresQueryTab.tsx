@@ -1,4 +1,4 @@
-import { PostgresSearchRecordEditDialog } from './PostgresSearchRecordEditDialog';
+import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit } from './PostgresSearchRecordEditDialog';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
 import { postgresResultOriginsZh as originsText } from '../locales/postgresResultOrigins.zh-CN';
@@ -12,7 +12,7 @@ import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { formatSqlEditor } from '../sqlFormatting';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
-import type { PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData } from '../../shared/contracts';
+import type { DataRow, PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
 import { ResultArchiveDialog } from './ResultArchiveDialog';
 import { resultArchiveZh as archiveText } from '../locales/resultArchive.zh-CN';
@@ -25,7 +25,7 @@ import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import { queryResultPresetValueSchema, type QueryResultPresetValue } from '../../shared/queryResultPresets';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
 import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from '../store';
-import { invoke, uid, errorMessage } from '../lib';
+import { invoke, uid, errorMessage, ownCell } from '../lib';
 import { postgresZh as text } from '../locales/postgres.zh-CN';
 import { formatText, zh } from '../locales/zh-CN';
 import { pinLimits, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
@@ -291,6 +291,7 @@ export function PostgresQueryTab({
   const [recordEdit, setRecordEdit] = useState<{
     source: { sessionId: string; executionId: string; rowIndex: number };
     result: QueryResult; scope: Scope; job: ReturnType<typeof acquireWorkspaceBusy>;
+    cell?: PostgresQueryCellEdit;
   }>();
   const retiredRecordExecution = useRef<string | undefined>(undefined);
   useEffect(() => () => { recordEdit?.job.release(); }, [recordEdit]);
@@ -1278,14 +1279,24 @@ export function PostgresQueryTab({
   const recordExecution = !pin && state.transactionKnown && !state.transactionOpen &&
     outcome?.postgresQueryRecordExecution !== retiredRecordExecution.current ? outcome?.postgresQueryRecordExecution : undefined;
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
-  function openQueryRecord() {
+  function openQueryRecord(row: DataRow, cell?: PostgresQueryCellEdit): boolean {
     const original = session.current;
-    if (!recordExecution || !original || !result || !activeDetailRow || activeDetailRow.binding !== detailBinding ||
-        !rowDetailCurrent(detailBinding)) return;
-    const rowIndex = result.rows.indexOf(activeDetailRow.binding.rows[activeDetailRow.index]);
-    if (rowIndex < 0) return;
+    if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding)) return false;
+    const rowIndex = result.rows.indexOf(row);
+    if (rowIndex < 0) return false;
     const job = acquireWorkspaceBusy(tab.id);
-    setRecordEdit({ result, scope, job, source: { sessionId: original.id, executionId: recordExecution, rowIndex } });
+    setRecordEdit({ result, scope, job, cell, source: { sessionId: original.id, executionId: recordExecution, rowIndex } });
+    return true;
+  }
+
+  function editQueryCell(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
+    const column = cell.column;
+    if (!column || detailBinding?.rows[cell.index] !== cell.row || column.type.toLowerCase() === 'bytea') return false;
+    const raw = ownCell(cell.row, column.key);
+    if (raw !== null && typeof raw !== 'string') return false;
+    const columnIndex = result?.columns.findIndex(item => item.key === column.key) ?? -1;
+    if (columnIndex < 0) return false;
+    return openQueryRecord(cell.row, { columnIndex, anchor, typed });
   }
   /** 侧栏翻行只访问当前显示行，旧侧栏回调必须通过同一视图校验。 */
   function moveRowDetail(view: QueryRowDetailsView, index: number) {
@@ -2052,7 +2063,10 @@ export function PostgresQueryTab({
                 <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
                 {recordExecution && <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
-                  onClick={openQueryRecord}>{originsText.edit}</button>}
+                  title={originsText.cellHint} onClick={() => {
+                    if (activeDetailRow && activeDetailRow.binding === detailBinding)
+                      openQueryRecord(activeDetailRow.binding.rows[activeDetailRow.index]);
+                  }}>{originsText.edit}</button>}
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
                   onClick={() => openResultFilter()}>{filterText.open}</button>
                 {!!filterView?.rules.length && <>
@@ -2106,7 +2120,7 @@ export function PostgresQueryTab({
               !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
               result.columns.length ? (
                 <div className="query-result-with-details">
-                  <div className="query-result-grid">
+                  <div className="query-result-grid" inert={!!recordEdit?.cell}>
                     <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
                       frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
                       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
@@ -2117,6 +2131,7 @@ export function PostgresQueryTab({
                         setExportView({ result, selected: false, scope: 'rectangle' });
                       } : undefined}
                       onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
+                      onCellEdit={recordExecution ? editQueryCell : undefined}
                       filterDialect="postgresql"
                       onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
                       onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
@@ -2180,6 +2195,7 @@ export function PostgresQueryTab({
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
       {recordEdit && <PostgresSearchRecordEditDialog connectionId={tab.connectionId} database={recordEdit.scope.database} queryRecord={recordEdit.source}
+        cell={recordEdit.cell} visible={workspace.settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && same(recordEdit.scope) && session.current?.id === recordEdit.source.sessionId &&
           selectedResultRef.current === recordEdit.result && !closeRef.current && useWorkspace.getState().settings.activeTabId === tab.id}
         onDirty={() => { /* 原编辑窗口全程持有标签占用，放弃草稿由对话框确认。 */ }}
@@ -2190,6 +2206,10 @@ export function PostgresQueryTab({
           }
           recordEdit.job.release();
           setRecordEdit(undefined);
+          const anchor = recordEdit.cell?.anchor;
+          if (anchor) requestAnimationFrame(() => {
+            if (anchor.isConnected && useWorkspace.getState().settings.activeTabId === tab.id) anchor.focus({ preventScroll: true });
+          });
         }}/>}
       {originsView && <PostgresResultOriginsDialog result={originsView.result} origins={originsView.origins} error={originsView.error}
         onClose={() => { if (originsOwner.current?.token === originsView.token) closeOrigins(); }} onOpen={index => {

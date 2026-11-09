@@ -11,6 +11,8 @@ export const postgresResultOriginsZh = {
   openRelation: '打开来源对象',
   openLabel: (name: string, position: number) => `打开来源对象 ${name}（第 ${position} 列）`,
   edit: '编辑查询原记录',
+  cellHint: '也可双击文本单元格，或选中后按 F2，就地编辑该字段。',
+  cellReadOnly: '此字段无法在结果网格就地编辑。可返回查询结果并打开原记录表单。',
   editHint: '核对完整主键和查询已返回字段后读取原记录。修改需要预览并确认提交。',
   editStale: 'PostgreSQL 原查询结果或连接已变化，请重新查询。',
   editBack: '返回查询结果',

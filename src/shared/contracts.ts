@@ -306,7 +306,7 @@ export interface CommandMap {
   'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetProfile };
   'postgres.queryRecordPage': { input: import('./postgresQueryRecord').PostgresQueryRecordPageInput;
-    output: { table: string; page: import('./postgresTable').PostgresTablePage } };
+    output: { table: string; page: import('./postgresTable').PostgresTablePage; columnKeys: (string | null)[] } };
   'postgres.resultOrigins': { input: import('./postgresResultOrigins').PostgresResultOriginsInput; output: import('./postgresResultOrigins').PostgresResultOrigin[] };
   'postgres.completion': { input: import('./postgresCompletion').PostgresCompletionInput; output: import('./postgresCompletion').PostgresCompletionResult };
   'postgres.storage.read': { input: import('./postgresStorage').PostgresStorageRead; output: import('./postgresStorage').PostgresStorageReport };

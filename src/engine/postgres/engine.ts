@@ -1289,7 +1289,9 @@ export class PostgresEngine {
             table: resolved.table, tabId: request.tabId };
           const page = await this.tables.searchEdit(target, action => action(connection),
             (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, request.rowIndex, resolved, relation), current);
-          return { table: resolved.table, page };
+          // 结果可以重复使用同一个别名，原表字段键只按已核验的来源位置返回。
+          const keys = new Map(page.columns.map(column => [column.name, column.key]));
+          return { table: resolved.table, page, columnKeys: resolved.columns.map(name => keys.get(name) ?? null) };
         });
       }
       case 'postgres.resultOrigins': {
