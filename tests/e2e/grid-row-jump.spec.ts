@@ -1491,9 +1491,21 @@ test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async
   expect(pageErrors).toEqual([]);
 });
 
+/** 使用应用允许的最小原生尺寸复现工具条折行。 */
+async function compactSqliteWindow(): Promise<void> {
+  const bounds = await desktop.evaluate(({ BrowserWindow }) => {
+    const windows = BrowserWindow.getAllWindows();
+    if (windows.length !== 1) throw Error('SQLite 测试需要唯一原生窗口');
+    windows[0].setBounds({ width: 1024, height: 680 });
+    return windows[0].getBounds();
+  });
+  expect(bounds).toMatchObject({ width: 1024, height: 680 });
+}
+
 test('SQLite 表和视图从单列选区包含或排除原值，按明确应用读取服务器页', async ({}, info) => {
   await seed(undefined, "UPDATE subject SET name = NULL WHERE id=1; UPDATE subject SET name='' WHERE id IN (2,4,120);" +
     "UPDATE subject SET name='NULL' WHERE id=3;");
+  await compactSqliteWindow();
   const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
   for (const [tab, title, typed] of [['t-jump', '表格定位', true], ['v-jump', '视图定位', false]] as const) {
     await page.locator('[data-workspace-tab-id="' + tab + '"]').getByRole('button', { name: title, exact: true }).click();
@@ -1501,6 +1513,15 @@ test('SQLite 表和视图从单列选区包含或排除原值，按明确应用�
     const id = (value: number) => grid.getByRole('gridcell', { name: (typed ? 'INTEGER · ' : '') + value, exact: true });
     const note = (value: number) => id(value).locator('..').getByRole('gridcell').last();
     await expect(id(1)).toBeVisible();
+    if (!typed) {
+      await (await navigationMenuItem(table.locator('.toolbar'), { name: layoutText.entry, exact: true })).click();
+      const layout = page.getByRole('dialog', { name: layoutText.title, exact: true });
+      await layout.getByRole('combobox', { name: heightText.label, exact: true }).selectOption('56');
+      await layout.getByRole('button', { name: tableGridZh.save, exact: true }).click();
+      await layout.locator('footer').getByRole('button', { name: zh.common.close, exact: true }).click();
+      await expect(layout).toHaveCount(0);
+      await expect(grid).toHaveClass(/grid-row-height-56/);
+    }
     await id(3).locator('..').getByRole('checkbox').check();
     const before = await tasks();
     await note(1).click();
@@ -1523,6 +1544,17 @@ test('SQLite 表和视图从单列选区包含或排除原值，按明确应用�
       await expect(id(3)).toBeVisible();
       await expect(id(5)).toBeVisible();
       for (const excluded of [1, 2, 4]) await expect(id(excluded)).toHaveCount(0);
+      await expect.poll(() => grid.evaluate(element => element.clientHeight)).toBeGreaterThanOrEqual(164);
+      await note(5).scrollIntoViewIfNeeded();
+      await expect.poll(() => grid.locator('.rdg-row').evaluateAll(rows => rows.slice(0, 2).map(row => {
+        const cell = Array.from(row.querySelectorAll('[role="gridcell"]')).at(-1)!;
+        const { left, top, width, height } = cell.getBoundingClientRect();
+        return cell.contains(document.elementFromPoint(left + width / 2, top + height / 2));
+      }))).toEqual([true, true]);
+      await note(3).click({ button: 'right' });
+      await expect(page.getByRole('menuitem', { name: tableCellFilterZh.endsWith, exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await info.attach('SQLite最小窗口只读视图大行高', { body: await page.screenshot(), contentType: 'image/png' });
     }
     expect(await tasks()).toHaveLength(before.length + 1);
   }
@@ -1531,6 +1563,7 @@ test('SQLite 表和视图从单列选区包含或排除原值，按明确应用�
 
 test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', async ({}, info) => {
   await seed(undefined, "UPDATE subject SET name='A%_' WHERE id=1; UPDATE subject SET name='前A%_' WHERE id=120; UPDATE subject SET name='a%_' WHERE id=2; UPDATE subject SET name='A%_后' WHERE id=3;");
+  await compactSqliteWindow();
   const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
   await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
   const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
@@ -1550,8 +1583,11 @@ test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', asyn
   await expect(id(2)).toHaveCount(0);
   expect(await tasks()).toHaveLength(before.length + 1);
   await expect(id(3)).toBeVisible();
-  await (await navigationMenuItem(table.locator('.toolbar'), { name: browseText.conditions, exact: true })).click();
-  await expect(table.getByLabel(browseText.filterOperator(1), { exact: true })).toHaveCount(0);
+  // 已有筛选保持展开，按钮换行时数据格仍须有真实的点击区域。
+  await expect(table.getByLabel(browseText.filterOperator(1), { exact: true })).toHaveValue('contains');
+  await expect.poll(() => grid.evaluate(element => element.clientHeight), { timeout: 3000 }).toBeGreaterThanOrEqual(112);
+  await note.scrollIntoViewIfNeeded();
+  await info.attach('SQLite最小窗口展开筛选后原格可点击', { body: await page.screenshot(), contentType: 'image/png' });
   await note.click({ button: 'right' });
   await page.getByRole('menuitem', { name: tableCellFilterZh.endsWith, exact: true }).click();
   const suffixOperator = table.getByLabel(browseText.filterOperator(2), { exact: true });

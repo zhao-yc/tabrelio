@@ -1,7 +1,8 @@
 .sqlite-table-tab { min-width: 0; }
+.sqlite-browse-body { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden auto; }
 .sqlite-browse-hint { margin: 0; padding: 7px 12px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line-soft); }
 /* 条件内容可在自己的视区滚动；窄／矮工作区让出网格空间，不能把数据行挤到固定底栏下。 */
-.sqlite-browse-conditions { flex-shrink: 1; min-height: 0; max-height: 300px; overflow: auto; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
+.sqlite-browse-conditions { flex-shrink: 1; min-height: 36px; max-height: 300px; overflow: auto; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
 .sqlite-browse-conditions fieldset { margin: 6px 0; padding: 8px; border: 1px solid var(--line-soft); border-radius: 5px; }
 .sqlite-browse-conditions select, .sqlite-browse-conditions input { min-width: 80px; padding: 5px 7px; }
 .sqlite-browse-conditions input[type=number] { width: 84px; margin: 0 8px; }
@@ -19,11 +20,37 @@
 .sqlite-browse-rule input[type=checkbox] { flex: none; min-width: 0; width: 14px; padding: 0; }
 .sqlite-browse-list { flex-basis: 100%; min-width: 0; }
 .sqlite-browse-list-value { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
-/* 至少保留列头、两行和横向滚动条；筛选面板先缩小，编辑与分页底栏仍在正常文档流中。 */
-.sqlite-browse-result { flex: 1; min-height: 128px; overflow: hidden; }
-/* 编辑网格上方还有跳行和复制按钮，展开筛选时一并给它们预留高度。 */
-.sqlite-browse-result:has(> .sqlite-edit-clipboard-region) { min-height: 144px; }
+/* 单独预留列头、两行及滚动条的空间。工具条换行时用自己的滚动区，外层空间不足时再滚动内容区。 */
+.sqlite-browse-result {
+  --sqlite-data-row-height: 32px;
+  --sqlite-grid-min-height: calc(42px + 2 * var(--sqlite-data-row-height) + 10px);
+  --sqlite-grid-actions-min-height: 36px;
+  --sqlite-grid-find-min-height: 0px;
+  flex: 1;
+  min-height: calc(var(--sqlite-grid-min-height) + var(--sqlite-grid-actions-min-height) + var(--sqlite-grid-find-min-height));
+  overflow: hidden;
+}
+.sqlite-browse-result:has(.grid-row-height-24) { --sqlite-data-row-height: 24px; }
+.sqlite-browse-result:has(.grid-row-height-56) { --sqlite-data-row-height: 56px; }
+.sqlite-browse-result:has(.query-result-find-region) { --sqlite-grid-find-min-height: 36px; }
 .sqlite-browse-result > .results-grid { height: 100%; }
+.sqlite-browse-result .query-result-grid { display: flex; flex-direction: column; }
+.sqlite-browse-result .query-result-copy-region { flex: 1; height: auto; }
+.sqlite-browse-result .query-result-find-region {
+  min-height: calc(var(--sqlite-grid-min-height) + var(--sqlite-grid-find-min-height));
+  overflow: auto;
+}
+.sqlite-browse-result .query-result-find-grid { flex: 1 0 var(--sqlite-grid-min-height); }
+.sqlite-browse-result :is(.sqlite-edit-clipboard-region, .query-result-grid) > .results-grid {
+  flex: 1 0 var(--sqlite-grid-min-height);
+  height: 0;
+  min-height: 0;
+}
+.sqlite-browse-result :is(.sqlite-grid-row-jump, .query-result-copy-actions) {
+  flex: 0 1 auto;
+  min-height: var(--sqlite-grid-actions-min-height);
+  overflow: auto;
+}
 /* 窄侧栏工作区把底部完整操作移至下一行，计数不能被压成竖排或溢出到分页／状态栏。 */
 .sqlite-table-tab .table-action-bar { height: auto; min-height: 39px; flex-wrap: wrap; padding-block: 6px; }
 .sqlite-table-tab .table-action-bar > [role="status"], .sqlite-table-tab .table-action-bar > button { flex-shrink: 0; white-space: nowrap; }
