@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Client } from 'pg';
 import { answerDialogs, test, expect, page, pageErrors } from './desktop-fixture';
 import { postgresResultOriginsZh as text } from '../../src/renderer/locales/postgresResultOrigins.zh-CN';
@@ -263,6 +264,100 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     const afterRight = await read();
     expect(afterRight[0]).toEqual(before[0]);
     expect(afterRight.map(row => [row.src, row.dst])).toEqual([['00feff', 'beef'], [null, null], ['1234', '1234']]);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 查询按勾选原主键删除，拒绝并发变更并整批回滚外键失败', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    const password = randomBytes(32).toString('hex');
+    await observer.query(`CREATE ROLE query_delete_user LOGIN PASSWORD '${password}';
+      CREATE TABLE public.query_delete (tenant text, id bigint, note text, guard text, PRIMARY KEY (tenant,id));
+      INSERT INTO public.query_delete VALUES ('区甲', 2, '待删甲', '保护'),
+        ('区甲', 3, '保留同区', '保护'), ('区乙', 2, '保留同号', '保护'),
+        ('区乙', 9223372036854775807, '待删乙', '保护');
+      CREATE TABLE public.query_delete_ref (tenant text, id bigint,
+        CONSTRAINT guarded_query_delete FOREIGN KEY (tenant,id) REFERENCES public.query_delete);
+      INSERT INTO public.query_delete_ref VALUES ('区乙', 9223372036854775807);
+      CREATE SEQUENCE public.query_delete_attempt;
+      CREATE FUNCTION public.count_query_delete_attempt() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path TO pg_catalog AS
+        $$ BEGIN PERFORM nextval('public.query_delete_attempt'); RETURN OLD; END $$;
+      CREATE TRIGGER count_query_delete_attempt BEFORE DELETE ON public.query_delete
+        FOR EACH ROW EXECUTE FUNCTION public.count_query_delete_attempt();
+      GRANT SELECT, DELETE ON public.query_delete TO query_delete_user`);
+    await loadQuery({ ...config, user: 'query_delete_user', password },
+      'SELECT tenant AS 区域, id AS 编号, note AS 备注 FROM public.query_delete ORDER BY id DESC, tenant DESC;');
+    const query = page.locator('.postgres-query:visible');
+    const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
+    const remove = query.getByRole('button', { name: text.deleteChecked, exact: true });
+    const preview = page.getByRole('dialog', { name: text.deleteTitle, exact: true });
+    const read = async () => (await observer.query('SELECT tenant, id::text, note, guard FROM public.query_delete ORDER BY tenant,id')).rows;
+    const before = await read();
+    const stage = async () => {
+      for (const name of ['待删乙', '待删甲']) await query.getByRole('gridcell', { name, exact: true }).locator('..').getByRole('checkbox').check();
+      await remove.click();
+      await expect(preview.locator('pre')).toContainText('DELETE FROM ONLY "public"."query_delete"');
+      await expect(preview.locator('tbody td')).toHaveText(['区甲', '2', '区乙', '9223372036854775807']);
+    };
+    const submit = async () => {
+      const apply = preview.getByRole('button', { name: text.deleteApply, exact: true });
+      await expect(apply).toBeDisabled();
+      await preview.getByRole('checkbox', { name: text.deleteConfirm(2), exact: true }).check();
+      await apply.click();
+    };
+    const discard = async () => {
+      await answerDialogs([0]);
+      const [confirmation] = await Promise.all([page.waitForEvent('dialog'),
+        preview.getByRole('button', { name: text.editBack, exact: true }).click()]);
+      expect(confirmation.message()).toBe(text.deleteDiscard);
+      await expect(preview).toBeHidden();
+    };
+    const sortAscending = async () => {
+      await expect(remove).toBeVisible();
+      await query.getByRole('columnheader', { name: '编号' }).click();
+      await expect(query.getByRole('gridcell', { name: '待删乙', exact: true }).locator('..')).toHaveAttribute('aria-rowindex', '5');
+    };
+    let completed = 0;
+    const run = async () => {
+      await execute.click();
+      await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+        .filter(task => task.kind === 'query.execute' && task.status === 'completed').length)).toBe(++completed);
+      await sortAscending();
+    };
+
+    await run();
+    await expect(query.getByRole('button', { name: text.edit, exact: true })).toBeHidden();
+    await expect(remove).toBeDisabled();
+    await stage();
+    expect(await read()).toEqual(before);
+    await observer.query("UPDATE public.query_delete SET guard='外部改动' WHERE tenant='区乙' AND id=9223372036854775807");
+    await submit();
+    await expect(preview.locator('.error-box')).toContainText('原记录已被修改、删除或替换，整批未写入');
+    expect((await observer.query('SELECT is_called FROM public.query_delete_attempt')).rows[0].is_called).toBe(false);
+    expect(await read()).toHaveLength(4);
+    await discard();
+
+    await run();
+    await stage();
+    const current = await read();
+    await submit();
+    await expect(preview.locator('.error-box')).toContainText('guarded_query_delete');
+    expect((await observer.query('SELECT last_value::int FROM public.query_delete_attempt')).rows[0].last_value).toBe(2);
+    expect(await read()).toEqual(current);
+    await discard();
+
+    await observer.query('DELETE FROM public.query_delete_ref');
+    await stage();
+    expect(await read()).toEqual(current);
+    await info.attach('PostgreSQL查询勾选删除预览', { body: await page.screenshot(), contentType: 'image/png' });
+    await submit();
+    await expect(preview).toBeHidden();
+    await expect(remove).toBeHidden();
+    expect(await read()).toEqual(current.filter(row => row.note.startsWith('保留')));
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

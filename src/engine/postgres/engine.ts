@@ -1156,10 +1156,10 @@ export class PostgresEngine {
           // 目录读取失败只撤销原记录编辑能力，不改写用户已完成的查询结果。
           const oid = references[0]!.relation;
           const confirmed = await postgresQueryRecordIdentity(session.managed, qualified, oid).catch(() => undefined);
-          if (confirmed && !task.cancelled && !session.managed.broken &&
+          if (confirmed && (confirmed.capabilities.update || confirmed.capabilities.delete) && !task.cancelled && !session.managed.broken &&
               confirmed.keys.every(key => references.some(origin => origin?.attribute === key))) {
             session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
-              identity: confirmed.identity, table, result, origins: references.filter(origin => origin !== null) };
+              identity: confirmed.identity, table, result, origins: references.filter(origin => origin !== null), capabilities: confirmed.capabilities };
           }
         }
       }
@@ -1212,7 +1212,8 @@ export class PostgresEngine {
       ...(postgresNotices ? {postgresNotices} : {}),
       ...(!estimate && !analysisSql ? {postgresResultSources: resultSources} : {}),
       ...(resultOrigins.some(Boolean) ? { postgresResultOrigins: resultOrigins } : {}),
-      ...(session.queryRecord ? { postgresQueryRecordExecution: session.queryRecord.executionId } : {}),
+      ...(session.queryRecord ? { postgresQueryRecordExecution: session.queryRecord.executionId,
+        postgresQueryRecordCapabilities: session.queryRecord.capabilities } : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
@@ -1272,6 +1273,7 @@ export class PostgresEngine {
         const { owner, connectionRevision, profile, ...raw } = input;
         const request = postgresQueryRecordPageSchema.parse(raw), session = this.sessions.get(request.sessionId);
         const rowIndices = 'rowIndices' in request ? request.rowIndices : [request.rowIndex];
+        const operation = 'operation' in request ? request.operation : 'update';
         const source = session?.queryRecord;
         const current = () => {
           const state = session?.managed.state();
@@ -1282,14 +1284,15 @@ export class PostgresEngine {
             throw Error('PostgreSQL 原查询结果已变化或原会话有活动事务');
         };
         current();
-        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId || !source || rowIndices.some(index => !source.result.rows[index]))
+        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId || !source?.capabilities[operation] ||
+            rowIndices.some(index => !source.result.rows[index]))
           throw Error('PostgreSQL 原查询记录不可用');
         return this.use(profile, request.database, async connection => {
           const resolved = await resolvePostgresQueryRecord(connection, source);
           const target = { owner, connectionRevision, connectionId: request.connectionId, database: request.database,
             table: resolved.table, tabId: request.tabId };
           const page = await this.tables.recordEdit(target, action => action(connection),
-            (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, rowIndices, resolved, relation), current);
+            (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, rowIndices, resolved, relation), current, operation);
           // 结果可以重复使用同一个别名，原表字段键只按已核验的来源位置返回。
           const keys = new Map(page.columns.map(column => [column.name, column.key]));
           return { table: resolved.table, page, columnKeys: resolved.columns.map(name => keys.get(name) ?? null) };

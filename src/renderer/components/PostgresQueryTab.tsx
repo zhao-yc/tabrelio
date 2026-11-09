@@ -1284,17 +1284,31 @@ export function PostgresQueryTab({
 
   const recordExecution = !pin && state.transactionKnown && !state.transactionOpen &&
     outcome?.postgresQueryRecordExecution !== retiredRecordExecution.current ? outcome?.postgresQueryRecordExecution : undefined;
+  const canUpdateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.update === true;
+  const canDeleteQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.delete === true;
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
-  function openQueryRecords(rows: readonly DataRow[], { cell, range }: { cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit } = {}): boolean {
+  function openQueryRecords(rows: readonly DataRow[], { cell, range, deleting }: {
+    cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; deleting?: boolean;
+  } = {}): boolean {
     const original = session.current;
-    if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding)) return false;
+    if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding) ||
+        !(deleting ? canDeleteQueryRecord : canUpdateQueryRecord)) return false;
     const rowIndices = rows.map(row => result.rows.indexOf(row));
     if (!rowIndices.length || rowIndices.some(index => index < 0) || new Set(rowIndices).size !== rowIndices.length) return false;
     const job = acquireWorkspaceBusy(tab.id);
     const identity = { sessionId: original.id, executionId: recordExecution };
-    const source = range ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
+    const source: PostgresQueryRecordIntent = deleting ? { ...identity, rowIndices, operation: 'delete' }
+      : range ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
     setRecordEdit({ result, scope, job, cell, range, source });
     return true;
+  }
+
+  /** 删除只消费当前网格已接纳的勾选，索引按显示顺序映射回原执行，空选不回退全表。 */
+  function deleteCheckedQueryRows() {
+    if (!binding || !canDeleteQueryRecord || !resultCurrent()) return;
+    const checked = resultSelection.checkedIndices(binding);
+    if (!checked.length || checked.length > postgresTableLimits.changes) return;
+    if (openQueryRecords(checked.map(index => binding.rows[index]), { deleting: true })) setError('');
   }
 
   function editQueryCell(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
@@ -2106,11 +2120,13 @@ export function PostgresQueryTab({
                 {origins && <button disabled={locked} onClick={() => void openOrigins()}>{originsText.open}</button>}
                 <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
-                {recordExecution && <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
+                {canUpdateQueryRecord && <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={originsText.cellHint} onClick={() => {
                     if (activeDetailRow && activeDetailRow.binding === detailBinding)
                       openQueryRecords([activeDetailRow.binding.rows[activeDetailRow.index]]);
                   }}>{originsText.edit}</button>}
+                {canDeleteQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
+                  title={originsText.deleteLimit} onClick={deleteCheckedQueryRows}>{originsText.deleteChecked}</button>}
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
                   onClick={() => openResultFilter()}>{filterText.open}</button>
                 {!!filterView?.rules.length && <>
@@ -2175,9 +2191,9 @@ export function PostgresQueryTab({
                         setExportView({ result, selected: false, scope: 'rectangle' });
                       } : undefined}
                       onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
-                      onCellEdit={recordExecution ? editQueryCell : undefined}
-                      onCellPaste={recordExecution ? pasteQueryCells : undefined}
-                      onFillRange={recordExecution ? fillQueryCells : undefined}
+                      onCellEdit={canUpdateQueryRecord ? editQueryCell : undefined}
+                      onCellPaste={canUpdateQueryRecord ? pasteQueryCells : undefined}
+                      onFillRange={canUpdateQueryRecord ? fillQueryCells : undefined}
                       filterDialect="postgresql"
                       onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
                       onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
@@ -2248,7 +2264,8 @@ export function PostgresQueryTab({
         onDone={committed => {
           if (committed) {
             retiredRecordExecution.current = recordEdit.source.executionId;
-            useWorkspace.getState().notify(recordEdit.range ? originsText.rangeCommitted : originsText.editCommitted);
+            useWorkspace.getState().notify(recordEdit.source.operation === 'delete' ? originsText.deleteCommitted :
+              recordEdit.range ? originsText.rangeCommitted : originsText.editCommitted);
           }
           recordEdit.job.release();
           setRecordEdit(undefined);

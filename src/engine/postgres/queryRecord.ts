@@ -50,6 +50,7 @@ export interface PostgresQueryRecordSource {
   table: NonNullable<ReturnType<typeof postgresQueryRecordTable>>;
   result: QueryResult;
   origins: NonNullable<PostgresColumnReference>[];
+  capabilities: { update: boolean; delete: boolean };
 }
 
 /** 在原查询会话按其搜索路径确认真正的关系、有效主键及物理文件。 */
@@ -57,7 +58,8 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
   const result = await connection.query(`SELECT c.relfilenode::text, current_user::text,
     (SELECT pg_catalog.jsonb_agg(k.attnum ORDER BY k.ordinality)::text
      FROM pg_catalog.pg_index i, LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality)
-     WHERE i.indrelid=c.oid AND i.indisprimary AND i.indisvalid AND k.ordinality<=i.indnkeyatts)
+     WHERE i.indrelid=c.oid AND i.indisprimary AND i.indisvalid AND k.ordinality<=i.indnkeyatts),
+    pg_catalog.has_table_privilege(c.oid, 'UPDATE'), pg_catalog.has_table_privilege(c.oid, 'DELETE')
     FROM pg_catalog.pg_class c WHERE c.oid=$2::oid AND c.oid=pg_catalog.to_regclass($1)::oid
       AND c.relkind='r' AND c.relpersistence IN ('p','u') AND NOT c.relispartition AND NOT c.relhasrules
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhparent=c.oid)`,
@@ -67,7 +69,8 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
       typeof row.c1 !== 'string' || typeof row.c2 !== 'string') return;
   const keys: unknown = JSON.parse(row.c2);
   if (Array.isArray(keys) && keys.length && keys.every(key => Number.isSafeInteger(key) && key > 0))
-    return { keys: keys as number[], identity: JSON.stringify([row.c0, row.c1, keys]) };
+    return { keys: keys as number[], identity: JSON.stringify([row.c0, row.c1, keys]),
+      capabilities: { update: row.c3 === 't', delete: row.c4 === 't' } };
 }
 
 /** 独立连接必须仍在原服务器和库，来源目录使用服务器报告的关系 OID。 */

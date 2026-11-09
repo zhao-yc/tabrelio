@@ -2,7 +2,7 @@ import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRec
 import { postgresResultOriginsZh as queryText } from '../locales/postgresResultOrigins.zh-CN';
 import { useEffect, useRef, useState } from 'react';
 import { postgresTablePreviewSchema, type PostgresTableColumn, type PostgresTablePage, type PostgresTablePreview } from '../../shared/postgresTable';
-import { errorMessage, invoke, ownCell, uid } from '../lib';
+import { cellPreview, errorMessage, invoke, ownCell, uid } from '../lib';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
@@ -24,7 +24,7 @@ interface BaseProps {
 }
 
 export type PostgresQueryRecordIntent = Pick<PostgresQueryRecordPageInput, 'sessionId' | 'executionId'> &
-  ({ rowIndex: number } | { rowIndices: number[] });
+  ({ rowIndex: number; operation?: never } | { rowIndices: number[]; operation?: 'delete' });
 type RecordUpdate = Extract<PostgresEditableRecord, { kind: 'update' }>;
 export interface PostgresQueryCellEdit {
   columnIndex: number;
@@ -43,7 +43,9 @@ type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: neve
 export function PostgresSearchRecordEditDialog(props: Props) {
   const { connectionId, database, table: initialTable, recordRef, focusColumn, queryRecord, cell } = props;
   const range = 'range' in props ? props.range : undefined;
-  const bulkLabels = range?.kind === 'paste' ? { title: queryText.pasteTitle, hint: queryText.pasteHint, discard: queryText.pasteDiscard }
+  const deleting = queryRecord?.operation === 'delete';
+  const bulkLabels = deleting ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.deleteDiscard }
+    : range?.kind === 'paste' ? { title: queryText.pasteTitle, hint: queryText.pasteHint, discard: queryText.pasteDiscard }
     : range ? { title: queryText.fillTitle, hint: queryText.fillHint, discard: queryText.fillDiscard } : undefined;
   const [table, setTable] = useState(initialTable ?? '');
   const labels = queryRecord ? { title: queryText.edit, hint: queryText.editHint, stale: queryText.editStale, back: queryText.editBack, discard: queryText.editDiscard }
@@ -87,11 +89,20 @@ export function PostgresSearchRecordEditDialog(props: Props) {
         const result = loaded.page;
         const expectedRows = queryRecord && 'rowIndices' in queryRecord ? queryRecord.rowIndices.length : 1;
         if (result.pageToken && (!active || !current() || result.rows.length !== expectedRows ||
-            result.truncated || result.hasNext || !result.capabilities.update || result.capabilities.insert || result.capabilities.delete))
+            result.truncated || result.hasNext || result.capabilities.update !== !deleting || result.capabilities.insert ||
+            result.capabilities.delete !== deleting))
           await release({ pageToken: result.pageToken, table: loaded.table });
         else if (result.pageToken) {
           token.current = { pageToken: result.pageToken, table: loaded.table };
-          if (range) {
+          if (deleting) {
+            if (!result.primaryKey?.length || result.primaryKey.some(name => !result.columns.some(column => column.name === name)))
+              throw Error(labels.stale);
+            const request = postgresTablePreviewSchema.parse({ ...target, table: loaded.table, pageToken: result.pageToken,
+              changes: result.rows.map((_, row) => ({ kind: 'delete', row })) });
+            const next = await invoke('postgres.table.preview', request);
+            if (!active || !current()) throw Error(labels.stale);
+            setPreview(next);
+          } else if (range) {
             const columns = range.columnIndices.map(index => {
               const column = result.columns.find(item => item.key === loaded.columnKeys[index]);
               if (!column) throw Error(labels.stale);
@@ -122,7 +133,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
           }
           setTable(loaded.table);
           setPage({ ...result, pageToken: result.pageToken });
-          setForm(!range);
+          setForm(!range && !deleting);
           callbacks.current.onDirty(true);
           return;
         }
@@ -139,7 +150,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       if (token.current) { void release(token.current); token.current = undefined; }
       callbacks.current.onDirty(false);
     };
-  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId, cell, range]);
+  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId, cell, range, deleting]);
 
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
@@ -151,7 +162,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
   }
 
   function close() {
-    if (pending.current || ((draft || frozen) && !window.confirm(bulkLabels?.discard ?? labels.discard))) return;
+    if (pending.current || ((draft || frozen || deleting && preview) && !window.confirm(bulkLabels?.discard ?? labels.discard))) return;
     callbacks.current.onDone(false);
   }
 
@@ -179,7 +190,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
         }
         if (live.current) {
           setConfirmed(false);
-          if (!range && result.outcome === 'rolledBack' && result.draftsRetained && current()) setPreview(undefined);
+          if (!range && !deleting && result.outcome === 'rolledBack' && result.draftsRetained && current()) setPreview(undefined);
           else setFrozen(true);
           setError(result.outcome === 'unknown' ? tableText.unknown + ' ' + result.message : result.message);
         } else notify(result.message, true);
@@ -205,11 +216,15 @@ export function PostgresSearchRecordEditDialog(props: Props) {
   if (page && form) return <PostgresRecordForm page={page} row={0} initial={draft?.[0]} initialFocus={focusColumn}
     current={() => current() && !pending.current} onSave={stage} onClose={() => draft ? setForm(false) : close()}/>;
 
+  const keys = deleting && page ? page.primaryKey?.map(name => page.columns.find(column => column.name === name)!) : undefined;
   return <Modal title={bulkLabels?.title ?? (draft ? tableText.preview : labels.title)} onClose={close} wide>
     <div className="modal-content pg-table-preview">
       <p>{bulkLabels?.hint ?? labels.hint}</p>
       {busy && <Spinner text={text.reading}/>}
       <ErrorBox message={error}/>
+      {keys && page && <table className="dense-table"><thead><tr>{keys.map(key => <th key={key.key}>{key.name}</th>)}</tr></thead>
+        <tbody>{page.rows.map((row, index) => <tr key={index}>{keys.map(key =>
+          <td key={key.key}>{cellPreview(ownCell(row, key.key))}</td>)}</tr>)}</tbody></table>}
       {page && draft?.map(change => <div key={change.row}>
         {range && <strong>{queryText.rangeRow(range.startRow + change.row + 1)}</strong>}
         <dl>{change.fields.map(field => <div key={field.column}>
@@ -219,13 +234,14 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       </div>)}
       {preview && <><pre>{preview.statements.join(';\n')}</pre><label>
         <input type="checkbox" checked={confirmed} disabled={busy || frozen} onChange={event => setConfirmed(event.target.checked)}/>
-        {range ? queryText.rangeConfirm(preview.counts.update) : text.postgresConfirm}
+        {deleting ? queryText.deleteConfirm(preview.counts.delete) : range ? queryText.rangeConfirm(preview.counts.update) : text.postgresConfirm}
       </label></>}
     </div>
     <footer className="modal-footer">
       <button disabled={busy} onClick={close}>{labels.back}</button>
       {draft && !range && !frozen && <button disabled={busy} onClick={() => { setConfirmed(false); setForm(true); }}>{tableText.edit}</button>}
-      {preview && <button className="primary" disabled={busy || frozen || !confirmed} onClick={apply}>{tableText.apply}</button>}
+      {preview && <button className="primary" disabled={busy || frozen || !confirmed} onClick={apply}>
+        {deleting ? queryText.deleteApply : tableText.apply}</button>}
     </footer>
   </Modal>;
 }

@@ -98,6 +98,10 @@ export class ResultExportSelection {
   }
   /** 按钮可用性直接核同步绑定，不信任上一轮React状态。 */
   count(binding: ResultSelectionBinding | undefined): number { return this.current(binding) && this.selection?.binding === binding ? this.selection.indices.length : 0; }
+  /** 批量原行操作使用已接纳的显示索引，不把导出投影当作原行。 */
+  checkedIndices(binding: ResultSelectionBinding | undefined): number[] {
+    return this.current(binding) && this.selection?.binding === binding ? [...this.selection.indices] : [];
+  }
   /** 父级只证明本代已接纳的非空有序索引；不修改选择，也不返回私有数组引用。 */
   matchesIndices(binding: ResultSelectionBinding | undefined, indices: readonly number[]): boolean {
     if (!this.current(binding) || this.selection?.binding !== binding || !this.selection.indices.length || !Array.isArray(indices)) return false;
