@@ -86,7 +86,13 @@ describe('SQLite已返回列统计', () => {
     try { expect(finish(bytes.scan)).toMatchObject({ distinct: 4, min: "X''", max: "X'ff'", sqliteTypes: { blob: 4, null: 1 } }); } finally { bytes.db.close(); }
   });
   it.each([{ values: [] }, { values: [null, null] }])('空与全NULL范围提供零不同值和真实类型计数：$values', ({ values }) => {
-    const f = fixture(values); try { expect(finish(f.scan)).toEqual({ count: values.length, nonNull: 0, nulls: values.length, distinct: 0, approximate: false, floatInput: false, averageRounded: false, sqliteTypes: { integer: 0, real: 0, text: 0, blob: 0, null: values.length } }); } finally { f.db.close(); }
+    const f = fixture(values); try { expect(finish(f.scan)).toEqual({ count: values.length, nonNull: 0, nulls: values.length, distinct: 0, approximate: false, floatInput: false, averageRounded: false, quality: { emptyText: 0, singletons: 0 }, sqliteTypes: { integer: 0, real: 0, text: 0, blob: 0, null: values.length } }); } finally { f.db.close(); }
+  });
+  it('空文本与空字节分开，整数和实数等值时只计为一组重复值', () => {
+    const f = fixture([2n, 2, '2', '', '', new Uint8Array(), null, ' ', 'NULL']);
+    try {
+      expect(finish(f.scan)).toMatchObject({ count: 9, nulls: 1, distinct: 6, quality: { emptyText: 2, singletons: 4 } });
+    } finally { f.db.close(); }
   });
   it('选中范围独立，只读实际选中原格，不执行未选格getter', () => {
     const selected = new Set([1, 0]), f = fixture([9007199254740993n, 9007199254740995n, '不读取']);

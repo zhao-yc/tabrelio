@@ -105,7 +105,7 @@ describe('当前已返回行的常见值分布', () => {
 describe('当前结果列的精确数值统计', () => {
   it.each(['LONGLONG', 'BIGINT', 'BIGINT UNSIGNED', 'NEWDECIMAL', 'DECIMAL(65,0)'])('%s不经过Number，保留20位整数合计与循环平均', type => {
     const f = fixture(type, ['18446744073709551615', '2', '9007199254740993', null]), before = structuredClone(f.rows), result = finish(f.scan);
-    expect(result).toEqual({ count: 4, nonNull: 3, nulls: 1, distinct: 3, min: '2', max: '18446744073709551615', sum: '18455751272964292610', average: '6151917090988097536.666666666666666667', approximate: true, floatInput: false, averageRounded: true });
+    expect(result).toEqual({ count: 4, nonNull: 3, nulls: 1, distinct: 3, min: '2', max: '18446744073709551615', sum: '18455751272964292610', average: '6151917090988097536.666666666666666667', approximate: true, floatInput: false, averageRounded: true, quality: { emptyText: 0, singletons: 3 } });
     expect(f.rows).toEqual(before); expect(Object.isFrozen(f.rows)).toBe(false); expect(Object.isFrozen(f.rows[0])).toBe(false); expect(Object.isFrozen(result)).toBe(true);
   });
   it('20位DECIMAL保留原尺度并half-away舍入，勾选范围独立且不丢低位', () => {
@@ -173,10 +173,10 @@ describe('文本、时间、NULL及未知类型的完整语义', () => {
     expect(result).toEqual({ count: 2, nonNull: 1, nulls: 1, reason: text.unsupported, approximate: false, floatInput: false, averageRounded: false });
   });
   it.each(['INT', 'TEXT', 'BLOB', '未知'])('%s的全NULL范围不同值为零，其余值指标缺省', type => {
-    expect(finish(fixture(type, [null, null]).scan)).toEqual({ count: 2, nonNull: 0, nulls: 2, distinct: 0, approximate: false, floatInput: false, averageRounded: false });
+    expect(finish(fixture(type, [null, null]).scan)).toEqual({ count: 2, nonNull: 0, nulls: 2, distinct: 0, approximate: false, floatInput: false, averageRounded: false, quality: { emptyText: 0, singletons: 0 } });
   });
   it('空结果允许全部范围，但显式空勾选Set不能回退成全部', () => {
-    expect(finish(fixture('INT', []).scan)).toEqual({ count: 0, nonNull: 0, nulls: 0, distinct: 0, approximate: false, floatInput: false, averageRounded: false });
+    expect(finish(fixture('INT', []).scan)).toEqual({ count: 0, nonNull: 0, nulls: 0, distinct: 0, approximate: false, floatInput: false, averageRounded: false, quality: { emptyText: 0, singletons: 0 } });
     expect(() => fixture('INT', ['1'], new Set())).toThrow(text.invalid);
     expect(() => fixture('INT', ['1'], new Set([1]))).toThrow(); expect(() => fixture('INT', ['1'], new Set([0.5]))).toThrow();
   });

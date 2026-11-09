@@ -120,9 +120,28 @@ describe('查询结果列统计的真实对话框', () => {
     expect(metric(text.min)).toBe(''); expect(metric(text.max)).toBe('甲,乙\n下一行'); expect(metric(text.sum)).toBe(text.unavailable);
   });
 
+  it('质量摘要按勾选范围重新计算，占比区分 NULL、空字符串与其他非空原值', async () => {
+    const data = fixture();
+    data.rows = ['', '', ' ', 'NULL', null, null].map(word => ({ ...data.rows[0], word }));
+    await mount({ ...data, initialColumn: data.columns[2], selectedIndices: new Set([0, 2, 4]) });
+    await finish();
+    expect(metric(text.nullShare)).toBe('33.33%');
+    expect(metric(text.emptyText)).toBe('1');
+    expect(metric(text.emptyTextShare)).toBe('33.33%');
+    expect(metric(text.singletonRows)).toBe('2');
+    expect(metric(text.repeatedRows)).toBe('0');
+    await change(text.scope, 'all');
+    expect(hasMetrics()).toBe(false);
+    await finish();
+    expect(metric(text.emptyText)).toBe('2');
+    expect(metric(text.singletonRows)).toBe('2');
+    expect(metric(text.repeatedRows)).toBe('2');
+  });
+
   it('空结果与全NULL只显示真实零计数，不填虚构最小值或平均值', async () => {
     const data = fixture(); await mount({ ...data, rows: [] }); await finish();
     expect(metric(text.count)).toBe('0'); expect(metric(text.nonNull)).toBe('0'); expect(metric(text.nulls)).toBe('0'); expect(metric(text.min)).toBe(text.unavailable); expect(metric(text.average)).toBe(text.unavailable);
+    expect(metric(text.nullShare)).toBe(text.unavailable); expect(metric(text.emptyTextShare)).toBe(text.unavailable);
   });
 
   it('未知类型全NULL可计数和distinct0，含字节值只给计数并解释不支持值指标', async () => {
@@ -146,6 +165,7 @@ describe('查询结果列统计的真实对话框', () => {
   it('一列含不合类型原值时保留全部计数，不能发布前面几行算出的部分值指标', async () => {
     const data = fixture(); data.rows[1].n = '无效数字'; await mount({ ...data, initialColumn: data.columns[0] }); await finish();
     expect(metric(text.count)).toBe('3'); expect(metric(text.nonNull)).toBe('2'); expect(metric(text.sum)).toBe(text.unavailable); expect(metric(text.distinct)).toBe(text.unavailable); expect(document.body.textContent).toContain(text.value);
+    expect(metric(text.nullShare)).toBe('33.33%'); expect(metric(text.repeatedRows)).toBe(text.unavailable); expect(metric(text.emptyText)).toBe(text.unavailable);
   });
 
   it('多批处理中立即取消清理timer，父层尚未卸载也不显示迟到结果或重复关闭', async () => {

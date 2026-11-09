@@ -16,6 +16,7 @@ import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultKeywordZh as keywordText } from '../../src/renderer/locales/queryResultKeyword.zh-CN';
 import { queryResultSortZh as resultSort } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
@@ -144,6 +145,45 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
     }
     expect(await tasks()).toEqual(originalTasks);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('查询结果列数据质量保留 SQLite 原类型并区分当前勾选范围', async ({}, info) => {
+  await seed(`SELECT id, CASE id
+    WHEN 1 THEN '' WHEN 2 THEN '' WHEN 3 THEN X'' WHEN 4 THEN NULL
+    WHEN 5 THEN 2 WHEN 6 THEN 2.0 ELSE '2' END AS quality_value
+    FROM subject WHERE id <= 7 ORDER BY id;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(grid.getByRole('gridcell', { name: '1', exact: true })).toBeVisible();
+  const idColumn = await grid.getByRole('columnheader', { name: /^id\b/ }).getAttribute('aria-colindex');
+  expect(idColumn).not.toBeNull();
+  const idCell = (id: number) => page.getByRole('gridcell', { name: String(id), exact: true })
+    .and(page.locator(`[aria-colindex="${idColumn}"]`));
+  for (const id of [1, 3, 4]) {
+    const row = grid.getByRole('row').filter({ has: idCell(id) });
+    await row.getByRole('checkbox').check();
+  }
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const before = await tasks();
+  await query.getByRole('button', { name: statisticsText.open, exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: statisticsText.title, exact: true });
+  const quality = dialog.getByRole('region', { name: statisticsText.quality, exact: true });
+  const metric = (label: string) => quality.getByLabel(label, { exact: true });
+  const scope = dialog.getByRole('combobox', { name: statisticsText.scope, exact: true });
+  await expect(scope).toHaveValue('selected');
+  await dialog.getByRole('combobox', { name: statisticsText.column, exact: true }).selectOption('c1');
+  await expect(metric(statisticsText.nullShare)).toHaveText('33.33%');
+  await expect(metric(statisticsText.emptyText)).toHaveText('1');
+  await expect(metric(statisticsText.singletonRows)).toHaveText('2');
+  await expect(metric(statisticsText.repeatedRows)).toHaveText('0');
+  await scope.selectOption('all');
+  await expect(metric(statisticsText.nullShare)).toHaveText('14.29%');
+  await expect(metric(statisticsText.emptyTextShare)).toHaveText('28.57%');
+  await expect(metric(statisticsText.singletonRows)).toHaveText('2');
+  await expect(metric(statisticsText.repeatedRows)).toHaveText('4');
+  await info.attach('SQLite列统计数据质量', { body: await page.screenshot(), contentType: 'image/png' });
+  expect(await tasks()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

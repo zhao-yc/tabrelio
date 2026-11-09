@@ -19,6 +19,7 @@ export interface QueryResultStatisticsResult {
   readonly approximate: boolean; readonly floatInput: boolean; readonly averageRounded: boolean; readonly reason?: string;
   readonly sqliteTypes?: Readonly<Record<'integer' | 'real' | 'text' | 'blob' | 'null', number>>;
   readonly frequency?: QueryResultFrequency;
+  readonly quality?: Readonly<{ emptyText: number; singletons: number }>;
 }
 type OrdinaryKey = ReturnType<typeof queryResultFilterKey>;
 type Key = OrdinaryKey | SqliteResultComparisonKey;
@@ -32,6 +33,13 @@ interface Binding {
 const bindings = new WeakMap<QueryResultStatisticsCapture, Binding>();
 const frequencyOwners = new WeakMap<QueryResultFrequency, { capture: QueryResultStatisticsCapture; hasNull: boolean }>();
 const setSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size')!.get!;
+
+/** 百分比以当前统计范围的行数为分母；无行时比例没有定义。 */
+export function queryResultPercentage(count: number, total: number): string {
+  if (!total) return text.unavailable;
+  const basis = Math.floor((count * 10000 + total / 2) / total);
+  return `${Math.floor(basis / 100)}.${String(basis % 100).padStart(2, '0')}%`;
+}
 
 /** 自有数据描述符是唯一读取入口，原数组、行、元数据及字节对象上的访问器均不执行。 */
 function own(value: unknown, key: PropertyKey): unknown {
@@ -229,7 +237,9 @@ export class QueryResultStatisticsScan {
   private cancelled = false;
   private completed = false;
   private published?: QueryResultStatisticsResult;
-  private distinct = new Set<string>();
+  private readonly distinct = new Map<string, boolean>();
+  private singletons = 0;
+  private emptyText = 0;
   private readonly frequency?: QueryResultFrequencyCounter;
   private minimum?: { key: Key; literal: string };
   private maximum?: { key: Key; literal: string };
@@ -269,8 +279,20 @@ export class QueryResultStatisticsScan {
   private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; }
   /** 同一完整身份服务于摘要和分布；仅当前模式需要的集合持有它。 */
   private observeValue(identity: string, literal: string, kind: QueryResultFrequencyKind, index: number): void {
-    if (this.frequency) this.frequency.add(identity, literal, kind, index);
-    else this.distinct.add(identity);
+    if (this.frequency) {
+      this.frequency.add(identity, literal, kind, index);
+      return;
+    }
+    if (kind === 'text' && literal === '') this.emptyText++;
+    // 摘要只需区分首次和重复，沿用完整比较键，无需为每个值保留预览或次数。
+    const single = this.distinct.get(identity);
+    if (single === undefined) {
+      this.distinct.set(identity, true);
+      this.singletons++;
+    } else if (single) {
+      this.distinct.set(identity, false);
+      this.singletons--;
+    }
   }
   /** 每批至多512个原格或32Ki原文；结构检查不遍历整张行数组，最后一次才全量复核。 */
   step(): { processed: number; total: number; done: boolean } {
@@ -342,7 +364,8 @@ export class QueryResultStatisticsScan {
   private finish(): void {
     const count = this.total, nonNull = count - this.nulls, floatInput = this.sqliteTypes ? this.sqliteTypes.real > 0 : this.floatingColumn && nonNull > 0;
     const types = this.sqliteTypes && !this.reason ? { sqliteTypes: Object.freeze({ ...this.sqliteTypes }) } : {};
-    if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types, ...this.finishFrequency(0) }); return; }
+    const quality = this.frequency ? {} : { quality: Object.freeze({ emptyText: this.emptyText, singletons: this.singletons }) };
+    if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types, ...quality, ...this.finishFrequency(0) }); return; }
     if (this.reason) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: false, floatInput: false, averageRounded: false, reason: this.reason }); return; }
     let sum: string | undefined, average: string | undefined, averageRounded = false;
     if (this.finiteNumbers && (this.sqliteTypes ? this.numericOnly : this.numericColumn)) {
@@ -360,7 +383,7 @@ export class QueryResultStatisticsScan {
     }
     const reason = this.sqliteTypes && (!this.numericOnly || !this.finiteNumbers) ? text.sqliteNumericOnly :
       !this.finiteNumbers ? text.postgresNonFinite : undefined;
-    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.frequency?.distinct ?? this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...(reason ? { reason } : {}), ...this.finishFrequency(nonNull) });
+    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.frequency?.distinct ?? this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...quality, ...(reason ? { reason } : {}), ...this.finishFrequency(nonNull) });
     this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined;
   }
   /** 最后发布仍核源，调用方无需信任较早某一帧的current判断。 */
