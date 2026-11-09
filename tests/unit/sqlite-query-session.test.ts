@@ -79,6 +79,23 @@ function diskValue(path: string, sql: string): unknown {
 }
 
 describe('SQLite原查询会话与真实磁盘driver适配', () => {
+  it('原记录引用仅签发给返回完整主键的单表查询并撤销旧任务', async () => {
+    const harness = await open(fixture());
+    await execute(harness, "INSERT INTO subject VALUES (1, '原记录'); CREATE VIEW shown AS SELECT * FROM subject;");
+    const taskId = randomUUID();
+    const outcome = await execute(harness, 'SELECT s.id AS key, s.note FROM main.subject AS s WHERE s.id = 1 ORDER BY s.id;', { taskId });
+    expect(outcome.sqliteQueryRecordTable).toBe('subject');
+    expect(harness.session.queryRecord(taskId, 'subject').result.rows).toEqual([{ c0: '1', c1: '原记录' }]);
+    for (const sql of ['SELECT note FROM subject', 'SELECT * FROM shown',
+      'SELECT a.id, a.note FROM subject a JOIN subject b ON a.id=b.id',
+      'SELECT id, note FROM subject UNION ALL SELECT id, note FROM subject',
+      'SELECT DISTINCT id, note FROM subject', 'SELECT id, max(note) FROM subject',
+      'SELECT id, note FROM subject; SELECT 1']) {
+      expect((await execute(harness, sql)).sqliteQueryRecordTable).toBeUndefined();
+      expect(() => harness.session.queryRecord(taskId, 'subject')).toThrow(/已失效/);
+    }
+  });
+
   it('原生结果来源按结果和列位置对齐，别名和计算表达式不冒充源字段', async () => {
     const harness = await open(fixture());
     const outcome = await execute(harness, `CREATE VIEW visible AS SELECT id,note FROM subject;

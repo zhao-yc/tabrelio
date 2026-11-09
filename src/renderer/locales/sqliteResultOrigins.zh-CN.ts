@@ -10,5 +10,11 @@ export const sqliteResultOriginsZh = {
   action: '操作',
   openTable: '打开来源表',
   tableLabel: (name: string, position: number) => `打开来源表 ${name}（第 ${position} 列）`,
+  editRecord: '编辑查询原记录',
+  editHint: '核验原表主键和查询返回的字段后读取当前整行。修改需要预览并确认提交。',
+  editDiscard: '放弃这条原记录的本地修改并返回查询结果？如果提交结果未确认，请先核对数据库。',
+  editBack: '返回查询结果',
+  editStale: 'SQLite 查询结果或连接已变化，请重新查询后再编辑。',
+  editCommitted: '原记录已更新。重新执行查询可查看最新结果。',
   unavailable: '—',
 } as const;

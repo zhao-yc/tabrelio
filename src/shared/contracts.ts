@@ -99,6 +99,8 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   postgresResultSources?: PostgresResultSource[];
   /** 与本次 SQLite 的完整结果逐项对应，不随固定快照写入文件。 */
   sqliteResultReceipts?: { statementOrdinal?: number; producedRows: number; changedRows: number; sourceRange: import('./queryFailure').QueryFailureSourceRange }[];
+  /** 最新一次可回查的单表结果目标，编辑仍须由 Main 校验原行和主键。 */
+  sqliteQueryRecordTable?: string;
   /** 仅本次 SQLite 完整结果使用，结果及列均按原序号对应；空项表示未取得原生来源。 */
   sqliteResultOrigins?: (SqliteResultColumnOrigin[] | null)[];
 }

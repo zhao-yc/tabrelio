@@ -177,6 +177,55 @@ test('SQLite 查询显示原生结果列来源并打开原表', async ({}, info)
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询从排序后的结果编辑正确原行并拒绝陈旧行', async ({}, info) => {
+  await seed('SELECT id AS 编号, name AS 名称 FROM subject ORDER BY id DESC LIMIT 3;');
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const execute = () => query.locator('.query-execute-split > button.primary').click();
+  const edit = async (name: string) => {
+    await grid.getByRole('gridcell', { name, exact: true }).click();
+    await (await navigationMenuItem(query, { name: originsText.editRecord, exact: true })).click();
+  };
+  const disk = (sql: string) => {
+    const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+    try { return db.prepare(sql).all(); } finally { db.close(); }
+  };
+  await execute();
+  await expect(grid.getByRole('gridcell', { name: '记录 180', exact: true })).toBeVisible();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^编号/ });
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  await expect(grid.getByRole('gridcell').filter({ hasText: /^记录 / })).toHaveText(['记录 178', '记录 179', '记录 180']);
+  await edit('记录 178');
+  const form = page.getByRole('dialog', { name: '编辑 SQLite 当前行', exact: true });
+  const field = form.getByLabel('SQLite 字段 name 值', { exact: true });
+  await expect(field).toHaveValue('记录 178');
+  await field.fill('从查询改写');
+  await form.getByRole('button', { name: '保存 SQLite 本地草稿', exact: true }).click();
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toBeVisible();
+  expect(disk('SELECT name FROM subject WHERE id=178')).toEqual([{ name: '记录 178' }]);
+  await info.attach('SQLite查询原记录编辑预览', { body: await page.screenshot(), contentType: 'image/png' });
+  await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+  await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  expect(disk('SELECT name FROM subject WHERE id IN (178, 179, 180) ORDER BY id')).toEqual([
+    { name: '从查询改写' }, { name: '记录 179' }, { name: '记录 180' },
+  ]);
+  await execute();
+  await expect(grid.getByRole('gridcell', { name: '从查询改写', exact: true })).toBeVisible();
+  disk("UPDATE subject SET name='独立连接改写' WHERE id=179 RETURNING name");
+  await edit('记录 179');
+  const rejected = page.getByRole('dialog', { name: originsText.editRecord, exact: true });
+  await expect(rejected.getByText(/SQLite 查询结果无法核验为当前原记录/)).toBeVisible();
+  await expect(form).toHaveCount(0);
+  await rejected.getByRole('button', { name: originsText.editBack, exact: true }).click();
+  expect(disk('SELECT name FROM subject WHERE id=179')).toEqual([{ name: '独立连接改写' }]);
+  const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  expect(tasks.filter(task => task.kind === 'query.execute')).toHaveLength(2);
+  expect(tasks.filter(task => task.kind === 'sqlite.tableEdit.apply')).toHaveLength(1);
+  expect(pageErrors).toEqual([]);
+});
+
 test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async ({}, info) => {
   await seed(`/* NAME: 精确原值 */ SELECT 9223372036854775807 AS v, X'00ff' AS v;
     /* NAME: 不导出 */ SELECT '跳过';

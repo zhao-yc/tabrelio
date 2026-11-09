@@ -64,10 +64,10 @@ function lex(source: string, offset: number, complete = false): Token[] {
 }
 
 /** 目录分析仅接收完整语句正文，复用 SQLite 词法而不借用光标恢复规则。 */
-export function sqliteDefinitionTokens(source: string): Token[] {
+export function sqliteDefinitionTokens(source: string, allowParameters = false): Token[] {
   if (source.length > limits.sourceUnits || !unicode(source)) fail('budget');
   const tokens = lex(source, -1, true);
-  if (tokens.some(token => token.closed === false || token.kind === 'parameter' ||
+  if (tokens.some(token => token.closed === false || !allowParameters && token.kind === 'parameter' ||
       token.kind === 'symbol' && ['(', ')'].includes(token.value) && token.pair === undefined)) fail('syntax');
   return tokens;
 }

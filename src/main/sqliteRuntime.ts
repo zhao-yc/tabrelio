@@ -13,6 +13,7 @@ import { SqliteDriverError, SqliteDriverSession } from '../engine/sqlite/session
 import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport, type SqliteValue } from '../engine/sqlite/protocol';
 import { createSqliteProcess } from './sqliteProcess';
 import { SqliteQuerySession } from './sqliteQuerySession';
+import { sqliteQueryRecordPredicate, type SqliteQueryRecordSource } from './sqliteQueryRecord';
 import { readSqliteCompletion } from './sqliteCompletion';
 import { readSqliteCatalogDefinition, readSqliteObjectDefinition, sqliteObjectDefinitionDatabase } from './sqliteObjectDefinition';
 import { StructureSearchPages, type StructureSearchState } from '../engine/structureSearchPages';
@@ -518,6 +519,7 @@ export class SqliteRuntime {
     const input = sqliteTablePageSchema.parse(source), profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
     this.assertTarget(connection, profile);
     if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
+    if (input.queryRecord && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑查询原记录');
     if (input.searchRecordRef && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑搜索命中');
     const task: BrowseTask = { kind: 'browse', connection, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
     const work = this.track(connection, () => this.browse(task, input, profile)); task.active = work;
@@ -597,10 +599,19 @@ export class SqliteRuntime {
     const recordRef = searchPage?.searchRecordRef;
     const recordInput = recordRef ? { connectionId: input.connectionId, taskId: input.taskId, recordRef } : undefined;
     let searchEntry: ReturnType<DataSearchReferences['lookup']> | undefined;
+    const queryPage = 'queryRecord' in input ? input : undefined, queryInput = queryPage?.queryRecord;
+    let querySource: SqliteQueryRecordSource | undefined;
+    const currentQuerySource = () => {
+      if (!queryInput || !queryPage) return;
+      const session = this.session(queryInput.sessionId);
+      if (session.connection !== task.connection || session.pending || session.userHandoff) throw Error('SQLite 原查询会话不属于当前连接或正在执行');
+      return session.query.queryRecord(queryInput.taskId, queryPage.table);
+    };
     const aggregate = task.purpose === 'statistics' ? ('column' in input ? 'SQLite字段概况' : 'SQLite匹配行数') : undefined;
     try {
       this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: 'draft' in input ? '正在只读核验SQLite草稿完整原行' : 'incoming' in input ? input.incoming === 'catalog' ? '正在读取SQLite反向外键目录' : '正在读取SQLite关联子记录' : 'reference' in input ? input.reference === 'catalog' ? '正在读取SQLite外键目录' : '正在读取SQLite父记录' : aggregate ? '正在读取' + aggregate : 'tables' in input ? '正在读取SQLite表关系快照' : 'column' in input ? '正在读取SQLite不同值快照' : '正在读取SQLite只读分页快照' });
       this.browseCheck(task);
+      querySource = currentQuerySource();
       if (recordInput) {
         searchEntry = this.dataSearchReferences.lookup(recordInput);
         if (!searchEntry.sqliteIdentity || searchEntry.metadata.target.table !== searchPage?.table)
@@ -621,6 +632,8 @@ export class SqliteRuntime {
       else if ('column' in input) value = await readSqliteStatistics(task.driver, input, control);
       else if ('limit' in input) value = await readSqliteTablePage(task.driver, input, {
         ...control, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }),
+        ...(querySource && queryInput ? { queryRecord: (key, columns) =>
+          sqliteQueryRecordPredicate(task.driver!, querySource!, queryInput.rowIndex, key, columns) } : {}),
         ...(searchEntry ? { searchRecord: catalogue => verifySqliteSearchRecord(task.driver!, searchEntry!, control, catalogue) } : {}),
       });
       else value = await readSqliteRowCount(task.driver, input, control);
@@ -638,6 +651,7 @@ export class SqliteRuntime {
     }
     if (!failed) try {
       this.browseCheck(task);
+      if (querySource && currentQuerySource() !== querySource) throw Error('SQLite 原查询结果已变化');
       if (recordInput && this.dataSearchReferences.lookup(recordInput) !== searchEntry) throw Error('SQLite 原搜索引用已释放');
     } catch (reason) { failed = true; failure = reason; }
     if (task.resource && task.connection.resources.has(task.resource)) {

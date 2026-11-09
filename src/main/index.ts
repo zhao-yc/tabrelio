@@ -180,7 +180,7 @@ let rendererHasSettings = false;
 // 标签清单写入失败后不能把旧布局当作当前空闲事实；必须先成功保存当前布局才能替换。
 let rendererSettingsCurrent = true;
 let lastStorageWarning = 0;
-const sessions = new Map<string, { connectionId: string; postgres?: { owner: ColumnsInvocation; database: string; closing: boolean } }>();
+const sessions = new Map<string, { connectionId: string; sqliteOwner?: ColumnsInvocation; postgres?: { owner: ColumnsInvocation; database: string; closing: boolean } }>();
 // 历史上下文由引擎在会话互斥内报告，不能由渲染进程提供或从较早的标签状态推测。
 const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatement: boolean; executionSqlReceived: boolean }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
@@ -2615,6 +2615,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         columnsMain.assertCapturedOwner(columns); const revision = store.connectionRevision();
         columns!.sqliteReadPublication = () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(input.connectionId); if (shuttingDown || store.connectionRevision() !== revision) throw Error('SQLite只读操作的原窗口或连接配置已变化，请重新读取'); };
       }
+      if (command === 'sqlite.tablePage' && input.queryRecord) {
+        const session = sessions.get(input.queryRecord.sessionId);
+        if (!session?.sqliteOwner || session.connectionId !== input.connectionId || !columns ||
+            !columnsMain.sharesDocumentOwner(session.sqliteOwner, columns)) throw Error('SQLite 原查询会话不属于当前窗口或连接');
+      }
       if (input.editing === true) sqlitePage = sqliteEdits.page(columns!, input);
       break;
     }
@@ -3089,8 +3094,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (tableValueOptionsRead) tableValueOptionsAdmitted = true;
   }
   const session = sessions.get(input.sessionId);
-  const postgresSessionOwner = command === 'sessions.open' ? columns : undefined;
-  const postgresSessionRevision = postgresSessionOwner ? store.connectionRevision() : undefined;
+  const querySessionOwner = command === 'sessions.open' ? columns : undefined;
+  const querySessionRevision = querySessionOwner ? store.connectionRevision() : undefined;
   // 实际分析与当前语句均等待Engine报告真正发送的SQL；历史不能把ANALYZE误记成裸DML。
   const currentStatement = command === 'query.analyze' || command === 'postgres.analyze' || (command === 'query.execute' || command === 'query.executeParameterized') && input.currentStatement !== undefined;
   const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream' || command === 'query.analyze' || command === 'postgres.analyze') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
@@ -3169,7 +3174,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     sqliteEditLease?.beforeSend(); sqlitePreview?.check();
     if (tableFilteredExport) tableFilteredExportSubmitted = true;
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!();
-    if (postgresSessionOwner) columnsMain.assertCapturedOwner(postgresSessionOwner);
+    if (querySessionOwner) columnsMain.assertCapturedOwner(querySessionOwner);
     if (command === 'sessions.close' && session?.postgres) session.postgres.closing = true;
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
@@ -3255,17 +3260,18 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     if (command === 'sessions.open') {
       const entry: NonNullable<typeof session> = { connectionId: input.connectionId };
-      if (postgresSessionOwner) {
+      if (querySessionOwner) {
         try {
-          columnsMain.assertCapturedOwner(postgresSessionOwner);
+          columnsMain.assertCapturedOwner(querySessionOwner);
           connectionConfig.assertAvailable(input.connectionId);
-          if (shuttingDown || postgresSessionRevision !== store.connectionRevision()) throw Error('PostgreSQL会话的原窗口或连接已变化');
+          if (shuttingDown || querySessionRevision !== store.connectionRevision()) throw Error('查询会话的原窗口或连接已变化');
         } catch (reason) {
           await broker.request('sessions.close', { sessionId: result.sessionId });
           throw reason;
         }
         const profile = store.connections().find(profile => profile.id === input.connectionId);
-        entry.postgres = { owner: postgresSessionOwner, database: input.database || (profile?.dialect === 'postgresql' && profile.database) || 'postgres', closing: false };
+        if (profile?.dialect === 'sqlite') entry.sqliteOwner = querySessionOwner;
+        else entry.postgres = { owner: querySessionOwner, database: input.database || (profile?.dialect === 'postgresql' && profile.database) || 'postgres', closing: false };
       }
       sessions.set(result.sessionId, entry);
     }
@@ -3633,7 +3639,7 @@ else {
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.roles.') || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.storage.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.schemaManage.') || payload.command.startsWith('postgres.databaseManage.') || payload.command.startsWith('postgres.extensionManage.') || payload.command.startsWith('postgres.partitionManage.') || payload.command.startsWith('postgres.relationMaintenance.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.tableManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
-            payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
+            payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && (profile.dialect === 'postgresql' || profile.dialect === 'sqlite'))) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);

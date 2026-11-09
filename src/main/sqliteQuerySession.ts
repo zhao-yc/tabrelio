@@ -9,9 +9,11 @@ import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
 import { sqliteNamedParameterNames, sqliteParameterInfo } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 import { validSqliteStatementTimeout } from '../shared/sqliteStatementTimeout';
+import { foldSqliteCompletionName } from '../shared/sqliteCompletion';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
 import { queryScriptReportSummary } from '../shared/queryContinueOnError';
 import type { SqlStatementRange } from '../shared/sqlScriptScanner';
+import { sqliteQueryRecordSchema, sqliteQueryRecordTable, type SqliteQueryRecordSource } from './sqliteQueryRecord';
 import { continueSqliteScript } from './sqliteContinueOnError';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
@@ -37,6 +39,7 @@ export class SqliteQuerySession {
   private transactionCommand = false;
   private objectsRevision = 0;
   private closing?: Promise<void>;
+  private recordSource?: SqliteQueryRecordSource;
   private terminalNotificationFailed = false;
 
   constructor(readonly connectionId: string, private readonly driver: SqliteDriverSession, private readonly emit: (event: TaskEvent) => void, sessionId: string = randomUUID()) {
@@ -60,6 +63,15 @@ export class SqliteQuerySession {
     if (sessionId !== this.sessionId || this.closing || !this.driver.isUsable) throw Error('SQLite原查询会话已关闭或失效，不会自动重连或重放');
     if (this.terminalNotificationFailed && !explicitRollback) throw Error('SQLite执行终态已取得，但界面通知失败；请先核对结果再明确重开会话，不会自动重放');
     if (this.active || this.transactionCommand || this.driver.isBusy) throw Error('SQLite原查询会话已有运行操作');
+  }
+
+  /** 只允许使用本会话最新成功结果的原始行位置，外部不能提交列值或定位 SQL。 */
+  queryRecord(taskId: string, table: string): SqliteQueryRecordSource {
+    this.available(this.sessionId);
+    const source = this.recordSource;
+    if (!source || source.taskId !== taskId || source.table !== table || this.driver.transaction !== false)
+      throw Error('SQLite 原查询结果已失效或当前会话有事务，请重新查询');
+    return source;
   }
 
   /** 原查询执行使用同一TaskEvent/QueryOutcome，所有不支持的选项均在首条SQL投递前拒绝。 */
@@ -133,6 +145,7 @@ export class SqliteQuerySession {
     if (continueRanges && !continueRanges.length) throw Error('SQLite 脚本中没有可执行语句');
     if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
     this.objectsRevision++;
+    this.recordSource = undefined;
     const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0, cancelled: false };
     const titles: (string | null)[] = [];
     /** 只回传已完成的结果名称，失败语句的流式表头不能泄漏到下一条结果。 */
@@ -236,6 +249,11 @@ export class SqliteQuerySession {
         return {...completed, ...displayTitles(facts.length), elapsedMs: performance.now() - operation.started,
           transactionOpen: transaction, scriptReport: report, ...(failure ? {failure} : {})};
       }
+      const identity = this.driver.identity;
+      const candidate = !options.explainView && identity && !this.driver.readOnly && this.driver.transaction === false
+        ? sqliteQueryRecordTable(sql) : undefined;
+      const schema = candidate ? await sqliteQueryRecordSchema(this.driver, candidate).catch(() => undefined) : undefined;
+      if (operation.cancelled) throw new SqliteDriverError('SQLite 查询已取消', 'SQLITE_CANCELLED', this.driver.transaction, 0, this.driver.isClosed);
       const outcome = await this.driver.execute(sql, {
         maxRows: input.maxRows, batchRows: 200, maxBytes: queryBytes,
         ...(statementTimeoutMs === undefined ? {} : {statementTimeoutMs}),
@@ -252,8 +270,15 @@ export class SqliteQuerySession {
       const sqliteExplain = options.explainView && results.length === 1
         ? { ...buildSqliteExplainPlan(results[0], this.driver.version, options.explainView), sourceRange: options.sourceRange }
         : undefined;
+      const original = completed.sqliteResultOrigins?.[0], table = original?.[0]?.table;
+      if (schema && candidate && identity && table && results.length === 1 && results[0].rows.length &&
+          outcome.transaction === false && foldSqliteCompletionName(table) === foldSqliteCompletionName(candidate) &&
+          original?.every(origin => origin?.database === 'main' && origin.table === table) &&
+          schema.keys.every(key => original.some(origin => origin?.column === key)) &&
+          (await sqliteQueryRecordSchema(this.driver, candidate).catch(() => undefined))?.version === schema.version && !operation.cancelled)
+        this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schema.version, result: results[0], origins: original };
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
-      return { ...completed, ...displayTitles(results.length), elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
+      return { ...completed, ...displayTitles(results.length), ...(this.recordSource ? { sqliteQueryRecordTable: this.recordSource.table } : {}), elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {
       const cancelled = reason instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(reason.code);
       const message = options.explainView && this.driver.readOnly && reason instanceof SqliteDriverError && reason.code === 'SQLITE_NATIVE_23'
@@ -279,6 +304,7 @@ export class SqliteQuerySession {
     const sql = commands[input.action];
     if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
     this.objectsRevision++;
+    this.recordSource = undefined;
     this.transactionCommand = true;
     try { await this.driver.execute(sql); } finally { this.transactionCommand = false; }
   }

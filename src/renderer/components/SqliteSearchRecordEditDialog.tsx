@@ -2,22 +2,28 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke, errorMessage, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { SqliteTableEditor, type SqliteEditView } from '../sqliteTableEditor';
+import { sqliteResultOriginsZh as queryText } from '../locales/sqliteResultOrigins.zh-CN';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { SqliteTablePreviewDialog, SqliteTableValueDialog } from './SqliteTableEditDialog';
 import { ErrorBox, Modal, Spinner } from './ui';
 
-interface Props {
+interface BaseProps {
   connectionId: string;
   table: string;
-  recordRef: string;
   focusColumn?: string;
   onDirty(value: boolean): void;
   onDone(committed: boolean): void;
 }
 
-/** 只编辑准确命中行，沿用表页签发的编辑快照和原有预览提交链。 */
+type QueryRecord = NonNullable<import('../../shared/sqliteTableBrowse').SqliteTablePageInput['queryRecord']>;
+type Props = BaseProps & ({ recordRef: string; queryRecord?: never; isCurrent?: never } |
+  { recordRef?: never; queryRecord: QueryRecord; isCurrent(): boolean });
+
+/** 只编辑已核验的原行，沿用表页签发的编辑快照和原有预览提交链。 */
 export function SqliteSearchRecordEditDialog(props: Props) {
-  const { connectionId, table, recordRef, focusColumn } = props;
+  const { connectionId, table, recordRef, queryRecord, focusColumn } = props;
+  const labels = queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
+    : { title: text.edit, hint: text.editHint, discard: text.editDiscard, back: text.editBack, stale: text.editStale };
   const callbacks = useRef(props); callbacks.current = props;
   const editor = useRef<SqliteTableEditor | undefined>(undefined);
   const [view, setView] = useState<SqliteEditView>(), [error, setError] = useState('');
@@ -37,7 +43,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
     const current = () => {
       const state = useWorkspace.getState();
       if (!profile || profile.dialect !== 'sqlite' || profile.sqlite.readOnly ||
-          !state.connections.includes(profile) || (state.connectionVersions[connectionId] ?? 0) !== version) invalid = true;
+          callbacks.current.isCurrent?.() === false || !state.connections.includes(profile) || (state.connectionVersions[connectionId] ?? 0) !== version) invalid = true;
       return live && !invalid && !closingRef.current;
     };
     const unsubscribe = useWorkspace.subscribe(() => { current(); editor.current?.observe(); });
@@ -45,19 +51,19 @@ export function SqliteSearchRecordEditDialog(props: Props) {
       try {
         await Promise.resolve();
         if (!live || closingRef.current) return;
-        if (!current()) throw Error(text.editStale);
+        if (!current()) throw Error(labels.stale);
         read.sent = true;
         const page = await invoke('sqlite.tablePage', {
-          connectionId, database: 'main', table, taskId: read.id, searchRecordRef: recordRef, editing: true,
+          connectionId, database: 'main', table, taskId: read.id, ...(queryRecord ? { queryRecord } : { searchRecordRef: recordRef }), editing: true,
           offset: 0, limit: 1, mode: 'and', filters: [], sort: [],
         });
-        if (page.edit?.kind !== 'editable') throw Error(page.edit?.reason ?? text.editStale);
+        if (page.edit?.kind !== 'editable') throw Error(page.edit?.reason ?? labels.stale);
         const release = () => invoke('sqlite.tableEdit.release', { snapshotId: page.edit?.kind === 'editable' ? page.edit.snapshotId : undefined });
         let accepted = false;
         try {
           if (!current() || page.target.connectionId !== connectionId || page.target.database !== 'main' ||
               page.target.table !== table || page.target.kind !== 'table' || page.result.rows.length !== 1 || page.hasMore)
-            throw Error(text.editStale);
+            throw Error(labels.stale);
           const instance: SqliteTableEditor = new SqliteTableEditor(page, {
             current, active: () => editor.current === instance, available: () => !busy,
             acquire: () => {
@@ -91,12 +97,12 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         callbacks.current.onDirty(false);
       }
     };
-  }, [connectionId, table, recordRef]);
+  }, [connectionId, table, recordRef, queryRecord]);
 
   function close() {
     if (closeWork.current || editor.current?.busy) return;
     const instance = editor.current;
-    if (instance && (instance.changes.length || instance.view.unknown) && !window.confirm(text.editDiscard)) return;
+    if (instance && (instance.changes.length || instance.view.unknown) && !window.confirm(labels.discard)) return;
     const read = load.current;
     closingRef.current = true; setClosing(true);
     const work = (async () => {
@@ -134,8 +140,8 @@ export function SqliteSearchRecordEditDialog(props: Props) {
       }}
       onClose={() => { if (!saved.current) close(); }}/>;
   }
-  return <Modal title={text.edit} onClose={close} wide>
-    <div className="modal-content"><p>{text.editHint}</p>{loading && <Spinner text={closing ? text.closing : text.reading}/>}<ErrorBox message={error}/></div>
-    <footer className="modal-footer"><button disabled={closing} onClick={close}>{text.editBack}</button></footer>
+  return <Modal title={labels.title} onClose={close} wide>
+    <div className="modal-content"><p>{labels.hint}</p>{loading && <Spinner text={closing ? text.closing : text.reading}/>}<ErrorBox message={error}/></div>
+    <footer className="modal-footer"><button disabled={closing} onClick={close}>{labels.back}</button></footer>
   </Modal>;
 }
