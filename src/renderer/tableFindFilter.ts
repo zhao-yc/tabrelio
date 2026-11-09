@@ -3,7 +3,7 @@ import type { PageFindOptions } from './pageFindReplace';
 
 /** 只转换与原查找语义一致的单列条件。显示格式、正则与忽略大小写不交给服务器猜测。 */
 export function tableFindFilterRule(
-  options: Pick<PageFindOptions, 'query' | 'caseSensitive' | 'wholeCell' | 'regex'> & { kind: string },
+  options: Pick<PageFindOptions, 'query' | 'caseSensitive' | 'wholeCell' | 'regex' | 'edge'> & { kind: string },
   column: { name: string; type?: string } | undefined,
   dialect: 'mysql' | 'postgresql' | 'sqlite',
 ): FilterRule | undefined {
@@ -18,5 +18,6 @@ export function tableFindFilterRule(
   if (options.kind === 'empty') return { column: column.name, operator: 'TEXT EQUALS', value: '' };
   if (options.kind !== 'text' || !options.caseSensitive || options.regex || !options.query ||
       /\p{Surrogate}/u.test(options.query) || dialect === 'postgresql' && options.query.includes('\0')) return;
-  return { column: column.name, operator: options.wholeCell ? 'TEXT EQUALS' : 'CONTAINS', value: options.query };
+  const operator = options.wholeCell ? 'TEXT EQUALS' : options.edge === 'start' ? 'STARTS WITH' : options.edge === 'end' ? 'ENDS WITH' : 'CONTAINS';
+  return { column: column.name, operator, value: options.query };
 }

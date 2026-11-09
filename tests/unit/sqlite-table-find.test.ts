@@ -9,6 +9,16 @@ function source(patch: Partial<SqliteFindSource> = {}): SqliteFindSource { retur
 function ready(result: SqliteFindWorkerResult) { if (result.status !== 'ready') throw Error(result.message); return result; }
 
 describe('SQLite当前页typed查找算法', () => {
+  it('边界查找和替换保留同格重叠位置，并拒绝冲突或未知选项', () => {
+    const value = source();
+    value.rows[0].values[0] = { kind: 'text', value: 'aaa' };
+    const found = ready(run({ operation: 'find', source: { ...value, options: options({ query: 'aa', column: 0, edge: 'end' }) } }));
+    expect(found.matches[0].ranges).toEqual([{ start: 1, end: 3 }]);
+    expect(ready(run({ operation: 'preview', source: { ...value, options: options({ query: 'aa', column: 0, edge: 'start' }) }, replacement: 'X' })))
+      .toMatchObject({ patches: [{ before: 'aaa', after: 'Xa' }] });
+    expect(() => copySqliteFindOptions(options({ edge: 'end', wholeCell: true }), 4)).toThrow(text.invalid);
+    expect(() => copySqliteFindOptions(options({ edge: 'middle' as 'start' }), 4)).toThrow(text.invalid);
+  });
   it('TEXT原文大小写/整格/列范围可控，generated可导航但不获替换权', () => {
     const found = ready(run({ operation: 'find', source: source() })); expect(found.matches.map(match => [match.column, match.ranges.length, match.replaceable])).toEqual([[0, 2, true], [2, 2, false], [3, 3, false]]);
     const insensitive = ready(run({ operation: 'find', source: source({ options: options({ caseSensitive: false, column: 0 }) }) })); expect(insensitive.matches[0].ranges).toHaveLength(3);

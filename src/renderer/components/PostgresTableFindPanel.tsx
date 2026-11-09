@@ -13,6 +13,8 @@ import { ErrorBox } from './ui';
 import type { GridFindTarget } from './ResultsGrid';
 import { tableFindFilterRule } from '../tableFindFilter';
 import { tableFindFilterZh as filterText } from '../locales/tableFindFilter.zh-CN';
+import type { TableFindEdge } from '../tableFindPattern';
+import { TableFindEdgeSelect } from './TableFindEdgeSelect';
 
 export interface PostgresFindRequest { replace: boolean; }
 type Mode = 'text' | 'empty' | 'null' | 'field';
@@ -40,14 +42,15 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const [query, setQuery] = useState(''), [replacement, setReplacement] = useState('');
   const [regex, setRegex] = useState(false), [capture, setCapture] = useState(false);
   const [sensitive, setSensitive] = useState(false), [whole, setWhole] = useState(false), [highlight, setHighlight] = useState(true);
+  const [edge, setEdge] = useState<TableFindEdge>();
   const [composing, setComposing] = useState(false);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null);
   const modeInput = useRef<HTMLSelectElement>(null);
   const stageButton = useRef<HTMLButtonElement>(null);
   const client = useRef<PageFindWorkerClient>(undefined);
   const resume = useRef<{ request: PostgresFindRequest; pageKey?: string; query: string; hit: PageOccurrence; end: number }>(undefined);
-  const snapshot = useMemo(() => ({ request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, regex, composing }),
-    [request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, regex, composing]);
+  const snapshot = useMemo(() => ({ request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, edge, regex, composing }),
+    [request, scope, enabled, rows, replacementRows, columns, mode, column, query, sensitive, whole, edge, regex, composing]);
   const latest = useRef(snapshot); latest.current = snapshot;
   const runningPreview = useRef<{ snapshot: typeof snapshot }>(undefined);
   const [preparing, setPreparing] = useState<typeof snapshot>();
@@ -66,7 +69,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const canReplace = writable && enabled && replaceVisible;
   const pending = preparing === snapshot;
   const locked = pending || !!review;
-  const options: PageFindOptions = { kind, query, caseSensitive: sensitive, wholeCell: whole, regex: mode === 'text' && regex, column: column || undefined };
+  const options: PageFindOptions = { kind, query, caseSensitive: sensitive, wholeCell: whole, edge: mode === 'text' ? edge : undefined, regex: mode === 'text' && regex, column: column || undefined };
   const findFilter = onStageFilter && mode !== 'field'
     ? tableFindFilterRule(options, columns.find(item => item.key === column), 'postgresql') : undefined;
 
@@ -107,7 +110,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         const needle = sensitive ? query : query.toLowerCase();
         publish(columns.filter(column => {
           const name = sensitive ? column.name : column.name.toLowerCase();
-          return whole ? name === needle : name.includes(needle);
+          return whole ? name === needle : edge === 'start' ? name.startsWith(needle) : edge === 'end' ? name.endsWith(needle) : name.includes(needle);
         }).map(column => ({ rowId: '-1', key: column.key, occurrence: 1 })));
         return;
       }
@@ -210,7 +213,10 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         </select>}
         {needsQuery && <>
           <label className="check"><input type="checkbox" checked={sensitive} disabled={!enabled || locked} onChange={event => setSensitive(event.target.checked)}/>{text.caseSensitive}</label>
-          <label className="check"><input type="checkbox" checked={whole} disabled={!enabled || locked} onChange={event => setWhole(event.target.checked)}/>{text.whole}</label>
+          <label className="check"><input type="checkbox" checked={whole} disabled={!enabled || locked} onChange={event => {
+            setWhole(event.target.checked); if (event.target.checked) setEdge(undefined);
+          }}/>{text.whole}</label>
+          {onStageFilter && <TableFindEdgeSelect edge={edge} disabled={!enabled || locked} onChange={next => { setEdge(next); if (next) setWhole(false); }}/>}
         </>}
         {mode === 'text' && <label className="check"><input type="checkbox" checked={regex} disabled={!enabled || locked}
           onChange={event => { setRegex(event.target.checked); setCapture(false); setError(''); }}/>{text.regex}</label>}

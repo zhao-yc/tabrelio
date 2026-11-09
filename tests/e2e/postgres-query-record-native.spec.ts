@@ -316,7 +316,7 @@ test('PostgreSQL 表页字面前后缀筛选区分大小写、空文本和 NULL'
   } finally { await observer.end(); }
 });
 
-test('PostgreSQL 单列查找可带入整格、空文本和 NULL 全表筛选', async () => {
+test('PostgreSQL 单列查找可带入整格、结尾、空文本和 NULL 全表筛选', async () => {
   const config = isolatedConnection(), observer = new Client(config);
   try {
     await observer.connect();
@@ -335,11 +335,13 @@ test('PostgreSQL 单列查找可带入整格、空文本和 NULL 全表筛选', 
     await find.getByRole('checkbox', { name: findText.caseSensitive, exact: true }).check();
     await find.getByRole('checkbox', { name: findText.whole, exact: true }).check();
     for (const [kind, operator, value, matched] of [
-      ['text', 'TEXT EQUALS', 'A%_🚢', '1'], ['empty', 'TEXT EQUALS', '', '4'], ['null', 'IS NULL', undefined, '6'],
+      ['text', 'TEXT EQUALS', 'A%_🚢', '1'], ['text', 'ENDS WITH', 'A%_🚢', '1'],
+      ['empty', 'TEXT EQUALS', '', '4'], ['null', 'IS NULL', undefined, '6'],
     ] as const) {
       if (!await find.isVisible()) await findButton.click();
       await find.getByLabel(findText.mode, { exact: true }).selectOption(kind);
       await find.getByLabel(findText.column, { exact: true }).selectOption({ label: 'note' });
+      if (operator === 'ENDS WITH') await find.getByRole('combobox', { name: tableFindFilterZh.edge, exact: true }).selectOption('end');
       await stage.click();
       await expect(tab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue(operator);
       if (value !== undefined) await expect(tab.getByLabel(zh.table.text011, { exact: true })).toHaveValue(value);
@@ -351,6 +353,18 @@ test('PostgreSQL 单列查找可带入整格、空文本和 NULL 全表筛选', 
       await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
       await expect(ids).toHaveCount(6);
     }
+    await tab.getByRole('button', { name: findText.replaceTitle, exact: true }).click();
+    await find.getByLabel(findText.mode, { exact: true }).selectOption('text');
+    await find.getByLabel(findText.column, { exact: true }).selectOption({ label: 'note' });
+    await find.getByLabel(findText.query, { exact: true }).fill('A%_🚢');
+    await find.getByRole('combobox', { name: tableFindFilterZh.edge, exact: true }).selectOption('end');
+    await find.getByLabel(findText.replacement, { exact: true }).fill('只替换结尾');
+    await find.getByRole('button', { name: findText.all, exact: true }).click();
+    const review = find.getByRole('region', { name: findText.review, exact: true });
+    await expect(review).toContainText(findText.reviewCount(1, 1));
+    await review.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await expect(tab.getByRole('gridcell', { name: '只替换结尾', exact: true })).toBeVisible();
+    expect((await observer.query('SELECT note FROM public.find_filter WHERE id = 1')).rows[0].note).toBe('A%_🚢');
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

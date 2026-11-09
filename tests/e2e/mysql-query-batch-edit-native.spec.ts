@@ -245,6 +245,16 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(tableCell('A%_🚢')).toBeVisible();
     await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
     await expect(tableCell('前A%_🚢')).toBeVisible();
+    await tableFind.getByRole('combobox', { name: tableFindFilterZh.edge, exact: true }).selectOption('start');
+    await expect(tableFind.getByRole('checkbox', { name: tableGridZh.whole, exact: true })).not.toBeChecked();
+    await expect(tableFind).toContainText('当前页匹配 2 格');
+    await tableFind.getByRole('button', { name: tableFindFilterZh.action, exact: true }).click();
+    await expect(tableTab.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('STARTS WITH');
+    await tableTab.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await expect(tableCell('前A%_🚢')).toHaveCount(0);
+    await expect(tableCell('A%_🚢后')).toBeVisible();
+    await tableTab.getByRole('button', { name: formatText(zh.table.filterRemoveCondition, 1), exact: true }).click();
+    await expect(tableCell('前A%_🚢')).toBeVisible();
     if (await tableFind.isVisible()) await (await findButton()).click();
     await tableCell('18446744073709551613').click({ button: 'right' });
     await page.getByRole('menuitem', { name: queryResultFilterZh.cellBounds.gt, exact: true }).press('Enter');

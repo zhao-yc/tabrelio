@@ -6,6 +6,8 @@ it.each(['mysql', 'postgresql', 'sqlite'] as const)('%s 只转换语义明确的
   const column = { name: 'note', type: 'varchar(24)' };
   expect(tableFindFilterRule(text, column, dialect)).toEqual({ column: 'note', operator: 'CONTAINS', value: text.query });
   expect(tableFindFilterRule({ ...text, wholeCell: true }, column, dialect)?.operator).toBe('TEXT EQUALS');
+  expect(tableFindFilterRule({ ...text, edge: 'start' }, column, dialect)?.operator).toBe('STARTS WITH');
+  expect(tableFindFilterRule({ ...text, edge: 'end' }, column, dialect)?.operator).toBe('ENDS WITH');
   expect(tableFindFilterRule({ ...text, kind: 'empty' }, column, dialect)).toEqual({ column: 'note', operator: 'TEXT EQUALS', value: '' });
   expect(tableFindFilterRule({ ...text, kind: 'null' }, { name: 'id', type: 'int' }, dialect))
     .toEqual({ column: 'id', operator: 'IS NULL' });

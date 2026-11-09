@@ -10,6 +10,15 @@ const info: TableInfo = { database: 'CaseDb', name: 'CaseTable', columns: ['id',
 function row(id: string, value = 'old'): DraftRow { const data = Object.fromEntries([['id', '9007199254740993123'], ['text', value], ['__proto__', 'old'], ['constructor', 'old'], ['json', '{"key":"old"}'], ['amount', '12345678901234567890.1234567890'], ['generated', 'old']]); return { id, data, original: structuredClone(data), inserted: false, deleted: false }; }
 
 describe('页内查找和替换草稿', () => {
+  it('开头和结尾各只匹配一处，重叠后缀和末尾换行按真实边界处理', () => {
+    const rows = [row('1', 'aaa'), row('2', 'aaa\n'), row('3', '🚢aa')];
+    const prefix = { ...options, query: 'aa', edge: 'start' } as const;
+    const suffix = { ...prefix, edge: 'end' } as const;
+    expect(pageOccurrences(findPageCells(rows, ['text'], prefix)).map(hit => [hit.rowId, hit.range?.start])).toEqual([['1', 0], ['2', 0]]);
+    expect(pageOccurrences(findPageCells(rows, ['text'], suffix)).map(hit => [hit.rowId, hit.range?.start])).toEqual([['1', 1], ['3', 2]]);
+    const plan = previewPageReplacementInWorker(rows, ['text'], { ...suffix, query: '(a)(a)', regex: true, captureReplacement: true }, '[$2]', info, 1);
+    expect(plan.patches.map(patch => [patch.rowId, patch.after])).toEqual([['1', 'a[a]'], ['3', '🚢[a]']]);
+  });
   it('同步渲染入口拒绝用户正则；线程语义支持整格分支、大小写和Unicode零宽', () => {
     const rows = [row('1', 'ab'), row('2', '😀A')]; const regex = { ...options, regex: true };
     expect(() => findPageCells(rows, ['text'], { ...regex, query: '(a+)+$' })).toThrow('线程');

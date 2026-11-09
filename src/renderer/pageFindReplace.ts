@@ -3,9 +3,10 @@ import type { DraftRow } from './dataChanges';
 import { ownCell, rowEqual } from './lib';
 import { tableGridZh as text } from './locales/tableGrid.zh-CN';
 import { joinPageText, PageTextSize, type PageTextSpan } from './pageFindText';
+import { tableFindPattern, type TableFindEdge } from './tableFindPattern';
 
 export const pageFindLimits = { query: 512, replacement: 4096, bytes: 16 * 1024 * 1024, matches: 50_000, memory: 128 * 1024 * 1024, timeoutMs: 1500, startupMs: 8000 } as const;
-export interface PageFindOptions { kind: 'text' | 'empty' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; captureReplacement?: boolean; }
+export interface PageFindOptions { kind: 'text' | 'empty' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; captureReplacement?: boolean; edge?: TableFindEdge; }
 export interface PageCellMatch { rowId: string; key: string; ranges: { start: number; end: number }[]; }
 export interface PageOccurrence { rowId: string; key: string; range?: { start: number; end: number }; occurrence: number; }
 export interface PageTextPatch { rowId: string; key: string; before: string; after: string; }
@@ -41,9 +42,6 @@ export function assertPageFindTransfer(value: unknown): void {
   const total = { bytes: 0 }; measureJson(value, total);
   if (total.bytes * 6 + pageFindLimits.matches * 128 > pageFindLimits.memory) throw new Error(text.budget);
 }
-/** 字面模式只转义为安全正则，不向用户开放正则或替换表达式。 */
-function literalPattern(options: PageFindOptions) { return new RegExp(options.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options.caseSensitive ? 'gu' : 'giu'); }
-
 /** 空字符串有明确的零长度边界，可按普通文本权限预览替换。 */
 export function findKindAllowsReplacement(kind: PageFindOptions['kind']): boolean {
   return kind === 'text' || kind === 'empty';
@@ -73,7 +71,7 @@ export function nextPageOccurrenceAfterReplacement(rows: readonly DraftRow[], ke
 export function findPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions): PageCellMatch[] {
   if (options.regex) throw new Error(text.workerRequired);
   if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
-  return scanPageCells(rows, visibleKeys, options, options.kind === 'text' ? literalPattern(options) : null);
+  return scanPageCells(rows, visibleKeys, options, options.kind === 'text' ? tableFindPattern(options) : null);
 }
 
 /** 用户正则只允许实际 Worker 调用；渲染线程的同步入口始终拒绝用户模式。 */
@@ -86,7 +84,7 @@ function workerPattern(options: PageFindOptions): RegExp | null {
   let pattern: RegExp | null = null;
   if (options.kind === 'text') {
     if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
-    try { pattern = options.regex ? new RegExp(options.wholeCell ? `^(?:${options.query})$` : options.query, options.caseSensitive ? 'gu' : 'giu') : literalPattern(options); }
+    try { pattern = tableFindPattern(options); }
     catch { throw new Error(text.regexInvalid); }
   }
   return pattern;
@@ -111,7 +109,6 @@ function scanPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[]
         const source = String(value), size = new PageTextSize(); budget(scanned + source.length); size.append({ value: source, start: 0, end: source.length }); scanned += size.utf8; budget(scanned);
         const ranges: PlannedMatch['ranges'] = [];
         for (const match of source.matchAll(pattern!)) {
-          if (options.wholeCell && (match.index !== 0 || match[0].length !== source.length)) continue;
           if (++occurrences > pageFindLimits.matches) throw new Error(text.budget);
           const saved = capture?.(row, key, match);
           ranges.push({ start: match.index, end: match.index + match[0].length, ...(saved === undefined ? {} : { capture: saved }) });

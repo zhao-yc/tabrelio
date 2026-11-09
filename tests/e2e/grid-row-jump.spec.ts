@@ -1605,7 +1605,7 @@ test('SQLite 表页文本快捷筛选命中其它页并保留字面语义', asyn
 });
 
 test('SQLite 从只读视图单列查找带入全表筛选，命中原先未加载的行', async ({}, info) => {
-  await seed(undefined, "UPDATE subject SET name='z%_🚢' WHERE id=1; UPDATE subject SET name='Z%_🚢 ' WHERE id=119; UPDATE subject SET name='Z%_🚢' WHERE id=120;");
+  await seed(undefined, "UPDATE subject SET name='z%_🚢' WHERE id=1; UPDATE subject SET name='前Z%_🚢' WHERE id=118; UPDATE subject SET name='Z%_🚢 ' WHERE id=119; UPDATE subject SET name='Z%_🚢' WHERE id=120;");
   await page.locator('[data-workspace-tab-id="v-jump"]').getByRole('button', { name: '视图定位', exact: true }).click();
   const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
   const id = (value: number) => grid.getByRole('gridcell', { name: String(value), exact: true });
@@ -1620,15 +1620,18 @@ test('SQLite 从只读视图单列查找带入全表筛选，命中原先未加�
   await find.getByLabel(sqliteFind.column, { exact: true }).selectOption('1');
   await find.getByRole('checkbox', { name: sqliteFind.sensitive, exact: true }).check();
   await find.getByRole('checkbox', { name: sqliteFind.whole, exact: true }).check();
+  await find.getByRole('combobox', { name: tableFindFilterZh.edge, exact: true }).selectOption('end');
+  await expect(find.getByRole('checkbox', { name: sqliteFind.whole, exact: true })).not.toBeChecked();
   await stage.click();
   const operator = table.getByLabel(browseText.filterOperator(1), { exact: true });
-  await expect(operator).toHaveValue('textEquals');
+  await expect(operator).toHaveValue('endsWith');
   await expect(table.getByLabel(browseText.filterValue(1), { exact: true })).toHaveValue('Z%_🚢');
   expect(await reads()).toEqual(before);
   await operator.scrollIntoViewIfNeeded();
-  await info.attach('SQLite查找转全表筛选草稿', { body: await page.screenshot(), contentType: 'image/png' });
+  await info.attach('SQLite结尾查找转全表筛选', { body: await page.screenshot(), contentType: 'image/png' });
   await table.getByRole('button', { name: browseText.apply, exact: true }).click();
   await expect(id(120)).toBeVisible();
+  await expect(id(118)).toBeVisible();
   await expect(id(1)).toHaveCount(0);
   await expect(id(119)).toHaveCount(0);
   expect(await reads()).toHaveLength(before.length + 1);

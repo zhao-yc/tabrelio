@@ -13,6 +13,7 @@ import { queryResultFindZh as findText } from '../locales/queryResultFind.zh-CN'
 import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 import { tableFindFilterRule } from '../tableFindFilter';
 import { tableFindFilterZh as filterText } from '../locales/tableFindFilter.zh-CN';
+import { TableFindEdgeSelect } from './TableFindEdgeSelect';
 import '../sqliteTableFind.css';
 import '../queryResultFind.css';
 
@@ -68,6 +69,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
   function changeOptions(patch: Partial<SqliteFindOptions>, epoch?: object, structural = false): void {
     if (!inputCurrent(epoch)) return; cancelWork(); const value = live.current, options = { ...value.options, ...patch };
     if (options.kind !== 'text' || !options.regex) options.captureReplacement = false;
+    if (options.kind !== 'text' || options.wholeCell) options.edge = undefined;
     replace({ ...value, options, epoch: structural ? {} : value.epoch, found: undefined, position: -1, preview: undefined, error: '' });
     schedule();
   }
@@ -171,6 +173,9 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
       <Field label={text.query}><input ref={queryInput} aria-label={text.query} maxLength={512} value={options.query} disabled={unavailable || options.kind !== 'text'} onChange={event => changeOptions({ query: event.target.value }, epoch)} onKeyDown={event => key(event, 'query')}/></Field>
       <Field label={text.column}><select aria-label={text.column} disabled={unavailable} value={options.column === undefined ? '' : String(options.column)} onChange={event => { if (!local()) return; const value = event.target.value, column = value === '' ? undefined : Number(value); if (column === undefined || Number.isInteger(column) && column >= 0 && column < owner.page.columns.length) changeOptions({ column }, undefined, true); }}><option value="">{text.allColumns}</option>{(owner.visibleColumns ?? owner.page.columns.map((_, index) => index)).map(index => <option key={index} value={String(index)}>{owner.page.columns[index].name}</option>)}</select></Field>
       {(['caseSensitive', 'wholeCell', 'regex'] as const).map(name => <label key={name}><input type="checkbox" aria-label={name === 'caseSensitive' ? text.sensitive : name === 'wholeCell' ? text.whole : text.regex} disabled={unavailable || options.kind !== 'text'} checked={!!options[name]} onChange={event => { if (local()) changeOptions({ [name]: event.target.checked }, undefined, true); }}/>{name === 'caseSensitive' ? text.sensitive : name === 'wholeCell' ? text.whole : text.regex}</label>)}
+      <TableFindEdgeSelect edge={options.edge} disabled={unavailable || options.kind !== 'text'} onChange={edge => {
+        if (local()) changeOptions({ edge, wholeCell: edge ? false : options.wholeCell }, undefined, true);
+      }}/>
       <label><input type="checkbox" checked={highlightAll} disabled={unavailable} onChange={event => { if (local()) setHighlightAll(event.target.checked); }}/>{findText.highlightAll}</label>
       {!readonly && <button type="button" aria-pressed={draft.mode === 'replace'} disabled={unavailable} onClick={() => { if (local() && inputCurrent()) replace({ ...draft, mode: draft.mode === 'replace' ? 'find' : 'replace', epoch: {} }); }}>{text.replaceMode}</button>}
     </div><div className="sqlite-table-find-actions"><span role="status">{working === 'running' ? text.searching : working === 'stopping' ? text.stopping : text.count(found?.matches.length ?? 0, found?.occurrences.length ?? 0, draft.position)}</span>

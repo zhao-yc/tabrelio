@@ -51,7 +51,10 @@ function checkedMatches(raw: unknown, source: SqliteFindSource): SqliteFindMatch
       occurrences++;
     }
     else { if (!value || value.kind === 'null' || !match.ranges.length) throw Error(text.worker); let previousEnd = -1, previousStart = -1;
-      for (const range of match.ranges) { if (!range || Object.keys(range).sort().join(',') !== 'end,start' || !Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start || range.end > value.value.length || [range.start, range.end].some(at => at > 0 && at < value.value.length && value.value.charCodeAt(at) >= 0xdc00 && value.value.charCodeAt(at) <= 0xdfff && value.value.charCodeAt(at - 1) >= 0xd800 && value.value.charCodeAt(at - 1) <= 0xdbff) || range.start < previousEnd || range.start === previousStart || source.options.wholeCell && (range.start !== 0 || range.end !== value.value.length)) throw Error(text.worker); previousStart = range.start; previousEnd = range.end; occurrences++; }
+      for (const range of match.ranges) { if (!range || Object.keys(range).sort().join(',') !== 'end,start' || !Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start || range.end > value.value.length || [range.start, range.end].some(at => at > 0 && at < value.value.length && value.value.charCodeAt(at) >= 0xdc00 && value.value.charCodeAt(at) <= 0xdfff && value.value.charCodeAt(at - 1) >= 0xd800 && value.value.charCodeAt(at - 1) <= 0xdbff) || range.start < previousEnd || range.start === previousStart || source.options.wholeCell && (range.start !== 0 || range.end !== value.value.length)) throw Error(text.worker);
+        if (source.options.edge === 'start' && range.start !== 0 || source.options.edge === 'end' && range.end !== value.value.length) throw Error(text.worker);
+        previousStart = range.start; previousEnd = range.end; occurrences++;
+      }
     }
     if (occurrences > limits.matches) throw Error(text.worker);
   } return matches;
