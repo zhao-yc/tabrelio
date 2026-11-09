@@ -110,7 +110,7 @@ it('勾选查找保留原位置，旧匹配视图按钮不能消费后来勾选'
   (window as any).dbark = { invoke: vi.fn(async () => undefined) };
   store.setState({ settings: { theme: 'light' } as any }); container();
   const rows = [{ a: 'match' }, { a: 'other' }, { a: 'match' }], owner = {}, show = vi.fn();
-  await act(async () => root!.render(<Grid columns={cols} rows={rows} selectionScope={owner} isCurrent={() => true} onShowMatchingRows={show}/>));
+  await act(async () => root!.render(<Grid columns={cols} rows={rows} selectionScope={owner} isCurrent={() => true} onShowRows={show}/>));
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   await act(async () => latestGrid().onSelectedRowsChange(new Set([2])));
   await click(text.open); await search('match'); await settle();
@@ -128,6 +128,23 @@ it('勾选查找保留原位置，旧匹配视图按钮不能消费后来勾选'
   expect(show).not.toHaveBeenCalled();
   await click(text.showMatchingRows);
   expect(show).toHaveBeenCalledExactlyOnceWith(new Set([0]));
+});
+
+it('勾选视图只使用活动网格已接纳的勾选，旧按钮不能覆盖新范围', async () => {
+  (window as any).dbark = { invoke: vi.fn(async () => undefined) };
+  store.setState({ settings: { theme: 'light' } as any }); container();
+  const rows = [{ a: '一' }, { a: '二' }, { a: '三' }], owner = {}, show = vi.fn();
+  await act(async () => root!.render(<Grid columns={cols} rows={rows} selectionScope={owner} isCurrent={() => true} onShowRows={show}/>));
+  expect(button(text.hideCheckedRows).disabled).toBe(true);
+  await act(async () => latestGrid().onSelectedRowsChange(new Set([2, 0])));
+  const stale = callback(button(text.hideCheckedRows));
+  await click(text.showCheckedRows);
+  expect(show).toHaveBeenCalledExactlyOnceWith(new Set([0, 2]), 'checked');
+  await act(async () => latestGrid().onSelectedRowsChange(new Set([1])));
+  await act(async () => stale());
+  expect(show).toHaveBeenCalledTimes(1);
+  await click(text.hideCheckedRows);
+  expect(show).toHaveBeenLastCalledWith(new Set([1]), 'excluded');
 });
 
 it('查找转筛选只接纳活动单列条件，旧按钮不会重放', async () => {

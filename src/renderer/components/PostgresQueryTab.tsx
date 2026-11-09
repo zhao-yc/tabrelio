@@ -73,7 +73,7 @@ import { postgresQueryExportZh as fullExportText } from '../locales/postgresQuer
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultKeyword, useQueryResultKeyword } from './QueryResultKeyword';
-import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
+import { QueryResultMatchView, useQueryResultMatchView, type QueryResultRowViewKind } from './QueryResultMatchView';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
@@ -1773,7 +1773,7 @@ export function PostgresQueryTab({
       return false;
     }
   }
-  function changeMatchView(indices?: ReadonlySet<number>): void {
+  function changeMatchView(indices?: ReadonlySet<number>, kind: QueryResultRowViewKind = 'find'): void {
     if (!resultCurrent() || document.querySelector(appModalSelector)) return;
     const invalidate = () => {
       resultSelection.invalidate();
@@ -1781,8 +1781,9 @@ export function PostgresQueryTab({
       setRowDetail(undefined);
       setActiveDetailRow(undefined);
     };
+    if (kind !== 'find' && (!indices || !resultSelection.matchesIndices(binding, [...indices]))) return;
     try {
-      if (indices) matchView.apply(indices, invalidate);
+      if (indices) matchView.apply(indices, invalidate, kind);
       else matchView.clear(invalidate);
     } catch (reason) { setError(errorMessage(reason)); }
   }
@@ -2082,7 +2083,7 @@ export function PostgresQueryTab({
       } : undefined}
       frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
-      onShowMatchingRows={binding ? changeMatchView : undefined}
+      onShowRows={binding ? changeMatchView : undefined}
       onExportRange={binding ? result => {
         if (!resultCurrent() || document.querySelector(appModalSelector)) return;
         exportOpen.current = true;

@@ -103,10 +103,10 @@ it('离线匹配投影保留 SQLite 逐格类型、拒绝旧回调，另存与�
   bridge.mockResolvedValueOnce(value);
   await click(text.choose);
   const original = parent();
-  await act(async () => original.onShowMatchingRows(new Set([2, 1])));
+  await act(async () => original.onShowRows(new Set([2, 1])));
   expect(parent().rows).toEqual([{ value: '2' }, { value: null }]);
   expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'n']);
-  await act(async () => original.onShowMatchingRows(new Set([0])));
+  await act(async () => original.onShowRows(new Set([0])));
   expect(parent().sqliteSource.sqliteStorage.rows).toEqual(['t', 'n']);
 
   bridge.mockResolvedValueOnce(null);
@@ -160,7 +160,7 @@ it('离线排序保留匹配成员和 SQLite 逐格类型，撤销旧网格回�
   await mount();
   bridge.mockResolvedValueOnce(value);
   await click(text.choose);
-  await act(async () => parent().onShowMatchingRows(new Set([0, 1, 3])));
+  await act(async () => parent().onShowRows(new Set([0, 1, 3])));
   const beforeSort = parent();
   await act(async () => beforeSort.onSortChange([{ column: 'value', direction: 'ASC', nulls: 'LAST' }]));
   expect(parent().rows.map((row: { value: unknown }) => row.value)).toEqual(['2', '10', '2']);

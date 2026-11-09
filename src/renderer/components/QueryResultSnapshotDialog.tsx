@@ -31,7 +31,7 @@ import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
 import { escapeTargetsQueryResultFind } from './QueryResultFind';
-import { QueryResultMatchView, useQueryResultMatchView } from './QueryResultMatchView';
+import { QueryResultMatchView, useQueryResultMatchView, type QueryResultRowViewKind } from './QueryResultMatchView';
 import { SqlEditor } from './SqlEditor';
 import { UsageHelp, ErrorBox, Modal, Spinner  } from './ui';
 import '../queryResultSnapshotViewer.css';
@@ -141,14 +141,15 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     close();
   }
   /** 匹配筛看只改变当前网格，另存始终读取完整文件。换行视图时同步撤销旧网格回调。 */
-  function changeMatchView(indices?: ReadonlySet<number>): void {
+  function changeMatchView(indices?: ReadonlySet<number>, kind: QueryResultRowViewKind = 'find'): void {
     if (!loaded || !gridCurrent(loaded, interaction, false)) return;
     const invalidate = () => {
       advance();
       host.current?.querySelector<HTMLElement>('.query-result-snapshot-viewer-grid [role="grid"]')?.focus({ preventScroll: true });
     };
+    if (kind !== 'find' && (!indices || !exportSelection.matchesIndices(binding, [...indices]))) return;
     try {
-      if (indices) matches.apply(indices, invalidate);
+      if (indices) matches.apply(indices, invalidate, kind);
       else matches.clear(invalidate);
     } catch (reason) { setError(errorMessage(reason)); }
   }
@@ -471,7 +472,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           onExportRange={binding ? openRangeExport : undefined}
           onHistoryTravel={historyBinding ? travelHistory : undefined}
           onActiveCellChange={selectDetailRow}
-          sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
+          sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>
       </div>

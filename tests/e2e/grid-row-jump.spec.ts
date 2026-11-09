@@ -2264,6 +2264,58 @@ test('查询结果只显示匹配行可保留排序和筛选并恢复原范围',
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询按勾选临时显示或隐藏行并保留整理范围', async ({}, info) => {
+  await seed(`SELECT id, CASE WHEN id=4 THEN '排除' ELSE name END AS 文本 FROM subject WHERE id<=4 ORDER BY id DESC;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^id/i });
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  const keyword = query.getByRole('searchbox', { name: keywordText.input, exact: true });
+  await keyword.fill('记录');
+  await keyword.press('Enter');
+  const status = query.getByRole('search', { name: keywordText.input }).getByRole('status');
+  await expect(status).toHaveText(keywordText.counts(3, 4));
+  const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+  await expect(ids).toHaveText(['1', '2', '3']);
+  const check = (id: number) => grid.getByRole('gridcell', { name: String(id), exact: true }).locator('..').getByRole('checkbox');
+  const show = query.getByRole('button', { name: resultFind.showCheckedRows, exact: true });
+  const hide = query.getByRole('button', { name: resultFind.hideCheckedRows, exact: true });
+  const restore = query.getByRole('button', { name: resultFind.restoreRowView, exact: true });
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const before = await history();
+  await expect(show).toBeDisabled();
+  await expect(hide).toBeDisabled();
+  await check(3).check();
+  await check(1).check();
+  await show.click();
+  await expect(query.getByText(resultFind.checkedViewCount(2, 3), { exact: true })).toBeVisible();
+  await expect(ids).toHaveText(['1', '3']);
+  await expect(check(3)).not.toBeChecked();
+  await info.attach('SQLite查询勾选视图', { body: await page.screenshot(), contentType: 'image/png' });
+  await (await navigationMenuItem(query, { name: zh.resultExport.title, exact: true })).click();
+  const dialog = page.getByRole('dialog', { name: zh.resultExport.title, exact: true });
+  await expect(dialog.getByText('已返回 2 行', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: zh.common.close, exact: true }).click();
+  await restore.click();
+  await expect(ids).toHaveText(['1', '2', '3']);
+  await check(1).check();
+  await check(3).check();
+  await hide.click();
+  await expect(query.getByText(resultFind.excludedViewCount(1, 3), { exact: true })).toBeVisible();
+  await expect(ids).toHaveText(['2']);
+  await check(2).check();
+  await hide.click();
+  await expect(query.getByText(resultFind.excludedViewCount(0, 3), { exact: true })).toBeVisible();
+  await expect(ids).toHaveCount(0);
+  await restore.click();
+  await expect(ids).toHaveText(['1', '2', '3']);
+  await expect(status).toHaveText(keywordText.counts(3, 4));
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  expect(await history()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 只读查询结果按焦点接收查找菜单并保留查找条件', async ({}, info) => {
   await seed('SELECT id,name FROM subject_view WHERE id < 3;', '', undefined, true);
   const query = page.locator('.query-tab:visible');

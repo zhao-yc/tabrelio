@@ -489,6 +489,13 @@ function register(): void {
       await step(() => viewer.getByRole('button', { name: findText.clearMatchView, exact: true }).click());
       await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
       await step(() => expect(other).toBeVisible());
+      await step(() => other.locator('..').getByRole('checkbox').check());
+      await step(() => viewer.getByRole('button', { name: findText.hideCheckedRows, exact: true }).click());
+      await step(() => expect(viewer.getByText(findText.excludedViewCount(1, 2), { exact: true })).toBeVisible());
+      await step(() => expect(other).toHaveCount(0));
+      await step(() => expect(match).toBeVisible());
+      await step(() => viewer.getByRole('button', { name: findText.restoreRowView, exact: true }).click());
+      await step(() => expect(other).toBeVisible());
       await step(() => viewer.getByRole('button', { name: findText.open, exact: true }).click());
       await step(() => viewer.getByRole('combobox', { name: findText.columns, exact: true }).selectOption('column:constructor'));
       await step(() => viewer.getByRole('combobox', { name: findText.mode, exact: true }).selectOption('endsWith'));
