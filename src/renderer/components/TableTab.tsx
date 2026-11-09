@@ -15,7 +15,7 @@ import { TableApplyRecoveryBanner } from './TableApplyRecoveryBanner';
 import { RecordBatchEditIntent } from '../recordBatchEdit';
 import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
-import { GridRowSelectionActions } from './GridRowSelectionActions';
+import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { readGridRowHeight } from '../../shared/gridRowHeight';
@@ -487,6 +487,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const checkedExport = useTableCheckedExport(collectScope, collectSignature);
   const rowJumpScope = pageFindGeneration();
   const rowJumpDisabled = blocked || externalStale || gridEditing || record.hasInput() || record.pending || !visibleKeys.length;
+  const rowSelectionKey = (row: DraftRow) => row.deleted ? undefined : row.id;
+  const rowSelectionCurrent = () => !rowJumpDisabled && tableToolbarCurrent() && rowsRef.current === rows && selectedRowsRef.current === selectedRows
+    && !blockedRef.current && !activeGridEditor.current && !record.hasInput() && rowJumpScope === pageFindGeneration();
   /** 行列定位共用本页、可见列与编辑门；换页或草稿变化后旧坐标失效。 */
   function gridJumpCurrent(): boolean {
     const workspace = useWorkspace.getState();
@@ -2183,6 +2186,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (event.defaultPrevented || !openCellActions(row, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
     event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
   }} onCellKeyDown={(args, event) => {
+    if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
+      () => !!args.row && rows[args.rowIdx] === args.row && !!args.column && visibleKeys.includes(args.column.key) && rowSelectionCurrent(),
+      () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;
     if (isGridContextKey(event) && args.mode === 'ACTIVE' && !event.defaultPrevented && !event.isGridDefaultPrevented() &&
         openCellActions(args.row, args.column?.key, event.target)) {
       event.preventGridDefault(); event.preventDefault(); event.stopPropagation(); return;
@@ -2202,9 +2208,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       <GridColumnJump scope={rowJumpScope} columns={visibleColumns} disabled={rowJumpDisabled || !page}
         isCurrent={gridJumpCurrent} onJump={jumpToGridColumn}/>
       <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={rowJumpDisabled}
-        keyFor={row => row.deleted ? undefined : row.id}
-        isCurrent={() => tableToolbarCurrent() && rowsRef.current === rows && selectedRowsRef.current === selectedRows
-          && !blockedRef.current && !activeGridEditor.current && !record.hasInput() && rowJumpScope === pageFindGeneration()}
+        keyFor={rowSelectionKey}
+        isCurrent={rowSelectionCurrent}
         onChange={setSelectedRows}/><form className="page-jump" title={zh.table.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}><input aria-label={zh.table.pageJumpLabel} inputMode="numeric" value={pageJump} disabled={blocked || restoredDraftView} onChange={event => setPageJump(event.target.value)}/><button type="submit" disabled={blocked || restoredDraftView}>{zh.table.pageJump}</button></form><button type="button" disabled={restoredDraftView || blocked || gridEditing || pageRequest === 1} onClick={() => goToNumberedPage(1)}>{zh.table.firstPage}</button><button className="icon-button" aria-label={zh.common.pagePrevious} disabled={restoredDraftView || pageIndex === 1 || blocked} onClick={() => goToNumberedPage(pageIndex - 1)}><ChevronLeft size={16}/></button><span>{restoredDraftView ? savedDraftText.restoredScope : <>{zh.table.text023}{pageIndex}{zh.table.text024}</>}</span><button className="icon-button" aria-label={zh.common.pageNext} disabled={restoredDraftView || !page?.hasMore || blocked || pageIndex >= maxTablePage} onClick={() => goToNumberedPage(pageIndex + 1)}><ChevronRight size={16}/></button>
       <button type="button" disabled={!lastPageAvailable} title={lastPageSupported ? zh.table.lastPageHint : zh.table.lastPageUnsupported} onClick={openLastPage}>{zh.table.lastPage}</button>
       {busy && renderedLastPageRead && <button type="button" disabled={lastPageStopping || renderedLastPageRead.finished} onClick={() => stopLastPage(renderedLastPageRead)}>{lastPageStopping ? zh.table.lastPageStopping : zh.table.lastPageStop}</button>}

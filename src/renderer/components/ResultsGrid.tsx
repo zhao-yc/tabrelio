@@ -29,7 +29,7 @@ import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.z
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { appModalSelector } from '../modalSelectors';
-import { GridRowSelectionActions } from './GridRowSelectionActions';
+import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { encodeQueryResultColumn, encodeQueryResultWithHeaders, encodeTableGridCopy, writeQueryResultClipboard, type QueryResultCopyCell } from '../queryResultHeaderCopy';
@@ -341,6 +341,9 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   /** 整理快捷键仅属于当前只读网格；输入框、编辑模式和旧渲染不能借此撤销正文或另一结果。 */
   function cellKeyDown(args:CellKeyDownArgs<DataRow>,event:CellKeyboardEvent):void{
     const {row,column}=args,key=event.key.toLowerCase();
+    if (args.mode === 'ACTIVE' && handleGridSelectAllKey(event,
+      () => canSelectRows && !!row && rows[args.rowIdx] === row && !!column && columns.some(item => item.key === column.key) && rowSelectionCurrent(),
+      () => setSelectedRows(gridRowKeys(rows, rowSelectionKey)))) return;
     if (isGridContextKey(event) && args.mode === 'ACTIVE' && !event.defaultPrevented && !event.isGridDefaultPrevented() &&
       openCellActions(row, args.rowIdx, column?.key, event.target)) {
       event.preventGridDefault();
@@ -488,6 +491,9 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     });
   }
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
+  const canSelectRows = !onActiveRowChange && (rowJump || hasResultTools);
+  const rowSelectionKey = (row: DataRow, index: number) => skipRowInInversion?.(row) ? undefined : index;
+  const rowSelectionCurrent = () => tableCopy?.enabled !== false && selectedRowsRef.current === selectionBefore && rowJumpIsCurrent();
   const jump = rowJump ? <>
     <GridRowJump grid={gridRef} scope={scope} count={rows.length}
       disabled={!columns.length} isCurrent={rowJumpIsCurrent} onJump={jumpToGridRow}/>
@@ -532,10 +538,10 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
       onClick={() => handleRowOutput(build, selectedRows.size > 0, sql => onOpenRowSql(kind, sql))}>{labels.open}</button>)}
   </>;
-  const selectionTools = !onActiveRowChange && (rowJump || hasResultTools) ?
+  const selectionTools = canSelectRows ?
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={tableCopy?.enabled === false}
-      keyFor={(row, index) => skipRowInInversion?.(row) ? undefined : index}
-      isCurrent={() => selectedRowsRef.current === selectionBefore && rowJumpIsCurrent()}
+      keyFor={rowSelectionKey}
+      isCurrent={rowSelectionCurrent}
       onChange={setSelectedRows}/> : undefined;
   const gridTools = jump || tableCopy ? <>{jump}{tableCopy && copyTools}{selectionTools}</> : undefined;
   return <>{cellActionMenu.menu}{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : gridTools)}

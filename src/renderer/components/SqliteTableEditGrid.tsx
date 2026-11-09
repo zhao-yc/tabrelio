@@ -15,7 +15,7 @@ import type { SqlitePasteAnchor } from '../sqliteTableRangePaste';
 import type { SqliteCheckedRows } from '../sqliteTableSelection';
 import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
-import { GridRowSelectionActions } from './GridRowSelectionActions';
+import { GridRowSelectionActions, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
@@ -314,6 +314,9 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     return focusGridColumn(grid.current, index + 2, row ? rows.indexOf(row) : -1);
   }
   // 表头、行复选框和页操作共用同一勾选修订与父级通知。
+  const rowSelectionKey = (row: SqliteDraftRow) => row.deleted ? undefined : row.id;
+  const rowSelectionCurrent = () => !disabled && baseCurrent() && selection.current.revision === selectionTicket && noModal();
+
   function changeCheckedRows(ids: ReadonlySet<string>) {
     if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return;
     selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} };
@@ -351,8 +354,8 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => handleTableSql(build, selectedRows.size > 0, sql => onOpenRowSql(kind, sql))}>{labels.open}</button>)}
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
-      keyFor={row => row.deleted ? undefined : row.id}
-      isCurrent={() => baseCurrent() && selection.current.revision === selectionTicket && noModal()}
+      keyFor={rowSelectionKey}
+      isCurrent={rowSelectionCurrent}
       onChange={changeCheckedRows}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
@@ -364,7 +367,10 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       if (event.defaultPrevented || !openCellActions(row, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
       event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
     }}
-    onCellKeyDown={({ row, column, mode }, event) => {
+    onCellKeyDown={({ row, rowIdx, column, mode }, event) => {
+      if (mode === 'ACTIVE' && handleGridSelectAllKey(event,
+        () => !!row && rows[rowIdx] === row && !!column && order.some(index => column.key === 'c' + index) && rowSelectionCurrent(),
+        () => changeCheckedRows(gridRowKeys(rows, rowSelectionKey)))) return;
       if (isGridContextKey(event) && mode === 'ACTIVE' && !event.defaultPrevented && !event.isGridDefaultPrevented() &&
           openCellActions(row, column?.key, event.target)) {
         event.preventGridDefault(); event.preventDefault(); event.stopPropagation(); return;

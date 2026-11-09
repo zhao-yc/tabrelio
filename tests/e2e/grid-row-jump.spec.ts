@@ -68,17 +68,24 @@ async function nativeGoto() {
   });
 }
 
-test('查询结果和 SQLite 可编辑表、只读视图可定位未渲染行且无额外数据任务', async () => {
+test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲染行且无额外数据任务', async () => {
   await seed();
   const query = page.locator('.query-tab:visible'), table = page.locator('.sqlite-table-tab:visible');
   const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const selectAllKey = process.platform === 'darwin' ? 'Meta+Shift+Space' : 'Control+Shift+Space';
   await query.locator('.query-execute-split > button.primary').click();
   await expect(query.getByRole('gridcell', { name: '180', exact: true })).toBeVisible();
   const open = query.getByRole('button', { name: text.open, exact: true });
   await expect(open).toBeEnabled();
   const before = await tasks();
-  await query.getByRole('gridcell', { name: '180', exact: true }).focus();
+  const firstResult = query.getByRole('gridcell', { name: '180', exact: true });
+  await firstResult.click();
+  await page.keyboard.press(selectAllKey);
+  await expect(firstResult).toBeFocused();
+  await expect(firstResult.locator('..').getByRole('checkbox')).toBeChecked();
   await jump(query, '120', '61', () => page.keyboard.press('Control+g'));
+  await expect(query.getByRole('gridcell', { name: '61', exact: true }).locator('..').getByRole('checkbox')).toBeChecked();
+  await query.getByRole('button', { name: selectionText.clear, exact: true }).click();
   expect(await tasks()).toEqual(before);
   await open.click();
   await query.getByRole('textbox', { name: text.row, exact: true }).press('Escape');
@@ -97,11 +104,21 @@ test('查询结果和 SQLite 可编辑表、只读视图可定位未渲染行且
     await expect(table.getByRole('gridcell', { name: value('1'), exact: true })).toBeVisible();
     await expect(table.getByRole('button', { name: text.open, exact: true })).toBeEnabled();
     const originalTasks = await tasks();
-    await table.getByRole('gridcell', { name: value('1'), exact: true }).focus();
-    await jump(table, '80', value('80'), readOnly === 'false' ? nativeGoto : () => page.keyboard.press('Control+g'));
+    await table.getByRole('gridcell', { name: value('1'), exact: true }).click();
     if (readOnly === 'true') {
-      const row = table.getByRole('gridcell', { name: value('80'), exact: true }).locator('..').getByRole('checkbox');
-      const clear = table.getByRole('button', { name: selectionText.clear, exact: true });
+      await table.getByRole('button', { name: selectionText.all, exact: true }).click();
+      await table.getByRole('gridcell', { name: value('1'), exact: true }).focus();
+    } else {
+      await page.keyboard.press(selectAllKey);
+    }
+    await jump(table, '80', value('80'), readOnly === 'false' ? nativeGoto : () => page.keyboard.press('Control+g'));
+    const row = table.getByRole('gridcell', { name: value('80'), exact: true }).locator('..').getByRole('checkbox');
+    const clear = table.getByRole('button', { name: selectionText.clear, exact: true });
+    await expect(row).toBeChecked();
+    await clear.click();
+    await expect(row).not.toBeChecked();
+    await expect(clear).toBeDisabled();
+    if (readOnly === 'true') {
       await table.getByRole('button', { name: selectionText.invert, exact: true }).click();
       await expect(row).toBeChecked();
       await clear.click();
@@ -272,7 +289,10 @@ test('SQLite 跨页收集可替换单页并导出真实文件，刷新清除原�
 
   await openTab('v-jump', '视图定位');
   await expect(button(collectText.export)).toBeDisabled();
+  await pane.getByRole('button', { name: selectionText.all, exact: true }).click();
+  await expect(rowCheck('1')).toBeChecked();
   await pane.getByRole('button', { name: browseText.next, exact: true }).click();
+  await expect(rowCheck('101')).not.toBeChecked();
   await rowCheck('101').check();
   await button(collectText.collect).click();
   await expect(group.getByRole('status')).toHaveText(collectText.summary(1, 1));
