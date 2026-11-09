@@ -13,6 +13,7 @@ import { primaryKeyCopyZh as keyCopy } from '../../src/renderer/locales/primaryK
 import { updateSqlCopyZh as updateCopy } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
 import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
 import { copyInsertSqlZh as insertCopy } from '../../src/shared/copyInsertSql.zh-CN';
+import { postgresReferencePickerZh as referenceText } from '../../src/renderer/locales/postgresReferencePicker.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -40,6 +41,84 @@ async function loadQuery({ port, user, database, password }: ReturnType<typeof i
   }, { connectionId, database, sql });
   await page.reload();
 }
+
+test('PostgreSQL 只读查询结果可沿复合外键查看父子记录并拒绝陈旧原行', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    const password = randomBytes(32).toString('hex');
+    await observer.query(`CREATE SCHEMA query_fk;
+      CREATE SCHEMA query_fk_target;
+      CREATE TABLE public.query_fk_parent (tenant text, id bigint, label text, PRIMARY KEY (tenant, id));
+      CREATE TABLE query_fk_target.query_fk_parent (LIKE public.query_fk_parent INCLUDING ALL);
+      CREATE TABLE query_fk.subject (tenant text, id bigint, parent_id bigint, label text,
+        PRIMARY KEY (tenant, id), FOREIGN KEY (tenant, parent_id) REFERENCES query_fk_target.query_fk_parent (tenant, id));
+      CREATE TABLE query_fk.detail (id integer PRIMARY KEY, tenant text, subject_id bigint, label text,
+        FOREIGN KEY (tenant, subject_id) REFERENCES query_fk.subject (tenant, id));
+      INSERT INTO public.query_fk_parent VALUES ('区甲', 9007199254740993, '同名表干扰');
+      INSERT INTO query_fk_target.query_fk_parent VALUES ('区甲', 9007199254740993, '准确父甲'), ('区乙', 9007199254740993, '父乙干扰');
+      INSERT INTO query_fk.subject VALUES ('区甲', 2, 9007199254740993, '所选甲'), ('区乙', 3, 9007199254740993, '所选乙');
+      INSERT INTO query_fk.detail VALUES (1, '区甲', 2, '明细甲一'), (2, '区甲', 2, '明细甲二'), (3, '区乙', 3, '明细乙干扰');
+      CREATE ROLE query_fk_reader LOGIN PASSWORD '${password}';
+      GRANT USAGE ON SCHEMA query_fk, query_fk_target TO query_fk_reader;
+      GRANT SELECT ON ALL TABLES IN SCHEMA query_fk, query_fk_target TO query_fk_reader;
+      GRANT SELECT ON public.query_fk_parent TO query_fk_reader;`);
+    await loadQuery({ ...config, user: 'query_fk_reader', password },
+      'SELECT tenant AS 区, id AS 编号, label AS 内容 FROM query_fk.subject ORDER BY id DESC;');
+    const query = page.locator('.postgres-query:visible');
+    const button = (name: string) => query.getByRole('button', { name, exact: true });
+    const cell = query.getByRole('gridcell', { name: '所选甲', exact: true });
+    const parent = page.getByRole('dialog', { name: referenceText.browseTitle, exact: true });
+    const children = page.getByRole('dialog', { name: referenceText.childrenTitle, exact: true });
+    const related = page.locator('.postgres-related-table-tab:visible');
+    const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+      .filter(task => task.kind === 'query.execute'));
+
+    await button(postgresZh.execute).click();
+    await expect(button(referenceText.browse)).toBeDisabled();
+    await expect(button(text.edit)).toHaveCount(0);
+    await query.getByRole('columnheader', { name: '编号' }).click();
+    await expect(cell.locator('..')).toHaveAttribute('aria-rowindex', '2');
+    await cell.click();
+    const before = await tasks();
+    await button(referenceText.browse).click();
+    await expect(parent.getByRole('table')).toContainText('准确父甲');
+    await expect(parent.getByRole('table')).not.toContainText(/父乙干扰|同名表干扰/);
+    await expect(parent.getByRole('button', { name: referenceText.use, exact: true })).toHaveCount(0);
+    await info.attach('PostgreSQL查询结果外键关联', { body: await page.screenshot(), contentType: 'image/png' });
+    await parent.getByRole('button', { name: referenceText.openRelated, exact: true }).click();
+    await expect(related.getByRole('grid')).toContainText('准确父甲');
+    await expect(related.getByRole('grid')).not.toContainText(/父乙干扰|同名表干扰/);
+    await page.locator('.tab-strip .tab-select').getByText('原记录查询', { exact: true }).click();
+    await cell.click();
+    await button(referenceText.children).click();
+    await expect(children.getByRole('table')).toContainText('明细甲一');
+    await expect(children.getByRole('table')).toContainText('明细甲二');
+    await expect(children.getByRole('table')).not.toContainText('明细乙干扰');
+    await children.getByRole('searchbox', { name: referenceText.childQuery }).fill('明细甲二');
+    await children.getByRole('button', { name: referenceText.childSearch, exact: true }).click();
+    await expect(children.getByRole('table')).not.toContainText('明细甲一');
+    await children.getByRole('button', { name: referenceText.openRelated, exact: true }).click();
+    await expect(related.getByRole('grid')).toContainText('明细甲二');
+    await expect(related.getByRole('grid')).not.toContainText(/明细甲一|明细乙干扰/);
+
+    await page.locator('.tab-strip .tab-select').getByText('原记录查询', { exact: true }).click();
+    await cell.click();
+    await button(referenceText.browse).click();
+    await expect(parent.getByRole('table')).toContainText('准确父甲');
+    await observer.query("UPDATE query_fk.subject SET label = '已改变' WHERE tenant = '区甲' AND id = 2");
+    await parent.getByRole('button', { name: referenceText.openRelated, exact: true }).click();
+    await expect(parent.getByRole('alert')).toContainText('原记录已变化');
+    await parent.press('Escape');
+    await expect(parent).toBeHidden();
+    await cell.click();
+    await button(referenceText.browse).click();
+    await expect(parent.getByRole('alert')).toContainText('查询原记录无法核验');
+    expect(await tasks()).toEqual(before);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
 
 test('PostgreSQL 查询单元格按原行及原列定位，预览确认后提交并拒绝陈旧原值', async ({}, info) => {
   const config = isolatedConnection();

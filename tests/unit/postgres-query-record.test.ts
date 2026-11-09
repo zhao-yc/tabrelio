@@ -78,6 +78,16 @@ describe('PostgreSQL 查询原记录', () => {
     expect(postgresQueryRecordPageSchema.safeParse({ ...source, rowIndex: 7, rowIndices: [91] }).success).toBe(false);
   });
 
+  it('外键浏览只接收一个原行，拒绝表名、外键值和批量位置', () => {
+    const source = { connectionId: 'conn', database: 'db', sessionId: 'session', executionId: 'exec', tabId: 'tab',
+      operation: 'reference' };
+    const request = { ...source, rowIndex: 91 };
+    expect(postgresQueryRecordPageSchema.parse(request)).toEqual(request);
+    expect(postgresQueryRecordPageSchema.safeParse(source).success).toBe(false);
+    for (const extra of [{ table: 'public.other' }, { foreignKey: '2' }, { rowIndices: [91] }, { rowIndex: 100000 }])
+      expect(postgresQueryRecordPageSchema.safeParse({ ...request, ...extra }).success).toBe(false);
+  });
+
   it('删除和复制必须明确提交唯一的原行数组', () => {
     const source = { connectionId: 'conn', database: 'db', sessionId: 'session', executionId: 'exec', tabId: 'tab' };
     const deletion = { ...source, operation: 'delete', rowIndices: [2, 0] };

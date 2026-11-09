@@ -170,7 +170,9 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
         WHERE p.classid='pg_catalog.pg_attrdef'::regclass AND p.objid=d.oid
           AND p.refclassid='pg_catalog.pg_class'::regclass AND p.refobjsubid=0)))::text
       FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-      WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped), '[]')` : '';
+      WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped), '[]'),
+    pg_catalog.has_table_privilege(c.oid, 'SELECT') AND EXISTS (
+      SELECT 1 FROM pg_catalog.pg_constraint f WHERE f.contype='f' AND (f.conrelid=c.oid OR f.confrelid=c.oid))` : '';
   const result = await connection.query(`SELECT c.relfilenode::text, current_user::text,
     COALESCE((SELECT pg_catalog.jsonb_agg(k.attnum ORDER BY k.ordinality)::text
      FROM pg_catalog.pg_index i, LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality)
@@ -195,7 +197,7 @@ export async function postgresQueryRecordIdentity(connection: PostgresConnection
       textAttributes: new Set<number>(Array.isArray(textAttributes) ? textAttributes : []),
       rowSql: typeof row.c7 === 'string' && typeof row.c8 === 'string' && typeof row.c9 === 'string'
         ? { table: qualifiedQueryTable({ schema: row.c7, name: row.c8 }), columns: row.c9 } : undefined,
-      capabilities: { update: row.c3 === 't', delete: row.c4 === 't', insert: row.c5 === 't' } };
+      capabilities: { update: row.c3 === 't', delete: row.c4 === 't', insert: row.c5 === 't', reference: row.c10 === 't' } };
 }
 
 /** 以协议序号连接真实列名，重复投影只取第一次，计算列与连接表不进入 SQL。 */
@@ -245,15 +247,16 @@ function sameCell(before: CellValue, after: CellValue): boolean {
     : Object.is(before, after);
 }
 
-/** 只核对协议指向原表的投影值，不重新执行计算表达式。写入沿用整行版本保护。 */
-export async function verifyPostgresQueryEdit(connection: PostgresConnection, source: PostgresQueryRecordSource,
+/** 只核对协议指向原表的投影值，不重新执行计算表达式。后续按整行版本定位。 */
+export async function verifyPostgresQueryRecord(connection: PostgresConnection, source: PostgresQueryRecordSource,
   rowIndices: readonly number[], resolved: Awaited<ReturnType<typeof resolvePostgresQueryRecord>>,
   relation: { oid: string; sql: string; keys: string[] }) {
   const oid = String(source.relationOid);
   if (relation.oid !== oid || relation.sql !== resolved.table) throw blocked();
+  const { server, identity } = source;
   const checkServer = async (current: PostgresConnection) => {
-    if (current.serverIdentity !== source.server ||
-        (await postgresQueryRecordIdentity(current, resolved.table, Number(oid)))?.identity !== source.identity) throw blocked();
+    if (current.serverIdentity !== server ||
+        (await postgresQueryRecordIdentity(current, resolved.table, Number(oid)))?.identity !== identity) throw blocked();
   };
   await checkServer(connection);
   const locked = await resolvePostgresQueryRecord(connection, source);

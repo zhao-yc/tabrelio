@@ -1,6 +1,9 @@
 export const postgresReferencePickerZh = {
   open: '选择外键记录',
   browse: '查看引用记录',
+  queryChoose: '先在查询结果中选中一个单元格',
+  queryLoading: '正在核对查询结果的原记录…',
+  queryHint: '核对所选结果行后按数据库中的外键原值查找。',
   browseTitle: 'PostgreSQL 引用记录',
   browseHint: '按当前行在数据库中的原值查找。已暂存的外键值仍保留在草稿中。',
   parentTable: '引用表',

@@ -1,6 +1,6 @@
 import { postgresQueryRecordPageSchema } from '../../shared/postgresQueryRecord';
 import { postgresQueryHasUniqueKeys, postgresQueryJoinTarget, postgresQueryRecordIdentity, postgresQueryRecordTable,
-  postgresQueryRowSql, qualifiedQueryTable, resolvePostgresQueryRecord, verifyPostgresQueryEdit, type PostgresQueryRecordSource } from './queryRecord';
+  postgresQueryRowSql, qualifiedQueryTable, resolvePostgresQueryRecord, verifyPostgresQueryRecord, type PostgresQueryRecordSource } from './queryRecord';
 import { postgresResultOriginsSchema } from '../../shared/postgresResultOrigins';
 import { postgresColumnReferences, readPostgresResultOrigins } from './resultOrigins';
 import { postgresBatchSyncApplySchema, postgresBatchSyncPreviewSchema } from '../../shared/postgresBatchSync';
@@ -1168,7 +1168,8 @@ export class PostgresEngine {
               rowSql = postgresQueryRowSql(confirmed.rowSql, targets, confirmed.keys, rowsEditable);
             const capabilities = { update: rowsEditable && confirmed.capabilities.update,
               delete: !joined && rowsEditable && confirmed.capabilities.delete,
-              insert: !joined && rowsEditable && confirmed.capabilities.insert, newRecord: !joined && confirmed.capabilities.insert };
+              insert: !joined && rowsEditable && confirmed.capabilities.insert, newRecord: !joined && confirmed.capabilities.insert,
+              reference: rowsEditable && confirmed.capabilities.reference };
             if (Object.values(capabilities).some(Boolean))
               session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
                 identity: confirmed.identity, table, result, relationOid: oid, origins: targets, capabilities,
@@ -1310,8 +1311,8 @@ export class PostgresEngine {
           const resolved = await resolvePostgresQueryRecord(connection, source);
           const target = { owner, connectionRevision, connectionId: request.connectionId, database: request.database,
             table: resolved.table, tabId: request.tabId };
-          const page = await this.tables.recordEdit(target, action => action(connection),
-            (currentConnection, relation) => verifyPostgresQueryEdit(currentConnection, source, rowIndices, resolved, relation), current, operation);
+          const page = await this.tables.recordPage(target, action => action(connection),
+            (currentConnection, relation) => verifyPostgresQueryRecord(currentConnection, source, rowIndices, resolved, relation), current, operation);
           // 结果可以重复使用同一个别名，原表字段键只按已核验的来源位置返回。
           const keys = new Map(page.columns.map(column => [column.name, column.key]));
           return { table: resolved.table, page, columnKeys: resolved.columns.map(name => name === null ? null : keys.get(name) ?? null) };
@@ -1680,7 +1681,7 @@ export class PostgresEngine {
           if (!entry.postgresIdentity || target.kind !== 'table' || target.database !== page.database || target.table !== page.table)
             throw Error('PostgreSQL 搜索记录不属于当前库表');
           const { owner, connectionRevision, connectionId, database, table, tabId } = page;
-          return this.tables.recordEdit({ owner, connectionRevision, connectionId, database, table, tabId }, connect,
+          return this.tables.recordPage({ owner, connectionRevision, connectionId, database, table, tabId }, connect,
             async connection => {
               const { original, checkServer } = await verifyPostgresSearchEdit(connection, entry);
               return { originals: [original], checkServer };

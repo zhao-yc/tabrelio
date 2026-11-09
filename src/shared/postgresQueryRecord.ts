@@ -10,6 +10,7 @@ const source = z.object({
 });
 export const postgresQueryRecordPageSchema = z.union([
   source.extend({ rowIndex }).strict(),
+  source.extend({ rowIndex, operation: z.literal('reference') }).strict(),
   source.extend({ rowIndices }).strict(),
   source.extend({ rowIndices, operation: z.enum(['delete', 'insert']) }).strict(),
   source.extend({ operation: z.literal('new') }).strict(),

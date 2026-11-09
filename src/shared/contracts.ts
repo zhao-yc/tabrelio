@@ -99,7 +99,7 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   postgresResultSources?: PostgresResultSource[];
   /** 当前结果可尝试回查原行，编辑仍须由引擎核验主键及已返回值。 */
   postgresQueryRecordExecution?: string;
-  postgresQueryRecordCapabilities?: { update: boolean; delete: boolean; insert: boolean; newRecord: boolean };
+  postgresQueryRecordCapabilities?: { update: boolean; delete: boolean; insert: boolean; newRecord: boolean; reference: boolean };
   postgresQueryRecordJoinTarget?: number;
   postgresQueryReplaceColumns?: number[];
   postgresQueryRowSql?: import('./postgresQueryRecord').PostgresQueryRowSql;

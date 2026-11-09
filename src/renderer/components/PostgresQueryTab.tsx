@@ -4,6 +4,9 @@ import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresResultOrigin } from '../../shared/postgresResultOrigins';
 import { postgresResultOriginsZh as originsText } from '../locales/postgresResultOrigins.zh-CN';
 import { PostgresResultOriginsDialog } from './PostgresResultOriginsDialog';
+import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRecord';
+import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
+import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { handleQueryResultShortcut } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
@@ -306,6 +309,12 @@ export function PostgresQueryTab({
   }>();
   const retiredRecordExecution = useRef<string | undefined>(undefined);
   useEffect(() => () => { recordEdit?.job.release(); }, [recordEdit]);
+  const [recordReference, setRecordReference] = useState<{
+    request: Extract<PostgresQueryRecordPageInput, { operation: 'reference' }>;
+    direction: 'parent' | 'children';
+    result: QueryResult; scope: Scope; job: ReturnType<typeof acquireWorkspaceBusy>;
+  }>();
+  useEffect(() => () => { recordReference?.job.release(); }, [recordReference]);
 
   const [exportView, setExportView] = useState<{ result: ResultExportData; selected: boolean; scope?: 'rectangle' }>();
   const [fullExport, setFullExport] = useState<FullQueryExportSource>();
@@ -991,7 +1000,7 @@ export function PostgresQueryTab({
   const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
-    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!recordEdit || !!resultSql,
+    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!archiveOutcome || !!originsView || !!recordEdit || !!recordReference || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
   const archiveAvailable = !pin && !busy && !!outcome && !outcome.explain && !outcome.analysis
@@ -1295,6 +1304,34 @@ export function PostgresQueryTab({
   const canDeleteQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.delete === true;
   const canDuplicateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.insert === true;
   const canAddQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.newRecord === true;
+  const canBrowseQueryReference = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.reference === true;
+  const selectedDetailRow = activeDetailRow && activeDetailRow.binding === detailBinding ? activeDetailRow : undefined;
+
+  /** 本地排序及筛选只改变显示顺序。始终从原执行的行对象取序号。 */
+  function browseQueryReference(direction: 'parent' | 'children') {
+    const original = session.current;
+    if (locked || !canBrowseQueryReference || !recordExecution || !result || !original ||
+        !selectedDetailRow || !rowDetailCurrent(detailBinding)) return;
+    const rowIndex = result.rows.indexOf(selectedDetailRow.binding.rows[selectedDetailRow.index]);
+    if (rowIndex < 0) return;
+    const job = acquireWorkspaceBusy(tab.id);
+    setRecordReference({ request: { connectionId: tab.connectionId, database: scope.database, sessionId: original.id,
+      executionId: recordExecution, tabId: uid(), rowIndex, operation: 'reference' }, direction, result, scope, job });
+  }
+
+  function queryReferenceCurrent(view: NonNullable<typeof recordReference>) {
+    return view.job.owns() && same(view.scope) && session.current?.id === view.request.sessionId &&
+      selectedResultRef.current === view.result && !closeRef.current && useWorkspace.getState().settings.activeTabId === tab.id;
+  }
+
+  function closeQueryReference(view: NonNullable<typeof recordReference>) {
+    view.job.release();
+    setRecordReference(current => current === view ? undefined : current);
+  }
+
+  useEffect(() => {
+    if (recordReference && !queryReferenceCurrent(recordReference)) closeQueryReference(recordReference);
+  });
   const joinTarget = outcome?.postgresQueryRecordJoinTarget;
   const [replaceView, setReplaceView] = useState<{ binding: ResultSelectionBinding; request: PostgresFindRequest }>();
   const replaceKeys = useMemo(() => new Set(outcome?.postgresQueryReplaceColumns?.map(index => result?.columns[index]?.key)), [outcome, result]);
@@ -2213,6 +2250,12 @@ export function PostgresQueryTab({
                 {origins && <button disabled={locked} onClick={() => void openOrigins()}>{originsText.open}</button>}
                 <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
+                {canBrowseQueryReference && <>
+                  <button disabled={locked || !selectedDetailRow} title={referenceText.queryChoose}
+                    onClick={() => browseQueryReference('parent')}>{referenceText.browse}</button>
+                  <button disabled={locked || !selectedDetailRow} title={referenceText.queryChoose}
+                    onClick={() => browseQueryReference('children')}>{referenceText.children}</button>
+                </>}
                 {canUpdateQueryRecord && <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                   title={joinTarget === undefined ? originsText.cellHint : originsText.joinEditHint} onClick={() => {
                     if (activeDetailRow && activeDetailRow.binding === detailBinding)
@@ -2339,6 +2382,8 @@ export function PostgresQueryTab({
           isCurrent={() => sortCurrent(sortDraft)} onApply={rules => applyResultSort(rules, sortDraft)}
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
+      {recordReference && <PostgresQueryReferenceDialog request={recordReference.request} direction={recordReference.direction}
+        isCurrent={() => queryReferenceCurrent(recordReference)} onClose={() => closeQueryReference(recordReference)} />}
       {recordEdit && <PostgresSearchRecordEditDialog connectionId={tab.connectionId} database={recordEdit.scope.database} queryRecord={recordEdit.source}
         cell={recordEdit.cell} range={recordEdit.range} visible={workspace.settings.activeTabId === tab.id}
         isCurrent={() => recordEdit.job.owns() && same(recordEdit.scope) && session.current?.id === recordEdit.source.sessionId &&

@@ -16,8 +16,9 @@ type Opened = NonNullable<PostgresTableReferenceResult['opened']>;
 type View = { choice: PostgresTableReference; page: CandidatePage; offset: number; search: string };
 
 /** 候选回包属于打开时的表单和查询代次，填入操作只写父级字段输入。 */
-export function PostgresReferencePicker({ source, onClose, onChoose, onOpen }: {
+export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, queryResult }: {
   source: PostgresReferenceSource; onClose(): void; onChoose?(fields: PostgresTableField[]): void; onOpen?(opened: Opened): void;
+  queryResult?: boolean;
 }) {
   const parent = source.input.parentRow !== undefined, children = source.input.childrenRow !== undefined;
   const browse = parent || children;
@@ -160,6 +161,6 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen }: {
         </tr>)}</tbody>
       </table></div>}
     </>}
-    <p className="muted small">{children ? text.childrenHint : parent ? text.browseHint : text.hint}</p>
+    <p className="muted small">{queryResult ? text.queryHint : children ? text.childrenHint : parent ? text.browseHint : text.hint}</p>
   </section>;
 }
