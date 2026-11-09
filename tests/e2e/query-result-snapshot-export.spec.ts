@@ -8,6 +8,7 @@ import { queryResultSortZh as sort } from '../../src/renderer/locales/queryResul
 import { queryResultFilterZh as filter } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { gridRangeExportZh as rangeText } from '../../src/renderer/locales/gridRangeExport.zh-CN';
+import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultSnapshotFileMessages as filesText } from '../../src/main/queryResultSnapshotFiles';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
@@ -101,7 +102,11 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await expect(viewer.getByText(text.opened('离线源.dbark-result.json'), { exact: true })).toBeVisible();
     const shown = viewer.getByRole('button', { name: text.exportShown, exact: true });
     const checked = viewer.getByRole('button', { name: text.exportChecked, exact: true });
+    const undo = viewer.getByRole('button', { name: historyText.undo, exact: true });
+    const redo = viewer.getByRole('button', { name: historyText.redo, exact: true });
     await expect(checked).toBeDisabled();
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
     await viewer.getByRole('button', { name: find.open, exact: true }).click();
     await viewer.getByRole('textbox', { name: find.input, exact: true }).fill('匹配');
     await viewer.getByRole('button', { name: find.showMatchingRows, exact: true }).click();
@@ -163,6 +168,26 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await lower.press('Escape');
     await expect(filterButton).toBeFocused();
     await expect(filtered).toBeVisible();
+
+    // 已取消的草稿不入历史。撤销筛选和排序都沿用同一组查找命中的原行。
+    const undoKeys = process.platform === 'darwin' ? 'Meta+z' : 'Control+z';
+    const redoKeys = process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+Shift+z';
+    await labels.first().click();
+    await page.keyboard.press(undoKeys);
+    await expect(labels).toHaveText(['匹配丙', '匹配甲', '匹配乙']);
+    await expect(matched).toBeVisible();
+    await undo.click();
+    await expect(labels).toHaveText(['匹配乙', '匹配甲', '匹配丙']);
+    await expect(amount.getByLabel(sort.ascending)).toBeVisible();
+    await expect(redo).toBeEnabled();
+    await info.attach('离线快照撤销排序和筛选', { body: await page.screenshot(), contentType: 'image/png' });
+    await redo.click();
+    await expect(labels).toHaveText(['匹配丙', '匹配甲', '匹配乙']);
+    await labels.first().click();
+    await page.keyboard.press(redoKeys);
+    await expect(labels).toHaveText(['匹配丙', '匹配甲']);
+    await expect(filtered).toBeVisible();
+    await expect(redo).toBeDisabled();
 
     const save = async (title: string, format: 'csv' | 'json', rows: number, filename: string) => {
       const dialog = page.getByRole('dialog', { name: title, exact: true });

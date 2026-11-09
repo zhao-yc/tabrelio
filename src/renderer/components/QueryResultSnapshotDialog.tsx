@@ -12,10 +12,11 @@ import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterB
 import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilterOperator } from '../queryResultCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
-import { prepareQueryResultOrganization } from '../queryResultHistory';
+import { prepareQueryResultOrganization, QueryResultHistory } from '../queryResultHistory';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../locales/queryResultStatistics.zh-CN';
+import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
@@ -51,6 +52,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const [busy, setBusy] = useState<FileMode>(), [error, setError] = useState(''), [message, setMessage] = useState(''), [showSql, setShowSql] = useState(false);
   const [overlay, setOverlay] = useState<SnapshotOverlay>(), overlayRef = useRef<SnapshotOverlay | undefined>(undefined);
   const exportSelection = useMemo(() => new ResultExportSelection(), []);
+  const [history] = useState(() => new QueryResultHistory());
   const [, refreshSelection] = useState(0);
   const returnFocus = useRef<HTMLElement | null>(null);
   const exportTrigger = useRef<HTMLButtonElement | null>(null);
@@ -67,6 +69,8 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   const filterView = filter.view(filterBinding);
   const sortBinding = sorter.bind(filterView?.result ?? sourceResult, [loaded?.scope]);
   const sortView = sorter.view(sortBinding);
+  const historyBinding = loaded && sourceResult && filterView && sortView ? history.bind(sourceResult, sourceResult.columns, [loaded.scope],
+    { expression: filterView.expression, sort: sortView.rules }) : undefined;
   const matches = useQueryResultMatchView(sortView?.result ?? filterView?.result ?? sourceResult, sourceResult?.columns, [loaded?.scope]);
   const displayed = matches.result;
   const binding = exportSelection.bind(displayed, [loaded?.scope]);
@@ -174,7 +178,9 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   /** 只重排内存中的原行，匹配范围跟随行身份；文件和完整快照仍保留原序。 */
   function publishSort(binding: QueryResultSortBinding, initial: QueryResultSortView, rules: QueryResultSortRule[]): void {
+    if (!historyBinding || !filterView) throw Error(historyText.stale);
     const next = sorter.apply(binding, initial, rules);
+    history.record(historyBinding, { expression: filterView.expression, sort: next.rules });
     matches.reproject(next.result);
     exportSelection.invalidate();
     advance(); setError('');
@@ -249,14 +255,12 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   /** 在独立控制器完整验证筛选和现有排序，失败时原网格和条件草稿均保持。 */
   function publishFilter(expression: QueryResultFilterGroup): boolean {
-    if (!loaded || !sourceResult) return false;
+    if (!loaded || !sourceResult || !historyBinding) return false;
     try {
       const next = prepareQueryResultOrganization(sourceResult, [loaded.scope], sourceResult.columns,
         { expression, sort: sortView?.rules ?? [] }, dialect);
-      matches.reproject(next.sorter.view(next.sortBinding)!.result);
-      filter.invalidate(); sorter.invalidate(); exportSelection.invalidate();
-      setOrganization(next);
-      advance(); setError('');
+      history.record(historyBinding, { expression: next.filter.view(next.filterBinding)!.expression, sort: next.sorter.view(next.sortBinding)!.rules });
+      publishOrganization(next);
       return true;
     } catch (reason) { setError(errorMessage(reason)); return false; }
   }
@@ -265,6 +269,23 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   }
   function clearFilter(): void {
     if (loaded && gridCurrent(loaded, interaction, false)) publishFilter({ mode: 'AND', children: [] });
+  }
+  /** 先试算整套配置，成功后才移动历史游标；按原行身份保留查找筛看的范围。 */
+  function travelHistory(direction: -1 | 1): void {
+    if (!loaded || !sourceResult || !editable() || !gridCurrent(loaded, interaction, false)) return;
+    const target = history.target(historyBinding, direction);
+    if (!target) return;
+    try {
+      const next = prepareQueryResultOrganization(sourceResult, [loaded.scope], sourceResult.columns, target.configuration, dialect);
+      history.commit(target);
+      publishOrganization(next);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  function publishOrganization(next: ReturnType<typeof prepareQueryResultOrganization>): void {
+    matches.reproject(next.sorter.view(next.sortBinding)!.result);
+    filter.invalidate(); sorter.invalidate(); exportSelection.invalidate();
+    setOrganization(next);
+    advance(); setError('');
   }
   /** 允许比较器和其暂时隐藏的父窗口，旧文件或其他模态会撤销比较。 */
   function comparisonCurrent(view: SnapshotComparison): boolean {
@@ -296,6 +317,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           ] }, trigger!);
         } else {
           const next = { name: selected.name, snapshot, scope: {} }; loadedRef.current = next;
+          history.invalidate();
           setLoaded(next); setOrganization(undefined); setShowSql(false); setMessage('');
         }
       } else {
@@ -325,6 +347,10 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <button ref={filterTrigger} disabled={!!busy || !filterView} onClick={event => openFilter(event.currentTarget)}>{filterText.open}</button>
       <button disabled={!!busy || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
         onClick={event => openSort(event.currentTarget)}>{sortText.panelTitle}</button>
+      <button disabled={!!busy || !history.target(historyBinding, -1)} title={history.limited ? historyText.limited : text.historyHint}
+        onClick={() => travelHistory(-1)}>{historyText.undo}</button>
+      <button disabled={!!busy || !history.target(historyBinding, 1)} title={text.historyHint}
+        onClick={() => travelHistory(1)}>{historyText.redo}</button>
       {sortView && sortView.rules.length > 0 && <button disabled={!!busy} onClick={() => sortGrid([])}>{sortText.clear}</button>}
       <button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button>
       <span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button>
@@ -346,6 +372,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           ownDialog={ownDialog} filterDialect={dialect} onFilterSelected={filterView ? openSelectedFilter : undefined}
           onFilterCell={filterView ? openCellFilter : undefined} onStatistics={filterView ? openStatistics : undefined}
           onExportRange={binding ? openRangeExport : undefined}
+          onHistoryTravel={historyBinding ? travelHistory : undefined}
           sqliteSource={displayed.sqliteStorage ? displayed : undefined} onShowMatchingRows={changeMatchView}
           isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity}
           binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/>

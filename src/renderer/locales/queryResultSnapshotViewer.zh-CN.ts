@@ -11,6 +11,7 @@ export const queryResultSnapshotViewerZh = {
   exportShown: '导出快照当前显示行', exportChecked: '导出快照勾选行',
   exportCount: (rows: number, selected: boolean) => `本次导出快照${selected ? '勾选' : '当前显示'}的 ${rows} 行`,
   exportScope: '文件仅包含打开本窗口时选定的行和原列，不读取数据库，也不导出来源 SQL。',
+  historyHint: '仅恢复当前快照的筛选和排序，最多保留 20 步。打开快照时重新开始记录。',
   compare: '与另一份快照比较', comparingFile: '正在读取对比文件…',
   comparisonFormat: '两份快照必须使用同一结果格式且含有结果列，无法混合比较。',
   comparisonCurrent: (name: string) => `当前文件：${name}`,

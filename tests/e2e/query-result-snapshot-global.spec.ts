@@ -24,6 +24,7 @@ function register(): void {
   const { queryResultFilterZh: filterText } = require('../../src/renderer/locales/queryResultFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultFilter.zh-CN');
   const { queryResultSelectedFilterZh: selectedFilterText } = require('../../src/renderer/locales/queryResultSelectedFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultSelectedFilter.zh-CN');
   const { queryResultStatisticsZh: statisticsText } = require('../../src/renderer/locales/queryResultStatistics.zh-CN') as typeof import('../../src/renderer/locales/queryResultStatistics.zh-CN');
+  const { queryResultHistoryZh: historyText } = require('../../src/renderer/locales/queryResultHistory.zh-CN') as typeof import('../../src/renderer/locales/queryResultHistory.zh-CN');
   const { queryResultComparisonZh: comparisonText } = require('../../src/renderer/locales/queryResultComparison.zh-CN') as typeof import('../../src/renderer/locales/queryResultComparison.zh-CN');
   const { uiCommandLabels } = require('../../src/shared/uiCommands.zh-CN') as typeof import('../../src/shared/uiCommands.zh-CN');
   const { binaryCellZh } = require('../../src/renderer/locales/binaryCell.zh-CN') as typeof import('../../src/renderer/locales/binaryCell.zh-CN');
@@ -153,6 +154,8 @@ function register(): void {
       const actualCells = (await step(audit)).originalCells;
       expect(actualCells).toEqual({ negativeZero: true, prototypeOwn: true, constructorOwn: true, big: '18446744073709551615', decimal: '12345678901234567890.1234567890', date: '2026-10-28 12:34:56.123456', nullable: null, empty: '', blob: 'AP8A', emptyBlob: '', truncated: true });
       await step(async () => expect((await navigationMenuItem(viewer, { name: text.choose, exact: true }, () => clock.assertCurrent()))).toBeVisible()); await step(async () => expect((await navigationMenuItem(viewer, { name: text.save, exact: true }, () => clock.assertCurrent()))).toBeVisible());
+      await step(() => expect(viewer.getByRole('button', { name: historyText.undo, exact: true })).toBeDisabled());
+      await step(() => expect(viewer.getByRole('button', { name: historyText.redo, exact: true })).toBeDisabled());
       const grid = viewer.locator('.results-grid'), duplicateHeaders = grid.getByRole('columnheader').filter({ hasText: /^重复列/ });
       await step(() => expect(duplicateHeaders).toHaveCount(2));
       // 正式列头同时呈现列名与类型，分别核对，不能把small中的类型当成列名的一部分。
