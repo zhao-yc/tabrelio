@@ -8,6 +8,7 @@ export const mysqlQueryBatchEditZh = {
   replaceUnavailable: '当前结果的可见列没有可替换的原表文本字段。',
   delete: '预览删除勾选的查询记录',
   deleteChecked: '删除勾选的查询记录',
+  deleteCheckedJoin: '删除勾选的 JOIN 主表记录',
   deleteLimit: '勾选 1 至 100 条当前结果记录。',
   deleteCount: (rows: number, table: string) => `将从 ${table} 删除 ${rows} 条记录。`,
   deleteEffects: '删除会执行原表的触发器和外键规则。',

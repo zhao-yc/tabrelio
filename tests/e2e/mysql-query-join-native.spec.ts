@@ -118,6 +118,7 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} INNER 和 
     await execute();
     await expect(cell('主表甲新值')).toHaveCount(2);
     await expect(await navigationMenuItem(query, { name: text.editJoin, exact: true })).toHaveCount(0);
+    await expect(await navigationMenuItem(query, { name: batchText.deleteCheckedJoin, exact: true })).toHaveCount(0);
 
     const direct = await page.evaluate(async ({ connectionId, database, sql, executionId, taskId }) => {
       const { sessionId } = await window.dbark.invoke('sessions.open', { connectionId, database });

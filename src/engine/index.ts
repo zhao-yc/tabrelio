@@ -2014,7 +2014,8 @@ export class Engine {
     const columnIndices = batch && 'columnIndices' in batch ? batch.columnIndices : (columnIndex === undefined ? undefined : [columnIndex]);
     const { source, current, session } = this.queryRelationScope({ ...request, rowIndex: rowIndices[0] });
     // 原行和原字段只按原执行的协议序号定位，排序及显示别名不能扩大写入范围。
-    if (source.joined && (kind === 'relation' || operation !== 'update')) throw Error('JOIN 查询仅支持编辑主表原记录');
+    // JOIN 的批量删除复用主表的唯一主键和整行快照；关联浏览及新增仍使用单表来源。
+    if (source.joined && (kind === 'relation' || inserting)) throw Error('JOIN 查询只支持编辑或删除主表原记录');
     const columns = columnIndices?.map(index => {
       const name = source.columns[index];
       if (name === null || name === undefined) throw Error('当前查询字段没有可编辑的主表来源');

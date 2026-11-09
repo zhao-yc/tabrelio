@@ -2675,8 +2675,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {canPrepareQueryRowSql && <button disabled={queryRowSqlCount > copyInsertSqlLimits.rows ||
   !queryRowSqlCount && (!activeDetailRow || activeDetailRow.binding !== detailBinding)}
   onClick={openQueryRowSql}>{queryRowSqlText.open}</button>}
-{mysqlRelationAvailable && !mysqlJoinColumns && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
-  title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('delete')}>{mysqlBatchText.deleteChecked}</button>}
+{mysqlRelationAvailable && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
+  title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('delete')}>{mysqlJoinColumns ? mysqlBatchText.deleteCheckedJoin : mysqlBatchText.deleteChecked}</button>}
 {mysqlRelationAvailable && !mysqlJoinColumns && <button disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
   title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('insert')}>{mysqlBatchText.insert}</button>}
 {mysqlInsertAvailable && <button disabled={resultModal} onClick={openMysqlNewRecord}>{mysqlBatchText.new}</button>}</ActionMenuSection>
