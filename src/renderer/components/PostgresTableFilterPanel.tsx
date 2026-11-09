@@ -19,7 +19,7 @@ import { ErrorBox } from './ui';
 export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onSeedAdded, selected, onCloseSelected, replacesQuick, onApply, values, canReadValues, onOpenValues, onCloseValues }: {
   initial?: PostgresAdvancedTableFilter; columns: string[]; disabled: boolean;
   seed?: FilterDraft; onSeedAdded?(): void; replacesQuick?: boolean;
-  selected?: { column: string; rowCount: number; values: readonly (string | null)[]; current(): boolean };
+  selected?: { column: string; rowCount: number; values: readonly (string | null)[]; exclude?: boolean; current(): boolean };
   onCloseSelected?(): void;
   onApply(filter?: PostgresAdvancedTableFilter): void;
   values?: PostgresColumnReadSource; canReadValues: boolean; onOpenValues(): void; onCloseValues(): void;
@@ -67,15 +67,15 @@ export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onS
 
   return <section className="pg-table-filter-panel" aria-label={text.advancedFilter}>
     {selected && <fieldset className="pg-selected-filter">
-      <legend>{selectedText.title}</legend>
-      <p>{selectedText.postgresSource(selected.column, selected.rowCount)}</p>
-      <p className="filter-value-hint">{selectedText.postgresHint}</p>
+      <legend>{selected.exclude === undefined ? selectedText.title : selectedText.rangeTitle}</legend>
+      <p>{(selected.exclude === undefined ? selectedText.postgresSource : selectedText.rangeSource)(selected.column, selected.rowCount)}</p>
+      <p className="filter-value-hint">{selected.exclude === undefined ? selectedText.postgresHint : selectedText.rangeHint}</p>
       <ul aria-label={selectedText.values}>{selected.values.map(value => <li key={value === null ? 'null' : JSON.stringify(value)}>
         <code>{value === null ? selectedText.null : JSON.stringify(value)}</code>
       </li>)}</ul>
       <div className="pg-table-controls">
-        <button type="button" disabled={disabled || grouping} onClick={() => addSelected(false)}>{text.valueOptions.add}</button>
-        <button type="button" disabled={disabled || grouping} onClick={() => addSelected(true)}>{text.valueOptions.exclude}</button>
+        {selected.exclude !== true && <button type="button" disabled={disabled || grouping} onClick={() => addSelected(false)}>{text.valueOptions.add}</button>}
+        {selected.exclude !== false && <button type="button" disabled={disabled || grouping} onClick={() => addSelected(true)}>{text.valueOptions.exclude}</button>}
         <button type="button" onClick={onCloseSelected}>{selectedText.cancel}</button>
       </div>
     </fieldset>}

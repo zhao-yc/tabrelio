@@ -245,7 +245,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [columnDialog, setColumnDialog] = useState<{ kind: 'values' | 'statistics'; source: PostgresColumnReadSource }>();
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
   const [selectedFilter, setSelectedFilter] = useState<{
-    scope: object; column: string; rowCount: number; values: readonly (string | null)[]; current(): boolean;
+    scope: object; column: string; rowCount: number; values: readonly (string | null)[]; exclude?: boolean; current(): boolean;
   }>();
   const [selectionColumn, setSelectionColumn] = useState<string>();
   const [inlineEdit, setInlineEdit] = useState<InlineEdit>();
@@ -718,6 +718,26 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     try {
       const values = postgresSelectedTableValues(column, page.rows, indices);
       setSelectedFilter({ scope: cellScope, column: column.name, rowCount: indices.size, values, current });
+      setAdvancedFilters(true);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 选区按当前页原值取数。草稿覆盖或删除过的目标格不能作为服务器筛选值。 */
+  function openRangeFilter(range: GridRangeTarget<DataRow>, exclude: boolean, gridCurrent: () => boolean) {
+    const column = page?.columns.find(item => item.key === range.keys[0]);
+    if (!page || !column || !canFilterCell() || !gridCurrent()) return;
+    try {
+      if (range.rows.some((row, index) => page.rows[range.startRow + index] !== row || draftGrid?.cell(row, column.key)))
+        throw Error(selectedFilterText.unavailable);
+      const indices = new Set(range.rows.map((_, index) => range.startRow + index));
+      const values = postgresSelectedTableValues(column, page.rows, indices);
+      const fingerprint = JSON.stringify(values);
+      const current = () => {
+        try { return canFilterCell() && gridCurrent() && JSON.stringify(postgresSelectedTableValues(column, page.rows, indices)) === fingerprint; }
+        catch { return false; }
+      };
+      setSelectedFilter({ scope: cellScope, column: column.name, rowCount: indices.size, values, exclude, current });
       setAdvancedFilters(true);
       setError('');
     } catch (reason) { setError(errorMessage(reason)); }
@@ -1740,6 +1760,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           if (gridReturn) setGridReturn(undefined);
         }}
         cellMenuFilters={cellMenuEnabled ? cellMenuFilters : undefined}
+        onFilterTableRange={cellMenuEnabled ? openRangeFilter : undefined}
         onFillRange={canEditGrid ? fillGridRange : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}

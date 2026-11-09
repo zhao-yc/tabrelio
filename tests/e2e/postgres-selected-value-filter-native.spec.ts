@@ -97,6 +97,22 @@ test('PostgreSQL 表页按勾选原值包含与排除', async ({}, info) => {
     await values.getByRole('button', { name: table.valueOptions.add, exact: true }).click();
     await apply.click();
     await expectRows([7]);
+    await clear();
+    await expectRows([3, 4, 5]);
+    await toggle(5).check();
+    await note(3).click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(note(4)).toBeFocused();
+    await note(4).evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: selected.rangeExclude, exact: true }).press('Enter');
+    const rangePreview = tab.getByRole('group', { name: selected.rangeTitle, exact: true });
+    await expect(rangePreview.getByRole('listitem')).toHaveText(['""', selected.null]);
+    await expect(rangePreview.getByRole('button', { name: table.valueOptions.add, exact: true })).toHaveCount(0);
+    await rangePreview.getByRole('button', { name: table.valueOptions.exclude, exact: true }).click();
+    await expectRows([3, 4, 5]);
+    await apply.click();
+    await expectRows([5, 7]);
     expect((await read()).rows).toEqual(original);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

@@ -8,6 +8,7 @@ import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRan
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
+import { tableSelectedFilterZh } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_MYSQL_QUERY_RELATION_NATIVE !== '1', '仅使用本轮隔离网络实库');
@@ -37,7 +38,8 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
         name: '查询矩形专项', group: '', color: '#123456', rememberPassword: false });
       const settings = await window.dbark.invoke('settings.get', {});
       await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'query-batch',
-        tabs: [{ id: 'query-batch', kind: 'query', title: '选区编辑查询', connectionId: connection.id, database, sql }] });
+        tabs: [{ id: 'query-batch', kind: 'query', title: '选区编辑查询', connectionId: connection.id, database, sql },
+          { id: 'table-batch', kind: 'table', title: '选区筛选表', connectionId: connection.id, database, table: 'subject' }] });
     }, { host, port, user, writerPassword, database, dialect, sql });
     await page.reload();
     const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
@@ -164,6 +166,29 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(cell('18446744073709551615')).toBeVisible();
     await expect(cell('18446744073709551613')).toBeVisible();
     await expect(cell('13')).toHaveCount(0);
+    await observer.query(`UPDATE ${table} SET note=NULL WHERE id=9007199254740992`);
+    await page.locator('[data-workspace-tab-id="table-batch"]').getByRole('button', { name: '选区筛选表', exact: true }).click();
+    const tableTab = page.locator('.table-tab:visible'), tableGrid = tableTab.getByRole('grid');
+    const tableCell = (value: string) => tableGrid.getByRole('gridcell', { name: value, exact: true });
+    await expect(tableCell('9007199254740992')).toBeVisible();
+    await tableTab.locator('[data-table-refresh]').click();
+    const column = await tableGrid.getByRole('columnheader').filter({ hasText: /^note/ }).getAttribute('aria-colindex');
+    const note = (id: string) => tableCell(id).locator('..').locator('[role="gridcell"][aria-colindex="' + column + '"]');
+    await expect(note('9007199254740993')).toHaveText('NULL');
+    await note('9007199254740992').click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(note('9007199254740993')).toBeFocused();
+    await note('9007199254740993').evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: tableSelectedFilterZh.rangeExclude, exact: true }).press('Enter');
+    const preview = tableTab.getByRole('region', { name: tableSelectedFilterZh.rangeTitle, exact: true });
+    await expect(preview.getByRole('listitem')).toHaveText(['"NULL"']);
+    await expect(preview.getByLabel(tableSelectedFilterZh.nullValue, { exact: true })).toBeVisible();
+    await expect(tableCell('9007199254740992')).toBeVisible();
+    await preview.getByRole('button', { name: tableSelectedFilterZh.rangeApply, exact: true }).click();
+    await expect(tableCell('9007199254740992')).toHaveCount(0);
+    await expect(tableCell('9007199254740993')).toHaveCount(0);
+    await expect(tableCell('9007199254740994')).toBeVisible();
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

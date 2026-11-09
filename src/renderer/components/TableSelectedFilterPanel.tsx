@@ -6,7 +6,7 @@ import { errorMessage } from '../lib';
 import { ErrorBox, UsageHelp } from './ui';
 
 type EventSignal = { defaultPrevented?: boolean; nativeEvent?: { defaultPrevented?: boolean } };
-interface Props { proposal: TableSelectedFilterProposal; isCurrent(): boolean; onApply(): boolean; onClose(): void; }
+interface Props { proposal: TableSelectedFilterProposal; range?: boolean; isCurrent(): boolean; onApply(): boolean; onClose(): void; }
 
 /** 输入框、可编辑子节点拥有自己的按键；即使将来加入搜索输入也不能误用面板快捷键。 */
 function inputTarget(event: KeyboardEvent<HTMLElement>): boolean {
@@ -19,7 +19,7 @@ function inputTarget(event: KeyboardEvent<HTMLElement>): boolean {
 }
 
 /** 内联审核只展示冻结提案；不会取原表行、执行IPC或在预览时应用条件。 */
-export function TableSelectedFilterPanel({ proposal, isCurrent, onApply, onClose }: Props) {
+export function TableSelectedFilterPanel({ proposal, range, isCurrent, onApply, onClose }: Props) {
   const origin = useRef(proposal).current, latest = useRef(proposal); latest.current = proposal;
   const [prepared] = useState(() => {
     // 守住展示体积，不把异常超限集合截成看似完整的预览；完整筛选的准入仍由父模型负责。
@@ -72,16 +72,18 @@ export function TableSelectedFilterPanel({ proposal, isCurrent, onApply, onClose
   const semantics = !prepared.valid ? '' : origin.exclude
     ? origin.values.length ? origin.includesNull ? text.excludeValuesNull : text.excludeValues : text.excludeNull
     : origin.values.length ? origin.includesNull ? text.includeValuesNull : text.includeValues : text.includeNull;
-  return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title} tabIndex={-1} onKeyDown={keyDown}
+  const title = range ? text.rangeTitle : text.title, rowCount = range ? text.rangeRowCount : text.rowCount;
+  const nullState = range ? text.rangeNullState : text.nullState;
+  return <section className="filter-panel expanded-filter-panel" role="region" aria-label={title} tabIndex={-1} onKeyDown={keyDown}
     onCompositionStart={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && ownsRender()) { composition.current = true; setComposing(true); } }}
     onCompositionEnd={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && ownsRender()) { composition.current = false; setComposing(false); } }}>
-    <strong>{text.title}</strong><UsageHelp><p>{text.hint}</p><p>{text.originalAnd}</p><p>{text.valueHint}</p><p>{text.applyHint}</p><p>{text.shortcuts}</p></UsageHelp>
+    <strong>{title}</strong><UsageHelp><p>{range ? text.rangeHint : text.hint}</p><p>{text.originalAnd}</p><p>{text.valueHint}</p><p>{text.applyHint}</p><p>{text.shortcuts}</p></UsageHelp>
     {prepared.valid && <>
       <dl style={{ display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', gap: '5px 14px', margin: '10px 0', overflowWrap: 'anywhere' }}>
         <dt>{text.column}</dt><dd aria-label={text.column} style={{ margin: 0 }}>{origin.column}</dd>
-        <dt>{text.rowCount}</dt><dd aria-label={text.rowCount} style={{ margin: 0 }}>{origin.rowCount}</dd>
+        <dt>{rowCount}</dt><dd aria-label={rowCount} style={{ margin: 0 }}>{origin.rowCount}</dd>
         <dt>{text.valueCount}</dt><dd aria-label={text.valueCount} style={{ margin: 0 }}>{origin.values.length}</dd>
-        <dt>{text.nullState}</dt><dd aria-label={text.nullState} style={{ margin: 0 }}>{origin.includesNull ? text.hasNull : text.noNull}</dd>
+        <dt>{nullState}</dt><dd aria-label={nullState} style={{ margin: 0 }}>{origin.includesNull ? text.hasNull : text.noNull}</dd>
       </dl>
       <p aria-label={text.semantics}>{semantics}</p>
       <div role="list" aria-label={text.values} style={{ maxHeight: 220, overflow: 'auto', border: '1px solid var(--line)', borderRadius: 5, padding: 8 }}>
@@ -92,6 +94,6 @@ export function TableSelectedFilterPanel({ proposal, isCurrent, onApply, onClose
     </>}
     {composing && <p>{text.composing}</p>}
     <ErrorBox message={prepared.error || (!valid && !settled ? text.unavailable : feedback.message)}/>
-    <div className="filter-inputs"><span className="grow"/><button type="button" disabled={composing || settled || latest.current !== origin} onClick={cancel}>{text.cancel}</button><button type="button" className="primary" disabled={disabled} onClick={apply}>{text.apply}</button></div>
+    <div className="filter-inputs"><span className="grow"/><button type="button" disabled={composing || settled || latest.current !== origin} onClick={cancel}>{text.cancel}</button><button type="button" className="primary" disabled={disabled} onClick={apply}>{range ? text.rangeApply : text.apply}</button></div>
   </section>;
 }

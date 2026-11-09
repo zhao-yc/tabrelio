@@ -22,6 +22,7 @@ import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/lo
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultHistoryZh as resultHistoryText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
+import { tableSelectedFilterZh as tableSelectedFilterText } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
 import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
 import { sqliteResultOriginsZh as originsText } from '../../src/renderer/locales/sqliteResultOrigins.zh-CN';
 import { sqliteTableEditZh as sqliteEditText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
@@ -1486,6 +1487,44 @@ test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async
   expect(book.worksheets[2].rowCount).toBe(1);
   expect(book.worksheets[2].getCell('A1').text).toBe('name');
   expect(await executions()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 表和视图从单列选区包含或排除原值，按明确应用读取服务器页', async ({}, info) => {
+  await seed(undefined, "UPDATE subject SET name = NULL WHERE id=1; UPDATE subject SET name='' WHERE id IN (2,4,120);" +
+    "UPDATE subject SET name='NULL' WHERE id=3;");
+  const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
+  for (const [tab, title, typed] of [['t-jump', '表格定位', true], ['v-jump', '视图定位', false]] as const) {
+    await page.locator('[data-workspace-tab-id="' + tab + '"]').getByRole('button', { name: title, exact: true }).click();
+    const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+    const id = (value: number) => grid.getByRole('gridcell', { name: (typed ? 'INTEGER · ' : '') + value, exact: true });
+    const note = (value: number) => id(value).locator('..').getByRole('gridcell').last();
+    await expect(id(1)).toBeVisible();
+    await id(3).locator('..').getByRole('checkbox').check();
+    const before = await tasks();
+    await note(1).click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await note(1).click({ button: 'right' });
+    await page.getByRole('menuitem', {
+      name: typed ? tableSelectedFilterText.rangeEntry : tableSelectedFilterText.rangeExclude, exact: true,
+    }).click();
+    const apply = table.getByRole('button', { name: browseText.apply, exact: true });
+    await expect(apply).toBeEnabled();
+    await expect(id(3)).toBeVisible();
+    expect(await tasks()).toEqual(before);
+    if (typed) await info.attach('SQLite表页选区值筛选草稿', { body: await page.screenshot(), contentType: 'image/png' });
+    await apply.click();
+    if (typed) {
+      await expect(id(120)).toBeVisible();
+      await expect(id(3)).toHaveCount(0);
+      for (const included of [1, 2, 4]) await expect(id(included)).toBeVisible();
+    } else {
+      await expect(id(3)).toBeVisible();
+      await expect(id(5)).toBeVisible();
+      for (const excluded of [1, 2, 4]) await expect(id(excluded)).toHaveCount(0);
+    }
+    expect(await tasks()).toHaveLength(before.length + 1);
+  }
   expect(pageErrors).toEqual([]);
 });
 
