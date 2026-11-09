@@ -123,7 +123,10 @@ export function SqliteTableValueDialog({ ticket, page, row, column, initialFocus
 }
 
 /** 真实 modal 明确确认集中写入；预览关闭不丢本地草稿，也不伪取消已发送提交。 */
-export function SqliteTablePreviewDialog({ ticket, view, current, onApply, onClose, onStop }: { ticket: object; view: SqliteEditView; current(): boolean; onApply(): void; onClose(): void; onStop(): void }) {
+export function SqliteTablePreviewDialog({ ticket, view, current, onApply, onClose, onStop, review }: {
+  ticket: object; view: SqliteEditView; current(): boolean; onApply(): void; onClose(): void; onStop(): void;
+  review?: { title: string; hint: string; details: string; confirmation: string; submit: string };
+}) {
   const [confirmed, setConfirmed] = useState(false);
   const owner = useRef({ ticket, page: view.page, rows: view.rows, preview: view.preview }).current, invalid = useRef(false), renderTicket = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; }; });
@@ -131,5 +134,26 @@ export function SqliteTablePreviewDialog({ ticket, view, current, onApply, onClo
   /** 确认只属于原预览；旧按钮、旧 checkbox 或卸载组件不得向新预览发出动作。 */
   function actionCurrent(): boolean { return !invalid.current && committed.current === renderTicket && current(); }
   function close(): void { if (actionCurrent() && !view.busy) onClose(); }
-  return <Modal title={text.previewTitle} onClose={close} wide><div className="modal-content dialog-body"><p>{text.previewHint}</p>{view.preview && <><p>{workspaceText.previewPages(view.preview.snapshotIds?.length ?? 1)}</p><p>{view.preview.target.database}.{view.preview.target.table} · {text.counts(view.preview.counts.insert, view.preview.counts.update, view.preview.counts.delete)}</p><pre aria-label="SQLite 修改 SQL 预览" style={{ maxHeight: '45vh', overflow: 'auto', whiteSpace: 'pre-wrap' }}>{view.preview.sql.join('\n')}</pre><label><input type="checkbox" aria-label={text.confirmation} checked={confirmed} disabled={view.busy || !view.valid} onChange={event => { if (actionCurrent() && !view.busy && view.valid) setConfirmed(event.target.checked); }}/>{text.confirmation}</label></>}{view.busy && <Spinner text={text.working}/>}<ErrorBox message={view.message}/></div><footer className="modal-footer"><span className="grow"/><button aria-label={text.closePreview} disabled={view.busy} onClick={close}>{text.closePreview}</button>{view.busy && <button aria-label={text.stop} onClick={() => { if (actionCurrent()) onStop(); }}>{text.stop}</button>}<button className="primary" aria-label={text.submit} disabled={!confirmed || !view.preview || view.busy || !view.valid || view.unknown} onClick={() => { if (!confirmed || !view.preview || view.busy || !view.valid || view.unknown || !actionCurrent()) return; setConfirmed(false); onApply(); }}>{text.submit}</button></footer></Modal>;
+  const confirmation = review?.confirmation ?? text.confirmation, submit = review?.submit ?? text.submit;
+  return <Modal title={review?.title ?? text.previewTitle} onClose={close} wide>
+    <div className="modal-content dialog-body">
+      <p>{review?.hint ?? text.previewHint}</p>
+      {view.preview && <>
+        <p>{review?.details ?? workspaceText.previewPages(view.preview.snapshotIds?.length ?? 1)}</p>
+        <p>{view.preview.target.database}.{view.preview.target.table} · {text.counts(view.preview.counts.insert, view.preview.counts.update, view.preview.counts.delete)}</p>
+        <pre aria-label="SQLite 修改 SQL 预览" style={{ maxHeight: '45vh', overflow: 'auto', whiteSpace: 'pre-wrap' }}>{view.preview.sql.join('\n')}</pre>
+        <label><input type="checkbox" aria-label={confirmation} checked={confirmed} disabled={view.busy || !view.valid}
+          onChange={event => { if (actionCurrent() && !view.busy && view.valid) setConfirmed(event.target.checked); }}/>{confirmation}</label>
+      </>}
+      {view.busy && <Spinner text={text.working}/>}<ErrorBox message={view.message}/>
+    </div>
+    <footer className="modal-footer"><span className="grow"/>
+      <button aria-label={text.closePreview} disabled={view.busy} onClick={close}>{text.closePreview}</button>
+      {view.busy && <button aria-label={text.stop} onClick={() => { if (actionCurrent()) onStop(); }}>{text.stop}</button>}
+      <button className={review ? 'danger' : 'primary'} aria-label={submit} disabled={!confirmed || !view.preview || view.busy || !view.valid || view.unknown} onClick={() => {
+        if (!confirmed || !view.preview || view.busy || !view.valid || view.unknown || !actionCurrent()) return;
+        setConfirmed(false); onApply();
+      }}>{submit}</button>
+    </footer>
+  </Modal>;
 }

@@ -593,6 +593,124 @@ test('SQLite JOIN 查询仅提交唯一主表原行', async ({}, info) => {
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询删除勾选记录按显示顺序核验并提交', async ({}, info) => {
+  const ids = ['9007199254740992', '9007199254740993', '9007199254740994', '9007199254740995'];
+  await seed('SELECT p.tenant AS 区,p.id AS 编号,p.note AS 名称 FROM delete_subject p ORDER BY p.id DESC;',
+    `CREATE TABLE delete_subject(tenant TEXT,id INTEGER,note TEXT,PRIMARY KEY(tenant,id)) WITHOUT ROWID;
+     INSERT INTO delete_subject VALUES ('区',${ids[0]},'甲'),('区',${ids[1]},'乙'),('区',${ids[2]},'丙'),('区',${ids[3]},'丁');`);
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const preview = page.getByRole('dialog', { name: originsText.deleteTitle, exact: true });
+  const sql = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+  const submit = preview.getByRole('button', { name: originsText.deleteApply, exact: true });
+  const action = () => navigationMenuItem(query, { name: originsText.deleteChecked, exact: true });
+  const rows = () => {
+    const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+    try { return db.prepare('SELECT CAST(id AS TEXT) AS id FROM delete_subject ORDER BY id').all().map(row => row.id); }
+    finally { db.close(); }
+  };
+  const open = async () => {
+    for (const id of [ids[2], ids[0]]) {
+      await grid.getByRole('gridcell', { name: id, exact: true }).locator('..').getByRole('checkbox').check();
+    }
+    await (await action()).click();
+    await expect(sql).toContainText('DELETE FROM "main"."delete_subject"');
+    await expect(preview.getByText(originsText.deleteRows([1, 3]), { exact: true })).toBeVisible();
+    await expect(sql).toContainText(ids[0]);
+    await expect(sql).toContainText(ids[2]);
+    await expect(sql).not.toContainText(ids[1]);
+    await expect(sql).not.toContainText(ids[3]);
+    await expect(submit).toBeDisabled();
+    expect(rows()).toEqual(ids);
+  };
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+  const sort = grid.getByRole('columnheader').filter({ hasText: /^编号/ });
+  await sort.click();
+  await expect(sort.getByLabel(resultSort.ascending)).toBeVisible();
+  await expect(await action()).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await open();
+  await preview.getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click();
+  await expect(preview).toBeHidden();
+  expect(rows()).toEqual(ids);
+  await open();
+  await info.attach('SQLite删除查询勾选记录', { body: await page.screenshot(), contentType: 'image/png' });
+  await preview.getByRole('checkbox', { name: originsText.deleteConfirm, exact: true }).check();
+  await submit.click();
+  await expect(preview).toBeHidden();
+  expect(rows()).toEqual([ids[1], ids[3]]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite JOIN 查询删除勾选主表记录在冲突或外键失败时整批回滚', async ({}) => {
+  await seed('SELECT l.note AS 连接注,p.id AS 编号,p.note AS 名称 FROM delete_join p LEFT JOIN delete_side l ON l.id=p.link_id ORDER BY p.id;',
+    `CREATE TABLE delete_join(id INTEGER PRIMARY KEY,link_id INTEGER,note TEXT,guard TEXT);
+     CREATE TABLE delete_side(id INTEGER PRIMARY KEY,note TEXT);
+     CREATE TABLE restrict_child(parent INTEGER REFERENCES delete_join(id) ON DELETE RESTRICT);
+     CREATE TABLE delete_audit(id INTEGER);
+     CREATE TRIGGER log_delete AFTER DELETE ON delete_join BEGIN INSERT INTO delete_audit VALUES (old.id); END;
+     INSERT INTO delete_join VALUES (1,1,'甲','保护甲'),(2,2,'乙','保护乙');
+     INSERT INTO delete_side VALUES (1,'连接甲');
+     INSERT INTO restrict_child VALUES (2);`);
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const preview = page.getByRole('dialog', { name: originsText.deleteTitle, exact: true });
+  const sql = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+  const disk = (statement: string) => {
+    const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+    try { return db.prepare(statement).all(); } finally { db.close(); }
+  };
+  const original = disk('SELECT * FROM delete_join ORDER BY id');
+  const links = disk('SELECT * FROM delete_side');
+  const open = async (ids: readonly string[]) => {
+    for (const id of ids) {
+      await grid.getByRole('gridcell', { name: id, exact: true }).locator('..').getByRole('checkbox').check();
+    }
+    await (await navigationMenuItem(query, { name: originsText.deleteCheckedJoin, exact: true })).click();
+    await expect(sql).toContainText('DELETE FROM "main"."delete_join"');
+    await expect(sql).not.toContainText('delete_side');
+  };
+  const submit = async () => {
+    await preview.getByRole('checkbox', { name: originsText.deleteConfirm, exact: true }).check();
+    await preview.getByRole('button', { name: originsText.deleteApply, exact: true }).click();
+  };
+  const execute = () => query.locator('.query-execute-split > button.primary').click();
+  const close = () => preview.getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click();
+  await execute();
+  await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+  await open(['1', '2']);
+  await submit();
+  await expect(preview.getByRole('alert')).toContainText('SQLite修改已确认整批回滚');
+  expect(disk('SELECT * FROM delete_join ORDER BY id')).toEqual(original);
+  expect(disk('SELECT * FROM delete_audit')).toEqual([]);
+  expect(disk('SELECT parent FROM restrict_child')).toEqual([{ parent: 2 }]);
+  await close();
+  await expect(preview).toBeHidden();
+
+  await open(['1', '2']);
+  disk("UPDATE delete_join SET guard='外部修改' WHERE id=2");
+  await submit();
+  await expect(preview.getByRole('alert')).toContainText('SQLite原记录已被其他操作修改');
+  expect(disk('SELECT * FROM delete_join ORDER BY id')).toEqual([original[0], { ...original[1], guard: '外部修改' }]);
+  expect(disk('SELECT * FROM delete_audit')).toEqual([]);
+  await close();
+  await expect(preview).toBeHidden();
+
+  // 保留触发器和连接表，仅移除外键引用，刷新原行后重跑同一批删除。
+  disk('DELETE FROM restrict_child WHERE parent=2');
+  await execute();
+  await expect(query.getByText(originsText.inlineHint, { exact: true })).toBeVisible();
+  await open(['1', '2']);
+  await submit();
+  await expect(preview).toBeHidden();
+  expect(disk('SELECT * FROM delete_join')).toEqual([]);
+  expect(disk('SELECT id FROM delete_audit ORDER BY id')).toEqual([{ id: 1 }, { id: 2 }]);
+  expect(disk('SELECT * FROM delete_side')).toEqual(links);
+  const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  expect(tasks.filter(task => task.kind === 'sqlite.tableEdit.apply').map(task => task.sqliteWrite?.phase).sort())
+    .toEqual(['committed', 'rolled-back', 'rolled-back']);
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚', async ({}, info) => {
   await seed('SELECT id AS 同名, name AS 同名 FROM subject ORDER BY id DESC LIMIT 3;');
   const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');

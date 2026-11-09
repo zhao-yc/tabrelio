@@ -32,7 +32,8 @@ export interface SqliteQueryRangePaste {
 }
 
 type Props = BaseProps & ({ recordRef: string; queryRecord?: never; isCurrent?: never } |
-  { recordRef?: never; queryRecord: SqliteQueryRecordInput; isCurrent(): boolean; cell?: SqliteQueryInlineCell; rangeFill?: SqliteQueryRangeFill; rangePaste?: SqliteQueryRangePaste; visible?: boolean });
+  { recordRef?: never; queryRecord: SqliteQueryRecordInput; isCurrent(): boolean; cell?: SqliteQueryInlineCell; rangeFill?: SqliteQueryRangeFill;
+    rangePaste?: SqliteQueryRangePaste; deletePositions?: readonly number[]; visible?: boolean });
 
 /** 只编辑已核验的原行，沿用表页签发的编辑快照和原有预览提交链。 */
 export function SqliteSearchRecordEditDialog(props: Props) {
@@ -40,9 +41,11 @@ export function SqliteSearchRecordEditDialog(props: Props) {
   const cell = props.queryRecord ? props.cell : undefined;
   const rangeFill = props.queryRecord ? props.rangeFill : undefined;
   const rangePaste = props.queryRecord ? props.rangePaste : undefined;
+  const deletePositions = props.queryRecord ? props.deletePositions : undefined;
   const [pasteAnchor, setPasteAnchor] = useState<SqlitePasteAnchor>();
   const typedConsumed = useRef(false);
-  const labels = rangeFill || rangePaste ? { title: rangePaste ? pasteText.title : queryText.rangeTitle, hint: rangePaste ? queryText.pasteHint : queryText.rangeHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
+  const labels = deletePositions ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
+    : rangeFill || rangePaste ? { title: rangePaste ? pasteText.title : queryText.rangeTitle, hint: rangePaste ? queryText.pasteHint : queryText.rangeHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
     : { title: text.edit, hint: text.editHint, discard: text.editDiscard, back: text.editBack, stale: text.editStale };
   const callbacks = useRef(props); callbacks.current = props;
@@ -107,8 +110,12 @@ export function SqliteSearchRecordEditDialog(props: Props) {
             },
           });
           editor.current = instance;
-          if (rangeFill) {
-            if (!stageSqliteQueryRangeFill(instance, rangeFill)) throw Error(queryText.rangeUnchanged);
+          if (rangeFill || deletePositions) {
+            if (deletePositions) {
+              // 先暂存已核验的整批原行。预览和明确确认沿用编辑器的事务入口。
+              if (deletePositions.length !== limit || instance.removeRows(instance.view.rows.map(row => row.id)) !== limit)
+                throw Error(labels.stale);
+            } else if (rangeFill && !stageSqliteQueryRangeFill(instance, rangeFill)) throw Error(queryText.rangeUnchanged);
             accepted = true;
             setPreview(true);
             void instance.preview();
@@ -140,12 +147,12 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         callbacks.current.onDirty(false);
       }
     };
-  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste]);
+  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste, deletePositions]);
 
   function close() {
     if (closeWork.current || editor.current?.busy) return;
     const instance = editor.current;
-    if (instance && (instance.changes.length || instance.view.unknown) && !window.confirm(labels.discard)) return;
+    if (instance && (instance.view.unknown || !deletePositions && instance.changes.length) && !window.confirm(labels.discard)) return;
     const read = load.current;
     closingRef.current = true; setClosing(true);
     const work = (async () => {
@@ -174,10 +181,12 @@ export function SqliteSearchRecordEditDialog(props: Props) {
   }
 
   if (view && instance && preview) return <SqliteTablePreviewDialog key={view.preview?.previewId ?? 'pending'} ticket={ticket} view={view}
+    review={deletePositions ? { title: labels.title, hint: labels.hint, details: queryText.deleteRows(deletePositions),
+      confirmation: queryText.deleteConfirm, submit: queryText.deleteApply } : undefined}
     current={() => editor.current === instance && !closingRef.current}
     onApply={() => void instance.apply()} onStop={() => instance.stop()}
     onClose={() => {
-      if (rangeFill || rangePaste || !instance.view.valid || instance.view.unknown) { close(); return; }
+      if (rangeFill || rangePaste || deletePositions || !instance.view.valid || instance.view.unknown) { close(); return; }
       instance.closePreview(); instance.inputOpen(true); saved.current = false; setPreview(false);
     }}/>;
   if (view && instance && rangePaste && pasteAnchor) return <SqlitePasteRangeDialog page={view.page} rows={view.rows} anchor={pasteAnchor}
