@@ -5,6 +5,8 @@ import { SqliteTableEditor, type SqliteEditView } from '../sqliteTableEditor';
 import { sqliteResultOriginsZh as queryText } from '../locales/sqliteResultOrigins.zh-CN';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { SqliteTablePreviewDialog, SqliteTableValueDialog } from './SqliteTableEditDialog';
+import { sqliteQueryRecordIndices, type SqliteQueryRecordInput } from '../../shared/sqliteTableBrowse';
+import { stageSqliteQueryRangeFill, type SqliteQueryRangeFill } from '../sqliteQueryRangeFill';
 import type { SqliteOriginalValue } from '../../shared/sqliteTableEdit';
 import { SqliteQueryInlineCellEditor, type SqliteQueryInlineCell } from './SqliteQueryInlineCellEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
@@ -17,16 +19,17 @@ interface BaseProps {
   onDone(committed: boolean): void;
 }
 
-type QueryRecord = NonNullable<import('../../shared/sqliteTableBrowse').SqliteTablePageInput['queryRecord']>;
 type Props = BaseProps & ({ recordRef: string; queryRecord?: never; isCurrent?: never } |
-  { recordRef?: never; queryRecord: QueryRecord; isCurrent(): boolean; cell?: SqliteQueryInlineCell; visible?: boolean });
+  { recordRef?: never; queryRecord: SqliteQueryRecordInput; isCurrent(): boolean; cell?: SqliteQueryInlineCell; rangeFill?: SqliteQueryRangeFill; visible?: boolean });
 
 /** 只编辑已核验的原行，沿用表页签发的编辑快照和原有预览提交链。 */
 export function SqliteSearchRecordEditDialog(props: Props) {
   const { connectionId, table, recordRef, queryRecord, focusColumn } = props;
   const cell = props.queryRecord ? props.cell : undefined;
+  const rangeFill = props.queryRecord ? props.rangeFill : undefined;
   const typedConsumed = useRef(false);
-  const labels = queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
+  const labels = rangeFill ? { title: queryText.rangeTitle, hint: queryText.rangeHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
+    : queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
     : { title: text.edit, hint: text.editHint, discard: text.editDiscard, back: text.editBack, stale: text.editStale };
   const callbacks = useRef(props); callbacks.current = props;
   const editor = useRef<SqliteTableEditor | undefined>(undefined);
@@ -57,16 +60,17 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         if (!live || closingRef.current) return;
         if (!current()) throw Error(labels.stale);
         read.sent = true;
+        const limit = queryRecord ? sqliteQueryRecordIndices(queryRecord).length : 1;
         const page = await invoke('sqlite.tablePage', {
           connectionId, database: 'main', table, taskId: read.id, ...(queryRecord ? { queryRecord } : { searchRecordRef: recordRef }), editing: true,
-          offset: 0, limit: 1, mode: 'and', filters: [], sort: [],
+          offset: 0, limit, mode: 'and', filters: [], sort: [],
         });
         if (page.edit?.kind !== 'editable') throw Error(page.edit?.reason ?? labels.stale);
         const release = () => invoke('sqlite.tableEdit.release', { snapshotId: page.edit?.kind === 'editable' ? page.edit.snapshotId : undefined });
         let accepted = false;
         try {
           if (!current() || page.target.connectionId !== connectionId || page.target.database !== 'main' ||
-              page.target.table !== table || page.target.kind !== 'table' || page.result.rows.length !== 1 || page.hasMore)
+              page.target.table !== table || page.target.kind !== 'table' || page.result.rows.length !== limit || page.hasMore)
             throw Error(labels.stale);
           const instance: SqliteTableEditor = new SqliteTableEditor(page, {
             current, active: () => editor.current === instance, available: () => !busy,
@@ -88,8 +92,22 @@ export function SqliteSearchRecordEditDialog(props: Props) {
               callbacks.current.onDone(true);
             },
           });
-          editor.current = instance; accepted = true; instance.inputOpen(true);
-        } finally { if (!accepted) await release(); }
+          editor.current = instance;
+          if (rangeFill) {
+            if (!stageSqliteQueryRangeFill(instance, rangeFill)) throw Error(queryText.rangeUnchanged);
+            accepted = true;
+            setPreview(true);
+            void instance.preview();
+          } else {
+            accepted = true;
+            instance.inputOpen(true);
+          }
+        } finally {
+          if (!accepted) {
+            editor.current = undefined;
+            await release();
+          }
+        }
       } catch (reason) { if (live && !closingRef.current) setError(errorMessage(reason)); }
       finally { read.pending = false; if (live) setLoading(false); }
     })();
@@ -101,7 +119,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         callbacks.current.onDirty(false);
       }
     };
-  }, [connectionId, table, recordRef, queryRecord]);
+  }, [connectionId, table, recordRef, queryRecord, rangeFill]);
 
   function close() {
     if (closeWork.current || editor.current?.busy) return;
@@ -138,7 +156,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
     current={() => editor.current === instance && !closingRef.current}
     onApply={() => void instance.apply()} onStop={() => instance.stop()}
     onClose={() => {
-      if (!instance.view.valid || instance.view.unknown) { close(); return; }
+      if (rangeFill || !instance.view.valid || instance.view.unknown) { close(); return; }
       instance.closePreview(); instance.inputOpen(true); saved.current = false; setPreview(false);
     }}/>;
   if (cell) {

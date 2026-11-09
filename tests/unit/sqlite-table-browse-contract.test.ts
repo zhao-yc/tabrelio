@@ -6,6 +6,16 @@ import { publicCommands } from '../../src/shared/commands';
 const base = { connectionId: 'file', database: 'main', table: '中文"表🚢', taskId: 'read', offset: 0, limit: 100, mode: 'and', filters: [], sort: [] };
 /** 严格IPC只接收结构化条件，不接受SQL或文件能力，也不会借用网络表协议。 */
 describe('SQLite表浏览严格合同及动态类型条件', () => {
+  it('查询原记录批量读取只接收唯一原行序号和对应的准确数量', () => {
+    const queryRecord = { sessionId: 'session', taskId: 'execution', rowIndices: [9, 2] };
+    const selection = { ...base, editing: true, offset: 0, limit: 2, queryRecord };
+    expect(sqliteTablePageSchema.parse(selection).queryRecord).toEqual(queryRecord);
+    for (const patch of [{ limit: 1 }, { offset: 1 }, { editing: false }, { lastPage: true },
+      { queryRecord: { ...queryRecord, rowIndex: 0 } },
+      { queryRecord: { ...queryRecord, rowIndices: [9, 9] } },
+      { queryRecord: { ...queryRecord, rowIndices: Array.from({ length: 101 }, (_, i) => i) }, limit: 101 }])
+      expect(sqliteTablePageSchema.safeParse({ ...selection, ...patch }).success).toBe(false);
+  });
   it('只公开明确main页请求，拒绝原始SQL/路径/凭据和其它数据库', () => {
     expect(publicCommands['sqlite.tablePage']).toBe(true); expect(validateCommand('sqlite.tablePage', base)).toEqual(base);
     for (const value of [{ ...base, database: 'other' }, { ...base, sql: 'DELETE FROM subject' }, { ...base, filePath: '外部文件' }, { ...base, profile: { dialect: 'sqlite' } }, { ...base, offset: -1 }, { ...base, offset: 1000000001 }, { ...base, limit: 1001 }]) expect(sqliteTablePageSchema.safeParse(value).success).toBe(false);

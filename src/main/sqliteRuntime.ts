@@ -13,7 +13,7 @@ import { SqliteDriverError, SqliteDriverSession } from '../engine/sqlite/session
 import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport, type SqliteValue } from '../engine/sqlite/protocol';
 import { createSqliteProcess } from './sqliteProcess';
 import { SqliteQuerySession } from './sqliteQuerySession';
-import { sqliteQueryRecordPredicate, type SqliteQueryRecordSource } from './sqliteQueryRecord';
+import { sqliteQueryRecordPredicates, type SqliteQueryRecordSource } from './sqliteQueryRecord';
 import { readSqliteCompletion } from './sqliteCompletion';
 import { readSqliteCatalogDefinition, readSqliteObjectDefinition, sqliteObjectDefinitionDatabase } from './sqliteObjectDefinition';
 import { StructureSearchPages, type StructureSearchState } from '../engine/structureSearchPages';
@@ -27,7 +27,7 @@ import { readSqliteDataSearchCatalogue, readSqliteDataSearchRecord, sqliteDataSe
 import { readSqliteStructureSearchPage } from './sqliteStructureSearch';
 import { objectDefinitionInputSchema, objectDefinitionLimits, objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../shared/objectDefinition';
 import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTaskPrefix, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
-import { sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
+import { sqliteQueryRecordIndices, sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { readSqliteTablePage, SqliteTableBrowseCancelled } from './sqliteTableBrowse';
 import { readSqliteValueOptions } from './sqliteValueOptions';
 import { readSqliteRowCount, readSqliteStatistics } from './sqliteStatistics';
@@ -633,7 +633,7 @@ export class SqliteRuntime {
       else if ('limit' in input) value = await readSqliteTablePage(task.driver, input, {
         ...control, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }),
         ...(querySource && queryInput ? { queryRecord: (key, columns) =>
-          sqliteQueryRecordPredicate(task.driver!, querySource!, queryInput.rowIndex, key, columns) } : {}),
+          sqliteQueryRecordPredicates(task.driver!, querySource!, sqliteQueryRecordIndices(queryInput), key, columns) } : {}),
         ...(searchEntry ? { searchRecord: catalogue => verifySqliteSearchRecord(task.driver!, searchEntry!, control, catalogue) } : {}),
       });
       else value = await readSqliteRowCount(task.driver, input, control);

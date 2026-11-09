@@ -287,6 +287,63 @@ test('SQLite 查询网格原位编辑重名列并保留精确字段与确认', a
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询矩形填充使用显示顺序并在行冲突时整批回滚', async ({}, info) => {
+  await seed('SELECT id AS 同名, name AS 同名 FROM subject ORDER BY id DESC LIMIT 3;');
+  const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');
+  const header = grid.getByRole('columnheader').filter({ hasText: /^同名/ }).first();
+  const preview = page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  const execute = () => query.locator('.query-execute-split > button.primary').click();
+  const disk = (sql: string) => {
+    const db = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+    try { return db.prepare(sql).all(); } finally { db.close(); }
+  };
+  const values = () => disk('SELECT name FROM subject WHERE id BETWEEN 177 AND 180 ORDER BY id').map(row => row.name);
+  const fill = async (target: Locator, direction?: string) => {
+    await target.click();
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await query.getByRole('button', { name: rangeFill.open, exact: true }).click();
+    const form = query.getByRole('region', { name: rangeFill.open, exact: true });
+    await expect(form).toBeVisible();
+    if (direction) await form.getByRole('combobox', { name: rangeFill.kind, exact: true }).selectOption(direction);
+    else await form.getByRole('textbox', { name: rangeFill.value, exact: true }).fill('整批不可落盘');
+    await form.getByRole('button', { name: rangeFill.stage, exact: true }).click();
+    await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toBeVisible();
+  };
+  const submit = async () => {
+    await preview.getByRole('checkbox', { name: '确认提交 SQLite 集中修改', exact: true }).check();
+    await preview.getByRole('button', { name: '提交 SQLite 修改', exact: true }).click();
+  };
+  await execute();
+  await expect(grid.getByRole('gridcell', { name: '记录 178', exact: true })).toBeVisible();
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  await fill(grid.getByRole('gridcell', { name: '记录 178', exact: true }), 'down');
+  const sql = await preview.getByLabel('SQLite 修改 SQL 预览', { exact: true }).textContent();
+  expect(sql?.match(/UPDATE /g)).toHaveLength(2);
+  expect(sql).toContain('SET "name"=');
+  expect(values()).toEqual(['记录 177', '记录 178', '记录 179', '记录 180']);
+  await info.attach('SQLite查询矩形填充预览', { body: await page.screenshot(), contentType: 'image/png' });
+  await submit();
+  await expect(preview).toHaveCount(0);
+  expect(values()).toEqual(['记录 177', '记录 178', '记录 178', '记录 178']);
+
+  await execute();
+  await expect(grid.getByRole('gridcell', { name: '记录 178', exact: true })).toHaveCount(3);
+  await fill(grid.getByRole('gridcell', { name: '记录 178', exact: true }).first());
+  expect(disk("UPDATE subject SET name='并发改写' WHERE id=179 RETURNING name")).toEqual([{ name: '并发改写' }]);
+  await submit();
+  await expect(preview.getByRole('alert')).toContainText(/冲突|回滚|变化/);
+  expect(values()).toEqual(['记录 177', '记录 178', '并发改写', '记录 178']);
+  const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  expect(tasks.filter(task => task.kind === 'query.execute')).toHaveLength(2);
+  expect(tasks.filter(task => task.kind === 'sqlite.tablePage' && task.status === 'completed')).toHaveLength(2);
+  const applies = tasks.filter(task => task.kind === 'sqlite.tableEdit.apply');
+  expect(applies).toHaveLength(2);
+  expect(applies.map(task => task.sqliteWrite?.phase).sort()).toEqual(['committed', 'rolled-back']);
+  expect(pageErrors).toEqual([]);
+});
+
 test('批量导出已返回结果写入 ZIP 和 XLSX 且不会重跑 SQL', async ({}, info) => {
   await seed(`/* NAME: 精确原值 */ SELECT 9223372036854775807 AS v, X'00ff' AS v;
     /* NAME: 不导出 */ SELECT '跳过';

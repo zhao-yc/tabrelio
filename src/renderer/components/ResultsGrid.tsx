@@ -599,7 +599,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     quickValueActions.apply(cell, kind);
   }
   const copyTools = <>
-    {onFillRange && cellRange.rectangle && <GridRangeFill rectangle={cellRange.rectangle} onStage={stageGridRangeFill}/>}
+    {onFillRange && cellRange.rectangle && <GridRangeFill rectangle={cellRange.rectangle} typed={!!sqliteSource?.sqliteStorage} onStage={stageGridRangeFill}/>}
     {quickValueActions && gridQuickValueKinds.map(kind =>
       <button key={kind} type="button" title={quickValueText[`${kind}Hint`]}
         disabled={!activeCopyCell || !quickValueActions.allowed(activeCopyCell, kind)} onClick={() => applyQuickValue(kind)}>{quickValueText[kind]}</button>)}

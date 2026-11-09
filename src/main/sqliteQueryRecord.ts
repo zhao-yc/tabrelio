@@ -65,14 +65,27 @@ export async function sqliteQueryRecordSchema(driver: SqliteDriverSession, table
   if (Array.isArray(keys) && keys.length && keys.every(key => typeof key === 'string')) return { version: version.value, keys };
 }
 
-/** 绑定原始主键，随后按存储类和原值核对每个投影字段。全行快照仍由现有表编辑器签发。 */
-export async function sqliteQueryRecordPredicate(driver: SqliteDriverSession, source: SqliteQueryRecordSource, index: number,
-  primaryKey: SqliteTablePage['primaryKey'], columns: SqliteTablePage['columns']) {
-  const identity = driver.identity, { result, origins, table } = source;
+export interface SqliteQueryRecordPredicate {
+  where: string;
+  parameters: SqliteValue[];
+  verify(row: readonly SqliteValue[]): void;
+}
+
+/** 同一个读快照先核对文件与目录，再按传入顺序为每条原行建立主键及原投影校验。 */
+export async function sqliteQueryRecordPredicates(driver: SqliteDriverSession, source: SqliteQueryRecordSource, indices: readonly number[],
+  primaryKey: SqliteTablePage['primaryKey'], columns: SqliteTablePage['columns']): Promise<SqliteQueryRecordPredicate[]> {
+  const identity = driver.identity;
+  if (!primaryKey?.length || !identity || identity.path !== source.identity.path || identity.device !== source.identity.device ||
+      identity.inode !== source.identity.inode || (await sqliteQueryRecordSchema(driver, source.table))?.version !== source.schemaVersion)
+    throw blocked();
+  return indices.map(index => queryRecordPredicate(source, index, primaryKey, columns));
+}
+
+function queryRecordPredicate(source: SqliteQueryRecordSource, index: number, primaryKey: NonNullable<SqliteTablePage['primaryKey']>,
+  columns: SqliteTablePage['columns']): SqliteQueryRecordPredicate {
+  const { result, origins } = source;
   const row = result.rows[index], storage = result.sqliteStorage?.rows[index];
-  if (!identity || identity.path !== source.identity.path || identity.device !== source.identity.device ||
-      identity.inode !== source.identity.inode || (await sqliteQueryRecordSchema(driver, table))?.version !== source.schemaVersion ||
-      !primaryKey?.length || !row || storage?.length !== result.columns.length) throw blocked();
+  if (!row || storage?.length !== result.columns.length) throw blocked();
   const values = new Map<string, SqliteValue>();
   for (const [columnIndex, origin] of origins.entries()) {
     if (!origin || !columns.some(column => column.name === origin.column)) throw blocked();
