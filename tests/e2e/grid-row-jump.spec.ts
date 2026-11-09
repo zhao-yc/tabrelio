@@ -2318,7 +2318,7 @@ test('查询结果按原类型查找可区分 SQL NULL、空字符串和整格�
   await highlight.check();
   await expect(nullable).toHaveClass(/query-result-find-match/);
 
-  for (const [kind, row] of [['whole', 1], ['null', 0], ['empty', 2]] as const) {
+  for (const [kind, row] of [['whole', 1], ['endsWith', 1], ['null', 0], ['empty', 2]] as const) {
     await mode.selectOption({ label: resultFind.modes[kind] });
     await expect(status).toHaveText(resultFind.count(1, -1));
     await expect(nullable).not.toHaveClass(/query-result-find-match/);
@@ -2332,6 +2332,16 @@ test('查询结果按原类型查找可区分 SQL NULL、空字符串和整格�
   await expect(input).toBeEnabled();
   await expect(status).toHaveText(resultFind.count(3, -1));
   await expect(selected).toBeChecked();
+  await mode.selectOption({ label: resultFind.modes.startsWith });
+  await expect(status).toHaveText(resultFind.count(2, -1));
+  await query.getByRole('checkbox', { name: resultFind.sensitive, exact: true }).check();
+  await expect(status).toHaveText(resultFind.count(1, -1));
+  await query.getByRole('button', { name: resultFind.showMatchingRows, exact: true }).click();
+  await expect(query.getByText(resultFind.matchViewCount(1, 4), { exact: true })).toBeVisible();
+  await expect(query.getByRole('gridcell', { name: '179', exact: true })).toBeVisible();
+  await expect(query.getByRole('gridcell', { name: '180', exact: true })).toHaveCount(0);
+  await query.getByRole('button', { name: resultFind.clearMatchView, exact: true }).click();
+  await expect(query.getByRole('gridcell', { name: '180', exact: true })).toBeVisible();
   expect(await tasks()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });

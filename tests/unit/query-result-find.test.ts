@@ -22,6 +22,26 @@ describe('已返回结果的有界字面查找', () => {
     expect(finish(unicode).count).toBe(1);
   });
 
+  it('按原标量首尾匹配字面文字，保留尾随换行、重叠后缀和大小写规则', () => {
+    const long = 'x'.repeat(100000);
+    const rows: DataRow[] = [
+      { a: 'A.*' + long }, { a: long + 'a.*' }, { a: 'a.*\n' }, { a: 'xa.*y' },
+      { a: null }, { a: { type: 'binary', base64: '' } }, { a: 'aaa' }, { a: '😀' }, { a: 'ς' },
+    ];
+    for (const [mode, query, sensitive, expected] of [
+      ['startsWith', 'a.*', false, [0, 2]], ['startsWith', 'a.*', true, [2]],
+      ['endsWith', 'a.*', true, [1]], ['endsWith', 'aa', true, [6]],
+      ['startsWith', 'NULL', false, []], ['startsWith', '0x', true, []],
+      ['startsWith', '\ud83d', true, []], ['endsWith', '\ude00', true, []],
+      ['endsWith', '😀', true, [7]], ['endsWith', 'Σ', false, [8]],
+    ] as const) {
+      const scan = new QueryResultFindScan(rows, columns, query, sensitive, () => true, 'a', mode);
+      expect(scan.step()).toMatchObject({ phase: 'complete', scannedCells: rows.length });
+      expect(positions(scan)).toEqual(expected.map(row => ({ row, column: 0 })));
+      expect(scan.matchingRows()).toEqual(new Set(expected));
+    }
+  });
+
   it('指定同名列时仅扫描该列，保留完整可见布局中的命中坐标', () => {
     const rows = [{ a: 'hit', b: 'miss' }, { a: 'hit', b: 'hit' }];
     const readOther = vi.fn(() => { throw Error('不应访问范围外列'); });

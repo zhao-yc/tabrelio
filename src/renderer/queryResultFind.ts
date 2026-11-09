@@ -2,12 +2,13 @@ import type { DataRow, ResultColumn } from '../shared/contracts';
 import { cellPreview, ownCell } from './lib';
 import { queryResultRegexLimits } from './queryResultRegexProtocol';
 import type { QueryResultRegexWorkerClient } from './queryResultRegexWorkerClient';
+import { tableFindPattern } from './tableFindPattern';
 
 export const queryResultFindLimits = { queryUnits: 256, chunkUnits: 8192, batchUnits: 32768, batchCells: 256, hits: 5000 } as const;
 export interface QueryResultFindMatch { readonly row: number; readonly column: number; }
 type RegexFailure = 'regex-invalid' | 'regex-timeout' | 'regex-budget' | 'regex-worker';
 export type QueryResultFindPhase = 'searching' | 'complete' | 'limited' | 'invalid' | 'stopped' | RegexFailure;
-export type QueryResultFindMode = 'contains' | 'whole' | 'null' | 'empty' | 'regex';
+export type QueryResultFindMode = 'contains' | 'whole' | 'startsWith' | 'endsWith' | 'null' | 'empty' | 'regex';
 export const isTextResultFind = (mode: QueryResultFindMode): boolean => mode !== 'null' && mode !== 'empty';
 export interface QueryResultFindProgress { phase: QueryResultFindPhase; count: number; scannedCells: number; totalCells: number; }
 
@@ -18,6 +19,7 @@ export class QueryResultFindScan {
   private readonly scanColumnCount: number;
   private readonly rowCount: number;
   private readonly needle: string;
+  private readonly edge?: { pattern: RegExp; units: number };
   private readonly matches: QueryResultFindMatch[] = [];
   private readonly matchCells = new Set<number>();
   private cursor = 0;
@@ -30,6 +32,10 @@ export class QueryResultFindScan {
     this.scanColumnCount = this.targetColumn === undefined ? this.keys.length : this.targetColumn < 0 ? 0 : 1;
     const usesText = isTextResultFind(mode), invalid = usesText && query.length > queryResultFindLimits.queryUnits;
     this.needle = !usesText || invalid ? '' : mode === 'regex' || caseSensitive ? query : query.toLowerCase();
+    if (!invalid && (mode === 'startsWith' || mode === 'endsWith')) {
+      const pattern = tableFindPattern({ query, caseSensitive, wholeCell: false, edge: mode === 'startsWith' ? 'start' : 'end' });
+      this.edge = { pattern, units: query.length + 1 };
+    }
     this.phase = this.targetColumn === -1 ? 'stopped' : invalid ? 'invalid' : (!usesText || query) && rows.length && this.scanColumnCount ? 'searching' : 'complete';
   }
   /** 首次观察到归属失效即永久撤销，恢复相等引用也不能复活旧查找。 */
@@ -126,7 +132,16 @@ export class QueryResultFindScan {
           this.offset = end;
         } else {
           const value = ownCell(this.rows[row], this.keys[column]);
-          if (this.mode === 'whole') {
+          if (this.edge) {
+            const scalar = value == null || typeof value === 'object' ? '' : String(value);
+            // 只检查原值的一端。多保留一个代码单元，避免在匹配边界拆开代理对。
+            const size = Math.max(1, Math.min(scalar.length, this.edge.units));
+            if (size > remaining) break;
+            units += size;
+            const piece = this.mode === 'startsWith' ? scalar.slice(0, size) : scalar.slice(-size);
+            this.edge.pattern.lastIndex = 0;
+            found = this.edge.pattern.test(piece);
+          } else if (this.mode === 'whole') {
             // 整格只核对原标量。远长于搜索词的文本不折叠大小写，也不查二进制预览。
             const scalar = value == null || typeof value === 'object' ? undefined : String(value);
             const candidate = scalar !== undefined && scalar.length <= queryResultFindLimits.chunkUnits ? scalar : undefined;

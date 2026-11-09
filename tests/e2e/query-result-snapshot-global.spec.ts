@@ -341,7 +341,13 @@ function register(): void {
       await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       const applySearch = async () => {
         await step(() => viewer.getByRole('combobox', { name: findText.columns, exact: true }).selectOption({ label: findText.columnOption('重复列', 2) }));
-        await step(() => input.fill('构造键安全'));
+        const matchMode = viewer.getByRole('combobox', { name: findText.mode, exact: true });
+        await step(() => matchMode.selectOption({ label: findText.modes.startsWith }));
+        await step(() => input.fill('构造'));
+        await step(() => expect(status).toHaveText(findText.count(1, -1)));
+        await step(() => matchMode.selectOption({ label: findText.modes.endsWith }));
+        await step(() => expect(status).toHaveText(findText.noMatch));
+        await step(() => input.fill('安全'));
         await step(() => expect(status).toHaveText(findText.count(1, -1)));
       };
       await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
