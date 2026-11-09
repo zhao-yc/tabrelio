@@ -42,6 +42,7 @@ describe('MySQL 查询关联原行', () => {
     expect(select.sql).toContain(' AS DECIMAL(65,0)');
     const lock = mysqlQueryRelationSelect(source, info, 0, true);
     expect(lock.sql).toBe(select.sql + ' FOR UPDATE');
+    expect(mysqlQueryRelationSelect(source, info, 0, 'share').sql).toBe(select.sql + ' LOCK IN SHARE MODE');
     expect(lock.searchKey.params).toEqual(['9007199254740993', '9007199254740993']);
     const page = { rows: [{ id: '9007199254740993', label: '原值' }], columns: [], page: 1, pageSize: 1, hasMore: false };
     expect(select.verify(page)).toEqual(page.rows[0]);
@@ -105,5 +106,15 @@ describe('MySQL 查询关联原行', () => {
       expect(() => validateCommand(command, { ...request, queryRecord: { sessionId: scope.sessionId, token: queryRecord.token } })).toThrow();
       expect(() => validateCommand(command, { ...request, changes: [change, { ...change, kind: 'update', values: { id: '1' } }] })).toThrow();
     }
+  });
+
+  it('查询副本只允许明确授权的 INSERT，并允许全默认值草稿', () => {
+    const scope = { connectionId: 'conn', sessionId: 'session', executionId: 'run', taskId: 'read', rowIndices: [3, 0], operation: 'insert' };
+    expect(validateCommand('mysql.queryBatchEdit', scope)).toEqual(scope);
+    expect(() => validateCommand('mysql.queryBatchEdit', { ...scope, columnIndices: [0] })).toThrow();
+    const ref = { sessionId: scope.sessionId, token: randomUUID(), operation: 'insert' };
+    const input = { connectionId: scope.connectionId, database: 'db', table: 't', queryRecord: ref, changes: [{ kind: 'insert', values: {} }] };
+    expect(validateCommand('table.preview', input)).toEqual(input);
+    expect(() => validateCommand('table.preview', { ...input, queryRecord: { ...ref, operation: 'delete' } })).toThrow();
   });
 });

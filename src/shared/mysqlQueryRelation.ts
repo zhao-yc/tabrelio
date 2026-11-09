@@ -17,8 +17,8 @@ export const mysqlQueryBatchEditSchema = z.union([
   queryBatchScope.extend({ columnIndices: z.array(columnIndex).min(1).max(1024) })
     .refine(value => value.rowIndices.length * value.columnIndices.length <= mysqlQueryBatchLimits.cells &&
       new Set(value.columnIndices).size === value.columnIndices.length, '查询编辑选区重复或超过预算'),
-  queryBatchScope.extend({ operation: z.literal('delete') }),
+  queryBatchScope.extend({ operation: z.enum(['delete', 'insert']) }),
 ]);
 export type MysqlQueryBatchEditInput = z.infer<typeof mysqlQueryBatchEditSchema>;
-export const mysqlQueryRecordRefSchema = z.object({ sessionId: id, token: z.uuid(), operation: z.literal('delete').optional() }).strict();
+export const mysqlQueryRecordRefSchema = z.object({ sessionId: id, token: z.uuid(), operation: z.enum(['delete', 'insert']).optional() }).strict();
 export type MysqlQueryRecordRef = z.infer<typeof mysqlQueryRecordRefSchema>;

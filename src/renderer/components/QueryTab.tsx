@@ -1497,7 +1497,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (!mysqlRelationAvailable || !result || !sourceResult || !sessionRef.current || !queryOwnerCurrent() || !resultSelectionAllowed(selectionBinding))
       throw Error(mysqlBatchText.stale);
     if (!displayIndices.length || displayIndices.length > mysqlQueryBatchLimits.rows ||
-        operation.kind !== 'delete' && (!keys.length || displayIndices.length * keys.length > mysqlQueryBatchLimits.cells))
+        (operation.kind === 'fill' || operation.kind === 'paste') && (!keys.length || displayIndices.length * keys.length > mysqlQueryBatchLimits.cells))
       throw Error(gridRangeFillZh.limit);
     const rowIndices = displayIndices.map(index => sourceResult.rows.indexOf(result.rows[index]));
     const columnIndices = keys.map(key => sourceResult.columns.findIndex(column => column.key === key));
@@ -1505,21 +1505,21 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const job = acquireWorkspaceBusy(tab.id);
     const owner = { connectionId: tab.connectionId, sessionId: sessionRef.current, executionId: task.current, taskId: uid(), rowIndices };
     const key = keys[0] ?? visibleColumns[0]?.key;
-    setMysqlBatch({ request: operation.kind === 'delete' ? { ...owner, operation: 'delete' } : { ...owner, columnIndices },
+    setMysqlBatch({ request: operation.kind === 'delete' || operation.kind === 'insert' ? { ...owner, operation: operation.kind } : { ...owner, columnIndices },
       operation, job, result: sourceResult, displayRows: displayIndices.map(index => index + 1),
       anchor: key ? { row: result.rows[displayIndices[0]], key } : undefined });
     setError('');
   }
 
-  function openMysqlQueryBatch(range: GridRangeTarget<DataRow>, operation: Exclude<MysqlQueryBatchInput, { kind: 'delete' }>): void {
+  function openMysqlQueryBatch(range: GridRangeTarget<DataRow>, operation: Extract<MysqlQueryBatchInput, { kind: 'fill' | 'paste' }>): void {
     if (!result || range.rows.some((row, index) => result.rows[range.startRow + index] !== row)) throw Error(mysqlBatchText.stale);
     startMysqlQueryBatch(range.rows.map((_, index) => range.startRow + index), operation, range.keys);
   }
 
-  function openMysqlQueryDelete(): void {
+  function openMysqlCheckedRecords(kind: 'delete' | 'insert'): void {
     const indices = resultSelection.checkedIndices(selectionBinding);
     if (!indices.length || indices.length > mysqlQueryBatchLimits.rows) return;
-    try { startMysqlQueryBatch(indices, { kind: 'delete' }); }
+    try { startMysqlQueryBatch(indices, { kind }); }
     catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -2544,7 +2544,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {mysqlRelationAvailable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   title={rowDetailsText.choose} onClick={() => openMysqlRelation('edit')}>{mysqlEditText.edit}</button>}
 {mysqlRelationAvailable && <button className="danger" disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
-  title={mysqlBatchText.deleteLimit} onClick={openMysqlQueryDelete}>{mysqlBatchText.deleteChecked}</button>}</ActionMenuSection>
+  title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('delete')}>{mysqlBatchText.deleteChecked}</button>}
+{mysqlRelationAvailable && <button disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
+  title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('insert')}>{mysqlBatchText.insert}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
 {sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={memoryText.hint} onClick={rememberResultOrganization}>{memoryText.save}</button></>:null}{resultMemory&&<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)} title={queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)?memoryText.scope:memoryText.mismatch} onClick={applyRememberedOrganization}>{memoryText.apply}</button><button disabled={!rememberedOrganizationCanDiscard()} onClick={discardRememberedOrganization}>{memoryText.clear}</button></>}<div className="action-menu-field" role="group" aria-label={zh.app.text020}><label className="inline-field">{zh.query.text020}<input aria-label={zh.query.text021} type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => useWorkspace.getState().updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/>{zh.query.text022}</label></div></ActionMenuSection>

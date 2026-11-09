@@ -74,7 +74,7 @@ export function mysqlQueryRelationSource(managed: ManagedConnection, target: Non
 }
 
 /** 数值主键沿用精确十进制绑定，避免以双精度字符串比较相邻 BIGINT。 */
-export function mysqlQueryRelationSelect(source: MysqlQueryRelationSource, info: TableInfo, index: number, lock = false) {
+export function mysqlQueryRelationSelect(source: MysqlQueryRelationSource, info: TableInfo, index: number, lock: boolean | 'share' = false) {
   const original = source.result.rows[index], names = info.columns.map(column => column.name);
   if (!original || info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' || !info.primaryKey.length ||
       info.database !== source.database || info.name !== source.table || source.columns.some(column => !names.includes(column))) throw blocked();
@@ -95,7 +95,7 @@ export function mysqlQueryRelationSelect(source: MysqlQueryRelationSource, info:
   const where = buildDataSearchRecordWhere({ keyColumns }, keyValues);
   const searchKey = { sql: where.sql, params: where.params.map(serializeCell) };
   const sql = inlineParameters('SELECT ' + names.map(identifier).join(',') + ' FROM ' + qualified(info.database, info.name) +
-    ' WHERE ' + where.sql + ' LIMIT 2' + (lock ? ' FOR UPDATE' : ''), searchKey.params);
+    ' WHERE ' + where.sql + ' LIMIT 2' + (lock === 'share' ? ' LOCK IN SHARE MODE' : lock ? ' FOR UPDATE' : ''), searchKey.params);
   return { sql, searchKey, verify(page: TablePage): DataRow {
     const row = page.rows[0];
     if (!row || page.rows.length !== 1 || page.hasMore || [...values].some(([column, value]) =>
