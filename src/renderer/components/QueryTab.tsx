@@ -1821,9 +1821,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if(!filterBinding||!filterView||!result||!resultSelectionAllowed(selectionBinding))return;
     try{const capture=captureQueryResultCellFilter(visibleColumns,result.rows,cell,result),seed=appendQueryResultFilterNode(filterView.expression,queryResultCellFilterNode(capture,operator));showFilterPanel(seed);}catch(reason){setError(errorMessage(reason));}
   }
-  /** 勾选集合须与父级接纳的精确索引一致；全部结构检查通过后才撤销选择并打开审核草稿。 */
-  function openSelectedFilter(capture:QueryResultSelectedFilterCapture):void{
-    const current=()=>!!result&&resultSelectionAllowed(selectionBinding)&&resultSelection.matchesIndices(selectionBinding,capture.indices)&&currentQueryResultSelectedFilter(capture,visibleColumns,result.rows,result);
+  /** 勾选核对父级接纳的索引，矩形核对网格原选区。结构检查通过才打开草稿。 */
+  function openSelectedFilter(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean):void{
+    const current=()=>!!result&&resultSelectionAllowed(selectionBinding)&&
+      (rangeCurrent ? rangeCurrent() : resultSelection.matchesIndices(selectionBinding,capture.indices))&&
+      currentQueryResultSelectedFilter(capture,visibleColumns,result.rows,result);
     if(!filterBinding||!filterView||!current())return;
     try{
       const seed=appendQueryResultFilterNode(filterView.expression,queryResultSelectedFilterNode(capture));

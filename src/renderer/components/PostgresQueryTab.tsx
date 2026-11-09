@@ -1517,11 +1517,16 @@ export function PostgresQueryTab({
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
-  /** 只接受当前网格与导出选择共同认可的勾选位置，以活动列原值构造审核草稿。 */
-  function openSelectedFilter(capture: QueryResultSelectedFilterCapture) {
-    if (!resultCurrent() || !binding || !resultSelection.matchesIndices(binding, capture.indices) ||
-        !currentQueryResultSelectedFilter(capture, binding.visibleColumns, binding.rows)) return;
-    try { openResultFilter(queryResultSelectedFilterNode(capture)); }
+  /** 取值须绑定当前勾选或单列矩形，原行列核验后才打开审核草稿。 */
+  function openSelectedFilter(capture: QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean) {
+    const current = () => !!binding && resultCurrent() &&
+      (rangeCurrent ? rangeCurrent() : resultSelection.matchesIndices(binding, capture.indices)) &&
+      currentQueryResultSelectedFilter(capture, binding.visibleColumns, binding.rows);
+    if (!current()) return;
+    try {
+      const node = queryResultSelectedFilterNode(capture);
+      if (current()) openResultFilter(node);
+    }
     catch (reason) { setError(errorMessage(reason)); }
   }
 

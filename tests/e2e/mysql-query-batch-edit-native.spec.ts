@@ -6,6 +6,8 @@ import { encodeClipboard } from '../../src/renderer/gridClipboard';
 import { mysqlQueryBatchEditZh as text } from '../../src/renderer/locales/mysqlQueryBatchEdit.zh-CN';
 import { gridRangeFillZh as rangeFill } from '../../src/renderer/locales/gridRangeFill.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_MYSQL_QUERY_RELATION_NATIVE !== '1', '仅使用本轮隔离网络实库');
@@ -151,6 +153,17 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await submit(fill);
     await expect(fill).toBeHidden();
     expect(await read()).toEqual([{ ...beforeNullFill[0], note: '补齐' }, ...beforeNullFill.slice(1)]);
+    await execute('补齐');
+    await select('18446744073709551615', 1);
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: queryResultSelectedFilterZh.range, exact: true }).click();
+    const filter = query.getByRole('region', { name: queryResultFilterZh.title, exact: true });
+    await expect(filter.getByLabel(queryResultFilterZh.operator + ' 1', { exact: true })).toHaveValue('in');
+    await expect(cell('13')).toBeVisible();
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(cell('18446744073709551615')).toBeVisible();
+    await expect(cell('18446744073709551613')).toBeVisible();
+    await expect(cell('13')).toHaveCount(0);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

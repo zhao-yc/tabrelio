@@ -11,6 +11,8 @@ import { postgresBatchEditZh as batchText } from '../../src/renderer/locales/pos
 import { postgresTableFindZh as findText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { primaryKeyCopyZh as keyCopy } from '../../src/renderer/locales/primaryKeyCopy.zh-CN';
 import { updateSqlCopyZh as updateCopy } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
 import { deleteSqlCopyZh as deleteCopy } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
@@ -391,6 +393,23 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     const afterNullFill = await read();
     expect(afterNullFill[0]).toMatchObject({ note: '补齐' });
     expect(afterNullFill.slice(1)).toEqual(beforeNullFill.slice(1));
+    await execute.click();
+    await expect(cell('补齐')).toBeVisible();
+    if (!await idHeader.getByLabel(queryResultSortZh.ascending).isVisible()) await idHeader.click();
+    await cell(sequence[0]).click();
+    await page.keyboard.press('Shift+ArrowDown');
+    const endpoint = cell(sequence[1]);
+    await expect(endpoint).toBeFocused();
+    await endpoint.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: queryResultSelectedFilterZh.range, exact: true }).press('Enter');
+    const filter = query.getByRole('region', { name: queryResultFilterZh.title, exact: true });
+    await expect(filter.getByLabel(queryResultFilterZh.operator + ' 1', { exact: true })).toHaveValue('in');
+    await expect(cell(sequence[2])).toBeVisible();
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(cell(sequence[0])).toBeVisible();
+    await expect(cell(sequence[1])).toBeVisible();
+    await expect(cell(sequence[2])).toHaveCount(0);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
