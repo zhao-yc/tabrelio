@@ -18,12 +18,15 @@ export const savedQueryReadSchema=z.object({id,digest:z.string().regex(/^[a-f0-9
 export const savedQueryReadTextSchema=savedQueryReadSchema.omit({connectionId:true}).strict();
 export type SavedQueryReadTextInput=z.infer<typeof savedQueryReadTextSchema>;
 export interface SavedQueryReadTextResult{query:SavedQuery}
+export const querySqlExportEncodingSchema = z.enum(['utf8', 'utf16le', 'gb18030']);
+export const savedQueryExportSqlSchema = savedQueryReadTextSchema.extend({ encoding: querySqlExportEncodingSchema.optional() }).strict();
+export type SavedQueryExportSqlInput = z.infer<typeof savedQueryExportSqlSchema>;
 /** 保存结果只返回显示名称，原路径和正文不离开主进程。 */
 export type SavedQueryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
 export const savedQueryArchiveLimits = { files: 100, bytes: 32 * 1024 * 1024 } as const;
 /** 批量导出只接收跨页选中的本地查询身份，不接收路径或 SQL。 */
 export const savedQueryExportSqlArchiveSchema = z.object({ items: z.array(savedQueryReadTextSchema).min(1).max(savedQueryArchiveLimits.files)
-  .refine(items => new Set(items.map(item => item.id)).size === items.length, '选中的查询不能重复') }).strict();
+  .refine(items => new Set(items.map(item => item.id)).size === items.length, '选中的查询不能重复'), encoding: querySqlExportEncodingSchema.optional() }).strict();
 export type SavedQueryExportSqlArchiveInput = z.infer<typeof savedQueryExportSqlArchiveSchema>;
 export type SavedQueryExportSqlArchiveResult = { status: 'cancelled' } | { status: 'saved'; name: string; count: number };
 /** 导入只回传新记录的名称，文件路径及原文留在主进程。 */

@@ -149,6 +149,15 @@ describe('queries.exportSql 原生选址及原摘要写入', () => {
     expect(f.unexpected).not.toHaveBeenCalled();
   });
 
+  it('支持明确选用 UTF-16LE，只提交带 BOM 的完整原文字节', async () => {
+    const f = mainFixture(), target = 'C:/isolated/saved.sql';
+    expect(await f.exportSql({ ...f.input(), encoding: 'utf16be' })).toMatchObject({ ok: false });
+    expect(f.choose).not.toHaveBeenCalled();
+    f.choose.mockResolvedValueOnce({ canceled: false, filePath: target });
+    expect(await f.exportSql({ ...f.input(), encoding: 'utf16le' })).toEqual({ ok: true, result: { status: 'saved', name: 'saved.sql' } });
+    expect(f.write).toHaveBeenCalledExactlyOnceWith(target, Buffer.from('\uFEFF' + record().sql, 'utf16le'), expect.any(Function));
+  });
+
   it('选址期间原记录变化或文档失效均拒绝写入', async () => {
     const target = 'C:/isolated/saved.sql';
     const stale = mainFixture(), original = stale.input();
@@ -156,7 +165,7 @@ describe('queries.exportSql 原生选址及原摘要写入', () => {
       stale.replace(JSON.stringify(record({ sql: 'SELECT 2' })));
       return { canceled: false, filePath: target };
     });
-    expect(await stale.exportSql(original)).toMatchObject({ ok: false });
+    expect(await stale.exportSql({ ...original, encoding: 'gb18030' })).toMatchObject({ ok: false });
     expect(stale.write).not.toHaveBeenCalled();
     expect(stale.release).toHaveBeenCalledOnce();
     const obsolete = mainFixture();

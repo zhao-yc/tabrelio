@@ -225,7 +225,7 @@ export interface CommandMap {
   'search.savedQueriesRelease':{input:{cursor:string};output:void};
   'queries.read':{input:{id:string;digest:string;connectionId:string};output:SavedQueryOpenResult};
   'queries.readText':{input:import('./savedQuerySearch').SavedQueryReadTextInput;output:import('./savedQuerySearch').SavedQueryReadTextResult};
-  'queries.exportSql':{input:import('./savedQuerySearch').SavedQueryReadTextInput;output:import('./savedQuerySearch').SavedQueryExportSqlResult};
+  'queries.exportSql':{input:import('./savedQuerySearch').SavedQueryExportSqlInput;output:import('./savedQuerySearch').SavedQueryExportSqlResult};
   'queries.exportSqlArchive':{input:import('./savedQuerySearch').SavedQueryExportSqlArchiveInput;output:import('./savedQuerySearch').SavedQueryExportSqlArchiveResult};
   'queries.copySql': { input: import('./savedQuerySearch').SavedQueryReadTextInput; output: void };
   'queries.importSql':{input:{encoding:QueryFileEncoding};output:import('./savedQuerySearch').SavedQueryImportSqlResult};

@@ -1938,7 +1938,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         assertCurrent();
         const reference = { id: input.id, digest: input.digest };
         const sql = fromHistory ? historyPages.readSql(reference).sql : savedQuerySearches.readText(reference).query.sql;
-        await writeQueryFileBytes(selected.filePath, encodeQueryFile(sql, fromHistory ? input.encoding : 'utf8'), assertCurrent);
+        await writeQueryFileBytes(selected.filePath, encodeQueryFile(sql, input.encoding ?? 'utf8'), assertCurrent);
         return { status: 'saved', name: basename(selected.filePath) };
       } finally { release(); }
     });
@@ -1962,7 +1962,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       try {
         await writeQuerySqlArchive(selected.filePath, input.items,
           item => fromHistory ? historyPages.readArchiveItem(item) : savedQuerySearches.readText(item).query,
-          assertCurrent, fromHistory ? input.encoding : 'utf8');
+          assertCurrent, input.encoding ?? 'utf8');
         return { status: 'saved', name: basename(selected.filePath), count: input.items.length };
       } finally { release(); }
     });

@@ -24,7 +24,8 @@ describe('保存查询批量 ZIP', () => {
   it('严格 IPC 拒绝重复、路径、SQL、额外参数和超量', () => {
     const parse = (value: unknown) => validateCommand('queries.exportSqlArchive', value);
     expect(parse({ items: refs })).toEqual({ items: refs });
-    for (const value of [{ items: [] }, { items: [refs[0], refs[0]] }, { items: [{ ...refs[0], sql: 'SELECT 1' }] }, { items: refs, path: '输入路径' }, { items: Array.from({ length: savedQueryArchiveLimits.files + 1 }, (_, index) => ({ ...refs[0], id: `${index}` })) }]) {
+    for (const encoding of ['utf8', 'utf16le', 'gb18030']) expect(parse({ items: refs, encoding })).toEqual({ items: refs, encoding });
+    for (const value of [{ items: [] }, { items: [refs[0], refs[0]] }, { items: [{ ...refs[0], sql: 'SELECT 1' }] }, { items: refs, path: '输入路径' }, { items: refs, encoding: 'utf16be' }, { items: Array.from({ length: savedQueryArchiveLimits.files + 1 }, (_, index) => ({ ...refs[0], id: `${index}` })) }]) {
       expect(() => parse(value)).toThrow();
     }
   });

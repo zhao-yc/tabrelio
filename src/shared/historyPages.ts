@@ -2,7 +2,7 @@ import{z}from'zod';
 import { canonicalHistoryInstant } from './historyTimeRange';
 import { historyDurationRangeSchema } from './historyDurationRange';
 import type{QueryDatabaseContext}from'./queryContext';
-import{savedQueryArchiveLimits,savedQueryContextSchema,savedQuerySearchLimits}from'./savedQuerySearch';
+import{querySqlExportEncodingSchema,savedQueryArchiveLimits,savedQueryContextSchema,savedQuerySearchLimits}from'./savedQuerySearch';
 import{localSqlPageLimits,type LocalSqlPage}from'./localSqlPages';
 
 /** 沿用最近1000条存储保留；分页限制传输，不扩大或截断旧记录正文。 */
@@ -15,12 +15,11 @@ export const historyPageInputSchema=z.object({taskId:z.string().uuid(),search:z.
 export const historyReadSchema=z.object({id,digest,connectionId:id}).strict();
 export const historyRecordReferenceSchema=z.object({id,digest}).strict();
 export type HistoryRecordReference = z.infer<typeof historyRecordReferenceSchema>;
-const historySqlEncodingSchema = z.enum(['utf8', 'utf16le', 'gb18030']);
-export const historyExportSqlSchema = historyRecordReferenceSchema.extend({ encoding: historySqlEncodingSchema }).strict();
+export const historyExportSqlSchema = historyRecordReferenceSchema.extend({ encoding: querySqlExportEncodingSchema }).strict();
 export const historyExportSqlArchiveSchema = z.object({
   items: z.array(historyRecordReferenceSchema).min(1).max(savedQueryArchiveLimits.files)
     .refine(items => new Set(items.map(item => item.id)).size === items.length, '所选历史不能重复'),
-  encoding: historySqlEncodingSchema,
+  encoding: querySqlExportEncodingSchema,
 }).strict();
 export type HistoryExportSqlArchiveInput = z.infer<typeof historyExportSqlArchiveSchema>;
 export type HistoryExportSqlInput = z.infer<typeof historyExportSqlSchema>;

@@ -38,6 +38,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const connections = useWorkspace(state => state.connections);
   const [scope, setScope] = useState<SavedQueryScope>(() => initialConnectionId ? { kind: 'connection', connectionId: initialConnectionId } : { kind: 'all' });
   const [importEncoding, setImportEncoding] = useState<QueryFileEncoding>('utf8');
+  const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
@@ -246,7 +247,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function exportSql(item: SavedQueryPageEntry): void {
     if (!editable() || !currentCard(item)) return;
     void run(async ticket => {
-      const result = await io.request('queries.exportSql', { id: item.query.id, digest: item.digest });
+      const result = await io.request('queries.exportSql', { id: item.query.id, digest: item.digest, encoding: exportEncoding });
       if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlExported, result.name));
     });
   }
@@ -255,7 +256,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     if (!editable() || !selectedRef.current.size || pageView.current.needsRefresh) return;
     const items = [...selectedRef.current.values()].map(({ id, digest }) => ({ id, digest }));
     void run(async ticket => {
-      const result = await io.request('queries.exportSqlArchive', { items });
+      const result = await io.request('queries.exportSqlArchive', { items, encoding: exportEncoding });
       if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlArchiveSaved, result.count, result.name));
     });
   }
@@ -321,6 +322,10 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           <label>{fileText.encoding} <select disabled={blocked} value={importEncoding} onChange={event => draft(() => setImportEncoding(event.target.value as QueryFileEncoding))}><option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option></select></label>
           <button disabled={blocked} onClick={importSql}>{t.sqlImportChoose}</button>
         </div></details>
+        <label className="inline-field">{t.sqlExportEncoding}<select aria-label={t.sqlExportEncoding} value={exportEncoding} disabled={blocked}
+          onChange={event => setExportEncoding(event.target.value as QueryFileEncoding)}>
+          <option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option>
+        </select></label>
         <label className="inline-field">{t.scope}<select aria-label={t.scope} disabled={blocked} value={scope.kind === 'connection' ? 'connection:' + scope.connectionId : scope.kind} onChange={event => selectConnectionScope(event.target.value)}>
           <option value="all">{t.allSources}</option>
           <option value="unbound">{t.unbound}</option>
