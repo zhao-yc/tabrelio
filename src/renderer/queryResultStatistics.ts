@@ -16,6 +16,7 @@ export interface QueryResultStatisticsCapture {
 export interface QueryResultStatisticsResult {
   readonly count: number; readonly nonNull: number; readonly nulls: number;
   readonly distinct?: number; readonly min?: string; readonly max?: string; readonly sum?: string; readonly average?: string;
+  readonly standardDeviation?: string; readonly standardDeviationRounded?: true;
   readonly approximate: boolean; readonly floatInput: boolean; readonly averageRounded: boolean; readonly reason?: string;
   readonly sqliteTypes?: Readonly<Record<'integer' | 'real' | 'text' | 'blob' | 'null', number>>;
   readonly frequency?: QueryResultFrequency;
@@ -177,6 +178,39 @@ function exactAverage(sum: Decimal, count: number): Decimal | undefined {
   while (scale > sum.scale && coefficient % 10n === 0n) { coefficient /= 10n; scale--; }
   return { coefficient, scale };
 }
+/** 从高于根的二次幂开始，用整数牛顿迭代取得向下取整的平方根。 */
+function integerSquareRoot(value: bigint): bigint {
+  if (value < 2n) return value;
+  let root = 1n << BigInt(Math.ceil(value.toString(2).length / 2));
+  for (;;) {
+    const next = (root + value / root) / 2n;
+    if (next >= root) return root;
+    root = next;
+  }
+}
+/** 用同尺度的精确矩计算总体标准差。比较平方判断半位，无需把大数转为浮点。 */
+function populationDeviation(sum: Decimal, squares: bigint, count: number): Pick<QueryResultStatisticsResult, 'standardDeviation' | 'standardDeviationRounded'> {
+  const size = BigInt(count);
+  const varianceNumerator = size * squares - sum.coefficient * sum.coefficient;
+  const root = integerSquareRoot(varianceNumerator);
+  const exact = root * root === varianceNumerator ? exactAverage({ coefficient: root, scale: sum.scale }, count) : undefined;
+  const format = (coefficient: bigint, scale: number) => {
+    const decimalText = display(coefficient, scale);
+    if (!scale) return decimalText;
+    let end = decimalText.length;
+    while (decimalText[end - 1] === '0') end--;
+    return decimalText.slice(0, decimalText[end - 1] === '.' ? end - 1 : end);
+  };
+  if (exact) return { standardDeviation: format(exact.coefficient, exact.scale) };
+
+  const denominator = size * size;
+  const precision = Math.max(sum.scale, 18);
+  const numerator = varianceNumerator * 10n ** BigInt(2 * (precision - sum.scale));
+  const lower = integerSquareRoot(numerator / denominator);
+  const midpoint = 2n * lower + 1n;
+  const rounded = 4n * numerator >= denominator * midpoint * midpoint ? lower + 1n : lower;
+  return { standardDeviation: format(rounded, precision), standardDeviationRounded: true };
+}
 /** 不同值沿用原比较键：精确数值归一、文本区分大小写、时间保留返回字段语义。 */
 function identity(key: OrdinaryKey): string {
   if (key === null) return 'null';
@@ -244,6 +278,7 @@ export class QueryResultStatisticsScan {
   private minimum?: { key: Key; literal: string };
   private maximum?: { key: Key; literal: string };
   private sum: Decimal = { coefficient: 0n, scale: 0 };
+  private sumOfSquares = 0n;
   private reason?: string;
   private sqliteTypes?: Record<'integer' | 'real' | 'text' | 'blob' | 'null', number>;
   private numericOnly = true;
@@ -272,11 +307,12 @@ export class QueryResultStatisticsScan {
     this.maximum = undefined;
     this.published = undefined;
     this.sum = { coefficient: 0n, scale: 0 };
+    this.sumOfSquares = 0n;
     this.binding = undefined;
     this.capture = undefined;
   }
   /** 坏值只撤销所有值指标，完整计数仍继续；不发布部分不同值或极值。 */
-  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; }
+  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.sumOfSquares = 0n; }
   /** 同一完整身份服务于摘要和分布；仅当前模式需要的集合持有它。 */
   private observeValue(identity: string, literal: string, kind: QueryResultFrequencyKind, index: number): void {
     if (this.frequency) {
@@ -342,7 +378,11 @@ export class QueryResultStatisticsScan {
             // 浮点聚合使用已验证的有限比较值，避免展开原文中任意长度的科学计数指数。
             const next = decimal(this.kind === 'postgresFloat' ? key as number : value as string | number);
             const scale = Math.max(next.scale, this.sum.scale);
-            this.sum = { coefficient: this.sum.coefficient * 10n ** BigInt(scale - this.sum.scale) + next.coefficient * 10n ** BigInt(scale - next.scale), scale };
+            const previousFactor = 10n ** BigInt(scale - this.sum.scale);
+            const nextCoefficient = next.coefficient * 10n ** BigInt(scale - next.scale);
+            // 平方和的尺度是合计尺度的两倍；值分布不需要额外的二阶矩。
+            if (!this.frequency) this.sumOfSquares = this.sumOfSquares * previousFactor * previousFactor + nextCoefficient * nextCoefficient;
+            this.sum = { coefficient: this.sum.coefficient * previousFactor + nextCoefficient, scale };
           }
         } catch { this.rejectValues(text.value); }
       }
@@ -368,8 +408,10 @@ export class QueryResultStatisticsScan {
     if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types, ...quality, ...this.finishFrequency(0) }); return; }
     if (this.reason) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: false, floatInput: false, averageRounded: false, reason: this.reason }); return; }
     let sum: string | undefined, average: string | undefined, averageRounded = false;
+    let deviation: ReturnType<typeof populationDeviation> = {};
     if (this.finiteNumbers && (this.sqliteTypes ? this.numericOnly : this.numericColumn)) {
       sum = display(this.sum.coefficient, this.sum.scale);
+      if (!this.frequency) deviation = populationDeviation(this.sum, this.sumOfSquares, nonNull);
       const finite = exactAverage(this.sum, nonNull);
       if (finite) average = display(finite.coefficient, finite.scale);
       else {
@@ -383,8 +425,9 @@ export class QueryResultStatisticsScan {
     }
     const reason = this.sqliteTypes && (!this.numericOnly || !this.finiteNumbers) ? text.sqliteNumericOnly :
       !this.finiteNumbers ? text.postgresNonFinite : undefined;
-    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.frequency?.distinct ?? this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...quality, ...(reason ? { reason } : {}), ...this.finishFrequency(nonNull) });
+    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.frequency?.distinct ?? this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, ...deviation, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...quality, ...(reason ? { reason } : {}), ...this.finishFrequency(nonNull) });
     this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined;
+    this.sumOfSquares = 0n;
   }
   /** 最后发布仍核源，调用方无需信任较早某一帧的current判断。 */
   result(): QueryResultStatisticsResult | undefined {

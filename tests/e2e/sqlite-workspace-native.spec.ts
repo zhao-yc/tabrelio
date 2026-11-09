@@ -238,17 +238,16 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     expect(generated.tabs[0].sql).toBe('SELECT * FROM "main"."中文""航船🚢" LIMIT 100;'); expect(generated.tabs[0].databaseContext).toEqual({ state: 'known', database: 'main' });
     await step(() => expect(page.locator('.table-tab')).toHaveCount(0)); expect(await tasks()).toEqual([]); expect(await history()).toEqual([]); expect((await step(audit)).executions).toBe(0);
     await step(() => expect(query().getByLabel('当前查询默认库', { exact: true })).toHaveText('main'));
-    await step(() => expect(query().locator('.query-context-options')).toHaveCount(0));
-    // 展开真实“更多”菜单再检查入口缺失，不能以未展开的portal冒充隐藏成功。
-    const triggers = query().locator('.action-menu-trigger:visible');
-    for (let index = 0, count = await step(() => triggers.count()); index < count; index++) {
-      const trigger = triggers.nth(index); if (await step(() => trigger.isDisabled())) continue;
-      await step(() => trigger.click());
-      for (const label of [queryAnalyzeZh.open, queryTransactionSettingsZh.open, queryDatabaseSwitchZh.open]) await step(() => expect(page.getByRole('button', { name: label, exact: true })).toHaveCount(0));
-      await step(() => page.keyboard.press('Escape'));
+    // 会话菜单现在包含 SQLite 执行选项；尚未建立会话时切换默认库不可用。
+    await step(async () => expect(await navigationMenuItem(query(), { name: queryDatabaseSwitchZh.open, exact: true }, check)).toBeDisabled());
+    await step(() => expect(page.getByRole('spinbutton', { name: sqliteZh.statementTimeout, exact: true })).toBeVisible());
+    await step(() => page.keyboard.press('Escape'));
+    // 从真实执行子菜单核对 SQLite 计划可用，网络数据库专用选项没有混入。
+    await step(async () => expect(await navigationMenuItem(query(), { name: zh.query.text014, exact: true }, check)).toBeEnabled());
+    for (const label of [queryAnalyzeZh.open, queryTransactionSettingsZh.open]) {
+      await step(() => expect(page.getByRole('menuitem', { name: label, exact: true })).toHaveCount(0));
     }
-    // 已接入的计划入口应真实可见；仅打开菜单检查，不执行未授权的计划SQL。
-    await step(async () => expect(await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(query(), { name: zh.query.text014, exact: true }, check)).toBeEnabled());
+    await step(() => page.keyboard.press('Escape'));
     await step(() => page.keyboard.press('Escape'));
 
     stage = '原Monaco键盘执行精度及二进制'; await execute(precisionSql, 1);
@@ -332,10 +331,13 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => query().getByRole('button', { name: statisticsText.open, exact: true }).click());
     await step(() => expect(statistics().getByLabel(statisticsText.sum, { exact: true })).toHaveText('-1'));
     await step(() => expect(statistics().getByLabel(statisticsText.average, { exact: true })).toHaveText('-0.5'));
+    await step(() => expect(statistics().getByLabel(statisticsText.standardDeviation, { exact: true })).toHaveText('9223372036854775807.5'));
+    await step(async () => info.attach('SQLite查询结果总体标准差', { body: await page.screenshot(), contentType: 'image/png' }));
     await step(() => expect(statistics().getByLabel(statisticsText.sqliteTypeCount('integer'), { exact: true })).toHaveText('2'));
     await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c4'));
     await step(() => expect(statistics().getByLabel(statisticsText.distinct, { exact: true })).toHaveText('2'));
     await step(() => expect(statistics().getByLabel(statisticsText.sum, { exact: true })).toHaveText(statisticsText.unavailable));
+    await step(() => expect(statistics().getByLabel(statisticsText.standardDeviation, { exact: true })).toHaveText(statisticsText.unavailable));
     await step(() => expect(statistics().getByLabel(statisticsText.sqliteTypeCount('text'), { exact: true })).toHaveText('1'));
     await step(async () => info.attach('SQLite混合存储列统计', { body: await page.screenshot(), contentType: 'image/png' }));
     const frequency = () => statistics().getByRole('table', { name: statisticsText.frequencyTitle, exact: true });

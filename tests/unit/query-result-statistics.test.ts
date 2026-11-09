@@ -28,7 +28,7 @@ describe('PostgreSQL 当前结果列统计', () => {
     const f = fixture('NUMERIC', ['1.00000000000000000001', '1.00000000000000000002', 'NaN'], new Set([0, 1]), 'postgresql');
     expect(finish(f.scan)).toMatchObject({
       count: 2, distinct: 2, min: '1.00000000000000000001', max: '1.00000000000000000002',
-      sum: '2.00000000000000000003', average: '1.000000000000000000015', approximate: false,
+      sum: '2.00000000000000000003', average: '1.000000000000000000015', standardDeviation: '0.000000000000000000005', approximate: false,
     });
   });
 
@@ -38,6 +38,7 @@ describe('PostgreSQL 当前结果列统计', () => {
     expect(result).toMatchObject({ count: 6, nulls: 1, distinct: 4, min: '-Infinity', max: 'NaN', reason: text.postgresNonFinite });
     expect(result.sum).toBeUndefined();
     expect(result.average).toBeUndefined();
+    expect(result.standardDeviation).toBeUndefined();
     const frequency = result.frequency!;
     expect(frequency.entries[0]).toMatchObject({ label: 'NaN', count: 2 });
     expect(queryResultFrequencyFilter(frequency, frequency.entries[0])).toMatchObject({ operator: 'eq', value: 'NaN' });
@@ -105,7 +106,7 @@ describe('当前已返回行的常见值分布', () => {
 describe('当前结果列的精确数值统计', () => {
   it.each(['LONGLONG', 'BIGINT', 'BIGINT UNSIGNED', 'NEWDECIMAL', 'DECIMAL(65,0)'])('%s不经过Number，保留20位整数合计与循环平均', type => {
     const f = fixture(type, ['18446744073709551615', '2', '9007199254740993', null]), before = structuredClone(f.rows), result = finish(f.scan);
-    expect(result).toEqual({ count: 4, nonNull: 3, nulls: 1, distinct: 3, min: '2', max: '18446744073709551615', sum: '18455751272964292610', average: '6151917090988097536.666666666666666667', approximate: true, floatInput: false, averageRounded: true, quality: { emptyText: 0, singletons: 3 } });
+    expect(result).toEqual({ count: 4, nonNull: 3, nulls: 1, distinct: 3, min: '2', max: '18446744073709551615', sum: '18455751272964292610', average: '6151917090988097536.666666666666666667', standardDeviation: '8693756310659631645.738853775198258427', standardDeviationRounded: true, approximate: true, floatInput: false, averageRounded: true, quality: { emptyText: 0, singletons: 3 } });
     expect(f.rows).toEqual(before); expect(Object.isFrozen(f.rows)).toBe(false); expect(Object.isFrozen(f.rows[0])).toBe(false); expect(Object.isFrozen(result)).toBe(true);
   });
   it('20位DECIMAL保留原尺度并half-away舍入，勾选范围独立且不丢低位', () => {
@@ -125,6 +126,19 @@ describe('当前结果列的精确数值统计', () => {
     expect(finish(fixture('DECIMAL(65,20)', ['0.12345678901234567890', '1.00000000000000000001']).scan)).toMatchObject({ sum: '1.12345678901234567891', average: '0.561728394506172839455', approximate: false, averageRounded: false });
     expect(finish(fixture('DECIMAL(65,20)', ['0.00000000000000000001', '0', '0']).scan)).toMatchObject({ average: '0.00000000000000000000', approximate: true, averageRounded: true });
   });
+  it('总体标准差保留相邻大整数的差值，忽略 NULL 并报告非终止小数舍入', () => {
+    const values = ['18446744073709551615', null, '18446744073709551614', '0'];
+    const selected = finish(fixture('BIGINT UNSIGNED', values, new Set([0, 1, 2])).scan);
+    expect(selected.standardDeviation).toBe('0.5');
+    expect(selected.standardDeviationRounded).toBeUndefined();
+    expect(finish(fixture('INT', ['2', '0', '0']).scan)).toMatchObject({ standardDeviation: '0.942809041582063366', standardDeviationRounded: true });
+    expect(finish(fixture('INT', ['9', null]).scan).standardDeviation).toBe('0');
+    expect(finish(fixture('INT', [null]).scan).standardDeviation).toBeUndefined();
+  });
+  it('总体标准差统一不等的小数尺度，保留双精度大指数原值边界', () => {
+    expect(finish(fixture('DECIMAL', ['-0.100', '1.3']).scan).standardDeviation).toBe('0.7');
+    expect(finish(fixture('DOUBLE', [-1e308, 1e308]).scan)).toMatchObject({ standardDeviation: '1' + '0'.repeat(308), floatInput: true });
+  });
   it('数值不同值与排序键一致，前导零、尾零和正负零归一，原极值文本保留', () => {
     const f = fixture('DECIMAL', ['-0.00', '000', '+0', '01.00', '1', null]);
     expect(finish(f.scan)).toMatchObject({ distinct: 2, min: '-0.00', max: '01.00', sum: '2.00', average: '0.40', approximate: false });
@@ -134,7 +148,7 @@ describe('当前结果列的精确数值统计', () => {
     for (const value of [0.1, Number.MAX_SAFE_INTEGER + 1]) {
       const result = finish(fixture('DECIMAL', ['1', value, null]).scan);
       expect(result).toMatchObject({ count: 3, nonNull: 2, nulls: 1, reason: text.value });
-      for (const key of ['distinct', 'min', 'max', 'sum', 'average'] as const) expect(result[key]).toBeUndefined();
+      for (const key of ['distinct', 'min', 'max', 'sum', 'average', 'standardDeviation'] as const) expect(result[key]).toBeUndefined();
     }
   });
   it('FLOAT按已返回number的十进制计算，明确原值近似且不叠加二进制求和误差', () => {
