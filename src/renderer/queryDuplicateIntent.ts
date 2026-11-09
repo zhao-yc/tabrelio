@@ -17,10 +17,12 @@ export interface QueryDuplicatePorts {
   flush(editor: monaco.editor.IStandaloneCodeEditor, expectedDraft: string): string | Promise<string>;
   database(scope: QueryDuplicateScope): QueryDatabaseContext | Promise<QueryDatabaseContext>;
   open(tab: Omit<WorkspaceTab, 'id'>): void | Promise<void>;
+  openBatch?(tabs: readonly Omit<WorkspaceTab, 'id'>[]): void;
   chooseTarget?(draft: QueryTargetDraft): void;
 }
 export interface QueryTargetDraft { sourceTabId: string; title: string; sql: string }
-export type QueryDuplicateMode = 'all' | 'selection' | 'target' | 'statement' | 'statements' | 'save-statements';
+export type QueryDuplicateMode = 'all' | 'selection' | 'target' | 'statement' | 'statements' | 'save-statements' | 'split-statements';
+export const statementDraftBatchLimit = 20;
 const contextKey = (tab?: WorkspaceTab) => JSON.stringify([tab?.database ?? null, tab?.databaseContext?.state ?? 'legacy', tab?.databaseContext?.state === 'known' ? tab.databaseContext.database : null]);
 /** 标题保留Unicode字符边界，符合既有settings保存的256单元限制。 */
 function copyTitle(title: string, suffix: string): string {
@@ -62,7 +64,7 @@ function statementDraft(source: string, range: NavigableStatement | undefined, d
 }
 
 /** 目录勾选按原顺序输出，各语句独立保留必要的终止符和客户端分隔符。 */
-export function statementDraftSql(source: string, ranges: readonly NavigableStatement[], dialect: ConnectionProfile['dialect']): string {
+function statementDraftParts(source: string, ranges: readonly NavigableStatement[], dialect: ConnectionProfile['dialect']): string[] {
   if (!ranges.length) throw Error(text.selectionRequired);
   let previous = 0;
   return ranges.map(range => {
@@ -70,7 +72,10 @@ export function statementDraftSql(source: string, ranges: readonly NavigableStat
     const sql = statementDraft(source, range, dialect);
     previous = range.delimiterEnd;
     return sql;
-  }).join(source.includes('\r\n') ? '\r\n' : '\n');
+  });
+}
+export function statementDraftSql(source: string, ranges: readonly NavigableStatement[], dialect: ConnectionProfile['dialect']): string {
+  return statementDraftParts(source, ranges, dialect).join(source.includes('\r\n') ? '\r\n' : '\n');
 }
 
 /** 一次复制只借用原模型读取权；任何失效永久撤销，创建目标时严格挑选草稿字段。 */
@@ -83,6 +88,8 @@ export class QueryDuplicateIntent {
   readonly #source: WorkspaceTab;
   readonly #context: string;
   readonly #draft: string;
+  readonly #readOnlySource: boolean;
+  readonly #batch?: readonly string[];
   readonly #selected?: { key: string; sql: string; suffix: string };
   readonly #subscriptions: Array<{ dispose(): void }> = [];
   #valid = true;
@@ -92,8 +99,13 @@ export class QueryDuplicateIntent {
     const editor = ports.editor(), model = editor?.getModel(), scope = ports.scope();
     if (!editor || !model || model.isDisposed() || editor.getRawOptions().readOnly || !scope.tab || scope.tab.kind !== 'query' || !scope.connection || !scope.present || !scope.active || scope.blocked) throw Error(text.unavailable);
     this.#editor = editor; this.#model = model; this.#version = model.getVersionId(); this.#sql = model.getValue(); this.#scope = scope; this.#source = { ...scope.tab }; this.#context = contextKey(scope.tab); this.#draft = scope.tab.sql ?? '';
+    this.#readOnlySource = mode === 'save-statements' || mode === 'split-statements';
     if (this.#sql.length > 20_000_000) throw Error(text.tooLarge);
-    if (mode === 'statement' || mode === 'statements' || mode === 'save-statements') {
+    if (mode === 'split-statements') {
+      const ranges = statements ?? [];
+      if (ranges.length > statementDraftBatchLimit) throw Error(text.batchTooLarge(statementDraftBatchLimit));
+      this.#batch = statementDraftParts(this.#sql, ranges, scope.connection.dialect);
+    } else if (mode === 'statement' || mode === 'statements' || mode === 'save-statements') {
       const ranges = statements ?? [];
       this.#selected = { key: editorSelectionKey(editor), sql: statementDraftSql(this.#sql, ranges, scope.connection.dialect),
         suffix: mode === 'statement' ? text.statementSuffix : text.statementsSuffix };
@@ -119,8 +131,8 @@ export class QueryDuplicateIntent {
   #matches(): boolean {
     const scope = this.ports.scope(), tab = scope.tab;
     const sql = tab?.sql ?? '';
-    // 保存独立查询不写回原草稿，连工作区存下的原始换行也要保留。
-    const draftMatches = this.mode === 'save-statements' ? sql === this.#draft : sql === this.#sql || this.#flushing && sql === this.#draft;
+    // 独立保存和批量打开均不写回原草稿，保留工作区存下的原始换行。
+    const draftMatches = this.#readOnlySource ? sql === this.#draft : sql === this.#sql || this.#flushing && sql === this.#draft;
     return !!tab && scope.present && scope.active && !scope.blocked && scope.connection === this.#scope.connection && scope.connectionVersion === this.#scope.connectionVersion && scope.sessionId === this.#scope.sessionId
       && tab.kind === 'query' && tab.id === this.#source.id && tab.connectionId === this.#source.connectionId && tab.title === this.#source.title && tab.sourceBinding === this.#source.sourceBinding && tab.fileSourceBinding === this.#source.fileSourceBinding && contextKey(tab) === this.#context
       && draftMatches;
@@ -140,7 +152,7 @@ export class QueryDuplicateIntent {
     if (this.#started) throw Error(text.changed); this.#started = true;
     try {
       this.#assert();
-      const sql = this.mode === 'save-statements' ? this.#sql : await this.ports.flush(this.#editor, this.#draft);
+      const sql = this.#readOnlySource ? this.#sql : await this.ports.flush(this.#editor, this.#draft);
       this.#assert();
       if (sql !== this.#sql) throw Error(text.changed);
       this.#flushing = false; this.#assert();
@@ -152,9 +164,18 @@ export class QueryDuplicateIntent {
       }
       const context = await this.ports.database(this.#scope); this.#assert();
       if (context.state !== 'known') throw Error(text.contextUnknown);
-      const candidate: Omit<WorkspaceTab, 'id'> = { kind: 'query', title: copyTitle(this.#source.title, this.#selected?.suffix ?? text.suffix),
-        connectionId: this.#source.connectionId, sql: this.#selected?.sql ?? sql, ...queryDatabasePatch({ state: 'known', database: context.database }) };
-      this.#assert(); await this.ports.open(candidate);
+      const candidate = (body: string, suffix: string): Omit<WorkspaceTab, 'id'> => ({
+        kind: 'query', title: copyTitle(this.#source.title, suffix), connectionId: this.#source.connectionId, sql: body,
+        ...queryDatabasePatch(context),
+      });
+      if (this.#batch) {
+        if (!this.ports.openBatch) throw Error(text.unavailable);
+        const drafts = this.#batch.map((body, index) => candidate(body, text.splitSuffix(index + 1)));
+        this.#assert(); this.ports.openBatch(drafts);
+        return;
+      }
+      const draft = candidate(this.#selected?.sql ?? sql, this.#selected?.suffix ?? text.suffix);
+      this.#assert(); await this.ports.open(draft);
     } finally { this.dispose(); }
   }
   /** 卸载或终态释放模型/store观察；不改原模型、撤销栈、查询来源或会话。 */

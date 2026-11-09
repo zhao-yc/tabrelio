@@ -88,6 +88,40 @@ describe('查询复制意图与既有正文桥', () => {
     expect(f.editor.edits).toEqual([]);
     f.close();
   });
+  it('批量打开逐条生成含分隔符的独立草稿，只读取一次上下文并保留原来源', async () => {
+    const f = selectionFixture(), body = 'CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END';
+    const sql = 'DELIMITER $$\n' + body + '$$\nDELIMITER ;\nSELECT 3;\nSELECT 4;';
+    f.editor.nativeInput(sql);
+    f.change({ connection: { id: 'c', dialect: 'mysql', name: '离线', group: '', color: '', host: '127.0.0.1', port: 1, user: 'offline' } });
+    const before = f.getScope().tab, analysis = analyzeStatementNavigation(sql, 'mysql');
+    if (analysis.status !== 'ready') throw Error('无法创建测试目录');
+    const [first, , last] = analysis.statements;
+    const openBatch = vi.fn(), flush = vi.fn(), database = vi.fn(f.ports.database);
+    await new QueryDuplicateIntent({ ...f.ports, openBatch, flush, database }, 'split-statements', [first, last]).run();
+    expect(openBatch).toHaveBeenCalledExactlyOnceWith([
+      { kind: 'query', title: '已保存查询（勾选语句 1）', connectionId: 'c', sql: 'DELIMITER $$\n' + body + '$$\nDELIMITER ;', database: undefined, databaseContext: { state: 'known', database: null } },
+      { kind: 'query', title: '已保存查询（勾选语句 2）', connectionId: 'c', sql: 'SELECT 4;', database: undefined, databaseContext: { state: 'known', database: null } },
+    ]);
+    expect(database).toHaveBeenCalledOnce();
+    expect(flush).not.toHaveBeenCalled();
+    expect(f.open).not.toHaveBeenCalled();
+    expect(f.getScope().tab).toBe(before);
+    f.close();
+  });
+  it('批量等待上下文期间目录失效，整批都不发布', async () => {
+    const f = selectionFixture(), gate = deferred<{ state: 'known'; database: null }>(), openBatch = vi.fn();
+    const sql = 'SELECT 1;\nSELECT 2;';
+    f.editor.nativeInput(sql);
+    const analysis = analyzeStatementNavigation(sql, 'sqlite');
+    if (analysis.status !== 'ready') throw Error('无法创建测试目录');
+    const pending = new QueryDuplicateIntent({ ...f.ports, openBatch, database: () => gate.promise }, 'split-statements', analysis.statements).run();
+    f.change({ blocked: true });
+    f.change({ blocked: false });
+    gate.resolve({ state: 'known', database: null });
+    await expect(pending).rejects.toThrow('已变化');
+    expect(openBatch).not.toHaveBeenCalled();
+    f.close();
+  });
   it('保存勾选语句只读模型，等待期间原目录失效则不提交', async () => {
     const f = selectionFixture(), gate = deferred<{ state: 'known'; database: '复用库' }>();
     const end = f.model.value.length - 1, ranges = [{ start: 0, end, delimiterStart: end, delimiterEnd: end + 1 }];

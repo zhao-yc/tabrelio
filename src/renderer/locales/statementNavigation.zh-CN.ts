@@ -12,6 +12,7 @@ export const statementNavigationZh = {
   checked: (count: number) => `已勾选 ${count} 条`,
   checkMatches: '勾选全部搜索结果', checkedOutsideSearch: (count: number) => `其中 ${count} 条不符合当前搜索`,
   copyChecked: '复制勾选语句', openChecked: '在新查询中打开勾选语句', clearChecked: '清除勾选',
+  openSeparately: '每条勾选语句单独打开', separateHint: (limit: number) => `按脚本顺序建立独立查询，一次最多 ${limit} 条。`,
   saveChecked: '另存勾选语句', scriptEncoding: '勾选语句文件编码', scriptFile: '勾选语句.sql',
   saved: (name: string) => `已另存勾选语句到 ${name}`,
   library: '保存勾选语句到查询库', libraryName: '查询名称', librarySave: '保存新查询', libraryCancel: '取消命名',

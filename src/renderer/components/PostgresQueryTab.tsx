@@ -100,7 +100,7 @@ import { openFocusedGridRowJump } from './GridRowJump';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
 import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
-import { saveStatementQuery, type StatementQueryOutput } from '../statementNavigationExtract';
+import { openStatementDraftBatch, saveStatementQuery, type StatementQueryOutput } from '../statementNavigationExtract';
 import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
 import type { NavigableStatement } from '../../shared/statementNavigation';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
@@ -1655,10 +1655,10 @@ export function PostgresQueryTab({
   }
   /** 复制只读取原草稿和固定数据库上下文，沿既有意图保护新建未绑定的独立查询。 */
   async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statements?: readonly NavigableStatement[], output?: StatementQueryOutput) {
-    const libraryName = output?.libraryName;
+    const library = output?.mode === 'save-statements' ? output : undefined;
     if (duplicateIntent.current || expectedEditor !== editor.current ||
-        (mode === 'selection' || mode === 'statement' || mode === 'statements' || mode === 'save-statements') && resultsOnly || !commandEditor()) {
-      if (libraryName !== undefined) throw Error(queryDuplicateZh.unavailable);
+        (mode === 'selection' || mode === 'statement' || !!output) && resultsOnly || !commandEditor()) {
+      if (library) throw Error(queryDuplicateZh.unavailable);
       return;
     }
     let intent: QueryDuplicateIntent | undefined;
@@ -1678,7 +1678,7 @@ export function PostgresQueryTab({
               current.connectionId === origin.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === origin.version,
             active: workspace.settings.activeTabId === tab.id,
             blocked: insertionLocked.current || !!phase.current || !!workspace.activeJobs[tab.id] || !!closeRef.current ||
-              fileOperation.current() || !!document.querySelector(appModalSelector) || !!output && libraryName !== undefined && !output.current(),
+              fileOperation.current() || !!document.querySelector(appModalSelector) || !!output && output.mode !== 'statements' && !output.current(),
           };
         },
         subscribe: changed => {
@@ -1700,18 +1700,19 @@ export function PostgresQueryTab({
           return { state: 'known', database: original?.scope.database || initial.tab?.database || connection.database || 'postgres' };
         },
         open: candidate => {
-          if (libraryName !== undefined) return saveStatementQuery(candidate, libraryName, output?.group);
+          if (library) return saveStatementQuery(candidate, library.libraryName, library.group);
           const workspace = useWorkspace.getState();
           if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany);
           workspace.openTab(candidate);
         },
+        openBatch: openStatementDraftBatch,
         chooseTarget: onChooseQueryTarget,
       }, mode, statements);
       duplicateIntent.current = intent;
       setDuplicating(true);
       await intent.run();
     } catch (reason) {
-      if (libraryName !== undefined) throw reason;
+      if (library) throw reason;
       if (alive.current) setError(errorMessage(reason));
     } finally {
       intent?.dispose();
@@ -1734,7 +1735,7 @@ export function PostgresQueryTab({
       available() && !files.isBusy() && currentTab() === draft && session.current === original &&
       editor.current === target.instance && !target.instance.getRawOptions().readOnly };
   }, (instance, ranges, output) =>
-    duplicateQuery(output?.libraryName !== undefined ? 'save-statements' : output ? 'statements' : 'statement', instance, ranges, output));
+    duplicateQuery(output?.mode ?? 'statement', instance, ranges, output));
   const canNavigate = editable && !navigation.busy;
   const canOpenStatementQuery = canNavigate && canDuplicateQuery && !resultsOnly;
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {

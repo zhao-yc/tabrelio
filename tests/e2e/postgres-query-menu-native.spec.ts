@@ -1959,6 +1959,24 @@ test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑
   const full = (await page.evaluate(() => window.dbark.invoke('queries.list', {}))).find(item => item.name === '完整脚本');
   expect(full).toMatchObject({ databaseContext: { state: 'known', database: 'offline_db' } });
   expect(full?.sql.replaceAll('\r\n', '\n')).toBe(sql);
+  const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  await expect.poll(async () => (await settings()).tabs.find(item => item.id === 'pg-original')?.sourceBinding?.id).toBe(full!.id);
+  const before = await settings();
+  await command('statement-navigation');
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(3));
+  await panel.getByRole('checkbox', { name: navigationText.check(2), exact: true }).check();
+  await panel.getByRole('checkbox', { name: navigationText.check(0), exact: true }).check();
+  await panel.getByRole('button', { name: navigationText.openSeparately, exact: true }).click();
+  await expect.poll(async () => (await settings()).tabs.length).toBe(before.tabs.length + 2);
+  const after = await settings(), drafts = after.tabs.slice(-2);
+  expect(after.tabs.slice(0, -2)).toEqual(before.tabs);
+  expect(after.activeTabId).toBe(drafts[0].id);
+  expect(drafts.map(item => item.sql?.replaceAll('\r\n', '\n'))).toEqual([firstStatement, sql.slice(sql.lastIndexOf('\nSELECT 3'))]);
+  for (const draft of drafts) {
+    expect(draft.databaseContext).toEqual({ state: 'known', database: 'offline_db' });
+    expect(draft.sourceBinding).toBeUndefined();
+    expect(draft.fileSourceBinding).toBeUndefined();
+  }
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });

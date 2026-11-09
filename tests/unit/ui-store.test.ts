@@ -20,6 +20,18 @@ describe('工作空间设置与连接上下文', () => {
 
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+  it('批量打开超过工作区上限时不写设置也不添加部分标签', async () => {
+    const { openStatementDraftBatch } = await import('../../src/renderer/statementNavigationExtract');
+    const store = workspace.useWorkspace;
+    const draft = { kind: 'query' as const, title: '查询', sql: 'SELECT 1;', connectionId: 'c' };
+    const settings = { ...store.getState().settings, activeTabId: '原标签0',
+      tabs: Array.from({ length: 99 }, (_, index) => ({ ...draft, id: '原标签' + index })) };
+    store.setState({ settings });
+    expect(() => openStatementDraftBatch([draft, draft])).toThrow('没有足够的标签位置');
+    expect(store.getState().settings).toBe(settings);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('退出握手只保存最新快照，并取消尚未执行的防抖写入', async () => {
     workspace.useWorkspace.getState().updateSettings({ sidebarWidth: 280 });
     workspace.useWorkspace.getState().updateSettings({ sidebarWidth: 320 });

@@ -4,6 +4,7 @@ import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization'
 import type { StatementNavigationView } from '../statementNavigationController';
 import { currentNavigableStatement, statementNavigationPreview, statementNavigationStart, type NavigableStatement, type StatementNavigationDialect } from '../../shared/statementNavigation';
 import type { StatementSelectionDestination } from '../statementNavigationExtract';
+import { statementDraftBatchLimit } from '../queryDuplicateIntent';
 import { errorMessage } from '../lib';
 import { statementNavigationZh as text } from '../locales/statementNavigation.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
@@ -40,15 +41,16 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
       return { ranges, indices };
     });
   }
-  async function save(destination: Extract<StatementSelectionDestination, object>) {
+  async function runOutput(destination: Extract<StatementSelectionDestination, object | 'separate'>) {
     if (savingRef.current || !selected.length) return;
+    const named = typeof destination === 'object' && 'libraryName' in destination;
     savingRef.current = true;
     setSaving(true);
     try {
       await onExtract(selected, destination);
-      if ('libraryName' in destination) setNameDraft(undefined);
+      if (named) setNameDraft(undefined);
     } catch (reason) {
-      if (!('libraryName' in destination) || !naming) throw reason;
+      if (!named || !naming) throw reason;
       setNameDraft({ ...naming, error: errorMessage(reason) });
     }
     finally { savingRef.current = false; setSaving(false); }
@@ -75,6 +77,8 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
         {outsideSearch > 0 && <span className="muted">{text.checkedOutsideSearch(outsideSearch)}</span>}
         <button disabled={!selected.length || saving} onClick={() => onExtract(selected, 'clipboard')}>{text.copyChecked}</button>
         <button disabled={!selected.length || saving} onClick={() => onExtract(selected, 'query')}>{text.openChecked}</button>
+        <button disabled={!selected.length || saving} title={text.separateHint(statementDraftBatchLimit)}
+          onClick={() => void runOutput('separate')}>{text.openSeparately}</button>
         <button disabled={!selected.length || saving} onClick={() => setSelection(undefined)}>{text.clearChecked}</button>
         <select aria-label={text.scriptEncoding} value={encoding} disabled={!selected.length || saving}
           onChange={event => setEncoding(event.target.value as QueryFileEncoding)}>
@@ -82,14 +86,14 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
           <option value="utf16le">{fileText.utf16le}</option>
           <option value="gb18030">{fileText.gb18030}</option>
         </select>
-        <button disabled={!selected.length || saving} onClick={() => void save({ encoding })}>{text.saveChecked}</button>
+        <button disabled={!selected.length || saving} onClick={() => void runOutput({ encoding })}>{text.saveChecked}</button>
         <button disabled={!checked || !selected.length || saving || !!naming}
           onClick={() => { if (checked) setNameDraft({ checked, name: '' }); }}>{text.library}</button>
       </div>
       {naming && <form className="statement-navigation-selection" onSubmit={event => {
         event.preventDefault();
         const name = naming.name.trim();
-        if (name) void save({ libraryName: name, group: naming.group });
+        if (name) void runOutput({ libraryName: name, group: naming.group });
       }}>
         <input autoFocus aria-label={text.libraryName} placeholder={text.libraryName} maxLength={256} value={naming.name}
           disabled={saving} onChange={event => setNameDraft({ ...naming, name: event.target.value, error: undefined })}/>

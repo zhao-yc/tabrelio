@@ -4,7 +4,7 @@ import { sqliteStatementTimeoutMaximumMs, validSqliteStatementTimeout } from '..
 import { appDialogSelector, appModalSelector } from '../modalSelectors';
 import { StatementNavigationController, type StatementNavigationView } from '../statementNavigationController';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
-import { extractStatementSelection, saveStatementQuery, type StatementQueryOutput, type StatementSelectionDestination } from '../statementNavigationExtract';
+import { extractStatementSelection, openStatementDraftBatch, saveStatementQuery, type StatementQueryOutput, type StatementSelectionDestination } from '../statementNavigationExtract';
 import { StatementNavigationWorkerClient } from '../statementNavigationWorkerClient';
 import StatementNavigationWorker from '../statementNavigation.worker?worker';
 import { adjacentNavigableStatement, currentNavigableStatement, type NavigableStatement, type StatementNavigationResult } from '../../shared/statementNavigation';
@@ -532,10 +532,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 复制仅占本地意图，不占SQL任务、不清结果；关闭/换连/新作业会永久撤销等待中的复制。 */
   async function duplicateQuery(mode: QueryDuplicateMode = 'all', expectedEditor = editor.current, statements?: readonly NavigableStatement[], output?: StatementQueryOutput) {
-    const libraryName = output?.libraryName;
+    const library = output?.mode === 'save-statements' ? output : undefined;
     if (duplicateIntent.current || expectedEditor !== editor.current ||
-        (mode === 'selection' || mode === 'statement' || mode === 'statements' || mode === 'save-statements') && resultsOnly) {
-      if (libraryName !== undefined) throw Error(queryDuplicateZh.unavailable);
+        (mode === 'selection' || mode === 'statement' || !!output) && resultsOnly) {
+      if (library) throw Error(queryDuplicateZh.unavailable);
       return;
     }
     let intent: QueryDuplicateIntent | undefined;
@@ -545,7 +545,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         return { tab: current, connection: profile, connectionVersion: workspace.connectionVersions[current?.connectionId ?? ''] ?? 0, sessionId: sessionRef.current,
           present: alive.current && current?.kind === 'query' && !!profile && current.connectionId === tab.connectionId && current.connectionId === origin.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === origin.version,
           active: workspace.settings.activeTabId === tab.id, blocked: busyRef.current || !!workspace.activeJobs[tab.id] || !!pendingSession.current || !!closeRequestRef.current || !!document.querySelector(appDialogSelector) ||
-            mode !== 'all' && (fileSource.isBusy() || !!formatting.current) || !!output && libraryName !== undefined && !output.current() };
+            mode !== 'all' && (fileSource.isBusy() || !!formatting.current) || !!output && output.mode !== 'statements' && !output.current() };
       };
       intent = new QueryDuplicateIntent({ editor: () => editor.current, scope, flush: flushEditorContent,
         subscribe: changed => {
@@ -557,19 +557,20 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         },
         database: async initial => initial.sessionId ? queryDatabaseFromSession(await invoke('query.completionState', { sessionId: initial.sessionId })) : resolveQueryDatabase(initial.tab?.database, initial.tab?.databaseContext, connectionDatabase(initial.connection)),
         open: candidate => {
-          if (libraryName !== undefined) {
+          if (library) {
             if (sqlite && candidate.database && candidate.database !== 'main') throw Error(sqliteZh.mainOnly);
-            return saveStatementQuery(candidate, libraryName, output?.group);
+            return saveStatementQuery(candidate, library.libraryName, library.group);
           }
           const workspace = useWorkspace.getState();
           if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany);
           workspace.openTab(candidate);
         },
+        openBatch: openStatementDraftBatch,
         chooseTarget: onChooseQueryTarget,
       }, mode, statements);
       duplicateIntent.current = intent; setDuplicating(true); await intent.run();
     } catch (reason) {
-      if (libraryName !== undefined) throw reason;
+      if (library) throw reason;
       if (alive.current) setError(errorMessage(reason));
     }
     finally { intent?.dispose(); if (duplicateIntent.current === intent) { duplicateIntent.current = null; if (alive.current) setDuplicating(false); } }
@@ -1860,7 +1861,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function extractNavigationStatements(ranges: readonly NavigableStatement[], destination: StatementSelectionDestination) {
     const binding = navigationIntent.current;
     if (binding) return extractStatementSelection(binding.controller, ranges, destination,
-      output => duplicateQuery(output.libraryName === undefined ? 'statements' : 'save-statements', binding.instance, ranges, output));
+      output => duplicateQuery(output.mode, binding.instance, ranges, output));
   }
   /** 单次选中先解绑原监听，再应用选区，避免把自己的选区变更误认作用户取消。 */
   function applyStatementRange(binding: NonNullable<typeof navigationIntent.current>, range: NavigableStatement, select: boolean): void {

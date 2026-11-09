@@ -15,6 +15,7 @@ import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh
 import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
+import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { savedQueryOrganizationZh as groupText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { sqliteTableFindZh as sqliteFind } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
@@ -327,6 +328,47 @@ test('查询和 SQLite 可从选区内打开复制菜单，表头只进入文本
   await page.keyboard.press('Shift+F10');
   const plain = await copy(rangeCopy.copy);
   expect(plain).toEqual({ ...withHeaders, text: '1\t记录 1\n2\t记录 2' });
+  expect(pageErrors).toEqual([]);
+});
+
+test('语句目录分别打开查询按原序建立独立标签，超限整批拒绝', async () => {
+  const statements = Array.from({ length: 21 }, (_, index) => `SELECT '语句 ${index}; 🚢';`);
+  await seed(statements.join('\n'));
+  const query = page.locator('.query-tab:visible');
+  await (await navigationMenuItem(query, { name: navigationText.entry, exact: true })).click();
+  const panel = query.getByRole('region', { name: navigationText.title, exact: true });
+  const split = panel.getByRole('button', { name: navigationText.openSeparately, exact: true });
+  const master = panel.getByRole('checkbox', { name: navigationText.checkMatches, exact: true });
+  const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(21));
+  await expect(split).toBeDisabled();
+  const before = await settings();
+  await master.check();
+  await split.click();
+  await expect(query.getByText(queryDuplicateZh.batchTooLarge(20), { exact: true })).toBeVisible();
+  expect((await settings()).tabs).toEqual(before.tabs);
+  await master.uncheck();
+  await panel.getByRole('button', { name: navigationText.next, exact: true }).click();
+  await panel.getByRole('button', { name: navigationText.next, exact: true }).click();
+  await panel.getByRole('checkbox', { name: navigationText.check(20), exact: true }).check();
+  await panel.getByRole('textbox', { name: navigationText.search, exact: true }).fill('语句 0;');
+  await panel.getByRole('checkbox', { name: navigationText.check(0), exact: true }).check();
+  await split.click();
+  const titles = [1, 2].map(index => '查询定位' + queryDuplicateZh.splitSuffix(index));
+  await expect(page.locator('[data-workspace-tab-id]').getByRole('button', { name: titles[0], exact: true })).toBeVisible();
+  await expect.poll(async () => (await settings()).tabs.length).toBe(before.tabs.length + 2);
+  const after = await settings(), drafts = after.tabs.slice(-2);
+  expect(after.tabs.slice(0, -2)).toEqual(before.tabs);
+  expect(after.activeTabId).toBe(drafts[0].id);
+  expect(new Set(drafts.map(tab => tab.id)).size).toBe(2);
+  for (const [index, body] of [statements[0], statements[20]].entries()) {
+    expect(drafts[index]).toMatchObject({ kind: 'query', title: titles[index], connectionId: 'row-jump-offline', sql: body,
+      databaseContext: { state: 'known', database: 'main' } });
+    expect(drafts[index].sourceBinding).toBeUndefined();
+    expect(drafts[index].fileSourceBinding).toBeUndefined();
+  }
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);
 });
 
