@@ -60,7 +60,7 @@ export function postgresBatchDuplicatePlan(page: PostgresTablePage, selected: Re
 
 /** 窗口只提交逐行覆盖的字段，未编辑副本仍从原计划生成独立 INSERT 草稿。 */
 export function postgresBatchDuplicateChanges(page: PostgresTablePage, plan: ReturnType<typeof postgresBatchDuplicatePlan>,
-  inputs: PostgresBatchEditInput): PostgresTableChange[] {
+  inputs: PostgresBatchEditInput): Extract<PostgresTableChange, { kind: 'insert' }>[] {
   if ([...inputs.keys()].some(index => !plan.initial.has(index))) throw Error(postgresBatchDuplicateZh.stale);
   const columns = new Map(page.columns.filter(column => !column.generated).map(column => [column.key, column]));
   return plan.rows.map(({ index, original }) => {

@@ -11,6 +11,6 @@ const source = z.object({
 export const postgresQueryRecordPageSchema = z.union([
   source.extend({ rowIndex }).strict(),
   source.extend({ rowIndices }).strict(),
-  source.extend({ rowIndices, operation: z.literal('delete') }).strict(),
+  source.extend({ rowIndices, operation: z.enum(['delete', 'insert']) }).strict(),
 ]);
 export type PostgresQueryRecordPageInput = z.infer<typeof postgresQueryRecordPageSchema>;

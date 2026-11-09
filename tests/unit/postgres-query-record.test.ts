@@ -58,10 +58,13 @@ describe('PostgreSQL 查询原记录', () => {
     expect(postgresQueryRecordPageSchema.safeParse({ ...source, rowIndex: 7, rowIndices: [91] }).success).toBe(false);
   });
 
-  it('删除必须明确提交唯一的原行数组', () => {
+  it('删除和复制必须明确提交唯一的原行数组', () => {
     const source = { connectionId: 'conn', database: 'db', sessionId: 'session', executionId: 'exec', tabId: 'tab' };
     const deletion = { ...source, operation: 'delete', rowIndices: [2, 0] };
     expect(postgresQueryRecordPageSchema.parse(deletion)).toEqual(deletion);
+    const duplication = { ...deletion, operation: 'insert' };
+    expect(postgresQueryRecordPageSchema.parse(duplication)).toEqual(duplication);
+    expect(postgresQueryRecordPageSchema.safeParse({ ...duplication, rowIndices: [] }).success).toBe(false);
     expect(postgresQueryRecordPageSchema.safeParse({ ...source, operation: 'delete', rowIndex: 2 }).success).toBe(false);
     expect(postgresQueryRecordPageSchema.safeParse({ ...deletion, rowIndices: [2, 2] }).success).toBe(false);
     expect(postgresQueryRecordPageSchema.safeParse({ ...deletion, operation: 'truncate' }).success).toBe(false);

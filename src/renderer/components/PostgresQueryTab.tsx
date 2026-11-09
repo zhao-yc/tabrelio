@@ -1286,30 +1286,31 @@ export function PostgresQueryTab({
     outcome?.postgresQueryRecordExecution !== retiredRecordExecution.current ? outcome?.postgresQueryRecordExecution : undefined;
   const canUpdateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.update === true;
   const canDeleteQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.delete === true;
+  const canDuplicateQueryRecord = !!recordExecution && outcome?.postgresQueryRecordCapabilities?.insert === true;
   /** 网格整理只改变展示顺序，回查使用原结果中的行对象及序号。 */
-  function openQueryRecords(rows: readonly DataRow[], { cell, range, deleting }: {
-    cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; deleting?: boolean;
+  function openQueryRecords(rows: readonly DataRow[], { cell, range, operation }: {
+    cell?: PostgresQueryCellEdit; range?: PostgresQueryRangeEdit; operation?: 'delete' | 'insert';
   } = {}): boolean {
     const original = session.current;
     if (!recordExecution || !original || !result || !rowDetailCurrent(detailBinding) ||
-        !(deleting ? canDeleteQueryRecord : canUpdateQueryRecord)) return false;
+        !outcome?.postgresQueryRecordCapabilities?.[operation ?? 'update']) return false;
     const rowIndices = rows.map(row => result.rows.indexOf(row));
     if (!rowIndices.length || rowIndices.some(index => index < 0) || new Set(rowIndices).size !== rowIndices.length) return false;
     const job = acquireWorkspaceBusy(tab.id);
     const identity = { sessionId: original.id, executionId: recordExecution };
-    const source: PostgresQueryRecordIntent = deleting ? { ...identity, rowIndices, operation: 'delete' }
+    const source: PostgresQueryRecordIntent = operation ? { ...identity, rowIndices, operation }
       : range ? { ...identity, rowIndices } : { ...identity, rowIndex: rowIndices[0] };
     setRecordEdit({ result, scope, job, cell, range, source });
     setError('');
     return true;
   }
 
-  /** 删除只消费当前网格已接纳的勾选，索引按显示顺序映射回原执行，空选不回退全表。 */
-  function deleteCheckedQueryRows() {
-    if (!binding || !canDeleteQueryRecord || !resultCurrent()) return;
+  /** 批量操作只消费已接纳的勾选，按显示顺序映射回原执行，空选不回退全表。 */
+  function openCheckedQueryRows(operation: 'delete' | 'insert') {
+    if (!binding || !resultCurrent()) return;
     const checked = resultSelection.checkedIndices(binding);
     if (!checked.length || checked.length > postgresTableLimits.changes) return;
-    openQueryRecords(checked.map(index => binding.rows[index]), { deleting: true });
+    openQueryRecords(checked.map(index => binding.rows[index]), { operation });
   }
 
   function editQueryCell(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
@@ -2126,7 +2127,9 @@ export function PostgresQueryTab({
                       openQueryRecords([activeDetailRow.binding.rows[activeDetailRow.index]]);
                   }}>{originsText.edit}</button>}
                 {canDeleteQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
-                  title={originsText.deleteLimit} onClick={deleteCheckedQueryRows}>{originsText.deleteChecked}</button>}
+                  title={originsText.deleteLimit} onClick={() => openCheckedQueryRows('delete')}>{originsText.deleteChecked}</button>}
+                {canDuplicateQueryRecord && <button disabled={locked || !selectedCount || selectedCount > postgresTableLimits.changes}
+                  title={originsText.duplicateLimit} onClick={() => openCheckedQueryRows('insert')}>{originsText.duplicateChecked}</button>}
                 <button disabled={locked || !filterBinding || !filterView || !sortView}
                   onClick={() => openResultFilter()}>{filterText.open}</button>
                 {!!filterView?.rules.length && <>
@@ -2265,6 +2268,7 @@ export function PostgresQueryTab({
           if (committed) {
             retiredRecordExecution.current = recordEdit.source.executionId;
             useWorkspace.getState().notify(recordEdit.source.operation === 'delete' ? originsText.deleteCommitted :
+              recordEdit.source.operation === 'insert' ? originsText.duplicateCommitted :
               recordEdit.range ? originsText.rangeCommitted : originsText.editCommitted);
           }
           recordEdit.job.release();

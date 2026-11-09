@@ -312,7 +312,7 @@ export class PostgresTableWorkspace {
   /** 查询和搜索只获得指定原行的单一写入能力，不能替换已有表页或借此获得整表操作。 */
   async recordEdit(input: Scoped<PostgresTableTarget>, connect: Connect, verify: (connection: PostgresConnection, relation: Relation) =>
     Promise<{ originals: PostgresReferenceRowVersion[]; checkServer(connection: PostgresConnection): Promise<void> }>,
-    assertReference: () => void, operation: 'update' | 'delete' = 'update'): Promise<PostgresTablePage> {
+    assertReference: () => void, operation: keyof Relation['capabilities'] = 'update'): Promise<PostgresTablePage> {
     const key = this.key(input);
     if (this.active.has(key) || this.snapshots.has(key) || this.related.has(key))
       throw Error('原记录编辑需要独立的 PostgreSQL 表页');
@@ -327,7 +327,7 @@ export class PostgresTableWorkspace {
         if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 原记录编辑的表锁未确认');
         const relation = await readRelation(connection, input.table, { headerComments: true });
         if (!relation.capabilities[operation])
-          throw Error(operation === 'delete' ? '此 PostgreSQL 表没有记录删除能力' : '此 PostgreSQL 表没有记录更新能力');
+          throw Error('此 PostgreSQL 表没有本次操作需要的写入权限');
         const { originals, checkServer } = await verify(connection, relation);
         if (!originals.length || originals.length > postgresTableLimits.changes ||
             originals.some(row => row.tableOid !== relation.oid) || new Set(originals.map(row => row.tid)).size !== originals.length)
@@ -929,16 +929,16 @@ export class PostgresTableWorkspace {
     if (this.active.has(this.key(input))) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot(input, false, false, true), relation = snapshot.relation;
     if (snapshot.recordServerCheck) {
-      const operation = relation.capabilities.delete ? 'delete' : 'update';
-      if ((operation === 'delete' && input.changes.length !== snapshot.rows.length) ||
-          input.changes.some(change => change.kind !== operation || !snapshot.rows[change.row] ||
+      const operation = relation.capabilities.insert ? 'insert' : relation.capabilities.delete ? 'delete' : 'update';
+      if ((operation !== 'update' && input.changes.length !== snapshot.rows.length) ||
+          input.changes.some(change => change.kind !== operation || (change.kind !== 'insert' && !snapshot.rows[change.row]) ||
             (change.pageToken && change.pageToken !== input.pageToken)))
         throw Error('PostgreSQL 原记录操作必须与本次核验的操作和行范围一致');
     }
     const counts = { insert: 0, update: 0, delete: 0 };
     const sources = new Map<string, Snapshot>();
     const keys = new Set<string>(), tids = new Set<string>();
-    const writes: Write[] = input.changes.map(change => {
+    const writes: Write[] = input.changes.map((change, index) => {
       const pageToken = change.pageToken ?? input.pageToken;
       let source = sources.get(pageToken);
       if (!source) {
@@ -954,7 +954,8 @@ export class PostgresTableWorkspace {
         const sql = 'INSERT INTO ' + relation.sql + (fields.length
           ? ' (' + fields.map(field => field.column).join(', ') + ') VALUES (' + fields.map(field => field.expression).join(', ') + ')'
           : ' DEFAULT VALUES');
-        return { kind: change.kind, sql, values };
+        // 查询副本与核验后的原行一一对应。原行仅供事务预检，不参与 INSERT。
+        return { kind: change.kind, sql, values, ...(snapshot.recordServerCheck ? { original: source.rows[index] } : {}) };
       }
       const original = source.rows[change.row];
       if (!original) throw Error('待修改的原行已失效');
@@ -1195,9 +1196,9 @@ export class PostgresTableWorkspace {
         const projection = (mapped?.columns ?? locked.columns.map(column => column.name)).map(postgresIdentifier).join(', ');
         for (const { original, kind } of writes) if (original) {
           const args: unknown[] = [];
-          // 仅有 SELECT 和 DELETE 权限时不能 SELECT FOR UPDATE。DELETE 自己加行锁，
-          // 且使用同一物理版本谓词，版本在预检后变化时影响行数为零并回滚整批。
-          const rowLock = kind === 'delete' && !locked.capabilities.update ? '' : ' FOR UPDATE';
+          // 复制使用预览时冻结的值，原行只做写入前复核。仅有 DELETE 权限时由 DELETE
+          // 自己加行锁，版本在预检后变化会使影响行数为零并回滚整批。
+          const rowLock = kind === 'insert' || kind === 'delete' && !locked.capabilities.update ? '' : ' FOR UPDATE';
           const row = await connection.query('SELECT ' + projection + ' FROM ' + only(locked) +
             ' WHERE ' + rowPredicate(args, original) + rowLock, args, { rows: 2, bytes: 8 * 1024 * 1024 });
           if (row.truncated || row.rows.length !== 1 || digest(row.rows[0]) !== original.digest) {

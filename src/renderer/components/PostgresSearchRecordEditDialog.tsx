@@ -8,6 +8,8 @@ import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import { postgresClipboardFieldValue } from '../postgresGridPaste';
 import { postgresQueryRangeFillChanges } from '../postgresBatchFill';
+import { postgresBatchDuplicateChanges, postgresBatchDuplicatePlan } from '../postgresRecordDuplicate';
+import { PostgresBatchEditDialog } from './PostgresBatchEditDialog';
 import type { GridRangeFillInput } from '../gridRangeFill';
 import type { ClipboardCell } from '../gridClipboard';
 import { useWorkspace } from '../store';
@@ -24,7 +26,7 @@ interface BaseProps {
 }
 
 export type PostgresQueryRecordIntent = Pick<PostgresQueryRecordPageInput, 'sessionId' | 'executionId'> &
-  ({ rowIndex: number; operation?: never } | { rowIndices: number[]; operation?: 'delete' });
+  ({ rowIndex: number; operation?: never } | { rowIndices: number[]; operation?: 'delete' | 'insert' });
 type RecordUpdate = Extract<PostgresEditableRecord, { kind: 'update' }>;
 export interface PostgresQueryCellEdit {
   columnIndex: number;
@@ -43,8 +45,10 @@ type Props = BaseProps & ({ table: string; recordRef: string; queryRecord?: neve
 export function PostgresSearchRecordEditDialog(props: Props) {
   const { connectionId, database, table: initialTable, recordRef, focusColumn, queryRecord, cell } = props;
   const range = 'range' in props ? props.range : undefined;
-  const deleting = queryRecord?.operation === 'delete';
+  const operation = queryRecord?.operation ?? 'update';
+  const deleting = operation === 'delete', duplicating = operation === 'insert';
   const bulkLabels = deleting ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.deleteDiscard }
+    : duplicating ? { title: queryText.duplicateTitle, hint: queryText.duplicateHint, discard: queryText.duplicateDiscard }
     : range?.kind === 'paste' ? { title: queryText.pasteTitle, hint: queryText.pasteHint, discard: queryText.pasteDiscard }
     : range ? { title: queryText.fillTitle, hint: queryText.fillHint, discard: queryText.fillDiscard } : undefined;
   const [table, setTable] = useState(initialTable ?? '');
@@ -58,8 +62,9 @@ export function PostgresSearchRecordEditDialog(props: Props) {
     return { profile: state.connections.find(item => item.id === connectionId), version: state.connectionVersions[connectionId] ?? 0 };
   });
   const [page, setPage] = useState<PostgresTablePage & { pageToken: string }>();
+  const [duplicate, setDuplicate] = useState<ReturnType<typeof postgresBatchDuplicatePlan>>();
   const [inline, setInline] = useState<{ column: PostgresTableColumn; raw: string | null }>();
-  const [draft, setDraft] = useState<RecordUpdate[]>(), [preview, setPreview] = useState<PostgresTablePreview>();
+  const [draft, setDraft] = useState<PostgresEditableRecord[]>(), [preview, setPreview] = useState<PostgresTablePreview>();
   const [form, setForm] = useState(false), [busy, setBusy] = useState(true), [error, setError] = useState('');
   const [frozen, setFrozen] = useState(false), [confirmed, setConfirmed] = useState(false);
   const live = useRef(false), pending = useRef(true), token = useRef<{ pageToken: string; table: string } | undefined>(undefined);
@@ -89,12 +94,14 @@ export function PostgresSearchRecordEditDialog(props: Props) {
         const result = loaded.page;
         const expectedRows = queryRecord && 'rowIndices' in queryRecord ? queryRecord.rowIndices.length : 1;
         if (result.pageToken && (!active || !current() || result.rows.length !== expectedRows ||
-            result.truncated || result.hasNext || result.capabilities.update !== !deleting || result.capabilities.insert ||
-            result.capabilities.delete !== deleting))
+            result.truncated || result.hasNext || !result.capabilities[operation] ||
+            Object.entries(result.capabilities).some(([kind, enabled]) => kind !== operation && enabled)))
           await release({ pageToken: result.pageToken, table: loaded.table });
         else if (result.pageToken) {
           token.current = { pageToken: result.pageToken, table: loaded.table };
-          if (deleting) {
+          if (duplicating) {
+            setDuplicate(postgresBatchDuplicatePlan(result, new Set(result.rows.map((_, index) => index)), () => undefined));
+          } else if (deleting) {
             if (!result.primaryKey?.length || result.primaryKey.some(name => !result.columns.some(column => column.name === name)))
               throw Error(labels.stale);
             const request = postgresTablePreviewSchema.parse({ ...target, table: loaded.table, pageToken: result.pageToken,
@@ -150,7 +157,7 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       if (token.current) { void release(token.current); token.current = undefined; }
       callbacks.current.onDirty(false);
     };
-  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId, cell, range, deleting]);
+  }, [connectionId, database, initialTable, recordRef, queryRecord, tabId, cell, range, operation]);
 
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
@@ -166,11 +173,11 @@ export function PostgresSearchRecordEditDialog(props: Props) {
     callbacks.current.onDone(false);
   }
 
-  function stage(change: PostgresEditableRecord) {
-    if (!page || !current() || change.kind !== 'update') throw Error(labels.stale);
-    const request = { ...target, pageToken: page.pageToken, changes: [change] };
+  function stageChanges(changes: PostgresEditableRecord[]) {
+    if (!page || !current() || changes.some(change => change.kind !== operation)) throw Error(labels.stale);
+    const request = { ...target, pageToken: page.pageToken, changes };
     postgresTablePreviewSchema.parse(request);
-    setDraft([change]); setForm(false); setPreview(undefined); setConfirmed(false);
+    setDraft(changes); setForm(false); setPreview(undefined); setConfirmed(false);
     void run(async () => {
       const next = await invoke('postgres.table.preview', request);
       if (!current()) throw Error(labels.stale);
@@ -209,12 +216,21 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       typed={draft ? undefined : cell.typed} visible={props.visible} onCancel={() => draft ? setForm(false) : close()}
       onStage={value => {
         if (!draft && (value.mode === 'null' && raw === null || value.mode === 'text' && value.value === raw)) { close(); return; }
-        stage({ kind: 'update', row: 0, fields: [{ column: column.key, value }] });
+        stageChanges([{ kind: 'update', row: 0, fields: [{ column: column.key, value }] }]);
       }}/>;
   }
 
+  if (page && form && duplicate) {
+    const initial = draft ? new Map(draft.map((change, index) =>
+      [index, new Map(change.fields.map(field => [field.column, field.value]))])) : duplicate.initial;
+    return <PostgresBatchEditDialog rows={duplicate.rows} duplicate={{ ...duplicate, initial }}
+      columns={page.columns.filter(column => !column.generated)} primary={page.columns.filter(column => column.primary)} offset={0}
+      onStage={inputs => stageChanges(postgresBatchDuplicateChanges(page, duplicate, new Map([...initial, ...inputs])))}
+      onClose={() => draft ? setForm(false) : close()}/>;
+  }
+
   if (page && form) return <PostgresRecordForm page={page} row={0} initial={draft?.[0]} initialFocus={focusColumn}
-    current={() => current() && !pending.current} onSave={stage} onClose={() => draft ? setForm(false) : close()}/>;
+    current={() => current() && !pending.current} onSave={change => stageChanges([change])} onClose={() => draft ? setForm(false) : close()}/>;
 
   const keys = deleting && page ? page.primaryKey?.map(name => page.columns.find(column => column.name === name)!) : undefined;
   return <Modal title={bulkLabels?.title ?? (draft ? tableText.preview : labels.title)} onClose={close} wide>
@@ -225,8 +241,9 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       {keys && page && <table className="dense-table"><thead><tr>{keys.map(key => <th key={key.key}>{key.name}</th>)}</tr></thead>
         <tbody>{page.rows.map((row, index) => <tr key={index}>{keys.map(key =>
           <td key={key.key}>{cellPreview(ownCell(row, key.key))}</td>)}</tr>)}</tbody></table>}
-      {page && draft?.map(change => <div key={change.row}>
-        {range && <strong>{queryText.rangeRow(range.startRow + change.row + 1)}</strong>}
+      {page && draft?.map((change, index) => <div key={index}>
+        {range && change.kind === 'update' && <strong>{queryText.rangeRow(range.startRow + change.row + 1)}</strong>}
+        {duplicating && <strong>{queryText.duplicateRow(index + 1)}</strong>}
         <dl>{change.fields.map(field => <div key={field.column}>
           <dt>{page.columns.find(column => column.key === field.column)?.name}</dt>
           <dd>{'value' in field.value ? field.value.value : field.value.mode.toUpperCase()}</dd>
@@ -234,7 +251,8 @@ export function PostgresSearchRecordEditDialog(props: Props) {
       </div>)}
       {preview && <><pre>{preview.statements.join(';\n')}</pre><label>
         <input type="checkbox" checked={confirmed} disabled={busy || frozen} onChange={event => setConfirmed(event.target.checked)}/>
-        {deleting ? queryText.deleteConfirm(preview.counts.delete) : range ? queryText.rangeConfirm(preview.counts.update) : text.postgresConfirm}
+        {deleting ? queryText.deleteConfirm(preview.counts.delete) : duplicating ? queryText.duplicateConfirm(preview.counts.insert) :
+          range ? queryText.rangeConfirm(preview.counts.update) : text.postgresConfirm}
       </label></>}
     </div>
     <footer className="modal-footer">

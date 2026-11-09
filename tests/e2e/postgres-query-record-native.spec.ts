@@ -6,6 +6,8 @@ import { postgresTableZh as tableText } from '../../src/renderer/locales/postgre
 import { dataSearchRecordsZh as recordText } from '../../src/renderer/locales/dataSearchRecords.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { gridRangeFillZh as fillText } from '../../src/renderer/locales/gridRangeFill.zh-CN';
+import { postgresBatchDuplicateZh as duplicateText } from '../../src/renderer/locales/postgresBatchDuplicate.zh-CN';
+import { postgresBatchEditZh as batchText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -421,6 +423,83 @@ test('PostgreSQL 带计算列的查询只修改原字段，重复主键结果保
     await expect(cell('修改后')).toHaveCount(2);
     await expect(edit).toBeHidden();
     await expect(query.getByRole('button', { name: text.deleteChecked, exact: true })).toBeHidden();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 查询勾选记录可复制完整原值，保留类型并在第二条失败时整批回滚', async ({}, info) => {
+  const config = isolatedConnection();
+  const observer = new Client(config);
+  try {
+    await observer.connect();
+    const password = randomBytes(32).toString('hex');
+    await observer.query(`CREATE ROLE query_duplicate_user LOGIN PASSWORD '${password}';
+      CREATE TABLE public.query_duplicate (
+        id bigint GENERATED ALWAYS AS IDENTITY (START WITH 9007199254740993) PRIMARY KEY,
+        note text NOT NULL, amount numeric(30,5), payload bytea, optional text,
+        chars integer GENERATED ALWAYS AS (length(note)) STORED,
+        CONSTRAINT no_bad_duplicate CHECK (note <> '拒绝'));
+      INSERT INTO public.query_duplicate(note,amount,payload,optional) VALUES
+        ('甲原样', 9007199254740993.12345, decode('00FEFF','hex'), NULL),
+        ('乙原样', -0.00001, decode('CAFE','hex'), '');
+      GRANT SELECT, INSERT ON public.query_duplicate TO query_duplicate_user;
+      GRANT USAGE ON SEQUENCE public.query_duplicate_id_seq TO query_duplicate_user`);
+    await loadQuery({ ...config, user: 'query_duplicate_user', password },
+      'SELECT length(note) AS 计算列, id, note FROM public.query_duplicate ORDER BY id DESC;');
+    const query = page.locator('.postgres-query:visible');
+    const execute = query.getByRole('button', { name: postgresZh.execute, exact: true });
+    const duplicate = query.getByRole('button', { name: text.duplicateChecked, exact: true });
+    const form = page.getByRole('dialog', { name: duplicateText.title, exact: true });
+    const preview = page.getByRole('dialog', { name: text.duplicateTitle, exact: true });
+    const read = async () => (await observer.query(`SELECT id::text, note, amount::text, encode(payload,'hex') AS payload,
+      optional, chars FROM public.query_duplicate ORDER BY id`)).rows;
+    const before = await read();
+    const secondValue = () => form.getByRole('region', { name: batchText.record(2), exact: true })
+      .getByLabel('note ' + tableText.value, { exact: true });
+    const stage = async () => {
+      await form.getByRole('button', { name: duplicateText.stage, exact: true }).click();
+      await expect(preview.locator('pre')).toContainText('INSERT INTO "public"."query_duplicate" ("note", "amount", "payload", "optional")');
+      expect(await read()).toEqual(before);
+    };
+    const submit = async () => {
+      const apply = preview.getByRole('button', { name: tableText.apply, exact: true });
+      await expect(apply).toBeDisabled();
+      await preview.getByRole('checkbox', { name: text.duplicateConfirm(2), exact: true }).check();
+      await apply.click();
+    };
+
+    await execute.click();
+    await expect(duplicate).toBeVisible();
+    await expect(duplicate).toBeDisabled();
+    await expect(query.getByRole('button', { name: text.edit, exact: true })).toBeHidden();
+    await expect(query.getByRole('button', { name: text.deleteChecked, exact: true })).toBeHidden();
+    await query.getByRole('columnheader', { name: 'id', exact: false }).click();
+    await expect(query.getByRole('gridcell', { name: '甲原样', exact: true }).locator('..')).toHaveAttribute('aria-rowindex', '2');
+    for (const name of ['乙原样', '甲原样'])
+      await query.getByRole('gridcell', { name, exact: true }).locator('..').getByRole('checkbox').check();
+    await duplicate.click();
+    await expect(form.getByText(duplicateText.omitted('id、chars'), { exact: true })).toBeVisible();
+    await form.getByRole('button', { name: batchText.record(2), exact: true }).click();
+    await expect(secondValue()).toHaveValue('乙原样');
+    await secondValue().fill('拒绝');
+    await stage();
+    await submit();
+    await expect(preview.locator('.error-box')).toContainText('no_bad_duplicate');
+    expect((await observer.query('SELECT last_value::text FROM public.query_duplicate_id_seq')).rows[0].last_value).toBe('9007199254740996');
+    expect(await read()).toEqual(before);
+
+    await preview.getByRole('button', { name: tableText.edit, exact: true }).click();
+    await form.getByRole('button', { name: batchText.record(2), exact: true }).click();
+    await expect(secondValue()).toHaveValue('拒绝');
+    await secondValue().fill('乙的副本');
+    await stage();
+    await info.attach('PostgreSQL查询勾选记录副本', { body: await page.screenshot(), contentType: 'image/png' });
+    await submit();
+    await expect(preview).toBeHidden();
+    expect(await read()).toEqual([...before,
+      { ...before[0], id: '9007199254740997' },
+      { ...before[1], id: '9007199254740998', note: '乙的副本', chars: 4 },
+    ]);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

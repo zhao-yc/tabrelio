@@ -99,7 +99,7 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   postgresResultSources?: PostgresResultSource[];
   /** 当前结果可尝试回查原行，编辑仍须由引擎核验主键及已返回值。 */
   postgresQueryRecordExecution?: string;
-  postgresQueryRecordCapabilities?: { update: boolean; delete: boolean };
+  postgresQueryRecordCapabilities?: { update: boolean; delete: boolean; insert: boolean };
   /** 仅当前执行结果保留的 PostgreSQL 协议列引用，按完整结果及列序号对应。 */
   postgresResultOrigins?: (import('./postgresResultOrigins').PostgresColumnReference[] | null)[];
   /** 与本次 SQLite 的完整结果逐项对应，不随固定快照写入文件。 */

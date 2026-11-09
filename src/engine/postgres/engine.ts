@@ -1158,7 +1158,7 @@ export class PostgresEngine {
           // 目录读取失败只撤销原记录编辑能力，不改写用户已完成的查询结果。
           const oid = origin.relation;
           const confirmed = await postgresQueryRecordIdentity(session.managed, qualified, oid).catch(() => undefined);
-          if (confirmed && (confirmed.capabilities.update || confirmed.capabilities.delete) && !task.cancelled && !session.managed.broken &&
+          if (confirmed && Object.values(confirmed.capabilities).some(Boolean) && !task.cancelled && !session.managed.broken &&
               postgresQueryHasUniqueKeys(result, references, confirmed.keys)) {
             session.queryRecord = { executionId: task.id, server: session.managed.serverIdentity,
               identity: confirmed.identity, table, result, relationOid: oid, origins: references, capabilities: confirmed.capabilities };
