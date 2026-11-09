@@ -66,9 +66,9 @@ export class SqliteQuerySession {
   }
 
   /** 只允许使用本会话最新成功结果的原始行位置，外部不能提交列值或定位 SQL。 */
-  queryRecord(taskId: string, table: string, editing = true): SqliteQueryRecordSource {
+  queryRecord(taskId: string, table: string, editing = true, inserting = false): SqliteQueryRecordSource {
     const source = this.queryRowSqlSource(taskId);
-    if (!source.keyed || source.table !== table || editing && this.driver.readOnly)
+    if (!(inserting ? editing && source.insertable : source.keyed) || source.table !== table || editing && this.driver.readOnly)
       throw Error('SQLite 原查询结果已失效或当前会话有事务，请重新查询');
     return source;
   }
@@ -294,14 +294,17 @@ export class SqliteQuerySession {
         ? sqliteQueryRecordOrigins(candidate, schemas, results[0], original) : undefined;
       if (proof && identity && schemas && JSON.stringify(await sourceSchemas()) === JSON.stringify(schemas) && !operation.cancelled) {
         const { table, origins, keyed } = proof;
-        this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schemas[0].version, result: results[0], origins, keyed };
+        const insertable = !proof.joined && !results[0].truncated && !this.driver.readOnly;
+        this.recordSource = { table, taskId: input.taskId, identity, schemaVersion: schemas[0].version, result: results[0], origins, keyed,
+          ...(insertable ? { insertable: true as const } : {}) };
       }
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
       return { ...completed, ...displayTitles(results.length),
         ...(this.recordSource?.keyed ? { sqliteQueryRecordTable: this.recordSource.table } : {}),
+        ...(this.recordSource?.insertable ? { sqliteQueryInsertTable: this.recordSource.table } : {}),
         ...(this.recordSource && proof?.joined ? { sqliteQueryJoined: true as const } : {}),
         ...(this.recordSource && proof?.computed.length ? { sqliteQueryComputedColumns: proof.computed, sqliteResultOrigins: [proof.displayOrigins] } : {}),
-        ...(this.recordSource && !this.recordSource.result.truncated ? { sqliteQueryRowSql: true as const } : {}),
+        ...(this.recordSource?.result.rows.length && !this.recordSource.result.truncated ? { sqliteQueryRowSql: true as const } : {}),
         elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {
       const cancelled = reason instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(reason.code);

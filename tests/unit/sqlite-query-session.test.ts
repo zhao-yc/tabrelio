@@ -79,6 +79,26 @@ function diskValue(path: string, sql: string): unknown {
 }
 
 describe('SQLite原查询会话与真实磁盘driver适配', () => {
+  it('空结果和无键普通表只签发新增来源，拒绝视图、连接、截断、事务和过期执行', async () => {
+    const harness = await open(fixture());
+    await execute(harness, "CREATE TABLE no_key(note TEXT); INSERT INTO no_key VALUES ('甲'),('乙'); CREATE VIEW shown AS SELECT note FROM no_key;");
+    const taskId = randomUUID();
+    const empty = await execute(harness, 'SELECT note FROM no_key WHERE 0', { taskId });
+    expect(empty.sqliteQueryInsertTable).toBe('no_key');
+    expect(empty.sqliteQueryRecordTable).toBeUndefined();
+    expect(empty.sqliteQueryRowSql).toBeUndefined();
+    expect(harness.session.queryRecord(taskId, 'no_key', true, true).result.rows).toEqual([]);
+    for (const [table, editing, inserting] of [['subject', true, true], ['no_key', false, true], ['no_key', true, false]] as const)
+      expect(() => harness.session.queryRecord(taskId, table, editing, inserting)).toThrow(/已失效/);
+    expect((await execute(harness, 'SELECT note FROM no_key')).sqliteQueryInsertTable).toBe('no_key');
+    for (const sql of ['SELECT note FROM shown', 'SELECT a.note,b.id FROM no_key a JOIN subject b ON 1=1',
+      'SELECT note FROM no_key; SELECT 1', 'SELECT note FROM no_key'])
+      expect((await execute(harness, sql, { maxRows: 1 })).sqliteQueryInsertTable).toBeUndefined();
+    expect(() => harness.session.queryRecord(taskId, 'no_key', true, true)).toThrow(/已失效/);
+    await execute(harness, 'BEGIN');
+    expect((await execute(harness, 'SELECT note FROM no_key')).sqliteQueryInsertTable).toBeUndefined();
+    await execute(harness, 'ROLLBACK');
+  });
   it('原记录引用仅签发给返回完整主键的单表查询并撤销旧任务', async () => {
     const harness = await open(fixture());
     await execute(harness, "INSERT INTO subject VALUES (1, '原记录'); CREATE VIEW shown AS SELECT * FROM subject;");
@@ -100,7 +120,9 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     const path = fixture(), database = new DatabaseSync(path);
     try { database.exec("INSERT INTO subject VALUES (1, '只读原值')"); } finally { database.close(); }
     const harness = await open(path, undefined, true), taskId = randomUUID();
-    expect((await execute(harness, 'SELECT id, note FROM subject', { taskId })).sqliteQueryRecordTable).toBe('subject');
+    const outcome = await execute(harness, 'SELECT id, note FROM subject', { taskId });
+    expect(outcome.sqliteQueryRecordTable).toBe('subject');
+    expect(outcome.sqliteQueryInsertTable).toBeUndefined();
     expect(harness.session.queryRecord(taskId, 'subject', false).result.rows).toEqual([{ c0: '1', c1: '只读原值' }]);
     expect(() => harness.session.queryRecord(taskId, 'subject')).toThrow(/已失效/);
   });

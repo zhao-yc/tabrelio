@@ -6,6 +6,15 @@ import { publicCommands } from '../../src/shared/commands';
 const base = { connectionId: 'file', database: 'main', table: '中文"表🚢', taskId: 'read', offset: 0, limit: 100, mode: 'and', filters: [], sort: [] };
 /** 严格IPC只接收结构化条件，不接受SQL或文件能力，也不会借用网络表协议。 */
 describe('SQLite表浏览严格合同及动态类型条件', () => {
+  it('查询新增只接受本次执行身份和编辑请求，不能夹带原行、筛选或分页', () => {
+    const queryRecord = { sessionId: 'session', taskId: 'execution', operation: 'insert' };
+    const input = { ...base, editing: true, limit: 1, queryRecord };
+    expect(sqliteTablePageSchema.parse(input).queryRecord).toEqual(queryRecord);
+    for (const patch of [{ editing: false }, { limit: 2 }, { offset: 1 }, { lastPage: true },
+      { queryRecord: { ...queryRecord, rowIndex: 0 } }, { queryRecord: { ...queryRecord, rowIndices: [] } },
+      { filters: [{ column: 'x', operator: 'isNull' }] }, { sort: [{ column: 'x', direction: 'asc' }] }])
+      expect(sqliteTablePageSchema.safeParse({ ...input, ...patch }).success).toBe(false);
+  });
   it('查询原记录批量读取只接收唯一原行序号和对应的准确数量', () => {
     const queryRecord = { sessionId: 'session', taskId: 'execution', rowIndices: [9, 2] };
     const selection = { ...base, editing: true, offset: 0, limit: 2, queryRecord };

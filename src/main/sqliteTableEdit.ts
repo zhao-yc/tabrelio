@@ -28,7 +28,7 @@ interface Snapshot {
   relation?: SqliteTableRelation;
   searchRecord?: true;
   id: string; pageOffset: number; pageLimit: number; restoredGroup?: boolean; target: SqliteEditTarget; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
-  catalogue: SqliteTableCatalogue; columns: SqliteTableDraftDocument['columns']; schemaVersion: string; locator: SqliteTableLocator;
+  catalogue: SqliteTableCatalogue; columns: SqliteTableDraftDocument['columns']; schemaVersion: string; locator?: SqliteTableLocator;
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
 interface Statement { sql: string; parameters: SqliteValue[]; row?: number; source?: number; kind: SqliteTableChange['kind']; }
@@ -81,11 +81,12 @@ function parameter(value: SqliteEditValue): SqliteValue {
 }
 /** 精确locator使用原存储类型和可靠键的实际collation，不被列默认collation扩大匹配范围。 */
 export function sqliteEditLocator(snapshot: Pick<Snapshot, 'locator' | 'locators'>, row: number): { sql: string; parameters: SqliteValue[] } {
-  const values = snapshot.locators[row]; if (!values) throw Error(text.stale);
-  const names = snapshot.locator.rowid ? [snapshot.locator.rowid] : snapshot.locator.columns;
+  const values = snapshot.locators[row], locator = snapshot.locator;
+  if (!values || !locator) throw Error(text.stale);
+  const names = locator.rowid ? [locator.rowid] : locator.columns;
   const parameters: SqliteValue[] = [], sql = names.map((name, index) => {
     const value = values[index], type = value === null ? 'null' : typeof value === 'string' ? 'text' : value.type === 'binary' ? 'blob' : value.type;
-    parameters.push(type, value); return '(typeof(' + quote(name) + ')=? AND ' + quote(name) + (snapshot.locator.collations[index] ? ' COLLATE ' + quote(snapshot.locator.collations[index]) : '') + ' IS ?)';
+    parameters.push(type, value); return '(typeof(' + quote(name) + ')=? AND ' + quote(name) + (locator.collations[index] ? ' COLLATE ' + quote(locator.collations[index]) : '') + ' IS ?)';
   }).join(' AND ');
   return { sql, parameters };
 }
@@ -104,10 +105,11 @@ function display(statement: Statement): string {
 
 /** 同一目录快照下选择原生唯一键。编辑及搜索定位共用 rowid 遮蔽、索引和排序规则判定。 */
 export async function chooseSqliteTableLocator(driver: SqliteDriverSession, table: string, catalogue: SqliteTableCatalogue,
-  control: Pick<SqliteTableBrowseControl, 'check'>, identifyCopyAlias = false): Promise<{ locator?: SqliteTableLocator; strict: boolean; rowidAlias?: string }> {
+  control: Pick<SqliteTableBrowseControl, 'check'>, mode: 'locate' | 'edit' | 'insert' = 'locate'): Promise<{ ordinary?: true; locator?: SqliteTableLocator; strict: boolean; rowidAlias?: string }> {
   const facts = await read(driver, "SELECT type,wr,strict FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY", [table], control, 2);
   if (facts.length !== 1 || facts[0][0] !== 'table') return { locator: undefined, strict: false };
   const withoutRowid = integer(facts[0][1]) === '1', strict = integer(facts[0][2]) === '1';
+  if (mode === 'insert') return { ordinary: true, strict };
   const columns = catalogue.xinfo.filter(row => integer(row[6]) !== '1')
     .map(row => ({ name: row[1] as string, nullable: integer(row[3]) === '0' }));
   let locator: SqliteTableLocator | undefined;
@@ -123,7 +125,7 @@ export async function chooseSqliteTableLocator(driver: SqliteDriverSession, tabl
     }
   }
   // INTEGER 单列主键仍可能因内联 DESC 有独立主键索引；只在目录证明没有该索引时省略。
-  const primary = identifyCopyAlias && !withoutRowid ? catalogue.xinfo.filter(row => integer(row[5]) !== '0') : [];
+  const primary = mode === 'edit' && !withoutRowid ? catalogue.xinfo.filter(row => integer(row[5]) !== '0') : [];
   const candidate = primary.length === 1 && String(primary[0][2]).toUpperCase() === 'INTEGER' ? primary[0][1] as string : undefined;
   const rowidAlias = candidate && !(await read(driver, "SELECT 1 FROM pragma_index_list(?, 'main') WHERE origin='pk' LIMIT 1", [table], control, 1)).length
     ? candidate : undefined;
@@ -161,19 +163,22 @@ export class SqliteTableEdits {
   async preparePage(driver: SqliteDriverSession, input: SqliteTablePageInput, profile: SqliteConnectionProfile, catalogue: SqliteTableCatalogue, control: SqliteTableBrowseControl, inspectLocator?: (value: SqliteTableLocator) => void): Promise<SqliteEditReadPlan> {
     const readonly = (reason = text.readonly): SqliteEditReadPlan => ({ capture: () => ({ kind: 'readonly', reason }) });
     if (profile.sqlite.readOnly || catalogue.kind !== 'table' || /^sqlite_/i.test(input.table) || !driver.identity) return readonly();
-    const { locator, strict, rowidAlias } = await chooseSqliteTableLocator(driver, input.table, catalogue, control, true);
+    const inserting = !!input.queryRecord && 'operation' in input.queryRecord;
+    const { ordinary, locator, strict, rowidAlias } = await chooseSqliteTableLocator(driver, input.table, catalogue, control, inserting ? 'insert' : 'edit');
     const fields = catalogue.xinfo.filter(row => integer(row[6]) !== '1');
     const columns = fields.map(row => ({ name: row[1] as string, declaredType: row[2] as string, generated: ['2', '3'].includes(integer(row[6])), nullable: integer(row[3]) === '0', hasDefault: row[4] !== null }));
-    if (!locator) return readonly();
+    if (inserting ? !ordinary : !locator) return readonly();
     const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1), schemaVersion = integer(schema[0]?.[0]);
-    const identity = driver.identity!, chosen = locator; inspectLocator?.(structuredClone(chosen));
+    const identity = driver.identity, chosen = locator;
+    if (chosen) inspectLocator?.(structuredClone(chosen));
     return {
-      project: projection, ...(chosen.rowid ? { extraColumn: '"__dbark_source".' + quote(chosen.rowid) } : {}),
+      project: projection, ...(chosen?.rowid ? { extraColumn: '"__dbark_source".' + quote(chosen.rowid) } : {}),
       capture: values => {
         this.prune();
-        const rows = values.map(row => structuredClone(chosen.rowid ? row.slice(1) : row));
-        const locators = values.map((row, index) => chosen.rowid ? [structuredClone(row[0])] : chosen.columns.map(name => structuredClone(rows[index][columns.findIndex(column => column.name === name)])));
-        if (rows.some(row => row.length !== columns.length) || locators.some(row => row.some(value => value === null)) || chosen.rowid && locators.some(row => !row[0] || typeof row[0] !== 'object' || row[0].type !== 'integer')) return { kind: 'readonly', reason: text.readonly };
+        if (!chosen && values.length) return { kind: 'readonly', reason: text.readonly };
+        const rows = values.map(row => structuredClone(chosen?.rowid ? row.slice(1) : row));
+        const locators = chosen ? values.map((row, index) => chosen.rowid ? [structuredClone(row[0])] : chosen.columns.map(name => structuredClone(rows[index][columns.findIndex(column => column.name === name)]))) : [];
+        if (rows.some(row => row.length !== columns.length) || locators.some(row => row.some(value => value === null)) || chosen?.rowid && locators.some(row => !row[0] || typeof row[0] !== 'object' || row[0].type !== 'integer')) return { kind: 'readonly', reason: text.readonly };
         const data = { pageOffset: input.offset, pageLimit: input.limit, ...(input.searchRecordRef ? { searchRecord: true as const } : {}), ...(input.relation ? { relation: structuredClone(input.relation) } : {}), target: { connectionId: profile.id, database: 'main' as const, table: input.table }, profile: structuredClone(profile), identity, catalogue: structuredClone(catalogue), columns, schemaVersion, locator: chosen, rows, locators };
         const size = Buffer.byteLength(JSON.stringify(data));
         if (this.snapshots.size >= limits.snapshots || this.bytes + size > limits.snapshotBytes) return { kind: 'readonly', reason: 'SQLite编辑快照预算已满，请关闭旧编辑来源后重新读取' };
@@ -181,9 +186,9 @@ export class SqliteTableEdits {
         this.snapshots.set(snapshot.id, snapshot); this.bytes += size;
         // 主键标记仅供界面判断映射兼容性，磁盘草稿继续使用既有字段格式。
         const pageColumns: SqliteEditColumn[] = columns.map((column, index) => ({ ...column, ...(integer(fields[index][5]) !== '0' ? { primary: true } : {}) }));
-        const rowKeys = locators.map(values => createHmac('sha256', this.copyKey).update(sqliteLocatorKey(chosen, values)).digest('hex'));
+        const rowKeys = chosen ? locators.map(values => createHmac('sha256', this.copyKey).update(sqliteLocatorKey(chosen, values)).digest('hex')) : [];
         return { kind: 'editable', snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), columns: pageColumns, rows: rows.map(row => row.map(original)),
-          ...(strict ? { strict: true } : {}), copy: { rowKeys, ...(rowidAlias ? { rowidAlias } : {}) }, locator: { kind: chosen.kind, columns: [...chosen.columns] } };
+          ...(strict ? { strict: true } : {}), ...(chosen ? { copy: { rowKeys, ...(rowidAlias ? { rowidAlias } : {}) }, locator: { kind: chosen.kind, columns: [...chosen.columns] } } : {}) };
       },
     };
   }
@@ -193,6 +198,7 @@ export class SqliteTableEdits {
     try {
       const claim = this.previews.get(preview.previewId)!, snapshot = claim.snapshot, pages = claim.sources ?? [snapshot];
       if (snapshot.searchRecord) throw Error('SQLite 搜索命中修改只保留在本次编辑中');
+      if (!snapshot.locator) throw Error('SQLite 查询新增只保留在本次编辑中');
       const groups = [input, ...(input.additionalPages ?? [])].map((group, index) => ({ group, snapshot: pages[index] })).sort((a, b) => a.snapshot.pageOffset - b.snapshot.pageOffset);
       const changes = groups.flatMap(({ group, snapshot: page }) => group.changes.map(change => {
         if (change.kind === 'insert') return { kind: change.kind, values: change.values };
@@ -264,6 +270,8 @@ export class SqliteTableEdits {
     const groups = [input, ...(input.additionalPages ?? [])], sources = groups.map(group => this.snapshots.get(group.snapshotId));
     if (sources.some(source => !source || source.revoked || source.active)) throw Error(text.stale);
     const pages = sources as Snapshot[];
+    if (pages.some(source => !source.locator) && (pages.length !== 1 || input.changes.length !== 1 || input.changes[0].kind !== 'insert'))
+      throw Error('SQLite 查询来源只允许新增一条记录');
     if (pages.some(source => source.searchRecord) &&
         (pages.length !== 1 || input.changes.length !== 1 || input.changes[0].kind !== 'update' || input.changes[0].row !== 0))
       throw Error('SQLite 搜索命中只允许修改本条记录');
@@ -279,7 +287,7 @@ export class SqliteTableEdits {
       const snapshot = pages[sourceIndex], origin = pages.length > 1 ? { source: sourceIndex } : {};
       counts[change.kind]++;
       if (change.kind !== 'insert') {
-        const locator = snapshot.locators[change.row]; if (!locator) throw Error(text.stale);
+        const locator = snapshot.locators[change.row]; if (!locator || !snapshot.locator) throw Error(text.stale);
         const key = sqliteLocatorKey(snapshot.locator, locator);
         if (touched.has(key)) throw Error('SQLite不同原页包含同一定位记录，不能重复修改'); touched.add(key);
       }

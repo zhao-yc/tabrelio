@@ -90,9 +90,11 @@ const sqliteQueryRecordSchema = z.union([
   z.object({ ...queryRecordIdentity, rowIndex: queryRecordIndex }).strict(),
   z.object({ ...queryRecordIdentity, rowIndices: z.array(queryRecordIndex).min(1).max(sqliteQueryEditMaxRows)
     .refine(indices => new Set(indices).size === indices.length, 'SQLite 查询原记录序号不能重复') }).strict(),
+  z.object({ ...queryRecordIdentity, operation: z.literal('insert') }).strict(),
 ]);
 export type SqliteQueryRecordInput = z.infer<typeof sqliteQueryRecordSchema>;
 export function sqliteQueryRecordIndices(input: SqliteQueryRecordInput): number[] {
+  if ('operation' in input) return [];
   return 'rowIndices' in input ? input.rowIndices : [input.rowIndex];
 }
 export const sqliteTablePageSchema = z.object({
@@ -104,10 +106,10 @@ export const sqliteTablePageSchema = z.object({
   sort: z.array(z.object({ column: name, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
 }).strict().superRefine((input, context) => {
   if (input.queryRecord && input.searchRecordRef) context.addIssue({ code: 'custom', message: 'SQLite 原记录来源不能同时指定' });
-  if ((input.queryRecord || input.searchRecordRef) && (input.offset !== 0 || input.limit !== (input.queryRecord ? sqliteQueryRecordIndices(input.queryRecord).length : 1) || input.lastPage || input.relation ||
+  if ((input.queryRecord || input.searchRecordRef) && (input.offset !== 0 || input.limit !== (input.queryRecord ? Math.max(1, sqliteQueryRecordIndices(input.queryRecord).length) : 1) || input.lastPage || input.relation ||
       input.filters.length || input.sort.length || input.mode !== 'and'))
     context.addIssue({ code: 'custom', message: '原记录只允许读取指定的查询行或搜索命中' });
-  if (!input.editing && (input.searchRecordRef || input.queryRecord && 'rowIndices' in input.queryRecord))
+  if (!input.editing && (input.searchRecordRef || input.queryRecord && !('rowIndex' in input.queryRecord)))
     context.addIssue({ code: 'custom', message: '只读定位只允许读取一条明确指定的查询原记录' });
   if (input.lastPage && input.offset !== 0) context.addIssue({ code: 'custom', path: ['offset'], message: 'SQLite末页请求不能指定偏移' });
   if (new Set(input.sort.map(sort => sort.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '排序列不能重复' });

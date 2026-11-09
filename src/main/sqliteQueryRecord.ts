@@ -31,6 +31,7 @@ export interface SqliteQueryRecordSource {
   identity: SqliteFileIdentity;
   schemaVersion: string;
   keyed: boolean;
+  insertable?: true;
   result: QueryResult;
   origins: readonly SqliteResultColumnOrigin[];
 }
@@ -184,7 +185,7 @@ export function sqliteQueryJoinKeysUnique(result: QueryResult, origins: readonly
 /** 回执中的连接列仍可查看来源。编辑、主键和原表 SQL 只消费首张表的直接投影。 */
 export function sqliteQueryRecordOrigins(target: SqliteQueryRecordTarget, schemas: SqliteQueryRecordSchema[],
   result: QueryResult, original: SqliteResultColumnOrigin[]) {
-  if (!result.rows.length || result.columns.length !== original.length) return;
+  if (result.columns.length !== original.length) return;
   const computed = sqliteQueryComputedPositions(target, schemas, original.length);
   if (!computed) return;
   const excluded = new Set(computed), names = new Set(target.tables.map(table => fold(table.name)));
@@ -195,8 +196,8 @@ export function sqliteQueryRecordOrigins(target: SqliteQueryRecordTarget, schema
   const table = origins.find(Boolean)?.table;
   if (!table) return;
   const { keys } = schemas[0], joined = target.tables.length > 1;
-  const keyed = joined ? sqliteQueryJoinKeysUnique(result, origins, keys) :
-    keys.length > 0 && keys.every(key => origins.some(origin => origin?.column === key));
+  const keyed = result.rows.length > 0 && (joined ? sqliteQueryJoinKeysUnique(result, origins, keys) :
+    keys.length > 0 && keys.every(key => origins.some(origin => origin?.column === key)));
   if (joined && !keyed) return;
   return { table, origins, displayOrigins, computed, keyed, joined };
 }
@@ -211,9 +212,12 @@ export interface SqliteQueryRecordPredicate {
 export async function sqliteQueryRecordPredicates(driver: SqliteDriverSession, source: SqliteQueryRecordSource, indices: readonly number[],
   primaryKey: SqliteTablePage['primaryKey'], columns: SqliteTablePage['columns']): Promise<SqliteQueryRecordPredicate[]> {
   const identity = driver.identity;
-  if (!primaryKey?.length || !identity || identity.path !== source.identity.path || identity.device !== source.identity.device ||
+  if (!identity || identity.path !== source.identity.path || identity.device !== source.identity.device ||
       identity.inode !== source.identity.inode || (await sqliteQueryRecordSchema(driver, source.table))?.version !== source.schemaVersion)
     throw blocked();
+  // 新增只证明同一普通表和目录版本，独立快照不读取任何原行。
+  if (!indices.length && source.insertable) return [];
+  if (!primaryKey?.length) throw blocked();
   return indices.map(index => queryRecordPredicate(source, index, primaryKey, columns));
 }
 

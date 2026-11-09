@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke, errorMessage, uid } from '../lib';
 import { useWorkspace } from '../store';
-import { SqliteTableEditor, type SqliteEditView } from '../sqliteTableEditor';
+import { SqliteTableEditor, type SqliteDraftRow, type SqliteEditView } from '../sqliteTableEditor';
 import { sqliteResultOriginsZh as queryText } from '../locales/sqliteResultOrigins.zh-CN';
 import { dataSearchRecordsZh as text } from '../locales/dataSearchRecords.zh-CN';
 import { SqliteTablePreviewDialog, SqliteTableValueDialog } from './SqliteTableEditDialog';
@@ -38,19 +38,22 @@ type Props = BaseProps & ({ recordRef: string; queryRecord?: never; isCurrent?: 
 /** 只编辑已核验的原行，沿用表页签发的编辑快照和原有预览提交链。 */
 export function SqliteSearchRecordEditDialog(props: Props) {
   const { connectionId, table, recordRef, queryRecord, focusColumn } = props;
+  const inserting = !!queryRecord && 'operation' in queryRecord;
   const cell = props.queryRecord ? props.cell : undefined;
   const rangeFill = props.queryRecord ? props.rangeFill : undefined;
   const rangePaste = props.queryRecord ? props.rangePaste : undefined;
   const deletePositions = props.queryRecord ? props.deletePositions : undefined;
   const [pasteAnchor, setPasteAnchor] = useState<SqlitePasteAnchor>();
   const typedConsumed = useRef(false);
-  const labels = deletePositions ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
+  const labels = inserting ? { title: queryText.insertOpen, hint: queryText.insertHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
+    : deletePositions ? { title: queryText.deleteTitle, hint: queryText.deleteHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : rangeFill || rangePaste ? { title: rangePaste ? pasteText.title : queryText.rangeTitle, hint: rangePaste ? queryText.pasteHint : queryText.rangeHint, discard: queryText.rangeDiscard, back: queryText.editBack, stale: queryText.editStale }
     : queryRecord ? { title: queryText.editRecord, hint: queryText.editHint, discard: queryText.editDiscard, back: queryText.editBack, stale: queryText.editStale }
     : { title: text.edit, hint: text.editHint, discard: text.editDiscard, back: text.editBack, stale: text.editStale };
   const callbacks = useRef(props); callbacks.current = props;
   const editor = useRef<SqliteTableEditor | undefined>(undefined);
   const [view, setView] = useState<SqliteEditView>(), [error, setError] = useState('');
+  const [insertDraft, setInsertDraft] = useState<SqliteDraftRow>();
   const [loading, setLoading] = useState(true), [closing, setClosing] = useState(false);
   const [preview, setPreview] = useState(false);
   const saved = useRef(false), closingRef = useRef(false), closeWork = useRef<Promise<void> | undefined>(undefined);
@@ -77,7 +80,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         if (!live || closingRef.current) return;
         if (!current()) throw Error(labels.stale);
         read.sent = true;
-        const limit = queryRecord ? sqliteQueryRecordIndices(queryRecord).length : 1;
+        const count = queryRecord ? sqliteQueryRecordIndices(queryRecord).length : 1, limit = Math.max(1, count);
         const page = await invoke('sqlite.tablePage', {
           connectionId, database: 'main', table, taskId: read.id, ...(queryRecord ? { queryRecord } : { searchRecordRef: recordRef }), editing: true,
           offset: 0, limit, mode: 'and', filters: [], sort: [],
@@ -87,7 +90,8 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         let accepted = false;
         try {
           if (!current() || page.target.connectionId !== connectionId || page.target.database !== 'main' ||
-              page.target.table !== table || page.target.kind !== 'table' || page.result.rows.length !== limit || page.hasMore)
+              page.target.table !== table || page.target.kind !== 'table' || page.result.rows.length !== count || page.hasMore ||
+              (inserting ? !!page.edit.locator : !page.edit.locator))
             throw Error(labels.stale);
           const instance: SqliteTableEditor = new SqliteTableEditor(page, {
             current, active: () => editor.current === instance, available: () => !busy,
@@ -120,6 +124,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
             setPreview(true);
             void instance.preview();
           } else {
+            if (inserting) setInsertDraft({ id: uid(), values: page.edit.columns.map(() => undefined), deleted: false });
             if (rangePaste) {
               const edit = page.edit;
               const columns = rangePaste.columns.map(name => edit.columns.findIndex(column => column.name === name));
@@ -147,7 +152,7 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         callbacks.current.onDirty(false);
       }
     };
-  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste, deletePositions]);
+  }, [connectionId, table, recordRef, queryRecord, rangeFill, rangePaste, deletePositions, inserting]);
 
   function close() {
     if (closeWork.current || editor.current?.busy) return;
@@ -171,8 +176,10 @@ export function SqliteSearchRecordEditDialog(props: Props) {
   const instance = editor.current;
   function stage(values: (SqliteOriginalValue | undefined)[]): boolean {
     const row = view?.rows[0];
-    if (!instance || !row || !instance.canEdit()) return false;
-    instance.save(row.id, values);
+    if (!instance || !instance.canEdit()) return false;
+    if (row) instance.save(row.id, values);
+    else if (inserting) instance.appendRows([values]);
+    else return false;
     saved.current = true;
     typedConsumed.current = true;
     if (instance.changes.length) { setPreview(true); void instance.preview(); }
@@ -217,8 +224,9 @@ export function SqliteSearchRecordEditDialog(props: Props) {
         if (!stage(values)) throw Error(labels.stale);
       }}/>;
   }
-  if (view && instance && view.rows[0]) {
-    const row = view.rows[0];
+  const formRow = view?.rows[0] ?? insertDraft;
+  if (view && instance && formRow) {
+    const row = formRow;
     return <SqliteTableValueDialog ticket={ticket} page={view.page} row={row} initialFocus={focusColumn}
       current={() => editor.current === instance && !closingRef.current && instance.canEdit()}
       onSave={stage}

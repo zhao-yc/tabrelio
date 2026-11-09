@@ -21,6 +21,7 @@ import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/lo
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
 import { sqliteResultOriginsZh as originsText } from '../../src/renderer/locales/sqliteResultOrigins.zh-CN';
+import { sqliteTableEditZh as sqliteEditText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { queryRowSqlZh as rowSqlText } from '../../src/renderer/locales/queryRowSql.zh-CN';
 import { sqliteRelationZh as relationText } from '../../src/renderer/locales/sqliteRelation.zh-CN';
 import { sqliteReferenceZh as parentText } from '../../src/renderer/locales/sqliteReference.zh-CN';
@@ -591,6 +592,110 @@ test('SQLite JOIN 查询仅提交唯一主表原行', async ({}, info) => {
   await expect(cell('更新甲')).toHaveCount(2);
   await expect(await navigationMenuItem(query, { name: originsText.editJoin, exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 查询从空结果向无主键来源表新增，保留默认值与精确整数', async ({}, info) => {
+  await seed('SELECT t.note AS 名称 FROM insert_source t WHERE t.qty=0;',
+    `CREATE TABLE insert_source(rowid TEXT, _rowid_ TEXT, oid TEXT, note TEXT DEFAULT '原表默认值',
+      qty INTEGER DEFAULT 7, derived TEXT GENERATED ALWAYS AS (note || ':' || qty) STORED);
+     INSERT INTO insert_source(note,qty) VALUES ('已有记录',5);`,
+    'SELECT note FROM insert_view;');
+  const observer = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+  try {
+    observer.exec('CREATE VIEW insert_view AS SELECT note FROM insert_source');
+    const query = page.locator('.query-tab:visible'), form = page.getByRole('dialog', { name: sqliteEditText.add, exact: true });
+    const preview = page.getByRole('dialog', { name: sqliteEditText.previewTitle, exact: true });
+    const sql = preview.getByLabel('SQLite 修改 SQL 预览', { exact: true });
+    const open = () => navigationMenuItem(query, { name: originsText.insertOpen, exact: true });
+    const execute = () => query.locator('.query-execute-split > button.primary').click();
+    const save = () => form.getByRole('button', { name: sqliteEditText.saveInput, exact: true }).click();
+    const apply = preview.getByRole('button', { name: sqliteEditText.submit, exact: true });
+    const rows = () => observer.prepare('SELECT note,CAST(qty AS TEXT) AS qty,derived FROM insert_source ORDER BY qty').all();
+    const original = rows();
+    await execute();
+    await expect(query.locator('.tab-status').getByText(/^本次总耗时/)).toBeVisible();
+    await expect(query.locator('.query-result-grid').getByRole('gridcell')).toHaveCount(0);
+    await (await open()).click();
+    await expect(form.getByRole('checkbox', { name: sqliteEditText.include('derived'), exact: true })).toBeDisabled();
+    await save();
+    await expect(sql).toHaveText('INSERT INTO "main"."insert_source" DEFAULT VALUES');
+    await expect(apply).toBeDisabled();
+    expect(rows()).toEqual(original);
+    await preview.getByRole('button', { name: sqliteEditText.closePreview, exact: true }).click();
+    await form.getByRole('checkbox', { name: sqliteEditText.include('qty'), exact: true }).check();
+    await form.getByRole('combobox', { name: sqliteEditText.type('qty'), exact: true }).selectOption('integer');
+    await form.getByRole('textbox', { name: sqliteEditText.value('qty'), exact: true }).fill('9007199254740993');
+    await save();
+    await expect(sql).toHaveText('INSERT INTO "main"."insert_source" ("qty") VALUES (9007199254740993)');
+    expect(rows()).toEqual(original);
+    await info.attach('SQLite查询空结果新增记录', { body: await page.screenshot(), contentType: 'image/png' });
+    await preview.getByRole('checkbox', { name: sqliteEditText.confirmation, exact: true }).check();
+    await apply.click();
+    await expect(preview).toBeHidden();
+    expect(rows()).toEqual([...original, { note: '原表默认值', qty: '9007199254740993', derived: '原表默认值:9007199254740993' }]);
+    await expect(await open()).toHaveCount(0);
+
+    await page.locator('[data-workspace-tab-id="q-copy-source"]').getByRole('button', { name: '复制来源', exact: true }).click();
+    await execute();
+    await expect(query.getByRole('gridcell', { name: '已有记录', exact: true })).toBeVisible();
+    await expect(await open()).toHaveCount(0);
+    expect(pageErrors).toEqual([]);
+  } finally { observer.close(); }
+});
+
+test('SQLite 查询新增拒绝结构漂移，原执行新增能力只能暂存一条', async ({}) => {
+  await seed('SELECT note FROM insert_guard;', 'CREATE TABLE insert_guard(note TEXT DEFAULT \'初始值\');');
+  const observer = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'));
+  try {
+    const query = page.locator('.query-tab:visible');
+    const form = page.getByRole('dialog', { name: sqliteEditText.add, exact: true });
+    const preview = page.getByRole('dialog', { name: sqliteEditText.previewTitle, exact: true });
+    const readFailure = page.getByRole('dialog', { name: originsText.insertOpen, exact: true });
+    const action = () => navigationMenuItem(query, { name: originsText.insertOpen, exact: true });
+    const execute = () => query.locator('.query-execute-split > button.primary').click();
+    await execute();
+    await expect(query.locator('.tab-status').getByText(/^本次总耗时/)).toBeVisible();
+    observer.exec('ALTER TABLE insert_guard ADD COLUMN changed TEXT');
+    await (await action()).click();
+    await expect(readFailure.getByRole('alert')).toContainText('无法核验');
+    await readFailure.getByRole('button', { name: originsText.editBack, exact: true }).click();
+    await expect(readFailure).toBeHidden();
+
+    const restrictions = await page.evaluate(async () => {
+      const connectionId = 'row-jump-offline', table = 'insert_guard';
+      const { sessionId } = await window.dbark.invoke('sessions.open', { connectionId, database: 'main' });
+      try {
+        const execution = crypto.randomUUID();
+        await window.dbark.invoke('query.execute', { sessionId, sql: 'SELECT note FROM insert_guard', taskId: execution, maxRows: 10 });
+        const page = await window.dbark.invoke('sqlite.tablePage', { connectionId, database: 'main', table, taskId: crypto.randomUUID(),
+          editing: true, offset: 0, limit: 1, mode: 'and', filters: [], sort: [], queryRecord: { sessionId, taskId: execution, operation: 'insert' } });
+        if (page.edit?.kind !== 'editable') throw Error('未取得查询新增快照');
+        const { snapshotId, locator } = page.edit;
+        const rejected: string[] = [];
+        try {
+          const insert = { kind: 'insert' as const, values: [] };
+          for (const changes of [[{ kind: 'delete' as const, row: 0 }], [insert, insert]]) {
+            try { await window.dbark.invoke('sqlite.tableEdit.preview', { snapshotId, taskId: crypto.randomUUID(), changes }); }
+            catch (error) { rejected.push(String(error)); }
+          }
+        } finally { await window.dbark.invoke('sqlite.tableEdit.release', { snapshotId }); }
+        return { rows: page.result.rows.length, locator: !!locator, rejected };
+      } finally { await window.dbark.invoke('sessions.close', { sessionId }); }
+    });
+    expect(restrictions).toEqual({ rows: 0, locator: false, rejected: [expect.stringContaining('只允许新增一条'), expect.stringContaining('只允许新增一条')] });
+
+    await execute();
+    await expect(query.locator('.tab-status').getByText(/^本次总耗时/)).toBeVisible();
+    await (await action()).click();
+    await form.getByRole('button', { name: sqliteEditText.saveInput, exact: true }).click();
+    await expect(preview.getByLabel('SQLite 修改 SQL 预览', { exact: true })).toContainText('DEFAULT VALUES');
+    observer.exec('ALTER TABLE insert_guard ADD COLUMN later TEXT');
+    await preview.getByRole('checkbox', { name: sqliteEditText.confirmation, exact: true }).check();
+    await preview.getByRole('button', { name: sqliteEditText.submit, exact: true }).click();
+    await expect(preview.getByRole('alert')).toContainText('SQLite表结构已变化');
+    expect(observer.prepare('SELECT * FROM insert_guard').all()).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  } finally { observer.close(); }
 });
 
 test('SQLite 查询删除勾选记录按显示顺序核验并提交', async ({}, info) => {

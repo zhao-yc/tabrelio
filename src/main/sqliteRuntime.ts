@@ -623,7 +623,7 @@ export class SqliteRuntime {
       const session = this.session(sessionId);
       if (session.connection !== task.connection || session.pending || session.userHandoff) throw Error('SQLite 原查询会话不属于当前连接或正在执行');
       return rowSql ? session.query.queryRowSqlSource(rowSql.executionId) :
-        session.query.queryRecord(queryInput!.taskId, queryPage!.table, queryPage!.editing === true);
+        session.query.queryRecord(queryInput!.taskId, queryPage!.table, queryPage!.editing === true, 'operation' in queryInput!);
     };
     const aggregate = task.purpose === 'statistics' ? ('column' in input ? 'SQLite字段概况' : 'SQLite匹配行数') : undefined;
     try {

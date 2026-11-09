@@ -1376,14 +1376,15 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   /** 每个 SQLite 字段先核对当前投影、原定位键和声明类型，原编辑器整批暂存。 */
   function fillGridRange(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput) {
     const editor = renderedEditor, source = page?.edit;
-    if (!editor || source?.kind !== 'editable' || !editActionCurrent() || !available() ||
+    const locator = source?.kind === 'editable' ? source.locator : undefined;
+    if (!editor || source?.kind !== 'editable' || !locator || !editActionCurrent() || !available() ||
         editor.view.rows !== editRows || range.rows.some((row, index) => editRows[range.startRow + index] !== row))
       throw Error(rangeFillText.stale);
     if (range.rows.some(row => row.deleted)) throw Error(rangeFillText.target);
     const editableColumn = (key: string) => {
       const column = Number(key.slice(1)), field = source.columns[column];
       if (!field || !projection.some(item => item.index === column) || field.primary || field.generated ||
-          source.locator.columns.includes(field.name)) throw Error(rangeFillText.target);
+          locator.columns.includes(field.name)) throw Error(rangeFillText.target);
       return { column, field };
     };
     if (input.kind === 'left' || input.kind === 'right') {

@@ -115,6 +115,7 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   sqliteResultReceipts?: { statementOrdinal?: number; producedRows: number; changedRows: number; sourceRange: import('./queryFailure').QueryFailureSourceRange }[];
   /** 最新一次可回查的单表结果目标，读取和编辑均须由 Main 校验原行和主键。 */
   sqliteQueryRecordTable?: string;
+  sqliteQueryInsertTable?: string;
   sqliteQueryComputedColumns?: number[];
   sqliteQueryJoined?: true;
   sqliteQueryRowSql?: true;

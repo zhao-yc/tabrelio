@@ -13,7 +13,8 @@ export interface SqliteQueryRangeFill {
 /** 只使用整批已核验的原行，按用户看到的行列顺序生成一组类型化差异。 */
 export function stageSqliteQueryRangeFill(editor: SqliteTableEditor, { columns, input }: SqliteQueryRangeFill): number {
   const page = editor.page, edit = page.edit, rows = editor.view.rows;
-  if (edit?.kind !== 'editable' || !rows.length) throw Error(text.stale);
+  const locator = edit?.kind === 'editable' ? edit.locator : undefined;
+  if (edit?.kind !== 'editable' || !locator || !rows.length) throw Error(text.stale);
   const fields = columns.map(name => edit.columns.findIndex(field => field.name === name));
   if (fields.some(index => index < 0)) throw Error(text.stale);
   const side = input.kind === 'left' || input.kind === 'right' ? gridRangeFillColumns(fields, input.kind) : undefined;
@@ -22,7 +23,7 @@ export function stageSqliteQueryRangeFill(editor: SqliteTableEditor, { columns, 
   const targets = side?.targets ?? fields, affectedRows = vertical?.rows ?? rows;
   if (new Set(targets).size !== targets.length || targets.some(index => {
     const field = edit.columns[index];
-    return field.primary || field.generated || edit.locator.columns.includes(field.name);
+    return field.primary || field.generated || locator.columns.includes(field.name);
   })) throw Error(text.target);
   if (affectedRows.length * targets.length > sqliteTableEditLimits.cells) throw Error(text.limit);
   const entered = side || vertical ? undefined : sqliteEditValueSchema.parse(input.kind === 'null'

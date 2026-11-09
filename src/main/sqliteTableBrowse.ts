@@ -156,7 +156,8 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
     const queryRecords = input.queryRecord ? await control.queryRecord?.(primaryKey, columns) : undefined;
-    if (input.queryRecord && queryRecords?.length !== input.limit) throw Error('SQLite 查询结果缺少原行核验');
+    if (input.queryRecord && queryRecords?.length !== ('operation' in input.queryRecord ? 0 : input.limit))
+      throw Error('SQLite 查询结果缺少原行核验');
     const searchRecord = input.searchRecordRef ? await control.searchRecord?.(catalogue) : undefined;
     if (input.searchRecordRef && !searchRecord) throw Error('SQLite 搜索记录缺少原行核验');
     const focused = !!(queryRecords || searchRecord);

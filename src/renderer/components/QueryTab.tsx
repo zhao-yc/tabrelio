@@ -1474,6 +1474,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
 
   const querySourceAvailable = !pin && !transaction && transactionKnown && !queryRunning && !busy && retiredRecordTask.current !== task.current;
+  const sqliteInsertTable = sqlite && querySourceAvailable && connection?.dialect === 'sqlite' && !connection.sqlite.readOnly
+    ? outcome?.sqliteQueryInsertTable : undefined;
   const mysqlRelationAvailable = querySourceAvailable && outcome?.mysqlQueryRelation === true;
   const mysqlInsertAvailable = querySourceAvailable && outcome?.mysqlQueryInsert === true;
   const mysqlJoinColumns = outcome?.mysqlQueryJoinColumns;
@@ -1643,6 +1645,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     view.job.release();
     setMysqlBatch(current => current === view ? undefined : current);
   }
+  /** 新增只消费本次查询的来源表能力，空结果也能打开独立草稿。 */
+  function openSqliteNewRecord(): void {
+    if (!sqliteInsertTable || !sourceResult || !sessionRef.current || !queryMenuCurrent() || !rowDetailAllowed(detailBinding)) return;
+    const job = acquireWorkspaceBusy(tab.id);
+    setRecordEdit({ table: sqliteInsertTable, job, source: { sessionId: sessionRef.current, taskId: task.current, operation: 'insert' } });
+  }
+
   function startQueryRecords(rows: readonly DataRow[], { cell, rangeFill, rangePaste, deletePositions }: {
     cell?: SqliteQueryInlineCell & { key: string; row: DataRow };
     rangeFill?: SqliteQueryRangeFill;
@@ -2679,6 +2688,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('delete')}>{mysqlJoinColumns ? mysqlBatchText.deleteCheckedJoin : mysqlBatchText.deleteChecked}</button>}
 {mysqlRelationAvailable && !mysqlJoinColumns && <button disabled={!selectedExportCount || selectedExportCount > mysqlQueryBatchLimits.rows}
   title={mysqlBatchText.deleteLimit} onClick={() => openMysqlCheckedRecords('insert')}>{mysqlBatchText.insert}</button>}
+{sqliteInsertTable && <button disabled={resultModal} onClick={openSqliteNewRecord}>{originsText.insertOpen}</button>}
 {mysqlInsertAvailable && <button disabled={resultModal} onClick={openMysqlNewRecord}>{mysqlBatchText.new}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.resultHistory}><button title={resultHistory.limited?historyText.limited:historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,-1)} onClick={()=>travelResultHistory(-1)}>{historyText.undo}</button>
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
@@ -2785,7 +2795,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
           if (committed) {
             // 保留原查询快照的身份，提交后只撤销编辑入口，筛选、排序及列布局继续有效。
             retiredRecordTask.current = recordEdit.source.taskId;
-            useWorkspace.getState().notify(recordEdit.deletePositions ? originsText.deleteCommitted : originsText.editCommitted);
+            useWorkspace.getState().notify('operation' in recordEdit.source ? originsText.insertCommitted :
+              recordEdit.deletePositions ? originsText.deleteCommitted : originsText.editCommitted);
           }
           recordEdit.job.release();
           setRecordEdit(undefined);
