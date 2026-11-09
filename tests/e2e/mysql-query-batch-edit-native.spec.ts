@@ -296,6 +296,16 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await find.getByRole('button', { name: queryResultFindZh.uncheckRows, exact: true }).click();
     await expect(check('9007199254740993')).toBeChecked();
     await expect(check('9007199254740994')).not.toBeChecked();
+    await find.getByLabel(tableGridZh.replacement, { exact: true }).fill('空值补齐');
+    await find.getByRole('button', { name: tableGridZh.preview, exact: true }).click();
+    const replaceReview = page.getByRole('dialog', { name: tableGridZh.replaceTitle, exact: true });
+    await expect(replaceReview).toContainText(formatText(tableGridZh.count, 1, 1));
+    await expect(replaceReview).toContainText('空值补齐');
+    await expect(note('9007199254740994')).toHaveText('');
+    await replaceReview.getByRole('button', { name: tableGridZh.apply, exact: true }).click();
+    await expect(note('9007199254740994')).toHaveText('空值补齐');
+    await expect(note('9007199254740993')).toHaveText('NULL');
+    expect((await read()).find(row => row.id === '9007199254740994')?.note).toBe('');
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

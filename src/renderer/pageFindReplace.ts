@@ -44,6 +44,11 @@ export function assertPageFindTransfer(value: unknown): void {
 /** 字面模式只转义为安全正则，不向用户开放正则或替换表达式。 */
 function literalPattern(options: PageFindOptions) { return new RegExp(options.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options.caseSensitive ? 'gu' : 'giu'); }
 
+/** 空字符串有明确的零长度边界，可按普通文本权限预览替换。 */
+export function findKindAllowsReplacement(kind: PageFindOptions['kind']): boolean {
+  return kind === 'text' || kind === 'empty';
+}
+
 /** 将同格多次出现展开为独立位置；NULL 和 DEFAULT 各自保留一个可导航位置。 */
 export function pageOccurrences(matches: readonly PageCellMatch[]): PageOccurrence[] {
   return matches.flatMap(match => match.ranges.length ? match.ranges.map((range, index) => ({ rowId: match.rowId, key: match.key, range, occurrence: index + 1 })) : [{ rowId: match.rowId, key: match.key, occurrence: 1 }]);
@@ -98,8 +103,9 @@ function scanPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[]
     for (const key of keys) {
       const value = ownCell(row.data, key);
       if (options.kind !== 'text') {
-        if ((options.kind === 'empty' && value === '') || (options.kind === 'null' && value === null) ||
-            (options.kind === 'default' && row.inserted && value === undefined)) matches.push({ rowId: row.id, key, ranges: [] });
+        if (options.kind === 'empty' && value === '') matches.push({ rowId: row.id, key, ranges: [{ start: 0, end: 0 }] });
+        else if ((options.kind === 'null' && value === null) || (options.kind === 'default' && row.inserted && value === undefined))
+          matches.push({ rowId: row.id, key, ranges: [] });
       }
       else if (value !== null && value !== undefined && typeof value !== 'object') {
         const source = String(value), size = new PageTextSize(); budget(scanned + source.length); size.append({ value: source, start: 0, end: source.length }); scanned += size.utf8; budget(scanned);
@@ -221,7 +227,7 @@ function unchangedText(before: string, spans: Iterable<PageTextSpan>): boolean {
 function replacementPlans(rows: readonly DraftRow[], matches: PlannedMatch[], options: PageFindOptions, replacement: string,
   writable: (key: string) => boolean, only?: PageOccurrence) {
   if (replacement.length > pageFindLimits.replacement) throw new Error(text.replacementLimit);
-  if (options.kind !== 'text') throw new Error(text.noReplace);
+  if (!findKindAllowsReplacement(options.kind)) throw new Error(text.noReplace);
   const plans: { rowId: string; key: string; before: string; ranges: PlannedMatch['ranges']; size: PageTextSize }[] = []; let outputBytes = 0;
   for (const match of matches) {
     if (only && (only.rowId !== match.rowId || only.key !== match.key)) continue;

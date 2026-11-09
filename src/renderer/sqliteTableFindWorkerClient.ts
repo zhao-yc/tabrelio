@@ -1,3 +1,4 @@
+import { findKindAllowsReplacement } from './pageFindReplace';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import type { SqliteDraftRow } from './sqliteTableEditor';
 import { copySqliteFindTransfer, copySqliteFindOptions, matchesSqliteFindValue, sqliteFindSource, sqliteFindSourceSignature, sqliteFindOccurrences, sqliteFindLimits as limits, sqliteFindMessages as text, type SqliteFindOptions, type SqliteFindMatch, type SqliteFindOccurrence, type SqliteFindSource, type SqliteFindWorkerRequest, type SqliteFindWorkerResult, type SqliteTextPatch } from './sqliteTableFind';
@@ -38,9 +39,15 @@ function checkedMatches(raw: unknown, source: SqliteFindSource): SqliteFindMatch
   const matches = copySqliteFindTransfer(raw) as SqliteFindMatch[]; if (!Array.isArray(matches) || matches.length > limits.matches) throw Error(text.worker); let prior = -1, occurrences = 0;
   for (const match of matches) {
     if (!match || typeof match !== 'object' || Object.keys(match).sort().join(',') !== 'column,ranges,replaceable,rowId' || typeof match.rowId !== 'string' || !Number.isInteger(match.column) || match.column < 0 || match.column >= source.columns.length || source.options.column !== undefined && match.column !== source.options.column || !Array.isArray(match.ranges) || typeof match.replaceable !== 'boolean') throw Error(text.worker);
-    const rowIndex = source.rows.findIndex(row => row.id === match.rowId), row = source.rows[rowIndex]; if (!row || row.deleted) throw Error(text.worker); const order = rowIndex * limits.columns + match.column; if (order <= prior) throw Error(text.worker); prior = order; const value = row.values[match.column], writable = source.writable && source.options.kind === 'text' && value?.kind === 'text' && !source.columns[match.column].generated; if (writable !== match.replaceable) throw Error(text.worker);
+    const rowIndex = source.rows.findIndex(row => row.id === match.rowId), row = source.rows[rowIndex]; if (!row || row.deleted) throw Error(text.worker); const order = rowIndex * limits.columns + match.column; if (order <= prior) throw Error(text.worker); prior = order; const value = row.values[match.column], writable = source.writable && findKindAllowsReplacement(source.options.kind) && value?.kind === 'text' && !source.columns[match.column].generated; if (writable !== match.replaceable) throw Error(text.worker);
     if (source.options.kind !== 'text') {
-      if (match.ranges.length || !matchesSqliteFindValue(source.options.kind, row, match.column)) throw Error(text.worker);
+      if (!matchesSqliteFindValue(source.options.kind, row, match.column)) throw Error(text.worker);
+      // 空字符串的替换只能落在唯一的 [0,0]，NULL 和 DEFAULT 不携带文本区间。
+      if (source.options.kind === 'empty') {
+        const [range] = match.ranges;
+        if (match.ranges.length !== 1 || !range || Object.keys(range).sort().join(',') !== 'end,start' ||
+            range.start !== 0 || range.end !== 0) throw Error(text.worker);
+      } else if (match.ranges.length) throw Error(text.worker);
       occurrences++;
     }
     else { if (!value || value.kind === 'null' || !match.ranges.length) throw Error(text.worker); let previousEnd = -1, previousStart = -1;
@@ -78,7 +85,7 @@ export class SqliteTableFindWorkerClient {
   async preview(found: SqliteFindReadyResult, replacement: string, only?: SqliteFindOccurrence): Promise<SqliteFindPreviewResult> {
     const revision = ++this.planRevision;
     try {
-      const proof = searches.get(found); if (!proof || proof.client !== this || !proof.owner.source.writable || proof.owner.source.options.kind !== 'text' || only && (!proof.occurrences.includes(only) || !only.replaceable || !only.range)) throw Error(text.stale); assertOwner(proof.owner);
+      const proof = searches.get(found); if (!proof || proof.client !== this || !proof.owner.source.writable || !findKindAllowsReplacement(proof.owner.source.options.kind) || only && (!proof.occurrences.includes(only) || !only.replaceable || !only.range)) throw Error(text.stale); assertOwner(proof.owner);
       copySqliteFindOptions(proof.owner.source.options, proof.owner.source.columns.length); if (typeof replacement !== 'string' || replacement.length > limits.replacement) throw Error(text.invalid); copySqliteFindTransfer(replacement);
       const result = await this.run({ operation: 'preview', source: proof.owner.source, replacement, ...(only ? { only } : {}) }); if (result.status === 'blocked') return result; assertOwner(proof.owner); if (revision !== this.planRevision || result.operation !== 'preview') throw Error(text.stale);
       const matches = checkedMatches(result.matches, proof.owner.source); if (JSON.stringify(matches) !== JSON.stringify(proof.matches)) throw Error(text.worker); const patches = checkedPatches(result.patches, proof, only), plan: SqliteTextReplacementPlan = Object.freeze({ changedCells: patches.length, changedRows: new Set(patches.map(patch => patch.rowId)).size });

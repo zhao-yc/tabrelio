@@ -43,9 +43,21 @@ describe('页内查找和替换草稿', () => {
     const keys = ['text', 'empty', 'nullable', 'spaces', 'binary', '__proto__', 'constructor'];
     expect(findPageCells([draft], keys, { ...options, query: 'NULL' }).map(match => match.key)).toEqual(['text']);
     expect(findPageCells([draft], keys, { ...options, kind: 'null' }).map(match => match.key)).toEqual(['nullable']);
-    expect(findPageCells([draft], keys, { ...options, kind: 'empty', query: '' })).toEqual([{ rowId: 'new', key: 'empty', ranges: [] }]);
+    expect(findPageCells([draft], keys, { ...options, kind: 'empty', query: '' })).toEqual([{ rowId: 'new', key: 'empty', ranges: [{ start: 0, end: 0 }] }]);
     expect(() => previewPageReplacement([draft], keys, { ...options, kind: 'empty' }, '新', info, 4)).toThrow();
     expect(findPageCells([draft], keys, { ...options, kind: 'default' }).map(match => match.key)).toEqual(['__proto__', 'constructor']);
+  });
+  it('仅替换可写空文本，保持空白、空二进制、NULL、生成列和其它命中', () => {
+    const first = row('1', ''), second = row('2', ''), space = row('3', ' ');
+    first.data.generated = ''; first.original!.generated = '';
+    const rows = [first, second, space], keys = ['text', 'generated'];
+    const empty: PageFindOptions = { ...options, kind: 'empty', query: '' };
+    const hits = pageOccurrences(findPageCells(rows, keys, empty));
+    expect(previewPageReplacement(rows, keys, empty, '$&', info, 4, hits[0]).patches)
+      .toEqual([{ rowId: '1', key: 'text', before: '', after: '$&' }]);
+    const plan = previewPageReplacementInWorker(rows, keys, empty, '已填充', info, 4);
+    expect(plan.patches.map(patch => patch.rowId)).toEqual(['1', '2']);
+    expect(applyPageReplacement(rows, plan, info, 4).map(row => row.data.text)).toEqual(['已填充', '已填充', ' ']);
   });
   it('Unicode匹配用原串坐标，前缀İ不会导致替换错位', () => {
     const rows = [row('1', 'İ前缀 OLD 尾部😀')];

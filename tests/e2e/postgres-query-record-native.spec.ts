@@ -110,6 +110,18 @@ test('PostgreSQL 表页查找批量勾选命中且排除字段名模式', async 
     await expect(check(4)).toBeChecked();
     for (const row of [1, 3, 5, 6]) await expect(check(row)).not.toBeChecked();
     await expect(check(2)).toBeChecked();
+    await tab.getByRole('button', { name: findText.replaceTitle, exact: true }).click();
+    await expect(mode).toHaveValue('empty');
+    await panel.getByLabel(findText.replacement, { exact: true }).fill('空值补齐');
+    await panel.getByRole('button', { name: findText.all, exact: true }).click();
+    const review = panel.getByRole('region', { name: findText.review, exact: true });
+    await expect(review).toContainText(findText.reviewCount(1, 1));
+    await expect(review).toContainText('空值补齐');
+    const filled = grid.getByRole('gridcell', { name: '空值补齐', exact: true });
+    await expect(filled).toHaveCount(0);
+    await review.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await expect(filled).toBeVisible();
+    expect((await observer.query('SELECT note FROM public.find_checked WHERE id=4')).rows[0].note).toBe('');
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });

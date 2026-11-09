@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as InputKeyEvent } from 'react';
 import type { TableInfo } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
-import { nextPageOccurrenceAfterReplacement, pageOccurrences, pageReplaceWritable, type PageCellMatch, type PageFindOptions, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
+import { findKindAllowsReplacement, nextPageOccurrenceAfterReplacement, pageOccurrences, pageReplaceWritable, type PageCellMatch, type PageFindOptions, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 import { useTableFindKeys } from '../gridFindKeys';
 import { tableFindHighlights } from '../tableFindHighlights';
@@ -51,8 +51,9 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   }, [onDisplay, disabled, composing, generation, highlights, current]);
   const currentRow = current ? rows.findIndex(row => row.id === current.rowId) : -1;
   const currentValue = currentRow >= 0 ? ownCell(rows[currentRow].data, current.key) : undefined;
-  const canReplace = !replaceDisabled && !!info && options.kind === 'text' && found.some(match => pageReplaceWritable(info, match.key) && typeof ownCell(rows.find(row => row.id === match.rowId)!.data, match.key) === 'string');
-  const currentWritable = !!current?.range && typeof currentValue === 'string' && !!info && pageReplaceWritable(info, current.key) && options.kind === 'text' && !replaceDisabled;
+  const replaceableKind = findKindAllowsReplacement(options.kind);
+  const canReplace = !replaceDisabled && !!info && replaceableKind && found.some(match => pageReplaceWritable(info, match.key) && typeof ownCell(rows.find(row => row.id === match.rowId)!.data, match.key) === 'string');
+  const currentWritable = !!current?.range && typeof currentValue === 'string' && !!info && pageReplaceWritable(info, current.key) && replaceableKind && !replaceDisabled;
   /** 导航状态同步写引用，连续键盘事件不能借尚未渲染的位置替换上一处。 */
   function selectPosition(next: number) { positionRef.current = next; setPosition(next); }
   /** 每次新意图永久撤销旧命令；不能因文字或组合布尔值恢复原样而重新获得写稿资格。 */
@@ -64,7 +65,12 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     else { workingRef.current = false; singleLock.current = false; setWorking(false); }
   }
   /** 先同步递增修订及最新值，再交给React；同一事件轮次的ABA也不能漏掉。 */
-  function changeReplacement(value: string) { invalidateIntent(); latestReplacement.current = value; setReplacement(value); if (!found.length && options.kind === 'text' && options.query && !options.regex) autoTimer.current = setTimeout(() => { void run('find'); }, 120); }
+  function changeReplacement(value: string) {
+    invalidateIntent(); latestReplacement.current = value; setReplacement(value);
+    // 输入替换值可能取消尚未完成的自动查找，空字符串模式也应恢复扫描。
+    if (!found.length && (options.kind === 'empty' || options.kind === 'text' && options.query && !options.regex))
+      autoTimer.current = setTimeout(() => { void run('find'); }, 120);
+  }
   /** 查找类型、文字、列及匹配选项统一撤销在途计划。 */
   function changeOptions(value: PageFindOptions) { invalidateIntent(); if (value.captureReplacement && (value.kind !== 'text' || !value.regex)) value = { ...value, captureReplacement: false }; activeOptions.current = value; setOptions(value); }
   /** 组合开始和结束各自都是新意图，结束后不能恢复组合前的预览授权。 */
@@ -93,12 +99,12 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     if (latest.current === snapshot && !workingRef.current) jump(direction, focusGrid);
   });
   /** 单处命令只接受当前快照中的精确出现位置；不能回退成整格或整页替换。 */
-  function replaceCurrent() { const match = occurrences[positionRef.current], row = match && rows.find(row => row.id === match.rowId); if (disabled || composingRef.current || workingRef.current || singleLock.current || replaceDisabled || options.kind !== 'text' || !info || !match?.range || !row || typeof ownCell(row.data, match.key) !== 'string' || !pageReplaceWritable(info, match.key)) return; void run('preview', match); }
+  function replaceCurrent() { const match = occurrences[positionRef.current], row = match && rows.find(row => row.id === match.rowId); if (disabled || composingRef.current || workingRef.current || singleLock.current || replaceDisabled || !replaceableKind || !info || !match?.range || !row || typeof ownCell(row.data, match.key) !== 'string' || !pageReplaceWritable(info, match.key)) return; void run('preview', match); }
   /** Enter仅处理本面板输入；组合标志或229保留原生输入，不产生导航或草稿。 */
   function inputKey(event: InputKeyEvent<HTMLInputElement>, target: 'query' | 'replacement') { if (composingRef.current || tableCellKeyIsComposing(event.nativeEvent) || event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey) return; event.preventDefault(); event.stopPropagation(); if (event.repeat) return; if (event.shiftKey) jump(-1, false); else if (target === 'query') jump(1, false); else replaceCurrent(); }
   /** 完成消息必须仍属于当前快照和请求；单处替换与整批预览共用原值、资格和预算政策。 */
   async function run(operation: 'find' | 'preview', only?: PageOccurrence, resume?: NonNullable<typeof advance.current>) {
-    if (disabled || composingRef.current || latest.current !== snapshot || activeOptions.current !== snapshot.options || (operation === 'preview' && (!info || replaceDisabled || workingRef.current || singleLock.current || (only && !sameCurrent(only))))) return;
+    if (disabled || composingRef.current || latest.current !== snapshot || activeOptions.current !== snapshot.options || (operation === 'preview' && (!replaceableKind || !info || replaceDisabled || workingRef.current || singleLock.current || (only && !sameCurrent(only))))) return;
     clearTimeout(autoTimer.current); autoTimer.current = undefined;
     const serial = ++requestSerial.current, intent = ++intentRevision.current, source = snapshot, value = latestReplacement.current, selectionToken = getSelectionToken?.();
     client.current ??= new PageFindWorkerClient(() => new Worker(new URL('../pageFind.worker.ts', import.meta.url), { type: 'module' }));
@@ -139,7 +145,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     <label><input type="checkbox" disabled={disabled} checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{findText.highlightAll}</label>
   </div><div className="page-find-actions"><span role="status">{working ? text.searching : formatText(text.matches, found.length, position < 0 ? 0 : position + 1, occurrences.length)}</span><button disabled={disabled || working || (options.kind === 'text' && !options.query)} onClick={() => void run('find')}>{text.search}</button>{working && <button onClick={() => void cancel()}>{text.cancelSearch}</button>}<button disabled={disabled || composing || !occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button disabled={disabled || composing || !occurrences.length} onClick={() => jump(1)}>{text.next}</button>{onMatchRows && <GridFindMatchActions disabled={disabled || working || composing || !!preview || !found.length} onChange={matchRows}/>}<span className="grow"/><button disabled={disabled} onClick={onFilter}>{text.filter}</button></div>
     {current && <div className="page-find-current" aria-live="polite"><span>{formatText(text.location, currentRow + 1, current.key, current.occurrence, current.range ? current.range.start + 1 : 1)}</span>{typeof currentValue === 'string' && current.range && <pre>{currentValue.slice(Math.max(0, current.range.start - 60), current.range.start)}<mark>{current.range.start === current.range.end ? text.zeroWidth : currentValue.slice(current.range.start, Math.min(current.range.end, current.range.start + 160))}</mark>{currentValue.slice(current.range.end, current.range.end + 60)}</pre>}</div>}
-    <div className="page-find-actions"><Field label={text.replacement}><input ref={replacementInput} disabled={disabled || options.kind !== 'text'} maxLength={4096} value={replacement} onKeyDown={event => inputKey(event, 'replacement')} onChange={event => changeReplacement(event.target.value)}/></Field><label><input type="checkbox" disabled={disabled || options.kind !== 'text' || !options.regex} checked={!!options.captureReplacement} onChange={event => changeOptions({ ...options, captureReplacement: event.target.checked })}/>{text.captureReplacement}</label><button title={text.replaceOneHint} disabled={disabled || working || composing || !currentWritable} onKeyDown={event => { if ((composingRef.current || tableCellKeyIsComposing(event.nativeEvent)) && ['Enter', ' '].includes(event.key)) event.preventDefault(); }} onClick={replaceCurrent}>{text.replaceOne}</button><button disabled={disabled || working || composing || !canReplace} onClick={() => void run('preview')}>{text.preview}</button></div>{current && !currentWritable && <p className="muted small">{text.currentReadonly}</p>}<ErrorBox message={error}/>
+    <div className="page-find-actions"><Field label={text.replacement}><input ref={replacementInput} disabled={disabled || !replaceableKind} maxLength={4096} value={replacement} onKeyDown={event => inputKey(event, 'replacement')} onChange={event => changeReplacement(event.target.value)}/></Field><label><input type="checkbox" disabled={disabled || options.kind !== 'text' || !options.regex} checked={!!options.captureReplacement} onChange={event => changeOptions({ ...options, captureReplacement: event.target.checked })}/>{text.captureReplacement}</label><button title={text.replaceOneHint} disabled={disabled || working || composing || !currentWritable} onKeyDown={event => { if ((composingRef.current || tableCellKeyIsComposing(event.nativeEvent)) && ['Enter', ' '].includes(event.key)) event.preventDefault(); }} onClick={replaceCurrent}>{text.replaceOne}</button><button disabled={disabled || working || composing || !canReplace} onClick={() => void run('preview')}>{text.preview}</button></div>{current && !currentWritable && <p className="muted small">{text.currentReadonly}</p>}<ErrorBox message={error}/>
     {preview && <Modal title={text.replaceTitle} wide onClose={() => setPreview(null)}><div className="modal-content"><p>{text.replaceHint}</p><p>{formatText(text.count, preview.patches.length, preview.rows.length)}</p><div className="page-replace-preview"><table><thead><tr><th>{text.row}</th><th>{text.column}</th><th>{text.before}</th><th>{text.after}</th></tr></thead><tbody>{preview.patches.slice(0, 50).map(patch => <tr key={`${patch.rowId}-${patch.key}`}><td>{rows.findIndex(row => row.id === patch.rowId) + 1}</td><td>{patch.key}</td><td><pre>{patch.before}</pre></td><td><pre>{patch.after}</pre></td></tr>)}</tbody></table></div><ErrorBox message={error}/></div><footer className="modal-footer"><button onClick={() => setPreview(null)}>{zh.common.cancel}</button><span className="grow"/><button className="primary" disabled={disabled} onClick={apply}>{text.apply}</button></footer></Modal>}
   </section>;
 }

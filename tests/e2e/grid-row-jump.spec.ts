@@ -1690,6 +1690,25 @@ test('SQLite 表页查找批量勾选命中且保留其它行', async ({}, info)
   await select.click();
   await expect(check(4)).toBeChecked();
   await expect(check(2)).toBeChecked();
+  await panel.getByRole('button', { name: sqliteFind.replaceMode, exact: true }).click();
+  await panel.getByRole('textbox', { name: sqliteFind.replacement, exact: true }).fill('空值补齐');
+  await panel.getByRole('button', { name: sqliteFind.replaceAll, exact: true }).click();
+  const review = page.getByRole('dialog', { name: sqliteFind.previewTitle, exact: true });
+  await expect(review).toContainText(sqliteFind.previewCount(1, 1));
+  await expect(review).toContainText('空值补齐');
+  const filled = grid.getByRole('gridcell', { name: 'TEXT · 空值补齐', exact: true });
+  await expect(filled).toHaveCount(0);
+  await info.attach('SQLite空字符串替换预览', { body: await page.screenshot(), contentType: 'image/png' });
+  await review.getByRole('button', { name: sqliteFind.cancelPreview, exact: true }).click();
+  await expect(filled).toHaveCount(0);
+  await panel.getByRole('button', { name: sqliteFind.replaceAll, exact: true }).click();
+  await review.getByRole('button', { name: sqliteFind.stage, exact: true }).click();
+  await expect(filled).toBeVisible();
+  const observer = new DatabaseSync(join(dataDir, 'grid-row-jump.sqlite'), { readOnly: true });
+  try { expect(observer.prepare('SELECT name FROM subject WHERE id=4').get()?.name).toBe(''); }
+  finally { observer.close(); }
+  await table.getByRole('button', { name: sqliteEditText.undo, exact: true }).click();
+  await expect(filled).toHaveCount(0);
   expect(await tasks()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });

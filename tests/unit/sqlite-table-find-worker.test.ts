@@ -33,12 +33,15 @@ describe('SQLite查找Worker Client与opaque替换计划', () => {
     f.rows[0].values[0] = { kind: 'text', value: '' };
     f.rows[1].values[0] = { kind: 'blob', value: '' };
     const query = options({ kind: 'empty', query: '' });
-    expect((await f.find(query)).matches).toEqual([{ rowId: 'row-0', column: 0, ranges: [], replaceable: false }]);
+    const found = await f.find(query);
+    expect(found.matches).toEqual([{ rowId: 'row-0', column: 0, ranges: [{ start: 0, end: 0 }], replaceable: true }]);
+    const plan = await f.preview(found, '已填充', found.occurrences[0]);
+    expect(sqliteTextReplacementPlanValues(plan, f.page, f.rows)).toEqual([{ rowId: 'row-0', column: 0, before: '', after: '已填充' }]);
     const pending = f.client.find(f.page, f.rows, query);
     await f.flush();
     const port = f.ports.at(-1)!;
     port.ready();
-    port.respond({ status: 'ready', operation: 'find', matches: [{ rowId: 'row-1', column: 0, ranges: [], replaceable: false }] });
+    port.respond({ status: 'ready', operation: 'find', matches: [{ rowId: 'row-1', column: 0, ranges: [{ start: 0, end: 0 }], replaceable: false }] });
     expect(await pending).toMatchObject({ status: 'blocked', message: text.worker });
   });
   it('完整计数与前10预览分离，Values一次消费且返回独立clone', async () => {

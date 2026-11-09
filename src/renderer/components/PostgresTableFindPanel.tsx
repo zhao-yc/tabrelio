@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import type { ResultColumn } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
 import { cellPreview, errorMessage } from '../lib';
-import { pageFindLimits, pageOccurrences, type PageFindOptions, type PageOccurrence, type PageTextPatch } from '../pageFindReplace';
+import { findKindAllowsReplacement, pageFindLimits, pageOccurrences, type PageFindOptions, type PageOccurrence, type PageTextPatch } from '../pageFindReplace';
 import { PageFindWorkerClient } from '../pageFindWorkerClient';
 import type { PostgresFindPlan } from '../postgresTableFind';
 import { queryResultFindZh } from '../locales/queryResultFind.zh-CN';
@@ -58,11 +58,12 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const hit = found?.hits[chosen];
   const needsQuery = mode === 'text' || mode === 'field';
   const canSearch = !needsQuery || !!query;
-  const replaceVisible = request?.replace && mode === 'text';
+  const kind = mode === 'field' ? 'text' : mode;
+  const replaceVisible = request?.replace && mode !== 'field' && findKindAllowsReplacement(kind);
   const canReplace = writable && enabled && replaceVisible;
   const pending = preparing === snapshot;
   const locked = pending || !!review;
-  const options: PageFindOptions = { kind: 'text', query, caseSensitive: sensitive, wholeCell: whole, regex, column: column || undefined };
+  const options: PageFindOptions = { kind, query, caseSensitive: sensitive, wholeCell: whole, regex: mode === 'text' && regex, column: column || undefined };
 
   useEffect(() => {
     if (!request || !enabled) return;
@@ -119,8 +120,12 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
     [request, highlight, found]);
   const replaceKeys = useMemo(() => new Set(columns.filter(replaceWritable).map(column => column.key)), [columns, replaceWritable]);
   const replacementById = useMemo(() => replacementRows && new Map(replacementRows.map(row => [row.id, row.data])), [replacementRows]);
-  const canReplaceHit = (target: PageOccurrence) => !!target.range && replaceKeys.has(target.key) &&
-    (!replacementById || typeof replacementById.get(target.rowId)?.[target.key] === 'string');
+  const canReplaceHit = (target: PageOccurrence) => {
+    if (!target.range || !replaceKeys.has(target.key)) return false;
+    if (!replacementById) return true;
+    const value = replacementById.get(target.rowId)?.[target.key];
+    return mode === 'empty' ? value === '' : typeof value === 'string';
+  };
   const hasWritable = canReplace && found?.hits.some(canReplaceHit);
   const oneWritable = canReplace && hit && canReplaceHit(hit);
 
@@ -149,7 +154,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
     setError('');
     try {
       const result = await client.current.run({ operation: 'previewText', rows: replacementRows ?? rows, keys: [...replaceKeys],
-        options: { ...options, captureReplacement: regex && capture }, replacement, generation: 0, only });
+        options: { ...options, captureReplacement: mode === 'text' && regex && capture }, replacement, generation: 0, only });
       if (runningPreview.current !== job || latest.current !== snapshot || !isCurrent()) return;
       if (result.status === 'blocked') setError(result.message);
       else if (result.operation === 'previewText') setPreview({ snapshot, replacement, only, plan: onPreview(result.patches) });
@@ -213,7 +218,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
       {replaceVisible && <div className="query-result-find-toolbar">
         <input ref={replacementInput} data-query-result-replace-input aria-label={text.replacement} value={replacement} maxLength={pageFindLimits.replacement} disabled={!canReplace || locked}
           onChange={event => { setReplacement(event.target.value); setError(''); }}/>
-        {regex && <label className="check"><input type="checkbox" checked={capture} disabled={!canReplace || locked}
+        {mode === 'text' && regex && <label className="check"><input type="checkbox" checked={capture} disabled={!canReplace || locked}
           onChange={event => { setCapture(event.target.checked); setError(''); }}/>{text.captures}</label>}
         <button type="button" disabled={!oneWritable || locked} onClick={() => void makePreview(hit)}>{text.one}</button>
         <button type="button" disabled={!hasWritable || locked} onClick={() => void makePreview()}>{text.all}</button>

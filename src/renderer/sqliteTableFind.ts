@@ -1,7 +1,7 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import type { SqliteDraftRow } from './sqliteTableEditor';
 import type { SqliteOriginalValue } from '../shared/sqliteTableEdit';
-import { pageFindLimits } from './pageFindReplace';
+import { findKindAllowsReplacement, pageFindLimits } from './pageFindReplace';
 import { PageTextSize, joinPageText, type PageTextSpan } from './pageFindText';
 
 export const sqliteFindLimits = { ...pageFindLimits, rows: 1500, columns: 1024, patches: 10000, changedRows: 500, valueUnits: 65536, writeBytes: 2 * 1024 * 1024 } as const;
@@ -70,11 +70,11 @@ export function matchesSqliteFindValue(kind: Exclude<SqliteFindOptions['kind'], 
 /** Unicode matchAll原生推进零宽模式；完整命中超过五万时拒绝，不静默截断。 */
 function scan(source: SqliteFindSource, captures: boolean, only?: SqliteFindOccurrence): PlannedMatch[] {
   const options = source.options, regex = pattern(options), matches: PlannedMatch[] = []; let occurrences = 0, captureBytes = 0;
-  for (const row of source.rows) { if (row.deleted) continue; for (let column = 0; column < source.columns.length; column++) { if (options.column !== undefined && options.column !== column) continue; const value = row.values[column], replaceable = source.writable && !source.columns[column].generated && value?.kind === 'text' && options.kind === 'text';
+  for (const row of source.rows) { if (row.deleted) continue; for (let column = 0; column < source.columns.length; column++) { if (options.column !== undefined && options.column !== column) continue; const value = row.values[column], replaceable = source.writable && !source.columns[column].generated && value?.kind === 'text' && findKindAllowsReplacement(options.kind);
     if (options.kind !== 'text') {
       if (matchesSqliteFindValue(options.kind, row, column)) {
         if (++occurrences > limits.matches) throw Error(sqliteFindMessages.budget);
-        matches.push({ rowId: row.id, column, ranges: [], replaceable: false });
+        matches.push({ rowId: row.id, column, ranges: options.kind === 'empty' ? [{ start: 0, end: 0 }] : [], replaceable });
       }
       continue;
     }
@@ -122,7 +122,7 @@ export function runSqliteTableFindInWorker(raw: SqliteFindWorkerRequest): Sqlite
   try {
     const input = fields(copySqliteFindTransfer(raw), ['operation', 'source'], ['replacement', 'only']); if (!['find', 'preview'].includes(input.operation) || input.operation === 'find' && (Object.hasOwn(input, 'replacement') || Object.hasOwn(input, 'only'))) throw invalid();
     const source = copySqliteFindSource(input.source), capture = source.options.captureReplacement === true;
-    if (input.operation === 'preview' && (source.options.kind !== 'text' || !source.writable)) throw Error(sqliteFindMessages.noReplace);
+    if (input.operation === 'preview' && (!findKindAllowsReplacement(source.options.kind) || !source.writable)) throw Error(sqliteFindMessages.noReplace);
     if (input.operation === 'preview' && (typeof input.replacement !== 'string' || input.replacement.length > limits.replacement || !unicode(input.replacement))) throw invalid();
     const only = input.only as SqliteFindOccurrence | undefined; if (only) { fields(only, ['rowId', 'column', 'occurrence', 'replaceable', 'range']); fields(only.range, ['start', 'end']); if (only.replaceable !== true) throw invalid(); }
     const matches = scan(source, input.operation === 'preview' && capture, only), publicMatches = matches.map(({ captures: _captures, ...match }) => match);
