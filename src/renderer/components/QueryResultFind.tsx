@@ -9,11 +9,13 @@ import { queryResultHost } from '../queryResultShortcut';
 import { queryResultFindFilterRule, queryResultFindTextFilterable } from '../queryResultFindFilter';
 import type { QueryResultFilterRule } from '../queryResultFilter';
 import type { SortDialect } from '../queryResultSort';
+import type { ResultCheckedRows } from '../resultExport';
+import { postgresTableFindZh as checkedText } from '../locales/postgresTableFind.zh-CN';
 import '../queryResultFind.css';
 
-interface Run { owner: object; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
+interface Run { owner: object; rowScope?: ResultCheckedRows | null; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
-interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; filterDialect?: SortDialect; children: ReactNode; }
+interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; checkedRows?: ResultCheckedRows; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; filterDialect?: SortDialect; children: ReactNode; }
 const regexErrors: Partial<Record<QueryResultFindPhase, string>> = text.regexErrors;
 const findOpeners = new WeakMap<Element, (target: HTMLElement) => boolean>();
 
@@ -36,7 +38,7 @@ export function escapeTargetsQueryResultFind(event: KeyboardEvent, root: HTMLEle
 }
 
 /** 查找栏与快捷键仅包住当前结果网格；私有代次负责取消。 */
-export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, onStageFindFilter, findFilterSource, filterDialect, children }: Props) {
+export function QueryResultFind({ owner, rows, columns, checkedRows, grid, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, onStageFindFilter, findFilterSource, filterDialect, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
   const region = useRef<HTMLDivElement>(null);
@@ -47,6 +49,9 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   const [query, setQuery] = useState(''), [sensitive, setSensitive] = useState(false);
   const [columnKey, setColumnKey] = useState<string>();
   const [mode, setMode] = useState<QueryResultFindMode>('contains');
+  const [checkedOnly, setCheckedOnly] = useState(false);
+  const checkedScope = checkedOnly ? checkedRows ?? null : undefined;
+  const emptyChecked = checkedScope === null;
   const usesText = isTextResultFind(mode);
   const [highlightAll, setHighlightAll] = useState(false);
   const [view, setView] = useState<{ run: Run; progress: QueryResultFindProgress; index: number }>();
@@ -68,14 +73,15 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   useLayoutEffect(() => { onHighlights(markScan); }, [markScan, markCount, onHighlights]);
 
   /** 条件变化都开启新查找，旧定时器不能发布或导航。 */
-  function start(value: string, caseSensitive: boolean, selectedColumn: string | undefined, nextMode: QueryResultFindMode) {
+  function start(value: string, caseSensitive: boolean, selectedColumn: string | undefined, nextMode: QueryResultFindMode, restrict = checkedOnly) {
     if (!panelCurrent() || run.current !== view?.run) return;
-    cancel(); setQuery(value); setSensitive(caseSensitive); setColumnKey(selectedColumn); setMode(nextMode); onHit(undefined);
+    cancel(); setQuery(value); setSensitive(caseSensitive); setColumnKey(selectedColumn); setMode(nextMode); setCheckedOnly(restrict); onHit(undefined);
     // RDG每次render重发handle；实例以本挂载/原scope及可取得的原宿主核验，导航使用最新handle。
     const originalMount = mountOwner.current, originalElement = grid.current?.element;
-    const next = { owner, index: -1 } as Run;
+    const rowScope = restrict ? checkedRows ?? null : undefined;
+    const next = { owner, rowScope, index: -1 } as Run;
     const regex = nextMode === 'regex' ? new QueryResultRegexWorkerClient(() => new Worker(new URL('../queryResultRegex.worker.ts', import.meta.url), { type: 'module' })) : undefined;
-    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && originalMount !== undefined && mountOwner.current === originalMount && grid.current !== null && originalElement !== undefined && (originalElement === null || grid.current.element === originalElement && originalElement.ownerDocument.contains(originalElement)), selectedColumn, nextMode, regex);
+    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && (!rowScope || rowScope.isCurrent()) && originalMount !== undefined && mountOwner.current === originalMount && grid.current !== null && originalElement !== undefined && (originalElement === null || grid.current.element === originalElement && originalElement.ownerDocument.contains(originalElement)), selectedColumn, nextMode, regex, restrict ? rowScope?.indices ?? [] : undefined);
     run.current = next;
     const progress = next.scan.progress();
     setView({ run: next, progress, index: -1 });
@@ -88,6 +94,10 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     };
     if (progress.phase === 'searching') next.timer = setTimeout(advance, 0);
   }
+  // 勾选换代立即撤销旧坐标，并保留原查找条件重新扫描；空勾选不会扩大范围。
+  useLayoutEffect(() => {
+    if (checkedOnly && run.current?.rowScope !== checkedScope && panelCurrent()) start(query, sensitive, columnKey, mode);
+  }, [checkedOnly, checkedScope, visible]);
   /** 菜单、按键和按钮共用入口。再次打开保留原扫描、条件与命中位置。 */
   function open(): boolean {
     if (!own() || !grid.current || !region.current || gridFindModalBlocked(region.current, true)) return false;
@@ -95,7 +105,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
       (usesText ? input.current : modeSelect.current)?.focus({ preventScroll: true });
       return true;
     }
-    cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(undefined); setMode('contains');
+    cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(undefined); setMode('contains'); setCheckedOnly(false);
     return true;
   }
   function openFromFocus(target: EventTarget | null): boolean {
@@ -130,7 +140,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     active.run.index = index; setView({ run: active.run, progress, index }); onHit({ scan: active.run.scan, match });
   }
   function applyMatchingRows(apply: (indices: ReadonlySet<number>) => void) {
-    if (!panelCurrent() || !active || run.current !== active.run) return;
+    if (emptyChecked || !panelCurrent() || !active || run.current !== active.run) return;
     const indices = active.run.scan.matchingRows();
     if (indices) apply(indices);
   }
@@ -146,13 +156,13 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   }
   const progress = active?.progress;
   const canCheckMatches = available && progress?.phase === 'complete' && progress.count > 0;
-  const status = usesText && !query ? text.empty : !active ? text.stopped : progress?.phase === 'invalid' ? text.invalid :
+  const status = emptyChecked ? text.checkedEmpty : usesText && !query ? text.empty : !active ? text.stopped : progress?.phase === 'invalid' ? text.invalid :
     progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
       (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
   const filterColumn = visible && findFilterSource ? columns.find(column => column.key === columnKey) : undefined;
   const textFilterable = useMemo(() => queryResultFindTextFilterable(filterColumn, findFilterSource, filterDialect), [filterColumn, findFilterSource, filterDialect]);
-  const filterRule = onStageFindFilter && available && active && queryResultFindFilterRule(filterColumn, mode, query, sensitive, textFilterable);
+  const filterRule = onStageFindFilter && available && active && !checkedOnly && queryResultFindFilterRule(filterColumn, mode, query, sensitive, textFilterable);
   /** 转换当前条件本身，不依赖命中数量或查找上限。旧条件或旧网格不得打开草稿。 */
   function stageFilter() {
     if (!filterRule || !active || !panelCurrent() || run.current !== active.run || !active.run.scan.current()) return;
@@ -174,18 +184,20 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
         </select>
         <label className="check"><input type="checkbox" checked={sensitive} disabled={!usesText} onChange={event => start(query, event.target.checked, columnKey, mode)}/>{text.sensitive}</label>
         <label className="check"><input type="checkbox" checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{text.highlightAll}</label>
+        <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!available}
+          onChange={event => start(query, sensitive, columnKey, mode, event.target.checked)}/>{checkedText.checkedOnly}</label>
         <button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button>
         <button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button>
-        <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, true))}>{text.checkRows}</button>
+        <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches || checkedOnly} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, true))}>{text.checkRows}</button>
         <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, false))}>{text.uncheckRows}</button>
-        {onShowMatchingRows && <button type="button" disabled={!available || progress?.phase !== 'complete' || usesText && !query}
+        {onShowMatchingRows && <button type="button" disabled={!available || emptyChecked || progress?.phase !== 'complete' || usesText && !query}
           onClick={() => applyMatchingRows(onShowMatchingRows)}>{text.showMatchingRows}</button>}
-        {onStageFindFilter && <button type="button" disabled={!filterRule} title={filterRule ? text.stageFilterHint : text.stageFilterUnavailable}
+        {onStageFindFilter && <button type="button" disabled={!filterRule} title={checkedOnly ? text.stageFilterChecked : filterRule ? text.stageFilterHint : text.stageFilterUnavailable}
           onClick={stageFilter}>{text.stageFilter}</button>}
         <button type="button" aria-label={text.close} onClick={close}>×</button>
       </>}
     </div>
-    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{text.scope(rows.length, columnKey === undefined ? columns.length : 1)}</span></div>}
+    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{checkedOnly ? checkedText.checkedScope(checkedScope?.indices.length ?? 0) : text.scope(rows.length, columnKey === undefined ? columns.length : 1)}</span></div>}
     <div className="query-result-find-grid">{children}</div>
   </div>;
 }

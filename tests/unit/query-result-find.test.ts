@@ -8,6 +8,23 @@ function finish(scan: QueryResultFindScan) { for (let n = 0; n < 1000 && scan.pr
 function positions(scan: QueryResultFindScan) { return Array.from({ length: scan.progress().count }, (_, index) => scan.match(index)); }
 
 describe('已返回结果的有界字面查找', () => {
+  it('仅扫描勾选行，命中和匹配行仍使用网格原索引', () => {
+    const outside = vi.fn(() => { throw Error('不应访问未勾选行'); });
+    const rows = [Object.defineProperty({}, 'a', { get: outside }), { a: '命中' }, { a: null }, { a: '命中' }];
+    const indices = [1, 3];
+    const scan = new QueryResultFindScan(rows, columns, '命中', true, () => true, 'a', 'whole', undefined, indices);
+    indices[0] = 0;
+    expect(finish(scan)).toEqual({ phase: 'complete', count: 2, scannedCells: 2, totalCells: 2 });
+    expect(positions(scan)).toEqual([{ row: 1, column: 0 }, { row: 3, column: 0 }]);
+    expect(scan.matchingRows()).toEqual(new Set([1, 3]));
+    expect(scan.hasMatch(3, 0)).toBe(true);
+    expect(outside).not.toHaveBeenCalled();
+    const empty = new QueryResultFindScan(rows, columns, '命中', true, () => true, 'a', 'contains', undefined, []);
+    expect(finish(empty)).toMatchObject({ phase: 'complete', totalCells: 0, count: 0 });
+    const invalid = new QueryResultFindScan(rows, columns, '命中', true, () => true, 'a', 'contains', undefined, [1, 1]);
+    expect(invalid.progress().phase).toBe('stopped');
+  });
+
   it('只将兼容的单列条件带入原值筛选，保留唯一键与 SQLite 文本类型', () => {
     const column = { key: 'a', name: '重复显示名', type: 'SQLITE' }, literal = ' %_😀 ';
     for (const [mode, operator] of [['contains', 'contains'], ['whole', 'eq'], ['startsWith', 'startsWith'], ['endsWith', 'endsWith']] as const) {

@@ -619,15 +619,16 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
   const selectionBefore = selectedRowsRef.current;
   const selectedActionCurrent = () => actionCurrent() && selectedRowsRef.current === selectionBefore &&
     (selectionBefore?.scope === rowScope ? selectionBefore.indices === selectedRows : !selectedRows.size);
-  // 表页查找读取同一份已接纳勾选。选择提交时同步更新引用，旧凭据在 React 提交之前也会失效。
-  useLayoutEffect(() => {
-    if (!onCheckedRows) return;
-    if (!selectionBefore || selectionBefore.scope !== rowScope || !selectionBefore.indices.size) { onCheckedRows(undefined); return; }
-    onCheckedRows({
+  // 查找读取同一份已接纳勾选。选择提交时同步更新引用，旧凭据在 React 提交之前也会失效。
+  const needsCheckedRows = hasResultTools || !!onCheckedRows;
+  const checkedRows = useMemo((): ResultCheckedRows | undefined => {
+    if (!needsCheckedRows || !selectionBefore || selectionBefore.scope !== rowScope || !selectionBefore.indices.size) return;
+    return {
       indices: Object.freeze([...selectionBefore.indices].sort((a, b) => a - b)),
       isCurrent: () => alive.current && selectedRowsRef.current === selectionBefore && currentScope.current === scope && gridRevisionRef.current === gridRevision,
-    });
-  }, [onCheckedRows, selectionBefore, rowScope, scope, gridRevision]);
+    };
+  }, [needsCheckedRows, selectionBefore, rowScope, scope, gridRevision]);
+  useLayoutEffect(() => { onCheckedRows?.(checkedRows); }, [onCheckedRows, checkedRows]);
   /** 复制与打开查询草稿共用活动格或勾选代次，生成失败时不产生副作用。 */
   function handleRowOutput(build: ((indices: ReadonlySet<number>) => string) | undefined, checked: boolean, destination: string | ((sql: string) => void)) {
     const current = () => tableCopy?.enabled !== false && selectedActionCurrent() &&
@@ -710,5 +711,5 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
       onChange={setSelectedRows}/> : undefined;
   const gridTools = jump || tableCopy ? <>{jump}{tableCopy && copyTools}{selectionTools}</> : undefined;
   return <>{cellActionMenu.menu}{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : gridTools)}
-    {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{selectionTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{checkedFilterActions}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind owner={scope} rows={rows} columns={columns} grid={gridRef} isCurrent={actionCurrent} onHighlights={showFindHighlights} onMatchingRows={changeMatchingRows} onShowMatchingRows={onShowMatchingRows} onStageFindFilter={onStageFindFilter} findFilterSource={findFilterSource} filterDialect={filterDialect} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
+    {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{selectionTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{checkedFilterActions}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind owner={scope} rows={rows} columns={columns} checkedRows={checkedRows} grid={gridRef} isCurrent={actionCurrent} onHighlights={showFindHighlights} onMatchingRows={changeMatchingRows} onShowMatchingRows={onShowMatchingRows} onStageFindFilter={onStageFindFilter} findFilterSource={findFilterSource} filterDialect={filterDialect} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
 }

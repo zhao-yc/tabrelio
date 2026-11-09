@@ -18,6 +18,8 @@ export class QueryResultFindScan {
   private readonly targetColumn: number | undefined;
   private readonly scanColumnCount: number;
   private readonly rowCount: number;
+  private readonly rowIndices?: readonly number[];
+  private readonly totalCells: number;
   private readonly needle: string;
   private readonly edge?: { pattern: RegExp; units: number };
   private readonly matches: QueryResultFindMatch[] = [];
@@ -26,17 +28,21 @@ export class QueryResultFindScan {
   private offset = 0;
   private text: string | undefined;
   private phase: QueryResultFindPhase;
-  constructor(private readonly rows: DataRow[], private readonly columns: ResultColumn[], query: string, private readonly caseSensitive: boolean, private readonly isCurrent: () => boolean, columnKey?: string, private readonly mode: QueryResultFindMode = 'contains', private readonly regex?: QueryResultRegexWorkerClient) {
+  constructor(private readonly rows: DataRow[], private readonly columns: ResultColumn[], query: string, private readonly caseSensitive: boolean, private readonly isCurrent: () => boolean, columnKey?: string, private readonly mode: QueryResultFindMode = 'contains', private readonly regex?: QueryResultRegexWorkerClient, rowIndices?: readonly number[]) {
     this.rowCount = rows.length; this.keys = columns.map(column => column.key);
     this.targetColumn = columnKey === undefined ? undefined : this.keys.indexOf(columnKey);
     this.scanColumnCount = this.targetColumn === undefined ? this.keys.length : this.targetColumn < 0 ? 0 : 1;
+    this.rowIndices = rowIndices && [...rowIndices];
+    this.totalCells = (this.rowIndices?.length ?? this.rowCount) * this.scanColumnCount;
+    // 勾选范围必须有序且无重复；扫描位置映射回网格的原行索引。
+    const invalidRows = this.rowIndices?.some((row, index, indices) => !Number.isSafeInteger(row) || row < 0 || row >= this.rowCount || index > 0 && row <= indices[index - 1]);
     const usesText = isTextResultFind(mode), invalid = usesText && query.length > queryResultFindLimits.queryUnits;
     this.needle = !usesText || invalid ? '' : mode === 'regex' || caseSensitive ? query : query.toLowerCase();
     if (!invalid && (mode === 'startsWith' || mode === 'endsWith')) {
       const pattern = tableFindPattern({ query, caseSensitive, wholeCell: false, edge: mode === 'startsWith' ? 'start' : 'end' });
       this.edge = { pattern, units: query.length + 1 };
     }
-    this.phase = this.targetColumn === -1 ? 'stopped' : invalid ? 'invalid' : (!usesText || query) && rows.length && this.scanColumnCount ? 'searching' : 'complete';
+    this.phase = this.targetColumn === -1 || invalidRows ? 'stopped' : invalid ? 'invalid' : (!usesText || query) && this.totalCells ? 'searching' : 'complete';
   }
   /** 首次观察到归属失效即永久撤销，恢复相等引用也不能复活旧查找。 */
   current(): boolean {
@@ -47,7 +53,7 @@ export class QueryResultFindScan {
   }
   /** 释放正在扫描的原文本及全部命中坐标，不修改源结果或业务选择。 */
   cancel(): void { this.phase = 'stopped'; this.text = undefined; this.matches.length = 0; this.matchCells.clear(); this.regex?.dispose(); }
-  progress(): QueryResultFindProgress { this.current(); return { phase: this.phase, count: this.matches.length, scannedCells: this.cursor, totalCells: this.rowCount * this.scanColumnCount }; }
+  progress(): QueryResultFindProgress { this.current(); return { phase: this.phase, count: this.matches.length, scannedCells: this.cursor, totalCells: this.totalCells }; }
   /** 每格一个命中，位置只在同一活代次有效；导航不能使用已撤销快照。 */
   match(index: number): QueryResultFindMatch | undefined { return this.current() && Number.isSafeInteger(index) && index >= 0 ? this.matches[index] : undefined; }
   /** 只有完整结果才能用于批量勾选；同一原行的多个匹配单元格只消费一次。 */
@@ -61,7 +67,8 @@ export class QueryResultFindScan {
       this.matchCells.has(row * this.keys.length + column);
   }
   private position(cursor: number): QueryResultFindMatch {
-    return { row: Math.floor(cursor / this.scanColumnCount), column: this.targetColumn ?? cursor % this.scanColumnCount };
+    const row = Math.floor(cursor / this.scanColumnCount);
+    return { row: this.rowIndices?.[row] ?? row, column: this.targetColumn ?? cursor % this.scanColumnCount };
   }
   private addMatch(row: number, column: number): void {
     this.matches.push({ row, column });
@@ -72,7 +79,7 @@ export class QueryResultFindScan {
   async stepRegex(): Promise<QueryResultFindProgress> {
     if (!this.current() || this.phase !== 'searching' || this.mode !== 'regex') return this.progress();
     if (!this.regex) return this.failRegex('regex-worker');
-    const values: (string | null)[] = [], total = this.rowCount * this.scanColumnCount;
+    const values: (string | null)[] = [], total = this.totalCells;
     let units = 0;
     try {
       for (let index = this.cursor; index < total && values.length < queryResultRegexLimits.batchCells; index++) {
@@ -108,7 +115,7 @@ export class QueryResultFindScan {
   step(): QueryResultFindProgress {
     if (!this.current() || this.phase !== 'searching' || this.mode === 'regex') return this.progress();
     let units = 0, cells = 0;
-    const total = this.rowCount * this.scanColumnCount;
+    const total = this.totalCells;
     try {
       while (this.cursor < total && units < queryResultFindLimits.batchUnits && cells < queryResultFindLimits.batchCells) {
         if (!this.current()) break;

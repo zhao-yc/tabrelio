@@ -20,6 +20,7 @@ function register(): void {
   const executeFile = promisify(execFile);
   const { queryResultSnapshotViewerZh: text } = require('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshotViewer.zh-CN');
   const { queryResultFindZh: findText } = require('../../src/renderer/locales/queryResultFind.zh-CN') as typeof import('../../src/renderer/locales/queryResultFind.zh-CN');
+  const { postgresTableFindZh: checkedText } = require('../../src/renderer/locales/postgresTableFind.zh-CN') as typeof import('../../src/renderer/locales/postgresTableFind.zh-CN');
   const { queryResultSortZh: sortText } = require('../../src/renderer/locales/queryResultSort.zh-CN') as typeof import('../../src/renderer/locales/queryResultSort.zh-CN');
   const { queryResultFilterZh: filterText } = require('../../src/renderer/locales/queryResultFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultFilter.zh-CN');
   const { queryResultSelectedFilterZh: selectedFilterText } = require('../../src/renderer/locales/queryResultSelectedFilter.zh-CN') as typeof import('../../src/renderer/locales/queryResultSelectedFilter.zh-CN');
@@ -369,6 +370,14 @@ function register(): void {
       await step(() => expect(grid).toBeFocused());
       await step(() => viewer.getByRole('button', { name: findText.open, exact: true }).click());
       await applySearch();
+      const checkOther = other.locator('..').getByRole('checkbox'), checkMatch = match.locator('..').getByRole('checkbox');
+      await step(() => checkOther.check());
+      await step(() => viewer.getByRole('checkbox', { name: checkedText.checkedOnly, exact: true }).check());
+      await step(() => expect(status).toHaveText(findText.noMatch));
+      await step(() => checkOther.uncheck());
+      await step(() => expect(status).toHaveText(findText.checkedEmpty));
+      await step(() => checkMatch.check());
+      await step(() => expect(status).toHaveText(findText.count(1, -1)));
       await step(() => viewer.getByRole('button', { name: findText.showMatchingRows, exact: true }).click());
       await step(() => expect(viewer.getByText(findText.matchViewCount(1, 2), { exact: true })).toBeVisible());
       await step(() => expect(match).toBeVisible());

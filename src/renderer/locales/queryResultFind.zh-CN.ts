@@ -6,6 +6,8 @@ export const queryResultFindZh = {
   stageFilter: '将查找带入本地筛选',
   stageFilterHint: '将单列查找带入草稿，确认后筛选已返回的行。文字条件比较原文本。',
   stageFilterUnavailable: '请选择单列的 SQL NULL、空字符串或区分大小写的字面文字。文本条件需要可靠的原文本类型。',
+  stageFilterChecked: '筛选条件会应用于所有已返回的行。先取消「仅限勾选行」，或使用「只显示匹配行」。',
+  checkedEmpty: '请先勾选要查找的结果行。',
   matchViewCount: (shown: number, total: number) => `匹配视图显示 ${shown} / ${total} 行`,
   matchViewInvalid: '查找结果行已变化，请重新查找。',
   open: '查找结果', input: '在当前结果中查找', sensitive: '区分大小写', previous: '上一个匹配', next: '下一个匹配', close: '关闭结果查找',

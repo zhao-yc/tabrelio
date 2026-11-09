@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import type { DataRow, QueryResult, ResultColumn } from '../../src/shared/contracts';
 import { queryResultFindZh as text } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { postgresTableFindZh as checkedText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 const ports = vi.hoisted(() => ({ grids: [] as any[], scroll: vi.fn(), activate: vi.fn(), hostKey: 0 }));
@@ -103,6 +104,30 @@ it('匹配行操作只消费完成的当前代次，旧按钮不能重放或修�
   await act(async () => stale());
   expect(latestGrid().selectedRows).toEqual(new Set([1]));
   expect(onSelectionChange).toHaveBeenCalledTimes(3);
+});
+
+it('勾选查找保留原位置，旧匹配视图按钮不能消费后来勾选', async () => {
+  (window as any).dbark = { invoke: vi.fn(async () => undefined) };
+  store.setState({ settings: { theme: 'light' } as any }); container();
+  const rows = [{ a: 'match' }, { a: 'other' }, { a: 'match' }], owner = {}, show = vi.fn();
+  await act(async () => root!.render(<Grid columns={cols} rows={rows} selectionScope={owner} isCurrent={() => true} onShowMatchingRows={show}/>));
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await act(async () => latestGrid().onSelectedRowsChange(new Set([2])));
+  await click(text.open); await search('match'); await settle();
+  const check = document.querySelectorAll('label').find(label => label.textContent === checkedText.checkedOnly)?.querySelector('input');
+  await act(async () => callback(check, 'onChange')({ target: { checked: true } }));
+  await settle();
+  await click(text.next);
+  expect(ports.scroll).toHaveBeenLastCalledWith({ rowIdx: 2, idx: 1 });
+  const stale = callback(button(text.showMatchingRows));
+  await act(async () => latestGrid().onSelectedRowsChange(new Set()));
+  expect(button(text.showMatchingRows).disabled).toBe(true);
+  await act(async () => latestGrid().onSelectedRowsChange(new Set([0])));
+  await settle();
+  await act(async () => stale());
+  expect(show).not.toHaveBeenCalled();
+  await click(text.showMatchingRows);
+  expect(show).toHaveBeenCalledExactlyOnceWith(new Set([0]));
 });
 
 it('查找转筛选只接纳活动单列条件，旧按钮不会重放', async () => {

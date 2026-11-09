@@ -2384,6 +2384,53 @@ test('查询结果正则在线程查找、超时清除命中并可重新搜索',
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询在勾选行中正则查找并只显示命中', async ({}, info) => {
+  await seed(`SELECT id, CASE WHEN id IN (1,3) THEN '同值' ELSE name END AS 文本 FROM subject WHERE id<=4 ORDER BY id DESC;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const header = grid.getByRole('columnheader').filter({ hasText: /^id/i });
+  await header.click();
+  await expect(header.getByLabel(resultSort.ascending)).toBeVisible();
+  const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+  await expect(ids).toHaveText(['1', '2', '3', '4']);
+  const row = (value: number) => grid.getByRole('gridcell', { name: String(value), exact: true }).locator('..');
+  const check = row(3).getByRole('checkbox');
+  const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'query.execute').map(task => task.id));
+  const before = await tasks();
+  await query.getByRole('button', { name: resultFind.open, exact: true }).click();
+  const status = query.locator('.query-result-find-status').getByRole('status');
+  const show = query.getByRole('button', { name: resultFind.showMatchingRows, exact: true });
+  const restrict = query.getByRole('checkbox', { name: replaceText.checkedOnly, exact: true });
+  await query.getByRole('combobox', { name: resultFind.columns, exact: true }).selectOption({ label: resultFind.columnOption('文本', 2) });
+  const input = query.getByRole('textbox', { name: resultFind.input, exact: true });
+  await input.fill('同值');
+  await query.getByRole('checkbox', { name: resultFind.sensitive, exact: true }).check();
+  const stage = query.getByRole('button', { name: resultFind.stageFilter, exact: true });
+  await expect(stage).toBeEnabled();
+  await restrict.check();
+  await expect(stage).toBeDisabled();
+  await expect(status).toHaveText(resultFind.checkedEmpty);
+  await expect(show).toBeDisabled();
+  await query.getByRole('combobox', { name: resultFind.mode, exact: true }).selectOption('regex');
+  await input.fill('^同值$');
+  await check.check();
+  await expect(status).toHaveText(resultFind.count(1, -1));
+  await query.getByRole('button', { name: resultFind.next, exact: true }).click();
+  await expect(row(3).getByRole('gridcell', { name: '同值', exact: true })).toHaveClass(/query-result-find-hit/);
+  await expect(row(1).getByRole('gridcell', { name: '同值', exact: true })).not.toHaveClass(/query-result-find-hit/);
+  await info.attach('SQLite结果勾选行查找', { body: await page.screenshot(), contentType: 'image/png' });
+  await check.uncheck();
+  await expect(status).toHaveText(resultFind.checkedEmpty);
+  await expect(query.locator('.query-result-find-hit')).toHaveCount(0);
+  await row(1).getByRole('checkbox').check();
+  await show.click();
+  await expect(ids).toHaveText(['1']);
+  await query.getByRole('button', { name: resultFind.clearMatchView, exact: true }).click();
+  await expect(ids).toHaveText(['1', '2', '3', '4']);
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果按原类型查找可区分 SQL NULL、空字符串和整格文字', async () => {
   await seed("SELECT id, CASE id WHEN 180 THEN NULL WHEN 179 THEN 'NULL' WHEN 178 THEN '' ELSE 'nullable' END AS 内容, NULL AS 对照 FROM subject WHERE id >= 177 ORDER BY id DESC;");
   const query = page.locator('.query-tab:visible');
