@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CellValue, QueryResult, ResultColumn } from '../../shared/contracts';
 import { pinLimits, type PinnedQueryResult } from '../queryPins';
-import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonValues, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonValue } from '../queryResultComparison';
+import { alignQueryResultComparisonColumns, captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonValues, sameQueryResultComparisonColumnType, snapshotQueryResultComparisonReport, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonColumnPair, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
 import type { SortDialect } from '../queryResultSort';
 import { errorMessage, invoke, uid } from '../lib';
@@ -9,7 +9,9 @@ import { UsageHelp, ErrorBox, Modal  } from './ui';
 
 export type QueryResultComparisonSource = Pick<PinnedQueryResult, 'id' | 'label' | 'result'>;
 interface Props { pins: readonly QueryResultComparisonSource[]; owner: string; dialect?: SortDialect; offline?: boolean; isCurrent(): boolean; onClose(): void; }
-type Draft = { left: string; right: string; keys: readonly string[]; byName: boolean };
+type AlignmentMode = 'strict' | 'name' | 'manual';
+type Draft = { left: string; right: string; keys: readonly string[]; mode: AlignmentMode; pairs: readonly QueryResultComparisonColumnPair[] };
+const emptyPair: QueryResultComparisonColumnPair = { left: '', right: '' };
 type Source = { pin: QueryResultComparisonSource; id: string; label: string; result: QueryResult; columns: readonly ResultColumn[]; truncated: boolean };
 type Run = { draft: Draft; left: QueryResult; right: QueryResult; capture: QueryResultComparisonCapture; scan: QueryResultComparisonScan; timer?: ReturnType<typeof setTimeout> };
 type View = { run?: Run; processed: number; total: number; result?: QueryResultComparisonResult; error?: string };
@@ -58,7 +60,8 @@ function valueText(value: CellValue | undefined): string {
 export function QueryResultComparisonDialog({ pins, owner, dialect, offline = false, isCurrent, onClose }: Props) {
   const origin = useRef({ pins, owner, dialect }).current, latest = useRef({ pins, owner, dialect, isCurrent }); latest.current = { pins, owner, dialect, isCurrent };
   const [prepared] = useState(() => { try { return { sources: sources(pins), error: '' }; } catch (reason) { return { sources: [] as Source[], error: errorMessage(reason) }; } });
-  const [draft, setDraft] = useState<Draft>(() => ({ left: prepared.sources[0]?.id ?? '', right: prepared.sources.at(-1)?.id ?? '', keys: [], byName: false }));
+  const [draft, setDraft] = useState<Draft>(() => ({ left: prepared.sources[0]?.id ?? '', right: prepared.sources.at(-1)?.id ?? '', keys: [], mode: 'strict', pairs: [] }));
+  const [candidate, setCandidate] = useState(emptyPair);
   const draftRef = useRef(draft), [view, setView] = useState<View>({ processed: 0, total: 0, error: prepared.error });
   const [filter, setFilter] = useState<Filter>('differences'), [page, setPage] = useState(1), [detail, setDetail] = useState<{ run: Run; row: QueryResultComparisonRow; values: readonly QueryResultComparisonValue[] }>();
   const active = useRef<Run | undefined>(undefined), last = useRef<Run | undefined>(undefined), alive = useRef(true), invalid = useRef(false), closed = useRef(false);
@@ -99,6 +102,7 @@ export function QueryResultComparisonDialog({ pins, owner, dialect, offline = fa
     if (report.current || committed.current !== ticket || draftRef.current !== draft || !sourceCurrent()) return;
     if (!prepared.sources.some(source => source.id === next.left) || !prepared.sources.some(source => source.id === next.right) || next.keys.length > 8 || new Set(next.keys).size !== next.keys.length) return;
     if (next.keys.some(key => !columns.some(column => column.key === key && !queryResultComparisonKeyReason(column, dialect)))) return;
+    if (next.pairs !== draft.pairs) setCandidate(emptyPair);
     cancelRun(); draftRef.current = next; setDraft(next); setView({ processed: 0, total: 0 }); setDetail(undefined); setFilter('differences'); setPage(1);
     setReportStatus(''); setReportError('');
   }
@@ -109,7 +113,8 @@ export function QueryResultComparisonDialog({ pins, owner, dialect, offline = fa
     if (!left || !right) return;
     try {
       cancelRun();
-      const capture = captureQueryResultComparison(left, right, draft.keys, dialect, draft.byName), run: Run = { draft, left, right, capture, scan: new QueryResultComparisonScan(capture) };
+      const capture = captureQueryResultComparison(left, right, draft.keys, dialect, draft.mode === 'manual' ? draft.pairs : draft.mode);
+      const run: Run = { draft, left, right, capture, scan: new QueryResultComparisonScan(capture) };
       last.current = run; active.current = run; setView({ run, processed: 0, total: capture.leftCount + capture.rightCount }); setDetail(undefined); setPage(1); setFilter('differences');
       setReportStatus(''); setReportError('');
       /** 最终结果的私有快照与当前来源都通过复核后，才发布四计数和完整记录。 */
@@ -143,12 +148,26 @@ export function QueryResultComparisonDialog({ pins, owner, dialect, offline = fa
   const running = active.current !== undefined && active.current === view.run;
   const left = prepared.sources.find(source => source.id === draft.left), right = prepared.sources.find(source => source.id === draft.right);
   const alignment = useMemo(() => {
-    if (!draft.byName || !left || !right || left === right) return {};
+    if (draft.mode !== 'name' || !left || !right || left === right) return {};
     try { return { columns: alignQueryResultComparisonColumns(left.columns, right.columns, dialect).map(pair => left.columns[pair.left]) }; }
     catch (reason) { return { error: errorMessage(reason) }; }
-  }, [draft.byName, left, right, dialect]);
-  const columns = (draft.byName ? alignment.columns : left?.columns) ?? [];
+  }, [draft.mode, left, right, dialect]);
+  const leftPairs = new Map(draft.pairs.map(pair => [pair.left, pair.right]));
+  const usedRight = new Set(leftPairs.values());
+  const columns = draft.mode === 'name' ? alignment.columns ?? []
+    : (left?.columns ?? []).filter(column => draft.mode === 'strict' || leftPairs.has(column.key));
   const names = new Map(columns.map(column => [column.key, column.name || column.key]));
+  const availableLeft = draft.mode === 'manual' ? left?.columns.filter(column => !leftPairs.has(column.key)) ?? [] : [];
+  const candidateLeft = availableLeft.find(column => column.key === candidate.left);
+  const availableRight = candidateLeft ? right?.columns.filter(column =>
+    !usedRight.has(column.key) && sameQueryResultComparisonColumnType(candidateLeft.type, column.type, dialect)) ?? [] : [];
+  const canAdd = !!candidateLeft && availableRight.some(column => column.key === candidate.right);
+  const manualDisabled = !valid || !!reportPhase || left === right;
+  const describeColumn = ({ key, name, type }: ResultColumn) => `${name || key} · ${key} · ${type}`;
+  /** 候选列只属于本次来源和配对方式。真正添加时才清除旧匹配键和差异。 */
+  function updateCandidate(next: QueryResultComparisonColumnPair): void {
+    if (!manualDisabled && draft.mode === 'manual' && committed.current === ticket && draftRef.current === draft) setCandidate(next);
+  }
   const indexed = useMemo(() => result?.rows.map((row, index) => ({ row, index })).filter(({ row }) => filter === 'all' || filter === 'differences' ? filter === 'all' || row.kind !== 'equal' : row.kind === filter) ?? [], [result, filter]);
   const pages = Math.max(1, Math.ceil(indexed.length / 50)), currentPage = Math.min(page, pages), visible = indexed.slice((currentPage - 1) * 50, currentPage * 50);
   /** 结果浏览同样拒绝旧渲染回调；详情只从该次捕获的安全原值快照取得。 */
@@ -186,14 +205,35 @@ export function QueryResultComparisonDialog({ pins, owner, dialect, offline = fa
   const kindLabel = (kind: QueryResultComparisonRow['kind']) => text[kind];
   const leftLabel = offline ? text.leftFile : text.left, rightLabel = offline ? text.rightFile : text.right;
   return <div data-query-result-comparison-owner={owner}><Modal title={offline ? text.fileTitle : text.title} onClose={close} wide><div className="modal-content">
-    <p>{offline ? text.fileNotice : text.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : dialect === 'postgresql' ? text.postgresKeysHint : text.keysHint}</p><p>{draft.byName ? text.alignmentHint : text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
-    <div className="filter-inputs"><label>{leftLabel}<select aria-label={leftLabel} value={draft.left} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, left: event.target.value, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
-      <label>{rightLabel}<select aria-label={rightLabel} value={draft.right} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, right: event.target.value, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label></div>
-    <label className="check"><input type="checkbox" checked={draft.byName} disabled={!valid || !!reportPhase} onChange={event => {
-      if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, byName: event.target.checked, keys: [] });
-    }}/>{text.alignByName}</label>
-    {draft.byName && <p>{text.alignmentHint}</p>}
-    {alignment.columns && left && right && <p>{text.alignedColumns(columns.length, left.columns.length - columns.length, right.columns.length - columns.length)}</p>}
+    <p>{offline ? text.fileNotice : text.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : dialect === 'postgresql' ? text.postgresKeysHint : text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
+    <div className="filter-inputs"><label>{leftLabel}<select aria-label={leftLabel} value={draft.left} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, left: event.target.value, keys: [], pairs: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
+      <label>{rightLabel}<select aria-label={rightLabel} value={draft.right} disabled={!valid || !!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, right: event.target.value, keys: [], pairs: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
+      <label>{text.alignmentMode}<select aria-label={text.alignmentMode} value={draft.mode} disabled={!valid || !!reportPhase} onChange={event => {
+        const mode = event.target.value;
+        if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (mode === 'strict' || mode === 'name' || mode === 'manual')) change({ ...draft, mode, keys: [], pairs: [] });
+      }}><option value="strict">{text.strictAlignment}</option><option value="name">{text.alignByName}</option><option value="manual">{text.manualAlignment}</option></select></label>
+    </div>
+    {draft.mode === 'name' && <p>{text.alignmentHint}</p>}
+    {draft.mode === 'manual' && <fieldset disabled={manualDisabled}><legend>{text.manualAlignment}</legend>
+      <p>{text.manualHint}</p>
+      <div className="filter-inputs">
+        <label>{text.leftColumn}<select aria-label={text.leftColumn} value={candidate.left} onChange={event => updateCandidate({ left: event.target.value, right: '' })}>
+          <option value="">{text.chooseColumn}</option>{availableLeft.map(column => <option key={column.key} value={column.key}>{describeColumn(column)}</option>)}
+        </select></label>
+        <label>{text.rightColumn}<select aria-label={text.rightColumn} value={candidate.right} disabled={!candidateLeft} onChange={event => updateCandidate({ ...candidate, right: event.target.value })}>
+          <option value="">{text.chooseColumn}</option>{availableRight.map(column => <option key={column.key} value={column.key}>{describeColumn(column)}</option>)}
+        </select></label>
+        <button disabled={!canAdd || manualDisabled} onClick={() => {
+          if (canAdd && !manualDisabled) change({ ...draft, pairs: [...draft.pairs, candidate], keys: [] });
+        }}>{text.addPair}</button>
+      </div>
+      {draft.pairs.length > 0 && <ul>{columns.map(column => {
+        const paired = right?.columns.find(item => item.key === leftPairs.get(column.key));
+        return paired && <li key={column.key}>{describeColumn(column)} ↔ {describeColumn(paired)} <button aria-label={text.removePair(column.key)} onClick={() =>
+          change({ ...draft, pairs: draft.pairs.filter(pair => pair.left !== column.key), keys: [] })}>{text.removePair(column.key)}</button></li>;
+      })}</ul>}
+    </fieldset>}
+    {(draft.mode === 'manual' || alignment.columns) && left && right && <p>{text.alignedColumns(columns.length, left.columns.length - columns.length, right.columns.length - columns.length)}</p>}
     <ErrorBox message={alignment.error}/>
     <fieldset disabled={!valid || !!reportPhase}><legend>{text.keys}</legend>{columns.map(column => { const reason = queryResultComparisonKeyReason(column, dialect), checked = draft.keys.includes(column.key); return <label key={column.key} className="check" title={reason}><input type="checkbox" aria-label={text.key(column.key)} checked={checked} disabled={!valid || !!reason || !checked && draft.keys.length >= 8} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, keys: event.target.checked ? [...draft.keys, column.key] : draft.keys.filter(key => key !== column.key) }); }}/>{column.name || column.key} · {column.key}{reason && <span> · {reason}</span>}</label>; })}</fieldset>
     <p>{text.selectKeys}</p>{!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={view.error}/>
@@ -202,7 +242,7 @@ export function QueryResultComparisonDialog({ pins, owner, dialect, offline = fa
       <label>{text.filter}<select aria-label={text.filter} value={filter} disabled={!!reportPhase} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && resultCurrent() && ['all', 'differences', 'added', 'removed', 'changed', 'equal'].includes(event.target.value)) { setFilter(event.target.value as Filter); setPage(1); setDetail(undefined); setReportStatus(''); setReportError(''); } }}>{(['differences', 'all', 'added', 'removed', 'changed', 'equal'] as const).map(kind => <option key={kind} value={kind}>{kind === 'all' ? text.all : kind === 'differences' ? text.differences : text[kind]}</option>)}</select></label>
       <table aria-label={text.rows}><thead><tr><th>{text.filter}</th><th>{text.leftRow}</th><th>{text.rightRow}</th><th>{text.changedColumns}</th><th>{text.detailsTitle}</th></tr></thead><tbody>{visible.map(({ row, index }) => <tr key={index}><td>{kindLabel(row.kind)}</td><td>{row.leftIndex === undefined ? text.missing : row.leftIndex + 1}</td><td>{row.rightIndex === undefined ? text.missing : row.rightIndex + 1}</td><td>{row.changedColumns.map(key => names.get(key) ?? key).join('、')}</td><td><button disabled={!!reportPhase} onClick={() => show(row)} aria-label={text.details(index)}>{text.details(index)}</button></td></tr>)}</tbody></table>{!visible.length && <p>{text.noRows}</p>}
       <div className="filter-inputs"><button disabled={!!reportPhase || currentPage <= 1} onClick={() => { if (resultCurrent()) { setPage(currentPage - 1); setDetail(undefined); } }}>{text.previous}</button><span>{text.page(currentPage - 1, pages)}</span><button disabled={!!reportPhase || currentPage >= pages} onClick={() => { if (resultCurrent()) { setPage(currentPage + 1); setDetail(undefined); } }}>{text.next}</button></div>
-      {detail && detail.run === view.run && <section aria-label={text.detailsTitle}><h3>{text.detailsTitle}</h3><dl>{detail.values.map(value => <div key={value.column}><dt>{value.name || value.column} · {value.column}{value.changed && ` · ${text.changed}`}</dt><dd aria-label={`${text.leftValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.leftValue}：{valueText(value.left)}{value.leftType && ` · ${text.sqliteType(value.leftType)}`}</dd><dd aria-label={`${text.rightValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.rightValue}：{valueText(value.right)}{value.rightType && ` · ${text.sqliteType(value.rightType)}`}</dd></div>)}</dl></section>}
+      {detail && detail.run === view.run && <section aria-label={text.detailsTitle}><h3>{text.detailsTitle}</h3><dl>{detail.values.map(value => <div key={value.column}><dt>{value.name || value.column} · {value.column}{value.rightColumn && ` ↔ ${value.rightName || value.rightColumn} · ${value.rightColumn}`}{value.changed && ` · ${text.changed}`}</dt><dd aria-label={`${text.leftValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.leftValue}：{valueText(value.left)}{value.leftType && ` · ${text.sqliteType(value.leftType)}`}</dd><dd aria-label={`${text.rightValue} ${value.column}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.rightValue}：{valueText(value.right)}{value.rightType && ` · ${text.sqliteType(value.rightType)}`}</dd></div>)}</dl></section>}
     </section>}
     {reportPhase && <p role="status">{reportPhase === 'choosing' ? text.reportChoosing : text.reportWriting}</p>}
     {reportStatus && <p role="status">{reportStatus}</p>}<ErrorBox message={reportError}/>

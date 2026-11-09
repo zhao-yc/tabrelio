@@ -17,14 +17,16 @@ export type ComparisonRow = QueryResultComparisonRow;
 export interface QueryResultComparisonResult {
   readonly added: number; readonly removed: number; readonly changed: number; readonly equal: number; readonly rows: readonly QueryResultComparisonRow[];
 }
-export interface QueryResultComparisonValue { readonly column: string; readonly name: string; readonly left?: CellValue; readonly right?: CellValue; readonly leftType?: SqliteResultStorageCode; readonly rightType?: SqliteResultStorageCode; readonly changed: boolean; }
+export interface QueryResultComparisonValue { readonly column: string; readonly name: string; readonly rightColumn?: string; readonly rightName?: string; readonly left?: CellValue; readonly right?: CellValue; readonly leftType?: SqliteResultStorageCode; readonly rightType?: SqliteResultStorageCode; readonly changed: boolean; }
+export interface QueryResultComparisonColumnPair { readonly left: string; readonly right: string; }
+type Alignment = 'strict' | 'name' | readonly QueryResultComparisonColumnPair[];
 interface Source {
   result: QueryResult; columns: readonly ResultColumn[]; columnRefs: readonly ResultColumn[]; rows: readonly DataRow[]; rowRefs: readonly DataRow[];
-  metadata: readonly ResultColumn[]; comparedKeys: readonly string[];
+  metadata: readonly ResultColumn[]; comparedColumns: readonly ResultColumn[];
   raw: readonly (readonly CellValue[])[]; values: readonly (readonly CellValue[])[]; units: readonly number[]; truncated: boolean;
   sqlite?: { readonly codes: readonly string[]; current(): boolean };
 }
-interface Binding { left: Source; right: Source; metadata: readonly ResultColumn[]; keyIndices: readonly number[]; binaryPrototypes: WeakMap<object, object | null>; invalid: boolean; dialect?: SortDialect; }
+interface Binding { left: Source; right: Source; metadata: readonly ResultColumn[]; keyIndices: readonly number[]; binaryPrototypes: WeakMap<object, object | null>; invalid: boolean; manual: boolean; dialect?: SortDialect; }
 interface Owner { capture?: QueryResultComparisonCapture; active: boolean; }
 const bindings = new WeakMap<QueryResultComparisonCapture, Binding>();
 const rowOwners = new WeakMap<QueryResultComparisonRow, Owner>();
@@ -64,7 +66,7 @@ export function queryResultComparisonKeyReason(column: ResultColumn, dialect?: S
   } catch (reason) { return reason instanceof Error && reason.message === text.budget ? text.budget : text.identity; }
 }
 /** 只放行同一内置类型的新旧 PostgreSQL 协议标记，仍保留两侧原元数据用于过期检查。 */
-function sameColumnType(left: string, right: string, dialect?: SortDialect): boolean {
+export function sameQueryResultComparisonColumnType(left: string, right: string, dialect?: SortDialect): boolean {
   if (left === right) return true;
   if (dialect !== 'postgresql') return false;
   const kind = queryResultSortKind(left, dialect);
@@ -84,11 +86,26 @@ export function alignQueryResultComparisonColumns(left: readonly ResultColumn[],
     if (!name || !rightNames.has(name)) continue;
     const other = rightNames.get(name);
     if (index === undefined || other === undefined) throw Error(text.ambiguousColumn(name));
-    if (!sameColumnType(left[index].type, right[other].type, dialect)) throw Error(text.incompatibleColumn(name));
+    if (!sameQueryResultComparisonColumnType(left[index].type, right[other].type, dialect)) throw Error(text.incompatibleColumn(name));
     pairs.push({ left: index, right: other });
   }
   if (!pairs.length) throw Error(text.noCommonColumns);
   return pairs;
+}
+
+/** 手动配对按内部键定位，独立复核两侧一对一及类型，按左侧原列序比较。 */
+function manualColumnPairs(left: readonly ResultColumn[], right: readonly ResultColumn[], pairs: readonly QueryResultComparisonColumnPair[], dialect?: SortDialect) {
+  const leftIndices = new Map(left.map((column, index) => [column.key, index]));
+  const rightIndices = new Map(right.map((column, index) => [column.key, index]));
+  const usedLeft = new Set<number>(), usedRight = new Set<number>();
+  return array(pairs, queryResultComparisonLimits.columns).map(pair => {
+    const l = leftIndices.get(own(pair, 'left') as string), r = rightIndices.get(own(pair, 'right') as string);
+    if (l === undefined || r === undefined || usedLeft.has(l) || usedRight.has(r)) throw Error(text.invalidPair);
+    if (!sameQueryResultComparisonColumnType(left[l].type, right[r].type, dialect)) throw Error(text.invalidPair);
+    usedLeft.add(l);
+    usedRight.add(r);
+    return { left: l, right: r };
+  }).sort((a, b) => a.left - b.left);
 }
 /** 二进制只按明确包装和base64原文比较，不解码，也不序列化未知对象。 */
 function binary(value: unknown): value is { type: 'binary'; base64: string } {
@@ -111,14 +128,18 @@ function equal(left: CellValue, right: CellValue): boolean {
   return !!left && !!right && typeof left === 'object' && typeof right === 'object' && left.base64 === right.base64;
 }
 /** 捕获时先校结构与合计格数，再复制全部值，避免预算外的大表先分配单元格快照。 */
-export function captureQueryResultComparison(left: QueryResult, right: QueryResult, keys: readonly string[], dialect?: SortDialect, byName = false): QueryResultComparisonCapture {
+export function captureQueryResultComparison(left: QueryResult, right: QueryResult, keys: readonly string[], dialect?: SortDialect, alignment: Alignment = 'strict'): QueryResultComparisonCapture {
   const leftColumns = own(left, 'columns') as ResultColumn[], rightColumns = own(right, 'columns') as ResultColumn[];
   const leftRefs = array(leftColumns, queryResultComparisonLimits.columns, 1), rightRefs = array(rightColumns, queryResultComparisonLimits.columns, 1);
   const leftMetadata = leftRefs.map(metadata), rightMetadata = rightRefs.map(metadata);
   if ([leftMetadata, rightMetadata].some(items => new Set(items.map(column => column.key)).size !== items.length)) throw Error(text.identity);
-  if (!byName && (leftMetadata.length !== rightMetadata.length || rightMetadata.some((column, index) =>
-    column.key !== leftMetadata[index].key || column.name !== leftMetadata[index].name || !sameColumnType(leftMetadata[index].type, column.type, dialect)))) throw Error(text.identity);
-  const pairs = byName ? alignQueryResultComparisonColumns(leftMetadata, rightMetadata, dialect) : leftMetadata.map((_, index) => ({ left: index, right: index }));
+  if (alignment === 'strict' && (leftMetadata.length !== rightMetadata.length || rightMetadata.some((column, index) =>
+    column.key !== leftMetadata[index].key || column.name !== leftMetadata[index].name ||
+    !sameQueryResultComparisonColumnType(leftMetadata[index].type, column.type, dialect)))) throw Error(text.identity);
+  const pairs = alignment === 'strict' ? leftMetadata.map((_, index) => ({ left: index, right: index }))
+    : alignment === 'name' ? alignQueryResultComparisonColumns(leftMetadata, rightMetadata, dialect)
+    : manualColumnPairs(leftMetadata, rightMetadata, alignment, dialect);
+  if (!pairs.length) throw Error(text.invalidPair);
   const columns = pairs.map(pair => leftMetadata[pair.left]);
   const sqlite = columns.some(column => column.type === 'SQLITE');
   if (sqlite && [leftMetadata, rightMetadata].some(items => items.some(column => column.type !== 'SQLITE'))) throw Error(text.identity);
@@ -138,13 +159,13 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
     const raw: (readonly CellValue[])[] = [], values: (readonly CellValue[])[] = [], rowUnits: number[] = [];
     const sourceMetadata = side === 'left' ? leftMetadata : rightMetadata;
     const positions = pairs.map(pair => pair[side]);
-    const comparedKeys = positions.map(position => sourceMetadata[position].key);
+    const comparedColumns = positions.map(position => sourceMetadata[position]);
     for (const row of rowRefs) {
       const original: CellValue[] = [], copied: CellValue[] = []; let currentUnits = 0;
       const charge = (length: number) => { if (length > queryResultComparisonLimits.valueUnits) throw Error(text.budget); units += length; currentUnits += length; if (units > queryResultComparisonLimits.units) throw Error(text.budget); };
       for (let index = 0; index < columns.length; index++) {
         try {
-          const value = own(row, comparedKeys[index]); copied.push(snapshot(value, charge, prototypes)); original.push(value as CellValue);
+          const value = own(row, comparedColumns[index].key); copied.push(snapshot(value, charge, prototypes)); original.push(value as CellValue);
         } catch (reason) {
           if (keyIndices.includes(index) && !(reason instanceof Error && reason.message === text.budget)) throw Error(text.keyInvalid(side));
           throw reason;
@@ -154,12 +175,12 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
     }
     // 缺失类型帧不能把旧快照中的数字外观猜为INTEGER；准入与最终复核均不读取SQL正文。
     const storage = sqlite ? { codes: Object.freeze(copySqliteResultStorage(own(result, 'sqliteStorage'), refs, rowRefs).rows
-      .map(codes => byName ? positions.map(position => codes[position]).join('') : codes)), current: bindSqliteResultStorage(result) } : undefined;
-    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, metadata: sourceMetadata, comparedKeys,
+      .map(codes => alignment === 'strict' ? codes : positions.map(position => codes[position]).join(''))), current: bindSqliteResultStorage(result) } : undefined;
+    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, metadata: sourceMetadata, comparedColumns,
       raw: Object.freeze(raw), values: Object.freeze(values), units: Object.freeze(rowUnits), truncated, sqlite: storage };
   }
   const capture = Object.freeze({ columns: Object.freeze(columns), keys: Object.freeze(keyRefs), leftCount: leftRowRefs.length, rightCount: rightRowRefs.length, leftTruncated: own(left, 'truncated') as boolean, rightTruncated: own(right, 'truncated') as boolean });
-  const binding: Binding = { left: source(left, leftColumns, leftRefs, leftRows, leftRowRefs, 'left'), right: source(right, rightColumns, rightRefs, rightRows, rightRowRefs, 'right'), metadata: columns, keyIndices: Object.freeze(keyIndices), binaryPrototypes: prototypes, invalid: false, dialect };
+  const binding: Binding = { left: source(left, leftColumns, leftRefs, leftRows, leftRowRefs, 'left'), right: source(right, rightColumns, rightRefs, rightRows, rightRowRefs, 'right'), metadata: columns, keyIndices: Object.freeze(keyIndices), binaryPrototypes: prototypes, invalid: false, manual: Array.isArray(alignment), dialect };
   bindings.set(capture, binding);
   if (!currentQueryResultComparison(capture, left, right)) throw Error(text.stale);
   return capture;
@@ -179,8 +200,8 @@ function structure(source: Source): boolean {
 function currentRow(source: Source, index: number, binding: Binding): boolean {
   const row = own(source.rows, String(index));
   if (row !== source.rowRefs[index]) return false;
-  for (let column = 0; column < source.comparedKeys.length; column++) {
-    const value = own(row, source.comparedKeys[column]), raw = source.raw[index][column], copy = source.values[index][column];
+  for (let column = 0; column < source.comparedColumns.length; column++) {
+    const value = own(row, source.comparedColumns[column].key), raw = source.raw[index][column], copy = source.values[index][column];
     if (!Object.is(value, raw)) return false;
     if (copy && typeof copy === 'object' && (!binary(value) || Object.getPrototypeOf(value) !== binding.binaryPrototypes.get(value) || own(value, 'base64') !== copy.base64)) return false;
   }
@@ -223,6 +244,7 @@ function comparisonRowValues(capture: QueryResultComparisonCapture, binding: Bin
   if (!owner?.active || owner.capture !== capture) throw Error(text.stale);
   const changed = new Set(row.changedColumns);
   return Object.freeze(binding.metadata.map((column, index) => Object.freeze({ column: column.key, name: column.name,
+    ...(binding.manual ? { rightColumn: binding.right.comparedColumns[index].key, rightName: binding.right.comparedColumns[index].name } : {}),
     ...(row.leftIndex === undefined ? {} : { left: binding.left.values[row.leftIndex][index], ...(binding.left.sqlite ? { leftType: binding.left.sqlite.codes[row.leftIndex][index] as SqliteResultStorageCode } : {}) }),
     ...(row.rightIndex === undefined ? {} : { right: binding.right.values[row.rightIndex][index], ...(binding.right.sqlite ? { rightType: binding.right.sqlite.codes[row.rightIndex][index] as SqliteResultStorageCode } : {}) }), changed: changed.has(column.key) })));
 }
@@ -231,7 +253,7 @@ function comparisonRowValues(capture: QueryResultComparisonCapture, binding: Bin
 export function snapshotQueryResultComparisonReport(capture: QueryResultComparisonCapture, rows: readonly QueryResultComparisonRow[]): ResultExportData {
   const binding = bindings.get(capture);
   if (!binding || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
-  const columns = ['kind', 'leftRow', 'rightRow', 'columnKey', 'columnName', 'matchKey', 'changed',
+  const columns = ['kind', 'leftRow', 'rightRow', 'columnKey', 'columnName', ...(binding.manual ? ['rightColumnKey', 'rightColumnName'] : []), 'matchKey', 'changed',
     'leftValue', 'rightValue', 'leftStorage', 'rightStorage', 'leftTruncated', 'rightTruncated'].map(key => ({ key, name: key }));
   const count = rows.length * capture.columns.length;
   if (count > resultExportLimits.rows || count * columns.length > resultExportLimits.cells) throw Error(text.reportBudget);
@@ -243,6 +265,7 @@ export function snapshotQueryResultComparisonReport(capture: QueryResultComparis
       leftRow: row.leftIndex === undefined ? null : row.leftIndex + 1,
       rightRow: row.rightIndex === undefined ? null : row.rightIndex + 1,
       columnKey: value.column, columnName: value.name, matchKey: keys.has(value.column), changed: value.changed,
+      ...(binding.manual ? { rightColumnKey: value.rightColumn!, rightColumnName: value.rightName! } : {}),
       leftValue: value.left ?? null, rightValue: value.right ?? null,
       leftStorage: value.leftType ?? null, rightStorage: value.rightType ?? null,
       leftTruncated: capture.leftTruncated, rightTruncated: capture.rightTruncated,

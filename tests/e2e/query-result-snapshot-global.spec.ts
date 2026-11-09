@@ -48,8 +48,10 @@ function register(): void {
     { ...expectedWire.result.rows[1], big: '18446744073709551614' },
   ] } });
   const alignedWire = JSON.stringify({ ...expectedWire, result: { ...expectedWire.result,
-    columns: [{ ...expectedWire.result.columns[3], key: 'amount' }, { ...expectedWire.result.columns[2], key: 'identity' }],
-    rows: [{ amount: '2.00', identity: '2' }, { amount: '12345678901234567890.1234567891', identity: '18446744073709551615' }],
+    columns: [{ ...expectedWire.result.columns[3], key: 'amount' }, { ...expectedWire.result.columns[2], key: 'identity' },
+      { key: 'label', name: '新标签', type: 'VAR_STRING' }],
+    rows: [{ amount: '2.00', identity: '2', label: '不同内容' },
+      { amount: '12345678901234567890.1234567891', identity: '18446744073709551615', label: '构造键已修改' }],
   } });
   let halted = false, firstComplete = false, outputRemoved = false, output = '', sourcePath = '', rightPath = '', alignedPath = '', savedPath = '', shownPath = '', savedSha256 = '', shownSha256 = '', firstPid = 0, firstProfile = '';
   let outputIdentity: { dev: number; ino: number } | undefined;
@@ -471,10 +473,10 @@ function register(): void {
         await step(() => compare.click());
         await step(() => expect(right.locator('option:checked')).toHaveText(text.comparisonOther(basename(alignedPath))));
         await step(() => key.check());
-        await step(() => comparison.getByRole('checkbox', { name: comparisonText.alignByName, exact: true }).check());
+        await step(() => comparison.getByLabel(comparisonText.alignmentMode, { exact: true }).selectOption('name'));
         await step(() => expect(start).toBeDisabled());
         await step(() => expect(key).not.toBeChecked());
-        await step(() => expect(comparison.getByText(comparisonText.alignedColumns(2, 8, 0), { exact: true })).toBeVisible());
+        await step(() => expect(comparison.getByText(comparisonText.alignedColumns(2, 8, 1), { exact: true })).toBeVisible());
         await step(() => key.check());
         await step(() => start.click());
         await step(() => expect(comparison.getByLabel(comparisonText.changed, { exact: true })).toHaveText('1'));
@@ -483,6 +485,29 @@ function register(): void {
         await step(() => changed.getByRole('button').click());
         await step(() => expect(comparison.getByLabel(comparisonText.rightValue + ' decimal', { exact: true })).toContainText('12345678901234567890.1234567891'));
         await step(async () => info.attach('离线快照按同名列对齐', { body: await page.screenshot(), contentType: 'image/png' }));
+        await step(() => comparison.getByLabel(comparisonText.alignmentMode, { exact: true }).selectOption('manual'));
+        await step(() => expect(start).toBeDisabled());
+        const leftColumn = comparison.getByLabel(comparisonText.leftColumn, { exact: true });
+        const rightColumn = comparison.getByLabel(comparisonText.rightColumn, { exact: true });
+        const addPair = comparison.getByRole('button', { name: comparisonText.addPair, exact: true });
+        await step(() => leftColumn.selectOption('big'));
+        await step(() => expect(rightColumn.locator('option[value="label"]')).toHaveCount(0));
+        await step(() => rightColumn.selectOption('identity'));
+        await step(() => addPair.click());
+        await step(() => expect(leftColumn.locator('option[value="big"]')).toHaveCount(0));
+        await step(() => leftColumn.selectOption('constructor'));
+        await step(() => rightColumn.selectOption('label'));
+        await step(() => addPair.click());
+        await step(() => expect(comparison.getByText(comparisonText.alignedColumns(2, 8, 1), { exact: true })).toBeVisible());
+        await step(() => key.check());
+        await step(() => start.click());
+        await step(() => expect(comparison.getByLabel(comparisonText.changed, { exact: true })).toHaveText('1'));
+        await step(() => changed.getByRole('button').click());
+        await step(() => expect(comparison.getByLabel(comparisonText.rightValue + ' constructor', { exact: true })).toContainText('构造键已修改'));
+        await step(() => expect(comparison.getByText('重复列 · constructor ↔ 新标签 · label', { exact: false }).last()).toBeVisible());
+        await step(async () => info.attach('离线快照手动配对列', { body: await page.screenshot(), contentType: 'image/png' }));
+        await step(() => comparison.getByRole('button', { name: comparisonText.removePair('constructor'), exact: true }).click());
+        await step(() => expect(start).toBeDisabled());
         await step(() => comparison.getByRole('button', { name: comparisonText.close, exact: true }).last().click());
         await step(() => expect(viewer.getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
         await step(() => viewer.getByRole('button', { name: columnText.open, exact: true }).click());
