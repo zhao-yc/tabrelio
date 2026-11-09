@@ -7,6 +7,20 @@ function finish(scan: QueryResultFindScan) { for (let n = 0; n < 1000 && scan.pr
 function positions(scan: QueryResultFindScan) { return Array.from({ length: scan.progress().count }, (_, index) => scan.match(index)); }
 
 describe('已返回结果的有界字面查找', () => {
+  it('指定同名列时仅扫描该列，保留完整可见布局中的命中坐标', () => {
+    const rows = [{ a: 'hit', b: 'miss' }, { a: 'hit', b: 'hit' }];
+    const readOther = vi.fn(() => { throw Error('不应访问范围外列'); });
+    for (const row of rows) Object.defineProperty(row, 'a', { get: readOther });
+    const scan = new QueryResultFindScan(rows, columns, 'hit', true, () => true, 'b');
+    expect(finish(scan)).toEqual({ phase: 'complete', count: 1, scannedCells: 2, totalCells: 2 });
+    expect(scan.match(0)).toEqual({ row: 1, column: 1 });
+    expect(scan.hasMatch(1, 1)).toBe(true);
+    expect(scan.hasMatch(1, 0)).toBe(false);
+    expect(readOther).not.toHaveBeenCalled();
+    const missing = new QueryResultFindScan(rows, columns, 'hit', true, () => true, 'hidden');
+    expect(missing.step()).toEqual({ phase: 'stopped', count: 0, scannedCells: 0, totalCells: 0 });
+  });
+
   it('只读可见唯一键和原自有值；重复出现按单元格计数，不读隐藏列或原型', () => {
     const rows: DataRow[] = [JSON.parse('{"a":"same same","b":"same","__proto__":"same"}'), { a: 'other', b: 'same' }];
     Object.defineProperty(rows[0], 'hidden', { get() { throw Error('不得读隐藏列'); } });

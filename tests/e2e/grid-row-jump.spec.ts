@@ -145,6 +145,48 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
   expect(pageErrors).toEqual([]);
 });
 
+test('查询结果按列查找可区分同名列，切换范围立即清除旧定位', async () => {
+  await seed("SELECT id, name AS 同名, CASE WHEN id = 1 THEN '记录 对照' ELSE '无' END AS 同名 FROM subject ORDER BY id DESC;");
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  const first = query.getByRole('gridcell', { name: '记录 180', exact: true });
+  const firstRow = first.locator('..').getByRole('checkbox');
+  await firstRow.check();
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const before = await tasks();
+  await query.getByRole('button', { name: resultFind.open, exact: true }).click();
+  const input = query.getByRole('textbox', { name: resultFind.input, exact: true });
+  const columns = query.getByRole('combobox', { name: resultFind.columns, exact: true });
+  const status = query.locator('.query-result-find-status').getByRole('status');
+  await input.fill('记录');
+  await expect(status).toHaveText(resultFind.count(181, -1));
+  await query.getByRole('checkbox', { name: resultFind.highlightAll, exact: true }).check();
+  await expect(first).toHaveClass(/query-result-find-match/);
+  await columns.selectOption({ label: resultFind.columnOption('同名', 3) });
+  await expect(input).toHaveValue('记录');
+  await expect(status).toHaveText(resultFind.count(1, -1));
+  await expect(first).not.toHaveClass(/query-result-find-match/);
+  await input.press('Enter');
+  const last = query.getByRole('gridcell', { name: '记录 对照', exact: true });
+  await expect(last).toBeInViewport();
+  await expect(last).toHaveClass(/query-result-find-hit/);
+  await expect(query.getByText(resultFind.location(179, 2), { exact: true })).toBeVisible();
+
+  await columns.selectOption({ label: resultFind.columnOption('同名', 2) });
+  await expect(status).toHaveText(resultFind.count(180, -1));
+  await expect(last).not.toHaveClass(/query-result-find-match|query-result-find-hit/);
+  await input.press('Enter');
+  await expect(first).toBeInViewport();
+  await expect(first).toHaveClass(/query-result-find-hit/);
+  await expect(firstRow).toBeChecked();
+  await columns.selectOption({ label: resultFind.allColumns });
+  await expect(status).toHaveText(resultFind.count(181, -1));
+  await expect(first).toHaveClass(/query-result-find-match/);
+  await expect(first).not.toHaveClass(/query-result-find-hit/);
+  expect(await tasks()).toEqual(before);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查找可标记全部命中并跨屏循环定位，保留勾选且不执行数据任务', async () => {
   await seed();
   const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));

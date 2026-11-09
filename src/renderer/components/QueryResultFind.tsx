@@ -18,6 +18,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   const panel = useRef<object | undefined>(undefined), mountOwner = useRef<object | undefined>({});
   const [opened, setOpened] = useState<{ owner: object; token: object }>();
   const [query, setQuery] = useState(''), [sensitive, setSensitive] = useState(false);
+  const [columnKey, setColumnKey] = useState<string>();
   const [highlightAll, setHighlightAll] = useState(false);
   const [view, setView] = useState<{ run: Run; progress: QueryResultFindProgress; index: number }>();
   /** 原scope或父接纳门变化时仅撤销本地查找，不改变选择或业务资源。 */
@@ -37,14 +38,14 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   // 只在有新增命中或显示开关变化时刷新网格样式，复用原扫描和原坐标。
   useLayoutEffect(() => { onHighlights(markScan); }, [markScan, markCount, onHighlights]);
 
-  /** 每次文字/大小写变化都消费新代次；旧定时器即使迟到也不能发布或导航。 */
-  function start(value: string, caseSensitive: boolean) {
+  /** 每次文字、大小写或列范围变化都开启新查找，旧定时器不能发布或导航。 */
+  function start(value: string, caseSensitive: boolean, selectedColumn: string | undefined) {
     if (!panelCurrent() || run.current !== view?.run) return;
-    cancel(); setQuery(value); setSensitive(caseSensitive); onHit(undefined);
+    cancel(); setQuery(value); setSensitive(caseSensitive); setColumnKey(selectedColumn); onHit(undefined);
     // RDG每次render重发handle；实例以本挂载/原scope及可取得的原宿主核验，导航使用最新handle。
     const originalMount = mountOwner.current, originalElement = grid.current?.element;
     const next = { owner, index: -1 } as Run;
-    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && originalMount !== undefined && mountOwner.current === originalMount && grid.current !== null && originalElement !== undefined && (originalElement === null || grid.current.element === originalElement && originalElement.ownerDocument.contains(originalElement)));
+    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && originalMount !== undefined && mountOwner.current === originalMount && grid.current !== null && originalElement !== undefined && (originalElement === null || grid.current.element === originalElement && originalElement.ownerDocument.contains(originalElement)), selectedColumn);
     run.current = next;
     setView({ run: next, progress: next.scan.progress(), index: -1 });
     const advance = () => {
@@ -58,7 +59,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   }
   function open() {
     if (!own() || !grid.current) return;
-    cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery('');
+    cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(undefined);
   }
   function close() { if (!alive.current || latest.current.owner !== owner || !visible || panel.current !== opened?.token || run.current !== view?.run) return; cancel(); panel.current = undefined; setOpened(undefined); setView(undefined); onHit(undefined); }
   /** 只滚动并标记坐标，不调用setActivePosition或行选择，不改变复制/导出所选行。 */
@@ -87,9 +88,21 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
   return <div className="query-result-find-region" onKeyDown={keyDown}>
     <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
-      {visible && <><input ref={input} type="text" aria-label={text.input} value={query} onChange={event => start(event.target.value, sensitive)}/><label className="check"><input type="checkbox" checked={sensitive} onChange={event => start(query, event.target.checked)}/>{text.sensitive}</label><label className="check"><input type="checkbox" checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{text.highlightAll}</label><button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button><button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button><button type="button" aria-label={text.close} onClick={close}>×</button></>}
+      {visible && <>
+        <input ref={input} type="text" aria-label={text.input} value={query} onChange={event => start(event.target.value, sensitive, columnKey)}/>
+        <select aria-label={text.columns} value={columnKey === undefined ? '' : 'column:' + columnKey} disabled={!available}
+          onChange={event => { const value = event.target.value; start(query, sensitive, value ? value.slice('column:'.length) : undefined); }}>
+          <option value="">{text.allColumns}</option>
+          {columns.map((column, index) => <option key={column.key} value={'column:' + column.key}>{text.columnOption(column.name, index + 1)}</option>)}
+        </select>
+        <label className="check"><input type="checkbox" checked={sensitive} onChange={event => start(query, event.target.checked, columnKey)}/>{text.sensitive}</label>
+        <label className="check"><input type="checkbox" checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{text.highlightAll}</label>
+        <button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button>
+        <button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button>
+        <button type="button" aria-label={text.close} onClick={close}>×</button>
+      </>}
     </div>
-    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{text.scope(rows.length, columns.length)}</span></div>}
+    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{text.scope(rows.length, columnKey === undefined ? columns.length : 1)}</span></div>}
     <div className="query-result-find-grid">{children}</div>
   </div>;
 }
