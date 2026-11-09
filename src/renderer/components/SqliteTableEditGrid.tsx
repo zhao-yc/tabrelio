@@ -19,8 +19,9 @@ import { GridRowSelectionActions } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
-import { copyGridColumnNames, encodeGridJson, writeTableClipboardEvent } from '../gridClipboard';
+import { copyGridColumnNames, encodeGridCsv, encodeGridJson, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
+import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
 import { CopyInsertSqlButtons } from './CopyInsertSqlButtons';
 import { copyInsertSqlZh as insertCopyText } from '../../shared/copyInsertSql.zh-CN';
 import { primaryKeyCopyZh as keyCopyText } from '../locales/primaryKeyCopy.zh-CN';
@@ -170,7 +171,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     } catch (reason) { try { event.clipboardData.clearData(); } catch { /* 仅原事件可清理，不借系统剪贴板重试。 */ } if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
   }
   /** 复制只读本页；JSON 取当前记录的全部可见列。 */
-  function copyFromGrid(mode: 'headers' | 'column' | 'json' | 'names') {
+  function copyFromGrid(mode: 'headers' | 'column' | 'json' | 'csv' | 'names') {
     const allowed = () => !disabled && (mode === 'names' ? baseCurrent() : current()) && noModal();
     if (!allowed()) return;
     try {
@@ -183,16 +184,18 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
       const checked = rows.filter(item => selectedRows.has(item.id) && !item.deleted);
       const cell = activeCell.current.position;
       if (selectedRows.size && !checked.length) throw Error(headerCopyText.stale);
-      if (mode === 'json') {
+      if (mode === 'json' || mode === 'csv') {
+        const labels = mode === 'csv' ? csvCopyText : jsonCopyText;
+        const encode = mode === 'csv' ? encodeGridCsv : encodeGridJson;
         const records = selectedRows.size ? checked :
           cell && !cell.row.deleted && order.some(index => cell.key === 'c' + index) ? [cell.row] : [];
         if (selectedRows.size && checked.length !== selectedRows.size ||
-            records.some(row => row.values.length !== page.columns.length)) throw Error(jsonCopyText.invalid);
+            records.some(row => row.values.length !== page.columns.length)) throw Error(labels.invalid);
         const columns = order.map(index => ({ key: String(index), name: page.columns[index].name }));
-        const json = encodeGridJson(columns, records, (row, key) => sqliteClipboardProtocolCell(row.values[Number(key)]));
-        writeTableClipboardEvent(allowed, data => data.setData('text/plain', json));
+        const content = encode(columns, records, (row, key) => sqliteClipboardProtocolCell(row.values[Number(key)]));
+        writeTableClipboardEvent(allowed, data => data.setData('text/plain', content));
         setError('');
-        useWorkspace.getState().notify(jsonCopyText.copied);
+        useWorkspace.getState().notify(labels.copied);
         return;
       }
       let content;
@@ -323,6 +326,8 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
     <button type="button" title={gridCellFileZh.hint} disabled={disabled || !hasActiveDataColumn} onClick={saveActiveCell}>{gridCellFileZh.action}</button>
     <button type="button" title={jsonCopyText.hint} disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
       onClick={() => copyFromGrid('json')}>{jsonCopyText.action}</button>
+    <button type="button" title={csvCopyText.hint} disabled={disabled || !selectedRows.size && !hasActiveDataColumn}
+      onClick={() => copyFromGrid('csv')}>{csvCopyText.action}</button>
     {page.insertCopy && <CopyInsertSqlButtons disabled={disabled} current={hasActiveDataColumn}
       selected={!!selectedRows.size} onCopy={checked => handleTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied)}/>}
     {!!page.primaryKey?.length && <button type="button" title={keyCopyText.hint}

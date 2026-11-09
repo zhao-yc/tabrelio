@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { gridJsonClipboardZh as text } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
+import { gridCsvClipboardZh as csvText } from '../../src/renderer/locales/gridCsvClipboard.zh-CN';
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
@@ -97,6 +98,12 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       expect(Object.keys(packet)).toEqual(['text/plain']);
       return JSON.parse(packet['text/plain']);
     };
+    const copyCsv = async (scope: ReturnType<typeof page.locator>) => {
+      await (await navigationMenuItem(scope, { name: csvText.action, exact: true })).click();
+      const packet = await lastPacket();
+      expect(Object.keys(packet)).toEqual(['text/plain']);
+      return packet['text/plain'];
+    };
     const menuCopy = async (cell: ReturnType<typeof page.locator>, typed: unknown, plain: string, sqlite?: unknown, keyboard = false) => {
       // 菜单会在网格滚动时关闭。先让测试滚动目标格并等浏览器派发该次滚动，再打开菜单。
       await cell.scrollIntoViewIfNeeded();
@@ -107,7 +114,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       } else await cell.click({ button: 'right' });
       const action = page.getByRole('menuitem', { name: gridQuickValueZh.copyCell, exact: true });
       await expect(action).toBeVisible();
-      if (count === 1) await page.screenshot({ path: info.outputPath('复制当前单元格.png') });
+      if (count === 2) await page.screenshot({ path: info.outputPath('复制当前单元格.png') });
       if (keyboard) {
         await expect(action).toBeFocused();
         await page.keyboard.press('Enter');
@@ -142,6 +149,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await expect(tableCell).toBeVisible();
     await tableCell.click();
     expect(await copy(tableTab)).toMatchObject([expectedA]);
+    expect(await copyCsv(tableTab)).toBe('id,amount,label,payload,nullable\r\n1,9007199254740993,row A,base64:AP8=,\\N\r\n');
     const tableB = tableTab.getByRole('row', { name: /row B/ });
     const tableBCheck = tableB.getByRole('checkbox');
     await tableBCheck.check();
@@ -216,6 +224,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(tableCell).toBeVisible();
       await tableCell.click();
       expect(await copy(tableTab)).toMatchObject([expectedA]);
+      expect(await copyCsv(tableTab)).toBe('id,amount,label,payload,nullable\r\n1,9007199254740993,row A,base64:AP8=,\\N\r\n');
       await menuCopy(tableAmount, expectedA.amount, expectedA.amount);
       await tableBCheck.check();
       await fitAmount();
@@ -250,6 +259,8 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       { alias: '9007199254740994', 'alias [2]': 'row B', payload: { type: 'binary', base64: '' }, nullable: '' },
       { alias: '9007199254740993', 'alias [2]': 'row A', payload: { type: 'binary', base64: 'AP8=' }, nullable: null },
     ]);
+    expect(await copyCsv(query)).toBe('alias,alias [2],payload,nullable\r\n' +
+      '9007199254740994,row B,base64:,""\r\n9007199254740993,row A,base64:AP8=,\\N\r\n');
     const resultA = rowA.locator('..'), resultB = rowB.locator('..');
     await menuCopy(resultA.getByRole('gridcell', { name: expectedA.amount, exact: true }), expectedA.amount, expectedA.amount, undefined, true);
     await menuCopy(resultA.getByRole('gridcell', { name: 'NULL', exact: true }), null, 'NULL');

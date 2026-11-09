@@ -6,6 +6,8 @@ import { binaryByteLength } from './binaryCell';
 import { tableHeaderCopyZh } from './locales/tableHeaderCopy.zh-CN';
 import { resultExportColumns, resultExportLimits } from '../shared/resultExport';
 import { gridJsonClipboardZh } from './locales/gridJsonClipboard.zh-CN';
+import { gridCsvClipboardZh } from './locales/gridCsvClipboard.zh-CN';
+import { csvCell, csvHeader } from '../shared/csvExport';
 
 export const cellClipboardType = 'application/x-dbark-cells';
 /** undefined 仅表示新增行尚未填写的 DEFAULT，不能编码成实际 NULL。 */
@@ -181,6 +183,41 @@ export function encodeGridJson<Row>(columns: readonly { key: string; name: strin
     append('}');
   });
   append('\n]');
+  return parts.join('');
+}
+
+/** 沿用文件 CSV 的列名和字段协议；未填写的默认值没有对应的 CSV 字段，整次复制拒绝。 */
+export function encodeGridCsv<Row>(columns: readonly { key: string; name: string }[], rows: readonly Row[],
+  read: (row: Row, key: string) => ClipboardCell): string {
+  if (!columns.length || columns.length > resultExportLimits.columns || !rows.length ||
+      columns.some(column => typeof column.name !== 'string' || column.name.length > 1024 || typeof column.key !== 'string' || !column.key) ||
+      new Set(columns.map(column => column.key)).size !== columns.length) throw Error(gridCsvClipboardZh.invalid);
+  if ((rows.length + 1) * columns.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
+  const names = resultExportColumns(columns.map(({ key, name }) => ({ key, name })));
+  const parts = [names.map(column => csvHeader(column.exportName)).join(','), '\r\n'];
+  let units = parts[0].length + 2;
+  for (const row of rows) {
+    for (const [index, { key }] of names.entries()) {
+      const value = read(row, key);
+      if (value === undefined) throw Error(gridCsvClipboardZh.defaultValue);
+      if (typeof value === 'number' && (!Number.isFinite(value) || Number.isInteger(value) && !Number.isSafeInteger(value))) throw Error(gridCsvClipboardZh.invalid);
+      if (typeof value === 'string' && value.length > maxClipboardCharacters - units) throw Error(zh.clipboard.copySizeLimit);
+      if (value && typeof value === 'object') {
+        const base64 = Object.getOwnPropertyDescriptor(value, 'base64')?.value;
+        if (Object.getOwnPropertyDescriptor(value, 'type')?.value !== 'binary' || typeof base64 !== 'string' || Reflect.ownKeys(value).length !== 2)
+          throw Error(gridCsvClipboardZh.invalid);
+        if (base64.length + 7 > maxClipboardCharacters - units) throw Error(zh.clipboard.copySizeLimit);
+        const padding = base64.indexOf('=');
+        if (base64.length % 4 || /[^A-Za-z0-9+/=]/.test(base64) ||
+            (padding >= 0 && (padding < base64.length - 2 || !/^={1,2}$/.test(base64.slice(padding))))) throw Error(gridCsvClipboardZh.invalid);
+      }
+      const field = csvCell(Object.is(value, -0) ? '-0' : value);
+      const delimiter = index + 1 === names.length ? '\r\n' : ',';
+      units += field.length + delimiter.length;
+      if (units > maxClipboardCharacters) throw Error(zh.clipboard.copySizeLimit);
+      parts.push(field, delimiter);
+    }
+  }
   return parts.join('');
 }
 

@@ -15,7 +15,7 @@ import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
-import { cellClipboardType, copyGridCellValue, copyGridColumnNames, encodeClipboard, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
+import { cellClipboardType, copyGridCellValue, copyGridColumnNames, encodeClipboard, encodeGridCsv, encodeGridJson, maxClipboardCells, writeTableClipboardEvent } from '../gridClipboard';
 import { saveGridCell } from '../gridCellFile';
 import { gridCellFileZh } from '../locales/gridCellFile.zh-CN';
 import { fitGridColumnWidths, gridResizeHandleColumn } from '../gridColumnFit';
@@ -23,6 +23,7 @@ import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { GridHeaderDetails, type GridHeaderDetailsOptions } from './GridHeaderDetails';
 import { updateSqlCopyZh } from '../locales/updateSqlCopy.zh-CN';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
+import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
 import type { ResultGridSelection } from '../resultExport';
 import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
 import { appModalSelector } from '../modalSelectors';
@@ -467,18 +468,20 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** 勾选顺序独立于显示顺序，列名与值从同一当前视图取出。 */
-  function copyRowsAsJson(indices: ReadonlySet<number>): string {
+  function copyRowsAsText(indices: ReadonlySet<number>, format: 'json' | 'csv'): string {
+    const labels = format === 'csv' ? csvCopyText : jsonCopyText;
+    const encode = format === 'csv' ? encodeGridCsv : encodeGridJson;
     if (indices.size * columns.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
     const selected = [...indices].sort((left, right) => left - right).map(index => {
       const row = rows[index];
-      if (!Number.isSafeInteger(index) || !row || skipRowInInversion?.(row)) throw Error(jsonCopyText.invalid);
+      if (!Number.isSafeInteger(index) || !row || skipRowInInversion?.(row)) throw Error(labels.invalid);
       return row;
     });
-    return encodeGridJson(columns, selected, (row, key) => {
+    return encode(columns, selected, (row, key) => {
       const presentation = tableCopy && presentCell?.(row, key);
       if (presentation) return presentation.value;
       const descriptor = Object.getOwnPropertyDescriptor(row, key);
-      if (!descriptor || !('value' in descriptor) || descriptor.value === undefined) throw Error(jsonCopyText.invalid);
+      if (!descriptor || !('value' in descriptor) || descriptor.value === undefined) throw Error(labels.invalid);
       return descriptor.value;
     });
   }
@@ -510,7 +513,9 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     <button type="button" title={copyLabels.columnHint} disabled={!copyEnabled || !activeCopyCell?.column}
       onClick={() => copyResult('column')}>{copyLabels.column}</button>
     <button type="button" title={jsonCopyText.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
-      onClick={() => handleRowOutput(copyRowsAsJson, selectedRows.size > 0, jsonCopyText.copied)}>{jsonCopyText.action}</button>
+      onClick={() => handleRowOutput(indices => copyRowsAsText(indices, 'json'), selectedRows.size > 0, jsonCopyText.copied)}>{jsonCopyText.action}</button>
+    <button type="button" title={csvCopyText.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}
+      onClick={() => handleRowOutput(indices => copyRowsAsText(indices, 'csv'), selectedRows.size > 0, csvCopyText.copied)}>{csvCopyText.action}</button>
     {insertSql && <CopyInsertSqlButtons disabled={!copyEnabled}
       current={!!activeCopyCell} selected={!!selectedRows.size} onCopy={checked => handleRowOutput(insertSql, checked, insertCopyText.copied)}/>}
     {updateSql && <button type="button" title={updateSqlCopyZh.hint} disabled={!copyEnabled || !selectedRows.size && !activeCopyCell}

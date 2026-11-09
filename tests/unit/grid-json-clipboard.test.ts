@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { encodeGridJson, maxClipboardCells, maxClipboardCharacters, type ClipboardCell } from '../../src/renderer/gridClipboard';
+import { encodeGridCsv, encodeGridJson, maxClipboardCells, maxClipboardCharacters, type ClipboardCell } from '../../src/renderer/gridClipboard';
 import { gridJsonClipboardZh as text } from '../../src/renderer/locales/gridJsonClipboard.zh-CN';
+import { gridCsvClipboardZh as csv } from '../../src/renderer/locales/gridCsvClipboard.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 describe('记录复制为 JSON', () => {
@@ -23,5 +24,24 @@ describe('记录复制为 JSON', () => {
     for (const value of [Number.MAX_SAFE_INTEGER + 1, Infinity, { type: 'binary', base64: 'a=a=' }, {
       type: 'binary', base64: 'AP8=', toJSON() { throw Error('不应执行 toJSON'); },
     }] as ClipboardCell[]) expect(() => encodeGridJson(columns, [value], row => row)).toThrow(text.invalid);
+  });
+});
+
+describe('记录复制为 CSV', () => {
+  it('按文件 CSV 规则编码同名表头、精确值、空串、换行和二进制', () => {
+    const columns = ['列,名', '列,名', '', 'nullable', 'binary', 'empty', 'raw', 'zero'].map((name, index) => ({ key: String(index), name }));
+    const values: ClipboardCell[] = ['9007199254740993', '0.1234567890123456789', '甲,"乙"\r\n🚢', null, { type: 'binary', base64: 'AP8=' }, '', '\\N', -0];
+    expect(encodeGridCsv(columns, [values], (row, key) => row[Number(key)])).toBe(
+      '"列,名","列,名 [2]",列 [3],nullable,binary,empty,raw,zero\r\n' +
+      '9007199254740993,0.1234567890123456789,"甲,""乙""\r\n🚢",\\N,base64:AP8=,"",\\\\N,-0\r\n');
+  });
+
+  it('默认值、损坏字段和超预算时拒绝整批', () => {
+    const columns = [{ key: 'value', name: 'value' }];
+    expect(() => encodeGridCsv(columns, [null, undefined], value => value)).toThrow(csv.defaultValue);
+    expect(() => encodeGridCsv(columns, [Number.MAX_SAFE_INTEGER + 1], value => value)).toThrow(csv.invalid);
+    expect(() => encodeGridCsv<ClipboardCell>(columns, [{ type: 'binary', base64: 'a=a=' }], value => value)).toThrow(csv.invalid);
+    expect(() => encodeGridCsv(columns, Array(maxClipboardCells).fill(0), value => value)).toThrow(zh.clipboard.copyLimit);
+    expect(() => encodeGridCsv(columns, ['"'.repeat(Math.ceil(maxClipboardCharacters / 2))], value => value)).toThrow(zh.clipboard.copySizeLimit);
   });
 });

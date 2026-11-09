@@ -1003,6 +1003,8 @@ MySQL、MariaDB、SQLite 和 PostgreSQL 的表格及查询结果可「仅复制�
 
 MySQL、MariaDB、SQLite 和 PostgreSQL 的表格与查询结果可直接「复制为 JSON」。MySQL／MariaDB 表页从「更多 → 数据传输」进入，其余入口位于网格上方。有勾选时复制当前网格的勾选记录，否则复制当前数据格所在记录。JSON 数组按显示顺序取可见列，重复或空列名沿用文件导出的命名规则。精确数值原文保留为字符串，NULL 为 `null`，字节为 `type` 和 `base64` 组成的对象。编辑网格使用当前草稿值，省略尚未填写的默认字段。复制范围以当前页或当前已返回结果为准。
 
+同一入口的「复制为 CSV」按当前显示顺序复制可见列和表头，使用逗号分隔。NULL 表示为 `\N`，空字符串保留为 `""`，二进制使用 `base64:`。包含尚未填写默认字段的勾选记录会使本次复制停止，剪贴板保留原内容。
+
 ### 复制记录为 UPDATE SQL
 
 MySQL、MariaDB、SQLite 和 PostgreSQL 的实体表可「复制为 UPDATE SQL」。MySQL／MariaDB 表页从「更多 → 生成查询」进入，SQLite 和 PostgreSQL 的入口在网格上方。有勾选时每行生成一条语句，无勾选时使用当前记录。WHERE 使用完整原主键，SET 使用已加载的普通非键字段，省略生成列和标识列。所选行有未提交修改、新增或删除草稿时，先处理草稿再复制。操作只生成文本。回放 MySQL／MariaDB 的非主键 TIMESTAMP 赋值时，使用与读取原值一致的会话时区。
