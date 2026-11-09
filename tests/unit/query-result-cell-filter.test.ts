@@ -10,6 +10,28 @@ function fixture(value:CellValue,type='TEXT'){
   return{columns,rows,cell,capture:()=>captureQueryResultCellFilter(columns,rows,cell)};
 }
 describe('当前单元格筛选的精确原值捕获',()=>{
+  it('严格和含端点的快捷条件沿用精确小数比较，NULL 不参与', () => {
+    const f = fixture('9007199254740993.000000000001', 'DECIMAL');
+    f.rows.push(...['9007199254740993.000000000000', '9007199254740993.000000000002', null].map(k => ({ k, other: '' })));
+    const capture = f.capture();
+    const source: QueryResult = { columns: f.columns, rows: f.rows, elapsedMs: 0, truncated: false, statement: '' };
+    const filter = new QueryResultFilter(), binding = filter.bind(source, [])!;
+    for (const [operator, expected] of [['lt', [1]], ['lte', [0, 1]], ['gt', [2]], ['gte', [0, 2]]] as const) {
+      const rule = queryResultCellFilterRule(capture, operator);
+      expect(rule.value).toBe('9007199254740993.000000000001');
+      expect(filter.applyExpression(binding, filter.view(binding)!, { mode: 'AND', children: [rule] }).sourceIndices).toEqual(expected);
+    }
+  });
+
+  it('日期时间原样带入边界，文本外观和 PostgreSQL 布尔不作为边界', () => {
+    const date = '2026-10-20 12:00:00.123456';
+    expect(queryResultCellFilterRule(fixture(date, 'DATETIME').capture(), 'gte').value).toBe(date);
+    expect(() => queryResultCellFilterRule(fixture(date, 'TEXT').capture(), 'gte')).toThrow(text.invalid);
+    const f = fixture('t', 'BOOLEAN');
+    const pgBoolean = captureQueryResultCellFilter(f.columns, f.rows, f.cell, undefined, 'postgresql');
+    expect(() => queryResultCellFilterRule(pgBoolean, 'lte')).toThrow(text.invalid);
+  });
+
   it.each([undefined, 'postgresql'] as const)('文本快捷条件按字面比较，方言 %s', dialect => {
     const source: QueryResult = { columns: [{ key: 'k', name: '文本', type: 'TEXT' }],
       rows: ['A%_', '前A%_后', 'a%_', 'AAx', null, ''].map(k => ({ k })), elapsedMs: 0, truncated: false, statement: '' };

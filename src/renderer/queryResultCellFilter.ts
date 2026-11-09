@@ -6,8 +6,10 @@ import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
 import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
 
-export type CellFilterOperator='eq'|'ne'|'contains'|'notContains';
-export interface QueryResultCellFilterCapture {readonly cell:Readonly<QueryResultCopyCell>;readonly value:CellValue;readonly key:string;readonly name:string;readonly type:string;readonly literal:string;readonly textMatch:boolean;readonly sqliteType?:SqliteResultFilterType;}
+export const cellBoundOperators = ['lt', 'lte', 'gt', 'gte'] as const;
+export type CellFilterOperator='eq'|'ne'|'contains'|'notContains'|typeof cellBoundOperators[number];
+const bounds = new Set<CellFilterOperator>(cellBoundOperators);
+export interface QueryResultCellFilterCapture {readonly cell:Readonly<QueryResultCopyCell>;readonly value:CellValue;readonly key:string;readonly name:string;readonly type:string;readonly literal:string;readonly textMatch:boolean;readonly orderedMatch:boolean;readonly sqliteType?:SqliteResultFilterType;}
 const sqliteBindings=new WeakMap<QueryResultCellFilterCapture,{source?:SqliteResultFilterSource;columns:readonly ResultColumn[];rows:readonly DataRow[];invalid:boolean}>();
 /** 只捕获当前可见原格；标量按声明类型往返核对，不能截断精确数值或把字节转成文本。 */
 export function captureQueryResultCellFilter(columns:readonly ResultColumn[],rows:readonly DataRow[],cell:QueryResultCopyCell|undefined,sqliteSource?:QueryResult,dialect?:SortDialect):QueryResultCellFilterCapture{
@@ -22,7 +24,8 @@ export function captureQueryResultCellFilter(columns:readonly ResultColumn[],row
     const typed=source?.literal(cell.index,column.key)??{value,literal:''};
     if(!Object.is(typed.value,value)||source&&!source.current())throw Error(text.stale);
     const capture:QueryResultCellFilterCapture=Object.freeze({cell:Object.freeze({...cell}),value,key:column.key,name:column.name,type:column.type,literal:typed.literal,
-      textMatch:typed.sqliteType==='text'&&typed.literal.length>0,...(typed.sqliteType?{sqliteType:typed.sqliteType}:{})});
+      textMatch:typed.sqliteType==='text'&&typed.literal.length>0,
+      orderedMatch:typed.sqliteType==='integer'||typed.sqliteType==='real',...(typed.sqliteType?{sqliteType:typed.sqliteType}:{})});
     sqliteBindings.set(capture,{source,columns,rows,invalid:false});return capture;
   }
   const operators=value===null?[]:queryResultFilterOperators(column,undefined,dialect);
@@ -32,7 +35,8 @@ export function captureQueryResultCellFilter(columns:readonly ResultColumn[],row
   // 使用与筛选控制器相同的方言，保留 PostgreSQL 数值特殊值和布尔原文。
   if(value!==null&&compareQueryResultFilterKeys(queryResultFilterKey(column,value,dialect),queryResultFilterKey(column,queryResultFilterLiteral(column,literal,dialect),dialect))!==0)throw Error(text.value);
   return Object.freeze({cell:Object.freeze({...cell}),value,key:column.key,name:column.name,type:column.type,literal,
-    textMatch:typeof value==='string'&&value.length>0&&operators.includes('contains')});
+    textMatch:typeof value==='string'&&value.length>0&&operators.includes('contains'),
+    orderedMatch:column.type!=='BOOLEAN'&&operators.includes('gt')});
 }
 /** 捕获后原格或元数据漂移即拒绝；父级另核结果、工作区及模态租约。 */
 export function currentQueryResultCellFilter(capture:QueryResultCellFilterCapture,columns:readonly ResultColumn[],rows:readonly DataRow[]):boolean{
@@ -48,7 +52,8 @@ export function currentQueryResultCellFilter(capture:QueryResultCellFilterCaptur
 }
 /** NULL使用独立判断；空文本、NULL字样及精确输入都保留原文，不生成SQL。 */
 export function queryResultCellFilterRule(capture:QueryResultCellFilterCapture,operator:CellFilterOperator):QueryResultFilterRule{
-  if(operator!=='eq'&&operator!=='ne'&&!(capture.textMatch&&(operator==='contains'||operator==='notContains')))throw Error(text.invalid);
+  if(operator!=='eq'&&operator!=='ne'&&!(capture.textMatch&&(operator==='contains'||operator==='notContains'))&&
+    !(capture.orderedMatch&&bounds.has(operator)))throw Error(text.invalid);
   if(capture.type==='SQLITE'){const binding=sqliteBindings.get(capture);if(!binding||!currentQueryResultCellFilter(capture,binding.columns,binding.rows))throw Error(text.stale);}
   return Object.freeze({column:capture.key,operator:capture.value===null?(operator==='eq'?'null':'notNull'):operator,value:capture.literal,...(capture.sqliteType?{sqliteType:capture.sqliteType}:{})});
 }

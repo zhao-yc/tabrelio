@@ -316,6 +316,13 @@ function register(): void {
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行']));
       await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行', '原型键安全']));
+      await step(() => exactBig.click({ button: 'right' }));
+      await step(() => rangeMenu.getByRole('menuitem', { name: filterText.cellBounds.lt, exact: true }).click());
+      await step(() => expect(checkedFilter.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('lt'));
+      await step(() => expect(checkedFilter.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('18446744073709551615'));
+      await step(() => checkedFilter.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(() => expect(grid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['另一行']));
+      await step(() => viewer.getByRole('button', { name: filterText.clear, exact: true }).click());
       await step(() => other.click({ button: 'right' }));
       await step(() => rangeMenu.getByRole('menuitem', { name: filterText.cellContains, exact: true }).click());
       await step(() => expect(checkedFilter.getByLabel(filterText.column + ' 1', { exact: true })).toHaveValue('constructor'));

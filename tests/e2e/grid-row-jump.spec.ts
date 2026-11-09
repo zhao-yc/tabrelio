@@ -1753,6 +1753,36 @@ test('SQLite 查询文本快捷筛选按字面匹配且不扫描其它存储类�
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 查询数值格生成精确边界且保留存储类型', async ({}, info) => {
+  await seed(`SELECT id, CASE id WHEN 1 THEN 9007199254740992 WHEN 2 THEN 9007199254740993
+    WHEN 3 THEN 9007199254740994 WHEN 4 THEN '9007199254740993' WHEN 5 THEN 9007199254740994.0
+    ELSE NULL END AS v FROM subject WHERE id <= 6 ORDER BY id;`);
+  const query = page.locator('.query-tab:visible'), grid = query.getByRole('grid');
+  await query.locator('.query-execute-split > button.primary').click();
+  const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+  const value = (id: number) => ids.filter({ hasText: new RegExp('^' + id + '$') }).locator('..').getByRole('gridcell').last();
+  await expect(ids).toHaveText(['1', '2', '3', '4', '5', '6']);
+  const action = page.getByRole('menuitem', { name: filterText.cellBounds.gte, exact: true });
+  await value(4).click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: filterText.cellContains, exact: true })).toBeVisible();
+  await expect(action).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await value(2).click();
+  await page.keyboard.press('Shift+F10');
+  await action.click();
+  const panel = query.getByRole('region', { name: filterText.title, exact: true });
+  await expect(panel.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('gte');
+  await expect(panel.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('integer');
+  await expect(panel.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('9007199254740993');
+  await expect(ids).toHaveText(['1', '2', '3', '4', '5', '6']);
+  await info.attach('SQLite查询数值快捷边界', { body: await page.screenshot(), contentType: 'image/png' });
+  await panel.getByRole('button', { name: filterText.apply, exact: true }).click();
+  await expect(ids).toHaveText(['2', '3']);
+  await (await navigationMenuItem(query, { name: resultHistoryText.undo, exact: true })).click();
+  await expect(ids).toHaveText(['1', '2', '3', '4', '5', '6']);
+  expect(pageErrors).toEqual([]);
+});
+
 test('查询结果只显示匹配行可保留排序和筛选并恢复原范围', async () => {
   await seed();
   const query = page.locator('.query-tab:visible'), grid = query.locator('.query-result-grid').getByRole('grid');

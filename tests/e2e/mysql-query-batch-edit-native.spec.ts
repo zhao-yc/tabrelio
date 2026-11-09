@@ -179,6 +179,14 @@ for (const dialect of ['mysql', 'mariadb'] as const) test(`${dialect} 查询矩�
     await expect(cell('18446744073709551615')).toHaveCount(0);
     await expect(cell('18446744073709551613')).toHaveCount(0);
     await expect(cell('13')).toBeVisible();
+    await (await navigationMenuItem(query, { name: queryResultFilterZh.clear, exact: true })).click();
+    await cell('18446744073709551613').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: queryResultFilterZh.cellBounds.gt, exact: true }).press('Enter');
+    await expect(filter.getByLabel(queryResultFilterZh.input + ' 1', { exact: true })).toHaveValue('18446744073709551613');
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(cell('18446744073709551615')).toBeVisible();
+    await expect(cell('18446744073709551613')).toHaveCount(0);
+    await expect(cell('13')).toHaveCount(0);
     await observer.query(`UPDATE ${table} SET note=NULL WHERE id=9007199254740992`);
     await observer.query(`UPDATE ${table} SET guard=CASE id WHEN 9007199254740992 THEN 'A%_'
       WHEN 9007199254740993 THEN '前A%_后' ELSE 'a%_' END`);

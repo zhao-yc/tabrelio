@@ -446,6 +446,14 @@ test('PostgreSQL 查询矩形按显示边缘复制，仅更新有变化的目标
     await expect(cell(sequence[0])).toHaveCount(0);
     await expect(cell(sequence[1])).toHaveCount(0);
     await expect(cell(sequence[2])).toBeVisible();
+    await (await navigationMenuItem(query, { name: queryResultFilterZh.clear, exact: true })).click();
+    await cell(sequence[1]).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: queryResultFilterZh.cellBounds.lte, exact: true }).press('Enter');
+    await expect(filter.getByLabel(queryResultFilterZh.input + ' 1', { exact: true })).toHaveValue(sequence[1]);
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(cell(sequence[0])).toBeVisible();
+    await expect(cell(sequence[1])).toBeVisible();
+    await expect(cell(sequence[2])).toHaveCount(0);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
