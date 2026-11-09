@@ -4,6 +4,7 @@ import type { DataRow, ResultColumn } from '../../src/shared/contracts';
 import { QueryResultStatisticsDialog } from '../../src/renderer/components/QueryResultStatisticsDialog';
 import { QueryResultStatisticsScan } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
@@ -72,6 +73,21 @@ async function finish() { await act(async () => { vi.runAllTimers(); }); }
 async function batch() { await act(async () => { vi.advanceTimersToNextTimer(); }); }
 
 describe('查询结果列统计的真实对话框', () => {
+  it('切到直方图后选择区间数和范围，重新计算前不保留旧图', async () => {
+    await mount({ selectedIndices: new Set([0, 2]) });
+    await finish();
+    await act(async () => button(text.histogram).dispatchEvent(new MemoryEvent('click')));
+    await finish();
+    expect(node(histogramText.title).textContent).toContain(histogramText.actual(1, 10));
+    await change(histogramText.bins, '5');
+    expect(document.querySelector('[aria-label="数值直方图"]')).toBeNull();
+    await change(text.scope, 'all');
+    await finish();
+    expect(node(histogramText.title).textContent).toContain(histogramText.actual(3, 5));
+    await change(text.column, 'word');
+    await finish();
+    expect(document.body.textContent).toContain(text.histogramUnavailable);
+  });
   it('明确切换值分布才发布，当前勾选与全部范围的占比正确，失效时撤下整图', async () => {
     const f = await mount({ selectedIndices: new Set([2, 0]), truncated: true }); await finish();
     expect(metric(text.count)).toBe('2'); expect(document.querySelector(`[aria-label="${text.frequencyTitle}"]`)).toBeNull();

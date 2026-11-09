@@ -94,6 +94,15 @@ describe('SQLite已返回列统计', () => {
       expect(finish(f.scan)).toMatchObject({ count: 9, nulls: 1, distinct: 6, quality: { emptyText: 2, singletons: 4 } });
     } finally { f.db.close(); }
   });
+  it('混合列的直方图只收有限数值，原类型的文本、字节和无穷值单独计数', () => {
+    const f = fixture([2n, 2, '2', new Uint8Array(), null, Infinity]);
+    try {
+      expect(finish(new QueryResultStatisticsScan(f.capture, { histogram: 10 })).histogram).toMatchObject({
+        finite: '2', nonNumeric: '2', nulls: '1', nonFinite: '1', approximate: true,
+        ranges: [{ lower: '2', upper: '2', upperInclusive: true, count: '2' }],
+      });
+    } finally { f.db.close(); }
+  });
   it('选中范围独立，只读实际选中原格，不执行未选格getter', () => {
     const selected = new Set([1, 0]), f = fixture([9007199254740993n, 9007199254740995n, '不读取']);
     try {

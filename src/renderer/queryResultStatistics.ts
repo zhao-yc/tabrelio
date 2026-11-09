@@ -7,6 +7,7 @@ import { QueryResultFrequencyCounter, queryResultFrequencyRow, type QueryResultF
 import { captureQueryResultCellFilter, queryResultCellFilterRule } from './queryResultCellFilter';
 import { queryResultFilterLimits, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
 import { sqliteResultCellMatches } from '../shared/sqliteResultStorage';
+import { QueryResultHistogramCounter, type QueryResultHistogram, type QueryResultHistogramBins } from './queryResultHistogram';
 
 export interface QueryResultStatisticsCapture {
   readonly column: Readonly<ResultColumn>;
@@ -21,6 +22,7 @@ export interface QueryResultStatisticsResult {
   readonly sqliteTypes?: Readonly<Record<'integer' | 'real' | 'text' | 'blob' | 'null', number>>;
   readonly frequency?: QueryResultFrequency;
   readonly quality?: Readonly<{ emptyText: number; singletons: number }>;
+  readonly histogram?: QueryResultHistogram;
 }
 type OrdinaryKey = ReturnType<typeof queryResultFilterKey>;
 type Key = OrdinaryKey | SqliteResultComparisonKey;
@@ -275,6 +277,8 @@ export class QueryResultStatisticsScan {
   private singletons = 0;
   private emptyText = 0;
   private readonly frequency?: QueryResultFrequencyCounter;
+  private readonly histogram?: QueryResultHistogramCounter;
+  private readonly histogramBins?: QueryResultHistogramBins;
   private minimum?: { key: Key; literal: string };
   private maximum?: { key: Key; literal: string };
   private sum: Decimal = { coefficient: 0n, scale: 0 };
@@ -287,13 +291,16 @@ export class QueryResultStatisticsScan {
   private readonly numericColumn: boolean;
   private readonly floatingColumn: boolean;
   /** 私有WeakMap拒绝伪造capture；声明为字节的列即使返回字符串也不参加值聚合。 */
-  constructor(capture: QueryResultStatisticsCapture, includeFrequency = false) {
+  constructor(capture: QueryResultStatisticsCapture, mode: boolean | { histogram: QueryResultHistogramBins } = false) {
     const binding = bindings.get(capture);
     if (!binding || !currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
     this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type, binding.dialect);
     this.floatingColumn = this.kind === 'float' || this.kind === 'postgresFloat';
     this.numericColumn = this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'postgresNumeric' || this.floatingColumn;
-    if (includeFrequency) this.frequency = new QueryResultFrequencyCounter();
+    const histogramBins = typeof mode === 'object' ? mode.histogram : undefined;
+    this.histogramBins = histogramBins;
+    if (mode === true) this.frequency = new QueryResultFrequencyCounter();
+    if (histogramBins && (binding.sqlite || this.numericColumn)) this.histogram = new QueryResultHistogramCounter(histogramBins);
     if (binding.sqlite) this.sqliteTypes = { integer: 0, real: 0, text: 0, blob: 0, null: 0 };
     else if (!this.kind || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(capture.column.type.trim())) this.reason = text.unsupported;
   }
@@ -303,6 +310,7 @@ export class QueryResultStatisticsScan {
     this.cancelled = true;
     this.distinct.clear();
     this.frequency?.clear();
+    this.histogram?.clear();
     this.minimum = undefined;
     this.maximum = undefined;
     this.published = undefined;
@@ -312,7 +320,7 @@ export class QueryResultStatisticsScan {
     this.capture = undefined;
   }
   /** 坏值只撤销所有值指标，完整计数仍继续；不发布部分不同值或极值。 */
-  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.sumOfSquares = 0n; }
+  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.histogram?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.sumOfSquares = 0n; }
   /** 同一完整身份服务于摘要和分布；仅当前模式需要的集合持有它。 */
   private observeValue(identity: string, literal: string, kind: QueryResultFrequencyKind, index: number): void {
     if (this.frequency) {
@@ -331,7 +339,7 @@ export class QueryResultStatisticsScan {
     }
   }
   /** 每批至多512个原格或32Ki原文；结构检查不遍历整张行数组，最后一次才全量复核。 */
-  step(): { processed: number; total: number; done: boolean } {
+  step(): { processed: number; total: number; done: boolean; binning?: true } {
     const total = this.total, binding = this.binding, capture = this.capture;
     if (this.cancelled) return { processed: this.processed, total, done: true };
     try {
@@ -362,21 +370,26 @@ export class QueryResultStatisticsScan {
             if (!key) throw Error(text.value);
             literal = type === 'blob' ? `X'${cell.literal}'` : cell.literal;
             numeric = type === 'integer' || type === 'real';
-            this.observeValue(sqliteIdentity(key), literal, numeric ? 'number' : type === 'blob' ? 'blob' : 'text', index);
+            if (!this.histogramBins) this.observeValue(sqliteIdentity(key), literal, numeric ? 'number' : type === 'blob' ? 'blob' : 'text', index);
             this.numericOnly &&= numeric;
             if (type === 'real' && !Number.isFinite(Number(value))) { this.finiteNumbers = false; numeric = false; }
           } else {
             key = queryResultFilterKey(capture.column, value as CellValue, binding.dialect); literal = String(value);
             numeric = this.numericColumn;
-            this.observeValue(identity(key), literal, numeric ? 'number' : this.kind === 'text' ? 'text' : this.kind === 'postgresBoolean' ? 'boolean' : 'temporal', index);
+            if (!this.histogramBins) this.observeValue(identity(key), literal, numeric ? 'number' : this.kind === 'text' ? 'text' : this.kind === 'postgresBoolean' ? 'boolean' : 'temporal', index);
             // PostgreSQL 特殊数值仍参与不同值、分布与极值，合计和平均只用于全有限的数值集合。
             if (numeric && typeof key === 'number' && !Number.isFinite(key)) { this.finiteNumbers = false; numeric = false; }
+          }
+          const numericValue = this.kind === 'postgresFloat' ? key as number : value as string | number;
+          if (this.histogramBins) {
+            if (numeric) this.histogram?.add(decimal(numericValue));
+            continue;
           }
           if (!this.minimum || compareKeys(key, this.minimum.key) < 0) this.minimum = { key, literal };
           if (!this.maximum || compareKeys(key, this.maximum.key) > 0) this.maximum = { key, literal };
           if (numeric) {
             // 浮点聚合使用已验证的有限比较值，避免展开原文中任意长度的科学计数指数。
-            const next = decimal(this.kind === 'postgresFloat' ? key as number : value as string | number);
+            const next = decimal(numericValue);
             const scale = Math.max(next.scale, this.sum.scale);
             const previousFactor = 10n ** BigInt(scale - this.sum.scale);
             const nextCoefficient = next.coefficient * 10n ** BigInt(scale - next.scale);
@@ -387,6 +400,9 @@ export class QueryResultStatisticsScan {
         } catch { this.rejectValues(text.value); }
       }
       if (this.processed === total && !this.completed) {
+        if (this.histogram && !this.reason && !this.histogram.step()) {
+          return { processed: this.histogram.processed, total: this.histogram.size, done: false, binning: true };
+        }
         if (!currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
         this.finish(); this.completed = true;
       }
@@ -403,6 +419,24 @@ export class QueryResultStatisticsScan {
   /** 有限AVG先约分精确扩展；仅循环小数按最大原尺度或18位，用BigInt商余数实现half-away。 */
   private finish(): void {
     const count = this.total, nonNull = count - this.nulls, floatInput = this.sqliteTypes ? this.sqliteTypes.real > 0 : this.floatingColumn && nonNull > 0;
+    if (this.histogramBins) {
+      const counter = this.histogram;
+      const nonNumeric = this.sqliteTypes ? this.sqliteTypes.text + this.sqliteTypes.blob : 0;
+      const histogram = counter && !this.reason ? {
+        column: this.capture!.column.name || this.capture!.column.key,
+        requestedBins: this.histogramBins,
+        approximate: floatInput,
+        finite: String(counter.size),
+        nonFinite: String(nonNull - nonNumeric - counter.size),
+        nonNumeric: String(nonNumeric),
+        nulls: String(this.nulls),
+        ranges: counter.ranges(display),
+      } : undefined;
+      this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: floatInput, floatInput, averageRounded: false, histogram, reason: this.reason });
+      counter?.clear();
+      this.minimum = this.maximum = undefined;
+      return;
+    }
     const types = this.sqliteTypes && !this.reason ? { sqliteTypes: Object.freeze({ ...this.sqliteTypes }) } : {};
     const quality = this.frequency ? {} : { quality: Object.freeze({ emptyText: this.emptyText, singletons: this.singletons }) };
     if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types, ...quality, ...this.finishFrequency(0) }); return; }

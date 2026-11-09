@@ -103,6 +103,42 @@ describe('当前已返回行的常见值分布', () => {
   });
 });
 
+describe('当前已返回行的数值直方图', () => {
+  it('精确十进制区间左闭右开，最大值只计一次，NULL 单列', () => {
+    const f = fixture('DECIMAL', ['-1.0', '-0.6', '-0.2', '0.2', '0.6', '1.0', null]);
+    const result = finish(new QueryResultStatisticsScan(f.capture, { histogram: 5 })).histogram!;
+    expect(result).toMatchObject({ finite: '6', nulls: '1', nonFinite: '0', nonNumeric: '0', approximate: false });
+    expect(result.ranges).toEqual([
+      { lower: '-1.0', upper: '-0.6', upperInclusive: false, count: '1' },
+      { lower: '-0.6', upper: '-0.2', upperInclusive: false, count: '1' },
+      { lower: '-0.2', upper: '0.2', upperInclusive: false, count: '1' },
+      { lower: '0.2', upper: '0.6', upperInclusive: false, count: '1' },
+      { lower: '0.6', upper: '1.0', upperInclusive: true, count: '2' },
+    ]);
+  });
+  it('分开相邻 UINT64，合并重复边界，不把 NaN 或无穷值塞入区间', () => {
+    const f = fixture('BIGINT UNSIGNED', ['18446744073709551614', '18446744073709551615'], new Set([0, 1]));
+    expect(finish(new QueryResultStatisticsScan(f.capture, { histogram: 20 })).histogram?.ranges).toEqual([
+      { lower: '18446744073709551614', upper: '18446744073709551615', upperInclusive: false, count: '1' },
+      { lower: '18446744073709551615', upper: '18446744073709551615', upperInclusive: true, count: '1' },
+    ]);
+    const pg = fixture('NUMERIC', ['1', 'NaN', '-Infinity', 'Infinity', null], undefined, 'postgresql');
+    expect(finish(new QueryResultStatisticsScan(pg.capture, { histogram: 10 })).histogram).toMatchObject({
+      finite: '1', nonFinite: '3', nulls: '1', ranges: [{ lower: '1', upper: '1', upperInclusive: true, count: '1' }],
+    });
+  });
+  it('第二阶段不发布部分结果，原值在计数期间变化时永久撤销', () => {
+    const f = fixture('INT', Array.from({ length: 300 }, (_, index) => String(index)));
+    const scan = new QueryResultStatisticsScan(f.capture, { histogram: 5 });
+    expect(scan.step()).toEqual({ processed: 128, total: 300, done: false, binning: true });
+    expect(scan.result()).toBeUndefined();
+    f.rows[0].k = '1';
+    expect(scan.step().done).toBe(false);
+    expect(() => scan.step()).toThrow(text.stale);
+    expect(scan.result()).toBeUndefined();
+  });
+});
+
 describe('当前结果列的精确数值统计', () => {
   it.each(['LONGLONG', 'BIGINT', 'BIGINT UNSIGNED', 'NEWDECIMAL', 'DECIMAL(65,0)'])('%s不经过Number，保留20位整数合计与循环平均', type => {
     const f = fixture(type, ['18446744073709551615', '2', '9007199254740993', null]), before = structuredClone(f.rows), result = finish(f.scan);

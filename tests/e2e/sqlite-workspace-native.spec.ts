@@ -16,6 +16,7 @@ import { queryResultValueOptionsZh as valueText } from '../../src/renderer/local
 import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
 import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
@@ -334,6 +335,14 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(statistics().getByLabel(statisticsText.standardDeviation, { exact: true })).toHaveText('9223372036854775807.5'));
     await step(async () => info.attach('SQLite查询结果总体标准差', { body: await page.screenshot(), contentType: 'image/png' }));
     await step(() => expect(statistics().getByLabel(statisticsText.sqliteTypeCount('integer'), { exact: true })).toHaveText('2'));
+    await step(() => statistics().getByRole('button', { name: statisticsText.histogram, exact: true }).click());
+    await step(() => statistics().getByLabel(histogramText.bins, { exact: true }).selectOption('5'));
+    const histogram = () => statistics().getByRole('region', { name: histogramText.title, exact: true });
+    await step(() => expect(histogram().locator('tbody td:nth-child(2)')).toHaveText(['1', '0', '0', '0', '1']));
+    await step(() => expect(histogram().locator('tbody th').first()).toHaveText('[-9223372036854775808, -5534023222112865485)'));
+    await step(() => expect(histogram().locator('tbody th').last()).toHaveText('[5534023222112865484, 9223372036854775807]'));
+    await step(async () => info.attach('SQLite查询结果数值直方图', { body: await page.screenshot(), contentType: 'image/png' }));
+    await step(() => statistics().getByRole('button', { name: statisticsText.summary, exact: true }).click());
     await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c4'));
     await step(() => expect(statistics().getByLabel(statisticsText.distinct, { exact: true })).toHaveText('2'));
     await step(() => expect(statistics().getByLabel(statisticsText.sum, { exact: true })).toHaveText(statisticsText.unavailable));
