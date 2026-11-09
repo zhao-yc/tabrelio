@@ -99,7 +99,10 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   postgresResultSources?: PostgresResultSource[];
   /** 与本次 SQLite 的完整结果逐项对应，不随固定快照写入文件。 */
   sqliteResultReceipts?: { statementOrdinal?: number; producedRows: number; changedRows: number; sourceRange: import('./queryFailure').QueryFailureSourceRange }[];
+  /** 仅本次 SQLite 完整结果使用，结果及列均按原序号对应；空项表示未取得原生来源。 */
+  sqliteResultOrigins?: (SqliteResultColumnOrigin[] | null)[];
 }
+export type SqliteResultColumnOrigin = { database: string; table: string; column: string } | null;
 export interface PostgresResultSource { statementOrdinal: number; sourceRange: import('./queryFailure').QueryFailureSourceRange; }
 export type FilterMode = 'all' | 'any';
 /** 数字引用同一filters数组位置；每条条件（含停用）在完整树中恰好出现一次。 */

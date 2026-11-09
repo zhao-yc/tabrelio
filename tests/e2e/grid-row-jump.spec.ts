@@ -19,6 +19,7 @@ import { queryResultSortZh as resultSort } from '../../src/renderer/locales/quer
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { resultArchiveZh as archiveText } from '../../src/renderer/locales/resultArchive.zh-CN';
+import { sqliteResultOriginsZh as originsText } from '../../src/renderer/locales/sqliteResultOrigins.zh-CN';
 import { decodeQueryCsvZip } from '../helpers/queryCsvZip';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
@@ -148,6 +149,31 @@ test('查询结果和 SQLite 可编辑表、只读视图可全选和定位未渲
     }
     expect(await tasks()).toEqual(originalTasks);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 查询显示原生结果列来源并打开原表', async ({}, info) => {
+  await seed('SELECT id AS 重名, name AS 重名, id + 1 AS id FROM subject_view ORDER BY id LIMIT 2;');
+  const query = page.locator('.query-tab:visible');
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(query.getByRole('gridcell', { name: '记录 1', exact: true })).toBeVisible();
+  const executions = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).filter(task => task.kind === 'query.execute'));
+  await expect.poll(async () => (await executions()).map(task => task.status)).toEqual(['completed']);
+  const before = await executions();
+  await (await navigationMenuItem(query, { name: originsText.open, exact: true })).click();
+  const dialog = page.getByRole('dialog', { name: originsText.title, exact: true });
+  const rows = dialog.locator('tbody tr');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0).getByRole('cell')).toHaveText(['1', 'main', 'subject', 'id', originsText.openTable]);
+  await expect(rows.nth(1).getByRole('cell')).toHaveText(['2', 'main', 'subject', 'name', originsText.openTable]);
+  await expect(rows.nth(2).getByRole('cell')).toHaveText(['3', '—', '—', '—', '']);
+  await info.attach('SQLite查询结果列来源', { body: await page.screenshot(), contentType: 'image/png' });
+  await dialog.getByRole('button', { name: originsText.tableLabel('subject', 2), exact: true }).click();
+  await expect(page.locator('.sqlite-table-tab:visible').getByRole('grid')).toBeVisible();
+  await expect(dialog).toHaveCount(0);
+  await page.locator('[data-workspace-tab-id="q-jump"]').getByRole('button', { name: '查询定位', exact: true }).click();
+  await expect(query.getByRole('gridcell', { name: '记录 1', exact: true })).toBeVisible();
+  expect(await executions()).toEqual(before);
   expect(pageErrors).toEqual([]);
 });
 

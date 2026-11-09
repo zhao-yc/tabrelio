@@ -140,7 +140,8 @@ export class SqliteQuerySession {
       const resultTitles = titles.slice(0, completed);
       return resultTitles.some(Boolean) ? { resultTitles } : {};
     }
-    let resultLimitReached = false, retainedBytes = 0;
+    const origins: NonNullable<QueryOutcome['sqliteResultOrigins']> = [];
+    let resultLimitReached = false, retainedBytes = 0, originBytes = 0;
     this.active = operation;
     const event = (patch: Omit<Partial<TaskEvent>, 'taskId'>) => {
       if (this.active !== operation) throw Error('SQLite原查询任务已失效，停止发布结果');
@@ -150,7 +151,7 @@ export class SqliteQuerySession {
     const terminalEvent = (patch: Omit<Partial<TaskEvent>, 'taskId'>) => {
       try { event(patch); } catch { this.terminalNotificationFailed = true; }
     };
-    const complete = (facts: readonly Readonly<SqliteStatementResult>[], ordinals?: number[]): Pick<QueryOutcome, 'results' | 'sqliteResultReceipts'> => {
+    const complete = (facts: readonly Readonly<SqliteStatementResult>[], ordinals?: number[]): Pick<QueryOutcome, 'results' | 'sqliteResultReceipts' | 'sqliteResultOrigins'> => {
       if (facts.length > operation.results.length) throw Error('SQLite完整结果与原语句不匹配');
       const receipts: NonNullable<QueryOutcome['sqliteResultReceipts']> = [];
       // 当前语句投递的是原文片段。选区及普通脚本的偏移相对各自完整载荷。
@@ -167,7 +168,9 @@ export class SqliteQuerySession {
         return { ...source, ...(!source.columns.length || changed > 0n ? { affectedRows: Number(changed) } : {}), truncated: source.truncated || fact.truncated,
           elapsedMs: fact.queryReceipt?.elapsedMs ?? performance.now() - operation.started };
       });
-      return {results, ...(receipts.length && receipts.length === results.length ? {sqliteResultReceipts: receipts} : {})};
+      const completedOrigins = origins.slice(0, facts.length);
+      return {results, ...(receipts.length && receipts.length === results.length ? {sqliteResultReceipts: receipts} : {}),
+        ...(completedOrigins.some(Boolean) ? { sqliteResultOrigins: completedOrigins } : {})};
     };
     const onStatement: NonNullable<SqliteExecuteOptions['onStatement']> = statement => {
       if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
@@ -176,6 +179,15 @@ export class SqliteQuerySession {
       const columns = statement.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' }));
       const result: QueryResult = { columns, rows: [], sqliteStorage: { version: 1, rows: [] }, truncated: false, elapsedMs: 0, statement: statement.sql.slice(0, 32768) };
       operation.results.push(result);
+      // 只用原生准备语句的来源元数据。缺失、过长和不完整的元组不能猜为表列。
+      const origin = options.explainView ? [] : statement.columns.map(({ database, table, column }) =>
+        database && table && column && [database, table, column].every(name => name.length <= 512 && !name.includes('\0'))
+          ? { database, table, column } : null);
+      const bytes = origin.some(Boolean) ? Buffer.byteLength(JSON.stringify(origin)) : 0;
+      if (bytes && originBytes + bytes <= 256 * 1024) {
+        origins.push(origin);
+        originBytes += bytes;
+      } else origins.push(null);
       titles.push(columns.length && validQueryResultTitle(statement.title) ? statement.title : null);
       // 续执行中，失败语句可能发出部分行；在原生确认前留在本次缓冲。
       if (!continueRanges) event({ resultIndex: statement.index, columns, executionSql: statement.sql });
@@ -198,11 +210,11 @@ export class SqliteQuerySession {
     try {
       event({ executionDatabase: { state: 'known', database: 'main' } });
       if (continueRanges) {
-        let checkpoint = {results: 0, rows: 0, bytes: 0};
+        let checkpoint = {results: 0, rows: 0, bytes: 0, origins: 0};
         const {facts, ordinals, report, cancelled, transaction} = await continueSqliteScript(this.driver, sql, continueRanges, options.namedParameters, resultLimit, statementTimeoutMs, {
           cancelled: () => operation.cancelled,
           budget: () => {
-            checkpoint = {results: operation.results.length, rows: operation.rows, bytes: retainedBytes};
+            checkpoint = {results: operation.results.length, rows: operation.rows, bytes: retainedBytes, origins: originBytes};
             return {rows: input.maxRows - operation.rows, bytes: queryBytes - retainedBytes};
           },
           statement: onStatement,
@@ -210,8 +222,10 @@ export class SqliteQuerySession {
           discard: () => {
             operation.results.length = checkpoint.results;
             titles.length = checkpoint.results;
+            origins.length = checkpoint.results;
             operation.rows = checkpoint.rows;
             retainedBytes = checkpoint.bytes;
+            originBytes = checkpoint.origins;
           },
         });
         const completed = complete(facts, ordinals);

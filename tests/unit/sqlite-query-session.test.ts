@@ -79,6 +79,22 @@ function diskValue(path: string, sql: string): unknown {
 }
 
 describe('SQLite原查询会话与真实磁盘driver适配', () => {
+  it('原生结果来源按结果和列位置对齐，别名和计算表达式不冒充源字段', async () => {
+    const harness = await open(fixture());
+    const outcome = await execute(harness, `CREATE VIEW visible AS SELECT id,note FROM subject;
+      SELECT id AS 同名, note AS 同名, id + 1 AS id FROM visible;
+      SELECT 1 AS note; SELECT missing FROM subject;`);
+    expect(outcome.failure).toBeDefined();
+    expect(outcome.results).toHaveLength(3);
+    expect(outcome.sqliteResultOrigins).toEqual([null, [
+      { database: 'main', table: 'subject', column: 'id' },
+      { database: 'main', table: 'subject', column: 'note' },
+      null,
+    ], null]);
+    expect(outcome.results[1].columns.map(column => column.name)).toEqual(['同名', '同名', 'id']);
+    expect(outcome.results[1].rows).toEqual([]);
+    expect((await execute(harness, 'SELECT 1 AS note;')).sqliteResultOrigins).toBeUndefined();
+  });
   it('原TaskEvent头、批次和唯一终态保持顺序，QueryOutcome重复列及数值精度不丢失', async () => {
     const harness = await open(fixture()), taskId = '精度查询';
     const sql = "SELECT 9223372036854775807 AS duplicate,-9223372036854775808 AS duplicate,1.25,-0.0,1e999,'9007199254740993',x'00ff',NULL,'中文🚢'";
