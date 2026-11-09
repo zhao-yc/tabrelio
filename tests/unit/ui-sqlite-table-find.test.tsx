@@ -64,7 +64,18 @@ it.each(['value','row','metadata']as const)('原地%s变化后永久拒旧计划
 it('自身preview单层标记可用，取消保文字与原find输入，不关闭父panel或别的窗口',async()=>{const f=await mount();await ready();expect(button(text.stage).disabled).toBe(false);await click(text.cancelPreview);expect(f.onPreviewChange.mock.calls.map(call=>call[0])).toEqual([true,false]);expect(control(text.query).value).toBe('old');expect(control(text.replacement).value).toBe('new');expect(f.onClose).not.toHaveBeenCalled();expect(f.onStage).not.toHaveBeenCalled();});
 it('父stage拒绝或throw保草稿且旧plan不可重试，明确再预览可签新plan',async()=>{const f=await mount();await ready();f.onStage.mockReturnValueOnce(false);const old=props(button(text.stage)).onClick;await act(async()=>{old();old();});expect(f.onStage).toHaveBeenCalledOnce();expect(control(text.replacement).value).toBe('new');expect(document.querySelectorAll('table')).toHaveLength(0);await click(text.replaceAll);await click(text.stage);expect(f.onStage).toHaveBeenCalledTimes(2);expect(f.onClose).not.toHaveBeenCalled();});
 it('父stage同步卸载后旧preview不能再次暂存，也不能误清新owner',async()=>{const f=await mount();await ready();const stage=props(button(text.stage)).onClick,close=props(button(text.close)).onClick;f.onStage.mockImplementationOnce(()=>{root!.unmount();root=undefined;return true;});await act(async()=>stage());await act(async()=>{stage();close();});expect(f.onStage).toHaveBeenCalledOnce();expect(f.onClose).not.toHaveBeenCalled();expect(RamWorker.all.every(worker=>worker.terminated)).toBe(true);});
-it('只读页可搜索并导航，不能预览替换，即使旧事件手动调用也不授写权',async()=>{const owned=fixture();owned.page.edit={kind:'readonly',reason:'只读'};const f=await mount(owned);await search();await click(text.next);expect(f.onJump).toHaveBeenCalled();expect(button(text.replaceAll).disabled).toBe(true);await act(async()=>props(button(text.replaceAll)).onClick());expect(allRequests().some(value=>value.request.operation==='preview')).toBe(false);expect(f.onStage).not.toHaveBeenCalled();});
+it('只读页可搜索并导航，不提供替换操作且不请求预览', async () => {
+  const owned = fixture();
+  owned.page.edit = { kind: 'readonly', reason: '只读' };
+  const f = await mount(owned);
+  await search();
+  await click(text.next);
+  expect(f.onJump).toHaveBeenCalled();
+  expect([...document.querySelectorAll('button')].map(item => item.textContent)).not.toContain(text.replaceMode);
+  expect(document.querySelector('input[aria-label="' + text.replacement + '"]')).toBeNull();
+  expect(allRequests().some(value => value.request.operation === 'preview')).toBe(false);
+  expect(f.onStage).not.toHaveBeenCalled();
+});
 it('IME与229或repeat Enter不导航或替换，组合期间不自动线程扫描',async()=>{vi.useFakeTimers();const f=await mount();await search();const handler=props(control(text.query)).onKeyDown;for(const nativeEvent of[{isComposing:true},{keyCode:229}])await act(async()=>handler({key:'Enter',nativeEvent,preventDefault:vi.fn(),stopPropagation:vi.fn()}));await act(async()=>handler({key:'Enter',repeat:true,nativeEvent:{},preventDefault:vi.fn(),stopPropagation:vi.fn()}));expect(f.onJump).not.toHaveBeenCalled();await act(async()=>panelProps().onCompositionStart());await input(text.query,'oldold');await act(async()=>{vi.advanceTimersByTime(500);});expect(allRequests()).toHaveLength(1);await act(async()=>panelProps().onCompositionEnd());await act(async()=>{vi.advanceTimersByTime(170);});expect(allRequests()).toHaveLength(2);});
 it('关闭等待dispose完成，卸载撤线程/防抖且旧按钮不再创建计算或IPC',async()=>{const f=await mount();RamWorker.hold=true;await search();RamWorker.retirement=deferred<void>();const close=props(button(text.close)).onClick;await click(text.close);expect(f.onClose).not.toHaveBeenCalled();await act(async()=>RamWorker.retirement!.resolve(undefined));expect(f.onClose).toHaveBeenCalledOnce();await act(async()=>close());expect(f.onClose).toHaveBeenCalledOnce();expect(RamWorker.all.every(worker=>worker.terminated)).toBe(true);expect(request).not.toHaveBeenCalled();});
 

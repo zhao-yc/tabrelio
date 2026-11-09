@@ -60,7 +60,7 @@ import { queryResultStatisticsZh as statisticsText } from '../locales/queryResul
 /** 任意结果的协议BLOB也可能是TEXT；没有真实结构时只认显式字节包装，NULL仍常规展示。 */
 export function isResultBinaryCell(value: CellValue | undefined): boolean { return isBinaryCell(value); }
 
-export interface GridFindTarget { row: number; key: string; }
+export interface GridFindTarget { row: number; key: string; focus?: boolean; }
 
 export interface GridCellPresentation {
   value: CellValue | undefined;
@@ -125,7 +125,7 @@ export function ResultsGrid({ columns, rows, headerDetails, frozenKeys, columnWi
     if (column < 0 || target.row < -1 || target.row >= rows.length) return;
     const position = { rowIdx: target.row, idx: column + (onActiveRowChange ? 0 : 1) };
     gridRef.current.scrollToCell(target.row < 0 ? { idx: position.idx } : position);
-    gridRef.current.setActivePosition(position, { enableEditor: false, shouldFocus: false });
+    gridRef.current.setActivePosition(position, { enableEditor: false, shouldFocus: target.focus === true });
   }, [findTarget, navigateTo, columns, rows]);
   /** 原位输入关闭后用原行及可见列定位，虚拟网格可重新创建原 DOM 节点。 */
   useLayoutEffect(() => {

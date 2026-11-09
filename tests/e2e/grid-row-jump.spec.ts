@@ -1580,6 +1580,72 @@ test('SQLite 表页快捷数值边界匹配跨页原生整数', async ({}, info)
   expect(pageErrors).toEqual([]);
 });
 
+test('SQLite 只读表和视图可查找原值并勾选本页匹配行', async ({}, info) => {
+  await seed(undefined, `ALTER TABLE subject ADD COLUMN raw;
+    UPDATE subject SET name='命中标记' WHERE id IN (1,90,120);
+    UPDATE subject SET name='NULL',raw=X'00FF' WHERE id=2;
+    UPDATE subject SET name=NULL WHERE id=3;
+    DROP VIEW subject_view;
+    CREATE VIEW subject_view AS SELECT id,name,raw FROM subject ORDER BY id;`, undefined, true);
+  const tasks = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {}))
+    .filter(task => task.kind === 'sqlite.tablePage').map(task => task.id));
+  for (const [tab, title] of [['t-jump', '表格定位'], ['v-jump', '视图定位']] as const) {
+    await page.locator('[data-workspace-tab-id="' + tab + '"]').getByRole('button', { name: title, exact: true }).click();
+    const table = page.locator('.sqlite-table-tab:visible'), grid = table.getByRole('grid');
+    const id = (value: number) => grid.getByRole('gridcell', { name: String(value), exact: true });
+    const row = (value: number) => id(value).locator('..');
+    const check = (value: number) => row(value).getByRole('checkbox');
+    await expect(table).toHaveAttribute('data-readonly', 'true');
+    await check(2).check();
+    const before = await tasks();
+    if (tab === 't-jump') await (await navigationMenuItem(table, { name: sqliteFind.entry, exact: true })).click();
+    else { await id(1).click(); await page.keyboard.press('Control+f'); }
+    const panel = table.getByRole('region', { name: sqliteFind.title, exact: true });
+    const input = panel.getByRole('textbox', { name: sqliteFind.query, exact: true });
+    const status = panel.getByRole('status'), next = panel.getByRole('button', { name: sqliteFind.next, exact: true });
+    const field = panel.getByRole('combobox', { name: sqliteFind.column, exact: true });
+    await expect(input).toBeFocused();
+    await expect(panel.getByRole('button', { name: sqliteFind.replaceMode, exact: true })).toHaveCount(0);
+    await field.selectOption({ label: 'raw' });
+    await input.fill('00ff');
+    await expect(status).toHaveText(sqliteFind.count(1, 1, -1));
+    await field.selectOption({ label: 'name' });
+    await panel.getByRole('combobox', { name: sqliteFind.kind, exact: true }).selectOption('null');
+    await expect(status).toHaveText(sqliteFind.count(1, 1, -1));
+    await next.click();
+    const nameColumn = await grid.getByRole('columnheader', { name: 'name', exact: true }).getAttribute('aria-colindex');
+    await expect(row(3).locator('[role="gridcell"][aria-colindex="' + nameColumn + '"]')).toBeFocused();
+    await panel.getByRole('combobox', { name: sqliteFind.kind, exact: true }).selectOption('text');
+    await input.fill('命中标记');
+    await expect(status).toHaveText(sqliteFind.count(2, 2, -1));
+    await panel.getByRole('checkbox', { name: resultFind.highlightAll, exact: true }).check();
+    const mark = (value: number) => row(value).getByRole('gridcell', { name: '命中标记', exact: true });
+    await expect(mark(1)).toHaveClass(/pg-find-match/);
+    await panel.getByRole('button', { name: resultFind.checkRows, exact: true }).click();
+    await expect(check(1)).toBeChecked();
+    await expect(check(2)).toBeChecked();
+    await input.press('F3');
+    await expect(input).toBeFocused();
+    await expect(mark(1)).toHaveClass(/query-result-find-hit/);
+    if (tab === 'v-jump') await info.attach('SQLite只读视图查找', { body: await page.screenshot(), contentType: 'image/png' });
+    await next.click();
+    await expect(mark(90)).toBeFocused();
+    await expect(check(90)).toBeChecked();
+    await panel.getByRole('button', { name: resultFind.uncheckRows, exact: true }).click();
+    await expect(check(90)).not.toBeChecked();
+    await mark(90).focus();
+    await page.keyboard.press('Shift+F3');
+    await expect(mark(1)).toBeFocused();
+    await expect(check(1)).not.toBeChecked();
+    await expect(check(2)).toBeChecked();
+    expect(await tasks()).toEqual(before);
+    await table.getByRole('button', { name: browseText.next, exact: true }).click();
+    await expect(id(101)).toBeVisible();
+    await expect(panel).toHaveCount(0);
+  }
+  expect(pageErrors).toEqual([]);
+});
+
 test('SQLite 表页查找批量勾选命中且保留其它行', async ({}, info) => {
   await seed(undefined, "UPDATE subject SET name='批量标记批量标记' WHERE id IN (1,3,120);");
   await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();

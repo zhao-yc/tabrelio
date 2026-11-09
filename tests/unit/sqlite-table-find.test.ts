@@ -1,3 +1,5 @@
+import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
+import { captureSqliteReadonlyFind } from '../../src/renderer/sqliteReadonlyFind';
 import { describe, expect, it, vi } from 'vitest';
 import { copySqliteFindTransfer, copySqliteFindOptions, copySqliteFindSource, runSqliteTableFindInWorker as run, sqliteFindLimits as limits, sqliteFindMessages as text, sqliteFindOccurrences, type SqliteFindSource, type SqliteFindOptions, type SqliteFindWorkerResult } from '../../src/renderer/sqliteTableFind';
 
@@ -40,6 +42,32 @@ describe('SQLite当前页typed查找算法', () => {
   it('只读source仍可查找但所有格不授替换资格，noop替换不签发空计划', () => {
     const value = source({ writable: false }); expect(ready(run({ operation: 'find', source: value })).matches.every(match => !match.replaceable)).toBe(true); expect(run({ operation: 'preview', source: value, replacement: 'x' }).status).toBe('blocked'); expect(run({ operation: 'preview', source: source(), replacement: 'a' })).toMatchObject({ status: 'blocked', message: text.noReplace });
   });
+});
+
+it('只读页仅投影可见字段的原类型，原存储类型或原值变化后不可恢复', () => {
+  const row = { c0: '9223372036854775807', c1: 'NULL', c2: { type: 'binary' as const, base64: 'AP8=' }, c3: null };
+  const names = Object.keys(row);
+  const page: SqliteTablePage = {
+    target: { connectionId: 'sqlite', database: 'main', table: 'subject_view', kind: 'view' },
+    schemaKey: 'a'.repeat(64), offset: 0, limit: 100, hasMore: false,
+    columns: names.map(name => ({ name, declaredType: '' })),
+    result: { columns: names.map(name => ({ name, key: name, type: 'SQLITE' })), rows: [row], elapsedMs: 0, statement: '', truncated: false },
+    storageTypes: ['itbn'],
+    edit: { kind: 'readonly', reason: '视图' },
+  };
+  const captured = captureSqliteReadonlyFind(page, new Set([0, 2, 3]));
+  expect(captured.rows[0].values).toEqual([
+    { kind: 'integer', value: '9223372036854775807' }, undefined, { kind: 'blob', value: '00ff' }, { kind: 'null' },
+  ]);
+  expect(captured.current()).toBe(true);
+  row.c2.base64 = 'AAE=';
+  expect(captured.current()).toBe(false);
+  row.c2.base64 = 'AP8=';
+  expect(captured.current()).toBe(false);
+  const next = captureSqliteReadonlyFind(page, new Set([0]));
+  page.storageTypes![0] = 'ttbn';
+  expect(next.current()).toBe(false);
+  expect(() => captureSqliteReadonlyFind({ ...page, storageTypes: undefined }, new Set([0]))).toThrow();
 });
 
 describe('SQLite查找完整预算与不可信输入门', () => {

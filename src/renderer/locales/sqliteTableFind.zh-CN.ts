@@ -12,6 +12,7 @@ export const sqliteTableFindZh = {
   cancelPreview: '取消 SQLite 替换预览', stage: '暂存 SQLite 替换草稿', previewRows: 'SQLite 替换前十项原文与新文',
   oldValue: '替换前', newValue: '替换后', row: '页内行', columnName: '字段', noChanges: '没有需要暂存的文本变化。',
   scope: '仅查找当前已加载页及本地新增草稿，不读取其它页或全库，不重新执行 SQL。待删除行不参与。',
+  readScope: '仅查找当前只读页的可见字段，查找和勾选不会读取其它页。',
   typedHint: 'NULL、DEFAULT 与字符串文字分开查找。数字和二进制可查找其准确表示；只有可写字段中的实际 TEXT 值允许替换，生成字段只查找。暂存的文字写入后仍受目标字段亲和性及约束影响。',
   regexHint: '正则模式仅在明确执行时运行，并受独立线程时间和内存上限保护；输入后不会自动运行。捕获组替换必须单独启用。',
   previewHint: '仅展示前十项；确认后整批暂存到当前页草稿，尚未写入数据库。可在表页一次撤销，最终写入仍需预览和提交。',
