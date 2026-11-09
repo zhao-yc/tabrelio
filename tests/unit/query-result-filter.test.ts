@@ -49,10 +49,28 @@ describe('PostgreSQL 结果筛选', () => {
     expect(() => f.apply([rule('eq', 'PT')])).toThrow();
     expect(f.filter.view(f.binding)).toBe(previous);
   });
+  it('UUID 和 IP 条件按字节、地址族及前缀比较，保留原行', () => {
+    const uuid = fixture('UUID', ['a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', null], 'postgresql');
+    expect(uuid.apply([rule('eq', '{A0EEBC999C0B4EF8-BB6D6BB9-BD380A11}')]).sourceIndices).toEqual([0]);
+    expect(() => uuid.apply([rule('eq', 'a0e-ebc999c0b4ef8bb6d6bb9bd380a11')])).toThrow();
+    const inet = fixture('INET', ['10.0.0.250/8', '10.0.0.1/24', '::ffff:10.0.0.1', '10.0.0.1/8', null], 'postgresql');
+    expect(inet.apply([{ ...rule('between', '10.0.0.250/8'), upper: '10.0.0.1/24' }]).sourceIndices).toEqual([0, 1]);
+    expect(inet.apply([rule('eq', '0:0:0:0:0:FFFF:A00:1/128')]).sourceIndices).toEqual([2]);
+    expect(() => inet.apply([rule('eq', 'fe80::1%en0')])).toThrow();
+    const cidr = fixture('CIDR', ['192.168.0.0/24', '10.0.0.0/8', '::ffff:1.2.3.0/120'], 'postgresql');
+    expect(cidr.apply([rule('eq', '192.168')]).sourceIndices).toEqual([0]);
+    expect(cidr.apply([rule('eq', '0x0a')]).sourceIndices).toEqual([1]);
+    expect(cidr.apply([rule('eq', '::ffff:1.2.3/120')]).sourceIndices).toEqual([2]);
+    expect(() => cidr.apply([rule('eq', '192.168.0.1/24')])).toThrow();
+  });
+  it.each([['OID 869', '10.0.0.0'], ['OID 650', '10.0.0.0/32']])('早期 PostgreSQL 快照类型 %s 仍可比较', (type, value) => {
+    expect(fixture(type, [value, null], 'postgresql').apply([rule('eq', '10.0.0.0/32')]).sourceIndices).toEqual([0]);
+    expect(queryResultFilterOperators({ key: 'k', name: '地址', type })).not.toContain('eq');
+  });
   it('布尔、浮点原文和未知类型分别使用准确条件', () => {
     expect(fixture('BOOLEAN',['t','f',null],'postgresql').apply([rule('eq','TRUE')]).sourceIndices).toEqual([0]);
     expect(fixture('DOUBLE PRECISION',['1e-300','-Infinity',null],'postgresql').apply([rule('gt','-inf')]).sourceIndices).toEqual([0]);
-    const unknown=fixture('UUID',['ab5b981c-e1c9-403f-9947-90a55c455beb',null],'postgresql');
+    const unknown=fixture('JSONB',['{"id":1}',null],'postgresql');
     expect(unknown.apply([rule('null')]).sourceIndices).toEqual([1]);
     expect(()=>unknown.apply([rule('gt','2026-11-05')])).toThrow(text.invalid);
   });

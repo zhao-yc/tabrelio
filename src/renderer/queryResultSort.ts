@@ -1,5 +1,6 @@
 import { postgresTemporalOrder, type PostgresTemporalKind } from './postgresResultTemporal';
 import { postgresIntervalOrder } from './postgresResultInterval';
+import { isPostgresResultIdentifierType, postgresResultIdentifierOrder } from './postgresResultIdentifier';
 import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultSortRule } from '../shared/queryResultPresets';
 export type { QueryResultSortRule } from '../shared/queryResultPresets';
@@ -9,7 +10,7 @@ import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultCo
 
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
-type SortKind = Kind | PostgresTemporalKind | 'pgInterval' | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
+type SortKind = Kind | PostgresTemporalKind | 'pgInterval' | 'UUID' | 'INET' | 'CIDR' | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
 export type SortDialect = 'postgresql';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
@@ -56,6 +57,10 @@ function sortKind(column: Pick<ResultColumn, 'type'>, dialect?: SortDialect): So
     case 'TIMESTAMP': return 'pgTimestamp';
     case 'TIMESTAMPTZ': return 'pgTimestampTz';
     case 'INTERVAL': return 'pgInterval';
+    case 'UUID': case 'INET': case 'CIDR': return column.type;
+    // 旧快照在协议列中保留已知的原生 OID，按同一内置类型比较。
+    case 'OID 869': return 'INET';
+    case 'OID 650': return 'CIDR';
   }
 }
 /** 入口和面板共用准确说明，不能把UTF-8固定本地序误称数据库COLLATE或原MySQL文本序。 */
@@ -158,6 +163,11 @@ export function queryResultSortKind(type: string, dialect?: SortDialect) {
 function valueUnits(value: CellValue, sqlite: boolean): number { return typeof value === 'string' ? value.length : sqlite && value && typeof value === 'object' ? value.base64.length : 1; }
 /** 原类型标记是唯一准入凭据；BLOB与文本键在分配前受单值上限约束。 */
 function scalarKey(value: CellValue, type: Exclude<SortKind, 'sqlite'>, column: ResultColumn): Key {
+  if (isPostgresResultIdentifierType(type)) {
+    if (value === null) return null;
+    if (typeof value !== 'string' || value.length > queryResultSortLimits.valueUnits) throw Error(text.value);
+    return postgresResultIdentifierOrder(value, type);
+  }
   switch (type) {
     case 'pgInterval': {
       if (value === null) return null;
@@ -198,7 +208,10 @@ function sortingKey(value: CellValue, type: SortKind, column: ResultColumn, code
   return sqliteResultComparisonKey(value, code, ignoreCase);
 }
 /** 编码后的比较键也计费，不把非BMP文本或BLOB解码空间排除在本地整理预算外。 */
-function keyUnits(value: SortKey): number { return value && typeof value === 'object' && 'sqlite' in value && value.storage !== 'number' ? value.bytes.byteLength : 0; }
+function keyUnits(value: SortKey, type: SortKind): number {
+  if (typeof value === 'string' && isPostgresResultIdentifierType(type)) return value.length;
+  return value && typeof value === 'object' && 'sqlite' in value && value.storage !== 'number' ? value.bytes.byteLength : 0;
+}
 /** PostgreSQL 的两种数值均令 NaN 等值且排在正无穷之后。 */
 function specialOrder(value: Key): number {
   if (typeof value !== 'number' || Number.isFinite(value)) return 0;
@@ -250,7 +263,7 @@ export class QueryResultSort {
       if (type === 'sqlite' && !source.sqliteStorage) { reasons.set(column.key,text.sqliteUnknown); continue; }
       if (source.rows.length * visible.length > queryResultSortLimits.cells || units > queryResultSortLimits.units) { reasons.set(column.key,text.budget); continue; }
       try {
-        for (let index=0;index<source.rows.length;index++) { const value=cell(source.rows[index],column); units += valueUnits(value,type==='sqlite'); if (units > queryResultSortLimits.units) throw Error(text.budget); const parsed=sortingKey(value,type,column,source.sqliteStorage?.rows[index][position]); units+=keyUnits(parsed); if(units>queryResultSortLimits.units)throw Error(text.budget); }
+        for (let index=0;index<source.rows.length;index++) { const value=cell(source.rows[index],column); units += valueUnits(value,type==='sqlite'); if (units > queryResultSortLimits.units) throw Error(text.budget); const parsed=sortingKey(value,type,column,source.sqliteStorage?.rows[index][position]); units+=keyUnits(parsed,type); if(units>queryResultSortLimits.units)throw Error(text.budget); }
         reasons.set(column.key,undefined);
       } catch (reason) { reasons.set(column.key,reason instanceof Error && reason.message === text.budget ? text.budget : text.value); }
     }
@@ -291,7 +304,7 @@ export class QueryResultSort {
     const values=admitted.map(({column,type})=>{const values=binding.rows.map(row=>{const value=cell(row,column);units+=valueUnits(value,type==='sqlite');if(units>queryResultSortLimits.units)throw Error(text.budget);return value;});return{column,values,binary:values.map(binaryStamp)};});
     const keys=admitted.map(({column,type,position,ignoreCase},i)=>values[i].values.map((value,row)=>{
       const parsed=sortingKey(value,type,column,binding.source.sqliteStorage?.rows[row][position],ignoreCase);
-      units+=keyUnits(parsed);if(units>queryResultSortLimits.units)throw Error(text.budget);
+      units+=keyUnits(parsed,type);if(units>queryResultSortLimits.units)throw Error(text.budget);
       // 只转换控制器自有文本键；原文与转换结果共同消耗原预算，NULL与其它类型不参与转换。
       if(ignoreCase&&typeof parsed==='string'){
         const folded=parsed.toLowerCase();units+=folded.length;if(units>queryResultSortLimits.units)throw Error(text.budget);return folded;

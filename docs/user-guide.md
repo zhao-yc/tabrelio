@@ -490,6 +490,8 @@ PostgreSQL 查询结果和 PostgreSQL 离线结果快照可按 ISO 原文排序�
 
 PostgreSQL 的 `INTERVAL` 查询结果及离线快照支持四种 `IntervalStyle` 原文的排序、筛选、统计和快照匹配键。比较遵循 PostgreSQL 的规则，一月折算为 30 天，时分秒保留到微秒，网格仍显示原返回文字。表页可用单个原格生成比较条件，或从同列两格及两条勾选行取上下界，确认后筛选全表。手动填写条件时可直接复制数据库返回的时长原文。
 
+PostgreSQL 的 `UUID`、`INET` 和 `CIDR` 支持结果及离线快照的排序、筛选、统计和匹配键。旧快照中以 OID 标记的内置地址类型也可与新快照匹配。UUID 按 16 字节比较，等值筛选接受大小写、有无连字符等 PostgreSQL 写法。IP 地址按地址族、公共前缀、掩码长度和地址比较，IPv4 排在 IPv6 之前。表页也可从原格或勾选的两条记录生成条件。要匹配同一子网中的主机，可在 SQL 中使用 PostgreSQL 的网络包含运算符。
+
 在 PostgreSQL 查询结果区点「筛选已返回结果」，可以组合条件、从结果选值或手动填写比较值。应用和清除筛选都会保留当前排序。导出按筛选后的显示范围和顺序写入。详见[PostgreSQL 查询结果筛选](development/postgres-query-result-filter-20261105.md)。
 
 选中单元格后，可点「追加等值条件」或「追加排除条件」。要用多个值，先勾选行，再点选目标列中的一个单元格，点击「勾选值加入筛选」。检查草稿后点击「应用筛选」。详见[PostgreSQL 查询结果快捷筛选](development/postgres-query-shortcut-filter-20261105.md)。

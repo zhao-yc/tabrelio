@@ -50,7 +50,7 @@ import { openFocusedGridRowJump } from './GridRowJump';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { tableCellBoundActions } from '../tableCellFilter';
 import { captureTableRangeBounds, tableCheckedBoundsOptions } from '../tableRangeFilter';
-import { isPostgresIntervalDeclaration, postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../postgresTableCellFilter';
+import { postgresTableSpecialOrderedType, postgresTableCellFilterDraft, postgresTableRangeFilterDraft } from '../postgresTableCellFilter';
 import { postgresSelectedTableValues } from '../postgresTableValues';
 import { tableSelectedFilterZh as selectedFilterText } from '../locales/tableSelectedFilter.zh-CN';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
@@ -684,7 +684,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     ? page?.columns.find(column => column.key === selectionColumn && !column.binary) : undefined;
   const selectedFilterColumn = activeFilterColumn?.valueOptions ? activeFilterColumn : undefined;
   const selectedBoundsColumn = selectedFilterColumn ??
-    (activeFilterColumn && isPostgresIntervalDeclaration(activeFilterColumn.type) ? activeFilterColumn : undefined);
+    (activeFilterColumn && postgresTableSpecialOrderedType(activeFilterColumn.type) ? activeFilterColumn : undefined);
 
   useLayoutEffect(() => {
     if (selectedFilter && (!cellMenuEnabled || recordView || selectedFilter.scope !== cellScope)) setSelectedFilter(undefined);

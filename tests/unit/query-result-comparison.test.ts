@@ -53,7 +53,19 @@ describe('PostgreSQL 固定结果匹配键', () => {
     expect(result).toMatchObject({ equal: 2, rows: [{ kind: 'equal', rightIndex: 1 }, { kind: 'equal', rightIndex: 0 }] });
   });
 
-  it.each(['REAL', 'DOUBLE PRECISION', 'BYTEA', 'UUID'])('%s 可作为对比值但不作为 PostgreSQL 匹配键', type => {
+  it('UUID 与 IPv6 表示变体及旧快照类型可作为复合匹配键', () => {
+    const metadata = [{ key: 'uuid', name: '标识', type: 'UUID' }, { key: 'address', name: 'IP', type: 'INET' }];
+    const left = source([['a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '::ffff:10.0.0.1']], metadata);
+    const legacy = [metadata[0], { ...metadata[1], type: 'OID 869' }];
+    const right = source([['{A0EEBC999C0B4EF8BB6D6BB9BD380A11}', '0:0:0:0:0:ffff:a00:1/128']], legacy);
+    const capture = captureQueryResultComparison(left, right, ['uuid', 'address'], 'postgresql');
+    const result = finish(new QueryResultComparisonScan(capture));
+    expect(result).toMatchObject({ equal: 1, changed: 0, added: 0, removed: 0 });
+    right.columns[1].type = 'INET';
+    expect(currentQueryResultComparison(capture, left, right)).toBe(false);
+  });
+
+  it.each(['REAL', 'DOUBLE PRECISION', 'BYTEA', 'JSONB'])('%s 可作为对比值但不作为 PostgreSQL 匹配键', type => {
     const metadata = [{ key: 'id', name: '字段', type }];
     expect(queryResultComparisonKeyReason(metadata[0], 'postgresql')).toBe(text.postgresKeyUnsupported);
     expect(() => captureQueryResultComparison(source([], metadata), source([], metadata), ['id'], 'postgresql'))

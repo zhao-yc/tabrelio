@@ -1,6 +1,7 @@
 import type { CellValue, DataRow, QueryResult, ResultColumn, ResultExportData } from '../shared/contracts';
 import { resultExportLimits, validateResultExportData } from '../shared/resultExport';
 import { queryResultFilterKey, queryResultSortKind, type SortDialect } from './queryResultSort';
+import { isPostgresResultIdentifierType } from './postgresResultIdentifier';
 import { queryResultComparisonZh as text } from './locales/queryResultComparison.zh-CN';
 import { bindSqliteResultStorage, copySqliteResultStorage, type SqliteResultStorageCode } from '../shared/sqliteResultStorage';
 
@@ -19,6 +20,7 @@ export interface QueryResultComparisonResult {
 export interface QueryResultComparisonValue { readonly column: string; readonly name: string; readonly left?: CellValue; readonly right?: CellValue; readonly leftType?: SqliteResultStorageCode; readonly rightType?: SqliteResultStorageCode; readonly changed: boolean; }
 interface Source {
   result: QueryResult; columns: readonly ResultColumn[]; columnRefs: readonly ResultColumn[]; rows: readonly DataRow[]; rowRefs: readonly DataRow[];
+  metadata: readonly ResultColumn[];
   raw: readonly (readonly CellValue[])[]; values: readonly (readonly CellValue[])[]; units: readonly number[]; truncated: boolean;
   sqlite?: { readonly codes: readonly string[]; current(): boolean };
 }
@@ -61,6 +63,13 @@ export function queryResultComparisonKeyReason(column: ResultColumn, dialect?: S
       ? dialect === 'postgresql' ? text.postgresKeyUnsupported : text.keyUnsupported : undefined;
   } catch (reason) { return reason instanceof Error && reason.message === text.budget ? text.budget : text.identity; }
 }
+/** 只放行同一内置类型的新旧 PostgreSQL 协议标记，仍保留两侧原元数据用于过期检查。 */
+function sameColumnType(left: string, right: string, dialect?: SortDialect): boolean {
+  if (left === right) return true;
+  if (dialect !== 'postgresql') return false;
+  const kind = queryResultSortKind(left, dialect);
+  return kind !== undefined && isPostgresResultIdentifierType(kind) && kind === queryResultSortKind(right, dialect);
+}
 /** 二进制只按明确包装和base64原文比较，不解码，也不序列化未知对象。 */
 function binary(value: unknown): value is { type: 'binary'; base64: string } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -86,7 +95,7 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
   const leftColumns = own(left, 'columns') as ResultColumn[], rightColumns = own(right, 'columns') as ResultColumn[];
   const leftRefs = array(leftColumns, queryResultComparisonLimits.columns, 1), rightRefs = array(rightColumns, queryResultComparisonLimits.columns, 1);
   const columns = leftRefs.map(metadata), rightMetadata = rightRefs.map(metadata);
-  if (columns.length !== rightMetadata.length || new Set(columns.map(column => column.key)).size !== columns.length || rightMetadata.some((column, index) => column.key !== columns[index].key || column.name !== columns[index].name || column.type !== columns[index].type)) throw Error(text.identity);
+  if (columns.length !== rightMetadata.length || new Set(columns.map(column => column.key)).size !== columns.length || rightMetadata.some((column, index) => column.key !== columns[index].key || column.name !== columns[index].name || !sameColumnType(columns[index].type, column.type, dialect))) throw Error(text.identity);
   const sqlite = columns.some(column => column.type === 'SQLITE');
   if (sqlite && columns.some(column => column.type !== 'SQLITE')) throw Error(text.identity);
   const keyRefs = array(keys, queryResultComparisonLimits.keys, 1);
@@ -118,7 +127,8 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
     }
     // 缺失类型帧不能把旧快照中的数字外观猜为INTEGER；准入与最终复核均不读取SQL正文。
     const storage = sqlite ? { codes: Object.freeze(copySqliteResultStorage(own(result, 'sqliteStorage'), refs, rowRefs).rows), current: bindSqliteResultStorage(result) } : undefined;
-    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, raw: Object.freeze(raw), values: Object.freeze(values), units: Object.freeze(rowUnits), truncated, sqlite: storage };
+    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, metadata: side === 'left' ? columns : rightMetadata,
+      raw: Object.freeze(raw), values: Object.freeze(values), units: Object.freeze(rowUnits), truncated, sqlite: storage };
   }
   const capture = Object.freeze({ columns: Object.freeze(columns), keys: Object.freeze(keyRefs), leftCount: leftRowRefs.length, rightCount: rightRowRefs.length, leftTruncated: own(left, 'truncated') as boolean, rightTruncated: own(right, 'truncated') as boolean });
   const binding: Binding = { left: source(left, leftColumns, leftRefs, leftRows, leftRowRefs, 'left'), right: source(right, rightColumns, rightRefs, rightRows, rightRowRefs, 'right'), metadata: columns, keyIndices: Object.freeze(keyIndices), binaryPrototypes: prototypes, invalid: false, dialect };
@@ -127,10 +137,10 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
   return capture;
 }
 /** 每批只核固定列结构和数组长度，不反复扫描全部行而退化为平方复杂度。 */
-function structure(source: Source, binding: Binding): boolean {
+function structure(source: Source): boolean {
   if (own(source.result, 'columns') !== source.columns || own(source.result, 'rows') !== source.rows || own(source.result, 'truncated') !== source.truncated || own(source.rows, 'length') !== source.rowRefs.length || own(source.columns, 'length') !== source.columnRefs.length) return false;
   for (let index = 0; index < source.columnRefs.length; index++) {
-    const column = own(source.columns, String(index)) as ResultColumn, before = binding.metadata[index];
+    const column = own(source.columns, String(index)) as ResultColumn, before = source.metadata[index];
     if (column !== source.columnRefs[index]) return false;
     const now = metadata(column);
     if (now.key !== before.key || now.name !== before.name || now.type !== before.type) return false;
@@ -153,7 +163,7 @@ export function currentQueryResultComparison(capture: QueryResultComparisonCaptu
   const binding = bindings.get(capture);
   if (!binding || binding.invalid) return false;
   try {
-    if (left !== binding.left.result || right !== binding.right.result || !structure(binding.left, binding) || !structure(binding.right, binding)) throw Error(text.stale);
+    if (left !== binding.left.result || right !== binding.right.result || !structure(binding.left) || !structure(binding.right)) throw Error(text.stale);
     if (binding.left.sqlite && !binding.left.sqlite.current() || binding.right.sqlite && !binding.right.sqlite.current()) throw Error(text.stale);
     for (const source of [binding.left, binding.right]) for (let index = 0; index < source.rowRefs.length; index++) if (!currentRow(source, index, binding)) throw Error(text.stale);
     return true;
@@ -246,7 +256,7 @@ export class QueryResultComparisonScan {
     try {
       if (!binding || !capture) throw Error(text.stale);
       let valid = false;
-      try { valid = !binding.invalid && structure(binding.left, binding) && structure(binding.right, binding); } catch { /* 访问器替换同样撤销原来源。 */ }
+      try { valid = !binding.invalid && structure(binding.left) && structure(binding.right); } catch { /* 访问器替换同样撤销原来源。 */ }
       if (!valid) { binding.invalid = true; throw Error(text.stale); }
       let rows = 0, units = 0;
       while (this.processed < this.total && rows < queryResultComparisonLimits.batchRows) {

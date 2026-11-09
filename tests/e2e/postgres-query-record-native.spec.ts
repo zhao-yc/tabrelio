@@ -12,6 +12,7 @@ import { postgresTableFindZh as findText } from '../../src/renderer/locales/post
 import { queryResultFindZh as resultFind } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultSortZh } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { QueryResultSort } from '../../src/renderer/queryResultSort';
+import { QueryResultFilter } from '../../src/renderer/queryResultFilter';
 import { queryResultFilterZh } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
@@ -167,6 +168,84 @@ test('PostgreSQL 查询结果 INTERVAL 排序及区间和服务器一致', async
     await tab.getByRole('button', { name: zh.table.text013, exact: true }).click();
     await tab.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
     await expect(tableGrid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['5', '6']);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+});
+
+test('PostgreSQL 查询结果 UUID 和 IP 地址排序、筛选和服务器一致', async ({}, info) => {
+  const config = isolatedConnection(), observer = new Client(config);
+  try {
+    await observer.connect();
+    await observer.query(`CREATE TABLE public.address_order (id int PRIMARY KEY, identifier uuid, address inet, network cidr);
+      INSERT INTO public.address_order VALUES
+        (1, lpad('a',32,'0')::uuid, '10.0.0.250/8', '10.0.0.0/8'),
+        (2, lpad('2',32,'0')::uuid, '10.0.0.1/24', '10.0.0.0/24'),
+        (3, lpad('9',32,'0')::uuid, '10.0.0.2/8', '10.0.0.0/9'),
+        (4, lpad('1',32,'0')::uuid, '2.0.0.0', '2.0.0.0/8'),
+        (5, lpad('3',32,'0')::uuid, '::ffff:10.0.0.1', '::ffff:10.0.0.0/120'),
+        (6, lpad('4',32,'0')::uuid, '2001:db8::1/64', '2001:db8::/64'),
+        (7, lpad('7',32,'0')::uuid, '::/0', '::/0'),
+        (8, NULL, NULL, NULL),
+        (9, lpad('6',32,'0')::uuid, '10.0.0.1/8', '10.0.0.0/16'),
+        (10, lpad('f',32,'0')::uuid, '2001:0db8::0001/64', '192.168.0.0/24')`);
+    const order = async (column: 'identifier' | 'network' | 'address') => (await observer.query(
+      'SELECT id FROM public.address_order ORDER BY ' + column + ', id DESC')).rows.map(row => String(row.id));
+    const raw = await observer.query('SELECT id, identifier::text, address::text, network::text FROM public.address_order ORDER BY id DESC');
+    const filterEngine = new QueryResultFilter('postgresql');
+    const filterBinding = filterEngine.bind({ rows: raw.rows, columns: [
+      { key: 'identifier', name: 'identifier', type: 'UUID' },
+      { key: 'address', name: 'address', type: 'INET' },
+      { key: 'network', name: 'network', type: 'CIDR' },
+    ], truncated: false, elapsedMs: 0, statement: '' }, [])!;
+    const alternate = [
+      ['identifier', 'uuid', '{00000000-00000000-0000-00000000000A}'],
+      ['address', 'inet', '0:0:0:0:0:FFFF:A00:1/128'],
+      ['network', 'cidr', '192.168'],
+      ['network', 'cidr', '0x0a'],
+      ['network', 'cidr', '::ffff:10.0.0/120'],
+    ] as const;
+    for (const [column, type, value] of alternate) {
+      const expected = (await observer.query('SELECT id FROM public.address_order WHERE ' + column +
+        ' = $1::' + type + ' ORDER BY id DESC', [value])).rows.map(row => row.id);
+      expect(expected.length).toBeGreaterThan(0);
+      const filtered = filterEngine.apply(filterBinding, filterEngine.view(filterBinding)!, [{ column, operator: 'eq', value }], 'AND');
+      expect(filtered.result.rows.map(row => row.id)).toEqual(expected);
+    }
+
+    await loadQuery(config, 'SELECT id, identifier, address, network FROM public.address_order ORDER BY id DESC;');
+    const query = page.locator('.postgres-query:visible'), grid = query.getByRole('grid');
+    await query.getByRole('button', { name: postgresZh.execute, exact: true }).click();
+    const ids = grid.locator('[role="gridcell"][aria-colindex="2"]');
+    for (const column of ['identifier', 'network', 'address'] as const) {
+      await grid.getByRole('columnheader', { name: new RegExp('^' + column) }).click();
+      await expect(ids).toHaveText(await order(column));
+    }
+    const lower = '10.0.0.250/8', upper = '10.0.0.1/24';
+    const lowerCell = grid.getByRole('gridcell', { name: lower, exact: true });
+    await grid.getByRole('gridcell', { name: upper, exact: true }).click();
+    await page.keyboard.press('Shift+ArrowUp');
+    await expect(lowerCell).toBeFocused();
+    await lowerCell.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: queryResultSelectedFilterZh.rangeBetween, exact: true }).press('Enter');
+    const filter = query.getByRole('region', { name: queryResultFilterZh.title, exact: true });
+    await expect(filter.getByLabel(queryResultFilterZh.lower + ' 1', { exact: true })).toHaveValue(lower);
+    await expect(filter.getByLabel(queryResultFilterZh.upper + ' 1', { exact: true })).toHaveValue(upper);
+    await info.attach('PostgreSQL地址区间', { body: await page.screenshot(), contentType: 'image/png' });
+    await filter.getByRole('button', { name: queryResultFilterZh.apply, exact: true }).click();
+    await expect(ids).toHaveText(['1', '2']);
+
+    await loadQuery(config, '', 'address_order');
+    const table = page.locator('.postgres-table-tab:visible'), tableGrid = table.getByRole('grid');
+    const cell = (name: string) => tableGrid.getByRole('gridcell', { name, exact: true });
+    for (const id of ['1', '2']) await cell(id).locator('..').getByRole('checkbox').check();
+    await cell(upper).click();
+    await table.getByRole('button', { name: tableSelectedFilterZh.checkedBetween, exact: true }).click();
+    await expect(table.getByLabel(zh.table.filterRangeStart, { exact: true })).toHaveValue(lower);
+    await expect(table.getByLabel(zh.table.filterRangeEnd, { exact: true })).toHaveValue(upper);
+    await table.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    await table.getByRole('button', { name: tableText.applyAdvancedFilter, exact: true }).click();
+    await expect(tableGrid.locator('[role="gridcell"][aria-colindex="2"]')).toHaveText(['1', '2']);
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
 });
