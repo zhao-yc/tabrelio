@@ -20,7 +20,7 @@ export interface QueryResultComparisonResult {
 export interface QueryResultComparisonValue { readonly column: string; readonly name: string; readonly left?: CellValue; readonly right?: CellValue; readonly leftType?: SqliteResultStorageCode; readonly rightType?: SqliteResultStorageCode; readonly changed: boolean; }
 interface Source {
   result: QueryResult; columns: readonly ResultColumn[]; columnRefs: readonly ResultColumn[]; rows: readonly DataRow[]; rowRefs: readonly DataRow[];
-  metadata: readonly ResultColumn[];
+  metadata: readonly ResultColumn[]; comparedKeys: readonly string[];
   raw: readonly (readonly CellValue[])[]; values: readonly (readonly CellValue[])[]; units: readonly number[]; truncated: boolean;
   sqlite?: { readonly codes: readonly string[]; current(): boolean };
 }
@@ -70,6 +70,26 @@ function sameColumnType(left: string, right: string, dialect?: SortDialect): boo
   const kind = queryResultSortKind(left, dialect);
   return kind !== undefined && isPostgresResultIdentifierType(kind) && kind === queryResultSortKind(right, dialect);
 }
+
+/** 只对齐两侧各自唯一的同名列，保留左侧列顺序；同名歧义或类型不兼容均须先修正来源。 */
+export function alignQueryResultComparisonColumns(left: readonly ResultColumn[], right: readonly ResultColumn[], dialect?: SortDialect) {
+  const byName = (columns: readonly ResultColumn[]) => {
+    const groups = new Map<string, number | undefined>();
+    columns.forEach(({ name }, index) => groups.set(name, groups.has(name) ? undefined : index));
+    return groups;
+  };
+  const leftNames = byName(left), rightNames = byName(right);
+  const pairs: { left: number; right: number }[] = [];
+  for (const [name, index] of leftNames) {
+    if (!name || !rightNames.has(name)) continue;
+    const other = rightNames.get(name);
+    if (index === undefined || other === undefined) throw Error(text.ambiguousColumn(name));
+    if (!sameColumnType(left[index].type, right[other].type, dialect)) throw Error(text.incompatibleColumn(name));
+    pairs.push({ left: index, right: other });
+  }
+  if (!pairs.length) throw Error(text.noCommonColumns);
+  return pairs;
+}
 /** 二进制只按明确包装和base64原文比较，不解码，也不序列化未知对象。 */
 function binary(value: unknown): value is { type: 'binary'; base64: string } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -91,13 +111,17 @@ function equal(left: CellValue, right: CellValue): boolean {
   return !!left && !!right && typeof left === 'object' && typeof right === 'object' && left.base64 === right.base64;
 }
 /** 捕获时先校结构与合计格数，再复制全部值，避免预算外的大表先分配单元格快照。 */
-export function captureQueryResultComparison(left: QueryResult, right: QueryResult, keys: readonly string[], dialect?: SortDialect): QueryResultComparisonCapture {
+export function captureQueryResultComparison(left: QueryResult, right: QueryResult, keys: readonly string[], dialect?: SortDialect, byName = false): QueryResultComparisonCapture {
   const leftColumns = own(left, 'columns') as ResultColumn[], rightColumns = own(right, 'columns') as ResultColumn[];
   const leftRefs = array(leftColumns, queryResultComparisonLimits.columns, 1), rightRefs = array(rightColumns, queryResultComparisonLimits.columns, 1);
-  const columns = leftRefs.map(metadata), rightMetadata = rightRefs.map(metadata);
-  if (columns.length !== rightMetadata.length || new Set(columns.map(column => column.key)).size !== columns.length || rightMetadata.some((column, index) => column.key !== columns[index].key || column.name !== columns[index].name || !sameColumnType(columns[index].type, column.type, dialect))) throw Error(text.identity);
+  const leftMetadata = leftRefs.map(metadata), rightMetadata = rightRefs.map(metadata);
+  if ([leftMetadata, rightMetadata].some(items => new Set(items.map(column => column.key)).size !== items.length)) throw Error(text.identity);
+  if (!byName && (leftMetadata.length !== rightMetadata.length || rightMetadata.some((column, index) =>
+    column.key !== leftMetadata[index].key || column.name !== leftMetadata[index].name || !sameColumnType(leftMetadata[index].type, column.type, dialect)))) throw Error(text.identity);
+  const pairs = byName ? alignQueryResultComparisonColumns(leftMetadata, rightMetadata, dialect) : leftMetadata.map((_, index) => ({ left: index, right: index }));
+  const columns = pairs.map(pair => leftMetadata[pair.left]);
   const sqlite = columns.some(column => column.type === 'SQLITE');
-  if (sqlite && columns.some(column => column.type !== 'SQLITE')) throw Error(text.identity);
+  if (sqlite && [leftMetadata, rightMetadata].some(items => items.some(column => column.type !== 'SQLITE'))) throw Error(text.identity);
   const keyRefs = array(keys, queryResultComparisonLimits.keys, 1);
   if (keyRefs.some(key => typeof key !== 'string') || new Set(keyRefs).size !== keyRefs.length) throw Error(text.selectKeys);
   const keyIndices = keyRefs.map(key => columns.findIndex(column => column.key === key));
@@ -112,12 +136,15 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
     const truncated = own(result, 'truncated');
     if (typeof truncated !== 'boolean' || new Set(rowRefs).size !== rowRefs.length || rowRefs.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw Error(text.identity);
     const raw: (readonly CellValue[])[] = [], values: (readonly CellValue[])[] = [], rowUnits: number[] = [];
+    const sourceMetadata = side === 'left' ? leftMetadata : rightMetadata;
+    const positions = pairs.map(pair => pair[side]);
+    const comparedKeys = positions.map(position => sourceMetadata[position].key);
     for (const row of rowRefs) {
       const original: CellValue[] = [], copied: CellValue[] = []; let currentUnits = 0;
       const charge = (length: number) => { if (length > queryResultComparisonLimits.valueUnits) throw Error(text.budget); units += length; currentUnits += length; if (units > queryResultComparisonLimits.units) throw Error(text.budget); };
       for (let index = 0; index < columns.length; index++) {
         try {
-          const value = own(row, columns[index].key); copied.push(snapshot(value, charge, prototypes)); original.push(value as CellValue);
+          const value = own(row, comparedKeys[index]); copied.push(snapshot(value, charge, prototypes)); original.push(value as CellValue);
         } catch (reason) {
           if (keyIndices.includes(index) && !(reason instanceof Error && reason.message === text.budget)) throw Error(text.keyInvalid(side));
           throw reason;
@@ -126,8 +153,9 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
       raw.push(Object.freeze(original)); values.push(Object.freeze(copied)); rowUnits.push(currentUnits);
     }
     // 缺失类型帧不能把旧快照中的数字外观猜为INTEGER；准入与最终复核均不读取SQL正文。
-    const storage = sqlite ? { codes: Object.freeze(copySqliteResultStorage(own(result, 'sqliteStorage'), refs, rowRefs).rows), current: bindSqliteResultStorage(result) } : undefined;
-    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, metadata: side === 'left' ? columns : rightMetadata,
+    const storage = sqlite ? { codes: Object.freeze(copySqliteResultStorage(own(result, 'sqliteStorage'), refs, rowRefs).rows
+      .map(codes => byName ? positions.map(position => codes[position]).join('') : codes)), current: bindSqliteResultStorage(result) } : undefined;
+    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, metadata: sourceMetadata, comparedKeys,
       raw: Object.freeze(raw), values: Object.freeze(values), units: Object.freeze(rowUnits), truncated, sqlite: storage };
   }
   const capture = Object.freeze({ columns: Object.freeze(columns), keys: Object.freeze(keyRefs), leftCount: leftRowRefs.length, rightCount: rightRowRefs.length, leftTruncated: own(left, 'truncated') as boolean, rightTruncated: own(right, 'truncated') as boolean });
@@ -151,8 +179,8 @@ function structure(source: Source): boolean {
 function currentRow(source: Source, index: number, binding: Binding): boolean {
   const row = own(source.rows, String(index));
   if (row !== source.rowRefs[index]) return false;
-  for (let column = 0; column < binding.metadata.length; column++) {
-    const value = own(row, binding.metadata[column].key), raw = source.raw[index][column], copy = source.values[index][column];
+  for (let column = 0; column < source.comparedKeys.length; column++) {
+    const value = own(row, source.comparedKeys[column]), raw = source.raw[index][column], copy = source.values[index][column];
     if (!Object.is(value, raw)) return false;
     if (copy && typeof copy === 'object' && (!binary(value) || Object.getPrototypeOf(value) !== binding.binaryPrototypes.get(value) || own(value, 'base64') !== copy.base64)) return false;
   }

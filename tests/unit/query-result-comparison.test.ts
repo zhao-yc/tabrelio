@@ -74,6 +74,43 @@ describe('PostgreSQL 固定结果匹配键', () => {
 });
 
 describe('固定结果的明确键与稳定完整差异', () => {
+  it('按同名列对齐不同内部键、顺序和单侧列，报告保留原行号与精确值', () => {
+    const id = { key: 'id', name: '编号', type: 'BIGINT' };
+    const amount = { key: 'a', name: '金额', type: 'DECIMAL(65,20)' };
+    const left = source([['9007199254740993', '0.12345678901234567891', '仅左'], ['2', '0', '仅左']], [id, amount, columns[2]]);
+    const right = source([['0', '2'], ['0.12345678901234567892', '9007199254740993']], [{ ...amount, key: 'other_amount' }, { ...id, key: 'other_id' }]);
+    expect(() => captureQueryResultComparison(left, right, ['id'])).toThrow(text.identity);
+    const capture = captureQueryResultComparison(left, right, ['id'], undefined, true);
+    const result = finish(new QueryResultComparisonScan(capture));
+    expect(result).toMatchObject({ changed: 1, equal: 1, added: 0, removed: 0 });
+    expect(result.rows[0]).toEqual({ kind: 'changed', leftIndex: 0, rightIndex: 1, changedColumns: ['a'] });
+    expect(snapshotQueryResultComparisonReport(capture, [result.rows[0]]).rows[1]).toMatchObject({
+      columnKey: 'a', leftRow: 1, rightRow: 2, leftValue: '0.12345678901234567891', rightValue: '0.12345678901234567892',
+    });
+    right.rows[1].other_amount = '0';
+    expect(currentQueryResultComparison(capture, left, right)).toBe(false);
+  });
+  it('按同名列对齐时拒绝共享重名、类型不兼容或无交集', () => {
+    const id = { key: 'id', name: '编号', type: 'BIGINT' };
+    const left = source([], [id]);
+    expect(() => captureQueryResultComparison(left, source([], [id, { ...id, key: 'id2' }]), ['id'], undefined, true))
+      .toThrow(text.ambiguousColumn('编号'));
+    expect(() => captureQueryResultComparison(left, source([], [{ ...id, type: 'VARCHAR' }]), ['id'], undefined, true))
+      .toThrow(text.incompatibleColumn('编号'));
+    expect(() => captureQueryResultComparison(left, source([], [{ ...id, name: '其它' }]), ['id'], undefined, true))
+      .toThrow(text.noCommonColumns);
+  });
+  it('SQLite 对齐时以各侧原列位置读取存储类型', () => {
+    const id = { key: 'id', name: '编号', type: 'SQLITE' };
+    const value = { key: 'value', name: '值', type: 'SQLITE' };
+    const left = { ...source([['2', '2']], [id, value]), sqliteStorage: { version: 1 as const, rows: ['it'] } };
+    const right = { ...source([['2', '2']], [{ ...value, key: 'v' }, { ...id, key: 'i' }]), sqliteStorage: { version: 1 as const, rows: ['ii'] } };
+    const capture = captureQueryResultComparison(left, right, ['id'], undefined, true);
+    const result = finish(new QueryResultComparisonScan(capture));
+    expect(result).toMatchObject({ changed: 1, removed: 0, added: 0 });
+    expect(queryResultComparisonValues(capture, result.rows[0])[1]).toMatchObject({ leftType: 't', rightType: 'i', changed: true });
+  });
+
   it('差异报告冻结指定分类的原值、匹配键和行号，超限与撤销均拒绝', () => {
     const left = source([['1', null, null], ['2', '2.0', null]]);
     const right = { ...source([['1', '', { type: 'binary', base64: 'AA==' }], ['3', '9007199254740993.01', null]]), truncated: true };
