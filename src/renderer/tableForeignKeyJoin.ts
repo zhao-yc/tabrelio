@@ -8,7 +8,14 @@ import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-
 
 export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, manualPairs: 64, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
 export type ForeignKeyJoinKind = 'LEFT' | 'RIGHT' | 'INNER';
-export interface ManualJoinPair { child: string; parent: string }
+export const manualJoinOperators = ['=', '<>', '<', '<=', '>', '>='] as const;
+export type ManualJoinOperator = typeof manualJoinOperators[number];
+export interface ManualJoinPair { child: string; parent: string; operator?: ManualJoinOperator }
+
+/** 只允许已知比较符；界面和生成器共用校验，避免任意表达式进入 ON。 */
+export function isManualJoinOperator(value: unknown): value is ManualJoinOperator {
+  return manualJoinOperators.some(operator => operator === value);
+}
 export type ForeignKeyJoinRelation = string | readonly ManualJoinPair[];
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: 'child' | 'parent' | 'aggregate'; column: string; alias: string }
@@ -144,34 +151,38 @@ function order(raw: unknown, child: { columns: { name: string }[] }, parent: { c
   }).join(', ');
 }
 
-/** 手动配对独立于物理外键；只接受双方目录中的真实字段及显式的等值配对。 */
-function joinColumns(left: ReturnType<typeof snapshot>, right: ReturnType<typeof snapshot>, input: ForeignKeyJoinRelation) {
+type JoinCondition = Required<ManualJoinPair>;
+
+/** 手动条件只引用真实目录字段和允许的比较符；已声明外键继续按原映射等值关联。 */
+function joinConditions(left: ReturnType<typeof snapshot>, right: ReturnType<typeof snapshot>, input: ForeignKeyJoinRelation): JoinCondition[] {
   const parentNames = new Set(right.columns.map(column => column.name));
   if (typeof input !== 'string') {
     const childNames = new Set(left.columns.map(column => column.name)), seen = new Set<string>();
-    const columns: string[] = [], referencedColumns: string[] = [];
-    for (const value of array(input, foreignKeyJoinLimits.manualPairs)) {
-      const child = own(value, 'child'), parent = own(value, 'parent');
-      if (Reflect.ownKeys(value as object).length !== 2 || typeof child !== 'string' || typeof parent !== 'string' ||
-          !childNames.has(child) || !parentNames.has(parent)) throw Error(text.manualInvalid);
-      const pair = JSON.stringify([child, parent]);
-      if (seen.has(pair)) throw Error(text.manualInvalid);
-      seen.add(pair); columns.push(child); referencedColumns.push(parent);
-    }
-    if (!columns.length) throw Error(text.manualInvalid);
-    return { columns, referencedColumns };
+    const conditions = array(input, foreignKeyJoinLimits.manualPairs).map(value => {
+      const child = own(value, 'child'), parent = own(value, 'parent'), suppliedOperator = own(value, 'operator', true);
+      const operator = suppliedOperator === undefined ? '=' : suppliedOperator;
+      if (Reflect.ownKeys(value as object).some(key => key !== 'child' && key !== 'parent' && key !== 'operator') ||
+          typeof child !== 'string' || typeof parent !== 'string' || !childNames.has(child) || !parentNames.has(parent) ||
+          !isManualJoinOperator(operator)) throw Error(text.manualInvalid);
+      const identity = JSON.stringify([child, operator, parent]);
+      if (seen.has(identity)) throw Error(text.manualInvalid);
+      seen.add(identity);
+      return { child, operator, parent };
+    });
+    if (!conditions.length) throw Error(text.manualInvalid);
+    return conditions;
   }
   const relation = left.foreignKeys.find(key => key.name === input);
   if (!relation) throw Error(text.relation);
   if (right.database !== relation.referencedDatabase || right.name !== relation.referencedTable) throw Error(text.target);
   if (relation.referencedColumns.some(column => !parentNames.has(column))) throw Error(text.relation);
-  return relation;
+  return relation.columns.map((child, index) => ({ child, operator: '=', parent: relation.referencedColumns[index] }));
 }
 
 /** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
 export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: ForeignKeyJoinRelation, kind: ForeignKeyJoinKind, limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
   if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
-  const left = snapshot(child), right = snapshot(parent), relation = joinColumns(left, right, input);
+  const left = snapshot(child), right = snapshot(parent), conditions = joinConditions(left, right, input);
   let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right.columns.map(column => column.name); }
   else {
@@ -189,8 +200,9 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: 
   }
   if (unmatchedOnly) {
     if (kind === 'INNER') throw Error(text.unmatchedInvalid);
-    // 等值连接成功时，任一映射列均非 NULL。用补空一侧的首个映射列判断是否匹配，即使原字段允许 NULL。
-    const missing = (kind === 'LEFT' ? 'p.' + quote(relation.referencedColumns[0]) : 'c.' + quote(relation.columns[0])) + ' IS NULL';
+    // 允许的比较符遇到 NULL 都不会匹配，可用补空侧的首个条件列识别未匹配行。
+    const first = conditions[0];
+    const missing = (kind === 'LEFT' ? 'p.' + quote(first.parent) : 'c.' + quote(first.child)) + ' IS NULL';
     // 用户条件编译器已为整个分组加括号，顶层 OR 也不能绕过未匹配限制。
     where = where ? missing + ' AND ' + where : missing;
   }
@@ -211,7 +223,7 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: 
   const append = (part: string) => { if (sql.length + part.length > foreignKeyJoinLimits.sqlUnits) throw Error(text.budget); sql += part; };
   columns.forEach((column, index) => append(`  ${summary ? summary.expressions[index] : (column.side === 'child' ? 'c' : 'p')+'.'+quote(column.column)+' AS '+quote(column.alias)}${index + 1 === columns.length ? '\n' : ',\n'}`));
   append(`FROM ${quote(left.database)}.${quote(left.name)} AS c\n${kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\nON\n`);
-  relation.columns.forEach((column, index) => append(`${index ? '  AND ' : '  '}c.${quote(column)} = p.${quote(relation.referencedColumns[index])}\n`));
+  conditions.forEach(({ child, operator, parent }, index) => append(`${index ? '  AND ' : '  '}c.${quote(child)} ${operator} p.${quote(parent)}\n`));
   if (where) append('WHERE ' + where + '\n');
   if (summary?.grouping.length) append('GROUP BY '+summary.grouping.join(', ')+'\n');
   if(having)append('HAVING '+having+'\n');

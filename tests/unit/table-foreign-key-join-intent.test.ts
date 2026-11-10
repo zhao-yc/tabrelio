@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TableInfo } from '../../src/shared/contracts';
 import { foreignKeyJoinPreview, fixedForeignKeyJoinStart, revalidateForeignKeyJoin, TableForeignKeyJoinIntent, type ForeignKeyJoinTarget } from '../../src/renderer/tableForeignKeyJoinIntent';
+import { buildForeignKeyJoin, type ManualJoinPair } from '../../src/renderer/tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 
 /** 完全合成的目录，不创建数据库会话或伪造查询执行成功。 */
@@ -13,6 +14,32 @@ function tables() {
 function fixture() { const source = tables(), identity = {}, intent = new TableForeignKeyJoinIntent(source.child, 'connection', 77, [identity], () => true); return { ...source, identity, intent, preview: () => foreignKeyJoinPreview(intent, source.parent, 'fk', 'LEFT', { childColumns: ['id'], parentColumns: ['value'] }) }; }
 
 describe('外键JOIN原结构与前置核验租约', () => {
+  it.each(['=', '<>', '<', '<=', '>', '>='] as const)('手动条件只输出允许的比较符 %s', operator => {
+    const { child, parent } = tables();
+    const query = buildForeignKeyJoin(child, parent, [{ child: 'parent_id', operator, parent: 'id' }], 'INNER', 1);
+    expect(query.sql).toContain('ON\n  c.`parent_id` ' + operator + ' p.`id`\n');
+  });
+
+  it('同一对列可用不同运算符，精确重复及未知比较符不能生成预览', () => {
+    const { child, parent } = tables();
+    const pairs: ManualJoinPair[] = [
+      { child: 'id', operator: '>=', parent: 'id' },
+      { child: 'id', operator: '<', parent: 'value' },
+      { child: 'id', operator: '<>', parent: 'id' },
+    ];
+    const intent = new TableForeignKeyJoinIntent(child, 'connection', 1, [], () => true);
+    const options = { childColumns: ['id'], parentColumns: ['value'], unmatchedOnly: true };
+    const preview = foreignKeyJoinPreview(intent, parent, pairs, 'LEFT', options);
+    expect(preview.sql).toContain('ON\n  c.`id` >= p.`id`\n  AND c.`id` < p.`value`\n  AND c.`id` <> p.`id`\nWHERE p.`id` IS NULL');
+    pairs[0].operator = '=';
+    expect(preview.relation).toMatchObject([{ operator: '>=' }, { operator: '<' }, { operator: '<>' }]);
+    expect(() => intent.consume({ ...preview, relation: pairs })).toThrow(text.stale);
+    for (const operator of ['<=>', 'OR 1=1', null]) {
+      const invalid = [{ child: 'id', operator, parent: 'id' }] as unknown as ManualJoinPair[];
+      expect(() => buildForeignKeyJoin(child, parent, invalid, 'INNER', 1)).toThrow(text.manualInvalid);
+    }
+    expect(() => buildForeignKeyJoin(child, parent, [{ child: 'id', parent: 'id' }, pairs[0]], 'INNER', 1)).toThrow(text.manualInvalid);
+  });
   it('没有外键也可生成跨库复合 JOIN，配对被快照固定，换目标结构不能打开旧 SQL', async () => {
     const { child, parent } = tables();
     child.foreignKeys = [];

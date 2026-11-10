@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { TableInfo } from '../../shared/contracts';
-import { foreignKeyJoinLimits, type ManualJoinPair } from '../tableForeignKeyJoin';
+import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinOperators, type ManualJoinPair } from '../tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import '../childReferences.css';
 
@@ -51,7 +51,11 @@ export function ManualJoinPairFields({ selection, child, parent, disabled, onAdd
         <option value="">{text.manualSelect}</option>
         {child.columns.map(column => <option key={column.name} value={column.name}>{column.name}</option>)}
       </select></label>
-      <span>=</span>
+      <label>{text.manualOperator(index + 1)}<select value={pair.operator ?? '='} onChange={event => {
+        if (isManualJoinOperator(event.target.value)) onChange(pair.id, { operator: event.target.value });
+      }}>
+        {manualJoinOperators.map(operator => <option key={operator} value={operator}>{operator} {text.manualOperatorLabels[operator]}</option>)}
+      </select></label>
       <label>{text.manualParent(index + 1)}<select value={pair.parent} onChange={event => onChange(pair.id, { parent: event.target.value })}>
         <option value="">{text.manualSelect}</option>
         {parent.columns.map(column => <option key={column.name} value={column.name}>{column.name}</option>)}
