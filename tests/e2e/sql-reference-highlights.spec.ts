@@ -11,6 +11,8 @@ test.skip(process.env.DBARK_SQL_REFERENCE_HIGHLIGHTS_TEST !== '1', '仅在隔离
 
 const sql = ['SELECT s.id,', '(SELECT s.id FROM child s)', 'FROM parent s', 'WHERE s.id=1;'].join('\n');
 const cteSql = 'WITH local_cte AS (SELECT 1 AS id) SELECT local_cte.id FROM local_cte;';
+const rowsCompletionSql = ['SELECT r.序', 'FROM ROWS FROM (', '  jsonb_to_recordset(\'[{"id":1}]\') AS (id integer),',
+  '  generate_series(1,2)', ') WITH ORDINALITY AS r(id,n,"序号");'].join('\n');
 const postgresDrafts = [
   {
     id: 'update-draft', title: 'UPDATE 导航草稿',
@@ -80,7 +82,7 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
       }
       await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
       // 真实持久化接口准备草稿，网络方言使用不可连接的回环配置，无需实库或凭据。
-      await page.evaluate(async ({ dialect, sql, cteSql, postgresDrafts }) => {
+      await page.evaluate(async ({ dialect, sql, cteSql, postgresDrafts, rowsCompletionSql }) => {
         const id = 'sql-reference-highlights', base = { id, name: '引用高亮样本', group: '', color: '#51bda5' };
         if (dialect === 'sqlite') {
           const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
@@ -96,9 +98,10 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
           ...(dialect === 'postgresql' ? [
             { id: 'cte', kind: 'query' as const, title: 'CTE 导航草稿', connectionId: id, sql: cteSql },
             ...postgresDrafts.map(({ id: tabId, title, sql }) => ({ id: tabId, kind: 'query' as const, title, sql, connectionId: id })),
+            { id: 'rows-completion', kind: 'query' as const, title: '表函数字段补全', connectionId: id, sql: rowsCompletionSql },
           ] : []),
         ] });
-      }, { dialect, sql, cteSql, postgresDrafts });
+      }, { dialect, sql, cteSql, postgresDrafts, rowsCompletionSql });
       await page.reload();
       const tab = page.locator('.query-tab:visible'), input = tab.locator('.monaco-editor').getByRole('textbox');
       const lines = tab.locator('.view-lines .view-line');
@@ -219,6 +222,16 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
           await page.keyboard.press(undo);
           await expect.poll(async () => (await snapshot()).source).toBe(draft.sql);
         }
+        await page.locator('.tab-strip').getByRole('button', { name: '表函数字段补全', exact: true }).click();
+        await move(0, 'SELECT r.序'.length);
+        await page.keyboard.press('Control+Space');
+        const focused = tab.locator('.suggest-widget.visible .monaco-list-row.focused');
+        await expect(focused).toContainText('序号');
+        await tab.screenshot({ path: info.outputPath('postgresql-rows-from-completion.png') });
+        await page.keyboard.press('Enter');
+        await expect.poll(async () => (await snapshot()).source).toBe(rowsCompletionSql.replace('r.序', 'r."序号"'));
+        await page.keyboard.press(undo);
+        await expect.poll(async () => (await snapshot()).source).toBe(rowsCompletionSql);
       }
       expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }))).toEqual({ tasks: [], history: [] });
       expect(pageErrors).toEqual([]);

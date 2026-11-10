@@ -450,21 +450,39 @@ function readFunctionCall(parts: Part[], start: number): { name: string; args: G
   return { name, args, next: index + 1 };
 }
 
-/** 类型和排序规则是列定义的元数据，只有调用实参进入引用作用域。 */
-function hasTypedColumns(group?: Part): boolean {
-  if (group?.kind !== 'group' || group.closing !== ')') return false;
+/** 只提取显式列名，类型和排序规则不进入表达式作用域。 */
+function typedColumnNames(group?: Part): string[] | undefined {
+  if (group?.kind !== 'group' || group.closing !== ')' || !group.closed) return;
   const parts = group.parts;
+  const names: string[] = [];
   let start = 0;
   for (let i = 0; i <= parts.length; i++) {
     if (i < parts.length && !punct(parts[i], ',')) continue;
-    if (i - start < 2 || !identifier(parts[start]) || !identifier(parts[start + 1]) || punct(parts[i - 1], '.')) return false;
-    if (parts.slice(start + 1, i).some(part => !identifier(part) && part.kind !== 'group' && !punct(part, '.'))) return false;
+    const name = identifier(parts[start]);
+    if (i - start < 2 || !name || name.length > limits.name || !identifier(parts[start + 1]) || punct(parts[i - 1], '.')) return;
+    if (parts.slice(start + 1, i).some(part => !identifier(part) && part.kind !== 'group' && !punct(part, '.'))) return;
+    names.push(name);
     start = i + 1;
   }
-  return true;
+  return names;
 }
 
 interface TableFunctionSource { relation: ScopedRelation; args: Group[]; next: number; }
+
+/** 未知函数列数时，只有确定越过位置别名的后续声明列才保留原名。 */
+function tableFunctionProjection(members: (string[] | undefined)[], aliases: string[], ordinal: boolean): Projection {
+  const names = [...aliases];
+  let knownWidth = 0, exact = true;
+  for (const member of members) {
+    if (!member) { exact = false; continue; }
+    for (const name of member) if (knownWidth++ >= aliases.length) names.push(name);
+  }
+  if (ordinal) {
+    if (knownWidth >= aliases.length) names.push('ordinality');
+    knownWidth++;
+  }
+  return { names: names.slice(0, limits.items), stars: [], exact: exact && aliases.length <= knownWidth && knownWidth <= limits.items };
+}
 
 /** ROWS FROM 的各个实参共享外部可见关系，函数名和成员列定义不会引入新的关系别名。 */
 function readTableFunction(parts: Part[], start: number): TableFunctionSource | false | undefined {
@@ -475,16 +493,18 @@ function readTableFunction(parts: Part[], start: number): TableFunctionSource | 
   const first = readFunctionCall(body, rows ? 0 : start);
   if (!first) return rows ? false : undefined;
   const args = [first.args];
-  let memberColumns = false;
+  const members: (string[] | undefined)[] = [];
   if (rows) {
     let member = first;
     for (;;) {
       let index = member.next;
+      let names: string[] | undefined;
       if (keyword(body[index]) === 'AS') {
-        if (!hasTypedColumns(body[index + 1])) return false;
-        memberColumns = true;
+        names = typedColumnNames(body[index + 1]);
+        if (!names) return false;
         index += 2;
       }
+      members.push(names);
       if (index === body.length) break;
       if (!punct(body[index], ',')) return false;
       const following = readFunctionCall(body, index + 1);
@@ -492,7 +512,7 @@ function readTableFunction(parts: Part[], start: number): TableFunctionSource | 
       member = following;
       args.push(member.args);
     }
-  }
+  } else members.push(undefined);
   let next = rows ? start + 3 : first.next;
   const ordinal = keyword(parts[next]) === 'WITH' && keyword(parts[next + 1]) === 'ORDINALITY';
   if (ordinal) next += 2;
@@ -500,15 +520,20 @@ function readTableFunction(parts: Part[], start: number): TableFunctionSource | 
   const renamed: RelationAlias | undefined = anonymousColumns ? { next: next + 1 } : readRelationAlias(parts, next, false);
   if (!renamed) return false;
   const columns = parts[renamed.next];
+  let aliases: string[] = [];
   next = renamed.next;
   if (columns?.kind === 'group') {
     if (!anonymousColumns && !renamed.declaration) return false;
-    if (anonymousColumns || !nameList(columns).length) {
-      if (args.length !== 1 || memberColumns || ordinal || !hasTypedColumns(columns)) return false;
+    if (!anonymousColumns) aliases = nameList(columns);
+    if (!aliases.length) {
+      const names = typedColumnNames(columns);
+      if (args.length !== 1 || members[0] || ordinal || !names) return false;
+      members[0] = names;
     }
     next++;
   }
-  return { relation: { name: first.name, alias: renamed.alias, declaration: renamed.declaration }, args, next };
+  return { relation: { name: first.name, alias: renamed.alias, declaration: renamed.declaration,
+    projection: tableFunctionProjection(members, aliases, ordinal) }, args, next };
 }
 
 function traceTableFunction(source: TableFunctionSource, scope: Scope,
@@ -829,25 +854,27 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return { projection: output, query, routine };
   }
 
-  const write = !!trace && (command === 'UPDATE' || command === 'DELETE');
+  const write = command === 'UPDATE' || command === 'DELETE';
   const tableSource = !!trace && command === 'TABLE';
   if (trace && !write && !['SELECT', 'VALUES', 'TABLE'].includes(command)) return unsupported();
   if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
-  const returning = write ? main.findIndex(part => keyword(part) === 'RETURNING') : -1;
-  const where = write ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
+  const returning = trace && write ? main.findIndex(part => keyword(part) === 'RETURNING') : -1;
+  const where = command === 'DELETE' ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
   const refs: ScopedRelation[] = [];
   const spans = trace ? new Map<number, RelationSpan>() : undefined;
   const commas = new Set<number>();
-  let from = false, deleteUsing = false;
+  let from = false, deleteUsing = -1;
   let joinChainStart = 0;
+  let argumentRefs: ScopedRelation[] | undefined;
+  let inFunctionMetadata = false;
   for (let i = 0; i < (returning < 0 ? main.length : returning); i++) {
     const word = keyword(main[i]);
     if (endsFrom.has(word)) from = false;
-    const usingSource = write && command === 'DELETE' && word === 'USING' && !deleteUsing && !from && (where < 0 || i < where);
-    if (usingSource) deleteUsing = true;
+    const usingSource = command === 'DELETE' && word === 'USING' && deleteUsing < 0 && !from && (where < 0 || i < where);
+    if (usingSource) deleteUsing = i;
     if (from && punct(main[i], ',')) commas.add(i);
     if (!usingSource && !(tableSource && i === 0) && !relationEntry(main, i) && !commas.has(i)) continue;
-    const target = write && writeTarget(main, i);
+    const target = writeTarget(main, i);
     if (!target && (word === 'FROM' || word === 'JOIN' || usingSource)) from = true;
     if (!target && word !== 'JOIN') joinChainStart = refs.length;
     let next = i + 1;
@@ -855,13 +882,21 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (modifier === 'ONLY' || modifier === 'LATERAL') next++;
     // PostgreSQL 的 FROM/USING 来源子查询及表函数不能引用本语句的写入目标。
     const joinType = keyword(main[i - (keyword(main[i - 1]) === 'OUTER' ? 2 : 1)]);
-    const available = trace && word === 'JOIN' && ['RIGHT', 'FULL'].includes(joinType) ? refs.slice(0, joinChainStart) : refs;
+    const available = word === 'JOIN' && ['RIGHT', 'FULL'].includes(joinType) ? refs.slice(0, joinChainStart) : refs;
     const preceding = write ? available.slice(1) : available;
-    const call = trace && !target && !tableSource && modifier !== 'ONLY' ? readTableFunction(main, next) : undefined;
+    const call = !target && !tableSource && modifier !== 'ONLY' ? readTableFunction(main, next) : undefined;
     if (call === false) return unsupported();
     if (call) {
-      traceTableFunction(call, scope, preceding, outer, trace!);
-      spans!.set(i, { end: call.next, relation: refs.length });
+      if (trace) {
+        traceTableFunction(call, scope, preceding, outer, trace);
+        spans!.set(i, { end: call.next, relation: refs.length });
+      }
+      if (context && context.offset <= main[call.next - 1].end) {
+        if (call.args.some(args => contains(args, context.offset))) argumentRefs = preceding.slice();
+        else if (context.start >= call.args[0].end || keyword(main[next]) === 'ROWS' && context.start >= main[next + 1].end) {
+          inFunctionMetadata = true;
+        }
+      }
       refs.push(call.relation);
       i = call.next - 1;
       continue;
@@ -931,15 +966,16 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return { projection: unknown };
   }
   const projection = project(main, refs);
-  if (!context || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };
+  if (!context || inFunctionMetadata || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };
 
   const { left, offset } = context;
+  const visible = argumentRefs ?? refs;
   const cursorGroup = main.find(part => part.kind === 'group' && contains(part, offset));
   if (cursorGroup?.kind === 'group') {
     let group = cursorGroup;
     // 只深入包含光标的表达式括号，普通函数参数仍沿用本层字段。
     while (true) {
-      if (commands.has(keyword(group.parts[0]))) return parseQuery(group.parts, scope, [refs, ...outer], context);
+      if (commands.has(keyword(group.parts[0]))) return parseQuery(group.parts, scope, [visible, ...outer], context);
       const nested = group.parts.find(part => part.kind === 'group' && contains(part, offset));
       if (nested?.kind !== 'group') break;
       group = nested;
@@ -953,7 +989,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     const position = main.findIndex(part => part === before);
     if (position === 0 && keyword(before) === 'CALL' && (!dotted || qualifier))
       return { projection, routine: { context: 'call', ...(qualifier ? { schema: qualifier } : {}) } };
-    if (position >= 0 && (!dotted || qualifier) && (relationEntry(main, position) || commas.has(position))) {
+    if (position >= 0 && (!dotted || qualifier) && (relationEntry(main, position) || commas.has(position) || position === deleteUsing)) {
       const ctes = qualifier || writeTarget(main, position) ? [] : [...scope.keys()].slice(0, limits.items);
       const routine: PostgresRoutineCompletionTarget | undefined = modifier !== 'ONLY' && !writeTarget(main, position)
         ? { context: 'from', ...(qualifier ? { schema: qualifier } : {}) } : undefined;
@@ -961,8 +997,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
         { kind: 'relations', ...(qualifier ? { schema: qualifier } : {}), ...(ctes.length ? { ctes } : {}) }, routine };
     }
   }
-  return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(refs, outer, left),
-    routine: expressionRoutine(main, left, cursorGroup, [refs, ...outer]) };
+  return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(visible, outer, left),
+    routine: expressionRoutine(main, left, cursorGroup, [visible, ...outer]) };
 }
 
 const noLocalReference = { status: 'blocked', reason: 'syntax' } as const;

@@ -82,6 +82,34 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('SELECT d.| FROM (SELECT * FROM a JOIN b USING (id)) d')?.query)
       .toMatchObject({ relations: [{ projection: { names: [], stars: [] } }] });
   });
+  it('表函数声明列、位置别名和序号列沿派生关系补全', () => {
+    expect(at('SELECT r.| FROM get_records() AS r(id int, "对外值" numeric(12,3))')?.query)
+      .toMatchObject({ qualified: true, relations: [{ alias: 'r', projection: { names: ['id', '对外值'], stars: [], exact: true } }] });
+    expect(at('SELECT get_records.| FROM tools.get_records() AS (id int)')?.query)
+      .toMatchObject({ relations: [{ name: 'get_records', projection: { names: ['id'], stars: [] } }] });
+    const rows = 'ROWS FROM (get_records() AS (id int, val text), get_tags() AS (tag text)) WITH ORDINALITY AS r(key)';
+    expect(at('WITH c AS (SELECT r.* FROM ' + rows + ') SELECT c.| FROM c')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['key', 'val', 'tag', 'ordinality'], stars: [], exact: true } }] });
+    expect(at('SELECT r.| FROM ROWS FROM (get_records() AS (id int)) WITH ORDINALITY AS r(key,seq)')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['key', 'seq'], exact: true } }] });
+  });
+  it('遇到未知返回列时只保留确定的名称，UPDATE FROM 和 DELETE USING 共享补全', () => {
+    const rows = 'ROWS FROM (unknown_rows(), get_records() AS (id int, val text)) WITH ORDINALITY AS r(key)';
+    const projected = { relations: [{ projection: { names: ['key', 'val', 'ordinality'], stars: [], exact: false } }] };
+    expect(at('SELECT r.| FROM ' + rows)?.query).toMatchObject(projected);
+    expect(at('UPDATE orders d SET value=r.| FROM ' + rows)?.query).toMatchObject(projected);
+    expect(at('DELETE FROM orders d USING ' + rows + ' WHERE d.id=r.|')?.query).toMatchObject(projected);
+    expect(at('SELECT r.| FROM unknown_rows() WITH ORDINALITY AS r(first,second)')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['first', 'second'], stars: [], exact: false } }] });
+  });
+  it('表函数实参只看到可关联的前序来源，列定义内不触发字段补全', () => {
+    expect(at('SELECT * FROM incoming i, ROWS FROM (get_records(i.|) AS (id int)) r, later l')?.query)
+      .toMatchObject({ relations: [{ name: 'incoming', alias: 'i' }] });
+    expect(at('SELECT * FROM incoming i, ROWS FROM (get_records(l.|) AS (id int)) r, later l')?.query).toBeUndefined();
+    expect(at('SELECT * FROM incoming i RIGHT JOIN get_records(i.|) AS r(id int) ON true')?.query).toBeUndefined();
+    expect(at('UPDATE orders d SET value=1 FROM get_records(d.|) AS r(id int)')?.query).toBeUndefined();
+    expect(at('SELECT * FROM get_records() AS r(id r.|type)')?.query).toBeUndefined();
+  });
   it('作用域跟随光标，区分普通派生表、LATERAL、相关子查询与集合分支', () => {
     expect(at('SELECT (SELECT p.| FROM child) FROM parent p')?.query)
       .toMatchObject({ relations: [{ name: 'parent', alias: 'p' }] });
@@ -189,6 +217,22 @@ it('本地投影不读取目录，同名物理列不可取代 CTE，通配结果
     star.provider.dispose();
     duplicate.provider.dispose();
   }
+});
+
+it('表函数声明列补全使用安全引用和原文替换范围，零目录请求', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const request = async (input: PostgresCompletionInput) => {
+    inputs.push(input);
+    return { items: [], incomplete: false };
+  };
+  const local = editor('SELECT r.对|旧 FROM ROWS FROM (get_records() AS ("对外""值" int)) WITH ORDINALITY AS r', request);
+  const duplicate = editor('SELECT r.ordi| FROM ROWS FROM (get_records() AS (ordinality int)) WITH ORDINALITY AS r', request);
+  try {
+    expect((await local.suggest())?.suggestions).toMatchObject([{ insertText: '"对外""值"',
+      range: { startColumn: 10, endColumn: 12 } }]);
+    expect((await duplicate.suggest())?.suggestions).toEqual([]);
+    expect(inputs).toEqual([]);
+  } finally { local.provider.dispose(); duplicate.provider.dispose(); }
 });
 
 it('切走再返回原标签时丢弃迟到目录，并由原承诺串行收尾', async () => {
