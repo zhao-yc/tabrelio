@@ -24,6 +24,60 @@ function button(label:string){const value=doc.querySelectorAll('button').find(no
 async function click(label:string){expect(button(label).disabled).toBe(false);await act(async()=>button(label).dispatchEvent(new MemoryEvent('click')));}
 async function input(label:string,value:string){const node=doc.querySelector(`input[aria-label="${label}"]`)!;await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent('input'));});}
 describe('历史时间筛选真实ReactDOM与原IPC端口',()=>{
+ it('连续读取在空批上限停止，并保留最后一批游标供继续', async () => {
+  let continued = 0;
+  invoke.mockImplementation(async command => command === 'history.page' ? page('head') :
+   command === 'history.pageContinue' ? page(`cursor-${++continued}`) : undefined);
+  await mount();
+  await click(t.nextMatching);
+  expect(continued).toBe(8);
+  expect(doc.body.textContent).toContain(t.matchingLimit(8));
+  const requests = invoke.mock.calls.filter(call => call[0] === 'history.pageContinue').map(call => call[1]);
+  expect(requests.map(input => input.cursor)).toEqual(['head', ...Array.from({ length: 7 }, (_, index) => `cursor-${index + 1}`)]);
+  expect(new Set(requests.map(input => input.taskId)).size).toBe(8);
+  await click(t.next);
+  expect(invoke.mock.calls.at(-1)).toEqual(['history.pageContinue', { cursor: 'cursor-8', taskId: expect.any(String) }]);
+ });
+ it('连续读取遇失败批会显示原明细，仍可沿返回的游标继续', async () => {
+  invoke.mockImplementation(async command => command === 'history.page' ? page('head') :
+   command === 'history.pageContinue' ? { ...page('after-error'), failures: [{ id: 'broken', message: '原记录无法读取' }], failed: 1 } : undefined);
+  await mount();
+  await click(t.nextMatching);
+  expect(invoke.mock.calls.filter(call => call[0] === 'history.pageContinue')).toHaveLength(1);
+  expect(doc.body.textContent).toContain('原记录无法读取');
+  expect(button(t.nextMatching).disabled).toBe(false);
+ });
+ it('停止连续读取等待当前批回包，随后可从新游标续读', async () => {
+  let resolve!: (value: ReturnType<typeof page>) => void;
+  invoke.mockImplementation(command => command === 'history.page' ? Promise.resolve(page('head')) :
+   command === 'history.pageContinue' ? new Promise(done => { resolve = done; }) : Promise.resolve(undefined));
+  await mount();
+  await click(t.nextMatching);
+  await click(t.stopMatching);
+  expect(doc.body.textContent).toContain(t.matchingStopping);
+  expect(invoke.mock.calls.some(call => call[0] === 'query.cancel')).toBe(false);
+  await act(async () => resolve(page('resume')));
+  expect(doc.body.textContent).toContain(t.matchingPaused);
+  expect(invoke.mock.calls.filter(call => call[0] === 'history.pageContinue')).toHaveLength(1);
+  await click(t.next);
+  expect(invoke.mock.calls.at(-1)).toEqual(['history.pageContinue', { cursor: 'resume', taskId: expect.any(String) }]);
+  await act(async () => resolve(page()));
+ });
+ it('关闭连续读取时取消当前任务并释放迟到游标', async () => {
+  let resolve!: (value: ReturnType<typeof page>) => void;
+  invoke.mockImplementation(command => command === 'history.page' ? Promise.resolve(page('head')) :
+   command === 'history.pageContinue' ? new Promise(done => { resolve = done; }) : Promise.resolve(undefined));
+  await mount();
+  await click(t.nextMatching);
+  const request = invoke.mock.calls.find(call => call[0] === 'history.pageContinue')![1];
+  await click('关闭');
+  expect(invoke).toHaveBeenCalledWith('query.cancel', { taskId: request.taskId });
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => resolve(page('late')));
+  expect(invoke).toHaveBeenCalledWith('history.pageRelease', { cursor: 'late' });
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(invoke.mock.calls.filter(call => call[0] === 'history.pageContinue')).toHaveLength(1);
+ });
  it('快捷范围立即应用并冻结端点，续页只使用同一个游标', async () => {
   const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-17T12:00:00.000Z'));
   invoke.mockImplementation(async command => command === 'history.page' ? page('old') : command === 'history.pageContinue' ? page('new') : undefined);

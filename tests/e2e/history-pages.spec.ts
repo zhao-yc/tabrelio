@@ -143,6 +143,34 @@ test('执行时间快捷范围组合来源、状态和耗时，刷新沿用原�
  expect(pageErrors).toEqual([]);
 });
 
+test('执行历史读取下一批匹配越过空批并保留原勾选和筛选', async ({}, info) => {
+ await seed(store => {
+  source(store);
+  for (let index = 0; index < 106; index++) store.addHistory(entry({
+   id: `scan-${String(index).padStart(3, '0')}`,
+   sql: [0, 27, 105].includes(index) ? 'SELECT 1 /* 本例命中 */' : 'SELECT 2 /* 普通记录 */',
+  }));
+ });
+ await open();
+ await search('本例命中');
+ const card = (index: string) => dialog().locator(`[data-history-id="scan-${index}"]`);
+ const nextMatch = dialog().getByRole('button', { name: text.nextMatching, exact: true });
+ await card('105').getByRole('checkbox').check();
+ await expect(progress()).toContainText('第1批 · 已检查25条 · 匹配1条');
+ await nextMatch.click();
+ await expect(card('027')).toBeVisible();
+ await expect(progress()).toContainText('第4批 · 已检查100条 · 匹配2条');
+ await expect(dialog().getByRole('status', { name: deletionText.selectionStatus, exact: true })).toHaveText(deletionText.selection(1));
+ await dialog().screenshot({ path: info.outputPath('执行历史下一批匹配.png') });
+ await dialog().getByRole('button', { name: text.next, exact: true }).click();
+ await expect(card('000')).toBeVisible();
+ await expect(progress()).toContainText('第5批 · 已检查106条 · 匹配3条');
+ await expect(nextMatch).toBeDisabled();
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect((await page.evaluate(() => window.dbark.invoke('history.list', {}))).length).toBe(106);
+ expect(pageErrors).toEqual([]);
+});
+
 test('执行历史按原始耗时跨批次排序并保留筛选和勾选', async () => {
  const entries = Array.from({ length: 28 }, (_, index) => entry({
   id: `sort-${String(index).padStart(2, '0')}`, elapsedMs: (index * 11) % 28 + 0.25,
