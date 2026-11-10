@@ -18,7 +18,9 @@ import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import { sqlEditorZoomCommandIds, sqlSelectionFindCommandIds } from '../../shared/uiCommandIds';
 import { nextSqlEditorZoomOffset, sqlEditorZoomSize } from '../sqlEditorZoom';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
+import { objectIdentifierDragType } from '../objectIdentifierInsertion';
+import { useSidebarObjectDrop } from './SidebarContextMenu';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
@@ -72,6 +74,7 @@ loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
 export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, mysqlMode, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onToggleBlockComment, onSelectCurrent, queryTabId, clipboardDisabled = false }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;mysqlMode?:MysqlEditorMode;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onToggleBlockComment?: () => void | Promise<void>; onSelectCurrent?: () => void; queryTabId?: string; clipboardDisabled?: boolean }) {
+  const objectDrop = useSidebarObjectDrop();
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
   const network = requestedDialect === 'mysql' || requestedDialect === 'mariadb' ? requestedDialect : undefined;
@@ -569,7 +572,23 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if (bridge.ready) propsRef.current.onReady?.(editor);
   };
   const quoted = clipboardDialog?.kind === 'quoted' ? quoteSqlForCode(clipboardDialog.sql, quoteFormat) : '';
-  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onCopy={rememberSql} onCut={rememberSql} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}{selectionFind && <SqlSelectionFindDialog mode={selectionFind.mode} target={selectionFind.target} source={selectionFind.source}
+  /** 只接管内部对象标记。行号、滚动条和编辑器弹层不作为 SQL 落点。 */
+  function handleObjectDrop(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes(objectIdentifierDragType)) return;
+    event.preventDefault(); event.stopPropagation();
+    const editor = editorRef.current;
+    const target = editor?.getTargetAtClientPoint(event.clientX, event.clientY);
+    if (!queryTabId || !editor || !contentReady || readOnly || clipboardDisabled || !target?.position ||
+        (target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT && target.type !== monaco.editor.MouseTargetType.CONTENT_EMPTY) ||
+        !objectDrop?.canDropIdentifier(queryTabId)) {
+      event.dataTransfer.dropEffect = 'none';
+      return;
+    }
+    event.dataTransfer.dropEffect = 'copy';
+    if (event.type === 'drop') objectDrop.dropIdentifier(queryTabId, event.dataTransfer, { editor, position: target.position });
+  }
+
+  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onCopy={rememberSql} onCut={rememberSql} onDragOverCapture={handleObjectDrop} onDropCapture={handleObjectDrop} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}{selectionFind && <SqlSelectionFindDialog mode={selectionFind.mode} target={selectionFind.target} source={selectionFind.source}
     setHost={node => { selectionFindHost.current = node; }} onClose={() => setSelectionFind(undefined)}
     focus={() => { if (editorRef.current === selectionFind.editor) selectionFind.editor.focus(); }}/>}{clipboardDialog?.kind === 'paste' && <div ref={clipboardHost}><Modal title={clipboardText.title} onClose={closeClipboard}>
     <div className="modal-content">

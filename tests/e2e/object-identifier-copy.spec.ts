@@ -4,8 +4,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { test, expect, page, desktop, dataDir, pageErrors } from './desktop-fixture';
 import { sidebarContextMenuZh as text } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
+import { objectIdentifierDragType } from '../../src/renderer/objectIdentifierInsertion';
 
-test('对象树与中央列表按原行复制名称，当前查询可直接插入 SQL 限定名', async ({}, info) => {
+test('对象名称复制、菜单插入和鼠标拖放均命中原目标', async ({}, info) => {
   const path = join(realpathSync(dataDir), '复制对象名称样本.sqlite');
   const sample = new DatabaseSync(path);
   try { sample.exec('CREATE TABLE "表.含""引号"(id INTEGER); CREATE TABLE "另一张表"(id INTEGER);'); }
@@ -145,6 +146,58 @@ test('对象树与中央列表按原行复制名称，当前查询可直接插�
   const atCaret = originalSql.slice(0, caret.start) + qualified + originalSql.slice(caret.start);
   await expect.poll(observe).toEqual({ sql: atCaret, start: caret.start + qualified.length, end: caret.start + qualified.length });
   await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await observe()).sql).toBe(originalSql);
+
+  // 真实拖放命中原选区之外的行尾，已有选中的占位文字必须保留。
+  const joinSuffix = ' CROSS JOIN ', dragBaseSql = originalSql + joinSuffix;
+  await box.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
+  await page.keyboard.insertText(joinSuffix);
+  await expect.poll(async () => (await observe()).sql).toBe(dragBaseSql);
+  for (const _ of joinSuffix) await page.keyboard.press('ArrowLeft');
+  for (const _ of 'placeholder') await page.keyboard.press('Shift+ArrowLeft');
+  await expect.poll(observe).toEqual({ sql: dragBaseSql, start: 'SELECT * FROM '.length, end: originalSql.length });
+  const editor = query.locator('.monaco-editor');
+  const dropPoint = await editor.evaluate(node => {
+    const editor = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco?.editor.getEditors()
+      .find(instance => instance.getDomNode() === node);
+    const end = editor?.getModel()?.getFullModelRange().getEndPosition();
+    const visible = end && editor?.getScrolledVisiblePosition(end);
+    if (!visible || !end) throw Error('查询行尾不可见');
+    const rect = node.getBoundingClientRect(), x = visible.left + 2, y = visible.top + visible.height / 2;
+    const hit = editor?.getTargetAtClientPoint(rect.left + x, rect.top + y)?.position;
+    if (hit?.lineNumber !== end.lineNumber || hit.column !== end.column) throw Error('落点未命中查询行尾');
+    return { x, y, clientX: rect.left + x, clientY: rect.top + y };
+  });
+  await tree.dragTo(editor, { targetPosition: { x: dropPoint.x, y: dropPoint.y } });
+  const droppedSql = dragBaseSql + qualified;
+  await expect.poll(observe).toEqual({ sql: droppedSql, start: droppedSql.length, end: droppedSql.length });
+  await expect(box).toBeFocused();
+  await page.screenshot({ path: info.outputPath('object-identifier-drag.png') });
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await observe()).sql).toBe(dragBaseSql);
+
+  // 手动控制两次事件之间的目录变化，验证晚到的原标记与伪造标记都无法修改正文。
+  const data = await page.evaluateHandle(() => new DataTransfer());
+  try {
+    await tree.dispatchEvent('dragstart', { dataTransfer: data });
+    expect(await data.evaluate((transfer, type) => ({ types: [...transfer.types], token: transfer.getData(type) }), objectIdentifierDragType))
+      .toEqual({ types: [objectIdentifierDragType], token: expect.stringMatching(/^[a-f\d-]{36}$/) });
+    const filter = sidebar.locator('.search-box input');
+    await filter.fill('另一张表');
+    await expect(tree).toHaveCount(0);
+    await editor.dispatchEvent('drop', { dataTransfer: data, clientX: dropPoint.clientX, clientY: dropPoint.clientY });
+    expect((await observe()).sql).toBe(dragBaseSql);
+    await filter.fill('');
+    await expect(tree).toBeVisible();
+    await data.evaluate((transfer, type) => transfer.setData(type, '伪造对象'), objectIdentifierDragType);
+    await editor.dispatchEvent('drop', { dataTransfer: data, clientX: dropPoint.clientX, clientY: dropPoint.clientY });
+    expect((await observe()).sql).toBe(dragBaseSql);
+  } finally { await data.dispose(); }
+  await box.focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
+  for (const _ of joinSuffix) await page.keyboard.press('Shift+ArrowLeft');
+  await page.keyboard.press('Backspace');
   await expect.poll(async () => (await observe()).sql).toBe(originalSql);
 
   await query.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();

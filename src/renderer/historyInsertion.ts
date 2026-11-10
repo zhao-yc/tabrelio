@@ -11,10 +11,11 @@ export interface HistoryInsertionTarget {
   readonly title: string;
   readonly connectionId: string;
   current(): boolean;
-  insert(sql: string): void;
+  insert(sql: string, drop?: ObjectIdentifierDrop): void;
   dispose(): void;
   subscribe(listener: () => void): () => void;
 }
+export interface ObjectIdentifierDrop { editor: HistoryInsertionEditor; position: monaco.IPosition }
 interface Model {
   isDisposed(): boolean;
   getVersionId(): number;
@@ -85,12 +86,17 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
     current,
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     dispose,
-    insert(sql) {
-      if (!current()) throw Error(text.changed);
-      if (typeof sql !== 'string' || sql.length > 20_000_000 || model.getValueLength() - model.getValueLengthInRange(range) + sql.length > 20_000_000) throw Error(text.tooLarge);
+    insert(sql, drop) {
+      if (!current() || (drop && (!cursor || drop.editor !== editor))) throw Error(text.changed);
+      // 拖入的位置来自原编辑器的命中测试，只插入文本，保留拖动前已选中的文字。
+      const destination = drop ? {
+        startLineNumber: drop.position.lineNumber, startColumn: drop.position.column,
+        endLineNumber: drop.position.lineNumber, endColumn: drop.position.column,
+      } : range;
+      if (typeof sql !== 'string' || sql.length > 20_000_000 || model.getValueLength() - model.getValueLengthInRange(destination) + sql.length > 20_000_000) throw Error(text.tooLarge);
       dispose();
       editor.pushUndoStop();
-      const edit = snippetEdit(range, sql);
+      const edit = snippetEdit(destination, sql);
       const accepted = cursor
         ? editor.executeEdits('dbark-object-identifier-insertion', [edit], changes => changes.map(({ range: inserted }) =>
           cursor.setEndPosition(inserted.endLineNumber, inserted.endColumn).setStartPosition(inserted.endLineNumber, inserted.endColumn)
