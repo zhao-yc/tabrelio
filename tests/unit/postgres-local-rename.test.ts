@@ -92,3 +92,37 @@ it('RETURNING 显式 OLD/NEW 别名可重命名，保留其他输出绑定和默
   expect(edited('UPDATE orders old SET n=1 RETURNING ¦old.id, new.n', 'target'))
     .toBe('UPDATE orders "target" SET n=1 RETURNING "target".id, new.n');
 });
+
+it('INSERT 来源和冲突更新各自解析，两个同名别名不会一起改写', () => {
+  const source = 'INSERT INTO public.orders AS ¦d (id,n) SELECT d.id,d.n FROM incoming d ON CONFLICT (id) DO UPDATE SET n=excluded.n+d.n WHERE d.id=excluded.id RETURNING d.n';
+  expect(edited(source, 'target'))
+    .toBe('INSERT INTO public.orders AS "target" (id,n) SELECT d.id,d.n FROM incoming d ON CONFLICT (id) DO UPDATE SET n=excluded.n+"target".n WHERE "target".id=excluded.id RETURNING "target".n');
+  expect(edited('INSERT INTO orders AS d SELECT ¦a.id FROM incoming a JOIN flags f ON conflict ON CONFLICT DO NOTHING RETURNING d.id', 'source'))
+    .toBe('INSERT INTO orders AS d SELECT "source".id FROM incoming "source" JOIN flags f ON conflict ON CONFLICT DO NOTHING RETURNING d.id');
+});
+
+it('INSERT 支持 TABLE、括号中的 SELECT、VALUES 及 DEFAULT VALUES 来源', () => {
+  expect(edited('WITH ¦q AS (SELECT 1 id) INSERT INTO orders AS q(id) TABLE q RETURNING q.id', 'rows'))
+    .toBe('WITH "rows" AS (SELECT 1 id) INSERT INTO orders AS q(id) TABLE "rows" RETURNING q.id');
+  expect(edited('INSERT INTO orders AS d (SELECT ¦s.id FROM incoming s) UNION ALL SELECT 2 RETURNING d.id', 'source'))
+    .toBe('INSERT INTO orders AS d (SELECT "source".id FROM incoming "source") UNION ALL SELECT 2 RETURNING d.id');
+  expect(edited('INSERT INTO orders AS d(id) OVERRIDING SYSTEM VALUE VALUES (1) RETURNING WITH (NEW AS ¦after) after.id', 'inserted'))
+    .toBe('INSERT INTO orders AS d(id) OVERRIDING SYSTEM VALUE VALUES (1) RETURNING WITH (NEW AS "inserted") "inserted".id');
+  expect(edited('INSERT INTO orders AS ¦d DEFAULT VALUES RETURNING d.id', 'target'))
+    .toBe('INSERT INTO orders AS "target" DEFAULT VALUES RETURNING "target".id');
+});
+
+it('冲突索引表达式和谓词可以引用目标别名，约束名称保持独立', () => {
+  expect(edited('INSERT INTO orders AS ¦d(id,n) VALUES(1,2) ON CONFLICT ((lower(d.n))) WHERE d.id>0 DO UPDATE SET n=d.n RETURNING d.id', 'target'))
+    .toBe('INSERT INTO orders AS "target"(id,n) VALUES(1,2) ON CONFLICT ((lower("target".n))) WHERE "target".id>0 DO UPDATE SET n="target".n RETURNING "target".id');
+  expect(edited('INSERT INTO orders AS ¦d VALUES(1) ON CONFLICT ON CONSTRAINT orders_pkey DO UPDATE SET n=d.n', 'target'))
+    .toBe('INSERT INTO orders AS "target" VALUES(1) ON CONFLICT ON CONSTRAINT orders_pkey DO UPDATE SET n="target".n');
+});
+
+it('避免隐式 excluded 冲突并保留冲突更新左侧复合字段', () => {
+  const source = 'INSERT INTO orders AS ¦d VALUES(1) ON CONFLICT (id) DO UPDATE SET n=d.n RETURNING d.id';
+  expect(rename(source, 'excluded')).toEqual({ status: 'blocked', reason: 'collision' });
+  expect(rename(source, 'Excluded')).toMatchObject({ status: 'ready' });
+  expect(rename('INSERT INTO orders AS ¦d VALUES(1) ON CONFLICT (id) DO UPDATE SET d.field=1 RETURNING d.id', 'target'))
+    .toEqual({ status: 'blocked', reason: 'unresolved' });
+});

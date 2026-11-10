@@ -80,3 +80,15 @@ it('写入目标仅在赋值、条件及输出表达式可见，SET 左侧不绑
   expect(at('DELETE FROM parent s USING incoming i WHERE s.id=i.id RETURNING WITH (OLD AS before) ¦before.id'))
     .toMatchObject({ status: 'ready', declaration: { start: 'DELETE FROM parent s USING incoming i WHERE s.id=i.id RETURNING WITH (OLD AS '.length } });
 });
+
+it('INSERT 区分来源、冲突动作和 RETURNING，避免把索引操作符类当字段', () => {
+  for (const source of [
+    'INSERT INTO orders AS d SELECT ¦d.id FROM incoming RETURNING d.id',
+    'INSERT INTO orders AS d VALUES(1) ON CONFLICT (id ¦d.ops) DO UPDATE SET n=d.n RETURNING d.id',
+    'INSERT INTO orders AS d VALUES(1) ON CONFLICT (id) DO UPDATE SET n=¦excluded.n RETURNING d.id',
+    'INSERT INTO orders AS d VALUES(1) ON CONFLICT (id) DO UPDATE SET n=d.n RETURNING ¦excluded.id',
+    'INSERT INTO orders AS excluded VALUES(1) ON CONFLICT (id) DO UPDATE SET n=¦excluded.n RETURNING excluded.id',
+  ]) expect(at(source), source).toMatchObject({ status: 'blocked' });
+  expect(at('INSERT INTO orders AS excluded VALUES(1) ON CONFLICT (id) DO UPDATE SET n=1 RETURNING ¦excluded.id'))
+    .toMatchObject({ status: 'ready', declaration: { start: 'INSERT INTO orders AS '.length } });
+});

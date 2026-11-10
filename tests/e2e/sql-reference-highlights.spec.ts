@@ -24,6 +24,12 @@ const dmlDrafts = [
     referenceAfter: 'USING ', declarationAfter: 'WITH ', original: 'q', name: '待删',
     renamed: 'WITH "待删" AS (SELECT 1 id) DELETE FROM orders d USING "待删" WHERE d.id="待删".id RETURNING d.id;',
   },
+  {
+    id: 'insert-draft', title: 'INSERT 导航草稿',
+    sql: 'INSERT INTO orders AS d(id,n) SELECT d.id,d.n FROM incoming d ON CONFLICT (id) DO UPDATE SET n=excluded.n+d.n WHERE d.id=excluded.id RETURNING d.n;',
+    referenceAfter: 'WHERE ', declarationAfter: 'orders AS ', original: 'd', name: '目标', highlights: 4,
+    renamed: 'INSERT INTO orders AS "目标"(id,n) SELECT d.id,d.n FROM incoming d ON CONFLICT (id) DO UPDATE SET n=excluded.n+"目标".n WHERE "目标".id=excluded.id RETURNING "目标".n;',
+  },
 ];
 const command = 'editor-local-references';
 
@@ -172,10 +178,12 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
 
         for (const draft of dmlDrafts) {
           await page.locator('.tab-strip').getByRole('button', { name: draft.title, exact: true }).click();
+          if (draft.highlights) { await toggle(); await expect.poll(setting).toBe(true); }
           const reference = draft.sql.indexOf(draft.referenceAfter) + draft.referenceAfter.length + 1;
           const declaration = draft.sql.indexOf(draft.declarationAfter) + draft.declarationAfter.length;
           await move(0, reference);
           await expect.poll(cursorOffset).toBe(reference);
+          if (draft.highlights) await expect(highlights).toHaveCount(draft.highlights);
           await page.keyboard.press('F12');
           await expect.poll(cursorOffset).toBe(declaration);
           await enterRename(draft.original, draft.name);

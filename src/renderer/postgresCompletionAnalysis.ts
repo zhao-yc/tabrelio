@@ -11,6 +11,7 @@ interface ScopedRelation extends PostgresCompletionRelation { declaration?: Loca
 interface ReferenceTrace {
   edges: Map<PostgresEditorToken, LocalReferenceRange>;
   declarations: Map<number, 'alias' | 'cte'>;
+  excludedTargets: Set<number>;
   unsupported: boolean;
 }
 interface RelationSpan { end: number; relation: number; }
@@ -38,7 +39,7 @@ const expressionEntries = new Set(['SELECT', 'WHERE', 'HAVING', 'ON', 'RETURNING
   'AND', 'OR', 'NOT', 'BY', 'DISTINCT', 'ALL']);
 const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '^', '~']);
 const unknown: Projection = { names: [], stars: [], exact: false };
-const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES']);
+const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE']);
 const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'ORDINALITY', 'SEARCH', 'CYCLE', 'XMLTABLE', 'JSON_TABLE']);
 
 /** PostgreSQL 未引用标识符折叠 ASCII 大写字母，引用名称保留原大小写。 */
@@ -276,7 +277,6 @@ function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], o
     if (part.kind === 'group') {
       const command = keyword(part.parts[0]);
       if (referenceCommands.has(command)) parseQuery(part.parts, scope, levels, undefined, trace);
-      else if (command === 'TABLE') trace.unsupported = true;
       else traceExpressions(part.parts, scope, levels[0], outer, new Map(), trace);
     } else traceQualifier(parts, i, levels, trace);
   }
@@ -315,6 +315,99 @@ function traceReturning(parts: Part[], scope: Scope, refs: ScopedRelation[], out
   traceExpressions(parts.slice(start), scope, visible, outer, new Map(), trace);
 }
 
+function startsReferenceQuery(part?: Part): boolean {
+  while (part?.kind === 'group' && part.closing === ')') part = part.parts[0];
+  return referenceCommands.has(keyword(part));
+}
+
+/** 冲突索引只分析索引表达式和谓词。排序规则、操作符类及约束名称均不绑定目标别名。 */
+function traceConflictTarget(parts: Part[], scope: Scope, target: ScopedRelation, outer: ScopedRelation[][], trace: ReferenceTrace): boolean {
+  if (!parts.length) return true;
+  if (keyword(parts[0]) === 'ON') return parts.length === 3 && keyword(parts[1]) === 'CONSTRAINT' && !!identifier(parts[2]);
+  const indexes = parts[0];
+  if (indexes.kind !== 'group' || indexes.closing !== ')' || !indexes.parts.length ||
+      parts.length > 1 && (keyword(parts[1]) !== 'WHERE' || parts.length < 3)) return false;
+  let start = 0;
+  for (let i = 0; i <= indexes.parts.length; i++) {
+    if (i < indexes.parts.length && !punct(indexes.parts[i], ',')) continue;
+    const entry = indexes.parts.slice(start, i);
+    const first = entry[0];
+    if (!first) return false;
+    let expression = first;
+    if (identifier(first)) {
+      const call = punct(entry[1], '.') && identifier(entry[2]) ? entry[3] : entry[1];
+      if (call?.kind === 'group') expression = call;
+    } else if (first.kind !== 'group') return false;
+    if (expression.kind === 'group') {
+      if (expression.closing !== ')') return false;
+      traceExpressions(expression.parts, scope, [target], outer, new Map(), trace);
+    }
+    start = i + 1;
+  }
+  if (parts.length > 1) traceExpressions(parts.slice(2), scope, [target], outer, new Map(), trace);
+  return !trace.unsupported;
+}
+
+/** INSERT 来源独立解析。目标只在冲突索引、更新动作和 RETURNING 的相应范围可见。 */
+function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], trace: ReferenceTrace): boolean {
+  if (keyword(parts[1]) !== 'INTO') return false;
+  let index = 2, name = identifier(parts[index]), schema: string | undefined;
+  if (!name || stop.has(keyword(parts[index++]))) return false;
+  if (punct(parts[index], '.')) {
+    schema = name;
+    name = identifier(parts[index + 1]);
+    index += 2;
+    if (!name || stop.has(keyword(parts[index - 1]))) return false;
+  }
+  const target: ScopedRelation = { name, schema };
+  if (keyword(parts[index]) === 'AS') {
+    const declaration = parts[index + 1], alias = identifier(declaration);
+    if (!alias || stop.has(keyword(declaration))) return false;
+    target.alias = alias;
+    target.declaration = declaration;
+    trace.declarations.set(declaration.start, 'alias');
+    index += 2;
+  }
+  const columns = parts[index];
+  if (columns?.kind === 'group' && !startsReferenceQuery(columns)) {
+    if (columns.closing !== ')' || !identifier(columns.parts[0])) return false;
+    index++;
+  }
+  if (keyword(parts[index]) === 'OVERRIDING') {
+    if (!['SYSTEM', 'USER'].includes(keyword(parts[index + 1])) || keyword(parts[index + 2]) !== 'VALUE') return false;
+    index += 3;
+  }
+  const returning = parts.findIndex((part, i) => i >= index && keyword(part) === 'RETURNING');
+  const end = returning < 0 ? parts.length : returning;
+  const action = parts.findIndex((part, i) => i >= index && i + 1 < end && keyword(part) === 'DO' &&
+    ['UPDATE', 'NOTHING'].includes(keyword(parts[i + 1])));
+  let conflict = action;
+  if (action >= 0) {
+    // JOIN ON conflict 可以出现在来源中，只有与 DO 动作配对的后置子句才切分来源。
+    for (conflict = action - 2; conflict >= index; conflict--) {
+      if (keyword(parts[conflict]) === 'ON' && keyword(parts[conflict + 1]) === 'CONFLICT') break;
+    }
+    if (conflict < index) return false;
+  }
+  const source = parts.slice(index, conflict < 0 ? end : conflict);
+  const defaults = source.length === 2 && keyword(source[0]) === 'DEFAULT' && keyword(source[1]) === 'VALUES';
+  if (!defaults) {
+    if (!startsReferenceQuery(source[0])) return false;
+    parseQuery(source, scope, outer, undefined, trace);
+  }
+  if (action >= 0 && !trace.unsupported) {
+    const arbiter = parts.slice(conflict + 2, action);
+    if (!traceConflictTarget(arbiter, scope, target, outer, trace)) return false;
+    if (keyword(parts[action + 1]) === 'UPDATE') {
+      if (!arbiter.length || keyword(parts[action + 2]) !== 'SET') return false;
+      if (target.declaration) trace.excludedTargets.add(target.declaration.start);
+      traceExpressions(parts.slice(action + 1, end), scope, [target, { name: 'excluded' }], outer, new Map(), trace);
+    } else if (action + 2 !== end) return false;
+  }
+  if (returning >= 0 && !trace.unsupported) traceReturning(parts.slice(returning + 1), scope, [target], outer, trace);
+  return !trace.unsupported;
+}
+
 /** 推导当前查询输出。引用模式只收集同一作用域树中的局部绑定，跳过投影计算。 */
 function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], context?: QueryContext, trace?: ReferenceTrace): Parsed {
   if (trace?.unsupported) return { projection: unknown };
@@ -322,7 +415,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return parseQuery(parts[0].parts, inherited, outer, context && contains(parts[0], context.offset) ? context : undefined, trace);
   }
   const unsupported = (): Parsed => { if (trace) trace.unsupported = true; return { projection: unknown }; };
-  if (parts.length && parts[0].kind !== 'group' && !commands.has(keyword(parts[0]))) return unsupported();
+  if (parts.length && parts[0].kind !== 'group' && !commands.has(keyword(parts[0])) && !(trace && keyword(parts[0]) === 'TABLE')) return unsupported();
   let start = 0;
   let scope = inherited;
   if (keyword(parts[0]) === 'WITH') {
@@ -364,6 +457,11 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     }
   }
   const main = parts.slice(start);
+  const command = keyword(main[0]);
+  if (trace && command === 'INSERT') {
+    if (!traceInsert(main, scope, outer, trace)) return unsupported();
+    return { projection: unknown };
+  }
   if (trace && main.some((part, i) => unsupportedReferenceSyntax.has(keyword(part)) || keyword(part) === 'INTO' ||
     keyword(part) === 'USING' && main[i + 1]?.kind === 'group' && keyword(main[i + 2]) === 'AS')) return unsupported();
   const firstSet = main.findIndex(part => setOperators.has(keyword(part)));
@@ -388,9 +486,9 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return { projection: output, query, routine };
   }
 
-  const command = keyword(main[0]);
   const write = !!trace && (command === 'UPDATE' || command === 'DELETE');
-  if (trace && !write && !['SELECT', 'VALUES'].includes(command)) return unsupported();
+  const tableSource = !!trace && command === 'TABLE';
+  if (trace && !write && !['SELECT', 'VALUES', 'TABLE'].includes(command)) return unsupported();
   if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
   const returning = write ? main.findIndex(part => keyword(part) === 'RETURNING') : -1;
   const where = write ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
@@ -404,7 +502,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     const usingSource = write && command === 'DELETE' && word === 'USING' && !deleteUsing && !from && (where < 0 || i < where);
     if (usingSource) deleteUsing = true;
     if (from && punct(main[i], ',')) commas.add(i);
-    if (!usingSource && !relationEntry(main, i) && !commas.has(i)) continue;
+    if (!usingSource && !(tableSource && i === 0) && !relationEntry(main, i) && !commas.has(i)) continue;
     const target = write && writeTarget(main, i);
     if (!target && (word === 'FROM' || word === 'JOIN' || usingSource)) from = true;
     let next = i + 1;
@@ -458,6 +556,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (trace) {
       if (explicitAlias && !alias) return unsupported();
       let end = next + (alias ? 1 : 0);
+      if (tableSource && (alias || main[end] && !['ORDER', 'LIMIT', 'OFFSET', 'FETCH', 'FOR'].includes(keyword(main[end])))) return unsupported();
       if (alias && main[end]?.kind === 'group') {
         if (target || !nameList(main[end]).length) return unsupported();
         end++;
@@ -538,7 +637,7 @@ function analyzePostgresBinding<T extends LocalReferences | LocalRename>(source:
     if (!target) return noLocalReference;
     const parts = groupStatement(tokens, offset, statement.end, true);
     if (!parts) return noLocalReference;
-    const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), unsupported: false };
+    const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), excludedTargets: new Set(), unsupported: false };
     parseQuery(parts, new Map(), [], undefined, trace);
     if (trace.unsupported) return noLocalReference;
     const declaration = trace.edges.get(target) ?? target;
@@ -565,6 +664,7 @@ export function analyzePostgresLocalRename(source: string, offset: number, stand
   return analyzePostgresBinding(source, offset, standardStrings, (references, target, tokens, trace) => {
     const name = identifier(target)!;
     const declaration = references.declaration.start;
+    if (newName === 'excluded' && newName !== name && trace.excludedTargets.has(declaration)) return { status: 'blocked', reason: 'collision' };
     const kind = trace.declarations.get(declaration);
     const localTokens = [];
     for (const token of tokens) {
