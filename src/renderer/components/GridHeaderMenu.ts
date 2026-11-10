@@ -23,6 +23,7 @@ interface HeaderMenuSource {
   canSort(key: string): boolean;
   applySort(next: readonly SortColumn[], current: () => boolean): void;
   selectColumn?(index: number): GridCellAction | undefined;
+  findColumn?(key: string): void;
   freeze?: GridHeaderFreeze;
   frozenThrough?: string;
 }
@@ -102,6 +103,9 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       const quoted = name.quoted;
       if (quoted !== undefined) actions.push({ label: text.copyQuotedName, run: () => copy(quoted) });
     }
+    if (source.findColumn) actions.push({ label: text.findColumn, run: () => {
+      if (current()) latest.current.findColumn?.(column.key);
+    } });
     return openMenu(target, grid, { title: column.name, label: text.menu, targetRole: 'columnheader', current, actions }, point);
   }
 

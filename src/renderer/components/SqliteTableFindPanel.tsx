@@ -18,7 +18,7 @@ import { postgresTableFindZh as checkedText } from '../locales/postgresTableFind
 import '../sqliteTableFind.css';
 import '../queryResultFind.css';
 
-export interface SqliteTableFindFocusRequest { id: number; mode: 'find' | 'replace'; }
+export interface SqliteTableFindFocusRequest { id: number; mode: 'find' | 'replace'; column?: number; }
 export interface SqliteTableFindSeed { options: SqliteFindOptions; replacement: string; mode: 'find' | 'replace'; highlightAll?: boolean; checkedOnly?: boolean; }
 export interface SqliteTableFindHighlights { owner: string; marks: ReadonlyMap<string, ReadonlySet<number>>; }
 interface Props {
@@ -172,7 +172,15 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
     onHighlights?.(valid && !working && marks && previewOwner ? { owner: previewOwner, marks } : undefined);
   }, [onHighlights, valid, working, marks, previewOwner]);
   useEffect(() => { if (!sourceCurrent()) { cancelWork(); } }, [valid]);
-  useEffect(() => { if (!mounted.current || !sourceCurrent() || live.current.preview) return; pendingFocus.current = focusRequest; if (live.current.mode !== focusRequest.mode) replace({ ...live.current, mode: focusRequest.mode, epoch: {} }); }, [focusRequest.id, focusRequest.mode]);
+  useEffect(() => {
+    if (!mounted.current || !sourceCurrent() || live.current.preview) return;
+    pendingFocus.current = focusRequest;
+    if (live.current.mode !== focusRequest.mode) replace({ ...live.current, mode: focusRequest.mode, epoch: {} });
+    const column = focusRequest.column;
+    if (column !== undefined && page.columns[column] && (!visibleColumns || visibleColumns.includes(column)) && live.current.options.column !== column) {
+      changeOptions({ column }, undefined, true);
+    }
+  }, [focusRequest.id, focusRequest.mode, focusRequest.column]);
   useEffect(() => { const request = pendingFocus.current; if (!request || !sourceCurrent() || live.current.preview || draft.mode !== request.mode) return; pendingFocus.current = undefined; const input = request.mode === 'replace' ? replacementInput.current : queryInput.current; (input && !input.disabled ? input : kindInput.current)?.focus(); }, [focusRequest.id, focusRequest.mode, draft.mode]);
   useEffect(() => { if (seed && sourceCurrent() && !seed.options.regex && !seed.options.captureReplacement) schedule(); return () => { mounted.current = false; closed.current = true; ++serial.current; clearTimeout(timer.current); void client.current?.dispose(); owner.onPreviewChange?.(false); }; }, []);
   const unavailable = !valid || !!draft.preview || staging.current, options = draft.options, epoch = draft.epoch;

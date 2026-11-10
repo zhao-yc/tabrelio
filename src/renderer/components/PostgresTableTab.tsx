@@ -1089,8 +1089,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
-  function openFind(replace: boolean) {
-    if (findIsCurrent() && (!replace || canEditGrid)) setFindRequest({ replace });
+  function openFind(replace: boolean, column?: string) {
+    if (findIsCurrent() && (!replace || canEditGrid) && (column === undefined || gridLayout.columns.some(item => item.key === column))) {
+      setFindRequest({ replace, column });
+    }
   }
 
   useUiCommandScope('tab:' + tab.id, {
@@ -1728,7 +1730,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
-        rowJump={canFind} rowJumpCurrent={findIsCurrent}
+        rowJump={canFind} rowJumpCurrent={findIsCurrent} onFindColumn={canFind ? key => openFind(false, key) : undefined}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}
         insertSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind)

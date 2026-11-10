@@ -7,4 +7,5 @@ export const gridHeaderMenuZh = {
   unfreeze: '取消冻结所有列',
   copyName: '复制列名',
   copyQuotedName: '复制 SQL 引用列名',
+  findColumn: '在此列查找',
 };

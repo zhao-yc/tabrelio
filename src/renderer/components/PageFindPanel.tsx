@@ -25,8 +25,9 @@ export interface PageFindDisplay {
 }
 
 /** 当前页查找和预览全部在线程内执行；正则模式需要明确点击，编辑模式不会自动重跑恶意表达式。 */
-export function PageFindPanel({ rows, keys, info, generation, disabled, replaceDisabled = false, focusRequest, onJump, onApply, onFilter, onStageFilter, getSelectionToken, onDisplay, onMatchRows, checkedRows }: { rows: DraftRow[]; keys: string[]; info: TableInfo | null; generation: number; disabled: boolean; replaceDisabled?: boolean; focusRequest: { target: 'query' | 'replacement'; generation: number }; onJump(rowId: string, key: string, focusGrid?: boolean): void; onApply(plan: PageReplacement, only?: PageOccurrence, selectionToken?: unknown): DraftRow[] | void; onFilter(): void; onStageFilter?(rule: FilterRule, generation: number): void; getSelectionToken?(): unknown; onDisplay?(display: PageFindDisplay | undefined): void; onMatchRows?: GridMatchRowsAction<string>; checkedRows?: { ids: ReadonlySet<string>; isCurrent(): boolean } }) {
-  const [options, setOptions] = useState<PageFindOptions>({ kind: 'text', query: '', caseSensitive: false, wholeCell: false });
+export function PageFindPanel({ rows, keys, info, generation, disabled, replaceDisabled = false, focusRequest, onJump, onApply, onFilter, onStageFilter, getSelectionToken, onDisplay, onMatchRows, checkedRows }: { rows: DraftRow[]; keys: string[]; info: TableInfo | null; generation: number; disabled: boolean; replaceDisabled?: boolean; focusRequest: { target: 'query' | 'replacement'; generation: number; column?: string }; onJump(rowId: string, key: string, focusGrid?: boolean): void; onApply(plan: PageReplacement, only?: PageOccurrence, selectionToken?: unknown): DraftRow[] | void; onFilter(): void; onStageFilter?(rule: FilterRule, generation: number): void; getSelectionToken?(): unknown; onDisplay?(display: PageFindDisplay | undefined): void; onMatchRows?: GridMatchRowsAction<string>; checkedRows?: { ids: ReadonlySet<string>; isCurrent(): boolean } }) {
+  const [options, setOptions] = useState<PageFindOptions>(() => ({ kind: 'text', query: '', caseSensitive: false, wholeCell: false,
+    column: focusRequest.column !== undefined && keys.includes(focusRequest.column) ? focusRequest.column : undefined }));
   const [checkedOnly, setCheckedOnly] = useState(false);
   const checked = checkedOnly ? checkedRows : undefined;
   const searchRows = useMemo(() => checkedOnly ? rows.filter(row => !row.deleted && checked?.ids.has(row.id)) : rows, [checkedOnly, checked, rows]);
@@ -48,6 +49,13 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   const found = foundState.snapshot === snapshot ? foundState.matches : [];
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null), kindSelect = useRef<HTMLSelectElement>(null);
   const panel = useRef<HTMLElement>(null);
+  /** 列标题带入字段而保留查找词，沿原选项修改入口撤销旧命中和预览。 */
+  useLayoutEffect(() => {
+    const column = focusRequest.column;
+    if (!disabled && column !== undefined && keys.includes(column) && activeOptions.current.column !== column) {
+      changeOptions({ ...activeOptions.current, column });
+    }
+  }, [focusRequest]);
   /** 每次明确打开或重复快捷键都接管输入焦点，不能让查找文字进入活动网格草稿。 */
   useEffect(() => { const target = focusRequest.target === 'replacement' ? replacementInput.current : queryInput.current; (target && !target.disabled ? target : kindSelect.current)?.focus(); }, [focusRequest]);
   const occurrences = useMemo(() => pageOccurrences(found), [foundState, snapshot]);

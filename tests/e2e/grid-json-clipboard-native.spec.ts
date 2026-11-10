@@ -8,6 +8,7 @@ import { gridCsvClipboardZh as csvText } from '../../src/renderer/locales/gridCs
 import { deleteSqlCopyZh } from '../../src/renderer/locales/deleteSqlCopy.zh-CN';
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
+import { sqliteTableFindZh } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
 import { sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
@@ -210,12 +211,37 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     };
     const amountHeader = tableTab.getByRole('columnheader', { name: /^amount\b/ });
     const labelHeader = tableTab.getByRole('columnheader', { name: /^label\b/ });
+    /** 同一文本在新列重新查找，保持所选记录，并确认没有读表、执行或复制动作。 */
+    async function checkColumnFind(screenshot = false) {
+      const before = await packets();
+      const panel = tableTab.getByRole('region', { name: sqliteTableFindZh.title, exact: true });
+      const input = panel.getByRole('textbox', { name: sqliteTableFindZh.query, exact: true });
+      const column = panel.getByRole('combobox', { name: sqliteTableFindZh.column, exact: true });
+      await chooseHeaderAction(labelHeader, gridHeaderMenuZh.findColumn);
+      await expect(input).toBeFocused();
+      await expect(column.locator('option:checked')).toHaveText('label');
+      await input.fill('row A');
+      await expect(panel.getByRole('status')).toHaveText(sqliteTableFindZh.count(1, 1, -1));
+      await panel.getByRole('button', { name: sqliteTableFindZh.next, exact: true }).click();
+      await expect(panel.getByRole('status')).toContainText(sqliteTableFindZh.count(1, 1, 0));
+      if (screenshot) await panel.screenshot({ path: info.outputPath('grid-header-find-column.png') });
+      await chooseHeaderAction(amountHeader, gridHeaderMenuZh.findColumn, true);
+      await expect(input).toBeFocused();
+      await expect(input).toHaveValue('row A');
+      await expect(column.locator('option:checked')).toHaveText('amount');
+      await expect(panel.getByRole('status')).toContainText(sqliteTableFindZh.count(0, 0, -1));
+      await expect(tableBCheck).toBeChecked();
+      await panel.getByRole('button', { name: sqliteTableFindZh.close, exact: true }).click();
+      await expect(panel).toBeHidden();
+      expect(await packets()).toEqual(before);
+    }
     const quoteName = (name: string) => local || dialect === 'postgresql' ? '"' + name + '"' : '`' + name + '`';
     await chooseHeaderAction(amountHeader, gridHeaderMenuZh.copyName);
     expect(await lastPacket()).toEqual({ 'text/plain': 'amount' });
     await chooseHeaderAction(labelHeader, gridHeaderMenuZh.copyQuotedName, true);
     expect(await lastPacket()).toEqual({ 'text/plain': quoteName('label') });
     await expect(tableBCheck).toBeChecked();
+    if (local) await checkColumnFind(true);
     const frozen = /rdg-cell-frozen-start/;
     const checkTableFreeze = async (capture = false) => {
       const previous = await tableSorts();
@@ -249,6 +275,7 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       expect(await copyCsv(tableTab)).toBe('id,amount,label,payload,nullable\r\n1,9007199254740993,row A,base64:AP8=,\\N\r\n');
       await menuCopy(tableAmount, expectedA.amount, expectedA.amount, { kind: 'integer', value: expectedA.amount });
       await tableBCheck.check();
+      await checkColumnFind();
       await fitAmount();
       await expect(tableBCheck).toBeChecked();
       await checkTableFreeze();

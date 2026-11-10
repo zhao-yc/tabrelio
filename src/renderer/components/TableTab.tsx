@@ -333,7 +333,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [findDisplay, setFindDisplay] = useState<PageFindDisplay>();
   /** 布局窗口变化同步记代，不依赖晚到的React effect或最终布尔值。 */
   function setShowPreferences(next:boolean){filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate();batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate();presetUiEpoch.current++;setShowPreferencesState(next);}
-  const [findFocus, setFindFocus] = useState<{ target: 'query' | 'replacement'; generation: number }>({ target: 'query', generation: 0 });
+  const [findFocus, setFindFocus] = useState<{ target: 'query' | 'replacement'; generation: number; column?: string }>({ target: 'query', generation: 0 });
   const [preferences, setPreferences] = useState<TablePreferences>({ version: 1, columns: [] }); const preferencesRef = useRef(preferences); preferencesRef.current = preferences;
   const [preferencesLoading, setPreferencesLoading] = useState(true); const [preferencesPending, setPreferencesPending] = useState(false); const preferencesLock = useRef(false);
   const [preferencesDirty, setPreferencesDirtyState] = useState(false); const [preferencesError, setPreferencesError] = useState(''); const layoutRevision = useRef(0);
@@ -605,9 +605,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (record.formOpen) record.select(rowId, activate); else activate();
   }
   /** 网格快捷键与工具栏明确打开时发出新焦点请求，已打开的面板也能再次聚焦。 */
-  function openPageFind(target: 'query' | 'replacement' = 'query') {
-    if (blocked || document.querySelector('[role="dialog"]')) return;
-    setShowFind(true); setFindFocus(current => ({ target, generation: current.generation + 1 }));
+  function openPageFind(target: 'query' | 'replacement' = 'query', column?: string) {
+    if (blocked || document.querySelector('[role="dialog"]') || column !== undefined && !visibleKeys.includes(column)) return;
+    setShowFind(true); setFindFocus(current => ({ target, generation: current.generation + 1, column }));
   }
   /** 当前页替换先核对完整快照，最后只一次写本地草稿。 */
   function applyPagePlan(plan: PageReplacement, only?: PageOccurrence, selectionToken?: unknown) {
@@ -2211,6 +2211,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
     selectColumn: index => cellRange.selectColumnAction(index - 1),
+    findColumn: page ? key => openPageFind('query', key) : undefined,
     frozenThrough: frozenKeys.at(-1), freeze: {
       current: () => !!page && !externalStale && !preferencesLoading && !preferencesLock.current,
       // 和布局窗口共享同一草稿，保存仍由用户从布局入口触发。

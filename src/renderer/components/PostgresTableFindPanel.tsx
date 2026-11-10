@@ -17,7 +17,7 @@ import type { TableFindEdge } from '../tableFindPattern';
 import { TableFindEdgeSelect } from './TableFindEdgeSelect';
 import type { ResultCheckedRows } from '../resultExport';
 
-export interface PostgresFindRequest { replace: boolean; }
+export interface PostgresFindRequest { replace: boolean; column?: string; }
 type Mode = 'text' | 'empty' | 'null' | 'field';
 type Review = Pick<PostgresFindPlan, 'patches'>;
 interface Props<Column extends ResultColumn, Plan extends Review> {
@@ -86,6 +86,13 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   useEffect(() => {
     if (!request || !enabled) return;
     (request.replace ? replacementInput.current ?? queryInput.current : queryInput.current ?? modeInput.current)?.focus();
+  }, [request]);
+  /** 列标题入口仅改变本页查找范围；字段名模式切回数据，旧快照随范围变化撤销。 */
+  useLayoutEffect(() => {
+    const key = request?.column;
+    if (key === undefined || !enabled || !isCurrent() || !columns.some(item => item.key === key)) return;
+    setColumn(key);
+    setMode(current => current === 'field' ? 'text' : current);
   }, [request]);
   // 预览在工作线程返回后展开。窄窗工具栏换行时，把暂存操作滚入面板可视区。
   useLayoutEffect(() => {
