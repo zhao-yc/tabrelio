@@ -90,8 +90,14 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     } else {
       await nativeQueryCommand('sql-find-selection', true);
     }
-    await findPanel.getByLabel('查找内容', { exact: true }).fill('needle');
-    await findPanel.getByRole('button', { name: '查找全部', exact: true }).click();
+    const findQuery = findPanel.getByLabel('查找内容', { exact: true });
+    await findQuery.fill('NEEDLE');
+    await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
+    if (dialect === 'mysql') {
+      await findPanel.getByLabel('区分大小写').check();
+      await expect(findPanel.getByRole('status')).toHaveText('选区内无匹配。');
+      await findQuery.fill('needle');
+    }
     await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
     await findPanel.getByRole('button', { name: '下一处', exact: true }).click();
     await expect(findPanel.getByRole('status')).toHaveText('第 2 处，共 2 处');
@@ -108,18 +114,33 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     await nativeQueryCommand('sql-replace-selection', true);
     const query = dialect === 'postgresql' ? "needle (🚢 A)',\\r?\\n  'needle (B)" : 'needle';
     if (dialect === 'postgresql') await replacePanel.getByLabel('正则表达式').check();
-    await replacePanel.getByLabel('查找内容', { exact: true }).fill(query);
-    await replacePanel.getByRole('button', { name: '查找全部', exact: true }).click();
+    const replaceQuery = replacePanel.getByLabel('查找内容', { exact: true });
+    const replaceAll = replacePanel.getByRole('button', { name: '全部替换', exact: true });
+    await replaceQuery.fill(query);
     await expect(replacePanel.getByRole('status')).toHaveText(dialect === 'postgresql' ? '第 1 处，共 1 处' : '第 1 处，共 2 处');
-    await replacePanel.getByLabel('替换为', { exact: true }).fill(dialect === 'postgresql' ? '组合 $1 $2' : '替换后的值');
-    if (dialect === 'sqlite') await replacePanel.screenshot({ path: info.outputPath('sql-selection-find.png') });
-    await replacePanel.getByRole('button', { name: '全部替换', exact: true }).click();
+    if (dialect === 'sqlite') {
+      await replaceQuery.fill('absent');
+      await expect(replaceAll).toBeDisabled();
+      await replaceQuery.fill('🚢 A');
+      await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 1 处');
+      await replaceQuery.fill(query);
+      await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
+    }
+    await replacePanel.getByLabel('替换为', { exact: true }).fill(dialect === 'postgresql' ? '组合 $1\n$2' : '替换后的值');
+    if (dialect === 'sqlite') await replacePanel.screenshot({ path: info.outputPath('sql-selection-live.png') });
+    if (dialect === 'mariadb') {
+      await replacePanel.getByRole('button', { name: '下一处', exact: true }).click();
+      await replacePanel.getByRole('button', { name: '替换当前匹配', exact: true }).click();
+    } else {
+      await replaceAll.click();
+    }
     await expect(replacePanel).toBeHidden();
     const read = () => page.evaluate(async () => {
       const settings = await window.dbark.invoke('settings.get', {});
       return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
     });
-    const result = dialect === 'postgresql' ? "'组合 🚢 A B'" : selected.replaceAll('needle', '替换后的值');
+    const result = dialect === 'postgresql' ? "'组合 🚢 A\nB'" : dialect === 'mariadb'
+      ? selected.replace('needle B', '替换后的值 B') : selected.replaceAll('needle', '替换后的值');
     await expect.poll(read).toBe(prefix + result + suffix);
     await page.keyboard.press(`${modifier}+z`);
     await expect.poll(read).toBe(source);

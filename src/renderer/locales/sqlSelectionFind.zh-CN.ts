@@ -1,7 +1,8 @@
 export const sqlSelectionFindZh = {
   query: '查找内容',
   replacement: '替换为',
-  find: '查找全部',
+  searching: '正在查找选区',
+  replacing: '正在替换',
   regex: '正则表达式',
   matchCase: '区分大小写',
   wholeWord: '整词匹配',
