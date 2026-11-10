@@ -7,7 +7,7 @@ import '../sidebarContextMenu.css';
 
 export interface GridCellAction { label: string; disabled?: boolean; run(): void; }
 interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; current(): boolean; focusTarget?(): HTMLElement | undefined; }
-interface Owner extends Request { cell: HTMLElement; grid: HTMLElement; dialog?: Element; scrollLeft: number; scrollTop: number; x: number; y: number; }
+interface Owner extends Request { cell: HTMLElement; grid: HTMLElement; dialog?: Element; anchorLeft: number; anchorTop: number; scrollLeft: number; scrollTop: number; x: number; y: number; }
 
 export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat: boolean; keyCode: number; nativeEvent: { isComposing: boolean } }): boolean {
   const key = event.key.toLowerCase();
@@ -62,7 +62,7 @@ export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
     if (!current()) return false;
     const rect = cell.getBoundingClientRect();
     const next = { ...request, ...(point ?? { x: rect.left, y: rect.bottom }), cell, grid, dialog,
-      scrollLeft: grid.scrollLeft, scrollTop: grid.scrollTop, current };
+      anchorLeft: rect.left, anchorTop: rect.top, scrollLeft: grid.scrollLeft, scrollTop: grid.scrollTop, current };
     active.current = next;
     setOwner(next);
     return true;
@@ -86,9 +86,11 @@ function GridCellMenu({ owner, close, choose }: { owner: Owner; close(focus: boo
     element.style.top = `${Math.max(8, Math.min(owner.y, window.innerHeight - rect.height - 8))}px`;
     (element.querySelector<HTMLElement>('button:not(:disabled)') ?? element).focus({ preventScroll: true });
     const outside = (event: Event) => { if (!(event.target instanceof Node) || !element.contains(event.target)) closeRef.current(false); };
-    // 打开前滚动的事件可能延迟派发。仅滚动位置实际变化时关闭菜单。
+    // 聚焦行标题可能先滚动外层查询页，后派发事件。只在菜单打开后网格或锚点实际移动时关闭。
     const scroll = (event: Event) => {
-      if (event.target === owner.grid && owner.grid.scrollLeft === owner.scrollLeft && owner.grid.scrollTop === owner.scrollTop) return;
+      const rect = owner.cell.getBoundingClientRect();
+      if (rect.left === owner.anchorLeft && rect.top === owner.anchorTop &&
+          owner.grid.scrollLeft === owner.scrollLeft && owner.grid.scrollTop === owner.scrollTop) return;
       outside(event);
     };
     const dismiss = () => closeRef.current(false);

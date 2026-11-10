@@ -1,6 +1,7 @@
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
 import { sqliteRowIdColumn, sqliteRowIdKey } from './SqliteRowIdColumn';
 import { useGridHeaderMenu, type GridHeaderFreeze } from './GridHeaderMenu';
+import { gridRowSqlActions } from '../gridRowSqlActions';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
@@ -248,12 +249,13 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : headerCopyText.unavailable); }
   }
   /** 只从本次勾选或活动数据格取得原行，生成失败时不产生副作用。 */
-  function handleTableSql(build: typeof sqliteCopyInsertDraftRows, checked: boolean, destination: string | ((sql: string) => void)) {
-    const allowed = () => !disabled && current() && noModal();
+  function handleTableSql(build: typeof sqliteCopyInsertDraftRows, checked: boolean, destination: string | ((sql: string) => void),
+    menu?: { row: SqliteDraftRow; current(): boolean }) {
+    const allowed = () => !disabled && (menu ? menu.current() : current()) && noModal();
     if (!allowed()) return;
     try {
-      const cell = activeCell.current.position;
-      const records = checked ? rows.filter(row => selectedRows.has(row.id)) : cell ? [cell.row] : [];
+      const row = menu?.row ?? activeCell.current.position?.row;
+      const records = checked ? rows.filter(row => selectedRows.has(row.id)) : row ? [row] : [];
       if (checked && records.length !== selectedRows.size) throw Error(insertCopyText.selection);
       const sql = build(page, records);
       if (typeof destination === 'function') {
@@ -285,6 +287,15 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
     canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
     selectColumn: index => cellRange.selectColumnAction(index - 2),
     resizeColumn: onColumnResize, rowHeaderColumns: 2,
+    rowActions: (index, current) => {
+      const row = rows[index];
+      if (!row || row.deleted || row.index === undefined || !baseCurrent(row)) return [];
+      const checked = selectedRows.has(row.id);
+      // 打开菜单会重渲染网格。行菜单用最新网格状态和原勾选代次核对行，不绑定打开前的渲染票据。
+      const menu = { row, current: () => current() && rows[index] === row && selection.current.revision === selectionTicket };
+      return gridRowSqlActions(checked, page.insertCopy ? () => handleTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied, menu) : undefined,
+        page.primaryKey?.length ? () => handleTableSql(sqliteCopyUpdateDraftRows, checked, updateSqlCopyZh.copied, menu) : undefined);
+    },
     visibility: { showType: !!showFieldType, onShowTypeChange: onShowFieldTypeChange },
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined,
     freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,

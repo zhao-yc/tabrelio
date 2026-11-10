@@ -33,6 +33,7 @@ interface HeaderMenuSource {
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
   rowHeaderColumns?: number;
+  rowActions?(rowIndex: number, current: () => boolean): readonly GridCellAction[];
   visibility?: GridHeaderVisibility;
   ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
@@ -97,26 +98,30 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
 
   /** 行高属于整个网格。只从行侧辅助格打开，应用前核对原网格和当前行高。 */
   function openRowHeader(target: EventTarget | null, point?: { x: number; y: number }): boolean {
-    if (!source.resizeRows || !source.owner || !(target instanceof HTMLElement)) return false;
+    if ((!source.resizeRows && !source.rowActions) || !source.owner || !(target instanceof HTMLElement)) return false;
     const grid = source.grid(), cell = target.closest<HTMLElement>('[role="gridcell"]');
     if (!grid || !cell || cell.closest('[role="grid"]') !== grid) return false;
     const index = Number(cell.getAttribute('aria-colindex')) - 1;
     if (!Number.isSafeInteger(index) || index < 0 || index >= (source.rowHeaderColumns ?? 1) || source.column(index)) return false;
-    const original = source.resizeRows.height;
+    const row = cell.closest('[role="row"]'), rowIndex = Number(row?.getAttribute('aria-rowindex')) - 2;
+    if (!Number.isSafeInteger(rowIndex) || rowIndex < 0) return false;
+    const original = source.resizeRows?.height;
     const current = () => {
       const now = latest.current;
       return now.owner === source.owner && now.grid() === grid && grid.isConnected &&
         now.resizeRows?.height === original && now.current() && gridDialogCurrent(grid, now.ownDialog);
     };
+    const actions = [...(source.rowActions?.(rowIndex, current) ?? [])];
+    if (original !== undefined) actions.push({ label: text.setHeight, run: () => {
+      if (!current()) return;
+      setSizeRequest({ dimension: 'height', description: text.heightScope, initial: original, apply(height) {
+        if (!current()) { useWorkspace.getState().notify(text.staleHeight, true); return; }
+        if (height !== original) latest.current.resizeRows?.apply(height);
+      } });
+    } });
     return openMenu(cell, grid, { title: text.rowMenu, label: text.rowMenu, current,
       focusTarget: () => target.matches('button,input') && cell.contains(target) ? target : undefined,
-      actions: [{ label: text.setHeight, run: () => {
-        if (!current()) return;
-        setSizeRequest({ dimension: 'height', description: text.heightScope, initial: original, apply(height) {
-          if (!current()) { useWorkspace.getState().notify(text.staleHeight, true); return; }
-          if (height !== original) latest.current.resizeRows?.apply(height);
-        } });
-      } }],
+      actions,
     }, point);
   }
 

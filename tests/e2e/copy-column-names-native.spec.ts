@@ -14,6 +14,8 @@ import { sqliteTableLayoutZh } from '../../src/renderer/locales/sqliteTableLayou
 import { postgresTableLayoutZh } from '../../src/renderer/locales/postgresTableLayout.zh-CN';
 import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { copyInsertSqlZh } from '../../src/shared/copyInsertSql.zh-CN';
+import { updateSqlCopyZh } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -70,6 +72,8 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
         ...(profile ? [] : [{ id: 'header-view', kind: 'table' as const, title: 'header_view', connectionId: connection.id, database, table: 'header_view' }]),
         { id: 'header-query', kind: 'query', title: '查询结果列名', connectionId: connection.id, database, sql },
         { id: 'range-query', kind: 'query', title: '查询选区列名', connectionId: connection.id, database, sql: populatedSql },
+        ...(profile?.dialect === 'postgresql' ? [{ id: 'row-sql-query', kind: 'query' as const, title: '查询结果行标题', connectionId: connection.id,
+          database, sql: 'SELECT id, amount, label, payload, nullable FROM public.header_subject ORDER BY id' }] : []),
       ] });
     }, { profile, table, sql, populatedSql, database });
     await page.reload();
@@ -171,6 +175,40 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await tableLayout.getByRole('button', { name: zh.common.close, exact: true }).last().click();
     await expect(tableLayout).toBeHidden();
     await expect.poll(async () => (await tableTab.getByRole('grid').getByRole('row').nth(1).boundingBox())?.height).toBe(67);
+    const firstCheck = tableRow.getByRole('checkbox');
+    const secondCheck = tableGrid.getByRole('row').nth(2).getByRole('checkbox');
+    const secondHeader = local ? indexedCell(tableGrid, 3, 2).getByRole('button') : secondCheck;
+    const rowMenu = page.getByRole('menu', { name: headerText.rowMenu, exact: true });
+    const sqlAction = (name: string) => rowMenu.getByRole('menuitem', { name, exact: true });
+    const copySql = async (name: string) => {
+      await sqlAction(name).click();
+      const data = await packets();
+      expect(data, (await page.getByRole('alert').allTextContents()).join('\n')).toHaveLength(++count);
+      expect(data.at(-1)?.formats).toEqual(['text/plain']);
+      return data.at(-1)!.text;
+    };
+    await firstCheck.check();
+    await secondHeader.click({ button: 'right' });
+    const one = await copySql(copyInsertSqlZh.current);
+    expect(one).toMatch(/^INSERT INTO /);
+    expect(one).toContain('9007199254740994');
+    expect(one).not.toContain('9007199254740993');
+    await expect(firstCheck).toBeChecked();
+    await expect(secondCheck).not.toBeChecked();
+    await secondCheck.check();
+    await secondHeader.press('Shift+F10');
+    await expect(sqlAction(updateSqlCopyZh.selected)).toBeVisible();
+    await page.screenshot({ path: info.outputPath('行标题复制SQL.png') });
+    const two = await copySql(updateSqlCopyZh.selected);
+    expect(two.match(/^UPDATE /gm)).toHaveLength(2);
+    expect(two.match(/^WHERE /gm)).toHaveLength(2);
+    expect(two).toContain('9007199254740993');
+    expect(two).toContain('9007199254740994');
+    await expect(firstCheck).toBeChecked();
+    await expect(secondCheck).toBeChecked();
+    await expect(secondHeader).toBeFocused();
+    await firstCheck.uncheck();
+    await secondCheck.uncheck();
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -282,6 +320,22 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(checkedRow).toBeFocused();
     expect(await history()).toEqual(historyBeforeWidth);
     await page.screenshot({ path: info.outputPath('自定义行高应用.png') });
+    if (dialect === 'postgresql') {
+      await open('row-sql-query');
+      await execute();
+      const queryRow = grid.getByRole('row').nth(2).getByRole('checkbox');
+      await expect(grid.getByRole('gridcell').filter({ hasText: '9007199254740994' })).toBeVisible();
+      await queryRow.scrollIntoViewIfNeeded();
+      await queryRow.focus();
+      await expect(queryRow).toBeFocused();
+      await page.keyboard.press('Shift+F10');
+      const sql = await copySql(updateSqlCopyZh.current);
+      expect(sql).toMatch(/^UPDATE /);
+      expect(sql.match(/^WHERE /gm)).toHaveLength(1);
+      expect(sql).toContain('9007199254740994');
+      expect(sql).not.toContain('9007199254740993');
+      await expect(queryRow).not.toBeChecked();
+    }
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     if (local) {

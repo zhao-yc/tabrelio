@@ -9,14 +9,14 @@ describe('仅复制明确表页中已加载的未修改行', () => {
     expect(f.prepare(new Set(['行1', '行0'])).rows).toEqual(f.page.rows);
     expect(f.prepare().rows).not.toBe(f.page.rows); expect(f.page.hasMore).toBe(true);
   });
-  it.each(['view', 'unknown', 'database', 'table', 'version', 'generation', 'metadata', 'page-object', 'busy', 'stale', 'unloaded', 'missing-source', 'missing-columns', 'original'])('%s 归属不成立时拒绝', condition => {
+  it.each(['view', 'unknown', 'database', 'table', 'version', 'generation', 'metadata', 'page-object', 'busy', 'stale', 'unloaded', 'missing-fingerprint', 'missing-columns', 'original'])('%s 归属不成立时拒绝', condition => {
     const f = fixture();
     if (condition === 'view') f.info.objectKind = 'view'; else if (condition === 'unknown') delete f.info.objectKind;
     else if (condition === 'database') f.context.target.database = '另库'; else if (condition === 'table') f.context.target.table = '另表';
     else if (condition === 'version') f.context.connectionVersion++; else if (condition === 'generation') f.context.generation++;
     else if (condition === 'metadata') f.info.columns[1].comment = '目录已改变'; else if (condition === 'page-object') f.binding.page = { ...f.page };
     else if (condition === 'busy') f.context.busy = true; else if (condition === 'stale') f.context.stale = true; else if (condition === 'unloaded') f.context.loaded = false;
-    else if (condition === 'missing-source') delete f.page.copySource; else if (condition === 'missing-columns') f.page.copySource!.missingColumns = ['值']; else f.rows[0].original!.值 = '旧快照被替换';
+    else if (condition === 'missing-fingerprint') delete f.page.copyMetadataKey; else if (condition === 'missing-columns') f.page.copySource!.missingColumns = ['值']; else f.rows[0].original!.值 = '旧快照被替换';
     expect(() => f.prepare()).toThrow();
   });
   it.each(['inserted', 'deleted', 'modified', 'missing', 'unknown'])('所选行 %s 草稿整次拒绝，不静默省略', condition => {

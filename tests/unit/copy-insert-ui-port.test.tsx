@@ -66,8 +66,9 @@ describe('表页 INSERT 入口的纯端口验证（实际 GUI/OS 为零）', () 
     const html = renderToStaticMarkup(exports.view);
     expect(html).toContain(copyInsertSqlZh.current); expect(html).toContain(copyInsertSqlZh.selected); expect(html).toContain(copyInsertSqlZh.policy); expect(html.match(/disabled=""/g)).toHaveLength(1);
   });
-  it('当前行和勾选行只调用专用 IPC，不调用查询、补取或表写入命令', async () => {
-    const p = port(); p.click(); expect(p.context.invoke).toHaveBeenCalledExactlyOnceWith('table.copyInsertSql', expect.objectContaining({ rows: [p.f.page.rows[0]] })); await p.settle();
+  it('完整表页没有补取租约时，当前行和勾选行也只调用专用 IPC', async () => {
+    const p = port(); delete p.f.page.copySource;
+    p.click(); expect(p.context.invoke).toHaveBeenCalledExactlyOnceWith('table.copyInsertSql', expect.objectContaining({ rows: [p.f.page.rows[0]] })); await p.settle();
     p.context.invoke.mockClear(); p.context.selectedRowsRef.current = new Set(['行0', '行1']); p.click(true); expect(p.context.invoke).toHaveBeenCalledExactlyOnceWith('table.copyInsertSql', expect.objectContaining({ rows: p.f.page.rows }));
   });
   it.each(['inactive', 'closed', 'removed-connection', 'version', 'target', 'loading', 'reference', 'applying', 'preferences', 'preview', 'copy-read', 'dirty', 'input', 'editor', 'modal', 'live-input', 'unmounted'])('%s 同步状态改变后旧回调也不能发起复制', condition => {

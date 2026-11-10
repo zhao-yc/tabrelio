@@ -1,6 +1,7 @@
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
 import { sqliteRowIdColumn, sqliteRowIdKey } from './SqliteRowIdColumn';
 import { useGridHeaderMenu, type GridHeaderFreeze } from './GridHeaderMenu';
+import { gridRowSqlActions } from '../gridRowSqlActions';
 import { gridQuickValueKinds, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -82,6 +83,8 @@ function displayedValue(row: DataRow, key: string, present?: PresentGridCell) {
 /** 表页可覆盖展示值，定位、编辑及原页能力仍引用原网格数据。查询结果默认使用原值。 */
 export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, onFindColumn, frozenKeys, columnWidths, rowHeight, onRowHeightChange, rowJump = false, rowJumpCurrent, freezeColumns, tableCopy, insertSql, updateSql, deleteSql, primaryKeySql, onOpenRowSql, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, onCheckedRows, matchRowsRef, onShowRows, onStageFindFilter, findFilterSource, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, ownDialog, sqliteSource, sqliteRowIds, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, cellMenuFilters, onCellEdit, onCellPaste, onFillRange, onExportRange, onFilterTableRange, findTarget, findMarks, navigateTo, restoreCell, onGridAnchor, quickValueActions, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; headerDetails?: GridHeaderDetailsOptions; columnNameDialect?: ConnectionProfile['dialect']; onFindColumn?(key: string): void; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; freezeColumns?: GridHeaderFreeze; tableCopy?: { enabled: boolean; isCurrent(): boolean }; insertSql?(indices: ReadonlySet<number>): string; updateSql?(indices: ReadonlySet<number>): string; deleteSql?(indices: ReadonlySet<number>): string; primaryKeySql?(indices: ReadonlySet<number>): string; onOpenRowSql?(kind: RowSqlKind, sql: string): void; rowHeight?: GridRowHeight; onRowHeightChange?(height: number): void; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; onCheckedRows?(checked: ResultCheckedRows | undefined): void; matchRowsRef?: Ref<GridMatchRowsAction<number>>; onShowRows?(indices: ReadonlySet<number>, kind?: QueryResultRowViewKind): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean; ownDialog?(): Element | undefined; sqliteSource?: QueryResult; sqliteRowIds?: readonly string[]; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, mode?: QueryResultSelectedFilterMode):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; cellMenuFilters?(cell: QueryResultCopyCell): { label?: string; actions: GridCellAction[] } | undefined; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer, range?: GridRangeTarget<DataRow>): void; onFillRange?(range: GridRangeTarget<DataRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<DataRow>; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; restoreCell?: { row: DataRow; key: string }; onGridAnchor?(anchor: GridFindTarget | undefined): void; quickValueActions?: { allowed(cell: QueryResultCopyCell, kind: GridQuickValue): boolean; apply(cell: QueryResultCopyCell, kind: GridQuickValue): void }; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
   const height = readGridRowHeight(rowHeight);
+  const rowSql = useRef({ insertSql, updateSql });
+  rowSql.current = { insertSql, updateSql };
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
   /** 只接受当前可见顺序的精确前缀；任一过期、重复或稀疏键整组取消，禁止RDG重排非前缀列。 */
@@ -631,10 +634,17 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
     resizeColumn: fitHeader ? resizeColumn : undefined, ownDialog,
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined, rowHeaderColumns: onActiveRowChange ? 0 : 1,
+    rowActions: insertSql || updateSql ? (index, current) => {
+      const row = rows[index];
+      if (!row || skipRowInInversion?.(row) || tableCopy?.enabled === false || tableCopy?.isCurrent() === false) return [];
+      const checked = selectedRows.has(index), menu = { index, current: () => current() && rows[index] === row };
+      return gridRowSqlActions(checked, insertSql ? () => handleRowOutput(rowSql.current.insertSql, checked, insertCopyText.copied, menu) : undefined,
+        updateSql ? () => handleRowOutput(rowSql.current.updateSql, checked, updateSqlCopyZh.copied, menu) : undefined);
+    } : undefined,
     visibility: headerDetails,
     freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,
   });
-  const hasHeaderMenu = onSortChange || freezeColumns || rangeTools || columnNameDialect || filterDialect || onFindColumn || fitHeader || onRowHeightChange ||
+  const hasHeaderMenu = onSortChange || freezeColumns || rangeTools || columnNameDialect || filterDialect || onFindColumn || fitHeader || onRowHeightChange || insertSql || updateSql ||
     headerDetails?.onShowTypeChange || headerDetails?.onShowCommentChange;
   const grid = onCellPaste || fitHeader || hasHeaderMenu ? <div style={{ display: 'contents' }}
     {...(hasHeaderMenu ? headerMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
@@ -653,12 +663,14 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   }, [needsCheckedRows, selectionBefore, rowScope, scope, gridRevision]);
   useLayoutEffect(() => { onCheckedRows?.(checkedRows); }, [onCheckedRows, checkedRows]);
   /** 复制与打开查询草稿共用活动格或勾选代次，生成失败时不产生副作用。 */
-  function handleRowOutput(build: ((indices: ReadonlySet<number>) => string) | undefined, checked: boolean, destination: string | ((sql: string) => void)) {
+  function handleRowOutput(build: ((indices: ReadonlySet<number>) => string) | undefined, checked: boolean, destination: string | ((sql: string) => void),
+    menu?: { index: number; current(): boolean }) {
     const current = () => tableCopy?.enabled !== false && selectedActionCurrent() &&
-      copyRevisionRef.current === copyRevision && tableCopy?.isCurrent() !== false && !document.querySelector(appModalSelector);
-    if (!build || !current() || (!checked && (!activeCopyCell || rows[activeCopyCell.index] !== activeCopyCell.row))) return;
+      (menu ? menu.current() : copyRevisionRef.current === copyRevision) && tableCopy?.isCurrent() !== false && !document.querySelector(appModalSelector);
+    const index = menu?.index ?? (activeCopyCell && rows[activeCopyCell.index] === activeCopyCell.row ? activeCopyCell.index : undefined);
+    if (!build || !current() || (!checked && index === undefined)) return;
     try {
-      const sql = build(checked ? selectedRows : new Set([activeCopyCell!.index]));
+      const sql = build(checked ? selectedRows : new Set([index!]));
       if (typeof destination === 'function') {
         if (current()) destination(sql);
         return;

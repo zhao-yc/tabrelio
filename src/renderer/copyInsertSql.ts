@@ -20,7 +20,7 @@ function sameRow(left: DataRow | undefined, right: DataRow): boolean {
 }
 /** 仅从当前表页选取原始行，不补取缺失值，不推断查询结果目标，也不包含任何行草稿。 */
 export function prepareCopyInsertSql(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null, rows: DraftRow[], ids: ReadonlySet<string>): CopyInsertSqlInput {
-  const selected = copyOriginalRows(context, binding, page, rows, ids, true);
+  const selected = copyOriginalRows(context, binding, page, rows, ids);
   const info = context.info!;
   const input: CopyInsertSqlInput = {
     database: info.database, table: info.name,
@@ -33,12 +33,12 @@ export function prepareCopyInsertSql(context: RecordContext, binding: RecordCopy
 
 /** SQL 数据复制以当前无草稿的原行作值来源，缺列或归属变化时整组拒绝。 */
 function copyOriginalRows(context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null,
-  rows: readonly DraftRow[], ids: ReadonlySet<string>, requireCopySource = false): DataRow[] {
+  rows: readonly DraftRow[], ids: ReadonlySet<string>): DataRow[] {
   const info = context.info;
   if (context.busy || context.stale || !context.loaded) throw new Error(text.busy);
+  // 完整表页只有目录指纹，补取租约仅在缺列时存在。两者都必须通过目录和原值校验。
   if (!info || info.objectKind !== 'table' || info.database !== context.target.database || info.name !== context.target.table ||
-      !page || binding?.page !== page || recordCopyMetadataReason(context, binding) ||
-      requireCopySource && !page.copySource || page.copySource?.missingColumns.length) throw new Error(text.target);
+      !page || binding?.page !== page || recordCopyMetadataReason(context, binding) || page.copySource?.missingColumns.length) throw new Error(text.target);
   if (!ids.size || rows.filter(row => ids.has(row.id)).length !== ids.size) throw new Error(text.selection);
   const originals = rows.filter(row => !row.inserted);
   if (originals.length !== page.rows.length || originals.some((row, index) => !sameRow(row.original, page.rows[index]))) throw new Error(text.target);

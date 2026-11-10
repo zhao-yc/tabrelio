@@ -4,6 +4,7 @@ import { objectQueryZh } from '../locales/objectQuery.zh-CN';
 import { navigationZh } from '../locales/navigation.zh-CN';
 import { isGridContextKey, useGridCellActionMenu } from './GridCellActionMenu';
 import { useGridHeaderMenu } from './GridHeaderMenu';
+import { gridRowSqlActions } from '../gridRowSqlActions';
 import { gridQuickValueAssignment, gridQuickValueKinds, mysqlQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { TableEditWorkspace, type TableEditBatch, type TableEditPage, type TableEditNavigation, type TableCheckedFill, type TableCheckedRecordEdit } from '../tableEditWorkspace';
@@ -1815,14 +1816,16 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制 SQL 和打开查询草稿共享原页租约。活动页或勾选变更时撤销旧入口。 */
-  function handleRowSql(kind: RowSqlKind, destination: 'clipboard' | 'draft') {
-    const current = () => tableToolbarCurrent() && !insertCopyBlockedRef.current && !restoredDraftView &&
+  function handleRowSql(kind: RowSqlKind, destination: 'clipboard' | 'draft', menu?: { row: DraftRow; current(): boolean }) {
+    const current = () => (menu ? menu.current() : tableToolbarCurrent() && selectionRef.current === selection) &&
+      !insertCopyBlockedRef.current && !restoredDraftView &&
       !externalStaleRef.current && !activeGridEditor.current && !record.hasInput() &&
-      rowsRef.current === rows && selectedRowsRef.current === selectedRows && selectionRef.current === selection &&
+      rowsRef.current === rows && selectedRowsRef.current === selectedRows &&
       copyPage.current?.page === page;
     if (!current()) return;
     try {
-      const ids = selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
+      const ids = menu ? selectedRows.has(menu.row.id) ? selectedRows : new Set([menu.row.id])
+        : selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
       const context = getRecordContext();
       const prepare = { select: prepareCopyPrimaryKeyQuery, update: prepareCopyUpdateSql, delete: prepareCopyDeleteSql };
       const sql = kind === 'insert' ? buildCopyInsertSql(prepareCopyInsertSql(context, copyPage.current, page, rows, ids))
@@ -2256,6 +2259,14 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     findColumn: page ? key => openPageFind('query', key) : undefined,
     visibility: page && !blocked ? { showType: showFieldType, showComment: showFieldComment,
       onShowTypeChange: setShowFieldType, onShowCommentChange: setShowFieldComment } : undefined,
+    rowActions: (index, current) => {
+      const row = rows[index];
+      if (!row || !cellActionCurrent(row) || info?.objectKind !== 'table' || insertCopyBlockedRef.current || restoredDraftView || copyMetadataReason) return [];
+      // 焦点回到行标题时会清掉活动数据格，复制仍绑定菜单打开时的行与布局。
+      const menu = { row, current: () => current() && rowsRef.current[index] === row && layoutRevision.current === headerCopyLayoutRevision };
+      return gridRowSqlActions(selectedRows.has(row.id), () => handleRowSql('insert', 'clipboard', menu),
+        info.primaryKey.length ? () => handleRowSql('update', 'clipboard', menu) : undefined);
+    },
     resizeRows: page && !externalStale && !preferencesLoading && !preferencesLock.current ? { height,
       apply: next => updatePreferences(setTableRowHeight(preferencesRef.current, next)),
     } : undefined,
