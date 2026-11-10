@@ -11,7 +11,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_QUERY_RESULT_NAVIGATOR_TEST !== '1', '仅在隔离的 SQLite 源码验收运行');
 
-test('多结果查询按名称、字段及序号切换，保持原执行和编辑器正文', async ({}, info) => {
+test('多结果查询按名称、字段、SQL预览及序号切换，保持原执行和编辑器正文', async ({}, info) => {
   if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || process.env.DBARK_DEV_URL || process.env.DBARK_EXECUTABLE_PATH)
     throw Error('结果集导航验收只使用本例临时 SQLite 文件');
   try {
@@ -23,7 +23,7 @@ test('多结果查询按名称、字段及序号切换，保持原执行和编�
       const number = index + 1;
       const title = number === 2 || number === 42 ? '-- NAME: 月度汇总\n' : '';
       const column = number === 44 ? 'UniqueOutput' : 'sample';
-      const comment = number === 44 ? ` /* ${'x'.repeat(66000)}完整原语句尾部🚢 */` : '';
+      const comment = number === 44 ? ` /* ${'x'.repeat(66000)}完整原语句尾部🚢 */` : number === 41 ? ' /* navigator_receipt_🧭 */' : '';
       return `${title}SELECT ${number} AS ${column}${comment};`;
     }).join('\n');
     // 只替换文件选择器。连接、执行、缓存及结果切换仍使用正式应用。
@@ -61,8 +61,20 @@ test('多结果查询按名称、字段及序号切换，保持原执行和编�
     await trigger.click();
     await expect(search).toBeFocused();
     await expect(dialog.getByRole('option')).toHaveCount(40);
+    await expect(dialog.getByText(text.receiptHint, { exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: text.next, exact: true }).click();
     await expect(dialog.getByRole('option')).toHaveCount(4);
+    await search.fill('NAVIGATOR_RECEIPT_🧭');
+    await expect(dialog.getByRole('option')).toHaveCount(1);
+    await expect(dialog.getByRole('option')).toContainText('结果 41');
+    await expect(dialog.locator('.query-result-navigator-sql')).toContainText('SELECT 41 AS sample');
+    await dialog.screenshot({ path: info.outputPath('按SQL预览查找结果.png') });
+    await search.press('Enter');
+    await expect(grid.getByRole('gridcell', { name: '41', exact: true })).toBeVisible();
+    await trigger.click();
+    // 回执之后的尾部只属于完整原语句，不能把目录查找声称为原文全文搜索。
+    await search.fill('完整原语句尾部🚢');
+    await expect(dialog.getByRole('option')).toHaveCount(0);
     await search.fill('月度汇总');
     await expect(dialog.getByRole('option')).toHaveCount(2);
     await search.press('ArrowDown');

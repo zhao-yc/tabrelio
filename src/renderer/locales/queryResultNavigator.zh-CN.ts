@@ -1,7 +1,8 @@
 export const queryResultNavigatorZh = {
   open: '查找结果集',
-  input: '搜索结果名称、序号或字段名',
-  placeholder: '输入名称、字段名或 #序号',
+  input: '搜索结果名称、序号、字段名或 SQL',
+  placeholder: '输入名称、字段名、SQL 或 #序号',
+  receiptHint: 'SQL 搜索仅覆盖结果附带的预览，长语句可能已截断。',
   list: '匹配结果集',
   result: (ordinal: number) => `结果 ${ordinal}`,
   rows: (rows: number) => `${rows} 行`,

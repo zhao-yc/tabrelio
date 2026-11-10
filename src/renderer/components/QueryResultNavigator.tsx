@@ -75,6 +75,7 @@ function ResultList({ results, names, selected, onSelect, onClose }: Pick<Props,
     return results.flatMap((result, index) => {
       const matchesText = () => names[index]?.toLowerCase().includes(value) ||
         result.postgresCommand?.toLowerCase().includes(value) ||
+        result.statement.toLowerCase().includes(value) ||
         result.columns.some(column => column.name.toLowerCase().includes(value));
       return (!value || index + 1 === ordinal || (!ordinalOnly && matchesText())) ? [index] : [];
     });
@@ -109,9 +110,12 @@ function ResultList({ results, names, selected, onSelect, onClose }: Pick<Props,
           }
         }}/>
       <p role="status">{text.count(matches.length, results.length)}</p>
+      <p className="muted small">{text.receiptHint}</p>
       <div id={listId} className="open-tab-search-list" role="listbox" aria-label={text.list}>
         {matches.slice(page * pageSize, (page + 1) * pageSize).map(resultIndex => {
           const result = results[resultIndex], name = names[resultIndex];
+          // 摘要仅取有界回执前缀，不访问编辑器原文，且不截断UTF-16代理对。
+          const preview = result.statement.slice(0, 200).replace(/[\uD800-\uDBFF]$/, '').replace(/\s+/g, ' ').trim();
           return <button key={resultIndex} ref={resultIndex === index ? active : undefined} id={`${listId}-${resultIndex}`}
             type="button" role="option" aria-selected={resultIndex === index} tabIndex={-1} className="open-tab-search-option"
             onMouseDown={event => event.preventDefault()} onClick={() => activate(resultIndex)}>
@@ -122,6 +126,7 @@ function ResultList({ results, names, selected, onSelect, onClose }: Pick<Props,
               result.truncated && text.truncated,
               resultIndex === selected && text.current,
             ].filter(Boolean).join(' · ')}</span>
+            {preview && <code className="query-result-navigator-sql">{preview}{result.statement.length > 200 ? '…' : ''}</code>}
           </button>;
         })}
       </div>

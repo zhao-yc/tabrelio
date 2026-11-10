@@ -15,3 +15,4 @@
 .open-tab-search-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .retained-query-list { list-style: none; margin: 0; padding: 0; min-height: 0; }
 .retained-query-preview { max-height: 3.6em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+.query-result-navigator-sql { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; opacity: .8; }
