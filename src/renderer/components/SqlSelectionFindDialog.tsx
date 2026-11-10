@@ -12,6 +12,7 @@ import '../sqlSelectionFind.css';
 
 type Target = NonNullable<ReturnType<typeof captureSqlClipboardSelection>>;
 type Range = { start: number; end: number };
+type Resume = { offset: number; skipEqual: boolean };
 interface Criteria { query: string; regex: boolean; caseSensitive: boolean; wholeWord: boolean; }
 const slot = 'sql-selection';
 const outputLimit = 1024 * 1024;
@@ -43,21 +44,22 @@ function MatchPreview({ source, ranges, index }: { source: string; ranges: Range
 }
 
 /** 只把选区原文送到既有查找线程，避免 Monaco 把跨行的部分选区扩成整行。 */
-export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose, focus }: {
+export function SqlSelectionFindDialog({ mode, target, source: initialSource, setHost, onClose, focus }: {
   mode: 'sql-find-selection' | 'sql-replace-selection'; target: Target; source: string;
   setHost(element: HTMLFormElement | null): void; onClose(): void; focus(): void;
 }) {
+  const [source, setSource] = useState(initialSource);
   const [criteria, setCriteria] = useState<Criteria>({ query: '', regex: false, caseSensitive: false, wholeWord: false });
   const [replacement, setReplacement] = useState(''), [composing, setComposing] = useState(false);
   const [result, setResult] = useState<{ generation: number; ranges: Range[] }>(), [index, setIndex] = useState(0);
   const [searching, setSearching] = useState(false), [writing, setWriting] = useState(false), [error, setError] = useState('');
   const [invalid, setInvalid] = useState(false);
   const queryInput = useRef<HTMLInputElement>(null);
+  const resume = useRef<Resume | undefined>(undefined);
   const generation = useRef(0), applying = useRef(false), closed = useRef(false), client = useRef<PageFindWorkerClient | undefined>(undefined);
   useEffect(() => {
-    const invalidate = () => { reset(); setInvalid(true); setError(text.changed); };
-    if (!target.current()) invalidate();
-    const offTarget = target.onInvalidated(invalidate);
+    if (!target.current()) invalidateTarget();
+    const offTarget = target.onInvalidated(invalidateTarget);
     const offWorkspace = useWorkspace.subscribe(target.current);
     return () => { offWorkspace(); offTarget(); closed.current = true; target.dispose(); void client.current?.dispose(); };
   }, [target]);
@@ -68,9 +70,11 @@ export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose,
   /** 输入发生时同步撤销旧结果和线程，防止旧回包与新输入共存。 */
   function reset() {
     generation.current++;
+    resume.current = undefined;
     void client.current?.cancel();
     setResult(undefined); setIndex(0); setSearching(false); setError('');
   }
+  function invalidateTarget() { reset(); setInvalid(true); setError(text.changed); }
   function change(patch: Partial<Criteria>) {
     if (applying.current) return;
     reset();
@@ -81,7 +85,12 @@ export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose,
   function move(delta: number) {
     if (busy || !ranges?.length || !target.current()) return;
     const count = ranges.length;
-    setIndex(previous => (previous + delta + count) % count);
+    setIndex(previous => previous < 0 ? (delta > 0 ? 0 : count - 1) : (previous + delta + count) % count);
+  }
+
+  /** 零宽替换后原断言可能刚好留在插入文字末尾，默认继续向它之后查找。 */
+  function nextIndex(matches: Range[], anchor: Resume) {
+    return matches.findIndex(match => match.start > anchor.offset || (!anchor.skipEqual && match.start === anchor.offset));
   }
 
   function request(operation: 'find' | 'previewText', ticket: number, only?: Range) {
@@ -106,6 +115,7 @@ export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose,
   useEffect(() => {
     if (!criteria.query || composing || invalid || closed.current) return;
     const ticket = generation.current;
+    if (!source) { setResult({ generation: ticket, ranges: [] }); return; }
     const current = () => !closed.current && generation.current === ticket;
     setSearching(true);
     const timer = setTimeout(() => {
@@ -117,13 +127,18 @@ export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose,
           if (!current()) return;
           if (!target.current()) throw Error(text.changed);
           if (response.status === 'blocked') throw Error(response.message);
-          if (response.operation === 'find') setResult({ generation: ticket, ranges: response.matches[0]?.ranges ?? [] });
+          if (response.operation === 'find') {
+            const matches = response.matches[0]?.ranges ?? [];
+            setIndex(resume.current ? nextIndex(matches, resume.current) : 0);
+            resume.current = undefined;
+            setResult({ generation: ticket, ranges: matches });
+          }
         } catch (reason) { if (current()) setError(errorMessage(reason)); }
         finally { if (current()) setSearching(false); }
       })();
     }, searchDelay);
     return () => clearTimeout(timer);
-  }, [criteria, composing, invalid, target]);
+  }, [criteria, composing, invalid, source, target]);
 
   /** 写入必须使用当前已完成的匹配代次，线程结果不能跳过原模型和选区复核。 */
   async function replace(only?: Range) {
@@ -140,6 +155,23 @@ export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose,
       const patch = response.patches[0];
       if (!patch) return;
       if (patch.rowId !== slot || patch.key !== slot || patch.before !== source || patch.after.length > outputLimit) throw Error(text.changed);
+      if (only) {
+        const suffix = source.slice(only.end), tail = patch.after.length - suffix.length;
+        if (tail < only.start || !patch.after.startsWith(source.slice(0, only.start)) || !patch.after.endsWith(suffix)) throw Error(text.changed);
+        const next = target.replaceMatch(only.start, only.end, patch.after.slice(only.start, tail), 'dbark-sql-selection-replace', sqlSelectionFindLimit);
+        if (!next) {
+          if (target.current()) throw Error(text.boundary);
+          invalidateTarget();
+          return;
+        }
+        if ('limited' in next) throw Error(text.continueLimit);
+        const anchor = { offset: next.nextOffset, skipEqual: only.start === only.end };
+        if (next.text === source) { setIndex(nextIndex(result.ranges, anchor)); return; }
+        reset();
+        resume.current = anchor;
+        setSource(next.text);
+        return;
+      }
       if (!target.replace(patch.after, 'dbark-sql-selection-replace')) throw Error(text.changed);
       flushSync(close);
       focus();
@@ -166,11 +198,11 @@ export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose,
         <label><input type="checkbox" checked={criteria.wholeWord} disabled={writing || invalid} onChange={event => change({ wholeWord: event.target.checked })}/>{text.wholeWord}</label>
       </div>
       <div className="full inline-field">
-        <button type="button" disabled={busy || !selected} onClick={() => move(-1)}>{text.previous}</button>
-        <button type="button" disabled={busy || !selected} onClick={() => move(1)}>{text.next}</button>
+        <button type="button" disabled={busy || !ranges?.length} onClick={() => move(-1)}>{text.previous}</button>
+        <button type="button" disabled={busy || !ranges?.length} onClick={() => move(1)}>{text.next}</button>
         {busy && <Spinner text={writing ? text.replacing : text.searching}/>}
       </div>
-      {ranges && <p className="full" role="status">{selected ? text.position(index + 1, ranges.length) : text.noMatches}</p>}
+      {ranges && <p className="full" role="status">{selected ? text.position(index + 1, ranges.length) : ranges.length ? text.end(ranges.length) : text.noMatches}</p>}
       {selected && ranges && <MatchPreview source={source} ranges={ranges} index={index}/>}
       <p id="sql-selection-find-keys" className="full muted">{text.keys}</p>
       <p className="full muted">{text.sourceHint}</p>
@@ -184,7 +216,7 @@ export function SqlSelectionFindDialog({ mode, target, source, setHost, onClose,
       }}>{text.locate}</button>
       {replaceMode && <>
         <button disabled={busy || !selected} onClick={() => void replace(selected)}>{text.replace}</button>
-        <button className="primary" disabled={busy || !selected} onClick={() => void replace()}>{text.replaceAll}</button>
+        <button className="primary" disabled={busy || !ranges?.length} onClick={() => void replace()}>{text.replaceAll}</button>
       </>}
     </footer>
   </Modal>, document.body);

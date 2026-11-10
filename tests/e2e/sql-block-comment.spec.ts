@@ -62,10 +62,22 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
   test(`${dialect} 在选区内查找替换保留同一行的区外匹配`, async ({}, info) => {
     const prefix = "select 'needle outside', ";
     const selected = dialect === 'postgresql' ? "'needle 🚢 A',\n  'needle B'" : "'needle 🚢 A', 'needle B'";
-    const suffix = ", 'needle outside';\nselect 'needle later';";
+    const suffix = ", 'needle outside';\nselect 'needle later';" + (dialect === 'mariadb' ? '\n  ' : '');
     const source = prefix + selected + suffix;
-    await seed(dialect, source);
+    await seed(dialect, dialect === 'mariadb' ? source.slice(0, -2) : source);
     const editor = activeEditor();
+    if (dialect === 'mariadb') {
+      // 模拟 Monaco 留待后续编辑清理的自动缩进，确保替换保留选区外的空白行。
+      await editor.evaluate(node => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const instance = api?.editor.getEditors().find(candidate => candidate.getContainerDomNode().contains(node));
+        const model = instance?.getModel();
+        if (!instance || !model || !model.getOptions().trimAutoWhitespace) throw Error('编辑器未启用自动缩进清理');
+        const line = model.getLineCount();
+        const autoIndent = { range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 }, text: '  ', isAutoWhitespaceEdit: true };
+        if (!instance.executeEdits('test-auto-indent', [autoIndent])) throw Error('无法准备选区外的自动缩进');
+      });
+    }
     const findPanel = page.getByRole('dialog', { name: '在选区内查找', exact: true });
     const replacePanel = page.getByRole('dialog', { name: '在选区内替换', exact: true });
     async function selectRange() {
@@ -136,23 +148,41 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       await replaceQuery.fill(query);
       await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
     }
-    await replacePanel.getByLabel('替换为', { exact: true }).fill(dialect === 'postgresql' ? '组合 $1\n$2' : '替换后的值');
-    if (dialect === 'sqlite') await replacePanel.screenshot({ path: info.outputPath('sql-selection-navigate.png') });
-    if (dialect === 'mariadb') {
-      await replacePanel.getByRole('button', { name: '下一处', exact: true }).click();
-      await replacePanel.getByRole('button', { name: '替换当前匹配', exact: true }).click();
-    } else {
-      await replaceAll.click();
-    }
-    await expect(replacePanel).toBeHidden();
     const read = () => page.evaluate(async () => {
       const settings = await window.dbark.invoke('settings.get', {});
       return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
     });
+    const replacement = replacePanel.getByLabel('替换为', { exact: true });
+    const replaceCurrent = replacePanel.getByRole('button', { name: '替换当前匹配', exact: true });
+    await replacement.fill(dialect === 'postgresql' ? '组合 $1\n$2' : dialect === 'mariadb' ? 'needle X' : '替换后的值');
+    const firstEdit = prefix + selected.replace('needle', 'needle X') + suffix;
+    if (dialect === 'mariadb') {
+      await replaceCurrent.click();
+      await expect.poll(read).toBe(firstEdit);
+      await expect(replacePanel.getByRole('status')).toHaveText('第 2 处，共 2 处');
+      await replacePanel.screenshot({ path: info.outputPath('sql-selection-repeat.png') });
+      await replaceCurrent.click();
+      await expect(replacePanel.getByRole('status')).toHaveText('已到选区末尾，仍有 2 处匹配。');
+      await expect(replaceCurrent).toBeDisabled();
+      await expect(replaceAll).toBeEnabled();
+      await replacePanel.getByRole('button', { name: '下一处', exact: true }).click();
+      await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
+    } else if (dialect === 'postgresql') {
+      await replaceCurrent.click();
+      await expect(replacePanel.getByRole('status')).toHaveText('选区内无匹配。');
+    } else {
+      await replaceAll.click();
+    }
+    if (dialect === 'mariadb' || dialect === 'postgresql') await replacePanel.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(replacePanel).toBeHidden();
     const result = dialect === 'postgresql' ? "'组合 🚢 A\nB'" : dialect === 'mariadb'
-      ? selected.replace('needle B', '替换后的值 B') : selected.replaceAll('needle', '替换后的值');
+      ? selected.replaceAll('needle', 'needle X') : selected.replaceAll('needle', '替换后的值');
     await expect.poll(read).toBe(prefix + result + suffix);
     await page.keyboard.press(`${modifier}+z`);
+    if (dialect === 'mariadb') {
+      await expect.poll(read).toBe(firstEdit);
+      await page.keyboard.press(`${modifier}+z`);
+    }
     await expect.poll(read).toBe(source);
     if (dialect === 'sqlite') {
       await selectRange();
@@ -160,6 +190,11 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       await replacePanel.getByLabel('正则表达式').check();
       await replaceQuery.fill('(?=needle)');
       await expect(replacePanel.getByLabel('选区匹配预览').locator('mark.zero-width')).toHaveCount(2);
+      await replacement.fill('新');
+      await replaceCurrent.click();
+      await expect(replacePanel.getByRole('status')).toHaveText('第 2 处，共 2 处');
+      const zeroWidthEdit = prefix + selected.replace('needle', '新needle') + suffix;
+      await expect.poll(read).toBe(zeroWidthEdit);
       await editor.evaluate(node => {
         const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
         const instance = api?.editor.getEditors().find(candidate => candidate.getContainerDomNode().contains(node));
@@ -171,6 +206,8 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       await expect(replaceAll).toBeDisabled();
       await page.keyboard.press('Escape');
       await expect(replacePanel).toBeHidden();
+      await expect.poll(read).toBe(zeroWidthEdit);
+      await page.keyboard.press(`${modifier}+z`);
       await expect.poll(read).toBe(source);
     }
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
