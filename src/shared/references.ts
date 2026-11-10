@@ -1,6 +1,10 @@
 import type { CellValue, ColumnInfo, ForeignKeyInfo, TableInfo } from './contracts';
+import { z } from 'zod';
 
 export const REFERENCE_LIMITS = { columns: 64, valueBytes: 256 * 1024, totalBytes: 1024 * 1024 } as const;
+export const referenceCandidateSearchLimit = 256;
+export const referenceCandidateSearchSchema = z.string().min(1).max(referenceCandidateSearchLimit)
+  .refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value));
 
 /** 跨进程关联值只接收完整单元格，禁止把缺失值悄悄转换成 NULL。 */
 export function validateReferenceValues(values: unknown): asserts values is CellValue[] {

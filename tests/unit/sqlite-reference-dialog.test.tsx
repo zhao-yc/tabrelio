@@ -111,6 +111,17 @@ it('搜索草稿修改或新页撤销所选父键；旧活动行回调不能借�
   const input = document.querySelectorAll('input').find(node => node.getAttribute('aria-label') === text.search)!;
   const props = (input as any)[Object.keys(input).find(name => name.startsWith('__reactProps$'))!]; await act(async () => props.onChange({ target: { value: '新搜索' } }));
   expect(button(text.stage).disabled).toBe(true); expect(f.services.read).toHaveBeenCalledTimes(2);
-  await click(text.candidates); expect(f.services.read.mock.calls.at(-1)![0]).toMatchObject({ reference: 'candidates', search: { column: 'id', text: '新搜索' }, offset: 0 });
+  const press = (extra = {}) => ({ key: 'Enter', nativeEvent: {}, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...extra });
+  const currentProps = () => (input as any)[Object.keys(input).find(name => name.startsWith('__reactProps$'))!];
+  await act(async () => {
+    currentProps().onCompositionStart();
+    currentProps().onKeyDown(press());
+    currentProps().onCompositionEnd();
+    for (const extra of [{ nativeEvent: { isComposing: true } }, { nativeEvent: { keyCode: 229 } }, { repeat: true }, { shiftKey: true }])
+      currentProps().onKeyDown(press(extra));
+  });
+  expect(f.services.read).toHaveBeenCalledTimes(2);
+  await act(async () => currentProps().onKeyDown(press()));
+  expect(f.services.read.mock.calls.at(-1)![0]).toMatchObject({ reference: 'candidates', search: { column: 'id', text: '新搜索' }, offset: 0 });
   await act(async () => oldGrid({ row: oldRow, rowIdx: 0, column: oldColumn })); expect(button(text.stage).disabled).toBe(true); expect(f.stage).not.toHaveBeenCalled();
 });

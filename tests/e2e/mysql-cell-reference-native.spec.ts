@@ -78,6 +78,18 @@ test('从外键格限定约束并将复合父键暂存到右键命中的记录',
     await modal.getByRole('button', { name: text.refresh, exact: true }).click();
     await expect(modal.getByRole('gridcell', { name: '9007199254740997', exact: true })).toBeVisible();
     await expect(candidate).toHaveCount(0);
+    const searchBox = modal.getByRole('searchbox', { name: text.search, exact: true });
+    await searchBox.fill('%_');
+    await searchBox.press('Enter');
+    await expect(modal.getByText(text.empty, { exact: true })).toBeVisible();
+    await searchBox.fill('目标配对');
+    await searchBox.press('Enter');
+    await expect(modal.getByRole('gridcell', { name: '9007199254740997', exact: true })).toBeVisible();
+    await expect(modal.getByRole('gridcell', { name: '9007199254740993', exact: true })).toHaveCount(0);
+    await expect(candidate).toHaveCount(0);
+    await searchBox.fill('');
+    await searchBox.press('Enter');
+    await expect(modal.getByRole('gridcell', { name: '9007199254740993', exact: true })).toBeVisible();
     await modal.getByText(displayText.title, { exact: true }).click();
     await expect(description).not.toBeChecked();
     await modal.getByRole('button', { name: displayText.showAll, exact: true }).click();

@@ -1,5 +1,6 @@
 import type { CellValue, ColumnInfo, FilterGroup, FilterMode, FilterRule, ForeignKeyInfo, SortRule, TableInfo } from '../shared/contracts';
-import { referenceColumn, validateReferenceValues } from '../shared/references';
+import { referenceCandidateSearchSchema, referenceColumn, validateReferenceValues } from '../shared/references';
+import { tableReadSqlLimits, tableReadTextComparison, tableReadTextLiteral } from '../shared/tableReadSql';
 import { buildPageSql, exportLiteral, identifier, inlineParameters, qualified, typedCellPlaceholder } from './sql';
 
 /** SHOW CREATE 词法只解析真实表级约束，跳过注释和字符串中的伪 SQL。 */
@@ -109,16 +110,36 @@ function scopedReferencePageSql(target: TableInfo, columns: string[], values: Ce
   const sql = inlineParameters(statement.sql, statement.params);
   const names = columns.map(name => referenceColumn(target, name).name);
   const match = values.includes(null) ? '0 = 1' : names.map((name, index) => `${identifier(name)} = ${referenceLiteral(valueColumns[index], values[index]!)}`).join(' AND ');
+  return addReferencePredicate(target, sql, match);
+}
+
+/** 约束或快速搜索始终与高级条件整体取交集，原排序与分页保持在谓词之后。 */
+function addReferencePredicate(target: TableInfo, sql: string, predicate: string): string {
   const prefix = `SELECT * FROM ${qualified(target.database, target.name)}`;
   if (!sql.startsWith(prefix)) throw new Error('关联分页模板无效');
   const tail = sql.slice(prefix.length);
-  return `${prefix} WHERE (${match})${tail.startsWith(' WHERE ') ? ' AND ' + tail.slice(7) : tail}`;
+  return `${prefix} WHERE (${predicate})${tail.startsWith(' WHERE ') ? ' AND ' + tail.slice(7) : tail}`;
 }
 
 /** 原正向可靠键及省略匹配值语义保留，ANY筛选不能放宽关联范围。 */
-export function buildReferencePageSql(target: TableInfo, foreignKey: ForeignKeyInfo, matchValues: CellValue[] | undefined, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode, filterGroup?:FilterGroup): string {
+export function buildReferencePageSql(target: TableInfo, foreignKey: ForeignKeyInfo, matchValues: CellValue[] | undefined, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode, filterGroup?: FilterGroup, candidateSearch?: string): string {
   if (!hasStableReferencePagination(target)) throw new Error('关联目标表没有可靠的非空唯一键，暂不支持稳定分页，请使用 SQL 查询查看');
-  if (matchValues === undefined) { const statement = buildPageSql(target, page, pageSize, filters, sort, filterMode, filterGroup); return inlineParameters(statement.sql, statement.params); }
+  if (candidateSearch !== undefined) {
+    if (matchValues !== undefined) throw Error('候选搜索不能用于精确父键读取');
+    const literal = tableReadTextLiteral(referenceCandidateSearchSchema.parse(candidateSearch));
+    const clauses = target.columns.filter(column => !/^(?:GEOMETRY(?:COLLECTION)?|POINT|LINESTRING|POLYGON|MULTI(?:POINT|LINESTRING|POLYGON))\b/i.test(column.type)).map(column => {
+      const field = identifier(column.name);
+      return tableReadTextComparison(/^(?:BINARY|VARBINARY|(?:TINY|MEDIUM|LONG)?BLOB|BIT)\b/i.test(column.type) ? `HEX(${field})` : field, literal, 'CONTAINS');
+    });
+    const statement = buildPageSql(target, page, pageSize, filters, sort, filterMode, filterGroup);
+    const sql = addReferencePredicate(target, inlineParameters(statement.sql, statement.params), clauses.join(' OR ') || '0 = 1');
+    if (Buffer.byteLength(sql) > tableReadSqlLimits.sqlBytes) throw Error('候选搜索超过查询预算，请缩短关键词或减少高级条件');
+    return sql;
+  }
+  if (matchValues === undefined) {
+    const statement = buildPageSql(target, page, pageSize, filters, sort, filterMode, filterGroup);
+    return inlineParameters(statement.sql, statement.params);
+  }
   return scopedReferencePageSql(target, foreignKey.referencedColumns, matchValues, foreignKey.referencedColumns.map(name => referenceColumn(target, name)), page, pageSize, filters, sort, filterMode, filterGroup);
 }
 

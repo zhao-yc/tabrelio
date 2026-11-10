@@ -880,7 +880,7 @@ export class Engine {
         const current = matches[0];
         const target = await metadata.tableInfo(managed, current.referencedDatabase, current.referencedTable, read);
         const foreignKey = canonicalReference(source, current, target);
-        const sql = buildReferencePageSql(target, foreignKey, input.matchValues, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
+        const sql = buildReferencePageSql(target, foreignKey, input.matchValues, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup, input.candidateSearch);
         // 关联页必须等待命令和连接各自的真实终态，不能在 QUIT 刚发送时发布结果。
         const ended = control.commandStarted();
         let page;

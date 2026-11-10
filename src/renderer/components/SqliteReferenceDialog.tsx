@@ -14,6 +14,7 @@ import { ErrorBox, Modal, Spinner } from './ui';
 import { ResultsGrid } from './ResultsGrid';
 import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
 import { ReferenceCandidateSort } from './ReferenceCandidateSort';
+import { ReferenceSearchInput } from './ReferenceSearchInput';
 
 export const sqliteReferenceServices: SqliteReferenceServices = { read: input => invoke('sqlite.referencePage', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid };
 type ReferenceKey = SqliteReferenceOutput['source']['foreignKeys'][number];
@@ -138,7 +139,7 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     }}>{keys.map(key => <option key={key.ordinal} value={key.ordinal}>{text.key(key.ordinal)} · {key.columns.join(', ')} → {key.referencedTable}</option>)}</select></label>
     : <p>{column === undefined ? text.emptyKeys : text.emptyColumn}</p>)}
     {key && <p>{key.columns.join(', ')} → {key.referencedTable} ({key.referencedColumns?.join(', ') ?? text.implicit})</p>}
-    {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<input aria-label={text.search} maxLength={256} disabled={disabled} value={searchText} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchText(event.target.value); } }}/></label><p>{text.searchHint}</p></div>}
+    {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<ReferenceSearchInput label={text.search} value={searchText} limit={256} disabled={disabled} onChange={value => { if (actionCurrent()) { resetSelection(); setSearchText(value); } }} onSearch={() => read(0, true)}/></label><p>{text.searchHint}</p></div>}
     {choosing && <ReferenceCandidateSort columns={searchColumns} sort={sort} disabled={disabled || !key} onChange={next => {
       if (!actionCurrent()) return;
       setSort(next); read(0, false, next);

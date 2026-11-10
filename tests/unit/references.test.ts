@@ -9,6 +9,19 @@ const page = (values: any, filters: any[] = [], mode: 'all' | 'any' = 'all') => 
 describe('关联值与可靠分页', () => {
   it('相邻大整数保留精确文本且补唯一键排序', () => { const sql = page(['18446744073709551615']); expect(sql).toContain('AS DECIMAL(65,0)'); expect(sql).toContain(Buffer.from('18446744073709551615').toString('hex')); expect(sql).toContain('ORDER BY `Id` ASC'); });
   it('ANY筛选在关联AND之外整体分组，不能扩大关联范围', () => { const sql = page(['9'], [{ column: 'Id', operator: '=', value: '1' }, { column: 'Id', operator: '=', value: '2' }], 'any'); expect(sql).toMatch(/WHERE \(.*\) AND \(.* OR .*\) ORDER BY/); });
+  it('快捷搜索按字面查多列，与任一高级条件整体取交集，再排序分页', () => {
+    const target = { ...info, columns: [...info.columns, { ...info.columns[1], name: '二进制', type: 'varbinary(8)' }] };
+    const search = "%_\\'😀";
+    const sql = buildReferencePageSql(target, key, undefined, 2, 10, [
+      { column: 'Id', operator: '=', value: '1' }, { column: 'Id', operator: '=', value: '2' },
+    ], [], 'any', undefined, search);
+    expect(sql).toMatch(/WHERE \(LOCATE\(.* OR LOCATE\(.*\) AND \(.* OR .*\) ORDER BY `Id` ASC LIMIT 11 OFFSET 10$/);
+    expect(sql.match(/LOCATE\(/g)).toHaveLength(3);
+    expect(sql).toContain('HEX(`二进制`)');
+    expect(sql).toContain(Buffer.from(search).toString('hex'));
+    expect(sql).not.toContain(search);
+    expect(() => buildReferencePageSql(target, key, ['1'], 1, 10, [], [], 'all', undefined, search)).toThrow('精确父键');
+  });
   it('NULL明确无匹配，省略tuple才为父候选页', () => { expect(page([null])).toContain('WHERE (0 = 1)'); expect(page(undefined)).not.toContain('WHERE'); expect(() => page([])).toThrow(); expect(() => page([undefined])).toThrow(); });
   it('拒绝舍入精确数值、宽松base64、超预算和不完整tuple', () => { for (const values of [[{ type: 'binary', base64: 'AB==' }], [{ type: 'binary', base64: '!!' }], ['中'.repeat(90000)]]) expect(() => validateReferenceValues(values)).toThrow(); expect(() => page([9007199254740992])).toThrow('精确字符串'); expect(() => page([1.25])).toThrow('精确字符串'); expect(() => page(['1','2'])).toThrow('数量'); });
   it('源和父列大小写规范化，不受prototype字段影响', () => { const source = { ...info, columns: [{ ...info.columns[0], name: 'SourceId' }] }; expect(canonicalReference(source, { ...key, referencedColumns: ['id'] }, info)).toMatchObject({ columns: ['SourceId'], referencedColumns: ['Id'] }); expect(canonicalReference(source, { ...key, referencedColumns: ['__proto__'] }, info).referencedColumns).toEqual(['__proto__']); });
@@ -16,4 +29,11 @@ describe('关联值与可靠分页', () => {
   it('超宽BIT二进制不能经CONV溢出饱和后误匹配最大键', () => { const bit = { ...info, columns: [{ ...info.columns[0], type: 'bit(64)' }] }; expect(() => buildReferencePageSql(bit, key, [{ type: 'binary', base64: Buffer.alloc(9, 255).toString('base64') }], 1, 10, [], [])).toThrow('位范围'); });
   it('二进制BIT按64位整数比较且普通文本不强制二进制collation', () => { const bit = { ...info, columns: [{ ...info.columns[0], type: 'bit(64)' }] }; expect(buildReferencePageSql(bit, key, [{ type: 'binary', base64: '//////////8=' }], 1, 10, [], [])).toContain("CAST(CONV(HEX(X'ffffffffffffffff'),16,10) AS UNSIGNED)"); const text = { ...info, columns: [{ ...info.columns[0], type: 'varchar(100)' }] }; const sql = buildReferencePageSql(text, key, ["中文'); OR 1=1 --"], 1, 10, [], []); expect(sql).not.toContain('OR 1=1'); expect(sql).not.toContain('BINARY'); });
   it('IPC拒绝目标注入、undefined值及非法筛选，接受NULL确认', () => { const input = { connectionId: 'c', database: 'd', table: 't', foreignKeyName: 'f', taskId: 'task', page: 1, pageSize: 10, filters: [], sort: [], matchValues: [null] }; expect(validateCommand('table.referencePage', input)).toEqual(input); expect(() => validateCommand('table.referencePage', { ...input, referencedTable: 'x' })).toThrow(); expect(() => validateCommand('table.referencePage', { ...input, matchValues: [undefined] })).toThrow(); expect(() => validateCommand('table.referencePage', { ...input, filters: [{ column: 'id', operator: 'IN', values: [] }] })).toThrow(); });
+  it('IPC 只允许候选带有界关键词', () => {
+    const input = { connectionId: 'c', database: 'd', table: 't', foreignKeyName: 'f', taskId: 'task', page: 1, pageSize: 10, filters: [], sort: [], candidateSearch: '_%😀' };
+    expect(validateCommand('table.referencePage', input)).toEqual(input);
+    expect(() => validateCommand('table.referencePage', { ...input, matchValues: [null] })).toThrow();
+    for (const candidateSearch of ['', '\0', '\ud800', 'x'.repeat(257)])
+      expect(() => validateCommand('table.referencePage', { ...input, candidateSearch })).toThrow();
+  });
 });

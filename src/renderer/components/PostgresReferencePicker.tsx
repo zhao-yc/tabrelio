@@ -10,6 +10,7 @@ import { ErrorBox } from './ui';
 import { PostgresReferenceRecord } from './PostgresReferenceRecord';
 import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
 import { ReferenceCandidateSort } from './ReferenceCandidateSort';
+import { ReferenceSearchInput } from './ReferenceSearchInput';
 
 export interface PostgresReferenceSource {
   input: Omit<PostgresTableReferenceInput, 'lookup'>;
@@ -138,12 +139,8 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
         {!choices?.length && <option value="">{text.constraint}</option>}
         {choices?.map(item => <option key={item.id} value={item.id}>{item.name} · {item.schema}.{item.table}</option>)}
       </select>
-      {!parent && <><input type="search" aria-label={children ? text.childQuery : text.query} placeholder={children ? text.childQuery : text.query}
-        value={query} maxLength={limits.search} disabled={busy || !choice}
-        onChange={event => setQuery(event.target.value)} onKeyDown={event => {
-          if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229 || busy || !choice) return;
-          event.preventDefault(); event.stopPropagation(); void load(choice, query, 0, sort);
-        }}/>
+      {!parent && <><ReferenceSearchInput label={children ? text.childQuery : text.query} value={query} limit={limits.search}
+        disabled={busy || !choice} onChange={setQuery} onSearch={() => { if (choice) void load(choice, query, 0, sort); }}/>
       <button type="button" disabled={busy || !choice} onClick={() => void load(choice, query, 0, sort)}>{children ? text.childSearch : text.search}</button></>}
       <button type="button" disabled={busy} onClick={() => { setQuery(''); void load(); }}>{text.refresh}</button>
       {browse && onOpen && <button type="button" disabled={busy || !view || (parent && !view.page.rows.length)}

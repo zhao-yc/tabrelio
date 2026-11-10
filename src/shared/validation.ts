@@ -162,7 +162,7 @@ import { queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPr
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { snippetSchema } from './snippets';
-import { validateReferenceValues } from './references';
+import { referenceCandidateSearchSchema, validateReferenceValues } from './references';
 import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRelationSchema, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryReplaceColumnsSchema } from './mysqlQueryRelation';
 import { queryRowSqlSchema } from './queryRowSql';
 import { mysqlResultOriginOpenSchema } from './mysqlResultOrigins';
@@ -645,8 +645,11 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   })),
   'table.copySourceRead': tableCopySourceReadSchema,
   'table.copySourceRelease': tableCopySourceReleaseSchema,
-  'table.referencePage': guardedTablePage(tablePage.safeExtend({ foreignKeyName: name, matchValues: z.array(cell).optional(), taskId: id }).superRefine((input, context) => {
+  'table.referencePage': guardedTablePage(tablePage.safeExtend({ foreignKeyName: name, matchValues: z.array(cell).optional(),
+    candidateSearch: referenceCandidateSearchSchema.optional(), taskId: id }).superRefine((input, context) => {
     if (input.matchValues !== undefined) try { validateReferenceValues(input.matchValues); } catch (error) { context.addIssue({ code: 'custom', path: ['matchValues'], message: error instanceof Error ? error.message : '关联值无效' }); }
+    if (input.matchValues !== undefined && input.candidateSearch !== undefined)
+      context.addIssue({ code: 'custom', path: ['candidateSearch'], message: '候选搜索不能用于精确父键读取' });
   })),
   'table.incomingReferences': z.object({ ...target, taskId: id, cursor: z.string().min(1).max(2048).regex(/^[A-Za-z0-9_-]+$/).optional() }).strict(),
   'table.valueOptions': guardedTablePage(z.object({ ...target, taskId: id, column: name, filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), searchPattern: z.string().optional(), order: z.enum(['value', 'count-desc', 'count-asc']).optional() }).strict().superRefine((input, context) => {

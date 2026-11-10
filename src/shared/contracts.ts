@@ -589,7 +589,7 @@ export interface CommandMap {
   /** 只生成并复制受限的已加载表行 INSERT，不访问数据库。 */
   'table.copyInsertSql': { input: CopyInsertSqlInput; output: void };
   /** 目标仅由服务器来源表的外键解析；值元组保留精确字符串及二进制，不以普通文本筛选代替关联。 */
-  'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
+  'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; candidateSearch?: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
   'table.incomingReferences': { input: import('./incomingReferences').IncomingReferencesInput; output: import('./incomingReferences').IncomingReferencesOutput };
   'table.childReferencePage': { input: import('./incomingReferences').ChildReferencePageInput; output: import('./incomingReferences').ChildReferencePageOutput };
   'table.statistics': { input: import('./tableStatistics').TableStatisticsInput; output: import('./tableStatistics').TableStatisticsOutput };

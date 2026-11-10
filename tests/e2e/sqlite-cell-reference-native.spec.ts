@@ -107,6 +107,14 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
     await expect(firstCandidate.getByRole('gridcell', { name: '106', exact: true })).toBeVisible();
     await sortBy.selectOption('');
     await expect(firstCandidate.getByRole('gridcell', { name: 'Alpha', exact: true })).toBeVisible();
+    const searchBox = picker.getByRole('searchbox', { name: text.search, exact: true });
+    await picker.getByRole('combobox', { name: text.searchColumn, exact: true }).selectOption('label');
+    await searchBox.fill('目标配对');
+    await searchBox.press('Enter');
+    await expect(firstCandidate.getByRole('gridcell', { name: 'Beta', exact: true })).toBeVisible();
+    await searchBox.fill('');
+    await searchBox.press('Enter');
+    await expect(firstCandidate.getByRole('gridcell', { name: 'Alpha', exact: true })).toBeVisible();
     await picker.getByText(displayText.title, { exact: true }).click();
     await picker.getByRole('checkbox', { name: displayText.show('label'), exact: true }).uncheck();
     await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toHaveCount(0);

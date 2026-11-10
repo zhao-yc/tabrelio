@@ -41,6 +41,18 @@ function filterParameter(column: ColumnInfo, value: string, pattern: boolean): s
   return `CAST(? AS DECIMAL(65,${fraction.length}))`;
 }
 
+/** 文本筛选与外键快捷搜索共用 UTF-8 字节比较，通配符保持原文字面意义。 */
+export function tableReadTextComparison(column: string, input: string, operator: keyof typeof tableTextFilterMatch): string {
+  const { comparison, reverse } = tableTextFilterMatch[operator];
+  const bytes = (expression: string) => {
+    const converted = `CAST(CONVERT(${expression} USING utf8mb4) AS BINARY)`;
+    return reverse ? `REVERSE(${converted})` : converted;
+  };
+  return operator === 'TEXT EQUALS'
+    ? `${bytes(column)} = ${bytes(input)}`
+    : `LOCATE(${bytes(input)}, ${bytes(column)}) ${comparison}`;
+}
+
 /** 表页及整范围聚合共用同一元数据白名单、启停及分组语义，不重新解析任意SQL。 */
 export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filterMode: FilterMode = 'all', filterGroup?: FilterGroup, parameterLiteral?: (value: string) => string, columnReference?: (column: string) => string): { where: string | undefined; params: CellValue[] } {
   const admitted=copyFilterRules(filters),group=validateFilterGroup(admitted,filterMode,filterGroup);
@@ -59,15 +71,7 @@ export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filt
       const value = filter.value ?? '';
       params.push(value);
       // 两端先转成 UTF-8，再按字节查找，避免列字符集和排序规则改变原文字面语义。
-      const input = parameterLiteral ? parameterLiteral(value) : '?';
-      const { comparison, reverse } = tableTextFilterMatch[filter.operator];
-      const bytes = (expression: string) => {
-        const converted = `CAST(CONVERT(${expression} USING utf8mb4) AS BINARY)`;
-        return reverse ? `REVERSE(${converted})` : converted;
-      };
-      return filter.operator === 'TEXT EQUALS'
-        ? `${bytes(column)} = ${bytes(input)}`
-        : `LOCATE(${bytes(input)}, ${bytes(column)}) ${comparison}`;
+      return tableReadTextComparison(column, parameterLiteral ? parameterLiteral(value) : '?', filter.operator);
     }
     /** 参数按条件原顺序加入，不拆分逗号、裁剪空白或转换为 JavaScript 数值。 */
     const parameter = (value: string) => {

@@ -8,6 +8,8 @@ import { parsePageJump, maxTablePage } from '../tableFilters';
 import { TableFilterPanel } from './TableFilterPanel';
 import { ResultsGrid } from './ResultsGrid';
 import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
+import { ReferenceSearchInput } from './ReferenceSearchInput';
+import { referenceCandidateSearchLimit } from '../../shared/references';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import '../references.css';
 
@@ -19,6 +21,7 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
   const [targetInfo, setTargetInfo] = useState<TableInfo | null>(null);
   const [pageIndex, setPageIndex] = useState(1); const [jump, setJump] = useState('1'); const [pageSize, setPageSize] = useState(50);
   const [filters, setFilters] = useState<FilterRule[]>([]); const [filterMode, setFilterMode] = useState<FilterMode>('all'); const [sort, setSort] = useState<SortRule[]>([]);
+  const [searchText, setSearchText] = useState(''), [candidateSearch, setCandidateSearch] = useState('');
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [clearConfirm, setClearConfirm] = useState(false); const [refresh, setRefresh] = useState(0);
   const alive = useRef(true); const generation = useRef(0); const pending = useRef(new Set<string>()); const verifying = useRef(false); const activity = useRef(onActivity); activity.current = onActivity;
   const match = mode === 'browse' ? referenceTuple(snapshot.data, key.columns) : undefined;
@@ -34,13 +37,14 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
   useEffect(() => {
     const current = ++generation.current; setCandidate(null); setData(null); setError(''); setBusy(true);
     if (mode === 'browse' && !match) { setError(text.incomplete); setBusy(false); return; }
-    void request(taskId => invoke('table.referencePage', { ...base, foreignKeyName: keyName, ...(match ? { matchValues: match } : {}), page: pageIndex, pageSize, filters, filterMode, sort, taskId })).then(next => {
+    void request(taskId => invoke('table.referencePage', { ...base, foreignKeyName: keyName, ...(match ? { matchValues: match } : {}),
+      ...(mode === 'choose' && candidateSearch ? { candidateSearch } : {}), page: pageIndex, pageSize, filters, filterMode, sort, taskId })).then(next => {
       if (!alive.current || current !== generation.current) return;
       if (referenceSignature(next.foreignKey) !== referenceSignature(key)) throw new Error(text.mappingChanged);
       setData(next); setTargetInfo(next.target);
     }).catch(reason => { if (alive.current && current === generation.current) { setData(null); setCandidate(null); setError(errorMessage(reason)); } }).finally(() => { if (alive.current && current === generation.current) setBusy(false); });
     return () => { generation.current++; cancel(); };
-  }, [base, keyName, pageIndex, pageSize, filters, filterMode, sort, refresh, mode, request, cancel]);
+  }, [base, keyName, pageIndex, pageSize, filters, filterMode, sort, refresh, mode, candidateSearch, request, cancel]);
   useEffect(() => { setJump(String(pageIndex)); }, [pageIndex]);
   useEffect(() => {
     if (!clearConfirm) return;
@@ -87,11 +91,26 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
   function close() { alive.current = false; generation.current++; cancel(); onClose(); }
   const writable = mode === 'choose' && referenceWritable(data?.source ?? snapshot.source, key);
   const canClear = writable && referenceClearable(data?.source ?? snapshot.source, key);
+  function search(value = searchText) {
+    if (!alive.current || busy || verifying.current || clearConfirm) return;
+    setCandidateSearch(value);
+    setPageIndex(1);
+    setRefresh(current => current + 1);
+  }
   return <Modal title={mode === 'choose' ? text.choose : text.browse} wide onClose={close}><div className="modal-content reference-content">
     <UsageHelp><p>{mode === 'choose' ? text.hint : text.browseHint}</p></UsageHelp>
     {column !== undefined && <p>{text.columnScope(column)}</p>}
-    <Field label={text.constraint}><select disabled={busy} value={keyName} onChange={event => { setKeyName(event.target.value); setPageIndex(1); setFilters([]); setSort([]); setClearConfirm(false); }}>{keys.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></Field>
+    <Field label={text.constraint}><select disabled={busy} value={keyName} onChange={event => { setKeyName(event.target.value); setPageIndex(1); setFilters([]); setSort([]); setSearchText(''); setCandidateSearch(''); setClearConfirm(false); }}>{keys.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></Field>
     <p>{text.target}：{key.referencedDatabase}.{key.referencedTable}</p><p className="reference-mapping">{text.mapping}：{key.columns.map((column, index) => `${column} → ${key.referencedColumns[index]}`).join('，')}</p>
+    {mode === 'choose' && <>
+      <div className="reference-search"><ReferenceSearchInput label={text.search} value={searchText} limit={referenceCandidateSearchLimit}
+        disabled={busy || clearConfirm} onChange={setSearchText} onSearch={() => search()}/>
+        <button type="button" disabled={busy || clearConfirm} onClick={() => search()}>{text.applySearch}</button>
+        <button type="button" disabled={busy || clearConfirm || (!searchText && !candidateSearch)} onClick={() => {
+          setSearchText(''); search('');
+        }}>{text.clearSearch}</button>
+      </div><p className="muted small">{text.searchHint}</p>
+    </>}
     <TableFilterPanel columns={(targetInfo?.columns ?? []).map(column => column.name)} filters={filters} mode={filterMode} disabled={busy || !data} onFiltersChange={next => { if (busy) return false; setFilters(next); setPageIndex(1); return true; }} onModeChange={next => { if (busy) return false; setFilterMode(next); setPageIndex(1); return true; }}/>
     <ErrorBox message={error}/>{busy && <Spinner text={text.loading}/>}
     <ReferenceCandidateColumns key={referenceSignature(key)} columns={data?.page.columns}

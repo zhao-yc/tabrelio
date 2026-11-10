@@ -12,3 +12,5 @@
 .reference-candidate-sort { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin: 8px 0; }
 .reference-candidate-sort label { display: flex; align-items: center; gap: 8px; }
 .reference-candidate-sort select { width: auto; max-width: 260px; }
+.reference-search { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.reference-search input { flex: 1 1 220px; max-width: 420px; }
