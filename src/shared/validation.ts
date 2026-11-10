@@ -141,7 +141,7 @@ import { historyDeletePreviewInputSchema, historyDeleteApplyInputSchema, history
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import { connectionOrganizationGetSchema, connectionOrganizationApplySchema } from './connectionOrganization';
-import { savedQueryGroupTargetSchema, savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
+import { savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
 import type { Command, ResultExportData } from './contracts';
 import { resultArchiveMaxSets, validateResultExportData } from './resultExport';
 import { assertResultExcelData, validateResultArchiveOptions } from './resultExcel';
@@ -183,7 +183,7 @@ import {dataSearchCatalogueSchema} from './dataSearchCatalogue';
 import{dataSearchRecordReadSchema,dataSearchRecordsReleaseSchema}from'./dataSearchRecords';
 import { tableCopySourceReadSchema, tableCopySourceReleaseSchema } from './tableCopySource';
 import { copyInsertSqlInputSchema } from './copyInsertSql';
-import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQueryReadBatchSchema,savedQueryReadTextSchema,savedQueryExportSqlSchema,savedQueryExportSqlArchiveSchema}from'./savedQuerySearch';
+import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQueryReadBatchSchema,savedQueryReadTextSchema,savedQueryExportSqlSchema,savedQueryExportSqlArchiveSchema,savedQueryImportSqlSchema}from'./savedQuerySearch';
 const queryDatabaseContext=z.discriminatedUnion('state',[z.object({state:z.literal('known'),database:z.string().min(1).max(256).refine(value=>!value.includes('\0')).nullable()}).strict(),z.object({state:z.literal('unknown')}).strict()]);
 const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
 const completionPrefix=z.string().max(completionLimits.prefixUnits).refine(value=>value===''||completionIdentifier(value),'补全前缀含无效字符');
@@ -545,7 +545,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,'queries.readBatch':savedQueryReadBatchSchema,'queries.readText':savedQueryReadTextSchema,'queries.exportSql':savedQueryExportSqlSchema,
   'queries.exportSqlArchive':savedQueryExportSqlArchiveSchema,
   'queries.copySql': savedQueryReadTextSchema,
-  'queries.importSql': z.object({ encoding: z.enum(['utf8','utf16le','gb18030']), group: savedQueryGroupTargetSchema.optional() }).strict(),
+  'queries.importSql': savedQueryImportSqlSchema,
   'queries.page':savedQueryPageInputSchema,'queries.pageContinue':savedQueryPageNextSchema,'queries.pageRelease':savedQueryPageReleaseSchema,'queries.deleteChecked':savedQueryDeleteCheckedSchema,
   'queries.renameChecked': savedQueryRenameSchema,
   'queries.duplicateChecked': savedQueryDuplicateSchema,

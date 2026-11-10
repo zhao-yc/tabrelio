@@ -3,6 +3,8 @@
 .saved-query-pages>.inline-field{margin-top:12px}
 .saved-query-pages .inline-field{white-space:normal;flex-wrap:wrap}
 .saved-query-pages .inline-field select{width:260px;max-width:100%;height:30px;flex:0 1 260px}
+.saved-query-import .inline-field input{width:260px;max-width:100%;height:30px;padding:4px 8px}
+.saved-query-import .inline-field + .inline-field,.saved-query-import > button{margin-top:8px}
 .saved-query-pages .history-card strong{overflow-wrap:anywhere;min-width:0}
 .saved-query-pages .history-card>div{flex-wrap:wrap}
 .history-pages>div[role=group]{gap:16px;margin:12px 0}

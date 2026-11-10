@@ -3,7 +3,7 @@ import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
 import type { SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryGroupTarget, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
 import { savedQueryOpenBatchLimits, type SavedQueryOpenResult, type SavedQueryScope } from '../../shared/savedQuerySearch';
-import type { QueryFileEncoding } from '../../shared/contracts';
+import type { ConnectionProfile, QueryFileEncoding } from '../../shared/contracts';
 import { zh, formatText } from '../locales/zh-CN';
 import { queryContextZh } from '../locales/queryContext.zh-CN';
 import { savedQueryPagesZh as t } from '../locales/savedQueryPages.zh-CN';
@@ -49,6 +49,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [scope, setScope] = useState<SavedQueryScope>(() => initialConnectionId ? { kind: 'connection', connectionId: initialConnectionId } : { kind: 'all' });
   const [importEncoding, setImportEncoding] = useState<QueryFileEncoding>('utf8');
   const [importGroup, setImportGroup] = useState<SavedQueryGroupTarget>();
+  const [importConnection, setImportConnection] = useState<ConnectionProfile>(), [importDatabase, setImportDatabase] = useState('');
   const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
   const [sort, setSort] = useState<SavedQueryPageSort>('recent');
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
@@ -373,11 +374,12 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }
   /** 写入完成后刷新原筛选。若刷新失败，保留导入成功提示并由用户重新读取列表。 */
   function importSql(): void {
-    if (!editable() || importGroupStale) return;
+    if (!editable() || importGroupStale || importConnection && !useWorkspace.getState().connections.includes(importConnection)) return;
     const path = importGroup ? tree.find(item => item.id === importGroup.id)?.path : undefined;
+    const target = importConnection && { connectionId: importConnection.id, database: importConnection.dialect === 'sqlite' ? 'main' : importDatabase || null };
     const canRefresh = !reply || criteriaKey(criteriaRef.current) === applied;
     void run(async ticket => {
-      const result = await io.request('queries.importSql', { encoding: importEncoding, ...(importGroup ? { group: importGroup } : {}) });
+      const result = await io.request('queries.importSql', { encoding: importEncoding, ...(importGroup ? { group: importGroup } : {}), ...(target ? { target } : {}) });
       if (!owns(ticket) || result.status !== 'imported') return;
       setNotice(path !== undefined ? formatText(t.sqlGroupImported, result.names.length, path) : result.names.length === 1
         ? formatText(t.sqlImported, result.names[0]) : formatText(t.sqlBatchImported, result.names.length));
@@ -419,6 +421,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
   const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening || !!external, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const importGroupStale = !!importGroup && (needsRefresh || importGroup.expectedRevision !== organization?.revision || !tree.some(item => item.id === importGroup.id));
+  const importConnectionStale = !!importConnection && !connections.includes(importConnection);
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
   return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else void close(); }}
     onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
@@ -432,7 +435,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         <div className="saved-query-group-actions"><button disabled={blocked || !organization || needsRefresh} onClick={() => edit({ kind: 'create', id: selectedGroup })}>{text.create}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'rename', id: selectedGroup })}>{text.rename}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'moveGroup', id: selectedGroup })}>{text.moveGroup}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'dissolve', id: selectedGroup })}>{text.dissolve}</button></div>
       </details>
       <div className="saved-query-organization-list"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={blocked} onChange={event => draft(() => setSearch(event.target.value))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(); } }}/><button disabled={blocked} onClick={() => void load()}>{t.searchButton}</button></div>
-        <details><summary>{t.sqlImport}</summary><p className="muted small">{t.sqlImportHint}</p><div className="inline-field">
+        <details className="saved-query-import"><summary>{t.sqlImport}</summary><p className="muted small">{t.sqlImportHint}</p><div className="inline-field">
           <label>{fileText.encoding} <select disabled={blocked} value={importEncoding} onChange={event => draft(() => setImportEncoding(event.target.value as QueryFileEncoding))}><option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option></select></label>
           <label>{t.sqlImportGroup} <select aria-label={t.sqlImportGroup} disabled={blocked || needsRefresh || !organization}
             value={importGroupStale ? '-' : importGroup ? 'group:' + importGroup.id : ''} onChange={event => {
@@ -443,8 +446,20 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
             <option value="">{text.unfiled}</option>
             {tree.map(item => <option key={item.id} value={'group:' + item.id}>{item.path}</option>)}
           </select></label>
-          <button disabled={blocked || importGroupStale} onClick={importSql}>{t.sqlImportChoose}</button>
-        </div></details>
+        </div><div className="inline-field">
+          <label>{t.sqlImportConnection} <select aria-label={t.sqlImportConnection} value={importConnectionStale ? '-' : importConnection ? 'connection:' + importConnection.id : ''}
+            disabled={blocked} onChange={event => {
+              const profile = connections.find(item => 'connection:' + item.id === event.target.value);
+              draft(() => { setImportConnection(profile); setImportDatabase(''); });
+            }}>
+            {importConnectionStale && <option value="-" disabled>{t.sqlImportReselectConnection}</option>}
+            <option value="">{t.unbound}</option>
+            {connections.map(item => <option key={item.id} value={'connection:' + item.id}>{item.name}</option>)}
+          </select></label>
+          {importConnection && !importConnectionStale && <label>{t.sqlImportDatabase} <input aria-label={t.sqlImportDatabase} value={importConnection.dialect === 'sqlite' ? 'main' : importDatabase}
+            readOnly={importConnection.dialect === 'sqlite'} disabled={blocked} maxLength={256} placeholder={queryContextZh.none}
+            onChange={event => draft(() => setImportDatabase(event.target.value))}/></label>}
+        </div><button disabled={blocked || importGroupStale || importConnectionStale} onClick={importSql}>{t.sqlImportChoose}</button></details>
         <label className="inline-field">{t.sqlExportEncoding}<select aria-label={t.sqlExportEncoding} value={exportEncoding} disabled={blocked}
           onChange={event => setExportEncoding(event.target.value as QueryFileEncoding)}>
           <option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option>

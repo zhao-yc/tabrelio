@@ -53,26 +53,38 @@ describe('保存查询来源绑定和真实原子 CAS', () => {
     if (grouped) store.applyQueryOrganization({ expectedRevision: initial.revision, operation: { kind: 'create', name: '批量导入', parentId: null } });
     const organization = store.queryOrganization();
     const group = grouped ? { id: organization.groups[0].id, expectedRevision: organization.revision } : undefined;
+    const target = grouped ? { connectionId: profile.id, database: '导入库' } : undefined;
     const before = readFileSync(path), revision = store.querySearchRevision(), existing = store.queries();
     if (group) expect(() => store.createImportedQueries(batch, () => {}, { ...group, expectedRevision: initial.revision })).toThrow('分组已变化');
     const temporary = path + '.tmp';
     mkdirSync(temporary);
-    try { expect(() => store.createImportedQueries(batch, () => {}, group)).toThrow('修改未保存'); }
+    try { expect(() => store.createImportedQueries(batch, () => {}, group, target)).toThrow('修改未保存'); }
     finally { rmdirSync(temporary); }
     expect(store.queries()).toEqual(existing);
     expect(store.querySearchRevision()).toBe(revision);
     expect(store.queryOrganization()).toEqual(organization);
     expect(readFileSync(path)).toEqual(before);
-    store.createImportedQueries(batch, () => {}, group);
+    store.createImportedQueries(batch, () => {}, group, target);
     store.close();
     const restored = await LocalStore.open(path, wasm, protector);
     const queries = restored.queries(), imported = queries.filter(item => item.id !== first.source.id);
     expect(queries.find(item => item.id === first.source.id)).toEqual(existing[0]);
     expect(new Set(imported.map(item => item.id)).size).toBe(2);
     expect(imported.map(item => item.sql).sort()).toEqual(batch.map(item => item.sql));
-    expect(imported.every(item => item.name === '同名' && !item.connectionId && item.databaseContext?.state === 'known' && item.databaseContext.database === null)).toBe(true);
+    expect(imported.every(item => item.name === '同名' && item.connectionId === target?.connectionId && item.databaseContext?.state === 'known' && item.databaseContext.database === (target?.database ?? null))).toBe(true);
     expect(restored.queryOrganization()).toMatchObject({ unfiledCount: group ? 1 : 3, totalCount: 3, groups: group ? [{ id: group.id, count: 2 }] : [] });
     restored.close();
+  });
+  it('导入可绑定明确无库，失效连接或 SQLite 非 main 不留下记录', async () => {
+    const { store, directory } = await open();
+    const batch = [{ name: '空库脚本', sql: 'SELECT 1;' }];
+    store.saveConnection({ id: 'sqlite', dialect: 'sqlite', name: 'SQLite', group: '', color: '', sqlite: { filePath: join(directory, 'offline.sqlite'), readOnly: true, busyTimeoutMs: 1000 } });
+    expect(() => store.createImportedQueries(batch, () => {}, undefined, { connectionId: 'missing', database: null })).toThrow('导入目标连接已删除');
+    expect(() => store.createImportedQueries(batch, () => {}, undefined, { connectionId: 'sqlite', database: null })).toThrow('须为 main');
+    expect(store.queries()).toEqual([]);
+    store.createImportedQueries(batch, () => {}, undefined, { connectionId: profile.id, database: null });
+    expect(store.queries()).toMatchObject([{ connectionId: profile.id, databaseContext: { state: 'known', database: null } }]);
+    store.close();
   });
   it('新建独立编号、原文摘要和正文精度，另存绝不改源记录', async () => {
     const { store } = await open(), first = store.createBoundQuery(content()), before = store.querySearchRaw(first.source.id);

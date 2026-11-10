@@ -2004,13 +2004,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       } finally { release(); }
     });
   }
-  // 导入始终创建未绑定记录。先完整读取并校验，再以单次事务写入查询库。
+  // 先完整读取并校验，再以单次事务写入查询库；显式选中的连接不能在等待期间换代。
   if (command === 'queries.importSql') {
+    const target = input.target, revision = target ? store.connectionRevision() : undefined;
     const assertCurrent = () => {
       columnsMain.assertCapturedOwner(columns);
       if (shuttingDown) throw Error('客户端正在退出，不能导入保存查询');
+      if (target) {
+        if (revision !== store.connectionRevision()) throw Error('导入目标连接已变化，请重新选择');
+        connectionConfig.assertAvailable(target.connectionId);
+      }
     };
     assertCurrent();
+    if (target) store.assertImportedQueryTarget(target);
     return queryFileOperation(async () => {
       const selected = await dialog.showOpenDialog(columns!.owner.window, {
         title: '导入 SQL 到保存查询', properties: ['openFile', 'multiSelections'], filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
@@ -2037,7 +2043,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         }
       }
       assertCurrent();
-      store.createImportedQueries(files, assertCurrent, input.group);
+      store.createImportedQueries(files, assertCurrent, input.group, target);
       return { status: 'imported', names: files.map(file => file.name) };
     });
   }

@@ -3,6 +3,7 @@ import {databaseSearchPatternSchema} from './databaseSearchPattern';
 import type {SavedQuery} from './contracts';
 import type {QueryDatabaseContext} from './queryContext';
 import type { QuerySourceBinding } from './queryBinding';
+import { savedQueryGroupTargetSchema } from './savedQueryOrganization';
 
 export const savedQuerySearchLimits={pageQueries:25,pageBytes:128*1024,maxHits:1000,cursors:16,cursorMs:5*60000,active:2,recordBytes:128*1024*1024,sqlUnits:20_000_000,matchMs:2000,initializationMs:5000,previewUnits:256,sqlMatches:200}as const;
 const id=z.string().min(1).max(200),name=z.string().min(1).max(256);
@@ -35,6 +36,11 @@ export const savedQueryExportSqlArchiveSchema = z.object({ items: z.array(savedQ
   .refine(items => new Set(items.map(item => item.id)).size === items.length, '选中的查询不能重复'), encoding: querySqlExportEncodingSchema.optional() }).strict();
 export type SavedQueryExportSqlArchiveInput = z.infer<typeof savedQueryExportSqlArchiveSchema>;
 export type SavedQueryExportSqlArchiveResult = { status: 'cancelled' } | { status: 'saved'; name: string; count: number };
+/** 只接受已保存连接的编号和显式默认库，不接受文件路径、SQL 或认证材料。 */
+const savedQueryImportTargetSchema = z.object({ connectionId: id, database: name.refine(value => !value.includes('\0')).nullable() }).strict();
+export type SavedQueryImportTarget = z.infer<typeof savedQueryImportTargetSchema>;
+export const savedQueryImportSqlSchema = z.object({ encoding: querySqlExportEncodingSchema, group: savedQueryGroupTargetSchema.optional(), target: savedQueryImportTargetSchema.optional() }).strict();
+export type SavedQueryImportSqlInput = z.infer<typeof savedQueryImportSqlSchema>;
 /** 导入只回传新记录的名称，文件路径及原文留在主进程。 */
 export type SavedQueryImportSqlResult = { status: 'cancelled' } | { status: 'imported'; names: string[] };
 export const savedQueryImportLimits = { files: 25, bytes: 32 * 1024 * 1024 } as const;

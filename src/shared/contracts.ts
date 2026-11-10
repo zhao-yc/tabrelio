@@ -267,7 +267,7 @@ export interface CommandMap {
   'queries.exportSql':{input:import('./savedQuerySearch').SavedQueryExportSqlInput;output:import('./savedQuerySearch').SavedQueryExportSqlResult};
   'queries.exportSqlArchive':{input:import('./savedQuerySearch').SavedQueryExportSqlArchiveInput;output:import('./savedQuerySearch').SavedQueryExportSqlArchiveResult};
   'queries.copySql': { input: import('./savedQuerySearch').SavedQueryReadTextInput; output: void };
-  'queries.importSql':{input:{encoding:QueryFileEncoding;group?:import('./savedQueryOrganization').SavedQueryGroupTarget};output:import('./savedQuerySearch').SavedQueryImportSqlResult};
+  'queries.importSql':{input:import('./savedQuerySearch').SavedQueryImportSqlInput;output:import('./savedQuerySearch').SavedQueryImportSqlResult};
   'queries.page':{input:SavedQueryPageInput;output:SavedQueryPage};
   'queries.organizationGet': { input: Record<string, never>; output: SavedQueryOrganizationSnapshot };
   'queries.organizationApply': { input: SavedQueryOrganizationApply; output: SavedQueryOrganizationSnapshot };

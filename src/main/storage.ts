@@ -40,7 +40,7 @@ import { fullQueryExportProfileMutation, fullQueryExportProfileScope, readFullQu
 import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
-import{savedQueryImportLimits,savedQuerySearchLimits}from'../shared/savedQuerySearch';
+import{savedQueryImportLimits,savedQuerySearchLimits,type SavedQueryImportTarget}from'../shared/savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPagePosition}from'../shared/savedQueryPages';
 import { historySaveBatchLimits, type HistoryPagePosition, type HistoryPageInput } from '../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
@@ -1098,13 +1098,21 @@ export class LocalStore {
     this.queryRevisionValue++;
     return records.length;
   }
-  /** 文件正文和目标分组成员同事务写入，分组变化或写盘失败时整批恢复。 */
-  createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void, group?: SavedQueryGroupTarget): void {
+  /** 只核对本机配置，不解析凭据或连接数据库。 */
+  assertImportedQueryTarget(target: SavedQueryImportTarget): void {
+    const profile = this.querySourceProfile(target.connectionId);
+    if (!profile) throw Error('导入目标连接已删除，请重新选择');
+    if (profile.dialect === 'sqlite' && target.database !== 'main') throw Error('SQLite 导入目标数据库须为 main');
+  }
+  /** 文件正文、连接上下文和分组同事务写入，目标变化或写盘失败时整批恢复。 */
+  createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void, group?: SavedQueryGroupTarget, target?: SavedQueryImportTarget): void {
     if (!files.length || files.length > savedQueryImportLimits.files) throw Error('导入文件数量超出限制');
-    const records = files.map(({ name, sql }) => this.boundQueryRecord(randomUUID(), { name, sql, context: { state: 'known', database: null } }));
+    const records = files.map(({ name, sql }) => this.boundQueryRecord(randomUUID(), { name, sql, connectionId: target?.connectionId,
+      context: { state: 'known', database: target?.database ?? null } }));
     assertCurrent();
     this.mutate(() => {
       this.assertQuerySaveGroup(group);
+      if (target) this.assertImportedQueryTarget(target);
       for (const record of records) this.insertNewBoundQuery(record, group);
     }, assertCurrent);
     this.queryRevisionValue++;
