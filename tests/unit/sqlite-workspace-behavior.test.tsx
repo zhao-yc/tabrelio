@@ -14,6 +14,8 @@ import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
+import { tableForeignKeyJoinZh as joinText } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
+import { completionIdentifier } from '../../src/shared/completionLexical';
 
 const profile: ConnectionProfile = { id: 'sqlite-unit', name: '现有文件', group: '', color: '#52c5a2', dialect: 'sqlite', sqlite: { filePath: 'C:\\合成文件.db', readOnly: true, busyTimeoutMs: 1000 } };
 /** 只提取正式组件函数与控件；RAM 端口隔离 React 调度和 IPC，不复制产品处理器。 */
@@ -74,9 +76,10 @@ describe('SQLite 新查询和声明快捷键的正式组件接线', () => {
     const connection = dialect === 'sqlite' ? profile : { id: profile.id, name: '网络', dialect, database: '网络默认库' };
     const state = { connections: [connection], selection: { connectionId: profile.id, database: '原库foo' }, settings: { tabs: [], activeTabId: '' }, openTab: vi.fn() };
     const hook = Object.assign((select: (value: typeof state) => unknown) => select(state), { getState: () => state });
-    const vm = publish(method(app, 'NewQueryDialog'), { exports: {}, require: () => jsxRuntime, useWorkspace: hook, useState: (value: unknown) => [value, vi.fn()], useEffect: vi.fn(), newQueryContext, completionServerFacts: {}, invoke: vi.fn(), errorMessage: String, zh, Modal: 'modal', Field: 'field', ErrorBox: 'error', ArrowRight: 'arrow' }, ['NewQueryDialog']);
+    const vm = publish(method(app, 'NewQueryDialog'), { exports: {}, require: () => jsxRuntime, useWorkspace: hook, useState: (value: unknown) => [value, vi.fn()], useEffect: vi.fn(), newQueryContext, completionServerFacts: {}, invoke: vi.fn(), errorMessage: String, zh, joinText, completionIdentifier, Modal: 'modal', Field: 'field', ErrorBox: 'error', ArrowRight: 'arrow' }, ['NewQueryDialog']);
     const view = vm.handlers.NewQueryDialog({ onClose: vi.fn() }); const nodes: any[] = []; const visit = (value: any) => { if (Array.isArray(value)) return value.forEach(visit); if (!value?.props) return; nodes.push(value); visit(value.props.children); }; visit(view);
     const input = nodes.find(value => value.type === 'input' && value.props.list === 'query-databases'); expect(input.props.readOnly).toBe(dialect === 'sqlite'); expect(input.props.value).toBe(dialect === 'sqlite' ? 'main' : '原库foo');
+    expect(nodes.some(value => value.type === 'button' && value.props.children === joinText.builderEntry)).toBe(dialect === 'mysql');
     nodes.find(value => value.type === 'form').props.onSubmit({ preventDefault() {} });
     expect(state.openTab).toHaveBeenCalledExactlyOnceWith({ kind: 'query', title: zh.common.unnamedQuery, connectionId: profile.id, database: dialect === 'sqlite' ? 'main' : '原库foo', ...(dialect === 'sqlite' ? { databaseContext: { state: 'known', database: 'main' } } : {}), sql: '' });
   });

@@ -11,6 +11,7 @@ import { tableFilterGroupsZh as groupText } from '../../src/renderer/locales/tab
 import { tableForeignKeyJoinSummaryZh as summaryText } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
 import { tableForeignKeyJoinHavingZh as havingText } from '../../src/renderer/locales/tableForeignKeyJoinHaving.zh-CN';
 import { explainZh as explainText } from '../../src/renderer/locales/explain.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 const enabled = process.env.DBARK_JOIN_ORDER_NATIVE === '1';
@@ -24,6 +25,87 @@ test.beforeAll(async () => {
   server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' }); await server.listen(); const bound = server.httpServer!.address(); if (!bound || typeof bound === 'string') throw Error('JOIN夹具没有取得本地端口'); address = 'http://127.0.0.1:' + bound.port + '/tests/fixtures/join-order/index.html';
 });
 test.afterAll(async () => { await server?.close(); });
+
+for (const scenario of ['open', 'cancel', 'stale'] as const) {
+  test('从新建查询进入 JOIN：' + scenario, async ({}, info) => {
+    const directory = await mkdtemp(join(tmpdir(), 'dbark-join-order-native-'));
+    const app = await electron.launch({ args: ['tests/fixtures/join-order/electron.cjs'], env: { ...process.env,
+      DBARK_JOIN_ORDER_FIXTURE_DATA: directory, DBARK_JOIN_ORDER_FIXTURE_URL: address + '?entry=query&hold=' + (scenario === 'open' ? '0' : '1') }, chromiumSandbox: true });
+    const page = await app.firstWindow(), errors: string[] = [];
+    page.on('pageerror', reason => errors.push(reason.message));
+    const evidence = () => page.evaluate(() => (window as typeof window & { __joinOrderEvidence(): {
+      calls: Array<{ command: string; input: Record<string, unknown> }>; tabs: Array<{ kind: string; sql?: string; database?: string; databaseContext?: unknown }>;
+      denied: string[]; jobs: Record<string, unknown>;
+    } }).__joinOrderEvidence());
+    const control = (action: 'releaseSource' | 'releaseCancel' | 'invalidate') => page.evaluate(name =>
+      (window as typeof window & { __joinEntryControls: Record<typeof name, () => void> }).__joinEntryControls[name](), action);
+    try {
+      const newQuery = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
+      const entry = newQuery.getByRole('button', { name: text.builderEntry, exact: true });
+      await expect(entry).toBeEnabled({ timeout: 30000 });
+      await entry.click();
+      const start = page.getByRole('dialog', { name: text.builderTitle, exact: true });
+      await expect(newQuery).toHaveCount(0);
+      if (scenario === 'open') {
+        await start.getByRole('button', { name: text.builderBack, exact: true }).click();
+        await expect(newQuery.getByLabel(zh.app.text050, { exact: true })).toHaveValue('合成关联库');
+        await entry.click();
+      }
+      await start.getByRole('button', { name: text.builderCatalog, exact: true }).click();
+      const source = start.getByRole('combobox', { name: text.builderTable, exact: true });
+      await expect(source.getByRole('option', { name: 'view_only', exact: true })).toHaveCount(0);
+      await start.getByRole('textbox', { name: text.builderSearch, exact: true }).fill('child');
+      await source.selectOption('child');
+      if (scenario === 'open') await page.screenshot({ path: info.outputPath('query-join-entry.png') });
+      await start.getByRole('button', { name: text.builderRead, exact: true }).click();
+      const builder = page.getByRole('dialog', { name: text.manualTitle, exact: true });
+      if (scenario === 'open') {
+        await expect(builder).toBeVisible();
+        await expect(start).toHaveCount(0);
+        await builder.getByRole('button', { name: text.manualDatabases, exact: true }).click();
+        await builder.getByRole('combobox', { name: text.manualDatabase, exact: true }).selectOption('另一库');
+        await builder.getByRole('button', { name: text.manualTables, exact: true }).click();
+        await builder.getByRole('combobox', { name: text.manualTable, exact: true }).selectOption('payments');
+        await builder.getByRole('button', { name: text.manualRead, exact: true }).click();
+        await builder.getByRole('combobox', { name: text.manualChild(1), exact: true }).selectOption('id');
+        await builder.getByRole('combobox', { name: text.manualParent(1), exact: true }).selectOption('order_id');
+        await builder.getByRole('button', { name: text.open, exact: true }).click();
+        const sql = page.getByLabel('本例独立查询SQL', { exact: true });
+        await expect(sql).toContainText('FROM `合成关联库`.`child` AS c');
+        await expect(sql).toContainText('INNER JOIN `另一库`.`payments` AS p');
+        await expect(sql).toContainText('LIMIT 43;');
+        const result = await evidence();
+        expect(result.tabs).toHaveLength(2);
+        expect(result.tabs[1].databaseContext).toEqual({ state: 'known', database: '合成关联库' });
+        expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'payments', 'child', 'payments']);
+      } else {
+        await expect.poll(async () => (await evidence()).calls.find(call => call.command === 'metadata.table')?.input.taskId).toEqual(expect.any(String));
+        if (scenario === 'cancel') await start.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+        else { await control('invalidate'); await expect(start.getByRole('alert')).toHaveText(text.stale); }
+        await expect.poll(async () => (await evidence()).calls.filter(call => call.command === 'query.cancel').length).toBe(1);
+        const calls = (await evidence()).calls;
+        expect(calls.find(call => call.command === 'query.cancel')?.input.taskId).toBe(calls.find(call => call.command === 'metadata.table')?.input.taskId);
+        if (scenario === 'stale') await start.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+        await control('releaseSource');
+        await expect(start.getByText(text.closing, { exact: true })).toBeVisible();
+        await expect(builder).toHaveCount(0);
+        await control('releaseCancel');
+        await expect(page.getByText('返回原查询', { exact: true })).toBeVisible();
+        expect((await evidence()).tabs).toHaveLength(1);
+      }
+      const result = await evidence();
+      expect(result.tabs[0].sql).toBe('SELECT 7');
+      expect(result.denied).toEqual([]);
+      expect(Object.values(result.jobs).some(Boolean)).toBe(false);
+      expect(result.calls.some(call => call.command === 'table.page' || call.command === 'query.execute')).toBe(false);
+      expect(errors).toEqual([]);
+    } finally {
+      await app.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
 for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark', 'group-light', 'summary-dark', 'summary-light', 'having-dark', 'having-light', 'distinct-dark', 'distinct-light'] as const) {
   const distinct = mode.startsWith('distinct-'), having = mode.startsWith('having-'), summarizing = mode.startsWith('summary-') || having, theme = mode.endsWith('light') ? 'light' : 'dark', grouping = mode.startsWith('group-') || summarizing, filtering = mode.startsWith('filter-') || grouping;
   test('JOIN真实菜单、双侧排序、上限及独立草稿：' + mode, async ({}, info) => {

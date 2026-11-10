@@ -3,7 +3,9 @@ import { FILTER_LIMITS } from '../../shared/filtering';
 import type { ManualJoinOn } from '../../shared/manualJoinDesigns';
 import { foreignKeyJoinGroupAfterChange } from '../tableForeignKeyJoinFilters';
 import { tableFilterGroupSummary, tableFilterGroupWithMode } from '../tableFilterGroups';
-import type { TableInfo } from '../../shared/contracts';
+import type { DatabaseObject, TableInfo } from '../../shared/contracts';
+import { completionIdentifier } from '../../shared/completionLexical';
+import { relationshipDiagramLimits } from '../relationshipDiagram';
 import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinAlias, manualJoinOperators, type AdditionalJoinPair, type ManualJoinStep } from '../tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { uid } from '../lib';
@@ -13,25 +15,46 @@ export interface ManualJoinSelection {
   database: string; table: string; pairs: Array<AdditionalJoinPair & { id: string }>; on?: ManualJoinOn;
 }
 
+/** 目录仅用于选取真实名称，超量或异常回包不产生半份列表。 */
+export function manualJoinCatalogNames(names: unknown[]): string[] {
+  if (names.length > relationshipDiagramLimits.catalog || !names.every(completionIdentifier)) throw Error(text.invalid);
+  return [...new Set(names)].sort();
+}
+
+/** 普通表才可进入构建器，视图和其它对象不出现在候选中。 */
+export function manualJoinTableNames(objects: DatabaseObject[]): string[] {
+  if (objects.length > relationshipDiagramLimits.catalog) throw Error(text.invalid);
+  return manualJoinCatalogNames(objects.filter(object => object.kind === 'table').map(object => object.name));
+}
+
 /** 只分页显示已读取的目录，过滤和翻页不改变原目标或触发读取。 */
 export function ManualJoinTableFields({ selection, databases, tables, disabled, onDatabases, onTables, onTarget }: {
   selection: ManualJoinSelection; databases: readonly string[]; tables?: readonly string[]; disabled: boolean;
   onDatabases(): void; onTables(): void; onTarget(database: string, table: string): void;
 }) {
-  const [search, setSearch] = useState(''), [page, setPage] = useState(0);
-  const visible = (tables ?? []).filter(name => name.toLowerCase().includes(search.toLowerCase())), pageSize = 50;
-  const last = Math.max(0, Math.ceil(visible.length / pageSize) - 1), index = Math.min(page, last);
-  const names = visible.slice(index * pageSize, (index + 1) * pageSize);
   return <fieldset disabled={disabled}>
     <label>{text.manualDatabase}<select value={selection.database} onChange={event => onTarget(event.target.value, '')}>
       {databases.map(database => <option key={database} value={database}>{database}</option>)}
     </select></label>
     <div className="child-reference-tools"><button onClick={onDatabases}>{text.manualDatabases}</button><button onClick={onTables}>{text.manualTables}</button></div>
+    <ManualJoinTablePicker tables={tables} table={selection.table} onTable={table => onTarget(selection.database, table)}/>
+  </fieldset>;
+}
+
+/** 同一目录选择规则供起始表与后续目标表复用。 */
+export function ManualJoinTablePicker({ tables, table, onTable, source = false }: {
+  tables?: readonly string[]; table: string; onTable(table: string): void; source?: boolean;
+}) {
+  const [search, setSearch] = useState(''), [page, setPage] = useState(0);
+  const visible = (tables ?? []).filter(name => name.toLowerCase().includes(search.toLowerCase())), pageSize = 50;
+  const last = Math.max(0, Math.ceil(visible.length / pageSize) - 1), index = Math.min(page, last);
+  const names = visible.slice(index * pageSize, (index + 1) * pageSize);
+  return <>
     {!!tables?.length && <>
-      <label>{text.manualSearch}<input value={search} maxLength={64} onChange={event => { setSearch(event.target.value); setPage(0); }}/></label>
-      <label>{text.manualTable}<select value={selection.table} onChange={event => onTarget(selection.database, event.target.value)}>
+      <label>{source ? text.builderSearch : text.manualSearch}<input value={search} maxLength={64} onChange={event => { setSearch(event.target.value); setPage(0); }}/></label>
+      <label>{source ? text.builderTable : text.manualTable}<select value={table} onChange={event => onTable(event.target.value)}>
         <option value="">{text.manualSelect}</option>
-        {selection.table && !names.includes(selection.table) && <option value={selection.table}>{selection.table}</option>}
+        {table && !names.includes(table) && <option value={table}>{table}</option>}
         {names.map(name => <option key={name} value={name}>{name}</option>)}
       </select></label>
       {last > 0 && <div className="child-reference-tools">
@@ -41,7 +64,7 @@ export function ManualJoinTableFields({ selection, databases, tables, disabled, 
       </div>}
     </>}
     {!visible.length && <p className="muted">{tables ? text.manualTableEmpty : text.manualTablePending}</p>}
-  </fieldset>;
+  </>;
 }
 
 /** 增删比较按稳定行 ID 更新括号，未编辑的组保留原语义。 */

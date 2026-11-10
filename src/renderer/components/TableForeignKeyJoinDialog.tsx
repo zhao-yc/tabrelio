@@ -5,7 +5,6 @@ import { mysqlJoinSampleRows, type MysqlJoinPreviewInput, type MysqlJoinPreviewT
 import { ExplainPlanView } from './ExplainPlanView';
 import { ResultsGrid } from './ResultsGrid';
 import '../viewQueryInspect.css';
-import { completionIdentifier } from '../../shared/completionLexical';
 import { FILTER_LIMITS, validateFilterGroup } from '../../shared/filtering';
 import { emptyFilterDraft, filterRuleSummary, type FilterDraft } from '../tableFilters';
 import { foreignKeyJoinFiltersFromDraft, foreignKeyJoinGroupAfterChange, type ForeignKeyJoinFilterDraft } from '../tableForeignKeyJoinFilters';
@@ -24,9 +23,8 @@ import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPre
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
-import { AdditionalJoinFields, ManualJoinPairFields, ManualJoinTableFields, manualJoinSteps, newManualJoinPair, replaceManualJoinPairs, type AdditionalJoinDraft, type ManualJoinSelection } from './ManualJoinFields';
+import { AdditionalJoinFields, ManualJoinPairFields, ManualJoinTableFields, manualJoinCatalogNames, manualJoinTableNames, manualJoinSteps, newManualJoinPair, replaceManualJoinPairs, type AdditionalJoinDraft, type ManualJoinSelection } from './ManualJoinFields';
 import type { ForeignKeyJoinSide } from '../tableForeignKeyJoinSources';
-import { relationshipDiagramLimits } from '../relationshipDiagram';
 
 export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget & { taskId: string }): Promise<TableInfo>; cancel(taskId: string): Promise<unknown>; }
 /** 每次正式元数据读取均持有独立任务编号；取消不借普通查询或复用数据库会话。 */
@@ -104,16 +102,10 @@ function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selectio
   });
 }
 
-/** 目录仅用于选取真实名称；超量或异常回包不产生半份列表。 */
-function manualCatalogNames(names: unknown[]): string[] {
-  if (names.length > relationshipDiagramLimits.catalog || !names.every(completionIdentifier)) throw Error(text.invalid);
-  return [...new Set(names)].sort();
-}
-
 /** 一次原读取和最新本地选择共用占门；不持有任何父页行数据或执行SQL的能力。 */
 export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
   intent: TableForeignKeyJoinIntent; onOpen(preview: ForeignKeyJoinPreview): boolean; onClose(): void;
-  fixed?: FixedForeignKeyJoinStart; manual?: boolean; onActivity(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
+  fixed?: FixedForeignKeyJoinStart; manual?: boolean; onActivity?(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
 }) {
   const origin = useRef({ intent, fixed, manual, services, onActivity }).current;
   if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed || origin.manual !== manual) origin.intent.invalidate();
@@ -247,7 +239,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     compileSelection(origin.intent, next, firstInfo, sources, joinHavingTargets(next, sources));
     if (!owns()) return;
     const restoredDatabases = [...new Set([...databases, first.database, ...extra.map(step => step.database)])];
-    setDatabases(manualCatalogNames(restoredDatabases));
+    setDatabases(manualJoinCatalogNames(restoredDatabases));
     setTables([first.table]);
     selectionRef.current = next;
     setSelection(next);
@@ -281,7 +273,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     };
     const owns = () => current() && operation.current === active && !active.cancelled && generation === revision.current && selectionRef.current === selected;
     active = { promise: Promise.resolve(), cancelled: false }; operation.current = active;
-    try { origin.onActivity(1); } catch (reason) { operation.current = null; setError(errorMessage(reason)); return; }
+    try { origin.onActivity?.(1); } catch (reason) { operation.current = null; setError(errorMessage(reason)); return; }
     if (designOperation) setDesignNotice('');
     if (inspectionMode) setInspection(undefined);
     const inspectionMessage = inspectionMode === 'rows' ? text.sampleLoading : text.explainLoading;
@@ -314,12 +306,11 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
         }
       } else if (kind === 'databases') {
         const names = await invoke('metadata.databases', { connectionId: origin.intent.connectionId });
-        if (owns()) setDatabases(manualCatalogNames([...names, origin.intent.source.database]));
+        if (owns()) setDatabases(manualJoinCatalogNames([...names, origin.intent.source.database]));
       } else if (kind === 'tables') {
         const objects = await invoke('metadata.objects', { connectionId: origin.intent.connectionId, database: step?.database ?? selected.manual!.database });
         if (!owns()) return;
-        if (objects.length > relationshipDiagramLimits.catalog) throw Error(text.invalid);
-        const names = manualCatalogNames(objects.filter(object => object.kind === 'table').map(object => object.name));
+        const names = manualJoinTableNames(objects);
         const table = step?.table ?? selected.manual!.table;
         if (table && !names.includes(table)) { origin.intent.invalidate(); throw Error(text.stale); }
         if (step) publishStep({ ...step, tables: names }); else setTables(names);
@@ -352,7 +343,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     }).catch(reason => { if (alive.current && !closingRef.current && operation.current === active && generation === revision.current) setError(errorMessage(reason)); }).finally(async () => {
       try { if (active.cancellation) await active.cancellation; }
       catch (reason) { cleanupError.current(errorMessage(reason)); }
-      finally { if (operation.current === active) operation.current = null; origin.onActivity(-1); if (alive.current) { setBusy(false); setMessage(''); } }
+      finally { if (operation.current === active) operation.current = null; origin.onActivity?.(-1); if (alive.current) { setBusy(false); setMessage(''); } }
     });
   }
   /** FK改变立即撤销旧父回执，取消仅本地原任务；原Promise收尾前不并发读新FK。 */
