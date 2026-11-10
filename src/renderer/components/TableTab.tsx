@@ -2116,6 +2116,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     if (!row || key === undefined || !visibleKeys.includes(key) || !cellActionCurrent(row)) return false;
     const rowIndex = rows.indexOf(row);
     const rectangle = cellRange.at(row, rowIndex, key), selectRow = cellRange.selectRowAction(row, rowIndex, key);
+    const selectAll = cellRange.selectAllAction(row, rowIndex, key);
     const filters = canSeedCellFilter && info ? ([
       [false, cellFilterText.equal], [true, cellFilterText.exclude],
       ...tableCellTextActions,
@@ -2129,6 +2130,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
+      ...(selectAll ? [selectAll] : []),
       ...(rectangle ? gridRangeCopyActions(format => {
         try {
           if (format === 'names') return copyGridRangeNames(cellRange.captureColumns(rectangle), visibleColumns, current);

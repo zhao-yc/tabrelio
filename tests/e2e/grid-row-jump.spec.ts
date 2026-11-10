@@ -2839,6 +2839,14 @@ test('SQLite 查询选中同名列或整行，复制虚拟结果并保留勾选'
   await expect(checked).toBeChecked();
   await page.keyboard.press('Escape');
   await expect(grid.locator('.grid-cell-in-range')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+a');
+  await expect(grid.getByRole('gridcell', { name: '179', exact: true })).toBeFocused();
+  expect(JSON.parse((await readGridRangeClipboard(page)).sqlite).rows).toEqual(Array.from({ length: 180 }, (_, index) => [
+    { kind: 'integer', value: String(180 - index) }, { kind: 'text', value: '记录 ' + (180 - index) },
+  ]));
+  await expect(checked).toBeChecked();
+  await page.keyboard.press('ControlOrMeta+a');
+  await expect(grid.locator('.grid-cell-in-range')).toHaveCount(0);
   expect((await tasks()).map(task => task.id)).toEqual(before.map(task => task.id));
   expect(pageErrors).toEqual([]);
 });
@@ -2860,6 +2868,10 @@ test('SQLite 表和视图整列选择限当前页，换页清除旧矩形', asyn
     expect(JSON.parse((await readGridRangeClipboard(page)).sqlite).rows).toEqual(
       Array.from({ length: 100 }, (_, i) => [{ kind: 'text', value: '记录 ' + (i + 1) }]),
     );
+    await page.keyboard.press('ControlOrMeta+a');
+    expect(JSON.parse((await readGridRangeClipboard(page)).sqlite).rows).toEqual(Array.from({ length: 100 }, (_, index) => [
+      { kind: 'integer', value: String(index + 1) }, { kind: 'text', value: '记录 ' + (index + 1) },
+    ]));
     await table.getByRole('button', { name: browseText.next, exact: true }).click();
     await expect(name(101)).toBeVisible();
     await expect(grid.locator('.grid-cell-in-range')).toHaveCount(0);

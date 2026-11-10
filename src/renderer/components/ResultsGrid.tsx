@@ -408,6 +408,8 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       }));
       const selectRow = rangeTools ? cellRange.selectRowAction(cell.row, rowIdx, key) : undefined;
+      const selectAll = rangeTools ? cellRange.selectAllAction(cell.row, rowIdx, key) : undefined;
+      if (selectAll) actions.unshift(selectAll);
       if (selectRow) actions.unshift(selectRow);
     }
     if (rectangle && onFillRange) actions.push(...gridRangeFillActions(rectangle, kind => applyGridRangeFill(rectangle, kind)));

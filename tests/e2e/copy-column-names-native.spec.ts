@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
+import { readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { tableHeaderCopyZh as text } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { gridRangeCopyZh as range } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
@@ -113,6 +114,12 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     const amountIndex = Number(await header.getAttribute('aria-colindex'));
     expect(amountIndex).toBeGreaterThan(1);
     await copyRange(indexedCell(tableTab, 3, amountIndex + 1), indexedCell(tableTab, 2, amountIndex), 'amount\tlabel', false);
+    const tableActive = indexedCell(tableTab, 2, amountIndex);
+    await tableActive.press('ControlOrMeta+a');
+    await expect(tableTab.locator('.grid-cell-in-range')).toHaveCount(10);
+    await expect(tableActive).toBeFocused();
+    await tableActive.press('ControlOrMeta+a');
+    await expect(tableTab.locator('.grid-cell-in-range')).toHaveCount(0);
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -157,6 +164,32 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(page.getByRole('menuitem', { name: range.namesOnly, exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('选区列名.png') });
     await page.keyboard.press('Escape');
+
+    const checkedRow = grid.getByRole('row').nth(2).getByRole('checkbox');
+    await checkedRow.check();
+    const active = indexedCell(grid, 2, first);
+    const inRange = grid.locator('.grid-cell-in-range');
+    await active.click();
+    await desktop.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const modifiers: Electron.KeyboardInputEvent['modifiers'] = [process.platform === 'darwin' ? 'meta' : 'control'];
+      // 通过宿主窗口输入，让快捷键经过 Electron 菜单和 Chromium 的真实事件路径。
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'A', modifiers });
+      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'A', modifiers });
+    });
+    await expect(inRange).toHaveCount(6);
+    await expect(active).toBeFocused();
+    await expect(checkedRow).toBeChecked();
+    expect((await readGridRangeClipboard(page)).text).toBe('9007199254740993\t1\trow A\n9007199254740994\t2\trow B');
+    await page.screenshot({ path: info.outputPath('全部可见单元格.png') });
+    await page.keyboard.press('ControlOrMeta+a');
+    await expect(inRange).toHaveCount(0);
+    await expect(checkedRow).toBeChecked();
+    await expect(active).toBeFocused();
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: range.selectAll, exact: true }).click();
+    await expect(inRange).toHaveCount(6);
+    await expect(active).toBeFocused();
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

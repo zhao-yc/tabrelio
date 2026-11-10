@@ -63,14 +63,13 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     live.current.active = active;
   }
 
-  function select(anchor: Point, focus: Point) {
-    const rectangle = bounds(anchor, focus);
+  function select(anchor: Point, focus: Point, rectangle = bounds(anchor, focus)) {
     live.current = { scope, active: focus, anchor, focus, rectangle };
     setShown({ scope, rectangle });
   }
 
-  /** 整行列仍使用原矩形端点。将焦点放到首格，使键盘复制立即获得准确选区。 */
-  function spanAction(label: string, anchor: Point, focus: Point) {
+  /** 菜单选择复用矩形端点，完成后将焦点归还给用于键盘复制的数据格。 */
+  function spanAction(label: string, anchor: Point, focus: Point, rectangle?: GridCellRectangle) {
     const element = grid.current?.element;
     if (!element || live.current.scope !== scope || !committedCurrent.current()) return;
     return { label, run() {
@@ -79,7 +78,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
       if (handle?.element !== element || !element.isConnected || live.current.scope !== scope ||
           !gridDialogCurrent(element, ownDialog) || !committedCurrent.current()) return;
       stopDrag();
-      select(anchor, focus);
+      select(anchor, focus, rectangle);
       handle.setActivePosition({ rowIdx: focus.row, idx: focus.column + columnOffset }, { shouldFocus: true });
       // 草稿刷新会清除逻辑端点，网格却可能保留同一活动格。用真实坐标判断是否要归还菜单焦点。
       const cell = focusTarget();
@@ -98,6 +97,16 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   function selectRowAction(row: Row, rowIndex: number, key: string) {
     if (!position(row, rowIndex, key)) return;
     return spanAction(rangeText.selectRow, { row: rowIndex, column: keys.length - 1 }, { row: rowIndex, column: 0 });
+  }
+
+  function fullRectangle(): GridCellRectangle {
+    return { top: 0, bottom: rows.length - 1, left: 0, right: keys.length - 1 };
+  }
+
+  function selectAllAction(row: Row, rowIndex: number, key: string) {
+    const active = position(row, rowIndex, key);
+    if (!active) return;
+    return spanAction(rangeText.selectAll, active, active, fullRectangle());
   }
 
   function allowed(event: CellKeyboardEvent | CellMouseEvent): boolean {
@@ -149,14 +158,21 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   function key(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent): boolean {
     const direction = arrowDirections.get(event.key);
     const cancel = event.key === 'Escape' && (!!live.current.anchor || !!drag.current);
-    if ((!event.shiftKey || !direction) && !cancel || event.altKey || event.ctrlKey || event.metaKey ||
+    const all = event.key.toLowerCase() === 'a' && !event.shiftKey && event.ctrlKey !== event.metaKey;
+    if (!(all || cancel || event.shiftKey && direction) || event.altKey || !all && (event.ctrlKey || event.metaKey) ||
         event.nativeEvent.isComposing || event.keyCode === 229 || !allowed(event) || !current()) return false;
     const active = position(args.row, args.rowIdx, args.column?.key);
     if (!active) return false;
     event.preventDefault(); event.preventGridDefault(); event.stopPropagation();
     stopDrag();
     if (cancel) clear();
-    else if (direction) {
+    else if (all) {
+      if (event.repeat) return true;
+      // 全选覆盖当前页的可见字段，但保留活动格，供复制和后续 Shift 扩选使用。
+      const selected = live.current.rectangle;
+      if (selected?.top === 0 && selected.bottom === rows.length - 1 && selected.left === 0 && selected.right === keys.length - 1) clear();
+      else select(active, active, fullRectangle());
+    } else if (direction) {
       const next = { row: Math.max(0, Math.min(rows.length - 1, active.row + direction.row)),
         column: Math.max(0, Math.min(keys.length - 1, active.column + direction.column)) };
       if (!samePoint(active, next)) {
@@ -186,9 +202,9 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
 
   /** 只允许在本矩形端点复制；活动格已变化时交还原勾选或单格复制。 */
   function copy<Value>(row: Row, column: string, read: (row: Row, key: string) => Value, skip?: (row: Row) => boolean) {
-    const { scope: owned, anchor, focus } = live.current;
-    if (owned !== scope || !anchor || !focus || rows[focus.row] !== row || keys[focus.column] !== column) return;
-    return readGridCellRange(bounds(anchor, focus), rows, keys, read, skip);
+    const { scope: owned, rectangle: selected, focus } = live.current;
+    if (owned !== scope || !selected || !focus || rows[focus.row] !== row || keys[focus.column] !== column) return;
+    return readGridCellRange(selected, rows, keys, read, skip);
   }
 
   /** 复制的准确端点可交给调用方读取原存储类型；离开端点继续使用既有单格或勾选行为。 */
@@ -242,7 +258,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   }
 
   return { rectangle, mouse, key, fillValueKey, move, copy, copyTarget, capture, captureColumns, pasteTarget, at, copyRectangle, rectangleCurrent,
-    focusTarget, selectColumnAction, selectRowAction };
+    focusTarget, selectAllAction, selectColumnAction, selectRowAction };
 }
 
 const arrowDirections = new Map<string, Point>([

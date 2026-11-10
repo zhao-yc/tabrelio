@@ -297,11 +297,13 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, page, rows, d
     const column = edit.columns[index], raw = row.values[index];
     const rowIndex = rows.indexOf(row);
     const rectangle = cellRange.at(row, rowIndex, key), selectRow = cellRange.selectRowAction(row, rowIndex, key);
+    const selectAll = cellRange.selectAllAction(row, rowIndex, key);
     const current = () => source.current === owner && checkedContext.current?.owner === owner &&
       !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal() &&
       (!rectangle || cellRange.rectangleCurrent(rectangle));
     return cellActionMenu.open(target, grid.current?.element, { title: column.name, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
+      ...(selectAll ? [selectAll] : []),
       ...(rectangle ? gridRangeCopyActions(format => {
         try {
           if (format === 'names') return copyGridRangeNames(cellRange.captureColumns(rectangle), page.result.columns, current);
