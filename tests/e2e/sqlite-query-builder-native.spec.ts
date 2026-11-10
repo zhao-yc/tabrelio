@@ -160,9 +160,21 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
       expect(read.all()).toEqual([{ label: '精确整数', 最终合计: BigInt(maxInteger) }]);
     } finally { reader.close(); }
     const fileAfterView = readFileSync(database);
+    await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();
+    await builder.getByRole('textbox', { name: joinText.designName, exact: true }).fill('整数汇总');
+    await button(joinText.designSave).click();
+    await expect(builder.getByText(joinText.designSaved, { exact: true })).toBeVisible();
     await button(aggregate.remove(1)).click();
     await expect(builder.getByRole('alert')).toContainText(summary.havingStale);
     await expect(button(text.open)).toBeDisabled();
+    await page.evaluate(expected => {
+      const original = window.confirm;
+      window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是恢复设计的确认'); return true; };
+    }, joinText.designRestoreConfirm);
+    await button(joinText.designLoad).click();
+    await expect(builder.getByText(joinText.designRestored, { exact: true })).toBeVisible();
+    await expect(sql).toHaveText(grouped);
+    await page.screenshot({ path: info.outputPath('sqlite-builder-design.png') });
     await summaryMode.uncheck();
     await expect(sql).toHaveText(expected.replace('LIMIT 3', 'LIMIT 2'));
     expect(await history()).toEqual(originalHistory);

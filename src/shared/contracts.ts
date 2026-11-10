@@ -1,5 +1,6 @@
 import type { MysqlJoinPreviewInput } from './mysqlJoinPreview';
 import type { QueryBuilderDesign, ManualJoinDesignScope, ManualJoinDesignSelect, ManualJoinDesignSave, ManualJoinDesignSummary } from './manualJoinDesigns';
+import type { SingleQueryDesignScope, SingleQueryDesignSelect, SingleQueryDesignSave, SingleQueryDraft } from './singleQueryDesigns';
 import type { ImportRecordRange } from './importRecordRange';
 import type { ObjectDefinitionInput, ObjectDefinitionOutput } from './objectDefinition';
 import type { PostgresTransactionApplyInput, PostgresTransactionSnapshot } from './postgresTransactionSettings';
@@ -179,6 +180,10 @@ export interface CommandMap {
   'joinDesigns.read': { input: ManualJoinDesignSelect; output: QueryBuilderDesign };
   'joinDesigns.save': { input: ManualJoinDesignSave; output: ManualJoinDesignSummary };
   'joinDesigns.delete': { input: ManualJoinDesignSelect; output: void };
+  'singleQueryDesigns.list': { input: SingleQueryDesignScope; output: ManualJoinDesignSummary[] };
+  'singleQueryDesigns.read': { input: SingleQueryDesignSelect; output: SingleQueryDraft };
+  'singleQueryDesigns.save': { input: SingleQueryDesignSave; output: ManualJoinDesignSummary };
+  'singleQueryDesigns.delete': { input: SingleQueryDesignSelect; output: void };
   'result.presets.list': { input: QueryResultPresetTarget; output: QueryResultPresetSnapshot };
   'result.presets.save': { input: QueryResultPresetSave; output: QueryResultPresetSnapshot };
   'result.presets.rename': { input: QueryResultPresetRename; output: QueryResultPresetSnapshot };

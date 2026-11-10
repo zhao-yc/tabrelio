@@ -1,3 +1,4 @@
+import { assertSingleQueryDraftColumns, type SqliteSingleQueryDraft, type SingleQueryDraft } from '../../shared/singleQueryDesigns';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DatabaseObject } from '../../shared/contracts';
 import { queryDatabasePatch } from '../../shared/queryContext';
@@ -18,8 +19,26 @@ import { SqliteTableFilters } from './SqliteTableFilters';
 import { SqliteObjectsDialog } from './SqliteObjectsDialog';
 import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
+import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
+import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+
+function compileDesign(draft: SqliteSingleQueryDraft, source: SqliteQueryBuilderSource) {
+  const { selected, distinct, limit, sort, filters, mode, summaryEnabled, summary, havingFilters, havingMode } = draft;
+  const outputs = queryBuilderSummaryOutputs(summary);
+  if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
+  const rowLimit = limit === '' ? undefined : Number(limit);
+  if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > sqliteReadSqlLimits.limit)) throw Error(text.invalidLimit);
+  const { connectionId, database, table } = source.target;
+  const { limit: _limit, ...query } = sqliteTableDraft({ connectionId, database, table }, 1, mode, filters, summaryEnabled ? [] : sort);
+  const having = summaryEnabled && havingFilters.length ? sqliteTableDraft({ connectionId, database, table }, 1, havingMode,
+    havingFilters.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })), []) : undefined;
+  const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: summaryEnabled ? [] : selected,
+    distinct: !summaryEnabled && distinct, rowLimit, summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary),
+      having: having && { mode: having.mode, filters: having.filters } } : undefined };
+  return { design, sql: buildSqliteQueryBuilderSql(design, source) };
+}
 
 /** 只从可信目录选取表或视图；旧窗口与跨连接的短读不发布草稿。 */
 export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onViewDirty, onViewApplied, onViewUncertain }: {
@@ -48,22 +67,14 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   const choices = objects?.filter(item => item.name === name || item.name.toLowerCase().includes(search.toLowerCase()));
   const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
   const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
-  const preview = useMemo(() => {
-    if (!source) return undefined;
-    try {
-      if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
-      const rowLimit = limit === '' ? undefined : Number(limit);
-      if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > sqliteReadSqlLimits.limit)) throw Error(text.invalidLimit);
-      const { connectionId, database, table } = source.target;
-      const { limit: _limit, ...query } = sqliteTableDraft({ connectionId, database, table }, 1, mode, filters, summaryEnabled ? [] : sort);
-      const having = summaryEnabled && havingFilters.length ? sqliteTableDraft({ connectionId, database, table }, 1, havingMode,
-        havingFilters.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })), []) : undefined;
-      const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: summaryEnabled ? [] : selected,
-        distinct: !summaryEnabled && distinct, rowLimit, summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary),
-          having: having && { mode: having.mode, filters: having.filters } } : undefined };
-      return { design, sql: buildSqliteQueryBuilderSql(design, source) };
-    } catch (reason) { return { error: errorMessage(reason) }; }
-  }, [source, selected, filters, sort, mode, distinct, limit, summaryEnabled, summary, outputs, havingFilters, havingMode]);
+  const draft = useMemo<SqliteSingleQueryDraft>(() => ({ dialect: 'sqlite', version: 1, selected, distinct, limit, sort, filters, mode, summaryEnabled, summary, havingFilters, havingMode }),
+    [selected, distinct, limit, sort, filters, mode, summaryEnabled, summary, havingFilters, havingMode]);
+  const preview = useMemo<(ReturnType<typeof compileDesign> & { error?: never }) |
+    { error: string; design?: never; sql?: never } | undefined>(() => {
+    if (!source) return;
+    try { return compileDesign(draft, source); }
+    catch (reason) { return { error: errorMessage(reason) }; }
+  }, [draft, source]);
 
   function current(): boolean {
     if (!mounted.current || owner.stale) return false;
@@ -108,6 +119,22 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
       setHavingFilters([]); setHavingMode('and');
     });
+  }
+
+  /** 先验证整份本地设计，再发布结构与草稿；失败时原设计保持。 */
+  async function restore(value: SingleQueryDraft) {
+    if (!source || value.dialect !== 'sqlite') throw Error(designText.designModeMismatch);
+    const target = source.target;
+    const fresh = await invoke('sqlite.queryBuilder.describe', target);
+    if (!current()) return;
+    if (fresh.target.connectionId !== target.connectionId || fresh.target.database !== target.database ||
+        fresh.target.table !== target.table || fresh.target.kind !== target.kind) throw Error(text.stale);
+    assertSingleQueryDraftColumns(value, fresh.columns.map(column => column.name));
+    compileDesign(value, fresh);
+    setSource(fresh); setSelected(value.selected); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
+    setSummaryEnabled(value.summaryEnabled); setSummary(value.summary);
+    setFilters(value.filters); setMode(value.mode);
+    setHavingFilters(value.havingFilters); setHavingMode(value.havingMode);
   }
 
   /** 返回构建器时保留原草稿，视图提交前重新核对同一个 SQLite 来源。 */
@@ -165,6 +192,8 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
         {choices?.length === 0 && <p role="status">{text.empty}</p>}
       </> : <>
         <p>main.{source.target.table}</p>
+        <SingleQueryDesignPanel scope={ { ...source.target, dialect: 'sqlite' } } draft={preview?.design ? draft : undefined}
+          disabled={disabled} current={current} run={action => void run(designText.designWorking, () => action())} restore={restore}/>
         <label className="check"><input type="checkbox" checked={summaryEnabled} disabled={disabled}
           onChange={event => { if (editable()) setSummaryEnabled(event.target.checked); }}/>{summaryText.enabled}</label>
         {!summaryEnabled && <fieldset disabled={disabled}><legend>{text.columns}</legend>

@@ -2327,6 +2327,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (command === 'joinDesigns.read') return store.readManualJoinDesign(input);
       if (command === 'joinDesigns.save') return store.saveManualJoinDesign(input);
       return store.deleteManualJoinDesign(input);
+    case 'singleQueryDesigns.list':
+    case 'singleQueryDesigns.read':
+    case 'singleQueryDesigns.save':
+    case 'singleQueryDesigns.delete':
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown) throw Error('客户端正在退出，不能操作查询设计。');
+      connectionConfig.assertAvailable(input.connectionId);
+      if (command === 'singleQueryDesigns.list') return store.listSingleQueryDesigns(input);
+      if (command === 'singleQueryDesigns.read') return store.readSingleQueryDesign(input);
+      if (command === 'singleQueryDesigns.save') return store.saveSingleQueryDesign(input);
+      return store.deleteSingleQueryDesign(input);
     case 'result.presets.list':
     case 'result.presets.save':
     case 'result.presets.rename':
@@ -3842,7 +3853,7 @@ else {
         }
         if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command === 'sqlite.view.inspectQuery'||payload.command === 'sqlite.view.dependencies' || payload.command.startsWith('sqlite.queryBuilder.')||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('record.templates.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('mysql.join.preview')) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('joinDesigns.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('joinDesigns.') || payload.command.startsWith('singleQueryDesigns.')) columns = columnsMain.capture(event);
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         if (payload.command.startsWith('postgres.queryBuilder.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
@@ -3897,7 +3908,7 @@ else {
           if (payload.command.startsWith('files.importPresets.')) { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，导入配置回执未发布，请重新读取'); }
           if (databaseEncodingCommand) { databaseEncodingResult = result; await databaseEncodingOwners.after(databaseEncodingCommand, input, result, columns!); }
           if (payload.command.startsWith('mysql.join.preview')) columnsMain.assertCapturedOwner(columns);
-          if (payload.command.startsWith('joinDesigns.')) columnsMain.assertCapturedOwner(columns);
+          if (payload.command.startsWith('joinDesigns.') || payload.command.startsWith('singleQueryDesigns.')) columnsMain.assertCapturedOwner(columns);
           if(payload.command.startsWith('result.presets.')){columnsMain.assertCapturedOwner(columns);columns?.resultPresetPublication?.();}
           if(payload.command.startsWith('table.presets.')){
             // dispatch成功到IPC发布之间仍允许取消；新取消必须结算，最后检查之后不能再await。

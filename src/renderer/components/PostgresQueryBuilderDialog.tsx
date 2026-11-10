@@ -1,3 +1,4 @@
+import { assertSingleQueryDraftColumns, type PostgresSingleQueryDraft, type SingleQueryDraft } from '../../shared/singleQueryDesigns';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FilterGroup, FilterMode, FilterRule, SortRule } from '../../shared/contracts';
 import { buildPostgresQueryBuilderSql, postgresQueryBuilderLimits, type PostgresQueryBuilderSource } from '../../shared/postgresQueryBuilder';
@@ -19,10 +20,28 @@ import { TableFilterPanel } from './TableFilterPanel';
 import { TableSortPanel } from './TableSortPanel';
 import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
+import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
+import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 interface CatalogueEntry { key: string; schema: string; name: string }
+
+function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBuilderSource) {
+  const { selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup } = draft;
+  const outputs = queryBuilderSummaryOutputs(summary);
+  if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
+  const rowLimit = limit ? Number(limit) : undefined;
+  if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > postgresQueryBuilderLimits.rowLimit)) throw Error(text.invalidLimit);
+  const design = { ...source.target, fingerprint: source.fingerprint, columns: summaryEnabled ? [] : selected,
+    distinct: !summaryEnabled && distinct, rowLimit, sort: summaryEnabled ? [] : sort,
+    summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary), having: havingRules.length ? {
+      rules: havingRules.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })),
+      mode: havingMode, group: havingGroup,
+    } : undefined } : undefined,
+    filter: rules.length ? { rules, mode, group } : undefined };
+  return { design, sql: buildPostgresQueryBuilderSql(design, source) };
+}
 
 /** 从连接和数据库创建独立草稿。预览结果与待打开的 SQL 只归属当前设计和原活动标签。 */
 export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onClose, onViewDirty, onViewCreated }: {
@@ -46,28 +65,21 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [havingGroup, setHavingGroup] = useState<FilterGroup>();
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
   const [viewSeed, setViewSeed] = useState<ViewQuerySeed>();
+  const [restoreEpoch, setRestoreEpoch] = useState(0);
   const mounted = useRef(false), pending = useRef(false);
   const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
   const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
   const schemas = useMemo(() => [...new Set(catalogue?.map(item => item.schema))], [catalogue]);
   const choices = catalogue?.filter(item => (!schema || item.schema === schema) &&
     (item.key === table || (item.schema + '.' + item.name).toLowerCase().includes(search.toLowerCase())));
-  const preview = useMemo(() => {
+  const draft = useMemo<PostgresSingleQueryDraft>(() => ({ dialect: 'postgresql', version: 1, selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup }),
+    [selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup]);
+  const preview = useMemo<(ReturnType<typeof compileDesign> & { error?: never }) |
+    { error: string; design?: never; sql?: never } | undefined>(() => {
     if (!source) return;
-    try {
-      if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
-      const rowLimit = limit ? Number(limit) : undefined;
-      if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > postgresQueryBuilderLimits.rowLimit)) throw Error(text.invalidLimit);
-      const design = { ...source.target, fingerprint: source.fingerprint, columns: summaryEnabled ? [] : selected,
-        distinct: !summaryEnabled && distinct, rowLimit, sort: summaryEnabled ? [] : sort,
-        summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary), having: havingRules.length ? {
-          rules: havingRules.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })),
-          mode: havingMode, group: havingGroup,
-        } : undefined } : undefined,
-        filter: rules.length ? { rules, mode, group } : undefined };
-      return { design, sql: buildPostgresQueryBuilderSql(design, source) };
-    } catch (reason) { return { error: errorMessage(reason) }; }
-  }, [source, selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, outputs, havingRules, havingMode, havingGroup]);
+    try { return compileDesign(draft, source); }
+    catch (reason) { return { error: errorMessage(reason) }; }
+  }, [draft, source]);
 
   function current(): boolean {
     if (!mounted.current || owner.stale) return false;
@@ -125,6 +137,24 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
     });
   }
 
+  /** 先验证整份本地设计，再发布结构与草稿；失败时原设计保持。 */
+  async function restore(value: SingleQueryDraft) {
+    if (!source || value.dialect !== 'postgresql') throw Error(designText.designModeMismatch);
+    const target = source.target;
+    const fresh = await invoke('postgres.queryBuilder.describe', target);
+    if (!current()) return;
+    if (fresh.target.connectionId !== target.connectionId || fresh.target.database !== target.database ||
+        fresh.target.table !== target.table) throw Error(text.stale);
+    assertSingleQueryDraftColumns(value, fresh.columns.map(column => column.name));
+    compileDesign(value, fresh);
+    setSource(fresh); setSelected(value.selected); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
+    setSummaryEnabled(value.summaryEnabled); setSummary(value.summary);
+    setRules(value.rules); setMode(value.mode); setGroup(value.group);
+    setHavingRules(value.havingRules); setHavingMode(value.havingMode); setHavingGroup(value.havingGroup);
+    // 条件编辑器可能持有旧行下标，恢复后必须重新建立未提交的输入。
+    setRestoreEpoch(epoch => epoch + 1);
+  }
+
   /** 原设计保持在当前组件中；提交视图前再次对照同一份结构和查询。 */
   function open(asView = false) {
     if (!source || !preview?.design || editor) return;
@@ -174,6 +204,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         {choices?.length === 0 && <p role="status">{text.empty}</p>}
       </> : <>
         <p>{database} / {source.target.table}</p>
+        <SingleQueryDesignPanel scope={ { ...source.target, dialect: 'postgresql' } } draft={preview?.design ? draft : undefined}
+          disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>
         <label className="check"><input type="checkbox" checked={summaryEnabled} disabled={disabled || !!editor}
           onChange={event => { if (editable()) setSummaryEnabled(event.target.checked); }}/>{summaryText.enabled}</label>
         {!summaryEnabled && <fieldset disabled={disabled || !!editor}><legend>{text.columns}</legend>
@@ -191,7 +223,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
           <label className="check"><input type="checkbox" checked={distinct} onChange={event => { if (editable()) setDistinct(event.target.checked); }}/>{text.distinct}</label>
         </fieldset>}
         <fieldset><legend>{text.filter}</legend>
-          <TableFilterPanel columns={names} filters={rules} mode={mode} disabled={disabled || !!editor} multilineScalar applyShortcut
+          <TableFilterPanel key={restoreEpoch} columns={names} filters={rules} mode={mode} disabled={disabled || !!editor} multilineScalar applyShortcut
             onFiltersChange={next => {
               if (!editable()) return false;
               setGroup(tableFilterGroupAfterChange(rules, next, group, mode)); setRules(next); return true;
@@ -209,7 +241,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
             onChange={next => { if (editable()) setSummary(next); }}/>
           <fieldset aria-label={summaryText.having}><legend>{summaryText.having}</legend>
             <p className="muted small">{summaryText.havingHint}</p>
-            <TableFilterPanel columns={outputs.map(item => item.key)} columnLabel={key => summaryConditionLabel(outputs, key)}
+            <TableFilterPanel key={restoreEpoch} columns={outputs.map(item => item.key)} columnLabel={key => summaryConditionLabel(outputs, key)}
               filters={havingRules} mode={havingMode} disabled={disabled || !!editor} multilineScalar applyShortcut
               onFiltersChange={next => {
                 if (!editable()) return false;

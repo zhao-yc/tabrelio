@@ -152,6 +152,23 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     expect((await observer.query('SELECT * FROM "odd.schema".builder_summary')).rows).toEqual([
       { label: '精确整数', 行数: '1', 最终合计: min },
     ]);
+    await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();
+    await builder.getByRole('textbox', { name: joinText.designName, exact: true }).fill('条件汇总');
+    await button(joinText.designSave).click();
+    await expect(builder.getByText(joinText.designSaved, { exact: true })).toBeVisible();
+    await button(zh.common.cancel).click();
+    await selectSource(view);
+    await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();
+    await button(joinText.designRefresh).click();
+    await builder.getByRole('combobox', { name: joinText.singleDesignTitle, exact: true }).selectOption({ label: '条件汇总' });
+    await page.evaluate(expected => {
+      const original = window.confirm;
+      window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是恢复设计的确认'); return true; };
+    }, joinText.designRestoreConfirm);
+    await button(joinText.designLoad).click();
+    await expect(builder.getByText(joinText.designRestored, { exact: true })).toBeVisible();
+    await expect(sql).toHaveText(grouped);
+    await page.screenshot({ path: info.outputPath('postgres-builder-design.png') });
     expect(await history()).toEqual(originalHistory);
     expect((await settings()).tabs).toEqual(originalTabs);
     await button(text.open).click();

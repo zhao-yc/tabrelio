@@ -7,6 +7,7 @@ import initSqlJs from 'sql.js';
 import { mainColumnsHarness } from './main-columns-owner-harness';
 import { LocalStore } from '../../src/main/storage';
 import { manualJoinDesignSaveSchema, singleTableQueryDesignSchema, type ManualJoinDesign } from '../../src/shared/manualJoinDesigns';
+import { assertSingleQueryDraftColumns, singleQueryDesignSaveSchema, type SqliteSingleQueryDraft } from '../../src/shared/singleQueryDesigns';
 
 const require = createRequire(import.meta.url);
 const wasm = require.resolve('sql.js/dist/sql-wasm.wasm'), directories: string[] = [];
@@ -41,6 +42,40 @@ async function fixture() {
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('手动 JOIN 设计本地配置库', () => {
+  it('SQLite 单表设计独立于旧设计，真实配置库重开后保留双模式及精确值', async () => {
+    const { file, store } = await fixture();
+    const sqlite = { ...scope, connectionId: 'sqlite-source', dialect: 'sqlite', database: 'main', kind: 'table' } as const;
+    const sqliteProfile = { id: sqlite.connectionId, name: 'SQLite 样本', dialect: 'sqlite' as const, group: '', color: '#ffffff',
+      sqlite: { filePath: '/isolated/sample.sqlite', readOnly: false, busyTimeoutMs: 1000 } };
+    const draft: SqliteSingleQueryDraft = { version: 1, dialect: 'sqlite', selected: ['id'], limit: '', distinct: true,
+      filters: [], mode: 'and', sort: [{ id: 'sort', column: 'id', direction: 'desc' }], summaryEnabled: true, havingMode: 'and',
+      summary: { groups: [], aggregates: [{ id: 'sum', fn: 'SUM', column: 'id', alias: '合计' }], sort: [] },
+      havingFilters: [{ id: 'filter', column: 'aggregate:sum', operator: 'gte', kind: 'integer', value: '9223372036854775807' }] };
+    let id: string;
+    try {
+      store.saveConnection(sqliteProfile);
+      const main = mainColumnsHarness(); main.context.store = store; main.setRevision(store.connectionRevision());
+      const entry = await main.run('singleQueryDesigns.save', { ...sqlite, name: '汇总', design: draft });
+      id = entry.id;
+      expect((await main.invoke('singleQueryDesigns.delete', { ...sqlite, id }, { ...main.event(), senderFrame: {} })).ok).toBe(false);
+      expect(main.request).not.toHaveBeenCalled();
+    } finally { store.close(); }
+    const reopened = await LocalStore.open(file, wasm, protector);
+    try {
+      expect(reopened.readSingleQueryDesign({ ...sqlite, id })).toEqual(draft);
+      expect(reopened.listSingleQueryDesigns({ ...sqlite, kind: 'view' })).toEqual([]);
+      expect(() => assertSingleQueryDraftColumns(draft, ['renamed'])).toThrow('来源字段已变化');
+      expect(singleQueryDesignSaveSchema.safeParse({ ...sqlite, name: '错配', design: { ...draft, sql: 'SELECT 1' } }).success).toBe(false);
+      const next = reopened.saveSingleQueryDesign({ ...sqlite, name: '汇总', replaceId: id, design: { ...draft, limit: '8' } });
+      expect(next.id).not.toBe(id);
+      expect(() => reopened.deleteSingleQueryDesign({ ...sqlite, id })).toThrow('已变化');
+      reopened.saveConnection({ ...sqliteProfile, sqlite: { ...sqliteProfile.sqlite, filePath: '/isolated/other.sqlite' } });
+      expect(() => reopened.readSingleQueryDesign({ ...sqlite, id: next.id })).toThrow('连接目标已更改');
+      reopened.deleteConnection(sqlite.connectionId);
+      reopened.saveConnection(sqliteProfile);
+      expect(reopened.listSingleQueryDesigns(sqlite)).toEqual([]);
+    } finally { reopened.close(); }
+  });
   it('重开真实配置文件后按原表准确恢复完整结构和精确值', async () => {
     const { file, store } = await fixture();
     let entry;

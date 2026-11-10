@@ -1,4 +1,7 @@
 import { manualJoinDesignLimits, manualJoinDesignSchema, manualJoinDesignSaveSchema, singleTableQueryDesignSchema, type QueryBuilderDesign, type ManualJoinDesignScope, type ManualJoinDesignSelect, type ManualJoinDesignSave, type ManualJoinDesignSummary } from '../shared/manualJoinDesigns';
+import { singleQueryDesignSaveSchema, singleQueryDraftSchema, type SingleQueryDraft, type SingleQueryDesignScope,
+  type SingleQueryDesignSelect, type SingleQueryDesignSave } from '../shared/singleQueryDesigns';
+
 import { sameConnectionFamily } from '../shared/connectionDialect';
 import { savedQueryExternalZh } from '../shared/savedQueryExternalEdit';
 import { savedQueryExternalRecordSchema, type SavedQueryExternalRecord } from './savedQueryExternalEdit';
@@ -81,6 +84,8 @@ const historyDurationValue = "CAST(json_extract(data,'$.elapsedMs') AS REAL)";
 const historyDurationKey = `CASE WHEN length(CAST(data AS BLOB)) <= ${savedQuerySearchLimits.recordBytes} AND json_valid(data)
   THEN CASE WHEN json_type(data,'$.elapsedMs') IN ('integer','real') AND ${historyDurationValue} BETWEEN -${Number.MAX_VALUE} AND ${Number.MAX_VALUE}
     THEN ${historyDurationValue} ELSE 0.0 END ELSE 0.0 END`;
+
+type QueryDesignLocation = { table: 'manual_join_designs' | 'single_table_query_designs' | 'single_relation_query_designs'; args: string[] };
 
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
@@ -194,6 +199,15 @@ export class LocalStore {
         CREATE TRIGGER IF NOT EXISTS single_table_query_designs_cleanup AFTER DELETE ON connections
           BEGIN DELETE FROM single_table_query_designs WHERE connection_id=OLD.id; END;
         DELETE FROM single_table_query_designs WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=single_table_query_designs.connection_id);
+        -- SQLite/PostgreSQL 草稿使用独立可选表，旧版 MySQL 单表与 JOIN 记录保持可读。
+        CREATE TABLE IF NOT EXISTS single_relation_query_designs (
+          id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL,
+          name TEXT NOT NULL, source_digest TEXT NOT NULL, data TEXT NOT NULL,
+          UNIQUE(connection_id, database_name, table_name, name)
+        );
+        CREATE TRIGGER IF NOT EXISTS single_relation_query_designs_cleanup AFTER DELETE ON connections
+          BEGIN DELETE FROM single_relation_query_designs WHERE connection_id=OLD.id; END;
+        DELETE FROM single_relation_query_designs WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=single_relation_query_designs.connection_id);
         -- 文件解释及人工映射为可选schema9元数据，不保存路径、行值或连接身份。
         CREATE TABLE IF NOT EXISTS import_presets (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         -- 分组元数据与查询原文分离；旧schema9客户端可忽略，不改变来源摘要。
@@ -756,15 +770,27 @@ export class LocalStore {
   }
 
   /** 模式只在固定的两张本地表中选择，外部参数仍全部绑定。 */
-  private manualJoinScope(input: ManualJoinDesignScope) {
+  private manualJoinScope(input: ManualJoinDesignScope): QueryDesignLocation {
     const profile = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [input.connectionId])[0];
     if (profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') throw Error('查询设计仅适用于已保存的 MySQL 或 MariaDB 连接。');
     return { table: input.single ? 'single_table_query_designs' : 'manual_join_designs', args: [input.connectionId, input.database, input.table] };
   }
 
+  private singleQueryDesignLocation(input: SingleQueryDesignScope): QueryDesignLocation {
+    const [profile] = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [input.connectionId]);
+    if (profile?.dialect !== input.dialect) throw Error('查询设计与当前连接类型不符。');
+    return { table: 'single_relation_query_designs',
+      args: [input.connectionId, input.database, JSON.stringify([input.dialect, input.table, input.dialect === 'sqlite' ? input.kind : null])] };
+  }
+
   /** 列表只返回当前表的名称和编号。正文留在本地，直到用户明确选择恢复。 */
   listManualJoinDesigns(input: ManualJoinDesignScope): ManualJoinDesignSummary[] {
-    const { table, args } = this.manualJoinScope(input);
+    return this.listQueryDesigns(this.manualJoinScope(input));
+  }
+  listSingleQueryDesigns(input: SingleQueryDesignScope): ManualJoinDesignSummary[] {
+    return this.listQueryDesigns(this.singleQueryDesignLocation(input));
+  }
+  private listQueryDesigns({ table, args }: QueryDesignLocation): ManualJoinDesignSummary[] {
     const statement = this.db.prepare(`SELECT id,name FROM ${table} WHERE connection_id=? AND database_name=? AND table_name=? ORDER BY name COLLATE BINARY LIMIT ?`);
     try {
       statement.bind([...args, manualJoinDesignLimits.perTable]);
@@ -778,20 +804,35 @@ export class LocalStore {
   }
 
   readManualJoinDesign(input: ManualJoinDesignSelect): QueryBuilderDesign {
-    const { table, args } = this.manualJoinScope(input), source = this.queryResultPresetSource(input.connectionId);
+    return (input.single ? singleTableQueryDesignSchema : manualJoinDesignSchema).parse(this.readQueryDesign(this.manualJoinScope(input), input.id));
+  }
+  readSingleQueryDesign(input: SingleQueryDesignSelect): SingleQueryDraft {
+    const design = singleQueryDraftSchema.parse(this.readQueryDesign(this.singleQueryDesignLocation(input), input.id));
+    if (design.dialect !== input.dialect) throw Error('查询设计与当前连接类型不符。');
+    return design;
+  }
+  private readQueryDesign({ table, args }: QueryDesignLocation, id: string): unknown {
+    const source = this.queryResultPresetSource(args[0]);
     const [raw] = this.records<unknown>(`SELECT data FROM ${table}
       WHERE connection_id=? AND database_name=? AND table_name=? AND id=? AND source_digest=? AND length(CAST(data AS BLOB))<=?`,
-      [...args, input.id, source.connectionDigest, manualJoinDesignLimits.bytes]);
+      [...args, id, source.connectionDigest, manualJoinDesignLimits.bytes]);
     if (raw === undefined) throw Error('查询设计已变化，或连接目标已更改。请刷新设计列表。');
-    return (input.single ? singleTableQueryDesignSchema : manualJoinDesignSchema).parse(raw);
+    return raw;
   }
 
   /** 覆盖消耗旧编号并生成新编号，旧窗口无法再次覆盖或删除已替换的设计。 */
   saveManualJoinDesign(raw: ManualJoinDesignSave): ManualJoinDesignSummary {
     const input = manualJoinDesignSaveSchema.parse(raw);
+    return this.saveQueryDesign(this.manualJoinScope(input), input);
+  }
+  saveSingleQueryDesign(raw: SingleQueryDesignSave): ManualJoinDesignSummary {
+    const input = singleQueryDesignSaveSchema.parse(raw);
+    return this.saveQueryDesign(this.singleQueryDesignLocation(input), input);
+  }
+  private saveQueryDesign(location: QueryDesignLocation, input: { name: string; design: unknown; replaceId?: string }): ManualJoinDesignSummary {
     const entry = { id: randomUUID(), name: input.name };
     this.mutate(() => {
-      const { table, args } = this.manualJoinScope(input), current = this.listManualJoinDesigns(input);
+      const { table, args } = location, current = this.listQueryDesigns(location);
       if (input.replaceId && !current.some(item => item.id === input.replaceId)) throw Error('查询设计已变化，请刷新列表。');
       if (current.some(item => item.name === input.name && item.id !== input.replaceId)) throw Error('同名查询设计已存在，请改名或明确覆盖。');
       if (!input.replaceId && current.length >= manualJoinDesignLimits.perTable) throw Error('当前表的查询设计数量已达上限。');
@@ -800,16 +841,21 @@ export class LocalStore {
       const data = JSON.stringify(input.design);
       if (Number(count) >= manualJoinDesignLimits.designs || Number(bytes) + Buffer.byteLength(data, 'utf8') > manualJoinDesignLimits.totalBytes)
         throw Error('本地查询设计已达存储上限，请先移除不再使用的设计。');
-      const digest = this.queryResultPresetSource(input.connectionId).connectionDigest;
+      const digest = this.queryResultPresetSource(args[0]).connectionDigest;
       this.db.run(`INSERT INTO ${table} VALUES (?,?,?,?,?,?,?)`, [entry.id, ...args, entry.name, digest, data]);
     });
     return entry;
   }
 
   deleteManualJoinDesign(input: ManualJoinDesignSelect): void {
+    this.deleteQueryDesign(this.manualJoinScope(input), input.id);
+  }
+  deleteSingleQueryDesign(input: SingleQueryDesignSelect): void {
+    this.deleteQueryDesign(this.singleQueryDesignLocation(input), input.id);
+  }
+  private deleteQueryDesign({ table, args }: QueryDesignLocation, id: string): void {
     this.mutate(() => {
-      const { table, args } = this.manualJoinScope(input);
-      this.db.run(`DELETE FROM ${table} WHERE connection_id=? AND database_name=? AND table_name=? AND id=?`, [...args, input.id]);
+      this.db.run(`DELETE FROM ${table} WHERE connection_id=? AND database_name=? AND table_name=? AND id=?`, [...args, id]);
       if (!this.db.getRowsModified()) throw Error('查询设计已变化，请刷新列表。');
     });
   }

@@ -1,5 +1,6 @@
 import { mysqlJoinPreviewSchema } from './mysqlJoinPreview';
 import { manualJoinDesignScopeSchema, manualJoinDesignSelectSchema, manualJoinDesignSaveSchema } from './manualJoinDesigns';
+import { singleQueryDesignScopeSchema, singleQueryDesignSelectSchema, singleQueryDesignSaveSchema } from './singleQueryDesigns';
 import { postgresQueryRecordPageSchema } from './postgresQueryRecord';
 import { postgresQueryBuilderCatalogueSchema, postgresQueryBuilderInspectSchema, postgresQueryBuilderTargetSchema } from './postgresQueryBuilder';
 import { postgresResultOriginsSchema } from './postgresResultOrigins';
@@ -527,6 +528,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'result.insertRelease': resultInsertReleaseInputSchema,
   'joinDesigns.list': manualJoinDesignScopeSchema, 'joinDesigns.read': manualJoinDesignSelectSchema,
   'joinDesigns.save': manualJoinDesignSaveSchema, 'joinDesigns.delete': manualJoinDesignSelectSchema,
+  'singleQueryDesigns.list': singleQueryDesignScopeSchema, 'singleQueryDesigns.read': singleQueryDesignSelectSchema,
+  'singleQueryDesigns.save': singleQueryDesignSaveSchema, 'singleQueryDesigns.delete': singleQueryDesignSelectSchema,
   'result.presets.list': queryResultPresetListSchema, 'result.presets.save': queryResultPresetSaveSchema, 'result.presets.rename': queryResultPresetRenameSchema, 'result.presets.delete': queryResultPresetSelectSchema, 'result.presets.read': queryResultPresetSelectSchema,
   'table.presets.list':tablePresetListSchema,'table.presets.save':tablePresetSaveSchema,'table.presets.delete':tablePresetSelectSchema,'table.presets.apply':tablePresetApplySchema,
   'table.copyInsertSql': copyInsertSqlInputSchema,
