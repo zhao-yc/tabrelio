@@ -53,7 +53,7 @@ import { createLocalReferencesAnalysis } from '../localReferencesAnalysis';
 import { createSqliteLocalReferencesAnalysis } from '../sqliteLocalReferencesAnalysis';
 import { createSqlReferencesProvider } from '../sqlReferencesProvider';
 import { bindSqlReferenceHighlights } from '../sqlReferenceHighlights';
-import { analyzePostgresLocalReferences } from '../postgresCompletionAnalysis';
+import { analyzePostgresLocalReferences, analyzePostgresLocalRename } from '../postgresCompletionAnalysis';
 import { postgresCompletionLimits } from '../../shared/postgresCompletion';
 import '../sqlReferenceHighlights.css';
 import { SqlReferenceCompletionGuard } from '../sqlReferenceCompletionGuard';
@@ -356,7 +356,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const registration = monaco.languages.registerDefinitionProvider(languageSelector, navigation.provider);
     return () => { registration.dispose(); void navigation.dispose().catch(() => {}); };
   }, [dialect, readOnly, contentReady, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
-  /** PostgreSQL 的声明与引用导航复用高亮的局部绑定，所有结果只指向当前查询模型。 */
+  /** PostgreSQL 的导航与重命名复用局部绑定，所有结果只指向当前查询模型。 */
   useEffect(() => {
     const instance = editorRef.current;
     if (requestedDialect !== 'postgresql' || !postgresCompletion || !instance || readOnly || clipboardDisabled || !contentReady) return;
@@ -374,10 +374,10 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         tab?.connectionId === profile.id && (tab.database || profile.database || 'postgres') === original.database &&
         state.connections.includes(profile) && (state.connectionVersions[profile.id] ?? 0) === original.connectionVersion;
     };
-    const current = () => aliveRef.current && editorRef.current === instance && contentRef.current?.ready === true &&
+    const editorCurrent = () => aliveRef.current && editorRef.current === instance && contentRef.current?.ready === true &&
       !propsRef.current.readOnly && !propsRef.current.clipboardDisabled && snippetScope.current.dialect === 'postgresql' &&
-      snippetScope.current.standardStrings === postgresStandardStrings && instance.hasTextFocus() && !document.querySelector(appModalSelector) && scopeCurrent();
-    const ports = { model: () => instance.getModel(), current, sourceLimit: postgresCompletionLimits.source };
+      snippetScope.current.standardStrings === postgresStandardStrings && !document.querySelector(appModalSelector) && scopeCurrent();
+    const ports = { model: () => instance.getModel(), current: () => instance.hasTextFocus() && editorCurrent(), sourceLimit: postgresCompletionLimits.source };
     const analyze = async (source: string, offset: number) => analyzePostgresLocalReferences(source, offset, postgresStandardStrings);
     // 分析完全在有预算的本文解析器内完成，声明位置无需查询服务器目录。
     const definition = createSqlDefinitionProvider({ ...ports, worker: {
@@ -392,9 +392,23 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       begin: signal => referenceCompletionGuard.current.acquire(signal),
       prepare: () => instance.trigger('dbark.localReferences', 'hideSuggestWidget', {}),
     });
+    const rename = createSqlRenameProvider({
+      ...ports,
+      current: () => (instance.hasTextFocus() || instance.hasWidgetFocus()) && editorCurrent(),
+      worker: {
+        async analyze(source, offset, _signal, newName) {
+          return analyzePostgresLocalRename(source, offset, postgresStandardStrings, newName);
+        },
+        async dispose() {},
+      },
+      begin: signal => referenceCompletionGuard.current.acquire(signal),
+      notify: setRenameMessage,
+      prepare: () => { setRenameMessage(null); instance.trigger('dbark.localRename', 'hideSuggestWidget', {}); },
+    });
     const registrations = [monaco.languages.registerDefinitionProvider(postgresEditorLanguages, definition.provider),
-      monaco.languages.registerReferenceProvider(postgresEditorLanguages, references.provider)];
-    const cancel = () => { definition.cancel(); references.cancel(); };
+      monaco.languages.registerReferenceProvider(postgresEditorLanguages, references.provider),
+      monaco.languages.registerRenameProvider(postgresEditorLanguages, rename.provider)];
+    const cancel = () => { definition.cancel(); references.cancel(); rename.cancel(); };
     const modelChange = instance.onDidChangeModel(cancel);
     const stop = useWorkspace.subscribe(() => { if (!scopeCurrent()) cancel(); });
     return () => {
@@ -403,6 +417,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       registrations.forEach(registration => registration.dispose());
       void definition.dispose();
       void references.dispose();
+      void rename.dispose();
     };
   }, [requestedDialect, readOnly, clipboardDisabled, contentReady, postgresCompletion?.tabId, postgresCompletion?.connectionId,
     postgresCompletion?.connectionVersion, postgresCompletion?.database, postgresCompletion?.sessionId, postgresStandardStrings]);

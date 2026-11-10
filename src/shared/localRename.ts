@@ -2,6 +2,7 @@ import type { LocalReferenceToken } from './localReferenceIndex';
 import type { LocalReferences } from './localReferences';
 
 export type LocalRenameDialect = 'mysql' | 'sqlite';
+type RenameDialect = LocalRenameDialect | 'postgresql';
 export type LocalRename = { status: 'blocked'; reason: string } | {
   status: 'ready'; target: { start: number; end: number }; name: string; kind: 'alias' | 'cte';
   edits: { start: number; end: number; text: string }[];
@@ -9,18 +10,23 @@ export type LocalRename = { status: 'blocked'; reason: string } | {
 export type LocalRenameContext = { status: 'blocked'; reason: string } | { status: 'ready'; target: LocalReferenceToken; tokens: LocalReferenceToken[] };
 
 /** 名称作为一个引用标识符写入，不接受控制符、孤立代理或超出该方言的名称预算。 */
-export function quoteLocalRename(name: string, dialect: LocalRenameDialect): string | undefined {
+export function quoteLocalRename(name: string, dialect: RenameDialect): string | undefined {
   if (typeof name !== 'string' || !name.trim() || name.length > (dialect === 'sqlite' ? 512 : 256) || /[\x00-\x1f\x7f]/.test(name)) return;
   for (const point of name) if (point.length === 1 && /[\ud800-\udfff]/.test(point) || dialect === 'mysql' && point.length > 1) return;
-  const quote = dialect === 'sqlite' ? '"' : '`';
+  // PostgreSQL 的 63 字节限制按 UTF-8 检查，避免服务器截断后改变绑定。
+  if (dialect === 'postgresql' && new TextEncoder().encode(name).length > 63) return;
+  const quote = dialect === 'mysql' ? '`' : '"';
   return quote + name.replaceAll(quote, quote + quote) + quote;
 }
 
-/** 大小写冲突采用保守比较；SQLite只折叠ASCII，MySQL额外拒绝大小写不同的旧同名词。 */
-const folded = (name: string, dialect: LocalRenameDialect) => dialect === 'sqlite' ? name.replace(/[A-Z]/g, letter => letter.toLowerCase()) : name.toLowerCase();
+/** PostgreSQL 的输入已经按原引号规范化，新名称写为引用标识符后保留大小写。 */
+const folded = (name: string, dialect: RenameDialect) => {
+  if (dialect === 'postgresql') return name;
+  return dialect === 'sqlite' ? name.replace(/[A-Z]/g, letter => letter.toLowerCase()) : name.toLowerCase();
+};
 
 /** 完整同名token必须全部落到这一声明，无法证明的词整份拒绝，绝不输出部分替换。 */
-export function planLocalRename(context: LocalRenameContext, references: LocalReferences, dialect: LocalRenameDialect, classify: (reference: { start: number; end: number }) => 'alias' | 'cte' | 'physical' | undefined, newName?: string): LocalRename {
+export function planLocalRename(context: LocalRenameContext, references: LocalReferences, dialect: RenameDialect, classify: (reference: { start: number; end: number }) => 'alias' | 'cte' | 'physical' | undefined, newName?: string): LocalRename {
   if (context.status !== 'ready') return context;
   if (references.status !== 'ready') return references;
   const { target, tokens } = context, group = [references.declaration, ...references.references].sort((a, b) => a.start - b.start);

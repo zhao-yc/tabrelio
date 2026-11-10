@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
+import { localRenameZh } from '../../src/renderer/locales/localRename.zh-CN';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -116,6 +117,28 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
         await expect.poll(cursorOffset).toBe(sql.lastIndexOf('s.id') + 1);
         expect(await snapshot()).toEqual(before);
 
+        const renameInput = tab.locator('.rename-box input.rename-input');
+        const undo = process.platform === 'darwin' ? 'Meta+z' : 'Control+z';
+        const enterRename = async (original: string, name: string) => {
+          await page.keyboard.press('F2');
+          await expect(renameInput).toHaveValue(original);
+          await renameInput.fill(name);
+          await renameInput.press('Enter');
+          await expect(renameInput).not.toBeVisible();
+          await input.focus();
+        };
+        await move(0, 8);
+        await enterRename('s', 'parent');
+        await expect(tab.getByRole('status').filter({ hasText: localRenameZh.collision })).toBeVisible();
+        expect(await snapshot()).toEqual(before);
+        await move(0, 8);
+        await enterRename('s', '外层');
+        const renamed = 'SELECT "外层".id,\n(SELECT s.id FROM child s)\nFROM parent "外层"\nWHERE "外层".id=1;';
+        await expect.poll(async () => (await snapshot()).source).toBe(renamed);
+        await tab.screenshot({ path: info.outputPath('postgresql-局部重命名.png') });
+        await page.keyboard.press(undo);
+        await expect.poll(async () => (await snapshot()).source).toBe(sql);
+
         await page.locator('.tab-strip').getByRole('button', { name: 'CTE 导航草稿', exact: true }).click();
         const cteReference = cteSql.lastIndexOf('local_cte') + 2;
         await move(0, cteReference);
@@ -125,6 +148,10 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
         await page.keyboard.press('F12');
         await expect.poll(cursorOffset).toBe('WITH '.length);
         expect(await snapshot()).toEqual(cteBefore);
+        await enterRename('local_cte', '明细🚢');
+        await expect.poll(async () => (await snapshot()).source).toBe(cteSql.replaceAll('local_cte', '"明细🚢"'));
+        await page.keyboard.press(undo);
+        await expect.poll(async () => (await snapshot()).source).toBe(cteSql);
       }
       expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }))).toEqual({ tasks: [], history: [] });
       expect(pageErrors).toEqual([]);

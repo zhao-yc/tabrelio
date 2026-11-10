@@ -1,13 +1,18 @@
 import { postgresCompletionLimits as limits, type PostgresCompletionReference, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
 import { currentPostgresStatement, scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
 import type { LocalReferenceRange, LocalReferences } from '../shared/localReferences';
+import { planLocalRename, type LocalRename } from '../shared/localRename';
 
 type Group = { kind: 'group'; start: number; end: number; closed: boolean; closing: ')' | ']'; parts: Part[] };
 type Part = PostgresEditorToken | Group;
 interface Projection { names: (string | null)[]; stars: PostgresCompletionReference[]; exact: boolean; declaration?: LocalReferenceRange; }
 export interface PostgresCompletionRelation extends PostgresCompletionReference { alias?: string; projection?: Projection; }
 interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; }
-interface ReferenceTrace { edges: Map<PostgresEditorToken, LocalReferenceRange>; unsupported: boolean; }
+interface ReferenceTrace {
+  edges: Map<PostgresEditorToken, LocalReferenceRange>;
+  declarations: Map<number, 'alias' | 'cte'>;
+  unsupported: boolean;
+}
 interface RelationSpan { end: number; relation: number; }
 type Scope = ReadonlyMap<string, Projection>;
 type Query = { kind: 'relations'; schema?: string; ctes?: string[] } |
@@ -297,6 +302,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       const body = parts[start++];
       if (body?.kind !== 'group') return unsupported();
       definitions.push({ name, names, body, declaration });
+      trace?.declarations.set(declaration.start, 'cte');
     } while (punct(parts[start], ',') && ++start);
     // 递归 WITH 中先占住所有声明名，避免自引用或后置定义落到同名物理表。
     if (recursive) for (const { name, names, declaration } of definitions)
@@ -402,6 +408,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
         end++;
       }
       spans!.set(i, { end, relation: refs.length });
+      if (alias) trace.declarations.set(part.start, 'alias');
       refs.push({ name, alias, schema, declaration: alias ? part : cte });
       i = end - 1;
       continue;
@@ -447,15 +454,17 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     routine: expressionRoutine(main, left, cursorGroup, [refs, ...outer]) };
 }
 
-const noLocalReference: LocalReferences = { status: 'blocked', reason: 'syntax' };
+const noLocalReference = { status: 'blocked', reason: 'syntax' } as const;
 const rangeOf = ({ start, end }: LocalReferenceRange): LocalReferenceRange => ({ start, end });
 
-/** 只读取光标所在语句。按声明偏移关联引用，保留查询块、CTE 及引号身份。 */
-export function analyzePostgresLocalReferences(source: string, offset: number, standardStrings?: boolean): LocalReferences {
+/** 只读取光标所在语句，为导航和重命名提供同一套原文绑定。 */
+function analyzePostgresBinding<T extends LocalReferences | LocalRename>(source: string, offset: number, standardStrings: boolean | undefined,
+  plan: (references: Extract<LocalReferences, { status: 'ready' }>, target: PostgresEditorToken,
+    tokens: PostgresEditorToken[], trace: ReferenceTrace) => T): T | Extract<LocalReferences, { status: 'blocked' }> {
   if (source.length > limits.source) return { status: 'blocked', reason: 'budget' };
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > source.length || /[\uD800-\uDFFF]/u.test(source)) return noLocalReference;
 
-  function analyze(mode: boolean): LocalReferences {
+  function analyze(mode: boolean): T | Extract<LocalReferences, { status: 'blocked' }> {
     let statement: ReturnType<typeof currentPostgresStatement>;
     try { statement = currentPostgresStatement(source, offset, mode); }
     catch { return noLocalReference; }
@@ -471,7 +480,7 @@ export function analyzePostgresLocalReferences(source: string, offset: number, s
     if (!target) return noLocalReference;
     const parts = groupStatement(tokens, offset, statement.end, true);
     if (!parts) return noLocalReference;
-    const trace: ReferenceTrace = { edges: new Map(), unsupported: false };
+    const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), unsupported: false };
     parseQuery(parts, new Map(), [], undefined, trace);
     if (trace.unsupported) return noLocalReference;
     const declaration = trace.edges.get(target) ?? target;
@@ -479,13 +488,37 @@ export function analyzePostgresLocalReferences(source: string, offset: number, s
       .map(([token]) => rangeOf(token)).sort((a, b) => a.start - b.start);
     if (!references.length) return noLocalReference;
     if (references.length > limits.items) return { status: 'blocked', reason: 'budget' };
-    return { status: 'ready', target: rangeOf(target), declaration: rangeOf(declaration), references };
+    return plan({ status: 'ready', target: rangeOf(target), declaration: rangeOf(declaration), references }, target, tokens, trace);
   }
 
   const result = analyze(standardStrings ?? true);
-  // 离线编辑时两种字符串模式必须得到同一个声明和全部引用范围。
+  // 离线编辑时两种字符串模式必须确认同一结果，包括重命名的每一处编辑。
   return standardStrings === undefined && result.status === 'ready' && JSON.stringify(result) !== JSON.stringify(analyze(false))
     ? noLocalReference : result;
+}
+
+/** 只返回绑定声明和引用的范围，供高亮与导航使用。 */
+export function analyzePostgresLocalReferences(source: string, offset: number, standardStrings?: boolean): LocalReferences {
+  return analyzePostgresBinding(source, offset, standardStrings, references => references);
+}
+
+/** 同名词只有确定属于另一个绑定才可略过，任何未确认的同名词都会阻止整组修改。 */
+export function analyzePostgresLocalRename(source: string, offset: number, standardStrings?: boolean, newName?: string): LocalRename {
+  return analyzePostgresBinding(source, offset, standardStrings, (references, target, tokens, trace) => {
+    const name = identifier(target)!;
+    const declaration = references.declaration.start;
+    const kind = trace.declarations.get(declaration);
+    const localTokens = [];
+    for (const token of tokens) {
+      const value = identifier(token);
+      if (value === undefined) continue;
+      const owner = trace.edges.get(token)?.start ?? (trace.declarations.has(token.start) ? token.start : undefined);
+      if (value === name && owner !== undefined && owner !== declaration) continue;
+      localTokens.push({ ...rangeOf(token), value });
+    }
+    return planLocalRename({ status: 'ready', target: { ...rangeOf(target), value: name }, tokens: localTokens },
+      references, 'postgresql', () => kind, newName);
+  });
 }
 
 /** 定位当前标识符，屏蔽注释、字符串和参数，再解析当前语句的查询作用域。 */
