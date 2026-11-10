@@ -9,6 +9,7 @@ import { deleteSqlCopyZh } from '../../src/renderer/locales/deleteSqlCopy.zh-CN'
 import { gridQuickValueZh } from '../../src/renderer/locales/gridQuickValue.zh-CN';
 import { gridHeaderMenuZh } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { sqliteTableFindZh } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
+import { queryResultFindZh } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
 import { sqliteCellClipboardType } from '../../src/renderer/sqliteTableClipboard';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
@@ -306,6 +307,24 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     expect(await lastPacket()).toEqual({ 'text/plain': 'alias' });
     await chooseHeaderAction(aliases.nth(0), gridHeaderMenuZh.copyQuotedName, true);
     expect(await lastPacket()).toEqual({ 'text/plain': quoteName('alias') });
+    const resultFind = query.locator('.query-result-find-region');
+    const searchResult = resultFind.getByRole('textbox', { name: queryResultFindZh.input, exact: true });
+    const resultColumn = resultFind.getByRole('combobox', { name: queryResultFindZh.columns, exact: true });
+    const findStatus = resultFind.getByRole('status');
+    async function checkAliasFind() {
+      await chooseHeaderAction(aliases.nth(1), gridHeaderMenuZh.findColumn);
+      await expect(searchResult).toBeFocused();
+      await expect(resultColumn.locator('option:checked')).toHaveText(queryResultFindZh.columnOption('alias', 2));
+      await searchResult.fill('row A');
+      await expect(findStatus).toHaveText(queryResultFindZh.count(1, -1));
+      await chooseHeaderAction(aliases.nth(0), gridHeaderMenuZh.findColumn, true);
+      await expect(searchResult).toHaveValue('row A');
+      await expect(resultColumn.locator('option:checked')).toHaveText(queryResultFindZh.columnOption('alias', 1));
+      await expect(findStatus).toHaveText(queryResultFindZh.noMatch);
+      await searchResult.press('Escape');
+      await expect(searchResult).toBeHidden();
+    }
+    await checkAliasFind();
     const aliasWidth = (index: number) => aliases.nth(index).evaluate(element => Math.round(element.getBoundingClientRect().width));
     const amountWidth = await aliasWidth(0), labelWidth = await aliasWidth(1);
     await aliases.nth(0).locator('.rdg-resize-handle').dblclick();
@@ -415,6 +434,11 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       })).toMatchObject({ connectionId: targetProfile.id, sql, databaseContext: { state: 'known', database } });
       await open('json-query');
       await expect(rowA).toBeVisible();
+    }
+    if (local) {
+      await (await navigationMenuItem(query, { name: zh.query.pinResult, exact: true })).click();
+      await expect(query.locator('.pinned-result.selected')).toHaveCount(1);
+      await checkAliasFind();
     }
     expect(await tableSorts()).toEqual(tableSortsBeforeResult);
     expect(await history()).toEqual(historyBefore);

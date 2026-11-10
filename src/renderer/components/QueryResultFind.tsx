@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DataGridHandle } from 'react-data-grid';
 import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
 import { isTextResultFind, QueryResultFindScan, type QueryResultFindMatch, type QueryResultFindMode, type QueryResultFindPhase, type QueryResultFindProgress } from '../queryResultFind';
@@ -15,7 +15,8 @@ import '../queryResultFind.css';
 
 interface Run { owner: object; rowScope?: ResultCheckedRows | null; scan: QueryResultFindScan; timer?: ReturnType<typeof setTimeout>; index: number; }
 export interface QueryResultFindHit { scan: QueryResultFindScan; match: QueryResultFindMatch; }
-interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; checkedRows?: ResultCheckedRows; grid: RefObject<DataGridHandle | null>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; filterDialect?: SortDialect; children: ReactNode; }
+export interface QueryResultFindControl { openColumn(key: string): boolean; }
+interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; checkedRows?: ResultCheckedRows; grid: RefObject<DataGridHandle | null>; control?: Ref<QueryResultFindControl>; isCurrent(): boolean; onHit(hit: QueryResultFindHit | undefined): void; onHighlights(scan: QueryResultFindScan | undefined): void; onMatchingRows(indices: ReadonlySet<number>, checked: boolean): void; onShowMatchingRows?(indices: ReadonlySet<number>): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; filterDialect?: SortDialect; children: ReactNode; }
 const regexErrors: Partial<Record<QueryResultFindPhase, string>> = text.regexErrors;
 const findOpeners = new WeakMap<Element, (target: HTMLElement) => boolean>();
 
@@ -38,7 +39,7 @@ export function escapeTargetsQueryResultFind(event: KeyboardEvent, root: HTMLEle
 }
 
 /** 查找栏与快捷键仅包住当前结果网格；私有代次负责取消。 */
-export function QueryResultFind({ owner, rows, columns, checkedRows, grid, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, onStageFindFilter, findFilterSource, filterDialect, children }: Props) {
+export function QueryResultFind({ owner, rows, columns, checkedRows, grid, control, isCurrent, onHit, onHighlights, onMatchingRows, onShowMatchingRows, onStageFindFilter, findFilterSource, filterDialect, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
   const region = useRef<HTMLDivElement>(null);
@@ -98,16 +99,19 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, isCur
   useLayoutEffect(() => {
     if (checkedOnly && run.current?.rowScope !== checkedScope && panelCurrent()) start(query, sensitive, columnKey, mode);
   }, [checkedOnly, checkedScope, visible]);
-  /** 菜单、按键和按钮共用入口。再次打开保留原扫描、条件与命中位置。 */
-  function open(): boolean {
+  /** 列标题带入实际列键。只有切列才撤销旧命中，普通再次打开保留当前定位。 */
+  function open(key?: string): boolean {
     if (!own() || !grid.current || !region.current || gridFindModalBlocked(region.current, true)) return false;
+    if (key !== undefined && !columns.some(column => column.key === key)) return false;
     if (panelCurrent()) {
+      if (key !== undefined && columnKey !== key) start(query, sensitive, key, mode);
       (usesText ? input.current : modeSelect.current)?.focus({ preventScroll: true });
       return true;
     }
-    cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(undefined); setMode('contains'); setCheckedOnly(false);
+    cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(key); setMode('contains'); setCheckedOnly(false);
     return true;
   }
+  useImperativeHandle(control, () => ({ openColumn: open }));
   function openFromFocus(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
     const host = grid.current?.element;
@@ -169,7 +173,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, isCur
     onStageFindFilter?.(filterRule);
   }
   return <div ref={region} className="query-result-find-region" data-query-result-find-open={visible ? '' : undefined} onKeyDown={keyDown}>
-    <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
+    <div className="query-result-find-toolbar" ref={toolbar}><button type="button" disabled={!available} aria-expanded={!!visible} onClick={() => open()} title="Ctrl / ⌘ + F">{text.open}</button>
       {visible && <>
         <select ref={modeSelect} aria-label={text.mode} value={mode} disabled={!available}
           onChange={event => start(query, sensitive, columnKey, event.target.value as QueryResultFindMode)}>

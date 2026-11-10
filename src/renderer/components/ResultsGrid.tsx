@@ -27,7 +27,7 @@ import type { RowSqlKind } from '../openRowSqlDraft';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
 import { gridCsvClipboardZh as csvCopyText } from '../locales/gridCsvClipboard.zh-CN';
 import type { ResultCheckedRows, ResultGridSelection } from '../resultExport';
-import { QueryResultFind, type QueryResultFindHit } from './QueryResultFind';
+import { QueryResultFind, type QueryResultFindControl, type QueryResultFindHit } from './QueryResultFind';
 import type { QueryResultFilterRule } from '../queryResultFilter';
 import type { QueryResultRowViewKind } from './QueryResultMatchView';
 import { queryResultFindZh as rowViewText } from '../locales/queryResultFind.zh-CN';
@@ -115,6 +115,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     onSortChange?.(next.map(rule=>{const previous=sort?.find(previous=>previous.column===rule.columnKey);return{column:rule.columnKey,direction:rule.direction,...(previous?.nulls?{nulls:previous.nulls}:{}),...(previous?.ignoreCase!==undefined?{ignoreCase:previous.ignoreCase}:{})};}));
   }
   const gridRef = useRef<DataGridHandle | null>(null);
+  const resultFind = useRef<QueryResultFindControl>(null);
   const rangeKeys = useMemo(() => columns.map(column => column.key), [columns]);
   const rangeScope = useMemo(() => ({}), [scope, presentCell]);
   const hasResultTools = !!selectionScope && !!isCurrent && !onActiveRowChange;
@@ -609,7 +610,8 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
     owner: scope, grid: () => gridRef.current?.element,
     column: index => columns[index - (onActiveRowChange ? 0 : 1)],
-    columnNameDialect: columnNameDialect ?? filterDialect, findColumn: onFindColumn,
+    columnNameDialect: columnNameDialect ?? filterDialect,
+    findColumn: onFindColumn ?? (hasResultTools ? key => resultFind.current?.openColumn(key) : undefined),
     sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
     current: actionCurrent, canSort: key => !!onSortChange && !sortReasons?.get(key), applySort: changeSortColumns,
     selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
@@ -723,5 +725,5 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   </>;
   const gridTools = jump || tableCopy ? <>{jump}{tableCopy && copyTools}{selectionTools}</> : undefined;
   return <>{cellActionMenu.menu}{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : gridTools)}
-    {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{selectionTools}{checkedViewTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{checkedFilterActions}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind owner={scope} rows={rows} columns={columns} checkedRows={checkedRows} grid={gridRef} isCurrent={actionCurrent} onHighlights={showFindHighlights} onMatchingRows={changeMatchingRows} onShowMatchingRows={onShowRows} onStageFindFilter={onStageFindFilter} findFilterSource={findFilterSource} filterDialect={filterDialect} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
+    {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{selectionTools}{checkedViewTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{checkedFilterActions}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind control={resultFind} owner={scope} rows={rows} columns={columns} checkedRows={checkedRows} grid={gridRef} isCurrent={actionCurrent} onHighlights={showFindHighlights} onMatchingRows={changeMatchingRows} onShowMatchingRows={onShowRows} onStageFindFilter={onStageFindFilter} findFilterSource={findFilterSource} filterDialect={filterDialect} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
 }

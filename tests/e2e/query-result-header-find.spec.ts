@@ -1,0 +1,83 @@
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { test, expect, desktop, page, dataDir, pageErrors } from './desktop-fixture';
+import { createQueryResultSnapshot, encodeQueryResultSnapshot } from '../../src/shared/queryResultSnapshot';
+import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
+import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { queryResultSnapshotViewerZh as snapshotText } from '../../src/renderer/locales/queryResultSnapshotViewer.zh-CN';
+import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { navigationMenuItem } from './navigation-menu';
+
+test('离线快照列标题查找按原列键定位重名列，重排后仍只查命中的列', async ({}, info) => {
+  const name = '同名列离线样本.dbark-result.json', path = join(realpathSync(dataDir), name);
+  const bytes = encodeQueryResultSnapshot(createQueryResultSnapshot({
+    columns: [{ key: 'left', name: '重复列', type: 'TEXT' }, { key: 'right', name: '重复列', type: 'TEXT' }],
+    rows: [{ left: '左侧内容', right: '目标记录' }, { left: '其它左值', right: '其它右值' }],
+    truncated: false, elapsedMs: 0, statement: 'SELECT 1;',
+  }));
+  writeFileSync(path, bytes);
+  // 仅固定本例文件选择路径，快照读取和解析仍经过生产入口。
+  await desktop.evaluate(({ dialog, BrowserWindow }, file) => {
+    const open = dialog.showOpenDialog;
+    dialog.showOpenDialog = (async (...args: unknown[]) => {
+      dialog.showOpenDialog = open;
+      const windows = BrowserWindow.getAllWindows(), options = args.at(-1) as Electron.OpenDialogOptions;
+      if (windows.length !== 1 || args[0] !== windows[0] || options.title !== '打开结果快照') throw Error('选择超出本例快照窗口');
+      return { canceled: false, filePaths: [file] };
+    }) as typeof open;
+  }, path);
+  await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('result-snapshot')?.enabled)).toBe(true);
+  await desktop.evaluate(({ Menu, BrowserWindow }) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById('result-snapshot'), windows = BrowserWindow.getAllWindows();
+    if (!item?.enabled || windows.length !== 1) throw Error('当前窗口缺少快照命令');
+    item.click(item, windows[0], {} as Electron.KeyboardEvent);
+  });
+  const viewer = page.getByRole('dialog', { name: snapshotText.title, exact: true });
+  await viewer.getByRole('button', { name: snapshotText.choose, exact: true }).click();
+  await expect(viewer.getByText(snapshotText.opened(name), { exact: true })).toBeVisible();
+  const grid = viewer.getByRole('grid'), headers = grid.getByRole('columnheader').filter({ hasText: /^重复列/ });
+  const search = viewer.getByRole('textbox', { name: findText.input, exact: true });
+  const field = viewer.getByRole('combobox', { name: findText.columns, exact: true });
+  const status = viewer.locator('.query-result-find-status').getByRole('status');
+  const selectedRow = grid.getByRole('row').filter({ hasText: '其它左值' }).getByRole('checkbox');
+  async function findFrom(index: number, keyboard = false) {
+    const header = headers.nth(index);
+    await header.scrollIntoViewIfNeeded();
+    if (keyboard) { await header.focus(); await page.keyboard.press('Shift+F10'); }
+    else await header.click({ button: 'right' });
+    await viewer.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.findColumn, exact: true }).click();
+    await expect(search).toBeFocused();
+  }
+  await expect(headers).toHaveCount(2);
+  await selectedRow.check();
+  await findFrom(0);
+  await expect(field).toHaveValue('column:left');
+  await search.fill('目标记录');
+  await expect(status).toHaveText(findText.noMatch);
+  await findFrom(1, true);
+  await expect(field).toHaveValue('column:right');
+  await expect(search).toHaveValue('目标记录');
+  await expect(status).toHaveText(findText.count(1, -1));
+  await search.press('Enter');
+  await expect(grid.getByRole('gridcell', { name: '目标记录', exact: true })).toHaveClass(/query-result-find-hit/);
+  await expect(selectedRow).toBeChecked();
+  await search.press('Escape');
+  await expect(viewer).toBeVisible();
+
+  await (await navigationMenuItem(viewer, { name: columnText.open, exact: true })).click();
+  const layout = page.getByRole('dialog', { name: columnText.title, exact: true });
+  await layout.getByRole('button', { name: columnText.up(2), exact: true }).click();
+  await layout.getByRole('button', { name: columnText.apply, exact: true }).click();
+  await expect(layout).toBeHidden();
+  await findFrom(0);
+  await expect(field).toHaveValue('column:right');
+  await expect(field.locator('option:checked')).toHaveText(findText.columnOption('重复列', 1));
+  await search.fill('目标记录');
+  await expect(status).toHaveText(findText.count(1, -1));
+  await viewer.screenshot({ path: info.outputPath('query-result-header-find.png') });
+  expect(readFileSync(path, 'utf8')).toBe(bytes);
+  expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
