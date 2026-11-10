@@ -9,6 +9,7 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedE
 test.skip(process.env.DBARK_SQL_REFERENCE_HIGHLIGHTS_TEST !== '1', '仅在隔离的源码窗口验收局部引用高亮');
 
 const sql = ['SELECT s.id,', '(SELECT s.id FROM child s)', 'FROM parent s', 'WHERE s.id=1;'].join('\n');
+const cteSql = 'WITH local_cte AS (SELECT 1 AS id) SELECT local_cte.id FROM local_cte;';
 const command = 'editor-local-references';
 
 for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
@@ -31,7 +32,7 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
       }
       await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
       // 真实持久化接口准备草稿，网络方言使用不可连接的回环配置，无需实库或凭据。
-      await page.evaluate(async ({ dialect, sql }) => {
+      await page.evaluate(async ({ dialect, sql, cteSql }) => {
         const id = 'sql-reference-highlights', base = { id, name: '引用高亮样本', group: '', color: '#51bda5' };
         if (dialect === 'sqlite') {
           const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
@@ -44,8 +45,9 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
         await window.dbark.invoke('settings.save', { ...settings, activeTabId: id, tabs: [
           { id, kind: 'query', title: '引用高亮草稿', connectionId: id, ...(dialect === 'sqlite' ? { database: 'main' } : {}), sql },
           { id: 'other', kind: 'query', title: '另一个查询', connectionId: id, sql: 'SELECT 1;' },
+          ...(dialect === 'postgresql' ? [{ id: 'cte', kind: 'query' as const, title: 'CTE 导航草稿', connectionId: id, sql: cteSql }] : []),
         ] });
-      }, { dialect, sql });
+      }, { dialect, sql, cteSql });
       await page.reload();
       const tab = page.locator('.query-tab:visible'), input = tab.locator('.monaco-editor').getByRole('textbox');
       const lines = tab.locator('.view-lines .view-line');
@@ -89,6 +91,41 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
       await move(0, 8); await expect(highlights).toHaveCount(3, { timeout: 13000 });
       await toggle(); await expect.poll(setting).toBe(false); await move(0, 8);
       await expect(highlights).toHaveCount(0); expect(await snapshot()).toEqual(before);
+
+      if (dialect === 'postgresql') {
+        const cursorOffset = () => page.evaluate(() => {
+          const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+          const editor = api?.editor.getEditors().find(editor => editor.hasTextFocus());
+          const model = editor?.getModel(), position = editor?.getPosition();
+          return model && position ? model.getOffsetAt(position) : -1;
+        });
+        // 高亮已关闭，真实 F12 和 Shift+F12 仍能定位各自的原文范围。
+        await page.keyboard.press('F12');
+        await expect.poll(cursorOffset).toBe(sql.indexOf('parent s') + 'parent '.length);
+        await page.keyboard.press('Shift+F12');
+        const peek = tab.locator('.peekview-widget.reference-zone-widget');
+        const rows = peek.locator('.ref-tree .monaco-list-row[role="treeitem"][aria-level="1"]');
+        await expect(peek).toBeVisible();
+        await expect(rows).toHaveCount(3);
+        await expect(peek.locator('.ref-tree .monaco-list-row[aria-selected="true"]')).toHaveCount(1);
+        await expect(rows.last()).toContainText('WHERE');
+        await tab.screenshot({ path: info.outputPath('postgresql-局部引用导航.png') });
+        await rows.last().dblclick();
+        await expect(peek).not.toBeVisible();
+        await input.focus();
+        await expect.poll(cursorOffset).toBe(sql.lastIndexOf('s.id') + 1);
+        expect(await snapshot()).toEqual(before);
+
+        await page.locator('.tab-strip').getByRole('button', { name: 'CTE 导航草稿', exact: true }).click();
+        const cteReference = cteSql.lastIndexOf('local_cte') + 2;
+        await move(0, cteReference);
+        const cteBefore = await snapshot();
+        expect(cteBefore.source).toBe(cteSql);
+        await expect.poll(cursorOffset).toBe(cteReference);
+        await page.keyboard.press('F12');
+        await expect.poll(cursorOffset).toBe('WITH '.length);
+        expect(await snapshot()).toEqual(cteBefore);
+      }
       expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }))).toEqual({ tasks: [], history: [] });
       expect(pageErrors).toEqual([]);
       await confirmOwnedDesktopExit(info);

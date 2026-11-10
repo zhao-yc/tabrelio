@@ -44,7 +44,7 @@ import { createSqlFieldHoverProvider } from '../sqlFieldHoverProvider';
 import SqliteCompletionWorker from '../sqliteCompletion.worker?worker';
 import { SqliteCompletionWorkerClient } from '../sqliteCompletionWorkerClient';
 import { createSqliteCompletionProvider } from '../sqliteCompletionProvider';
-import { createSqlDefinitionProvider } from '../sqlDefinitionProvider';
+import { createSqlDefinitionProvider, type LocalDefinitionAnalysis } from '../sqlDefinitionProvider';
 import { createMysqlDefinitionAnalysis } from '../mysqlDefinitionAnalysis';
 import { createSqlSignatureProvider } from '../sqlSignatureProvider';
 import SqliteLocalReferencesWorker from '../sqliteLocalReferences.worker?worker';
@@ -356,6 +356,56 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const registration = monaco.languages.registerDefinitionProvider(languageSelector, navigation.provider);
     return () => { registration.dispose(); void navigation.dispose().catch(() => {}); };
   }, [dialect, readOnly, contentReady, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+  /** PostgreSQL 的声明与引用导航复用高亮的局部绑定，所有结果只指向当前查询模型。 */
+  useEffect(() => {
+    const instance = editorRef.current;
+    if (requestedDialect !== 'postgresql' || !postgresCompletion || !instance || readOnly || clipboardDisabled || !contentReady) return;
+    const original = postgresCompletion;
+    const profile = useWorkspace.getState().connections.find(item => item.id === original.connectionId);
+    if (profile?.dialect !== 'postgresql') return;
+
+    const scopeCurrent = () => {
+      const state = useWorkspace.getState();
+      const tab = state.settings.tabs.find(item => item.id === original.tabId);
+      const latest = snippetScope.current.postgres;
+      return latest?.tabId === original.tabId && latest.connectionId === original.connectionId &&
+        latest.connectionVersion === original.connectionVersion && latest.database === original.database && latest.sessionId === original.sessionId &&
+        state.settings.activeTabId === original.tabId && !state.activeJobs[original.tabId] && !state.queryFileOpenings?.[original.tabId] &&
+        tab?.connectionId === profile.id && (tab.database || profile.database || 'postgres') === original.database &&
+        state.connections.includes(profile) && (state.connectionVersions[profile.id] ?? 0) === original.connectionVersion;
+    };
+    const current = () => aliveRef.current && editorRef.current === instance && contentRef.current?.ready === true &&
+      !propsRef.current.readOnly && !propsRef.current.clipboardDisabled && snippetScope.current.dialect === 'postgresql' &&
+      snippetScope.current.standardStrings === postgresStandardStrings && instance.hasTextFocus() && !document.querySelector(appModalSelector) && scopeCurrent();
+    const ports = { model: () => instance.getModel(), current, sourceLimit: postgresCompletionLimits.source };
+    const analyze = async (source: string, offset: number) => analyzePostgresLocalReferences(source, offset, postgresStandardStrings);
+    // 分析完全在有预算的本文解析器内完成，声明位置无需查询服务器目录。
+    const definition = createSqlDefinitionProvider({ ...ports, worker: {
+      async analyze(source, offset): Promise<LocalDefinitionAnalysis> {
+        const result = await analyze(source, offset);
+        if (result.status !== 'ready' || result.target.start === result.declaration.start) return { status: 'blocked' };
+        return { status: 'ready', target: result.target, definition: result.declaration };
+      },
+      async dispose() {},
+    } });
+    const references = createSqlReferencesProvider({ ...ports, worker: { analyze, async dispose() {} },
+      begin: signal => referenceCompletionGuard.current.acquire(signal),
+      prepare: () => instance.trigger('dbark.localReferences', 'hideSuggestWidget', {}),
+    });
+    const registrations = [monaco.languages.registerDefinitionProvider(postgresEditorLanguages, definition.provider),
+      monaco.languages.registerReferenceProvider(postgresEditorLanguages, references.provider)];
+    const cancel = () => { definition.cancel(); references.cancel(); };
+    const modelChange = instance.onDidChangeModel(cancel);
+    const stop = useWorkspace.subscribe(() => { if (!scopeCurrent()) cancel(); });
+    return () => {
+      stop();
+      modelChange.dispose();
+      registrations.forEach(registration => registration.dispose());
+      void definition.dispose();
+      void references.dispose();
+    };
+  }, [requestedDialect, readOnly, clipboardDisabled, contentReady, postgresCompletion?.tabId, postgresCompletion?.connectionId,
+    postgresCompletion?.connectionVersion, postgresCompletion?.database, postgresCompletion?.sessionId, postgresStandardStrings]);
   useEffect(() => {
     const instance = editorRef.current;
     if (!snippetCompletion || readOnly || !contentReady || !requestedDialect || !instance) return;
