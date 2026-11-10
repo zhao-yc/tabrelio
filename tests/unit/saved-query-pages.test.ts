@@ -28,6 +28,13 @@ beforeEach(async()=>{directory=mkdtempSync(join(tmpdir(),'dbark-test-querypages-
 afterEach(async()=>{await service?.close();for(const worker of workers)expect(worker.threadId).toBe(-1);store?.close();removeDirectory(directory);});
 
 describe('保存查询概要和协议',()=>{
+ it('默认库条件只允许在第一页提交明确的库名或上下文类别', () => {
+  for (const database of [{ kind: 'known', database: 'Sales' }, { kind: 'known', database: null }, { kind: 'unknown' }, { kind: 'legacy' }])
+   expect(validateCommand('queries.page', { ...request(), database })).toMatchObject({ database });
+  for (const database of [{ kind: 'known', database: '' }, { kind: 'known' }, { kind: 'unknown', database: 'Sales' }])
+   expect(() => validateCommand('queries.page', { ...request(), database })).toThrow();
+  expect(() => validateCommand('queries.pageContinue', { taskId: randomUUID(), cursor: randomUUID(), database: { kind: 'unknown' } })).toThrow();
+ });
  it('排序只允许在第一页提交枚举，不能通过续页改变顺序', () => {
   for (const sort of ['recent', 'oldest', 'name-asc', 'name-desc', 'opened'] as const)
    expect(validateCommand('queries.page', request({ sort }))).toMatchObject({ sort });
@@ -48,6 +55,33 @@ describe('保存查询概要和协议',()=>{
 });
 
 describe('真实SQLite键分页及工作线程',()=>{
+ it('默认库严格区分大小写、明确空库、未知和遗留，跨页保持来源与全文条件', async () => {
+  for (let index = 0; index < 25; index++) {
+   const id = String(index).padStart(2, '0');
+   store.saveQuery(query({ id, connectionId: 'source', sql: 'SELECT 1 -- 尾标', databaseContext: { state: 'known', database: 'sales' } }));
+  }
+  const candidates = [
+   { id: '26', databaseContext: { state: 'known', database: 'Sales' } },
+   { id: '27', databaseContext: { state: 'known', database: null } },
+   { id: '28', databaseContext: { state: 'unknown' } },
+   { id: '29', database: 'Sales' },
+   { id: '30', connectionId: 'other', databaseContext: { state: 'known', database: 'Sales' } },
+   { id: '31', sql: 'SELECT 2', databaseContext: { state: 'known', database: 'Sales' } },
+  ] as const;
+  for (const candidate of candidates) store.saveQuery(query({ connectionId: 'source', sql: 'SELECT 1 -- 尾标', ...candidate }));
+  const filters = [
+   [{ kind: 'known', database: 'Sales' }, '26'], [{ kind: 'known', database: null }, '27'],
+   [{ kind: 'unknown' }, '28'], [{ kind: 'legacy' }, '29'],
+  ] as const;
+  for (const [database, id] of filters) {
+   const first = await service.start(request({ database, sort: 'oldest', scope: { kind: 'connection', connectionId: 'source' }, search: '尾标' }));
+   expect(first).toMatchObject({ items: [], scanned: 25, failed: 0 });
+   const second = await service.next({ taskId: randomUUID(), cursor: first.cursor! });
+   expect(second.items.map(entry => entry.query.id)).toEqual([id]);
+   expect(second).toMatchObject({ scanned: 31, matched: 1, failed: 0 });
+   expect(second.cursor).toBeUndefined();
+  }
+ });
  it('最近打开最多100条，跨页维持顺序，记录变动只使对应游标失效', async () => {
   const ids = Array.from({ length: 102 }, (_, index) => `opened-${index}`);
   for (const id of ids) store.saveQuery(query({ id, name: id }));

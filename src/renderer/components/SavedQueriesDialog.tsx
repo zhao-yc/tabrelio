@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Clock3, FileCode2, Search, Star, Trash2 } from 'lucide-react';
 import type { SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryGroupTarget, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
-import { savedQueryOpenBatchLimits, type SavedQueryOpenResult, type SavedQueryScope } from '../../shared/savedQuerySearch';
+import { savedQueryDatabaseScopeSchema, savedQueryOpenBatchLimits, type SavedQueryDatabaseScope, type SavedQueryOpenResult, type SavedQueryScope } from '../../shared/savedQuerySearch';
 import type { ConnectionProfile, QueryFileEncoding } from '../../shared/contracts';
 import { zh, formatText } from '../locales/zh-CN';
 import { queryContextZh } from '../locales/queryContext.zh-CN';
 import { savedQueryPagesZh as t } from '../locales/savedQueryPages.zh-CN';
+import { savedQuerySearchZh as searchText } from '../locales/savedQuerySearch.zh-CN';
 import { historyPagesZh as sqlText } from '../locales/historyPages.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
@@ -34,7 +35,8 @@ import '../savedQueryPages.css';
 
 interface Services { request: typeof invoke; id(): string; }
 const services: Services = { request: invoke, id: uid };
-interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; scope: SavedQueryScope; sort: SavedQueryPageSort; favoritesOnly: boolean; }
+interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; scope: SavedQueryScope; database: SavedQueryDatabaseScope; sort: SavedQueryPageSort; favoritesOnly: boolean; }
+type DatabaseFilterKind = keyof typeof searchText.databaseKinds;
 interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; criteria: string; epoch: number; duplicateRevision?: string; }
 interface DeleteEdit { items: readonly SelectedSavedQuery[]; selection: ReadonlyMap<string, SelectedSavedQuery>; epoch: number; }
 interface OpenSelection extends SelectedSavedQuery { connectionId?: string; }
@@ -44,7 +46,7 @@ const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database,
   databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding,
 });
-const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.sort, value.favoritesOnly]);
+const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.database, value.sort, value.favoritesOnly]);
 interface OrganizationEdit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 interface RebindEdit { connectionSnapshot: ConnectionOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
 interface DuplicateBatchEdit { duplicateSnapshot: SavedQueryOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
@@ -54,6 +56,11 @@ type Edit = OrganizationEdit | RebindEdit | DuplicateBatchEdit;
 export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConnectionId, services: io = services }: { onClose(): void; onHistory(): void; insertion?: HistoryInsertionTarget | null; initialConnectionId?: string; services?: Services }) {
   const connections = useWorkspace(state => state.connections);
   const [scope, setScope] = useState<SavedQueryScope>(() => initialConnectionId ? { kind: 'connection', connectionId: initialConnectionId } : { kind: 'all' });
+  const [database, setDatabase] = useState<SavedQueryDatabaseScope>({ kind: 'all' });
+  const [databaseKind, setDatabaseKind] = useState<DatabaseFilterKind>('all'), [databaseName, setDatabaseName] = useState('');
+  const databaseDraft: SavedQueryDatabaseScope = databaseKind === 'known' || databaseKind === 'none'
+    ? { kind: 'known', database: databaseKind === 'none' ? null : databaseName } : { kind: databaseKind };
+  const databasePending = JSON.stringify(databaseDraft) !== JSON.stringify(database);
   const [importEncoding, setImportEncoding] = useState<QueryFileEncoding>('utf8');
   const [importGroup, setImportGroup] = useState<SavedQueryGroupTarget>();
   const [importConnection, setImportConnection] = useState<ConnectionProfile>(), [importDatabase, setImportDatabase] = useState('');
@@ -70,7 +77,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [external, setExternal] = useState<SavedQueryExternalSession>(), externalRef = useRef<SavedQueryExternalSession | true | undefined>(undefined);
   const openBatchTrigger = useRef<HTMLButtonElement>(null);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
-  const criteria: Criteria = { search, policy, group, scope, sort, favoritesOnly }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
+  const criteria: Criteria = { search, policy, group, scope, database, sort, favoritesOnly }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
   const currentSqlPreview = sqlPreview?.epoch === renderEpoch ? sqlPreview : undefined;
   // 分页、筛选或其它操作换代时释放大正文，渲染已立即隐藏旧预览。
@@ -124,6 +131,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         taskId, search: value.search, onError: value.policy,
         ...(value.group.kind === 'all' ? {} : { group: value.group }),
         ...(value.scope.kind === 'all' ? {} : { scope: value.scope }),
+        ...(value.database.kind === 'all' ? {} : { database: value.database }),
         ...(value.sort === 'recent' ? {} : { sort: value.sort }),
         ...(value.favoritesOnly ? { favoritesOnly: true } : {}),
       }));
@@ -146,6 +154,15 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }, []);
   /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
   function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
+  /** 只在确认后应用默认库条件，空库名不能被解释为已知无默认库。 */
+  function applySearch() {
+    if (!editable()) return;
+    const parsed = savedQueryDatabaseScopeSchema.safeParse(databaseDraft);
+    if (!parsed.success) { setError(t.databaseFilterInvalid); return; }
+    setDatabase(parsed.data);
+    criteriaRef.current = { ...criteriaRef.current, database: parsed.data };
+    void load(false, criteriaRef.current);
+  }
   function selectScope(value: SavedQueryGroupScope) { if (!editable()) return; setGroup(value); criteriaRef.current = { ...criteriaRef.current, group: value }; void load(false, criteriaRef.current); }
   function selectFavorites(value: boolean) {
     if (!editable()) return;
@@ -399,7 +416,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   /** 只有已应用范围内的原卡片可以读取或导出，旧页事件不能复用。 */
   function currentCard(item: SavedQueryPageEntry): boolean {
     return pageView.current.reply === reply && pageView.current.applied === applied
-      && !pageView.current.needsRefresh && criteriaKey(criteriaRef.current) === applied && reply?.items.includes(item) === true;
+      && !databasePending && !pageView.current.needsRefresh && criteriaKey(criteriaRef.current) === applied && reply?.items.includes(item) === true;
   }
   /** 编辑副本以原卡片编号和摘要启动，列表在确认保留、丢弃或写回前保持原选择。 */
   function beginExternal(item?: SavedQueryPageEntry): void {
@@ -535,7 +552,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
-  const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening || !!external, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
+  const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening || !!external, changed = databasePending || criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const importGroupStale = !!importGroup && (needsRefresh || importGroup.expectedRevision !== organization?.revision || !tree.some(item => item.id === importGroup.id));
   const importConnectionStale = !!importConnection && !connections.includes(importConnection);
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
@@ -550,7 +567,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       </nav><label><input type="checkbox" aria-label={text.includeDescendants} checked={includeDescendants} disabled={blocked || group.kind !== 'group'} onChange={event => { const value = event.target.checked; setIncludeDescendants(value); if (group.kind === 'group') selectScope({ ...group, includeDescendants: value }); }}/>{text.includeDescendants}</label>
         <div className="saved-query-group-actions"><button disabled={blocked || !organization || needsRefresh} onClick={() => edit({ kind: 'create', id: selectedGroup })}>{text.create}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'rename', id: selectedGroup })}>{text.rename}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'moveGroup', id: selectedGroup })}>{text.moveGroup}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'dissolve', id: selectedGroup })}>{text.dissolve}</button></div>
       </details>
-      <div className="saved-query-organization-list"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={blocked} onChange={event => draft(() => setSearch(event.target.value))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(); } }}/><button disabled={blocked} onClick={() => void load()}>{t.searchButton}</button></div>
+      <div className="saved-query-organization-list"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={blocked} onChange={event => draft(() => setSearch(event.target.value))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); applySearch(); } }}/><button disabled={blocked} onClick={applySearch}>{t.searchButton}</button></div>
         <details className="saved-query-import"><summary>{t.sqlImport}</summary><p className="muted small">{t.sqlImportHint}</p><div className="inline-field">
           <label>{fileText.encoding} <select disabled={blocked} value={importEncoding} onChange={event => draft(() => setImportEncoding(event.target.value as QueryFileEncoding))}><option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option></select></label>
           <label>{t.sqlImportGroup} <select aria-label={t.sqlImportGroup} disabled={blocked || needsRefresh || !organization}
@@ -586,6 +603,16 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           {scope.kind === 'connection' && !connections.some(profile => profile.id === scope.connectionId) && <option value={'connection:' + scope.connectionId}>{t.sourceMissing}</option>}
           {connections.map(profile => <option key={profile.id} value={'connection:' + profile.id}>{profile.name}</option>)}
         </select></label>
+        <div className="inline-field saved-query-database-filter">
+          <label>{t.databaseFilter} <select aria-label={t.databaseFilter} value={databaseKind} disabled={blocked}
+            onChange={event => draft(() => setDatabaseKind(event.target.value as DatabaseFilterKind))}>
+            {Object.entries(searchText.databaseKinds).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select></label>
+          {databaseKind === 'known' && <label>{searchText.databaseName} <input aria-label={searchText.databaseName} value={databaseName} maxLength={256} disabled={blocked}
+            onChange={event => draft(() => setDatabaseName(event.target.value))}
+            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); applySearch(); } }}/></label>}
+          <button type="button" disabled={blocked || !databasePending} onClick={applySearch}>{t.databaseFilterApply}</button>
+        </div>
         <label className="inline-field">{t.sort}<select aria-label={t.sort} disabled={blocked} value={sort} onChange={event => selectSort(event.target.value as SavedQueryPageSort)}>
           <option value="recent">{t.sortRecent}</option><option value="oldest">{t.sortOldest}</option>
           <option value="name-asc">{t.sortNameAsc}</option><option value="name-desc">{t.sortNameDesc}</option>

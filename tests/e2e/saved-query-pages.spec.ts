@@ -1,5 +1,6 @@
 import { savedQueryPagesZh as pagesText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQueryOrganizationZh as organizationText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
+import { savedQuerySearchZh as searchText } from '../../src/renderer/locales/savedQuerySearch.zh-CN';
 import{readFile}from'node:fs/promises';
 import{join}from'node:path';
 import{test,expect,page,dataDir,pageErrors,answerDialogs,quitDesktop,launchDesktop}from'./desktop-fixture';
@@ -51,6 +52,29 @@ test('列表打开保持四种默认库、精确SQL和独立原草稿，重启�
  await expect(names()).toHaveText(['已知指定库', '已知无库', '遗留', '未知库']);
  await names().first().scrollIntoViewIfNeeded();
  await dialog().screenshot({ path: info.outputPath('saved-query-recent-opens.png') });
+ const databaseKind = dialog().getByLabel(pagesText.databaseFilter, { exact: true });
+ const databaseName = dialog().getByLabel(searchText.databaseName, { exact: true });
+ const applyDatabase = dialog().getByRole('button', { name: pagesText.databaseFilterApply, exact: true });
+ await databaseKind.selectOption('known');
+ await applyDatabase.click();
+ await expect(dialog().getByText(pagesText.databaseFilterInvalid, { exact: true })).toBeVisible();
+ await expect(names()).toHaveText(['已知指定库', '已知无库', '遗留', '未知库']);
+ await databaseName.fill('旧库');
+ await applyDatabase.click();
+ await expect(names()).toHaveCount(0);
+ await databaseName.fill('实际库');
+ await databaseName.press('Enter');
+ await expect(names()).toHaveText(['已知指定库']);
+ await names().first().scrollIntoViewIfNeeded();
+ await dialog().screenshot({ path: info.outputPath('saved-query-database-filter.png') });
+ for (const [kind, expected] of [['none', '已知无库'], ['unknown', '未知库'], ['legacy', '遗留']]) {
+  await databaseKind.selectOption(kind);
+  await applyDatabase.click();
+  await expect(names()).toHaveText([expected]);
+ }
+ await databaseKind.selectOption('all');
+ await applyDatabase.click();
+ await expect(names()).toHaveText(['已知指定库', '已知无库', '遗留', '未知库']);
  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
  expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
  expect(pageErrors).toEqual([]);

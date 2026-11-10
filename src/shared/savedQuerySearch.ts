@@ -11,7 +11,12 @@ export const savedQueryContextSchema=z.discriminatedUnion('state',[z.object({sta
 export const savedQueryRecordSchema=z.object({id,name,connectionId:id.optional(),database:name.optional(),databaseContext:savedQueryContextSchema.optional(),sql:z.string().max(savedQuerySearchLimits.sqlUnits),updatedAt:z.string().max(256)}).strict();
 export const savedQueryScopeSchema=z.discriminatedUnion('kind',[z.object({kind:z.literal('all')}).strict(),z.object({kind:z.literal('connection'),connectionId:id}).strict(),z.object({kind:z.literal('unbound')}).strict()]);
 export type SavedQueryScope=z.infer<typeof savedQueryScopeSchema>;
-export const savedQuerySearchInputSchema=z.object({taskId:z.string().uuid(),scope:savedQueryScopeSchema,database:z.discriminatedUnion('kind',[z.object({kind:z.literal('all')}).strict(),z.object({kind:z.literal('known'),database:name.nullable()}).strict(),z.object({kind:z.literal('unknown')}).strict(),z.object({kind:z.literal('legacy')}).strict()]),fields:z.array(z.enum(['name','sql'])).min(1).max(2).refine(values=>new Set(values).size===values.length,'搜索字段不能重复'),pattern:databaseSearchPatternSchema,maxResults:z.number().int().min(1).max(savedQuerySearchLimits.maxHits),onError:z.enum(['stop','continue'])}).strict();
+export const savedQueryDatabaseScopeSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('all')}).strict(), z.object({kind:z.literal('known'),database:name.nullable()}).strict(),
+  z.object({kind:z.literal('unknown')}).strict(), z.object({kind:z.literal('legacy')}).strict(),
+]);
+export type SavedQueryDatabaseScope = z.infer<typeof savedQueryDatabaseScopeSchema>;
+export const savedQuerySearchInputSchema=z.object({taskId:z.string().uuid(),scope:savedQueryScopeSchema,database:savedQueryDatabaseScopeSchema,fields:z.array(z.enum(['name','sql'])).min(1).max(2).refine(values=>new Set(values).size===values.length,'搜索字段不能重复'),pattern:databaseSearchPatternSchema,maxResults:z.number().int().min(1).max(savedQuerySearchLimits.maxHits),onError:z.enum(['stop','continue'])}).strict();
 export const savedQuerySearchNextSchema=z.object({taskId:z.string().uuid(),cursor:z.string().uuid()}).strict();
 export const savedQuerySearchReleaseSchema=z.object({cursor:z.string().uuid()}).strict();
 export const savedQueryReadSchema=z.object({id,digest:z.string().regex(/^[a-f0-9]{64}$/),connectionId:id}).strict();

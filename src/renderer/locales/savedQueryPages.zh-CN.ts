@@ -4,6 +4,7 @@ export const savedQueryPagesZh={
  sortOpened:'最近打开（仅已打开）',rememberOpenFailed:'查询已打开，但未能保存最近打开记录。',
  search:'搜索名称或完整SQL',searchButton:'搜索保存查询',refresh:'刷新到第一页',next:'读取下一批',cancel:'取消列表读取',
  scope:'保存查询来源',allSources:'全部来源',unbound:'未绑定连接',
+ databaseFilter:'保存查询默认库范围',databaseFilterApply:'应用默认库筛选',databaseFilterInvalid:'请输入要筛选的默认库名称。',
  favoritesOnly:'仅显示收藏',favoriteName:(name:string)=>`收藏查询「${name}」`,
  favoriteAdd:'添加到收藏',favoriteRemove:'取消收藏',favoriteAdded:'已收藏查询。',favoriteRemoved:'已取消收藏。',
  favoriteRefresh:'收藏已更新，列表刷新未完成，请手动刷新。',

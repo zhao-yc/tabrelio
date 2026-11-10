@@ -1,4 +1,4 @@
-import type{SavedQueryScope}from'../shared/savedQuerySearch';
+import type{SavedQueryDatabaseScope,SavedQueryScope}from'../shared/savedQuerySearch';
 import { databaseSearchPatternSchema } from '../shared/databaseSearchPattern';
 import{parentPort}from'node:worker_threads';
 import{compileSavedQueryPattern,matchSavedQueryRecord,summarizeSavedQueryRecord}from'./savedQuerySearchMatch';
@@ -33,6 +33,6 @@ function matchSqliteStructure(source: string, raw: unknown, locate: boolean): Sq
 }
 
 /** 单线程只接收初始化、单条匹配或概要，复杂计算可由主进程终止，不接触连接凭据与文件。 */
-parentPort!.on('message',(message:{kind:'initialize';input:unknown}|{kind:'record';id:string;raw:string}|{kind:'summary';id:string;raw:string;search:string;scope?:SavedQueryScope}|{kind:'sqliteStructureMatch';source:string;pattern:unknown;locate:boolean}|{kind:'historySummary';id:string;raw:string;input:HistoryPageInput;position:HistoryPagePosition})=>{try{if(message.kind==='initialize'){compiled=compileSavedQueryPattern(message.input as never);parentPort!.postMessage({ok:true});}else if(message.kind==='sqliteStructureMatch'){
+parentPort!.on('message',(message:{kind:'initialize';input:unknown}|{kind:'record';id:string;raw:string}|{kind:'summary';id:string;raw:string;search:string;scope?:SavedQueryScope;database?:SavedQueryDatabaseScope}|{kind:'sqliteStructureMatch';source:string;pattern:unknown;locate:boolean}|{kind:'historySummary';id:string;raw:string;input:HistoryPageInput;position:HistoryPagePosition})=>{try{if(message.kind==='initialize'){compiled=compileSavedQueryPattern(message.input as never);parentPort!.postMessage({ok:true});}else if(message.kind==='sqliteStructureMatch'){
  parentPort!.postMessage({ok:true,sqliteStructure:matchSqliteStructure(message.source,message.pattern,message.locate)});
- }else if(message.kind==='summary'){parentPort!.postMessage({ok:true,summary:summarizeSavedQueryRecord(message.id,message.raw,message.search,message.scope)});}else if(message.kind==='historySummary'){parentPort!.postMessage({ok:true,summary:summarizeHistoryRecord(message.id,message.raw,message.input,message.position)});}else{if(!compiled)throw Error('本地匹配器尚未初始化');parentPort!.postMessage({ok:true,hit:matchSavedQueryRecord(message.id,message.raw,compiled)});}}catch(error){parentPort!.postMessage({ok:false,error:error instanceof Error?error.message:'本地匹配失败'});}});
+ }else if(message.kind==='summary'){parentPort!.postMessage({ok:true,summary:summarizeSavedQueryRecord(message.id,message.raw,message.search,message.scope,message.database)});}else if(message.kind==='historySummary'){parentPort!.postMessage({ok:true,summary:summarizeHistoryRecord(message.id,message.raw,message.input,message.position)});}else{if(!compiled)throw Error('本地匹配器尚未初始化');parentPort!.postMessage({ok:true,hit:matchSavedQueryRecord(message.id,message.raw,compiled)});}}catch(error){parentPort!.postMessage({ok:false,error:error instanceof Error?error.message:'本地匹配失败'});}});
