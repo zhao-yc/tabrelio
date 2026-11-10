@@ -11,6 +11,7 @@ import { useWorkspace } from '../store';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner } from './ui';
 import { ResultsGrid } from './ResultsGrid';
+import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
 
 export const sqliteReferenceServices: SqliteReferenceServices = { read: input => invoke('sqlite.referencePage', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid };
 type ReferenceKey = SqliteReferenceOutput['source']['foreignKeys'][number];
@@ -103,6 +104,8 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
   const key = keys.find(key => key.ordinal === selected), disabled = invalid || busy || closeBusy;
   const editableKey = !!key && writableKey(key);
   const clearable = editableKey && key.columns.every(name => source.edit?.kind === 'editable' && source.edit.columns.some(field => fold(field.name) === fold(name) && field.nullable));
+  const candidateKeys = choosing && data?.page ? data.page.result.columns.filter(column =>
+    data.referencedColumns?.some(name => fold(name) === fold(column.name))).map(column => column.name) : undefined;
   function resetDirectorySelection() {
     resetSelection(); setData(undefined); setSearchColumns([]); setSearchColumn(''); setSearchText(''); appliedSearch.current = undefined;
   }
@@ -133,8 +136,11 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     {key && <p>{key.columns.join(', ')} → {key.referencedTable} ({key.referencedColumns?.join(', ') ?? text.implicit})</p>}
     {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<input aria-label={text.search} maxLength={256} disabled={disabled} value={searchText} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchText(event.target.value); } }}/></label><p>{text.searchHint}</p></div>}
     {!contextual && <p>{text.unloaded}</p>}<div className="reference-pagination"><button disabled={disabled || !key} onClick={() => read(0, true)}>{choosing ? text.candidates : text.read}</button><button disabled={disabled || !data?.page || data.page.offset === 0} onClick={() => read(Math.max(0, data!.page!.offset - data!.page!.limit))}>{text.previous}</button><button disabled={disabled || !data?.page?.hasMore} onClick={() => read(data!.page!.offset + data!.page!.limit)}>{text.next}</button>{busy && <button disabled={closeBusy} onClick={() => { if (renderCurrent() && !closing.current) void reader.stop().catch(failure => { if (alive.current) setError(errorMessage(failure)); }); }}>{text.stop}</button>}</div>
-    <ErrorBox message={invalid ? text.stale : error}/>{busy && <Spinner text={text.loading}/>}{data?.page && <><p>{data.page.target.table} · {data.referencedColumns?.join(', ')} · {data.page.offset + 1}–{data.page.offset + data.page.result.rows.length}</p>{!data.page.result.rows.length && <p role="status">{text.empty}</p>}<div className="reference-grid"><ResultsGrid columns={data.page.result.columns} rows={data.page.result.rows} selectionScope={data.page} isCurrent={() => reader.current() && !busy} binaryFileActions={false}
-      onActiveRowChange={choosing ? selectCandidate : undefined} onRowDoubleClick={choosing && editableKey ? row => { stage(row); return true; } : undefined}/></div></>}
+    <ErrorBox message={invalid ? text.stale : error}/>{busy && <Spinner text={text.loading}/>}
+    <ReferenceCandidateColumns key={selected} columns={data?.page?.result.columns} keyNames={candidateKeys}>
+      {columns => data?.page && <><p>{data.page.target.table} · {data.referencedColumns?.join(', ')} · {data.page.offset + 1}–{data.page.offset + data.page.result.rows.length}</p>{!data.page.result.rows.length && <p role="status">{text.empty}</p>}<div className="reference-grid"><ResultsGrid columns={columns} rows={data.page.result.rows} selectionScope={data.page} isCurrent={() => reader.current() && !busy} binaryFileActions={false}
+        onActiveRowChange={choosing ? selectCandidate : undefined} onRowDoubleClick={choosing && editableKey ? row => { stage(row); return true; } : undefined}/></div></>}
+    </ReferenceCandidateColumns>
       {choosing && <><p>{chosen === undefined ? text.selectRow : text.selectedRow(chosen + 1)}</p><label><input type="checkbox" checked={clearConfirmed} disabled={disabled || !clearable} onChange={event => { if (actionCurrent()) setClearConfirmed(event.target.checked); }}/>{text.clearConfirm}</label><button disabled={disabled || !clearable || !clearConfirmed} onClick={clear}>{text.clear}</button></>}
   </div><footer className="modal-footer">{choosing && <button disabled={disabled || !editableKey || chosen === undefined || clearConfirmed} onClick={() => stage()}>{text.stage}</button>}<button disabled={closeBusy} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
 }

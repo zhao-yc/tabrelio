@@ -7,6 +7,7 @@ import { zh } from '../locales/zh-CN';
 import { parsePageJump, maxTablePage } from '../tableFilters';
 import { TableFilterPanel } from './TableFilterPanel';
 import { ResultsGrid } from './ResultsGrid';
+import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import '../references.css';
 
@@ -93,8 +94,11 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
     <p>{text.target}：{key.referencedDatabase}.{key.referencedTable}</p><p className="reference-mapping">{text.mapping}：{key.columns.map((column, index) => `${column} → ${key.referencedColumns[index]}`).join('，')}</p>
     <TableFilterPanel columns={(targetInfo?.columns ?? []).map(column => column.name)} filters={filters} mode={filterMode} disabled={busy || !data} onFiltersChange={next => { if (busy) return false; setFilters(next); setPageIndex(1); return true; }} onModeChange={next => { if (busy) return false; setFilterMode(next); setPageIndex(1); return true; }}/>
     <ErrorBox message={error}/>{busy && <Spinner text={text.loading}/>}
-    {data && <div className="reference-grid"><ResultsGrid columns={data.page.columns} rows={data.page.rows} onActiveRowChange={selectCandidate}
-      onRowDoubleClick={writable ? row => { void confirm(row); return true; } : undefined} sort={sort} onSortChange={changeSort}/></div>}
+    <ReferenceCandidateColumns key={referenceSignature(key)} columns={data?.page.columns}
+      keyNames={mode === 'choose' ? data?.foreignKey.referencedColumns : undefined}>
+      {columns => data && <div className="reference-grid"><ResultsGrid columns={columns} rows={data.page.rows} onActiveRowChange={selectCandidate}
+        onRowDoubleClick={writable ? row => { void confirm(row); return true; } : undefined} sort={sort} onSortChange={changeSort}/></div>}
+    </ReferenceCandidateColumns>
     {data && !data.page.rows.length && <p>{text.empty}</p>}
     <div className="reference-pagination"><button disabled={busy || pageIndex === 1} aria-label={text.previous} onClick={() => setPageIndex(index => index - 1)}>{zh.common.pagePrevious}</button><form onSubmit={event => { event.preventDefault(); try { if (!busy) setPageIndex(parsePageJump(jump)); } catch (reason) { setError(errorMessage(reason)); } }}><input aria-label={text.page} value={jump} disabled={busy} onChange={event => setJump(event.target.value)}/><button disabled={busy} type="submit">{text.jump}</button></form><button disabled={busy || !data?.page.hasMore || pageIndex >= maxTablePage} aria-label={text.next} onClick={() => setPageIndex(index => index + 1)}>{zh.common.pageNext}</button><select aria-label={text.pageSize} value={pageSize} disabled={busy} onChange={event => { setPageSize(Number(event.target.value)); setPageIndex(1); }}>{[50, 100, 200, 500].map(size => <option key={size}>{size}</option>)}</select><button disabled={busy} onClick={() => setRefresh(value => value + 1)}>{text.refresh}</button>{busy && <button onClick={cancel}>{text.cancelRead}</button>}</div>
     {clearConfirm && <div role="alertdialog" aria-label={text.clear}><p>{text.clearConfirm}</p><button disabled={busy} onClick={() => setClearConfirm(false)}>{zh.common.cancel}</button><button disabled={busy} onClick={() => void confirm(null, true)}>{text.clear}</button></div>}

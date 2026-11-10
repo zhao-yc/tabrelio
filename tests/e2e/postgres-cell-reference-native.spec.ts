@@ -1,3 +1,4 @@
+import { referenceCandidateColumnsZh as displayText } from '../../src/renderer/locales/referenceCandidateColumns.zh-CN';
 import { Client } from 'pg';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import { postgresReferencePickerZh as text } from '../../src/renderer/locales/postgresReferencePicker.zh-CN';
@@ -76,6 +77,18 @@ test('PostgreSQL 从命中的单元格选择复合父键并保留该行已有草
     await expect(picker.getByText(text.cellScope('a'), { exact: true })).toBeVisible();
     const target = picker.getByRole('row').filter({ hasText: '目标配对' });
     const use = target.getByRole('button', { name: text.use, exact: true });
+    await expect(use).toBeEnabled();
+    await picker.getByText(displayText.title, { exact: true }).click();
+    await picker.getByRole('button', { name: displayText.keysOnly, exact: true }).click();
+    await expect(picker.getByRole('columnheader', { name: 'label', exact: true })).toHaveCount(0);
+    await expect(picker.getByRole('columnheader', { name: 'b', exact: true })).toBeVisible();
+    await picker.getByRole('searchbox', { name: text.query, exact: true }).fill('目标配对');
+    await picker.getByRole('button', { name: text.search, exact: true }).click();
+    await expect(picker.getByRole('cell', { name: '9007199254740997', exact: true })).toBeVisible();
+    await expect(picker.getByRole('cell', { name: '9007199254740995', exact: true })).toHaveCount(0);
+    await expect(picker.getByRole('columnheader', { name: 'label', exact: true })).toHaveCount(0);
+    await picker.getByText(displayText.title, { exact: true }).click();
+    await picker.getByRole('checkbox', { name: displayText.show('label'), exact: true }).check();
     await expect(use).toBeEnabled();
     await page.screenshot({ path: info.outputPath('PostgreSQL外键候选.png') });
     await target.getByRole('cell', { name: '目标配对', exact: true }).dblclick();

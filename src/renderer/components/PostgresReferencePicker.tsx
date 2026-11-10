@@ -7,6 +7,7 @@ import { cellPreview, errorMessage, invoke, uid } from '../lib';
 import { postgresReferenceSelection } from '../postgresReferenceSelection';
 import { ErrorBox } from './ui';
 import { PostgresReferenceRecord } from './PostgresReferenceRecord';
+import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
 
 export interface PostgresReferenceSource {
   input: Omit<PostgresTableReferenceInput, 'lookup'>;
@@ -108,6 +109,7 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
   }
 
   const columns = view ? details ? view.page.columns : view.page.columns.slice(0, view.choice.pairs.length) : [];
+  const candidateKeys = !browse && view ? view.page.columns.slice(0, view.choice.pairs.length).map(column => column.name) : undefined;
   const record = view?.page.rows[parent ? 0 : childIndex ?? -1];
   const emptyDirectory = children ? text.emptyChildKeys : parent ? text.emptyBrowseKeys : text.emptyKeys;
   function useCandidate(candidateView: View, row: DataRow, index: number) {
@@ -148,7 +150,8 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
     {children && record && <button type="button" onClick={() => setChildIndex(undefined)}>{text.backToChildren}</button>}
     {view && record && <PostgresReferenceRecord columns={view.page.columns} row={record}/>}
     {parent && view && !record && <p>{text.emptyParent}</p>}
-    {!parent && !record && view && <>
+    <ReferenceCandidateColumns key={choice?.stamp} columns={view?.page.columns} keyNames={candidateKeys}>
+    {candidateColumns => !parent && !record && view && <>
       <div className="pg-table-controls">
         <button type="button" disabled={view.offset === 0 || busy}
           onClick={() => void load(view.choice, view.search, view.offset - limits.page)}>{children ? text.childPrevious : text.previous}</button>
@@ -156,16 +159,16 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
           onClick={() => void load(view.choice, view.search, view.offset + limits.page)}>{children ? text.childNext : text.next}</button>
         <span>{view.page.rows.length ? (children ? text.childRange : text.range)(view.offset, view.page.rows.length)
           : children ? text.emptyChildren : text.emptyRows}</span>
-        <label className="check"><input type="checkbox" checked={details} onChange={event => setDetails(event.target.checked)}/>{text.details}</label>
+        {children && <label className="check"><input type="checkbox" checked={details} onChange={event => setDetails(event.target.checked)}/>{text.details}</label>}
       </div>
       {!!view.page.rows.length && <div className={children ? 'pg-reference-candidates pg-reference-children' : 'pg-reference-candidates'}><table>
-        <thead><tr>{columns.map(column => <th key={column.key}>{column.name}</th>)}<th>{children ? text.inspectChild : text.use}</th></tr></thead>
+        <thead><tr>{(children ? columns : candidateColumns).map(column => <th key={column.key}>{column.name}</th>)}<th>{children ? text.inspectChild : text.use}</th></tr></thead>
         <tbody>{view.page.rows.map((row, index) => <tr key={index} onDoubleClick={!browse && onChoose ? event => {
           if (event.defaultPrevented || !(event.target instanceof Element) || event.target.closest('button')) return;
           event.preventDefault();
           useCandidate(view, row, index);
         } : undefined}>
-          {columns.map(column => {
+          {(children ? columns : candidateColumns).map(column => {
             const value = cellPreview(row[column.key]);
             return <td key={column.key}>{children ? <span>{value}</span> : value}</td>;
           })}
@@ -173,6 +176,7 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
         </tr>)}</tbody>
       </table></div>}
     </>}
+    </ReferenceCandidateColumns>
     <p className="muted small">{queryResult ? text.queryHint : children ? text.childrenHint : parent ? text.browseHint : source.column ? text.cellHint : text.hint}</p>
   </section>;
 }

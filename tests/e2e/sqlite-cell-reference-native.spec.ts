@@ -1,3 +1,4 @@
+import { referenceCandidateColumnsZh as displayText } from '../../src/renderer/locales/referenceCandidateColumns.zh-CN';
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,7 +17,7 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
   const file = join(await realpath(dataDir), 'cell-reference.sqlite');
   const fixture = new DatabaseSync(file);
   try {
-    fixture.exec("CREATE TABLE paired(a TEXT,b INTEGER,label TEXT,PRIMARY KEY(a,b)); INSERT INTO paired VALUES('Alpha',1,'原配对'),('Beta',2,'目标配对');" +
+    fixture.exec("CREATE TABLE paired(a TEXT,b INTEGER,label TEXT,details TEXT,PRIMARY KEY(a,b)); INSERT INTO paired VALUES('Alpha',1,'原配对','说明甲'),('Beta',2,'目标配对','说明乙');" +
       'CREATE TABLE alternative(id INTEGER PRIMARY KEY); INSERT INTO alternative VALUES(1),(2);' +
       'CREATE TABLE distant(id INTEGER PRIMARY KEY); INSERT INTO distant VALUES(9);' +
       'CREATE TABLE child(id INTEGER PRIMARY KEY,a TEXT,b INTEGER,other INTEGER,note TEXT,' +
@@ -91,7 +92,18 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
     await expect(picker.getByText(text.columnScope('a'), { exact: true })).toBeVisible();
     await expect(option()).toHaveCount(1);
     await expect(option()).toContainText('paired');
-    await picker.getByRole('gridcell', { name: 'Alpha', exact: true }).click();
+    await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toBeVisible();
+    await picker.getByText(displayText.title, { exact: true }).click();
+    await picker.getByRole('checkbox', { name: displayText.show('label'), exact: true }).uncheck();
+    await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toHaveCount(0);
+    await expect(picker.getByRole('gridcell', { name: '说明乙', exact: true })).toBeVisible();
+    await expect(picker.getByRole('gridcell', { name: 'Beta', exact: true })).toBeVisible();
+    await picker.getByRole('button', { name: text.candidates, exact: true }).click();
+    await expect(picker.getByRole('gridcell', { name: 'Beta', exact: true })).toBeVisible();
+    await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toHaveCount(0);
+    await picker.getByText(displayText.title, { exact: true }).click();
+    await picker.getByRole('button', { name: displayText.showAll, exact: true }).click();
+    await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('命中列外键候选.png') });
     await picker.getByRole('gridcell', { name: '目标配对', exact: true }).dblclick();
     await expect(picker).toHaveCount(0);

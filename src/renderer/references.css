@@ -7,3 +7,5 @@
 .reference-pagination select { width: 85px; }
 .reference-content [role="alertdialog"] { padding: 12px; margin-top: 12px; border: 1px solid var(--line); }
 .reference-content [role="alertdialog"] button { margin-right: 8px; }
+.reference-column-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.reference-columns .check { width: fit-content; }

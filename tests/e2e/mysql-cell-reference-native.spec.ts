@@ -1,4 +1,5 @@
 import type { NetworkConnectionProfile } from '../../src/shared/contracts';
+import { referenceCandidateColumnsZh as displayText } from '../../src/renderer/locales/referenceCandidateColumns.zh-CN';
 import { referenceZh as text } from '../../src/renderer/locales/references.zh-CN';
 import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 
@@ -68,7 +69,19 @@ test('从外键格限定约束并将复合父键暂存到右键命中的记录',
     await expect(constraints).toHaveText(['fk_pair']);
     await expect(modal.getByText(text.columnScope('a'), { exact: true })).toBeVisible();
     const candidate = modal.getByRole('gridcell', { name: '目标配对', exact: true });
-    await modal.getByRole('gridcell', { name: '起始一', exact: true }).click();
+    await expect(candidate).toBeVisible();
+    await modal.getByText(displayText.title, { exact: true }).click();
+    const description = modal.getByRole('checkbox', { name: displayText.show('label'), exact: true });
+    await description.uncheck();
+    await expect(candidate).toHaveCount(0);
+    await expect(modal.getByRole('gridcell', { name: '9007199254740997', exact: true })).toBeVisible();
+    await modal.getByRole('button', { name: text.refresh, exact: true }).click();
+    await expect(modal.getByRole('gridcell', { name: '9007199254740997', exact: true })).toBeVisible();
+    await expect(candidate).toHaveCount(0);
+    await modal.getByText(displayText.title, { exact: true }).click();
+    await expect(description).not.toBeChecked();
+    await modal.getByRole('button', { name: displayText.showAll, exact: true }).click();
+    await expect(candidate).toBeVisible();
     await page.screenshot({ path: info.outputPath('命中字段的父键候选.png') });
     await candidate.dblclick();
     await expect(modal).toHaveCount(0);
