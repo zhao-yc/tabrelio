@@ -59,7 +59,8 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
       const column = await header.getAttribute('aria-colindex');
       return grid.locator(`[role="row"][aria-rowindex="${row + 1}"] [role="gridcell"][aria-colindex="${column}"]`);
     };
-    const option = () => picker.getByRole('combobox', { name: text.constraint, exact: true }).locator('option');
+    const constraint = picker.getByRole('combobox', { name: text.constraint, exact: true });
+    const option = () => constraint.locator('option');
     const catalog = async () => picker.getByRole('button', { name: text.catalog, exact: true }).click();
     const close = async () => {
       await picker.getByRole('button', { name: text.close, exact: true }).click();
@@ -76,20 +77,20 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
     await (await cell('b', 1)).click();
     await page.keyboard.press('ControlOrMeta+Enter');
     await expect(picker.getByText(text.columnScope('b'), { exact: true })).toBeVisible();
-    await expect(picker.getByRole('grid')).toHaveCount(0);
-    await catalog();
     await expect(option()).toHaveCount(2);
     await expect(option().filter({ hasText: 'distant' })).toHaveCount(0);
+    await expect(picker.getByRole('columnheader', { name: /^id/ })).toBeVisible();
+    await constraint.selectOption({ label: (await option().filter({ hasText: 'paired' }).textContent())! });
+    await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toBeVisible();
+    expect(disk()).toEqual(baseline);
     await close();
 
     await (await cell('a', 1)).click();
     await (await cell('a', 2)).click({ button: 'right' });
     await page.getByRole('menuitem', { name: text.choiceEntry, exact: true }).click();
     await expect(picker.getByText(text.columnScope('a'), { exact: true })).toBeVisible();
-    await catalog();
     await expect(option()).toHaveCount(1);
     await expect(option()).toContainText('paired');
-    await picker.getByRole('button', { name: text.candidates, exact: true }).click();
     await picker.getByRole('gridcell', { name: 'Alpha', exact: true }).click();
     await page.screenshot({ path: info.outputPath('命中列外键候选.png') });
     await picker.getByRole('gridcell', { name: '目标配对', exact: true }).dblclick();
@@ -106,6 +107,7 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
 
     await (await cell('a', 1)).click();
     await (await navigationMenuItem(tab, { name: text.choiceEntry, exact: true })).click();
+    await expect(picker.getByRole('grid')).toHaveCount(0);
     await catalog();
     await expect(option()).toHaveCount(3);
     await close();
