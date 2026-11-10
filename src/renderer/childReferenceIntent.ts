@@ -28,8 +28,7 @@ export class ChildReferenceIntent {
 }
 /** NULL与缺字段分别报告；绝不把缺失元组降级为不带约束的子表查询。 */
 export function childReferenceTuple(intent: ChildReferenceIntent, relation: IncomingReferenceRelation): { kind: 'values'; values: CellValue[] } | { kind: 'null' } | { kind: 'missing' } {
-  const key = relation.foreignKey;
-  if (!key.columns.length || key.columns.length !== key.referencedColumns.length || key.referencedDatabase !== intent.source.database || key.referencedTable !== intent.source.name) throw Error(text.mismatch);
+  const key = referenceMapping(intent.source, relation);
   const values: CellValue[] = [];
   for (const name of key.referencedColumns) {
     const columns = intent.source.columns.filter(column => column.name.toLowerCase() === name.toLowerCase());
@@ -38,16 +37,22 @@ export function childReferenceTuple(intent: ChildReferenceIntent, relation: Inco
   }
   return values.some(value => value === null) ? { kind: 'null' } : { kind: 'values', values };
 }
+function referenceMapping(source: TableInfo, relation: IncomingReferenceRelation) {
+  const key = relation.foreignKey;
+  if (!key.columns.length || key.columns.length !== key.referencedColumns.length || key.referencedDatabase !== source.database || key.referencedTable !== source.name) throw Error(text.mismatch);
+  return key;
+}
 /** 首次与后续目录均核原完整父表，不能把变更后的目录接入旧父行快照。 */
-export function checkIncomingReferencePage(intent: ChildReferenceIntent, output: IncomingReferencesOutput, expectedDigest?: string): void {
+export function checkIncomingReferencePage(intent: Pick<ChildReferenceIntent, 'source' | 'current'>, output: IncomingReferencesOutput, expectedDigest?: string, sourceKey?: (info: TableInfo) => string): void {
   // 首次目录保守绑定原完整元数据；后续DDL由引擎摘要验证，允许已确认表尾自增计数自然变化。
   const projection = (source: TableInfo) => { const { ddl: _ddl, ...structure } = source; return structure; };
-  if (!intent.current() || identity(expectedDigest === undefined ? output.source : projection(output.source)) !== identity(expectedDigest === undefined ? intent.source : projection(intent.source)) || !/^[a-f0-9]{64}$/.test(output.sourceDigest) || expectedDigest !== undefined && output.sourceDigest !== expectedDigest || output.scope !== 'visible-only' || !Array.isArray(output.relations) || output.relations.length > 50 || output.nextCursor !== undefined && (typeof output.nextCursor !== 'string' || !output.nextCursor.length || output.nextCursor.length > 2048)) throw Error(text.mismatch);
+  const keyOf = sourceKey ?? (expectedDigest === undefined ? identity : (info: TableInfo) => identity(projection(info)));
+  if (!intent.current() || keyOf(output.source) !== keyOf(intent.source) || !/^[a-f0-9]{64}$/.test(output.sourceDigest) || expectedDigest !== undefined && output.sourceDigest !== expectedDigest || output.scope !== 'visible-only' || !Array.isArray(output.relations) || output.relations.length > 50 || output.nextCursor !== undefined && (typeof output.nextCursor !== 'string' || !output.nextCursor.length || output.nextCursor.length > 2048)) throw Error(text.mismatch);
   const seen = new Set<string>();
   for (const relation of output.relations) {
     if (!relation.database || !relation.table || !relation.foreignKey?.name || !/^[a-f0-9]{64}$/.test(relation.digest)) throw Error(text.mismatch);
     const key = identity([relation.database, relation.table, relation.foreignKey.name]); if (seen.has(key)) throw Error(text.mismatch); seen.add(key);
-    childReferenceTuple(intent, relation);
+    referenceMapping(intent.source, relation);
   }
 }
 /** 子页只接纳同一真实方向映射、摘要和完整父表，不构造反向外键。 */

@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve, join } from 'node:path';
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
+import { childReferencesZh as referenceText } from '../../src/renderer/locales/childReferences.zh-CN';
 import { tableForeignKeyJoinFilterZh as filterText } from '../../src/renderer/locales/tableForeignKeyJoinFilter.zh-CN';
 import { tableFilterGroupsZh as groupText } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
 import { tableForeignKeyJoinSummaryZh as summaryText } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
@@ -145,6 +146,43 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
     await step(() => dialog().getByRole('button', { name: text.open, exact: true }).click()); await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText(suffix)); const final = await evidence(); expect(final.tabs).toHaveLength(2); expect(final.tabs.filter(tab => tab.kind === 'query')).toHaveLength(1); expect(final.resultLimit).toBe(43); expect(final.denied).toEqual([]); expect(final.dirty).toEqual(before.dirty); expect(final.jobs).toEqual(before.jobs); expect(Object.values(final.jobs).some(Boolean)).toBe(false); expect(final.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'parent', 'child', 'parent']); expect(final.calls.some(call => /query\.|table\.(apply|preview)/.test(call.command))).toBe(false); expect(errors).toEqual([]);
     const sql = final.tabs.find(tab => tab.kind === 'query')?.sql; if (distinct) expect(sql).toMatch(/^SELECT DISTINCT\n/); if (filtering) { expect(sql).toContain('WHERE'); expect(sql).toContain('p.`amount` IN'); expect(sql).toContain('p.`id` IS NULL'); expect(sql).toContain(' OR '); } else expect(sql).not.toContain('WHERE');
     if (mode === 'filter-dark') { expect(sql).toContain('RIGHT JOIN'); expect(sql).toContain('WHERE c.`parent_id` IS NULL AND ('); }
+    if (mode === 'light') {
+      // 同一原生窗口换入独立父表夹具，父表没有出向外键，结果表也没有可选记录。
+      await step(() => page.goto(address + '?theme=light&direction=incoming'));
+      await step(() => expect(page.getByRole('grid', { name: '当前页数据网格', exact: true })).toBeVisible());
+      await step(async () => (await navigationMenuItem(page.locator('.table-tab'), { name: text.incomingEntry, exact: true }, check)).click());
+      const directory = page.getByRole('dialog', { name: text.incomingTitle, exact: true });
+      const select = directory.getByRole('combobox', { name: referenceText.relations, exact: true });
+      const proceed = directory.getByRole('button', { name: text.incomingOpen, exact: true });
+      await step(() => expect(select.getByRole('option').last()).toContainText('fk_other_parent'));
+      await step(() => select.selectOption('0'));
+      await step(() => directory.getByRole('button', { name: referenceText.nextRelations, exact: true }).click());
+      await step(() => expect(directory.getByText(referenceText.relationPage(2), { exact: true })).toBeVisible());
+      await step(() => expect(proceed).toBeDisabled());
+      await step(() => expect(select.getByRole('option').last()).toContainText('· fk_parent'));
+      await step(() => select.selectOption('0'));
+      await step(() => page.screenshot({ path: info.outputPath('incoming-foreign-key-directory.png') }));
+      await step(() => proceed.click());
+      await step(() => expect(directory).toBeHidden());
+      await step(() => expect(dialog().getByLabel(text.fk, { exact: true })).toBeDisabled());
+      await step(() => expect(dialog().getByLabel(text.fk, { exact: true })).toHaveValue('fk_parent'));
+      await step(() => expect(dialog().getByLabel(text.joinKind, { exact: true })).toHaveValue('RIGHT'));
+      const sqlPreview = dialog().getByLabel(text.preview, { exact: true });
+      await step(() => expect(sqlPreview).toContainText('RIGHT JOIN `合成关联库`.`parent` AS p'));
+      await step(() => expect(sqlPreview).toContainText('c.`parent_id` = p.`id`'));
+      await step(() => dialog().getByRole('button', { name: text.open, exact: true }).click());
+      await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('RIGHT JOIN'));
+      const inbound = await evidence();
+      expect(inbound.tabs).toHaveLength(2);
+      expect(inbound.calls.filter(call => call.command === 'table.incomingReferences').map(call => [call.input.table, call.input.cursor])).toEqual([
+        ['parent', undefined], ['parent', 'fixture-page-2'],
+      ]);
+      expect(inbound.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['parent', 'child', 'child', 'parent']);
+      expect(inbound.calls.filter(call => call.command === 'table.page').map(call => call.input.table)).toEqual(['parent']);
+      expect(inbound.calls.some(call => /query\.|childReferencePage/.test(call.command))).toBe(false);
+      expect(inbound.denied).toEqual([]);
+      expect(Object.values(inbound.jobs).some(Boolean)).toBe(false);
+    }
     check(); await app.close(); closed = true; expect(await exit).toEqual({ code: 0, signal: null }); expect(taskProcess.killed).toBe(false); await info.attach('JOIN排序原生组件终态', { body: JSON.stringify({ pid, directory, theme, mode, sql, filtering, grouping, summarizing, having, calls: final.calls, zeroDatabaseExecutions: true, zeroClipboardOperations: true, sourceDraftUnchanged: true, newQueryCount: 1, originalGlobalLimit: 43, normalExit: true, realDatabaseVerified: false }), contentType: 'application/json' }); accepted = true;
   } finally {
     // 失败原件保留；只请求原应用正常退出，不终止其它窗口或伪称完成清理。

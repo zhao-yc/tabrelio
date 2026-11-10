@@ -1,5 +1,11 @@
 export const tableForeignKeyJoinZh = {
   entry: '按外键生成 JOIN 查询',
+  incomingEntry: '按引用此表的外键生成 JOIN',
+  incomingTitle: '选择引用此表的外键',
+  incomingOpen: '继续配置 JOIN',
+  incomingRead: '读取引用关系',
+  incomingLoading: '正在读取外键目录或子表结构…',
+  incomingScope: '从当前账号可见的引用关系选择外键。默认保留当前父表记录。',
   title: '按一条外键生成 JOIN 查询',
   fk: '外键关系', joinKind: '连接方式', left: 'LEFT JOIN：保留所有子表记录', right: 'RIGHT JOIN：保留所有父表记录', inner: 'INNER JOIN：仅保留匹配记录',
   unmatchedOnly: '只看未匹配记录',

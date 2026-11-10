@@ -1,12 +1,27 @@
 import type { TableInfo } from '../shared/contracts';
+import type { IncomingReferenceRelation } from '../shared/incomingReferences';
 import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, type ForeignKeyJoinKind, type ForeignKeyJoinOptions } from './tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-CN';
 
 export interface ForeignKeyJoinTarget { connectionId: string; database: string; table: string; }
 export type ForeignKeyJoinRead = (target: ForeignKeyJoinTarget) => Promise<TableInfo>;
+export interface IncomingForeignKeyJoinStart { foreignKey: string; parent: TableInfo }
 export interface ForeignKeyJoinPreview {
   readonly parent: TableInfo; readonly parentKey: string; readonly childKey: string; readonly foreignKey: string;
   readonly kind: ForeignKeyJoinKind; readonly options: ForeignKeyJoinOptions; readonly sql: string;
+}
+
+/** 目录只负责定位，生成器仍使用新读到的真实子表外键。按原顺序核对每个映射字段。 */
+export function incomingForeignKeyJoinStart(parent: TableInfo, relation: IncomingReferenceRelation, child: TableInfo): IncomingForeignKeyJoinStart {
+  const key = relation.foreignKey;
+  const actual = foreignKeyJoinChoices(child).find(value => value.name === key.name);
+  const actions = child.foreignKeys.find(value => value.name === key.name);
+  if (!actual || child.database !== relation.database || child.name !== relation.table ||
+      actual.referencedDatabase !== key.referencedDatabase || actual.referencedTable !== key.referencedTable ||
+      actions?.onDelete !== key.onDelete || actions?.onUpdate !== key.onUpdate ||
+      JSON.stringify([actual.columns, actual.referencedColumns]) !== JSON.stringify([key.columns, key.referencedColumns])) throw Error(text.stale);
+  buildForeignKeyJoin(child, parent, actual.name, 'RIGHT', 1, { childColumns: [], parentColumns: [parent.columns[0]?.name] });
+  return { foreignKey: actual.name, parent };
 }
 
 /** 只保留结构和来源身份，不持有行、选中记录或服务器筛选，也不修改父页草稿。 */
