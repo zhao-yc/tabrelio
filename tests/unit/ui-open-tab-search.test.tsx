@@ -27,6 +27,7 @@ function tabs(): WorkspaceTab[] {
 beforeEach(() => {
   bridge.mockReset(); (window as any).dbark = { invoke: bridge }; store.setState({ settings: { ...store.getState().settings, tabs: tabs(), activeTabId: 'two' }, connections: [{ id: 'c', name: '开发连接', group: '', color: '', host: 'offline.invalid', port: 1, user: 'ram', dialect: 'mysql' }], dirtyTabs: { one: true }, queryFileDirty: {}, activeJobs: {}, notice: undefined });
   registry = new OpenTabSearchRegistry(); registry.observe(store.getState().settings.tabs); unsubscribe = store.subscribe(state => registry.observe(state.settings.tabs));
+  store.setState({ tabSearchOrder: 'strip', recentTabRefs: [] });
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } unsubscribe?.(); registry.dispose(); document.body.textContent = ''; delete (window as any).dbark; });
 afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
@@ -48,6 +49,28 @@ it('默认按标签栏顺序显示准确上下文/未保存/当前标记，自�
   const original = store.getState(), f = await mount(); expect(options().map(node => node.querySelector('strong')!.textContent)).toEqual(['订单查询', '客户表', '离线分析', '未知上下文']); expect(document.activeElement).toBe(input()); expect(chosen()).toBe(option('客户表')); expect(input().getAttribute('aria-activedescendant')).toBe(chosen().getAttribute('id'));
   const entries = registry.snapshot(original.settings.tabs, original.connections); for (const entry of entries) expect(option(entry.title).textContent).toContain(entry.databaseCaption);
   expect(option('订单查询').textContent).toContain(text.unsaved); expect(option('离线分析').textContent).toContain(text.unsaved); expect(option('客户表').textContent).toContain(text.current); expect(document.body.textContent).toContain(text.count(4, 4)); expect(store.getState().settings).toBe(original.settings); expect(f.activate).not.toHaveBeenCalled(); expect(bridge).not.toHaveBeenCalled();
+});
+it('最近使用排序保留选中令牌、文件草稿标记和未访问项的相对顺序', async () => {
+  const refs = store.getState().tabOrderSnapshot(), settings = store.getState().settings;
+  store.setState({ recentTabRefs: [refs[1], refs[3]] });
+  const f = await mount();
+  await key('ArrowDown');
+  expect(chosen()).toBe(option('离线分析'));
+  const oldClick = callback(option('订单查询'));
+  const recent = document.querySelectorAll('button').find(node => node.textContent === text.recentOrder)!;
+  await act(async () => { callback(recent)(); oldClick(); });
+  expect(recent.getAttribute('aria-pressed')).toBe('true');
+  expect(options().map(node => node.querySelector('strong')!.textContent)).toEqual(['客户表', '未知上下文', '订单查询', '离线分析']);
+  expect(chosen()).toBe(option('离线分析'));
+  expect(option('离线分析').textContent).toContain(text.unsaved);
+  expect(option('订单查询').textContent).toContain(text.unsaved);
+  expect(document.activeElement).toBe(input());
+  expect(f.activate).not.toHaveBeenCalled();
+  await search('query');
+  expect(chosen()).toBe(option('未知上下文'));
+  expect(input().getAttribute('aria-activedescendant')).toBe(chosen().getAttribute('id'));
+  expect(store.getState().settings).toBe(settings);
+  expect(bridge).not.toHaveBeenCalled();
 });
 it('AND关键词搜索标题/连接/库/对象，清空恢复原顺序，无匹配和空工作区分别提示', async () => {
   const original = store.getState().settings; await mount(); await search('开发连接 shop customers'); expect(options()).toHaveLength(1); expect(chosen()).toBe(option('客户表')); expect(document.body.textContent).toContain(text.count(1, 4));

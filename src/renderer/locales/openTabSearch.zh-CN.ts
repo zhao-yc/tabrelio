@@ -1,6 +1,7 @@
 export const openTabSearchZh = {
   entry: '查找已打开标签', title: '查找已打开标签', shortcutHint: 'Ctrl / ⌘ Shift A',
   searchLabel: '搜索已打开标签', placeholder: '输入标题、连接、数据库、表名或类型；空格分隔的条件同时匹配',
+  order: '结果排序', stripOrder: '标签栏顺序', recentOrder: '最近使用',
   empty: '尚未打开标签。', noMatches: '没有匹配的已打开标签。', close: '取消',
   query: '查询', table: '表', current: '当前标签', unsaved: '有未提交或未保存内容',
   noConnection: '连接不可用', noDatabase: '无默认数据库', unknownDatabase: '数据库上下文未知',

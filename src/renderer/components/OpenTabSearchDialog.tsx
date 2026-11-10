@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { errorMessage } from '../lib';
-import { filterOpenTabs, type OpenTabSearchEntry, type OpenTabSearchRegistry } from '../openTabSearch';
+import { filterOpenTabs, type OpenTabSearchEntry, type OpenTabSearchOrder, type OpenTabSearchRegistry } from '../openTabSearch';
 import { useWorkspace } from '../store';
 import { openTabSearchZh as text } from '../locales/openTabSearch.zh-CN';
 import { ErrorBox, Modal } from './ui';
@@ -12,18 +12,20 @@ export function OpenTabSearchDialog({ registry, onActivate, onClose }: {
 }) {
   const tabs = useWorkspace(state => state.settings.tabs), connections = useWorkspace(state => state.connections), activeId = useWorkspace(state => state.settings.activeTabId);
   const dirty = useWorkspace(state => state.dirtyTabs), fileDirty = useWorkspace(state => state.queryFileDirty);
+  const order = useWorkspace(state => state.tabSearchOrder);
+  const recent = useWorkspace(state => state.tabSearchOrder === 'recent' ? state.recentTabRefs : undefined);
   const [query, setQuery] = useState(''), [selection, setSelection] = useState<object | null>(() => initialSelection('')), [interaction, setInteraction] = useState(0), [activationError, setActivationError] = useState('');
   const [, setTabRevision] = useState(0);
   const host = useRef<HTMLDivElement | null>(null), input = useRef<HTMLInputElement | null>(null), list = useRef<HTMLDivElement | null>(null);
   const alive = useRef(false), ended = useRef(false), composing = useRef(false), epoch = useRef(0), committed = useRef<object | null>(null), ticket = {}, listId = useId();
   let entries: OpenTabSearchEntry[] = [], filtered: OpenTabSearchEntry[] = [], error = ''; const fileChanges = new Set<string>();
   try {
-    entries = registry.snapshot(tabs, connections); filtered = filterOpenTabs(entries, query);
+    entries = registry.snapshot(tabs, connections); filtered = filterOpenTabs(entries, query, recent);
     // 与标签栏一致：文件绑定还没有clean回执时保守显示dirty，不读取文件或SQL正文。
     for (let index = 0; index < tabs.length; index++) if (Object.getOwnPropertyDescriptor(tabs[index], 'fileSourceBinding')?.value && flag(fileDirty, entries[index].id) !== false) fileChanges.add(entries[index].id);
   } catch (reason) { error = errorMessage(reason); }
   const selected = filtered.find(entry => entry.token === selection), selectionMissing = selection !== null && !selected;
-  const selectedOrdinal = selected ? entries.indexOf(selected) : -1;
+  const selectedOrdinal = selected ? filtered.indexOf(selected) : -1;
   const optionId = (entry: OpenTabSearchEntry) => `${listId}-${entries.indexOf(entry)}`;
   useLayoutEffect(() => { alive.current = true; ended.current = false; return () => { alive.current = false; ended.current = true; }; }, []);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = null; }; });
@@ -48,13 +50,24 @@ export function OpenTabSearchDialog({ registry, onActivate, onClose }: {
   function current(): boolean { return alive.current && !ended.current && committed.current === ticket && interaction === epoch.current && surface(); }
   /** 初次打开或明确重新搜索时领一个具体token，后续列表变化绝不自动换领同名或邻项。 */
   function initialSelection(value: string): object | null {
-    try { const state = useWorkspace.getState(), matches = filterOpenTabs(registry.snapshot(state.settings.tabs, state.connections), value); return (matches.find(entry => entry.id === state.settings.activeTabId) ?? matches[0])?.token ?? null; }
+    try {
+      const state = useWorkspace.getState();
+      const matches = filterOpenTabs(registry.snapshot(state.settings.tabs, state.connections), value, state.tabSearchOrder === 'recent' ? state.recentTabRefs : undefined);
+      return (matches.find(entry => entry.id === state.settings.activeTabId) ?? matches[0])?.token ?? null;
+    }
     catch { return null; }
   }
   /** 标签ID可能与原型属性同名，只有自有布尔数据旗标才能参与dirty判断。 */
   function flag(flags: Record<string, boolean>, id: string): boolean | undefined { const descriptor = Object.getOwnPropertyDescriptor(flags, id); return descriptor && 'value' in descriptor && typeof descriptor.value === 'boolean' ? descriptor.value : undefined; }
   /** 输入或移动先同步废弃旧回调，React提交之前的旧DOM也不能切换目标。 */
   function advance(): void { epoch.current++; setInteraction(epoch.current); }
+  /** 只改变列表顺序，保留选中令牌和查询词，随后可直接用方向键浏览。 */
+  function changeOrder(next: OpenTabSearchOrder): void {
+    if (!current() || composing.current || order === next) return;
+    advance();
+    useWorkspace.getState().setTabSearchOrder(next);
+    input.current?.focus();
+  }
   function close(): void { if (!current() || composing.current) return; ended.current = true; onClose(); }
   /** 点击和Enter共用准确令牌复核，Root还会在正式激活入口再次核验。 */
   function activate(entry: OpenTabSearchEntry): void {
@@ -81,7 +94,14 @@ export function OpenTabSearchDialog({ registry, onActivate, onClose }: {
     <input ref={input} className="open-tab-search-input" type="text" role="combobox" aria-label={text.searchLabel} placeholder={text.placeholder} value={query} aria-expanded="true" aria-controls={listId} aria-activedescendant={selected ? optionId(selected) : undefined} aria-autocomplete="list"
       onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
       onChange={event => { if (!current()) return; const value = event.target.value; advance(); setQuery(value); setSelection(initialSelection(value)); setActivationError(''); }}/>
-    <p role="status">{text.count(filtered.length, entries.length)}</p><ErrorBox message={error || activationError || (selectionMissing ? text.stale : '')}/>
+    <div className="open-tab-search-options">
+      <p role="status">{text.count(filtered.length, entries.length)}</p>
+      <div className="open-tab-search-sort" role="group" aria-label={text.order}>
+        <button type="button" aria-pressed={order === 'strip'} onClick={() => changeOrder('strip')}>{text.stripOrder}</button>
+        <button type="button" aria-pressed={order === 'recent'} onClick={() => changeOrder('recent')}>{text.recentOrder}</button>
+      </div>
+    </div>
+    <ErrorBox message={error || activationError || (selectionMissing ? text.stale : '')}/>
     <div ref={list} id={listId} role="listbox" aria-label={text.title} className="open-tab-search-list">{filtered.map(entry => <button key={entry.id} id={optionId(entry)} type="button" role="option" tabIndex={-1} aria-selected={entry === selected} className="open-tab-search-option" onMouseDown={event => event.preventDefault()} onClick={() => activate(entry)}>
       <span className="open-tab-search-heading"><strong>{entry.title}</strong>{entry.id === activeId && <span>{text.current}</span>}{(flag(dirty, entry.id) || fileChanges.has(entry.id)) && <span>{text.unsaved}</span>}</span>
       <span className="open-tab-search-meta"><span>{entry.kindCaption}</span><span>{entry.connectionCaption}</span><span>{entry.databaseCaption}</span>{entry.table && <span>{entry.table}</span>}</span>

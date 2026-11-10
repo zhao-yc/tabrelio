@@ -39,6 +39,7 @@ import type { QueryFileTaskState } from './queryFileTasks';
 import { queryFilesZh } from './locales/queryFiles.zh-CN';
 import { TabOrderRegistry, type TabOrderRef, type TabOrderMove } from './tabOrder';
 import { rememberWorkspaceTab } from './recentWorkspaceTabs';
+import type { OpenTabSearchOrder } from './openTabSearch';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
@@ -51,6 +52,7 @@ const tabOrder = new TabOrderRegistry();
 interface WorkspaceState {
   ready: boolean; settings: AppSettings; connections: ConnectionProfile[]; tasks: TaskRecord[];
   recentTabRefs: readonly TabOrderRef[];
+  tabSearchOrder: OpenTabSearchOrder; setTabSearchOrder(order: OpenTabSearchOrder): void;
   notice?: { text: string; error: boolean }; selection?: ConnectionSelection; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>; connectionVersions: Record<string, number>;
   tableLayoutDrafts: Record<string, boolean>; setTableLayoutDraft(id: string, dirty: boolean): void;
   queryFileDirty: Record<string, boolean>; setQueryFileDirty(id: string, dirty: boolean, snapshot: WorkspaceTab): void;
@@ -210,6 +212,8 @@ export function watchQueryBatchConnections(ids: readonly string[]) {
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   ready: false, settings: defaults, recentTabRefs: [], connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {}, queryFileTasks: {}, queryFileOpenings: {},
+  // 搜索排序仅记在本次工作台中，不跟随配置写盘或覆盖条带顺序。
+  tabSearchOrder: 'strip', setTabSearchOrder: order => set({ tabSearchOrder: order }),
   /** 文件任务保留进度合同与取消状态，不保存SQL或路径；终态由真实文件结果推进。 */
   setQueryFileTask: task => set(state => {
     const previous = state.tasks.find(item => item.id === task.taskId), record: TaskRecord = { id: task.taskId, kind: queryFilesZh.taskTitle, status: task.status, progress: task.progress, message: task.message, startedAt: previous?.startedAt ?? task.startedAt };

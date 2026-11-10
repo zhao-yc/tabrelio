@@ -3,6 +3,7 @@ import type { SavedQueryOriginContext } from '../shared/queryBinding';
 import { queryContextZh } from './locales/queryContext.zh-CN';
 import { zh } from './locales/zh-CN';
 import { objectCategories, type ObjectCategory } from '../shared/objectBrowser';
+import type { TabOrderRef } from './tabOrder';
 
 export const openTabSearchLimits = { tabs: 100, connections: 10000, textUnits: 256, idUnits: 200, queryUnits: 1024, queryTokens: 64, searchUnits: 4096 } as const;
 export const openTabSearchMessages = {
@@ -12,6 +13,7 @@ export const openTabSearchMessages = {
   categories: { sequence: '序列', table: '表', view: '视图', routine: '存储过程／函数', trigger: '触发器', event: '事件' },
 } as const;
 export type OpenTabSearchTab = AppSettings['tabs'][number];
+export type OpenTabSearchOrder = 'strip' | 'recent';
 export interface OpenTabSearchEntry {
   readonly id: string; readonly token: object; readonly title: string; readonly kind: 'query' | 'table' | 'objects';
   readonly kindCaption: string; readonly connectionId: string; readonly connectionCaption: string;
@@ -127,9 +129,13 @@ export class OpenTabSearchRegistry {
 }
 
 /** 标题/连接/库表/类型进行本地AND包含搜索；不修改strip顺序、不扫描SQL正文。 */
-export function filterOpenTabs(entries: readonly OpenTabSearchEntry[], query: string): OpenTabSearchEntry[] {
+export function filterOpenTabs(entries: readonly OpenTabSearchEntry[], query: string, recent?: readonly TabOrderRef[]): OpenTabSearchEntry[] {
   const checked = list(entries, openTabSearchLimits.tabs);
   if (typeof query !== 'string') return invalid(); if (query.length > openTabSearchLimits.queryUnits) return budget();
   const tokens = query.trim().toLowerCase().split(/\s+/u).filter(Boolean); if (tokens.length > openTabSearchLimits.queryTokens) return budget();
-  return checked.filter(value => { const candidate = object(value), search = own(candidate, 'searchText'); if (typeof search !== 'string' || search.length > openTabSearchLimits.searchUnits) return invalid(); return tokens.every(token => search.includes(token)); }) as OpenTabSearchEntry[];
+  const matches = checked.filter(value => { const candidate = object(value), search = own(candidate, 'searchText'); if (typeof search !== 'string' || search.length > openTabSearchLimits.searchUnits) return invalid(); return tokens.every(token => search.includes(token)); }) as OpenTabSearchEntry[];
+  if (!recent?.length) return matches;
+  // 访问记录只决定展示顺序；未访问项维持标签栏顺序，激活仍消费查找器原令牌。
+  const ranks = new Map(recent.map((tab, index) => [tab.id, index]));
+  return matches.sort((a, b) => (ranks.get(a.id) ?? recent.length) - (ranks.get(b.id) ?? recent.length));
 }
