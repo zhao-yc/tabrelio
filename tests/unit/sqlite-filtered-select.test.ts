@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { buildSqliteFilteredSelect, buildSqliteReadPlan, quoteSqliteIdentifier } from '../../src/shared/sqliteReadSql';
+import { buildSqliteQueryBuilderSql, sqliteQueryBuilderInspectSchema, type SqliteQueryBuilderDesign, type SqliteQueryBuilderSource } from '../../src/shared/sqliteQueryBuilder';
 import { buildSqliteTableSelect } from '../../src/main/sqliteTableBrowse';
 import type { SqliteTableFilter, SqliteTablePageInput } from '../../src/shared/sqliteTableBrowse';
 import type { SqliteValue } from '../../src/engine/sqlite/protocol';
@@ -53,6 +54,23 @@ it('原分页SQL、typed参数和project/complete合同逐字保持，名称中�
   const projected = buildSqliteReadPlan(source, columns, ['id'], true, name => 'typeof(' + name + ')'); expect(projected.sql).toContain('typeof("__dbark_source"."id") AS "id"'); expect(projected.sql).toContain(' AS "__dbark_source"'); expect(projected.parameters).toHaveLength(2);
 });
 it('显式LIMIT只限制完整匹配首N行，不继承当前页或探测多一行', () => { const source = input(); for (const db of databases) { const sql = buildSqliteFilteredSelect(source, columns, ['id'], 3); expect(sql).toMatch(/ LIMIT 3$/); expect(sql).not.toContain('OFFSET'); expect(rows(db, sql)).toEqual([{ id: 18n }, { id: 17n }, { id: 16n }]); } });
+it('SQLite 构建器把来源、类型和投影绑定到可独立执行的 SQL', () => {
+  const source: SqliteQueryBuilderSource = {
+    target: { connectionId: 'owned', database: 'main', table, kind: 'table' }, schemaKey: 'a'.repeat(64), columns,
+  };
+  const design: SqliteQueryBuilderDesign = {
+    ...source.target, schemaKey: source.schemaKey, columns: [field], mode: 'and',
+    filters: [{ column: field, operator: 'eq', value: { kind: 'integer', value: '9223372036854775807' } }],
+    sort: [{ column: field, direction: 'desc' }], distinct: true, rowLimit: 2,
+  };
+  const sql = buildSqliteQueryBuilderSql(design, source);
+  expect(sql).toMatch(/^SELECT DISTINCT .* ORDER BY .* DESC LIMIT 2$/);
+  for (const db of databases) expect(rows(db, sql)).toEqual([{ [field]: 9223372036854775807n }]);
+  expect(() => buildSqliteQueryBuilderSql(design, { ...source, schemaKey: 'b'.repeat(64) })).toThrow('重新读取结构');
+  expect(() => buildSqliteQueryBuilderSql({ ...design, kind: 'view' }, source)).toThrow('重新读取结构');
+  expect(() => buildSqliteQueryBuilderSql({ ...design, columns: ['id'] }, source)).toThrow('已选的输出字段');
+  expect(sqliteQueryBuilderInspectSchema.safeParse({ ...design, inspect: 'rows', sql: 'DELETE FROM unrelated' }).success).toBe(false);
+});
 it.each([{ selected: [] }, { selected: ['missing'] }, { selected: ['id', 'id'] }])('空／丢失／重复投影$selected整体拒绝', ({ selected }) => { expect(() => buildSqliteFilteredSelect(input(), columns, selected)).toThrow(); });
 it.each([0, -1, 1.5, 1000001, NaN, Infinity])('非法LIMIT %s不生成', limit => { expect(() => buildSqliteFilteredSelect(input(), columns, ['id'], limit)).toThrow(); });
 it('输出预算拒整份，不截SQL；坏条件不静默过滤', () => {

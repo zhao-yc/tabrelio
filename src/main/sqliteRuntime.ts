@@ -30,7 +30,7 @@ import { readSqliteStructureSearchPage } from './sqliteStructureSearch';
 import { objectDefinitionInputSchema, objectDefinitionLimits, objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../shared/objectDefinition';
 import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTaskPrefix, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteQueryRecordIndices, sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
-import { readSqliteTablePage, SqliteTableBrowseCancelled } from './sqliteTableBrowse';
+import { readSqliteTableCatalogue, readSqliteTablePage, SqliteTableBrowseCancelled, withSqliteReadSnapshot } from './sqliteTableBrowse';
 import { readSqliteValueOptions } from './sqliteValueOptions';
 import { readSqliteRowCount, readSqliteStatistics } from './sqliteStatistics';
 import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema, sqliteStatisticsLimits, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../shared/sqliteStatistics';
@@ -39,7 +39,8 @@ import { readSqliteReference } from './sqliteReference';
 import { sqliteReferenceInputSchema, sqliteReferenceLimits, type SqliteReferenceInput, type SqliteReferenceOutput } from '../shared/sqliteReference';
 import { readSqliteSchemaScript } from './sqliteSchemaExport';
 import { sqliteSchemaScriptSchema } from '../shared/sqliteSchemaScript';
-import { inspectSqliteViewQuery } from './sqliteViewQueryInspect';
+import { inspectSqliteViewQuery, readSqliteQueryPreview } from './sqliteViewQueryInspect';
+import { buildSqliteQueryBuilderSql, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderSampleRows, sqliteQueryBuilderTargetSchema } from '../shared/sqliteQueryBuilder';
 import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type SqliteRelationshipsOutput } from '../shared/sqliteRelationships';
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import { sqliteQueryExportSchema } from '../shared/sqliteQueryExport';
@@ -1438,6 +1439,25 @@ export class SqliteRuntime {
           const result = await inspectSqliteViewQuery(driver, source);
           check();
           return result;
+        });
+      }
+      case 'sqlite.queryBuilder.describe':
+      case 'sqlite.queryBuilder.inspect': {
+        const request = command === 'sqlite.queryBuilder.inspect' ? sqliteQueryBuilderInspectSchema.parse(input) : undefined;
+        const target = request ? { connectionId: request.connectionId, database: request.database, table: request.table, kind: request.kind }
+          : sqliteQueryBuilderTargetSchema.parse(input);
+        return this.metadata(target, (driver, check) => {
+          const control = { check, beginCleanup: () => {}, cleanupFailed: () => {} };
+          // 目录与预览使用同一只读快照，跨连接结构变化不能让旧字段落到新对象。
+          return withSqliteReadSnapshot(driver, control, async () => {
+            const catalogue = await readSqliteTableCatalogue(driver, target.table, control);
+            if (catalogue.kind !== target.kind) throw Error('SQLite 查询来源已变化，请重新读取结构。');
+            const source = { target, schemaKey: catalogue.schemaKey, columns: catalogue.columns };
+            if (!request) return source;
+            const { inspect, ...design } = request, sql = buildSqliteQueryBuilderSql(design, source);
+            check();
+            return readSqliteQueryPreview(driver, inspect === 'explain' ? 'EXPLAIN QUERY PLAN\n' + sql : sql, inspect === 'explain', sqliteQueryBuilderSampleRows);
+          });
         });
       }
       case 'sqlite.relationships': return this.relationships(input);

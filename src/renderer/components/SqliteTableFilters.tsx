@@ -8,6 +8,7 @@ interface Props {
   filters: readonly SqliteFilterDraft[];
   mode: 'and' | 'or';
   disabled: boolean;
+  enabledHint?: string;
   current(): boolean;
   id(): string;
   onFilters(update: (values: SqliteFilterDraft[]) => SqliteFilterDraft[]): void;
@@ -55,7 +56,7 @@ export function SqliteTableFilters(props: Props) {
     <button disabled={enabled === filters.length} onClick={() => toggleAll(true)}>{text.enableFilters}</button>
     <button disabled={!enabled} onClick={() => toggleAll(false)}>{text.disableFilters}</button>
     <span className="muted small" role="status">{text.enabledFilters(enabled, filters.length)}</span>
-    <p className="muted small">{text.filterEnabledHint}</p>
+    <p className="muted small">{props.enabledHint ?? text.filterEnabledHint}</p>
     {filters.some(filter => isSqliteTextFilter(filter.operator)) && <p className="muted small">{text.textMatchHint}</p>}
     {!!filters.length && !enabled && <p className="muted small">{text.noEnabledFilters}</p>}
     {filters.map((filter, index) => <div className="sqlite-browse-rule" key={filter.id}>

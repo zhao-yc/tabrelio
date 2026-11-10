@@ -3,6 +3,7 @@ import type { QueryViewDraft, ViewQuerySeed } from './queryViewDraft';
 import { appDialogSelector, appModalSelector } from './modalSelectors';
 import { QueryTargetDialog } from './components/QueryTargetDialog';
 import { QueryJoinStartDialog } from './components/QueryJoinStartDialog';
+import { SqliteQueryBuilderDialog } from './components/SqliteQueryBuilderDialog';
 import { completionIdentifier } from '../shared/completionLexical';
 import { tableForeignKeyJoinZh as joinText } from './locales/tableForeignKeyJoin.zh-CN';
 import type { QueryTargetDraft } from './queryDuplicateIntent';
@@ -1513,9 +1514,9 @@ export function NewQueryDialog({ onClose, onViewApplied }: { onClose(): void; on
   const [connectionId, setConnectionId] = useState(initial.connectionId);
   const dialect = connections.find(profile => profile.id === connectionId)?.dialect, sqlite = dialect === 'sqlite';
   const [database, setDatabase] = useState(connections.find(profile => profile.id === initial.connectionId)?.dialect === 'sqlite' ? 'main' : initial.database ?? ''); const [databases, setDatabases] = useState<string[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const [joinScope, setJoinScope] = useState<{ connectionId: string; database: string }>();
-  const canBuildJoin = dialect === 'mysql' || dialect === 'mariadb';
-  const joinReady = canBuildJoin && !busy && completionIdentifier(database);
+  const [builderScope, setBuilderScope] = useState<{ connectionId: string; database: string; sqlite: boolean }>();
+  const canBuild = sqlite || dialect === 'mysql' || dialect === 'mariadb';
+  const builderReady = canBuild && !busy && (sqlite || completionIdentifier(database));
   useEffect(() => {
     let alive=true;setDatabases([]);if(!connectionId)return;setBusy(true);
     // 复用原有建连结果，不新增能力探测SQL；旧连接修订的迟到结果不能填充新草稿。
@@ -1531,12 +1532,18 @@ export function NewQueryDialog({ onClose, onViewApplied }: { onClose(): void; on
     // 关闭撤销后续目录和界面动作；在途建连仍按原ticket落定，不新增请求或覆盖新ticket。
     return()=>{alive=false;};
   },[connectionId]);
-  if (joinScope) return <QueryJoinStartDialog {...joinScope} onViewApplied={onViewApplied} onBack={() => setJoinScope(undefined)} onClose={onClose}/>;
+  if (builderScope) {
+    const onBack = () => setBuilderScope(undefined);
+    return builderScope.sqlite
+      ? <SqliteQueryBuilderDialog connectionId={builderScope.connectionId} onBack={onBack} onClose={onClose}/>
+      : <QueryJoinStartDialog connectionId={builderScope.connectionId} database={builderScope.database}
+        onViewApplied={onViewApplied} onBack={onBack} onClose={onClose}/>;
+  }
   return <Modal title={zh.common.newQuery} onClose={onClose}><form onSubmit={event => { event.preventDefault(); if (connectionId) { useWorkspace.getState().openTab({ kind: 'query', title: zh.common.unnamedQuery, connectionId, database: sqlite ? 'main' : database || undefined, ...(sqlite ? { databaseContext: { state: 'known' as const, database: 'main' } } : {}), sql: '' }); onClose(); } }}>
     <div className="modal-content form-grid"><Field label={zh.app.text049} full><select value={connectionId} onChange={event => { setConnectionId(event.target.value); setDatabase(connections.find(profile => profile.id === event.target.value)?.dialect === 'sqlite' ? 'main' : ''); setError(''); }}>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></Field><Field label={zh.app.text050} full><input list="query-databases" readOnly={sqlite} value={sqlite ? 'main' : database} onChange={event => { if (!sqlite) setDatabase(event.target.value); }} placeholder={busy ? zh.app.text051 : zh.app.text052}/><datalist id="query-databases">{databases.map(name => <option key={name} value={name}/>)}</datalist></Field><ErrorBox message={error}/></div>
     <footer className="modal-footer"><span className="grow"/>
-      {canBuildJoin && <button type="button" disabled={!joinReady} title={joinReady ? undefined : joinText.builderRequireDatabase}
-        onClick={() => { if (joinReady) setJoinScope({ connectionId, database }); }}>{joinText.builderEntry}</button>}
+      {canBuild && <button type="button" disabled={!builderReady} title={builderReady || sqlite ? undefined : joinText.builderRequireDatabase}
+        onClick={() => { if (builderReady) setBuilderScope({ connectionId, database: sqlite ? 'main' : database, sqlite }); }}>{joinText.builderEntry}</button>}
       <button type="button" onClick={onClose}>{zh.common.cancel}</button><button className="primary" type="submit" disabled={!connectionId}>{zh.app.text053}<ArrowRight size={14}/></button>
     </footer></form></Modal>;
 }

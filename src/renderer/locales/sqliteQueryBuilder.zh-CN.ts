@@ -1,0 +1,17 @@
+export const sqliteQueryBuilderZh = {
+  title: 'SQLite 查询构建器', catalog: '读取表和视图', source: '查询来源', select: '请选择表或视图', search: '搜索表和视图',
+  empty: '当前目录没有匹配的表或视图。',
+  read: '读取来源结构', back: '返回新建查询', changeSource: '重新选择来源',
+  loading: '正在读取 SQLite 目录…', stale: 'SQLite 文件、来源或原标签已变化，请重新打开查询构建器。',
+  hint: '从当前文件的 main 数据库选择表或视图。选列、条件和排序仅用于此查询设计。',
+  columns: '输出字段', choose: (name: string) => `选择输出字段 ${name}`, all: '全选输出字段', none: '清空输出字段',
+  noColumns: '至少选择一个输出字段。',
+  filterHint: '启用的条件会进入 SQL。停用会保留条件值，编辑后仍保持停用。',
+  distinct: '去重完整输出行（DISTINCT）', limit: '结果行数上限', limitHint: '留空时 SQL 不带 LIMIT。填写 1～1000000 的整数。',
+  invalidLimit: '结果行数上限须为 1～1000000 的整数。', preview: '预览 SQL', open: '打开为独立查询',
+  checking: '正在重新核对 SQLite 来源…',
+  tabs: '标签数量已达上限，请先关闭部分标签。',
+  inspection: (rows: number) => `预览使用独立只读连接，最多显示 ${rows} 行。查询计划由 SQLite 返回。`,
+  inspectLabels: { region: 'SQLite 查询检查', rows: '预览数据', explain: '查看查询计划', working: '正在检查 SQLite 查询…' },
+  queryTitle: (name: string) => `${name} · SQLite 查询`,
+} as const;

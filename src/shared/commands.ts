@@ -129,6 +129,8 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.columns.inspect': true,
   'sqlite.objects.preview': true,
   'sqlite.view.inspectQuery': true,
+  'sqlite.queryBuilder.describe': true,
+  'sqlite.queryBuilder.inspect': true,
   'sqlite.view.dependencies': true,
   'sqlite.tableMaintenance.preview': true,
   'sqlite.tableRename.preview': true,

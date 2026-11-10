@@ -9,13 +9,14 @@ import { ErrorBox, Spinner } from './ui';
 import '../viewQueryInspect.css';
 
 /** 结果只归属发起时的定义。编辑、切换连接或离开面板后不发布迟到响应。 */
-export function ViewQueryInspect({ read, hint, owner, disabled, current, onRows }: {
+export function ViewQueryInspect({ read, hint, owner, disabled, current, onRows, labels = text }: {
   read(mode: 'rows' | 'explain'): Promise<QueryOutcome>;
   hint: string;
   owner: object;
   disabled: boolean;
   current(): boolean;
   onRows?(columns: readonly ResultColumn[]): void;
+  labels?: { region: string; rows: string; explain: string; working: string };
 }) {
   const lifetime = useRef<object | undefined>(undefined), pending = useRef(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -51,12 +52,12 @@ export function ViewQueryInspect({ read, hint, owner, disabled, current, onRows 
   }
 
   const result = outcome?.results[0];
-  return <section aria-label={text.region} aria-busy={busy}>
+  return <section aria-label={labels.region} aria-busy={busy}>
     <p className="muted">{hint}</p>
     <div className="pg-column-edit-actions">
-      <button type="button" disabled={disabled || busy} onClick={() => void inspect('rows')}>{text.rows}</button>
-      <button type="button" disabled={disabled || busy} onClick={() => void inspect('explain')}>{text.explain}</button>
-      {busy && <Spinner text={text.working}/>}
+      <button type="button" disabled={disabled || busy} onClick={() => void inspect('rows')}>{labels.rows}</button>
+      <button type="button" disabled={disabled || busy} onClick={() => void inspect('explain')}>{labels.explain}</button>
+      {busy && <Spinner text={labels.working}/>}
     </div>
     <ErrorBox message={error}/>
     {outcome?.explain ? <ExplainPlanView outcome={outcome} busy={false}/> :

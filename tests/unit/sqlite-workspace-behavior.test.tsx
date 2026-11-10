@@ -79,7 +79,7 @@ describe('SQLite 新查询和声明快捷键的正式组件接线', () => {
     const vm = publish(method(app, 'NewQueryDialog'), { exports: {}, require: () => jsxRuntime, useWorkspace: hook, useState: (value: unknown) => [value, vi.fn()], useEffect: vi.fn(), newQueryContext, completionServerFacts: {}, invoke: vi.fn(), errorMessage: String, zh, joinText, completionIdentifier, Modal: 'modal', Field: 'field', ErrorBox: 'error', ArrowRight: 'arrow' }, ['NewQueryDialog']);
     const view = vm.handlers.NewQueryDialog({ onClose: vi.fn() }); const nodes: any[] = []; const visit = (value: any) => { if (Array.isArray(value)) return value.forEach(visit); if (!value?.props) return; nodes.push(value); visit(value.props.children); }; visit(view);
     const input = nodes.find(value => value.type === 'input' && value.props.list === 'query-databases'); expect(input.props.readOnly).toBe(dialect === 'sqlite'); expect(input.props.value).toBe(dialect === 'sqlite' ? 'main' : '原库foo');
-    expect(nodes.some(value => value.type === 'button' && value.props.children === joinText.builderEntry)).toBe(dialect === 'mysql');
+    expect(nodes.some(value => value.type === 'button' && value.props.children === joinText.builderEntry)).toBe(true);
     nodes.find(value => value.type === 'form').props.onSubmit({ preventDefault() {} });
     expect(state.openTab).toHaveBeenCalledExactlyOnceWith({ kind: 'query', title: zh.common.unnamedQuery, connectionId: profile.id, database: dialect === 'sqlite' ? 'main' : '原库foo', ...(dialect === 'sqlite' ? { databaseContext: { state: 'known', database: 'main' } } : {}), sql: '' });
   });

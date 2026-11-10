@@ -550,6 +550,8 @@ export interface CommandMap {
   'sqlite.objects.preview': { input: import('./sqliteObjects').SqliteObjectsPreviewInput; output: import('./sqliteObjects').SqliteObjectsPreviewOutput };
   'sqlite.view.dependencies': { input: import('./viewDependencies').SqliteViewDependenciesInput; output: import('./viewDependencies').ViewDependencies };
   'sqlite.view.inspectQuery': { input: import('./sqliteObjects').SqliteViewQueryInspectInput; output: QueryOutcome };
+  'sqlite.queryBuilder.describe': { input: import('./sqliteQueryBuilder').SqliteQueryBuilderTarget; output: import('./sqliteQueryBuilder').SqliteQueryBuilderSource };
+  'sqlite.queryBuilder.inspect': { input: import('./sqliteQueryBuilder').SqliteQueryBuilderInspectInput; output: QueryOutcome };
   'sqlite.tableMaintenance.preview': { input: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewInput; output: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewOutput };
   'sqlite.tableRename.preview': { input: import('./sqliteTableRename').SqliteTableRenamePreviewInput; output: import('./sqliteTableRename').SqliteTableRenamePreviewOutput };
   'sqlite.tableRebuild.preview': { input: import('./sqliteTableRebuild').SqliteTableRebuildPreviewInput; output: import('./sqliteTableRebuild').SqliteTableRebuildPreviewOutput };
