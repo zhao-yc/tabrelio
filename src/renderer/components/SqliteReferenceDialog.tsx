@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
+import type { DataRow } from '../../shared/contracts';
 import { sqliteRelationshipName as fold } from '../../shared/sqliteRelationships';
 import type { SqliteOriginalValue } from '../../shared/sqliteTableEdit';
 import type { SqliteReferenceOutput, SqliteReferenceSearch } from '../../shared/sqliteReference';
@@ -52,9 +53,20 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     resetSelection(); setData(undefined);
     run(async () => { const value = choosing ? await reader.candidates(key, offset, appliedSearch.current) : await reader.page(key, offset); if (environment()) { setData(value); if (choosing) setSearchColumns(value.page!.columns.map(column => column.name)); if (choosing && !searchColumn) setSearchColumn(value.referencedColumns![0]); } });
   }
-  /** 明确确认后复读所选整组父键；旧选择、迟到结果和关闭过程都不能暂存源行。 */
-  function stage(): void {
-    if (!actionCurrent() || !origin.onStage || !key) return;
+  function selectCandidate(row: DataRow | null): void {
+    if (!actionCurrent() || !data?.page) return;
+    resetSelection();
+    const index = row ? data.page.result.rows.indexOf(row) : -1;
+    if (index < 0) return;
+    try {
+      selection.current = { data, index, values: sqliteReferenceTuple(data, index) };
+      setChosen(index); setError('');
+    } catch (failure) { setError(errorMessage(failure)); }
+  }
+  /** 按钮使用当前选择，双击使用命中行，两者均须复读整组父键。 */
+  function stage(row?: DataRow): void {
+    if (!actionCurrent() || !origin.onStage || !editableKey || !key || clearConfirmed) return;
+    if (row) selectCandidate(row);
     const token = selection.current; if (!token || token.data !== data) return;
     run(async () => { const proof = await reader.verify(key, token.values, token.data.page!.schemaKey); assertSqliteReferenceChoice(proof, token.values);
       return () => { if (selection.current !== token || !reader.current()) return; if (!origin.onStage!({ foreignKey: key.ordinal, proof, values: token.values })) throw Error(text.stale); };
@@ -101,7 +113,8 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     {key && <p>{key.columns.join(', ')} → {key.referencedTable} ({key.referencedColumns?.join(', ') ?? text.implicit})</p>}
     {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<input aria-label={text.search} maxLength={256} disabled={disabled} value={searchText} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchText(event.target.value); } }}/></label><p>{text.searchHint}</p></div>}
     <p>{text.unloaded}</p><div className="reference-pagination"><button disabled={disabled || !key} onClick={() => read(0, true)}>{choosing ? text.candidates : text.read}</button><button disabled={disabled || !data?.page || data.page.offset === 0} onClick={() => read(Math.max(0, data!.page!.offset - data!.page!.limit))}>{text.previous}</button><button disabled={disabled || !data?.page?.hasMore} onClick={() => read(data!.page!.offset + data!.page!.limit)}>{text.next}</button>{busy && <button disabled={closeBusy} onClick={() => { if (renderCurrent() && !closing.current) void reader.stop().catch(failure => { if (alive.current) setError(errorMessage(failure)); }); }}>{text.stop}</button>}</div>
-    <ErrorBox message={invalid ? text.stale : error}/>{busy && <Spinner text={text.loading}/>}{data?.page && <><p>{data.page.target.table} · {data.referencedColumns?.join(', ')} · {data.page.offset + 1}–{data.page.offset + data.page.result.rows.length}</p>{!data.page.result.rows.length && <p role="status">{text.empty}</p>}<div className="reference-grid"><ResultsGrid columns={data.page.result.columns} rows={data.page.result.rows} selectionScope={data.page} isCurrent={() => reader.current() && !busy} binaryFileActions={false} onActiveRowChange={choosing ? row => { if (!actionCurrent() || !data?.page) return; resetSelection(); const index = row ? data.page.result.rows.indexOf(row) : -1; if (index < 0) return; try { const values = sqliteReferenceTuple(data, index); selection.current = { data, index, values }; setChosen(index); setError(''); } catch (failure) { setError(errorMessage(failure)); } } : undefined}/></div></>}
+    <ErrorBox message={invalid ? text.stale : error}/>{busy && <Spinner text={text.loading}/>}{data?.page && <><p>{data.page.target.table} · {data.referencedColumns?.join(', ')} · {data.page.offset + 1}–{data.page.offset + data.page.result.rows.length}</p>{!data.page.result.rows.length && <p role="status">{text.empty}</p>}<div className="reference-grid"><ResultsGrid columns={data.page.result.columns} rows={data.page.result.rows} selectionScope={data.page} isCurrent={() => reader.current() && !busy} binaryFileActions={false}
+      onActiveRowChange={choosing ? selectCandidate : undefined} onRowDoubleClick={choosing && editableKey ? row => { stage(row); return true; } : undefined}/></div></>}
       {choosing && <><p>{chosen === undefined ? text.selectRow : text.selectedRow(chosen + 1)}</p><label><input type="checkbox" checked={clearConfirmed} disabled={disabled || !clearable} onChange={event => { if (actionCurrent()) setClearConfirmed(event.target.checked); }}/>{text.clearConfirm}</label><button disabled={disabled || !clearable || !clearConfirmed} onClick={clear}>{text.clear}</button></>}
-  </div><footer className="modal-footer">{choosing && <button disabled={disabled || !editableKey || chosen === undefined} onClick={stage}>{text.stage}</button>}<button disabled={closeBusy} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
+  </div><footer className="modal-footer">{choosing && <button disabled={disabled || !editableKey || chosen === undefined || clearConfirmed} onClick={() => stage()}>{text.stage}</button>}<button disabled={closeBusy} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
 }

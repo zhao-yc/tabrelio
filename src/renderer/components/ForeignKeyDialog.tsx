@@ -56,10 +56,11 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
   /** 排序回调保持稳定，选择候选行时不重建网格列。 */
   const changeSort = useCallback((next: SortRule[]) => { if (!busy) { setSort(next); setPageIndex(1); } }, [busy]);
   /** 确认前清除用户筛选，精确查询选中元组，核对最新定义及父记录仍存在。 */
-  async function confirm(clear = false) {
-    if (busy || verifying.current || (!clear && !data) || mode !== 'choose') return;
-    const values = clear ? key.columns.map(() => null) : candidate && data ? referenceTuple(candidate, data.foreignKey.referencedColumns) : null;
-    if (!values) { setError(candidate ? text.nullParent : text.selectRow); return; }
+  async function confirm(row: DataRow | null, clear = false) {
+    if (!alive.current || busy || verifying.current || !writable || (clear ? !clearConfirm || !canClear : clearConfirm || !data)) return;
+    if (row && (!data?.page.rows.includes(row) || referenceSignature(data.foreignKey) !== referenceSignature(key))) return;
+    const values = clear ? key.columns.map(() => null) : row && data ? referenceTuple(row, data.foreignKey.referencedColumns) : null;
+    if (!values) { setError(row ? text.nullParent : text.selectRow); return; }
     verifying.current = true; setBusy(true); setError('');
     try {
       if (clear) {
@@ -92,9 +93,10 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
     <p>{text.target}：{key.referencedDatabase}.{key.referencedTable}</p><p className="reference-mapping">{text.mapping}：{key.columns.map((column, index) => `${column} → ${key.referencedColumns[index]}`).join('，')}</p>
     <TableFilterPanel columns={(targetInfo?.columns ?? []).map(column => column.name)} filters={filters} mode={filterMode} disabled={busy || !data} onFiltersChange={next => { if (busy) return false; setFilters(next); setPageIndex(1); return true; }} onModeChange={next => { if (busy) return false; setFilterMode(next); setPageIndex(1); return true; }}/>
     <ErrorBox message={error}/>{busy && <Spinner text={text.loading}/>}
-    {data && <div className="reference-grid"><ResultsGrid columns={data.page.columns} rows={data.page.rows} onActiveRowChange={selectCandidate} sort={sort} onSortChange={changeSort}/></div>}
+    {data && <div className="reference-grid"><ResultsGrid columns={data.page.columns} rows={data.page.rows} onActiveRowChange={selectCandidate}
+      onRowDoubleClick={writable ? row => { void confirm(row); return true; } : undefined} sort={sort} onSortChange={changeSort}/></div>}
     {data && !data.page.rows.length && <p>{text.empty}</p>}
     <div className="reference-pagination"><button disabled={busy || pageIndex === 1} aria-label={text.previous} onClick={() => setPageIndex(index => index - 1)}>{zh.common.pagePrevious}</button><form onSubmit={event => { event.preventDefault(); try { if (!busy) setPageIndex(parsePageJump(jump)); } catch (reason) { setError(errorMessage(reason)); } }}><input aria-label={text.page} value={jump} disabled={busy} onChange={event => setJump(event.target.value)}/><button disabled={busy} type="submit">{text.jump}</button></form><button disabled={busy || !data?.page.hasMore || pageIndex >= maxTablePage} aria-label={text.next} onClick={() => setPageIndex(index => index + 1)}>{zh.common.pageNext}</button><select aria-label={text.pageSize} value={pageSize} disabled={busy} onChange={event => { setPageSize(Number(event.target.value)); setPageIndex(1); }}>{[50, 100, 200, 500].map(size => <option key={size}>{size}</option>)}</select><button disabled={busy} onClick={() => setRefresh(value => value + 1)}>{text.refresh}</button>{busy && <button onClick={cancel}>{text.cancelRead}</button>}</div>
-    {clearConfirm && <div role="alertdialog" aria-label={text.clear}><p>{text.clearConfirm}</p><button disabled={busy} onClick={() => setClearConfirm(false)}>{zh.common.cancel}</button><button disabled={busy} onClick={() => void confirm(true)}>{text.clear}</button></div>}
-  </div><footer className="modal-footer">{mode === 'choose' && <><button disabled={busy || !canClear} onClick={() => setClearConfirm(true)}>{text.clear}</button><button className="primary" disabled={busy || !candidate || !data || !writable || clearConfirm} onClick={() => void confirm()}>{text.use}</button></>}<span className="grow"/><button onClick={close}>{zh.common.close}</button></footer></Modal>;
+    {clearConfirm && <div role="alertdialog" aria-label={text.clear}><p>{text.clearConfirm}</p><button disabled={busy} onClick={() => setClearConfirm(false)}>{zh.common.cancel}</button><button disabled={busy} onClick={() => void confirm(null, true)}>{text.clear}</button></div>}
+  </div><footer className="modal-footer">{mode === 'choose' && <><button disabled={busy || !canClear} onClick={() => setClearConfirm(true)}>{text.clear}</button><button className="primary" disabled={busy || !candidate || !data || !writable || clearConfirm} onClick={() => void confirm(candidate)}>{text.use}</button></>}<span className="grow"/><button onClick={close}>{zh.common.close}</button></footer></Modal>;
 }

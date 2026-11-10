@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { DataRow } from '../../shared/contracts';
 import { postgresTableReferenceLimits as limits, type PostgresTableField, type PostgresTableReference, type PostgresTableReferenceInput, type PostgresTableReferenceResult } from '../../shared/postgresTable';
 import { postgresReferencePickerZh as text } from '../locales/postgresReferencePicker.zh-CN';
 import { postgresRelatedTabPrefix } from '../../shared/postgresRelatedTab';
@@ -109,6 +110,13 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
   const columns = view ? details ? view.page.columns : view.page.columns.slice(0, view.choice.pairs.length) : [];
   const record = view?.page.rows[parent ? 0 : childIndex ?? -1];
   const emptyDirectory = children ? text.emptyChildKeys : parent ? text.emptyBrowseKeys : text.emptyKeys;
+  function useCandidate(candidateView: View, row: DataRow, index: number) {
+    try {
+      if (busy || liveView.current !== candidateView || candidateView.page.rows[index] !== row || !latest.current.current()) throw Error(text.expired);
+      if (children) setChildIndex(index);
+      else if (onChoose) { onChoose(postgresReferenceSelection(candidateView.choice, row)); onClose(); }
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   return <section className="pg-reference-picker" aria-label={children ? text.childrenTitle : parent ? text.browseTitle : text.title}>
     <div className="pg-table-controls">
       <select aria-label={text.constraint} value={choice?.id ?? ''} disabled={busy || !choices?.length} onChange={event => {
@@ -152,18 +160,16 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
       </div>
       {!!view.page.rows.length && <div className={children ? 'pg-reference-candidates pg-reference-children' : 'pg-reference-candidates'}><table>
         <thead><tr>{columns.map(column => <th key={column.key}>{column.name}</th>)}<th>{children ? text.inspectChild : text.use}</th></tr></thead>
-        <tbody>{view.page.rows.map((row, index) => <tr key={index}>
+        <tbody>{view.page.rows.map((row, index) => <tr key={index} onDoubleClick={!browse && onChoose ? event => {
+          if (event.defaultPrevented || !(event.target instanceof Element) || event.target.closest('button')) return;
+          event.preventDefault();
+          useCandidate(view, row, index);
+        } : undefined}>
           {columns.map(column => {
             const value = cellPreview(row[column.key]);
             return <td key={column.key}>{children ? <span>{value}</span> : value}</td>;
           })}
-          <td><button type="button" disabled={busy} onClick={() => {
-            try {
-              if (liveView.current !== view || !latest.current.current()) throw Error(text.expired);
-              if (children) setChildIndex(index);
-              else if (onChoose) { onChoose(postgresReferenceSelection(view.choice, row)); onClose(); }
-            } catch (reason) { setError(errorMessage(reason)); }
-          }}>{children ? text.inspectChild : text.use}</button></td>
+          <td><button type="button" disabled={busy} onClick={() => useCandidate(view, row, index)}>{children ? text.inspectChild : text.use}</button></td>
         </tr>)}</tbody>
       </table></div>}
     </>}

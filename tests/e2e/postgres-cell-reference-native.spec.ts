@@ -78,7 +78,7 @@ test('PostgreSQL 从命中的单元格选择复合父键并保留该行已有草
     const use = target.getByRole('button', { name: text.use, exact: true });
     await expect(use).toBeEnabled();
     await page.screenshot({ path: info.outputPath('PostgreSQL外键候选.png') });
-    await use.click();
+    await target.getByRole('cell', { name: '目标配对', exact: true }).dblclick();
     await expect(picker).toHaveCount(0);
     await expect(cell('第二条草稿').locator('..')).toContainText('目标组');
     await expect(cell('第二条草稿').locator('..')).toContainText('9007199254740997');
