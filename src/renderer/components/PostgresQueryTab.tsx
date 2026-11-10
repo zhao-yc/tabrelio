@@ -55,7 +55,7 @@ import { postgresRecordTransferZh as transferText } from '../locales/postgresRec
 import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
-import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, type QueryResultColumnLayout } from '../queryResultColumns';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
 import { captureQueryResultMemory, queryResultMemoryMatches } from '../queryResultMemory';
 import { queryResultPresetsZh as presetsText } from '../locales/queryResultPresets.zh-CN';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
@@ -1761,6 +1761,11 @@ export function PostgresQueryTab({
       layout: { ...(layout ?? { order: keys, visible: keys }), widths } });
   }
 
+  function resizeResultRowHeight(height: number): void {
+    if (!resultSource || !visibleColumns || !resultCurrent()) return;
+    setColumnLayout({ source: resultSource, columns: visibleColumns, layout: setQueryResultRowHeight(resultSource.columns, layout, height) });
+  }
+
   const headerFreeze = {
     current: resultCurrent,
     apply(key?: string) {
@@ -2115,7 +2120,7 @@ export function PostgresQueryTab({
         if (resultCurrent() && !document.querySelector(appModalSelector))
           openRowSqlDraft({ connectionId: tab.connectionId, database: scope.database, table: rowSql.table }, kind, sql);
       } : undefined}
-      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
+      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onRowHeightChange={resizeResultRowHeight} onColumnWidthsChange={resizeResultColumns}
       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
       onShowRows={binding ? changeMatchView : undefined}
       onExportRange={binding ? result => {

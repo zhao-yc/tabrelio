@@ -1,5 +1,13 @@
 import { tablePreferencesLimits, type TablePreferences } from '../shared/tablePreferences';
 import { tableGridZh as text } from './locales/tableGrid.zh-CN';
+import { defaultGridRowHeight, isGridRowHeight } from '../shared/gridRowHeight';
+
+/** 标准行高沿用省略字段的旧记录格式，其余布局属性保持。 */
+export function setTableRowHeight(preferences: TablePreferences, height: number): TablePreferences {
+  if (!isGridRowHeight(height)) throw Error(text.heightInvalid);
+  const { rowHeight: _previous, ...base } = preferences;
+  return height === defaultGridRowHeight ? base : { ...base, rowHeight: height };
+}
 
 /** 将已保存列与真实当前列调和：旧列删除，新列追加，实际列名作为身份。 */
 export function reconcileTablePreferences(names: readonly string[], preferences: TablePreferences | null): TablePreferences {

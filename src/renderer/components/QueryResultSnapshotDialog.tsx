@@ -8,7 +8,7 @@ import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
-import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, type QueryResultColumnLayout } from '../queryResultColumns';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
 import type { GridRangeExportData } from '../gridRangeExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView, type SortDialect } from '../queryResultSort';
 import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterRule, type QueryResultFilterView } from '../queryResultFilter';
@@ -259,6 +259,10 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     const keys = displayed.columns.map(column => column.key);
     setColumnLayout({ layout: { ...(columnLayout?.layout ?? { order: keys, visible: keys }), widths }, columns: visibleColumns });
   }
+  function resizeRowHeight(height: number): void {
+    if (!loaded || !displayed || !visibleColumns || !gridCurrent(loaded, interaction, false)) return;
+    setColumnLayout({ columns: visibleColumns, layout: setQueryResultRowHeight(displayed.columns, columnLayout?.layout, height) });
+  }
   function sortDraftCurrent(draft: SnapshotSort): boolean {
     return alive.current && overlayRef.current === draft && sorter.view(draft.binding) === draft.initial;
   }
@@ -469,7 +473,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       <div className="query-result-snapshot-viewer-grid">
         <ResultsGrid rowJump columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
           frozenKeys={frozenKeys} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
-          onColumnWidthsChange={binding ? resizeColumns : undefined}
+          onColumnWidthsChange={binding ? resizeColumns : undefined} onRowHeightChange={binding ? resizeRowHeight : undefined}
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
           ownDialog={ownDialog} filterDialect={dialect} columnNameDialect={loaded.snapshot.version === 2 ? 'sqlite' : undefined} onFilterSelected={filterView ? openSelectedFilter : undefined}

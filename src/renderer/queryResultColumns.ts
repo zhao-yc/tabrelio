@@ -1,10 +1,19 @@
 import type { DataRow, QueryResult, ResultColumn, ResultExportData } from '../shared/contracts';
 import { resultExportLimits, validateResultExportData } from '../shared/resultExport';
-import type { GridRowHeight } from '../shared/gridRowHeight';
+import { isGridRowHeight, type GridRowHeight } from '../shared/gridRowHeight';
+import { tableGridZh } from './locales/tableGrid.zh-CN';
 import { projectSqliteResultStorage } from '../shared/sqliteResultStorage';
 
 export const queryResultColumnWidth = { min: 64, max: 2000, default: 170 } as const;
 export interface QueryResultColumnLayout { order: string[]; visible: string[]; frozenThrough?: string; widths?: ReadonlyMap<string, number>; rowHeight?: GridRowHeight; }
+
+/** 独立调高复用当前布局。首次调整以原结果列顺序建立布局。 */
+export function setQueryResultRowHeight(columns: ResultColumn[], layout: QueryResultColumnLayout | undefined, rowHeight: number): QueryResultColumnLayout {
+  if (!isGridRowHeight(rowHeight)) throw Error(tableGridZh.heightInvalid);
+  if (layout) return { ...layout, rowHeight };
+  const keys = queryResultColumnKeys(columns);
+  return { order: keys, visible: [...keys], rowHeight };
+}
 
 /** 空白用默认值，手动输入只接受范围内的整数像素。 */
 export function parseQueryResultColumnWidth(value: string): number | undefined {

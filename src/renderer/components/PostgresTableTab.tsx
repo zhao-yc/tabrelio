@@ -64,7 +64,7 @@ import { tablePresetsZh } from '../locales/tablePresets.zh-CN';
 import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { postgresTableLayoutZh as layoutText } from '../locales/postgresTableLayout.zh-CN';
 import { TableLayoutController, type SqliteLayoutView, type TableLayoutScope } from '../sqliteTableLayout';
-import { setTableColumnWidths, setTableFrozenThrough } from '../tableColumnPreferences';
+import { setTableColumnWidths, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { postgresTablePresetConfiguration, postgresTablePresetOptions, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
@@ -1327,6 +1327,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     },
   };
 
+  function resizeRowHeight(height: number): void {
+    if (headerFreeze.current()) changeLayout(setTableRowHeight(layout.view.preferences, height));
+  }
+
   function persistLayout(reset = false) {
     setLayoutError('');
     void layout.persist(reset).catch(reason => setLayoutError(errorMessage(reason)));
@@ -1840,7 +1844,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell, undefined, range); }
           catch (reason) { setError(errorMessage(reason)); }
         }}
-        frozenKeys={gridLayout.frozenKeys} freezeColumns={headerFreeze} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onColumnWidthsChange={resizeLayout}
+        frozenKeys={gridLayout.frozenKeys} freezeColumns={headerFreeze} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onRowHeightChange={layoutView.ready && !layoutView.pending ? resizeRowHeight : undefined} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {
             const rules = sort.map(({ column, direction, nulls }) => ({

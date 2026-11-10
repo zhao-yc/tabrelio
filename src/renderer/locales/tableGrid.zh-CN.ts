@@ -1,4 +1,5 @@
 export const tableGridZh = {
+  heightInvalid: '数据行高必须是 24 到 120 的整数。',
   confirmLayout: '确认更改列布局',
   grid: '当前页数据网格',
   find: '当前页查找替换', preferences: '表列偏好', scope: '只查找当前已加载页的可见列，包含未提交草稿，排除待删除行；不会查询其他页。',

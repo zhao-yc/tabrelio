@@ -1,13 +1,13 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { TablePreferences } from '../../shared/tablePreferences';
-import { changeTablePreference, moveTableColumn, setTableColumnWidths, setTableFrozenThrough, setVisibleTableColumnWidths, visibleTableKeys } from '../tableColumnPreferences';
+import { changeTablePreference, moveTableColumn, setTableColumnWidths, setTableFrozenThrough, setTableRowHeight, setVisibleTableColumnWidths, visibleTableKeys } from '../tableColumnPreferences';
 import { errorMessage } from '../lib';
 import { tableGridZh as text } from '../locales/tableGrid.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import { GridColumnWidthBatch } from './GridColumnWidthBatch';
 import { GridRowHeightField } from './GridRowHeightField';
-import { defaultGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
+import type { GridRowHeight } from '../../shared/gridRowHeight';
 import { fitGridColumnWidths, type GridColumnFitSource } from '../gridColumnFit';
 import { gridColumnWidthBatchZh as widthText } from '../locales/gridColumnWidthBatch.zh-CN';
 
@@ -36,8 +36,7 @@ export function TablePreferencesDialog({ preferences, pending, dirty, error, onC
   /** 标准档继续沿用缺省记录；改行高保留单列宽度草稿和原布局。 */
   function changeRowHeight(rowHeight: GridRowHeight) {
     if (!alive.current || unavailable.current || source.current !== renderedSource) return;
-    const { rowHeight: _previous, ...base } = preferences;
-    onChange(rowHeight === defaultGridRowHeight ? base : { ...base, rowHeight });
+    onChange(setTableRowHeight(preferences, rowHeight));
   }
   /** 只替换本次设置范围内的宽度，搜索和隐藏列不改变批量范围。 */
   function applyVisibleWidths(width?: number, column?: string) {

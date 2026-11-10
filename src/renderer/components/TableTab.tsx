@@ -119,7 +119,7 @@ import { patchReferenceRow, referenceWritable, referencesForColumn, type Referen
 import { referenceZh } from '../locales/references.zh-CN';
 import type { CellValue, ForeignKeyInfo } from '../../shared/contracts';
 import type { TablePreferences } from '../../shared/tablePreferences';
-import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys, setTableFrozenThrough } from '../tableColumnPreferences';
+import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { applyPageReplacement, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { PageFindPanel, type PageFindDisplay } from './PageFindPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
@@ -2245,14 +2245,18 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       if (canReload(undefined, guard)) { setSort(checked); setPageIndex(1); }
     } catch (reason) { setError(errorMessage(reason)); }
   }
+  const height = readGridRowHeight(preferences.rowHeight);
   const gridSort = sort.map(({ column, direction }) => ({ columnKey: column, direction }));
-  const { widthDialog, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
+  const { sizeDialog, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner: sortScope, grid: () => grid.current?.element, column: index => visibleColumns[index - 1],
     columnNameDialect: 'mysql',
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
     selectColumn: index => cellRange.selectColumnAction(index - 1),
     findColumn: page ? key => openPageFind('query', key) : undefined,
+    resizeRows: page && !externalStale && !preferencesLoading && !preferencesLock.current ? { height,
+      apply: next => updatePreferences(setTableRowHeight(preferencesRef.current, next)),
+    } : undefined,
     resizeColumn: page && !externalStale && !preferencesLoading && !preferencesLock.current ? (key, width) => {
       try { updatePreferences(changeTablePreference(preferencesRef.current, key, { width })); }
       catch (reason) { setPreferencesError(errorMessage(reason)); }
@@ -2291,11 +2295,10 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     if (canReload(undefined, () => tableToolbarCurrent() && !reloadBlocked())) { checkedExport.clear(); void load(); }
   }
 
-  const height = readGridRowHeight(preferences.rowHeight);
   return <div ref={rootElement} className="workspace-tab table-tab" data-table-find-scope onKeyDown={event => {
     if (!blocked && tableRefreshShortcut(event)) refreshTable();
     if (!blocked && !gridEditing && tableToolbarCurrent() && tableObjectQueryShortcut(event)) openTableObjectQuery(tab, connectionVersion);
-  }}>{cellActionMenu.menu}{widthDialog}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
+  }}>{cellActionMenu.menu}{sizeDialog}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
   items={[
     { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} onClick={refreshTable} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button>) },
     { key: 'insert', content: (<button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button>) },

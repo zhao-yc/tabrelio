@@ -8,6 +8,7 @@ import { writeTableClipboardEvent } from '../gridClipboard';
 import { errorMessage } from '../lib';
 import { useWorkspace } from '../store';
 import { tablePreferencesLimits } from '../../shared/tablePreferences';
+import { gridRowHeightLimits } from '../../shared/gridRowHeight';
 import { appModalSelector, gridDialogCurrent } from '../modalSelectors';
 import { Field, Modal } from './ui';
 
@@ -28,38 +29,42 @@ interface HeaderMenuSource {
   selectColumn?(index: number): GridCellAction | undefined;
   findColumn?(key: string): void;
   resizeColumn?(key: string, width: number): void;
+  resizeRows?: { height: number; apply(height: number): void };
   ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
   frozenThrough?: string;
 }
 
-interface WidthRequest {
-  name: string;
+interface SizeRequest {
+  dimension: 'width' | 'height';
+  description: string;
   initial: number;
-  apply(width: number): void;
+  apply(size: number): void;
 }
 
-function ColumnWidthDialog({ request, onClose, onApply }: { request: WidthRequest; onClose(): void; onApply(width: number): void }) {
+function GridSizeDialog({ request, onClose, onApply }: { request: SizeRequest; onClose(): void; onApply(size: number): void }) {
   const [input, setInput] = useState(String(request.initial));
   const field = useRef<HTMLInputElement>(null);
-  const { minWidth, maxWidth } = tablePreferencesLimits;
-  const width = Number(input);
-  const valid = /^\d+$/.test(input) && width >= minWidth && width <= maxWidth;
-  return <Modal title={text.setWidth} onClose={onClose} initialFocus={field}>
-    <form data-grid-header-width-dialog onSubmit={event => {
+  const height = request.dimension === 'height';
+  const min = height ? gridRowHeightLimits.min : tablePreferencesLimits.minWidth;
+  const max = height ? gridRowHeightLimits.max : tablePreferencesLimits.maxWidth;
+  const size = Number(input);
+  const valid = /^\d+$/.test(input) && size >= min && size <= max;
+  return <Modal title={height ? text.setHeight : text.setWidth} onClose={onClose} initialFocus={field}>
+    <form data-grid-size-dialog onSubmit={event => {
       event.preventDefault();
       const dialogs = document.querySelectorAll(appModalSelector);
-      if (valid && event.currentTarget.closest(appModalSelector) === dialogs[dialogs.length - 1]) onApply(width);
+      if (valid && event.currentTarget.closest(appModalSelector) === dialogs[dialogs.length - 1]) onApply(size);
     }}>
       <div className="modal-content">
-        <p style={{ overflowWrap: 'anywhere' }}>{text.widthColumn(request.name)}</p>
-        <Field label={text.width}><input ref={field} inputMode="numeric" maxLength={16} value={input}
-          aria-invalid={!valid} aria-describedby="grid-header-width-range" onFocus={event => event.currentTarget.select()}
+        <p style={{ overflowWrap: 'anywhere' }}>{request.description}</p>
+        <Field label={height ? text.height : text.width}><input ref={field} inputMode="numeric" maxLength={16} value={input}
+          aria-invalid={!valid} aria-describedby="grid-size-range" onFocus={event => event.currentTarget.select()}
           onChange={event => setInput(event.target.value)}/></Field>
-        <p id="grid-header-width-range" className="muted small">{text.widthRange(minWidth, maxWidth)}</p>
+        <p id="grid-size-range" className="muted small">{text.widthRange(min, max)}</p>
       </div>
       <footer className="modal-footer"><span className="grow"/><button type="button" onClick={onClose}>{text.cancelWidth}</button>
-        <button type="submit" className="primary" disabled={!valid}>{text.applyWidth}</button></footer>
+        <button type="submit" className="primary" disabled={!valid}>{height ? text.applyHeight : text.applyWidth}</button></footer>
     </form>
   </Modal>;
 }
@@ -75,16 +80,41 @@ function changeHeaderSort(sort: readonly SortColumn[], key: string, direction?: 
 export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionMenu>['open'], source: HeaderMenuSource) {
   const latest = useRef(source);
   latest.current = source;
-  const [widthRequest, setWidthRequest] = useState<WidthRequest>();
-  const pendingWidth = useRef<{ request: WidthRequest; width: number }>(undefined);
+  const [sizeRequest, setSizeRequest] = useState<SizeRequest>();
+  const pendingSize = useRef<{ request: SizeRequest; size: number }>(undefined);
   // 布局接纳门会拒绝模态后的网格操作。关闭并提交 DOM 后，重新验证原网格再写入。
   useLayoutEffect(() => {
-    if (widthRequest || !pendingWidth.current) return;
-    const { request, width } = pendingWidth.current;
-    pendingWidth.current = undefined;
-    try { request.apply(width); }
+    if (sizeRequest || !pendingSize.current) return;
+    const { request, size } = pendingSize.current;
+    pendingSize.current = undefined;
+    try { request.apply(size); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
-  }, [widthRequest]);
+  }, [sizeRequest]);
+
+  /** 行高属于整个网格。只从行侧辅助格打开，应用前核对原网格和当前行高。 */
+  function openRowHeader(target: EventTarget | null, point?: { x: number; y: number }): boolean {
+    if (!source.resizeRows || !source.owner || !(target instanceof HTMLElement)) return false;
+    const grid = source.grid(), cell = target.closest<HTMLElement>('[role="gridcell"]');
+    if (!grid || !cell || cell.closest('[role="grid"]') !== grid) return false;
+    const index = Number(cell.getAttribute('aria-colindex')) - 1;
+    if (!Number.isSafeInteger(index) || index < 0 || source.column(index)) return false;
+    const original = source.resizeRows.height;
+    const current = () => {
+      const now = latest.current;
+      return now.owner === source.owner && now.grid() === grid && grid.isConnected &&
+        now.resizeRows?.height === original && now.current() && gridDialogCurrent(grid, now.ownDialog);
+    };
+    return openMenu(cell, grid, { title: text.rowMenu, label: text.rowMenu, current,
+      focusTarget: () => target.matches('button,input') && cell.contains(target) ? target : undefined,
+      actions: [{ label: text.setHeight, run: () => {
+        if (!current()) return;
+        setSizeRequest({ dimension: 'height', description: text.heightScope, initial: original, apply(height) {
+          if (!current()) { useWorkspace.getState().notify(text.staleHeight, true); return; }
+          if (height !== original) latest.current.resizeRows?.apply(height);
+        } });
+      } }],
+    }, point);
+  }
 
   function captureColumn(target: EventTarget | null, selector: string) {
     if (!(target instanceof Element)) return;
@@ -143,7 +173,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       const measuredWidth = () => Math.round(cell.getBoundingClientRect().width);
       const original = measuredWidth();
       const { minWidth, maxWidth } = tablePreferencesLimits;
-      setWidthRequest({ name: column.name, initial: Math.max(minWidth, Math.min(maxWidth, original)), apply(width) {
+      setSizeRequest({ dimension: 'width', description: text.widthColumn(column.name), initial: Math.max(minWidth, Math.min(maxWidth, original)), apply(width) {
         const now = latest.current;
         if (now.resizeColumn && current() && cell.isConnected && cell.closest('[role="grid"]') === grid &&
             Number(cell.getAttribute('aria-colindex')) === index + 1 && measuredWidth() === original && gridDialogCurrent(cell, now.ownDialog)) {
@@ -184,17 +214,18 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   }
 
   return {
-    widthDialog: widthRequest && <ColumnWidthDialog request={widthRequest} onClose={() => setWidthRequest(undefined)} onApply={width => {
-      pendingWidth.current = { request: widthRequest, width };
-      setWidthRequest(undefined);
+    sizeDialog: sizeRequest && <GridSizeDialog request={sizeRequest} onClose={() => setSizeRequest(undefined)} onApply={size => {
+      pendingSize.current = { request: sizeRequest, size };
+      setSizeRequest(undefined);
     }}/>,
     onContextMenuCapture(event: MouseEvent) {
-      if (event.defaultPrevented || !open(event.target, { x: event.clientX, y: event.clientY })) return;
+      const point = { x: event.clientX, y: event.clientY };
+      if (event.defaultPrevented || !(open(event.target, point) || openRowHeader(event.target, point))) return;
       event.preventDefault();
       event.stopPropagation();
     },
     onKeyDownCapture(event: KeyboardEvent) {
-      if (event.defaultPrevented || !(isGridContextKey(event) ? open(event.target) : sortFromKeyboard(event))) return;
+      if (event.defaultPrevented || !(isGridContextKey(event) ? open(event.target) || openRowHeader(event.target) : sortFromKeyboard(event))) return;
       event.preventDefault();
       event.stopPropagation();
     },
