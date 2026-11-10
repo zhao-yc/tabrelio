@@ -270,13 +270,14 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, page, rows, d
       () => current(cell.row) && !disabled && noModal());
   }
   const cellActionMenu = useGridCellActionMenu();
-  const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
+  const { widthDialog, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner, grid: () => grid.current?.element,
     column: index => page.result.columns[order[index - 2]],
     columnNameDialect: 'sqlite', findColumn: onFindColumn,
     sort: sort ?? [], current: () => !disabled && baseCurrent() && noModal(),
     canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
     selectColumn: index => cellRange.selectColumnAction(index - 2),
+    resizeColumn: onColumnResize,
     freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,
   });
   const quickValue = useRef(onQuickValue); quickValue.current = onQuickValue;
@@ -412,7 +413,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, page, rows, d
     if (next) changeCheckedRows(next);
   });
 
-  return <div className="sqlite-edit-clipboard-region" {...headerMenu} onPasteCapture={paste} onDoubleClickCapture={fitSource && onColumnResize ? fitHeaderColumn : undefined}>{cellActionMenu.menu}{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
+  return <div className="sqlite-edit-clipboard-region" {...headerMenu} onPasteCapture={paste} onDoubleClickCapture={fitSource && onColumnResize ? fitHeaderColumn : undefined}>{cellActionMenu.menu}{widthDialog}{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button>
     <GridColumnJump key={'column:' + orderKey} scope={owner} columns={order.map(index => page.columns[index])}
       disabled={disabled} isCurrent={() => !disabled && baseCurrent() && noModal()} onJump={jumpToGridColumn}/>
     <button type="button" title={headerCopyText.namesHint} disabled={disabled} onClick={() => copyFromGrid('names')}>{headerCopyText.names}</button>

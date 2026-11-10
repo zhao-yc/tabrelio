@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type MouseEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import type { SortColumn } from 'react-data-grid';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { gridHeaderMenuZh as text } from '../locales/gridHeaderMenu.zh-CN';
@@ -7,6 +7,9 @@ import { gridColumnName } from '../gridColumnName';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { errorMessage } from '../lib';
 import { useWorkspace } from '../store';
+import { tablePreferencesLimits } from '../../shared/tablePreferences';
+import { appModalSelector, gridDialogCurrent } from '../modalSelectors';
+import { Field, Modal } from './ui';
 
 export interface GridHeaderFreeze {
   current(): boolean;
@@ -24,8 +27,41 @@ interface HeaderMenuSource {
   applySort(next: readonly SortColumn[], current: () => boolean): void;
   selectColumn?(index: number): GridCellAction | undefined;
   findColumn?(key: string): void;
+  resizeColumn?(key: string, width: number): void;
+  ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
   frozenThrough?: string;
+}
+
+interface WidthRequest {
+  name: string;
+  initial: number;
+  apply(width: number): void;
+}
+
+function ColumnWidthDialog({ request, onClose, onApply }: { request: WidthRequest; onClose(): void; onApply(width: number): void }) {
+  const [input, setInput] = useState(String(request.initial));
+  const field = useRef<HTMLInputElement>(null);
+  const { minWidth, maxWidth } = tablePreferencesLimits;
+  const width = Number(input);
+  const valid = /^\d+$/.test(input) && width >= minWidth && width <= maxWidth;
+  return <Modal title={text.setWidth} onClose={onClose} initialFocus={field}>
+    <form data-grid-header-width-dialog onSubmit={event => {
+      event.preventDefault();
+      const dialogs = document.querySelectorAll(appModalSelector);
+      if (valid && event.currentTarget.closest(appModalSelector) === dialogs[dialogs.length - 1]) onApply(width);
+    }}>
+      <div className="modal-content">
+        <p style={{ overflowWrap: 'anywhere' }}>{text.widthColumn(request.name)}</p>
+        <Field label={text.width}><input ref={field} inputMode="numeric" maxLength={16} value={input}
+          aria-invalid={!valid} aria-describedby="grid-header-width-range" onFocus={event => event.currentTarget.select()}
+          onChange={event => setInput(event.target.value)}/></Field>
+        <p id="grid-header-width-range" className="muted small">{text.widthRange(minWidth, maxWidth)}</p>
+      </div>
+      <footer className="modal-footer"><span className="grow"/><button type="button" onClick={onClose}>{text.cancelWidth}</button>
+        <button type="submit" className="primary" disabled={!valid}>{text.applyWidth}</button></footer>
+    </form>
+  </Modal>;
 }
 
 /** 修改命中列，保留其他列及其顺序。新增列放在最后，底层仍负责验证排序规则。 */
@@ -39,6 +75,16 @@ function changeHeaderSort(sort: readonly SortColumn[], key: string, direction?: 
 export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionMenu>['open'], source: HeaderMenuSource) {
   const latest = useRef(source);
   latest.current = source;
+  const [widthRequest, setWidthRequest] = useState<WidthRequest>();
+  const pendingWidth = useRef<{ request: WidthRequest; width: number }>(undefined);
+  // 布局接纳门会拒绝模态后的网格操作。关闭并提交 DOM 后，重新验证原网格再写入。
+  useLayoutEffect(() => {
+    if (widthRequest || !pendingWidth.current) return;
+    const { request, width } = pendingWidth.current;
+    pendingWidth.current = undefined;
+    try { request.apply(width); }
+    catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+  }, [widthRequest]);
 
   function captureColumn(target: EventTarget | null, selector: string) {
     if (!(target instanceof Element)) return;
@@ -54,7 +100,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       return now.owner === source.owner && now.grid() === grid && live?.key === key && live.name === name &&
         now.columnNameDialect === source.columnNameDialect && now.current();
     };
-    return { grid, column, index, current };
+    return { grid, cell, column, index, current };
   }
 
   /** 菜单和快捷键共用排序快照，读取或确认草稿期间仍核对原列和规则。 */
@@ -74,7 +120,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   function open(target: EventTarget | null, point?: { x: number; y: number }): boolean {
     const captured = captureColumn(target, '[role="columnheader"]');
     if (!captured) return false;
-    const { grid, column, index, current } = captured;
+    const { grid, cell, column, index, current } = captured;
     const actions: GridCellAction[] = [];
     const selectColumn = source.selectColumn?.(index);
     if (selectColumn) actions.push(selectColumn);
@@ -92,6 +138,19 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       actions.push({ label: text.freeze, disabled: source.frozenThrough === column.key, run: () => apply(column.key) },
         { label: text.unfreeze, disabled: source.frozenThrough === undefined, run: () => apply() });
     }
+    if (source.resizeColumn) actions.push({ label: text.setWidth, run: () => {
+      if (!current() || !gridDialogCurrent(cell, source.ownDialog)) return;
+      const measuredWidth = () => Math.round(cell.getBoundingClientRect().width);
+      const original = measuredWidth();
+      const { minWidth, maxWidth } = tablePreferencesLimits;
+      setWidthRequest({ name: column.name, initial: Math.max(minWidth, Math.min(maxWidth, original)), apply(width) {
+        const now = latest.current;
+        if (now.resizeColumn && current() && cell.isConnected && cell.closest('[role="grid"]') === grid &&
+            Number(cell.getAttribute('aria-colindex')) === index + 1 && measuredWidth() === original && gridDialogCurrent(cell, now.ownDialog)) {
+          if (width !== original) now.resizeColumn(column.key, width);
+        } else useWorkspace.getState().notify(text.staleWidth, true);
+      } });
+    } });
     const name = gridColumnName(column.name, source.columnNameDialect);
     // 标题复制只写纯文本，与网格单元格的类型化剪贴板格式分开。
     const copy = (value: string) => {
@@ -125,6 +184,10 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   }
 
   return {
+    widthDialog: widthRequest && <ColumnWidthDialog request={widthRequest} onClose={() => setWidthRequest(undefined)} onApply={width => {
+      pendingWidth.current = { request: widthRequest, width };
+      setWidthRequest(undefined);
+    }}/>,
     onContextMenuCapture(event: MouseEvent) {
       if (event.defaultPrevented || !open(event.target, { x: event.clientX, y: event.clientY })) return;
       event.preventDefault();

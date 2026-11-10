@@ -536,6 +536,10 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
   const binaryColumn = binary ? columns.find(column => column.key === binary.key) : undefined;
   // 查询结果受控，恢复默认后丢弃虚拟网格此前缓存的手动宽度。
   const controlledWidths = useMemo<ColumnWidths>(() => new Map(Array.from(columnWidths ?? [], ([key, width]) => [key, { type: 'resized', width }])), [columnWidths]);
+  function resizeColumn(key: string, width: number): void {
+    if (onColumnResize) onColumnResize(key, width);
+    else onColumnWidthsChange?.(new Map(controlledWidths).set(key, { type: 'resized', width }));
+  }
   /** 适宽与拖动共享布局接纳门，按内部列键区分同名结果列。 */
   function fitHeaderColumn(event: MouseEvent): void {
     const index = gridResizeHandleColumn(event, gridRef.current?.element);
@@ -547,8 +551,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       const width = fitGridColumnWidths({ columns: [{ ...column, type }], rowCount: rows.length,
         cell: (row, key) => presentCell?.(rows[row], key)?.label ?? cellPreview(displayedValue(rows[row], key, presentCell)),
       }, new Set([column.key])).get(column.key)!;
-      if (onColumnResize) onColumnResize(column.key, width);
-      else onColumnWidthsChange?.(new Map(controlledWidths).set(column.key, { type: 'resized', width }));
+      resizeColumn(column.key, width);
     } catch { useWorkspace.getState().notify(gridColumnWidthBatchZh.fitUnavailable, true); }
   }
   const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, frozen: index < frozenCount, headerCellClass: findTarget?.row === -1 && findTarget.key === column.key ? 'query-result-find-hit' : findMarks?.has('-1:' + column.key) ? 'pg-find-match' : undefined, cellClass: row => {
@@ -610,7 +613,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
   const fitHeader = onColumnResize || onColumnWidthsChange ? fitHeaderColumn : undefined;
-  const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
+  const { widthDialog, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner: scope, grid: () => gridRef.current?.element,
     column: index => columns[index - (onActiveRowChange ? 0 : 1)],
     columnNameDialect: columnNameDialect ?? filterDialect,
@@ -618,9 +621,10 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
     current: actionCurrent, canSort: key => !!onSortChange && !sortReasons?.get(key), applySort: changeSortColumns,
     selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
+    resizeColumn: fitHeader ? resizeColumn : undefined, ownDialog,
     freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,
   });
-  const hasHeaderMenu = onSortChange || freezeColumns || rangeTools || columnNameDialect || filterDialect || onFindColumn;
+  const hasHeaderMenu = onSortChange || freezeColumns || rangeTools || columnNameDialect || filterDialect || onFindColumn || fitHeader;
   const grid = onCellPaste || fitHeader || hasHeaderMenu ? <div style={{ display: 'contents' }}
     {...(hasHeaderMenu ? headerMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。
@@ -727,6 +731,6 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     <button type="button" disabled={!checkedRows} onClick={() => showCheckedView('excluded')}>{rowViewText.hideCheckedRows}</button>
   </>;
   const gridTools = jump || tableCopy ? <>{jump}{tableCopy && copyTools}{selectionTools}</> : undefined;
-  return <>{cellActionMenu.menu}{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : gridTools)}
+  return <>{cellActionMenu.menu}{widthDialog}{renderRowSelectionAction?.(selectedRows, selectedActionCurrent, hasResultTools ? undefined : gridTools)}
     {!hasResultTools && !renderRowSelectionAction && gridTools && <div className="query-result-copy-actions">{gridTools}</div>}{hasResultTools ? <div className="query-result-copy-region"><div className="query-result-copy-actions">{copyTools}{selectionTools}{checkedViewTools}{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{checkedFilterActions}{onStatistics&&<button type="button" disabled={statisticsReadyScope!==scope||!columns.length} onClick={openStatistics}>{statisticsText.open}</button>}{jump}</div><QueryResultFind control={resultFind} owner={scope} rows={rows} columns={columns} checkedRows={checkedRows} grid={gridRef} isCurrent={actionCurrent} onHighlights={showFindHighlights} onMatchingRows={changeMatchingRows} onShowMatchingRows={onShowRows} onStageFindFilter={onStageFindFilter} findFilterSource={findFilterSource} filterDialect={filterDialect} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && binary.presentation === presentCell && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={binary.value} reason={binaryCellZh.readonly} source={[binary]} isCurrent={binaryFileActions ? () => binaryCurrent(binary) : undefined}/></div></Modal>}</>;
 }

@@ -2246,13 +2246,17 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     } catch (reason) { setError(errorMessage(reason)); }
   }
   const gridSort = sort.map(({ column, direction }) => ({ columnKey: column, direction }));
-  const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
+  const { widthDialog, ...headerMenu } = useGridHeaderMenu(cellActionMenu.open, {
     owner: sortScope, grid: () => grid.current?.element, column: index => visibleColumns[index - 1],
     columnNameDialect: 'mysql',
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
     selectColumn: index => cellRange.selectColumnAction(index - 1),
     findColumn: page ? key => openPageFind('query', key) : undefined,
+    resizeColumn: page && !externalStale && !preferencesLoading && !preferencesLock.current ? (key, width) => {
+      try { updatePreferences(changeTablePreference(preferencesRef.current, key, { width })); }
+      catch (reason) { setPreferencesError(errorMessage(reason)); }
+    } : undefined,
     frozenThrough: frozenKeys.at(-1), freeze: {
       current: () => !!page && !externalStale && !preferencesLoading && !preferencesLock.current,
       // 和布局窗口共享同一草稿，保存仍由用户从布局入口触发。
@@ -2290,7 +2294,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   return <div ref={rootElement} className="workspace-tab table-tab" data-table-find-scope onKeyDown={event => {
     if (!blocked && tableRefreshShortcut(event)) refreshTable();
     if (!blocked && !gridEditing && tableToolbarCurrent() && tableObjectQueryShortcut(event)) openTableObjectQuery(tab, connectionVersion);
-  }}>{cellActionMenu.menu}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
+  }}>{cellActionMenu.menu}{widthDialog}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
   items={[
     { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} onClick={refreshTable} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button>) },
     { key: 'insert', content: (<button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button>) },
