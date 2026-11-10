@@ -14,8 +14,10 @@ import type { TableInfo } from '../../src/shared/contracts';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { createStore } from 'zustand/vanilla';
+import type { useGridHeaderMenu } from '../../src/renderer/components/GridHeaderMenu';
 
 type Element = { type: unknown; props: Record<string, any> };
+type HeaderSource = Parameters<typeof useGridHeaderMenu>[1];
 const renderer = fileURLToPath(new URL('../../src/renderer', import.meta.url)), compiled = new Map<string, string>();
 /** 执行完整生产TableTab与真实useRecordViews/helper，React调度、DOM和IPC仅替换成RAM端口。 */
 async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: boolean } = {}) {
@@ -23,8 +25,12 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   const effects: (() => void)[] = [];
   const equal = (a: any[], b: any[]) => !!a && !!b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
   const hooks = {
+    // 此夹具直接渲染表页，未包裹网格缩放Provider，Context使用生产默认值。
+    createContext<T>(defaultValue: T) { return { defaultValue }; },
+    useContext<T>(context: { defaultValue: T }) { return context.defaultValue; },
     useState(initial: any) { const index = cursor++; if (!Object.hasOwn(slots, index)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (value: any) => { const next = typeof value === 'function' ? value(slots[index]) : value; if (!Object.is(next, slots[index])) { slots[index] = next; dirty = true; } }]; },
     useRef(initial: any) { const index = cursor++; if (!Object.hasOwn(slots, index)) slots[index] = { current: initial }; return slots[index]; },
+    useId() { return hooks.useMemo(() => 'RAM控件-' + ++counter, []); },
     useMemo(fn: () => any, deps: any[]) { const index = cursor++; if (!slots[index] || !equal(slots[index].deps, deps)) slots[index] = { value: fn(), deps }; return slots[index].value; },
     useCallback(fn: () => any, deps: any[]) { return hooks.useMemo(() => fn, deps); },
     useEffect(fn: () => any, deps: any[]) { const index = cursor++; if (!slots[index] || !equal(slots[index].deps, deps)) { const prior = slots[index]; const current = { deps, cleanup: undefined as any }; slots[index] = current; effects.push(() => { prior?.cleanup?.(); current.cleanup = fn(); }); } },
@@ -68,6 +74,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   const confirm = vi.fn((_message?: string): boolean => true);
   const context = createContext({ Error, Object, queueMicrotask, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: { querySelector: (selector: string) => dialog ? {} : memory.body.querySelector(selector), querySelectorAll: (selector: string) => dialog ? [{}] : memory.body.querySelectorAll(selector) }, window: { confirm } });
   const modules = new Map<string, { exports: any }>();
+  let headerSource: HeaderSource | undefined;
   function load(file: string): any {
     file = path.resolve(file); if (modules.has(file)) return modules.get(file)!.exports;
     const module = { exports: {} as any }; modules.set(file, module);
@@ -83,6 +90,12 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (target === path.join(renderer, 'uiCommands')) return navigationMenuVmPort;
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
       if (target === path.join(renderer, 'components/GridCellActionMenu')) return { useGridCellActionMenu: () => ({ menu: null }) };
+      // 钩子与辅助函数仍执行生产实现，展示组件只在JSX树边界停止渲染。
+      if (['TableReadHistory', 'TableColumnChooser', 'TableFieldFind'].some(name => target === path.join(renderer, 'components', name))) return load(target + '.tsx');
+      // 只捕获父页交给表头的生产回调，真实菜单展示由Electron验收。
+      if (target === path.join(renderer, 'components/GridHeaderMenu')) return {
+        useGridHeaderMenu(_open: unknown, source: HeaderSource) { headerSource = source; return {}; },
+      };
       if (target.startsWith(path.join(renderer, 'components') + path.sep)) return new Proxy({}, { get: (_, key) => String(key) });
       for (const extension of ['.ts', '.tsx']) if (existsSync(target + extension)) return load(target + extension);
       throw Error('纯组件不允许未知依赖：' + name);
@@ -112,7 +125,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
   await render(); expect(grid().rows).toHaveLength(options.batch ? 2 : 1);
-  return { confirm, render, click, change, press, grid, record, button, all, props, workspace, store, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
+  return { confirm, render, click, change, press, grid, record, button, all, props, workspace, store, invoke, info, pageSource, header: () => headerSource!, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
 }
 
 import React, { act } from 'react';
@@ -161,7 +174,10 @@ async function selectValue(value: string | null): Promise<void> {
 }
 /** 把真实TableTab产生的完整props交给正式Dialog，保留其services和onApply，不能以模拟接纳代替父门。 */
 async function openDialog(f: Awaited<ReturnType<typeof fixture>>) {
-  await f.click(text.open); const element = f.all('TableValueOptionsDialog')[0]; expect(element).toBeDefined();
+  await f.click(text.open); return mountDialog(f);
+}
+async function mountDialog(f: Awaited<ReturnType<typeof fixture>>) {
+  const element = f.all('TableValueOptionsDialog')[0]; expect(element).toBeDefined();
   const host = memory.createElement('div'); memory.body.appendChild(host); dialogRoot = createRoot(host as any);
   await act(async () => { dialogRoot!.render(<TableValueOptionsDialog {...element.props as any}/>); });
   expect(memory.body.querySelector('[data-table-value-options-dialog]')).not.toBeNull(); return element;
@@ -169,6 +185,41 @@ async function openDialog(f: Awaited<ReturnType<typeof fixture>>) {
 function pageReads(f: Awaited<ReturnType<typeof fixture>>) { return f.invoke.mock.calls.filter(([command]) => command === 'table.page'); }
 
 describe('服务器不同值的完整TableTab→正式Dialog产品集成（RAM边界）', () => {
+  it('列标题明确选择字段，正式候选读取与应用均绑定该列并保留父表排序', async () => {
+    const f = await fixture();
+    f.grid().onActivePositionChange({ row: f.grid().rows[0], column: { key: 'id' } }); await f.render();
+    const sortColumns = [{ columnKey: 'id', direction: 'DESC' }];
+    f.grid().onSortColumnsChange(sortColumns); await f.render();
+    expect(f.header().valueOptions?.available('note')).toBe(true);
+    expect(f.header().valueOptions?.available('bytes')).toBe(false);
+    expect(f.header().valueOptions?.available('不存在的列')).toBe(false);
+    f.header().valueOptions!.open('note'); await f.render();
+    const element = await mountDialog(f); expect(element.props.column).toBe('note');
+    await dialogClick(text.read);
+    expect(f.invoke).toHaveBeenCalledWith('table.valueOptions', expect.objectContaining({ column: 'note' }));
+    await selectValue('原值'); await dialogClick(text.apply); await f.render();
+    expect(pageReads(f).at(-1)![1]).toMatchObject({ filters: [{ column: 'note', operator: 'IN', values: ['原值'] }], sort: [{ column: 'id', direction: 'DESC' }] });
+    expect(f.grid().sortColumns).toEqual(sortColumns);
+    expect(f.invoke.mock.calls.some(([command]) => command === 'table.apply' || command === 'table.preview')).toBe(false);
+  });
+  it('列标题不支持的字段不会回退到其他字段，也不会自动读取', async () => {
+    const f = await fixture(), before = f.invoke.mock.calls.length;
+    for (const name of ['bytes', '不存在的列']) {
+      f.header().valueOptions!.open(name); await f.render();
+      expect(f.all('TableValueOptionsDialog')).toHaveLength(0);
+    }
+    expect(f.invoke.mock.calls).toHaveLength(before);
+  });
+  it('父页重读后的旧列标题回调失效，当前入口仍受模态门保护且恢复后可用', async () => {
+    const f = await fixture(), old = f.header().valueOptions!;
+    f.props.refreshVersion++; await f.render();
+    const before = f.invoke.mock.calls.length;
+    old.open('note'); await f.render(); expect(f.all('TableValueOptionsDialog')).toHaveLength(0);
+    f.modal(true); f.header().valueOptions!.open('note'); await f.render();
+    expect(f.all('TableValueOptionsDialog')).toHaveLength(0); expect(f.invoke.mock.calls).toHaveLength(before);
+    f.modal(false); f.header().valueOptions!.open('note'); await f.render();
+    expect(f.all('TableValueOptionsDialog')[0].props.column).toBe('note');
+  });
   it('无活动行及父表草稿仍有正式入口，默认首个可用列，读取全部服务器匹配行而不写库', async () => {
     const f = await fixture(); await f.change('未提交父草稿'); const row = f.grid().rows[0], original = row.original;
     const element = await openDialog(f); expect(element.props.column).toBe('id'); expect(element.props.target).toEqual({ connectionId: '连接', database: 'db', table: 'items' }); expect(element.props.isCurrent()).toBe(true); expect(f.button(zh.common.add).props.disabled).toBe(true); expect(f.button(text.open).props.disabled).toBe(true);
