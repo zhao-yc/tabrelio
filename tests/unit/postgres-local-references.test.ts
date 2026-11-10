@@ -123,3 +123,42 @@ it('MERGE 的目标不参与来源查询，输出别名只在 RETURNING 可见',
   expect(at(header + 'WHEN MATCHED AND ¦previous.id=1 THEN DELETE RETURNING WITH (OLD AS previous) previous.id'))
     .toMatchObject({ status: 'blocked' });
 });
+
+it('MERGE 区分来源 JOIN ON 与合并 ON，也接受限定字段中的保留词', () => {
+  const join = 'MERGE INTO orders d USING incoming s JOIN flags f ';
+  expect(at(join + 'ON ¦s.on=f.id ON d.id=s.on WHEN MATCHED AND s.when=1 THEN UPDATE SET n=s.n RETURNING s.id'))
+    .toMatchObject({ status: 'ready', declaration: { start: 'MERGE INTO orders d USING incoming '.length },
+      references: Array.from({ length: 5 }, () => expect.any(Object)) });
+  expect(at(join + 'ON ¦d.id=f.id ON d.id=s.id WHEN MATCHED THEN DELETE')).toMatchObject({ status: 'blocked' });
+  expect(at(join + 'JOIN labels l ON ¦f.id=l.id ON s.id=f.id ON d.id=s.id WHEN MATCHED THEN DELETE'))
+    .toMatchObject({ status: 'ready' });
+  expect(at(join + 'JOIN labels l ON ¦s.id=l.id ON s.id=f.id ON d.id=s.id WHEN MATCHED THEN DELETE'))
+    .toMatchObject({ status: 'blocked' });
+});
+
+it('MERGE 按服务器命名空间区分 JOIN 输入、整体别名和 USING 列别名', () => {
+  const start = 'MERGE INTO orders d USING ';
+  const bySource = 'WHEN NOT MATCHED BY SOURCE AND ';
+  const grouped = '((SELECT 1 id) AS s JOIN flags f ON s.id=f.id) AS j(sid,fid,flag) ';
+  expect(at(start + 'incoming s JOIN flags f ON s.id=f.id ON d.id=s.id ' + bySource + '¦s.id IS NULL THEN DELETE'))
+    .toMatchObject({ status: 'ready' });
+  expect(at(start + grouped + 'ON d.id=j.sid ' + bySource + '¦j.sid IS NULL THEN DELETE')).toMatchObject({ status: 'blocked' });
+  expect(at(start + grouped + 'ON d.id=j.sid WHEN MATCHED THEN DELETE RETURNING ¦s.id')).toMatchObject({ status: 'blocked' });
+  expect(at(start + grouped + 'ON d.id=j.sid WHEN MATCHED THEN DELETE RETURNING ¦j.sid')).toMatchObject({ status: 'ready' });
+  const using = 'incoming s JOIN flags f USING(id) AS j ON d.id=j.id ';
+  expect(at(start + using + 'WHEN NOT MATCHED THEN INSERT (id) VALUES (¦j.id)')).toMatchObject({ status: 'ready' });
+  expect(at(start + using + 'WHEN MATCHED THEN UPDATE SET n=¦j.n')).toMatchObject({ status: 'blocked' });
+  expect(at(start + using + bySource + '¦j.id IS NULL THEN DELETE')).toMatchObject({ status: 'blocked' });
+});
+
+it('MERGE 表函数与 LATERAL 查询只能关联可见的 JOIN 左侧', () => {
+  const join = 'MERGE INTO orders d USING incoming s ';
+  const tail = ' ON d.id=s.id WHEN MATCHED THEN UPDATE SET n=g.n';
+  expect(at(join + 'CROSS JOIN pg_catalog.generate_series(1,¦s.n) WITH ORDINALITY AS g(n,seq)' + tail))
+    .toMatchObject({ status: 'ready' });
+  expect(at(join + 'CROSS JOIN LATERAL (SELECT ¦s.n) g' + tail)).toMatchObject({ status: 'ready' });
+  expect(at(join + 'CROSS JOIN (SELECT ¦s.n) g' + tail)).toMatchObject({ status: 'blocked' });
+  expect(at(join + 'RIGHT JOIN LATERAL (SELECT ¦s.n) g ON true' + tail)).toMatchObject({ status: 'blocked' });
+  expect(at('MERGE INTO orders d USING generate_series(1,¦d.n) g(n) ON d.id=g.n WHEN MATCHED THEN DELETE'))
+    .toMatchObject({ status: 'blocked' });
+});

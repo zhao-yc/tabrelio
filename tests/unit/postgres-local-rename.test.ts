@@ -157,3 +157,27 @@ it('MERGE 拒绝改写不完整的分支、重名关系和未确认的同名词'
     expect(rename(header + clause, 'target'), clause).toMatchObject({ status: 'blocked' });
   }
 });
+
+it('MERGE 来源 JOIN 重命名同时修改来源内部与外部引用', () => {
+  const sql = 'WITH incoming AS (SELECT 1 id, 3 n) MERGE INTO orders d ' +
+    'USING incoming ¦s LEFT JOIN flags f ON s.id=f.id ON d.id=s.id ' +
+    'WHEN MATCHED THEN UPDATE SET n=s.n WHEN NOT MATCHED THEN INSERT (id,n) VALUES(s.id,s.n) RETURNING s.id';
+  expect(edited(sql, '来源')).toBe(sql.replace('¦s', '"来源"').replaceAll('s.', '"来源".'));
+  expect(edited('MERGE INTO orders d USING (incoming s JOIN flags f ON s.id=f.id) AS ¦j(sid,n,fid,flag) ' +
+      'ON d.id=j.sid WHEN MATCHED THEN UPDATE SET n=j.n RETURNING j.sid', 'source'))
+    .toBe('MERGE INTO orders d USING (incoming s JOIN flags f ON s.id=f.id) AS "source"(sid,n,fid,flag) ' +
+      'ON d.id="source".sid WHEN MATCHED THEN UPDATE SET n="source".n RETURNING "source".sid');
+  expect(edited('MERGE INTO orders d USING incoming s JOIN flags f USING(id) AS ¦j ON d.id=j.id ' +
+      'WHEN MATCHED THEN UPDATE SET n=s.n RETURNING j.id', 'key'))
+    .toBe('MERGE INTO orders d USING incoming s JOIN flags f USING(id) AS "key" ON d.id="key".id ' +
+      'WHEN MATCHED THEN UPDATE SET n=s.n RETURNING "key".id');
+});
+
+it('MERGE 重命名保护服务器自动生成的来源关系名', () => {
+  expect(rename('MERGE INTO orders ¦d USING incoming s JOIN flags f ON s.id=f.id ON d.id=s.id WHEN MATCHED THEN DELETE', 'unnamed_join'))
+    .toEqual({ status: 'blocked', reason: 'collision' });
+  expect(rename('MERGE INTO orders ¦d USING (SELECT 1 id) ON d.id=id WHEN MATCHED THEN DELETE', 'unnamed_subquery'))
+    .toEqual({ status: 'blocked', reason: 'collision' });
+  expect(rename('MERGE INTO orders ¦d USING (incoming s JOIN flags f ON s.id=f.id) j ON d.id=1 WHEN MATCHED THEN DELETE', 'unnamed_join'))
+    .toMatchObject({ status: 'ready' });
+});

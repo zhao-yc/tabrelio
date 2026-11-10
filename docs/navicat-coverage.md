@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。PostgreSQL MERGE 的局部引用编辑扩展到 JOIN 和常用表函数来源，识别 JOIN 内部条件、整体别名、USING 合并列别名及 LATERAL 关联。Q01 仍为部分覆盖。
+
 2026-11-11 源码增量。PostgreSQL 查询编辑器支持单表和子查询来源的 MERGE 局部引用高亮、跳转与重命名，按 ON、各 WHEN 分支和 RETURNING 的作用域识别别名与 CTE。Q01 仍为部分覆盖。
 
 2026-11-11 源码增量。PostgreSQL 局部引用高亮、跳转和重命名覆盖 INSERT，区分来源查询、ON CONFLICT 的索引与更新表达式、RETURNING，并保护隐式 excluded 关系。Q01 仍为部分覆盖。

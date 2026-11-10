@@ -7,11 +7,11 @@ type Group = { kind: 'group'; start: number; end: number; closed: boolean; closi
 type Part = PostgresEditorToken | Group;
 interface Projection { names: (string | null)[]; stars: PostgresCompletionReference[]; exact: boolean; declaration?: LocalReferenceRange; }
 export interface PostgresCompletionRelation extends PostgresCompletionReference { alias?: string; projection?: Projection; }
-interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; }
+interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; usingColumns?: string[]; }
 interface ReferenceTrace {
   edges: Map<PostgresEditorToken, LocalReferenceRange>;
   declarations: Map<number, 'alias' | 'cte'>;
-  excludedTargets: Set<number>;
+  implicitNames: Map<number, Set<string>>;
   unsupported: boolean;
 }
 interface RelationSpan { end: number; relation: number; }
@@ -241,7 +241,10 @@ function traceQualifier(parts: Part[], i: number, visible: ScopedRelation[][], t
   for (const level of visible) {
     const matches = level.filter(ref => (ref.alias ?? ref.name) === name);
     if (!matches.length) continue;
-    if (matches.length === 1 && matches[0].declaration) trace.edges.set(token, matches[0].declaration);
+    if (matches.length === 1 && matches[0].declaration &&
+        (!matches[0].usingColumns || punct(member, '*') || matches[0].usingColumns.includes(identifier(member)!))) {
+      trace.edges.set(token, matches[0].declaration);
+    }
     return;
   }
 }
@@ -318,6 +321,14 @@ function traceReturning(parts: Part[], scope: Scope, refs: ScopedRelation[], out
 function startsReferenceQuery(part?: Part): boolean {
   while (part?.kind === 'group' && part.closing === ')') part = part.parts[0];
   return referenceCommands.has(keyword(part));
+}
+
+/** 保留服务器提供但不会出现在 SQL 原文里的关系名，供重命名检查冲突。 */
+function reserveImplicitName(trace: ReferenceTrace, declaration: LocalReferenceRange | undefined, name: string): void {
+  if (!declaration) return;
+  const names = trace.implicitNames.get(declaration.start);
+  if (names) names.add(name);
+  else trace.implicitNames.set(declaration.start, new Set([name]));
 }
 
 /** 冲突索引只分析索引表达式和谓词。排序规则、操作符类及约束名称均不绑定目标别名。 */
@@ -400,7 +411,7 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
     if (!traceConflictTarget(arbiter, scope, target, outer, trace)) return false;
     if (keyword(parts[action + 1]) === 'UPDATE') {
       if (!arbiter.length || keyword(parts[action + 2]) !== 'SET') return false;
-      if (target.declaration) trace.excludedTargets.add(target.declaration.start);
+      reserveImplicitName(trace, target.declaration, 'excluded');
       traceExpressions(parts.slice(action + 1, end), scope, [target, { name: 'excluded' }], outer, new Map(), trace);
     } else if (action + 2 !== end) return false;
   }
@@ -408,19 +419,45 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
   return !trace.unsupported;
 }
 
-/** 识别 MERGE 的目标和单个来源，来源查询可见 WITH 声明，目标在 ON 之前尚未加入关系作用域。 */
+/** 读取关系别名及列列表。MERGE 目标的别名只允许重命名关系。 */
+function mergeAlias(parts: Part[], index: number, columns: boolean): { declaration?: Part; alias?: string; next: number } | undefined {
+  const explicit = keyword(parts[index]) === 'AS';
+  if (explicit) index++;
+  const declaration = parts[index];
+  const alias = stop.has(keyword(declaration)) ? undefined : identifier(declaration);
+  if (!alias) return explicit ? undefined : { next: index };
+  if (alias.length > limits.name) return;
+  index++;
+  if (columns && parts[index]?.kind === 'group') {
+    if (!nameList(parts[index]).length) return;
+    index++;
+  }
+  return { declaration, alias, next: index };
+}
+
+/** 括号中的 JOIN 可以从子查询开始，子查询后的别名或 JOIN 不属于该查询。 */
+function isMergeSourceQuery(part: Group): boolean {
+  while (part.closing === ')') {
+    const [first, following] = part.parts;
+    if (first?.kind !== 'group') return referenceCommands.has(keyword(first));
+    if (following && !setOperators.has(keyword(following)) && !endsFrom.has(keyword(following))) return false;
+    part = first;
+  }
+  return false;
+}
+
+/** 目标在外层 MERGE ON 前尚未进入作用域。表函数和 LATERAL 子查询可以看到允许关联的 JOIN 左侧。 */
 function traceMergeRelation(parts: Part[], start: number, target: boolean, scope: Scope, outer: ScopedRelation[][],
-  trace: ReferenceTrace): { relation: ScopedRelation; next: number } | undefined {
+  preceding: ScopedRelation[], trace: ReferenceTrace): { relation: ScopedRelation; next: number } | undefined {
   const modifier = keyword(parts[start]);
   const only = modifier === 'ONLY', lateral = modifier === 'LATERAL';
   let next = start + (only || lateral ? 1 : 0);
   const first = parts[next];
   let name = '', schema: string | undefined, cte: LocalReferenceRange | undefined;
-  if (!target && !only && first?.kind === 'group' && startsReferenceQuery(first)) {
-    parseQuery(first.parts, scope, outer, undefined, trace);
+  if (!target && !only && first?.kind === 'group' && isMergeSourceQuery(first)) {
+    parseQuery(first.parts, scope, lateral ? [preceding, ...outer] : outer, undefined, trace);
     next++;
   } else {
-    if (lateral) return;
     const wrapped = only && first?.kind === 'group' && first.closing === ')' ? first : undefined;
     const names = wrapped?.parts ?? parts;
     let index = wrapped ? 0 : next;
@@ -436,24 +473,99 @@ function traceMergeRelation(parts: Part[], start: number, target: boolean, scope
     }
     if (wrapped && index !== names.length) return;
     next = wrapped ? next + 1 : index;
-    if (!only && punct(parts[next], '*')) next++;
-    if (!target && !schema) cte = scope.get(name)?.declaration;
-    if (cte && token.kind !== 'group') trace.edges.set(token, cte);
-  }
-  const explicitAlias = keyword(parts[next]) === 'AS';
-  if (explicitAlias) next++;
-  const declaration = parts[next];
-  const alias = stop.has(keyword(declaration)) ? undefined : identifier(declaration);
-  if (explicitAlias && !alias || [name, schema, alias].some(value => value && value.length > limits.name)) return;
-  if (alias) {
-    trace.declarations.set(declaration.start, 'alias');
-    next++;
-    if (!target && parts[next]?.kind === 'group') {
-      if (!nameList(parts[next]).length) return;
+    const args = parts[next];
+    if (!target && !only && args?.kind === 'group' && args.closing === ')') {
+      traceExpressions(args.parts, scope, preceding, outer, new Map(), trace);
       next++;
+      if (keyword(parts[next]) === 'WITH' && keyword(parts[next + 1]) === 'ORDINALITY') next += 2;
+    } else {
+      if (lateral) return;
+      if (!only && punct(parts[next], '*')) next++;
+      if (!target && !schema) cte = scope.get(name)?.declaration;
+      if (cte && token.kind !== 'group') trace.edges.set(token, cte);
     }
   }
-  return { relation: { name, schema, alias, declaration: alias ? declaration : cte }, next };
+  if (name.length > limits.name || schema && schema.length > limits.name) return;
+  const renamed = mergeAlias(parts, next, !target);
+  if (!renamed) return;
+  const { alias, declaration } = renamed;
+  if (declaration) trace.declarations.set(declaration.start, 'alias');
+  return { relation: { name, schema, alias, declaration: declaration ?? cte }, next: renamed.next };
+}
+
+interface MergeSource { relations: ScopedRelation[]; root?: ScopedRelation; next: number; joined: boolean; }
+
+/** 点号后的保留词仍可作为列名，例如 s.on。 */
+const mergeKeyword = (parts: Part[], index: number) => punct(parts[index - 1], '.') ? '' : keyword(parts[index]);
+
+function mergeJoin(parts: Part[], start: number): { next: number; qualified: boolean; lateral: boolean } | undefined {
+  let index = start;
+  const natural = mergeKeyword(parts, index) === 'NATURAL';
+  if (natural) index++;
+  const type = mergeKeyword(parts, index);
+  if (type === 'CROSS' && natural) return;
+  if (['CROSS', 'INNER', 'LEFT', 'RIGHT', 'FULL'].includes(type)) index++;
+  if (['LEFT', 'RIGHT', 'FULL'].includes(type) && keyword(parts[index]) === 'OUTER') index++;
+  if (mergeKeyword(parts, index) !== 'JOIN') return;
+  return { next: index + 1, qualified: !natural && type !== 'CROSS', lateral: type !== 'RIGHT' && type !== 'FULL' };
+}
+
+function traceMergeOperand(parts: Part[], start: number, scope: Scope, outer: ScopedRelation[][], preceding: ScopedRelation[],
+  trace: ReferenceTrace, depth: number): MergeSource | undefined {
+  const part = parts[start];
+  if (part?.kind === 'group' && part.closing === ')' && !isMergeSourceQuery(part)) {
+    const inner = traceMergeSource(part.parts, 0, scope, outer, preceding, trace, depth + 1);
+    if (!inner?.joined || inner.next !== part.parts.length) return;
+    const renamed = mergeAlias(parts, start + 1, true);
+    if (!renamed) return;
+    if (!renamed.declaration) return { ...inner, next: renamed.next };
+    // 整个 JOIN 的别名会遮蔽输入表，只保留已收集的内部引用。
+    trace.declarations.set(renamed.declaration.start, 'alias');
+    const root = { name: renamed.alias!, declaration: renamed.declaration };
+    return { relations: [root], root, next: renamed.next, joined: true };
+  }
+  const atom = traceMergeRelation(parts, start, false, scope, outer, preceding, trace);
+  if (atom) return { relations: [atom.relation], root: atom.relation, next: atom.next, joined: false };
+}
+
+/** JOIN ON 只可见当前两个操作数。右侧尚未遇到 ON／USING 时，继续解析其未加括号的 JOIN。 */
+function traceMergeSource(parts: Part[], start: number, scope: Scope, outer: ScopedRelation[][], preceding: ScopedRelation[],
+  trace: ReferenceTrace, depth = 0): MergeSource | undefined {
+  if (depth >= 24 || trace.unsupported) return;
+  const first = traceMergeOperand(parts, start, scope, outer, preceding, trace, depth);
+  if (!first) return;
+  let left: MergeSource = first;
+  for (let join = mergeJoin(parts, left.next); join && !trace.unsupported; join = mergeJoin(parts, left.next)) {
+    const lateral: ScopedRelation[] = join.lateral ? [...preceding, ...left.relations] : preceding;
+    const right = join.qualified ? traceMergeSource(parts, join.next, scope, outer, lateral, trace, depth + 1)
+      : traceMergeOperand(parts, join.next, scope, outer, lateral, trace, depth);
+    if (!right) return;
+    let next = right.next;
+    const relations = [...left.relations, ...right.relations];
+    let root: ScopedRelation | undefined;
+    if (join.qualified) {
+      const qualifier = mergeKeyword(parts, next++);
+      if (qualifier === 'USING') {
+        const columns = nameList(parts[next++]);
+        if (!columns.length) return;
+        if (keyword(parts[next]) === 'AS') {
+          const declaration = parts[next + 1], name = identifier(declaration);
+          if (!name || name.length > limits.name || stop.has(keyword(declaration))) return;
+          trace.declarations.set(declaration.start, 'alias');
+          root = { name, declaration, usingColumns: columns };
+          relations.push(root);
+          next += 2;
+        }
+      } else if (qualifier === 'ON') {
+        const condition = next;
+        while (next < parts.length && !['ON', 'USING'].includes(mergeKeyword(parts, next)) && !mergeJoin(parts, next)) next++;
+        if (next === condition) return;
+        traceExpressions(parts.slice(condition, next), scope, relations, outer, new Map(), trace);
+      } else return;
+    }
+    left = { relations, root, next, joined: true };
+  }
+  return left;
 }
 
 /** 只扫描动作右侧的表达式。INSERT 列表和 UPDATE 赋值左侧可以包含复合字段路径。 */
@@ -489,20 +601,17 @@ function traceMergeAction(parts: Part[], inserts: boolean, scope: Scope, refs: S
 /** MERGE 的 WHEN 条件和动作共用分支作用域。CASE 中的 WHEN/THEN 仍属于所在表达式。 */
 function traceMerge(parts: Part[], scope: Scope, outer: ScopedRelation[][], trace: ReferenceTrace): boolean {
   if (keyword(parts[1]) !== 'INTO') return false;
-  const target = traceMergeRelation(parts, 2, true, scope, outer, trace);
+  const target = traceMergeRelation(parts, 2, true, scope, outer, [], trace);
   if (!target || keyword(parts[target.next]) !== 'USING') return false;
-  const source = traceMergeRelation(parts, target.next + 1, false, scope, outer, trace);
-  if (!source || keyword(parts[source.next]) !== 'ON') return false;
-  const refs = [target.relation, source.relation];
-  if ((refs[0].alias ?? refs[0].name) === (refs[1].alias ?? refs[1].name)) return false;
-
-  const join = source.next + 1;
+  const sourceStart = target.next + 1;
   const clauses: { when: number; then?: number }[] = [];
-  let depth = 0, end = parts.length;
-  for (let i = join; i < parts.length; i++) {
-    const word = keyword(parts[i]);
+  let depth = 0, end = parts.length, join = -1;
+  for (let i = sourceStart; i < parts.length; i++) {
+    const word = mergeKeyword(parts, i);
     if (word === 'CASE') depth++;
     else if (word === 'END' && depth) depth--;
+    // WHEN 前最后一个顶层 ON 属于 MERGE；更早的 ON 属于来源 JOIN。
+    else if (!depth && word === 'ON' && !clauses.length) join = i;
     else if (!depth && word === 'WHEN') clauses.push({ when: i });
     else if (!depth && word === 'THEN') {
       const clause = clauses.at(-1);
@@ -513,8 +622,21 @@ function traceMerge(parts: Part[], scope: Scope, outer: ScopedRelation[][], trac
       break;
     }
   }
-  if (depth || !clauses.length || clauses[0].when === join) return false;
-  traceExpressions(parts.slice(join, clauses[0].when), scope, refs, outer, new Map(), trace);
+  if (depth || join <= sourceStart || !clauses.length || clauses[0].when <= join + 1) return false;
+  const source = traceMergeSource(parts.slice(sourceStart, join), 0, scope, outer, [], trace);
+  if (!source || source.next !== join - sourceStart) return false;
+  const { relation } = target;
+  const rootName = source.root?.alias ?? source.root?.name;
+  const implicit = rootName ? undefined : source.joined ? 'unnamed_join' : 'unnamed_subquery';
+  if ((relation.alias ?? relation.name) === (rootName || implicit)) return false;
+  const refs = [relation, ...source.relations];
+  if (implicit) for (const ref of refs) reserveImplicitName(trace, ref.declaration, implicit);
+  // 自动生成的来源名由服务器在处理匹配动作时打开，没有可跳转的原文声明。
+  const actionSource = implicit ? [...source.relations, { name: implicit }] : source.relations;
+  const matched = implicit ? [relation, ...actionSource] : refs;
+  // PostgreSQL 17/18 只切换来源 JOIN 的首个根命名空间项，未遮蔽的输入别名仍可解析。
+  const withoutSource = refs.filter(ref => ref !== source.root);
+  traceExpressions(parts.slice(join + 1, clauses[0].when), scope, refs, outer, new Map(), trace);
   for (const [i, { when, then }] of clauses.entries()) {
     if (then === undefined) return false;
     let index = when + 1;
@@ -528,7 +650,7 @@ function traceMerge(parts: Part[], scope: Scope, outer: ScopedRelation[][], trac
       index += 2;
     }
     const inserts = unmatched && side !== 'SOURCE';
-    const visible = unmatched ? [inserts ? source.relation : target.relation] : refs;
+    const visible = unmatched ? inserts ? actionSource : withoutSource : matched;
     if (index !== then) {
       if (keyword(parts[index]) !== 'AND' || index + 1 >= then) return false;
       traceExpressions(parts.slice(index + 1, then), scope, visible, outer, new Map(), trace);
@@ -776,7 +898,7 @@ function analyzePostgresBinding<T extends LocalReferences | LocalRename>(source:
     if (!target) return noLocalReference;
     const parts = groupStatement(tokens, offset, statement.end, true);
     if (!parts) return noLocalReference;
-    const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), excludedTargets: new Set(), unsupported: false };
+    const trace: ReferenceTrace = { edges: new Map(), declarations: new Map(), implicitNames: new Map(), unsupported: false };
     parseQuery(parts, new Map(), [], undefined, trace);
     if (trace.unsupported) return noLocalReference;
     const declaration = trace.edges.get(target) ?? target;
@@ -803,7 +925,7 @@ export function analyzePostgresLocalRename(source: string, offset: number, stand
   return analyzePostgresBinding(source, offset, standardStrings, (references, target, tokens, trace) => {
     const name = identifier(target)!;
     const declaration = references.declaration.start;
-    if (newName === 'excluded' && newName !== name && trace.excludedTargets.has(declaration)) return { status: 'blocked', reason: 'collision' };
+    if (newName !== undefined && newName !== name && trace.implicitNames.get(declaration)?.has(newName)) return { status: 'blocked', reason: 'collision' };
     const kind = trace.declarations.get(declaration);
     const localTokens = [];
     for (const token of tokens) {

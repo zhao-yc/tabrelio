@@ -40,6 +40,15 @@ const dmlDrafts = [
       'WHEN NOT MATCHED THEN INSERT (id,n) VALUES (s.id,s.n)',
       'WHEN NOT MATCHED BY SOURCE AND "目标".closed THEN DELETE', 'RETURNING "目标".id;'].join('\n'),
   },
+  {
+    id: 'merge-join-draft', title: 'MERGE JOIN 导航草稿',
+    sql: ['MERGE INTO orders d USING incoming s JOIN flags f ON s.id=f.id', 'ON d.id=s.id',
+      'WHEN MATCHED THEN UPDATE SET n=s.n', 'WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)', 'RETURNING s.id;'].join('\n'),
+    referenceAfter: 'ON ', declarationAfter: 'incoming ', original: 's', name: '来源', highlights: 6,
+    renamed: ['MERGE INTO orders d USING incoming "来源" JOIN flags f ON "来源".id=f.id', 'ON d.id="来源".id',
+      'WHEN MATCHED THEN UPDATE SET n="来源".n', 'WHEN NOT MATCHED THEN INSERT (id) VALUES ("来源".id)',
+      'RETURNING "来源".id;'].join('\n'),
+  },
 ];
 const command = 'editor-local-references';
 
