@@ -6,6 +6,7 @@ import { zh } from '../locales/zh-CN';
 import { UsageHelp, Modal, ErrorBox  } from './ui';
 import { GridColumnWidthBatch } from './GridColumnWidthBatch';
 import { GridRowHeightField } from './GridRowHeightField';
+import { useGridZoom } from '../gridZoom';
 import { fitGridColumnWidths } from '../gridColumnFit';
 import { cellPreview, errorMessage, ownCell } from '../lib';
 import { gridColumnWidthBatchZh as widthText } from '../locales/gridColumnWidthBatch.zh-CN';
@@ -13,6 +14,7 @@ import '../queryResultColumns.css';
 
 /** 模态只编辑列草稿；自动列宽抽取少量现有预览，不投递 SQL 或文件请求。 */
 export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, onApply, onClose }: { binding:ResultSelectionBinding;initial:QueryResultColumnLayout;owner:string;isCurrent():boolean;onApply(layout:QueryResultColumnLayout):void;onClose():void }) {
+  const { percent: zoomPercent } = useGridZoom();
   const [layout,setLayout]=useState<QueryResultColumnLayout>(()=>({order:[...initial.order],visible:[...initial.visible],...(initial.frozenThrough===undefined?{}:{frozenThrough:initial.frozenThrough}),...(initial.rowHeight===undefined?{}:{rowHeight:initial.rowHeight})})),[search,setSearch]=useState('');
   const [widthDraft, setWidthDraft] = useState(() => new Map(Array.from(initial.widths ?? [], ([key, width]) => [key, String(width)])));
   const [fitError, setFitError] = useState('');
@@ -40,7 +42,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
     if (!current(layout) || column !== undefined && !visible.has(column)) return;
     try {
       const widths = width === undefined
-        ? fitGridColumnWidths({ columns: binding.columns, rowCount: binding.rows.length, cell: (index, key) => cellPreview(ownCell(binding.rows[index], key)) }, column === undefined ? visible : new Set([column]))
+        ? fitGridColumnWidths({ columns: binding.columns, rowCount: binding.rows.length, zoomPercent, cell: (index, key) => cellPreview(ownCell(binding.rows[index], key)) }, column === undefined ? visible : new Set([column]))
         : new Map(layout.visible.map(key => [key, width]));
       setWidthDraft(previous => new Map([...previous, ...Array.from(widths, ([key, value]) => [key, String(value)] as const)]));
       setFitError('');

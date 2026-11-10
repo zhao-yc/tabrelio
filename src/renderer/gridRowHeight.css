@@ -1,12 +1,18 @@
 /* 只影响数据行，表头、复选框、编辑器和原始复制值使用各自行为。 */
 .results-grid .rdg-row .rdg-cell { line-height: var(--grid-data-row-height, 32px); }
+.results-grid.grid-zoomable { --rdg-font-size: calc(11px * var(--grid-zoom)); }
+.results-grid.grid-zoomable .rdg-header-row .rdg-cell { line-height: calc(17px * var(--grid-zoom)); }
+.results-grid.grid-zoomable .column-type { font-size: calc(9px * var(--grid-zoom)); line-height: calc(13px * var(--grid-zoom)); }
+.results-grid.grid-zoomable :is(.grid-header-comment, .null-value, .default-value) { font-size: calc(10px * var(--grid-zoom)); }
+.results-grid.grid-zoomable .grid-header-comment { line-height: calc(13px * var(--grid-zoom)); }
+.results-grid.grid-zoomable .grid-input { font-size: var(--rdg-font-size); }
 .results-grid.grid-row-multiline .rdg-row .grid-row-preview {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
-  margin-block: 5px;
-  line-height: 15px;
-  max-height: 45px;
+  margin-block: calc(5px * var(--grid-zoom, 1));
+  line-height: calc(15px * var(--grid-zoom, 1));
+  max-height: calc(45px * var(--grid-zoom, 1));
   overflow: hidden;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

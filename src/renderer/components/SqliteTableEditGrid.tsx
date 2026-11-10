@@ -7,7 +7,7 @@ import { gridRowSqlActions } from '../gridRowSqlActions';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
-import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref, type CSSProperties } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
@@ -32,6 +32,7 @@ import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.
 import { GridRowSelectionActions, mergeGridMatchSelection, type GridMatchRowsAction, gridRowKeys, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { GridRowJump } from './GridRowJump';
 import { focusGridColumn, GridColumnJump } from './GridColumnJump';
+import { gridZoomDimensions, useGridZoom } from '../gridZoom';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
 import { copyGridColumnNames, encodeGridCsv, encodeGridJson, writeTableClipboardEvent } from '../gridClipboard';
 import { gridJsonClipboardZh as jsonCopyText } from '../locales/gridJsonClipboard.zh-CN';
@@ -57,6 +58,8 @@ interface Props { onChooseReference?(row: SqliteDraftRow, column: number): boole
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
 export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindColumn, showFieldType, showRowId, onShowFieldTypeChange, page, rows, disabled, selected, initialCheckedRows, matchRowsRef, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFillRange, onExportRange, onFilterTableRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, fieldFind, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, columnVisibility, onColumnReorder, fitSource, rowHeight, onRowHeightChange }: Props) {
   const height = readGridRowHeight(rowHeight);
+  const zoom = useGridZoom();
+  const dimensions = gridZoomDimensions(zoom.percent, height, 42);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
   const orderKey = JSON.stringify(display.map(column => column.index)), orderRef = useRef<{ key: string; indices: readonly number[] }>({ key: orderKey, indices: Object.freeze(display.map(column => column.index)) });
@@ -345,6 +348,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       return [...sqliteHeaderDataActions(allowed, undefined, row), ...sqliteRowSqlActions(row, allowed, undefined, selectedRows.has(row.id))];
     },
     visibility: { showType: !!showFieldType, onShowTypeChange: onShowFieldTypeChange },
+    zoom,
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined,
     columnVisibility, reorderColumns: onColumnReorder, freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,
   });
@@ -452,7 +456,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     const index = order[position - 2], column = page.columns[index], source = fitSource?.();
     if (!column || !source) return;
     try {
-      const width = fitGridColumnWidths(source, new Set([column.name])).get(column.name)!;
+      const width = fitGridColumnWidths({ ...source, zoomPercent: zoom.percent }, new Set([column.name])).get(column.name)!;
       onColumnResize?.(page.result.columns[index].key, width);
     } catch { if (current()) setError(gridColumnWidthBatchZh.fitUnavailable); }
   }
@@ -524,7 +528,7 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={rowSelectionKey}
       isCurrent={rowSelectionCurrent}
-      onChange={changeCheckedRows}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} onColumnsReorder={onColumnReorder ? reorderColumns : undefined} aria-label={text.grid} aria-keyshortcuts={page.referenceColumns?.some(index => order.includes(index)) && !disabled && onChooseReference ? referenceText.shortcut : undefined} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}`} style={{ '--grid-data-row-height': `${height}px` } as CSSProperties} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
+      onChange={changeCheckedRows}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} onColumnsReorder={onColumnReorder ? reorderColumns : undefined} aria-label={text.grid} aria-keyshortcuts={page.referenceColumns?.some(index => order.includes(index)) && !disabled && onChooseReference ? referenceText.shortcut : undefined} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-zoomable grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}`} style={dimensions.style} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={dimensions.rowHeight} headerRowHeight={dimensions.headerHeight}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={changeCheckedRows}

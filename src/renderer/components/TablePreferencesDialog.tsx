@@ -8,11 +8,13 @@ import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import { GridColumnWidthBatch } from './GridColumnWidthBatch';
 import { GridRowHeightField } from './GridRowHeightField';
 import type { GridRowHeight } from '../../shared/gridRowHeight';
+import { useGridZoom } from '../gridZoom';
 import { fitGridColumnWidths, type GridColumnFitSource } from '../gridColumnFit';
 import { gridColumnWidthBatchZh as widthText } from '../locales/gridColumnWidthBatch.zh-CN';
 
 /** 布局即时应用到当前网格，保存和恢复明确报告真实持久化结果。 */
 export function TablePreferencesDialog({ preferences, pending, dirty, error, onChange, onSave, onReset, onClose, title = text.preferences, hint = text.layoutHint, maximumNameLength = 256, defaultWidth = 165, onReload, reloadLabel, fitSource, resetPrompt, reloadPrompt, cleanNotice = text.saved }: { preferences: TablePreferences; pending: boolean; dirty: boolean; error: string; onChange(value: TablePreferences): void; onSave(): void; onReset(): void; onClose(): void; title?: string; hint?: string; maximumNameLength?: number; defaultWidth?: number; onReload?(): void; reloadLabel?: string; fitSource?(): GridColumnFitSource | undefined; resetPrompt?: string; reloadPrompt?: string; cleanNotice?: string }) {
+  const { percent: zoomPercent } = useGridZoom();
   const [localError, setLocalError] = useState(''); const [widths, setWidths] = useState<Record<string, string>>({});
   const [search, setSearch] = useState('');
   const [confirmation, setConfirmation] = useState<'reset' | 'reload'>();
@@ -52,7 +54,7 @@ export function TablePreferencesDialog({ preferences, pending, dirty, error, onC
       if (width === undefined) {
         const data = fitSource?.();
         if (!data) return;
-        const fitted = fitGridColumnWidths(data, keys);
+        const fitted = fitGridColumnWidths({ ...data, zoomPercent }, keys);
         if (!fitted.size) return;
         next = setTableColumnWidths(preferences, fitted);
       } else next = setVisibleTableColumnWidths(preferences, width);

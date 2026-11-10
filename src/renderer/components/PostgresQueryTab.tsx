@@ -2151,7 +2151,7 @@ export function PostgresQueryTab({
     return () => { active = false; blockComment.dispose(); for (const edit of editActions) edit.dispose(); action.dispose(); selectionQuery.dispose(); statementQuery.dispose(); };
   }, [editorInstance, editable, resultsOnly, workspace.settings.activeTabId, tab.id, tab.sql, profile, version, canOpenStatementQuery]);
   const renderResultGrid = (target?: GridFindTarget, marks?: ReadonlySet<string>) => result && displayResult ? (
-    <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding}
+    <ResultsGrid zoomable columns={visibleColumns ?? result.columns} rows={displayResult.rows} navigateTo={target} findMarks={marks} rowJump selectionScope={binding}
       insertSql={rowSql?.insert} updateSql={rowSql?.update} deleteSql={rowSql?.delete} primaryKeySql={rowSql?.select}
       onOpenRowSql={rowSql ? (kind, sql) => {
         if (resultCurrent() && !document.querySelector(appModalSelector))

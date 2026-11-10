@@ -4,6 +4,7 @@ import type { MouseEvent } from 'react';
 export interface GridColumnFitSource {
   columns: readonly { key: string; name: string; type?: string }[];
   rowCount: number;
+  zoomPercent?: number;
   cell(row: number, key: string): string;
 }
 
@@ -20,14 +21,15 @@ export function gridResizeHandleColumn(event: MouseEvent, grid: HTMLElement | nu
 }
 
 /** 按实际界面字体测量，保留列头和正文的字号差异。 */
-function browserMeasure() {
+function browserMeasure(zoomPercent = 100) {
+  const size = 11 * zoomPercent / 100;
   const context = document.createElement('canvas').getContext('2d');
   if (!context) throw Error('当前环境无法测量列宽');
   const family = getComputedStyle(document.documentElement).fontFamily || 'sans-serif';
   let previous: boolean | undefined;
   return (text: string, header: boolean) => {
     if (previous !== header) {
-      context.font = header ? `600 11px ${family}` : `11px ${family}`;
+      context.font = `${header ? 600 : 400} ${size}px ${family}`;
       previous = header;
     }
     return context.measureText(text).width;
@@ -35,7 +37,7 @@ function browserMeasure() {
 }
 
 /** 均匀抽取最多 64 个已载入行，测量预览文本，且不遍历隐藏列。 */
-export function fitGridColumnWidths(source: GridColumnFitSource, keys: ReadonlySet<string>, measure = browserMeasure()): Map<string, number> {
+export function fitGridColumnWidths(source: GridColumnFitSource, keys: ReadonlySet<string>, measure = browserMeasure(source.zoomPercent)): Map<string, number> {
   const fitted = new Map<string, number>();
   const sampleCount = Math.min(64, source.rowCount, Math.max(1, Math.floor(8192 / keys.size)));
   const max = 640;

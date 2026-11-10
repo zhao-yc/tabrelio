@@ -33,6 +33,24 @@ async function toggleFromHeader(header: Locator, name: string, keyboard = false)
   await expect(header).toBeFocused();
 }
 
+/** 同时核对虚拟网格的实际行高、字号及原列宽。 */
+async function verifyGridZoom(scope: Locator, header: Locator): Promise<void> {
+  const grid = scope.getByRole('grid');
+  const row = grid.getByRole('row').nth(1);
+  const height = () => row.evaluate(element => element.getBoundingClientRect().height);
+  const width = () => header.evaluate(element => element.getBoundingClientRect().width);
+  const initialHeight = await height(), initialWidth = await width();
+  await expect(grid).toHaveCSS('font-size', '11px');
+  await toggleFromHeader(header, headerMenuText.zoomOut(90), true);
+  await expect.poll(height).toBe(Math.round(initialHeight * 0.9));
+  await toggleFromHeader(header, headerMenuText.zoomReset);
+  await toggleFromHeader(header, headerMenuText.zoomIn(110));
+  await toggleFromHeader(header, headerMenuText.zoomIn(125));
+  await expect(grid).toHaveCSS('font-size', '13.75px');
+  await expect.poll(height).toBe(Math.round(initialHeight * 1.25));
+  expect(await width()).toBe(initialWidth);
+}
+
 /** 旁观正式分页回包，只记录筛选、排序和分页条件，不替换 Main 或驱动结果。 */
 async function observeReads(command: 'sqlite.tablePage' | 'postgres.table.page' | 'table.page') {
   await desktop.evaluate(({ ipcMain }, command) => {
@@ -125,6 +143,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(header('label')).toBeVisible();
     const before = await taskIds();
     const readsBeforeDisplay = await reads();
+    await verifyGridZoom(tab, header('label'));
     await expect(header('label').locator('.column-type')).toHaveCount(0);
     await toggleFromHeader(header('label'), text.showType);
     await expect(header('label').locator('.column-type')).toHaveText('VARCHAR(17)');
@@ -163,6 +182,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await tab.getByLabel(sqlite.filterColumn(1), { exact: true }).selectOption('label');
     await filter.fill('row A');
     await refreshFromGrid(tab, reads, 'F5');
+    await expect(tab.getByRole('grid')).toHaveCSS('font-size', '13.75px');
     if (process.platform === 'darwin') await refreshFromGrid(tab, reads, 'Meta+r');
     await expect(filter).toHaveValue('row A');
     await expect(rowLabels(tab)).toHaveCount(2);
@@ -179,6 +199,8 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await editor.getByRole('button', { name: sqliteEdit.saveInput, exact: true }).click();
     const draft = tab.getByRole('gridcell').filter({ hasText: /只留在本地的值$/ });
     await expect(draft).toBeVisible();
+    await toggleFromHeader(header('label'), headerMenuText.zoomReset);
+    await expect(draft).toBeVisible();
     await answerDialogs([1]);
     const [confirmation] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }), draft.press('F5')]);
     expect(confirmation.message()).toBe(sqliteWorkspace.confirmDiscard);
@@ -189,6 +211,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
     await expect(header('label')).toBeVisible();
     const viewReads = await reads();
+    await expect(tab.getByRole('grid')).toHaveCSS('font-size', '11px');
     await toggleFromHeader(header('label'), text.showType, true);
     await expect(header('label').locator('.column-type')).toHaveText('VARCHAR(17)');
     await header('label').press('Shift+F10');
@@ -210,6 +233,10 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
       const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
       await expect.poll(async () => (await history()).length).toBeGreaterThan(0);
       const prior = await history();
+      const editor = query.locator('.monaco-editor .view-line').first();
+      const editorSize = await editor.evaluate(element => getComputedStyle(element).fontSize);
+      await verifyGridZoom(result, result.getByRole('columnheader').filter({ hasText: /^label/ }));
+      await expect(editor).toHaveCSS('font-size', editorSize);
       await sortFromGrid(result, 'row B');
       expect(await history()).toEqual(prior);
     }
@@ -285,6 +312,7 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     const readsBeforeDisplay = await reads();
     const checked = tab.getByRole('grid').getByRole('row').nth(1).getByRole('checkbox');
     await checked.check();
+    await verifyGridZoom(tab, header);
     await toggleFromHeader(header, text.showComment);
     const expected = dialect === 'postgresql' ? '字段说明' + '注'.repeat(156) + '…' : '字段说明';
     await expect(header.locator('.grid-header-comment')).toHaveText(expected);
@@ -305,6 +333,7 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     expect(await taskIds()).toEqual(before);
     expect(await reads()).toEqual(readsBeforeDisplay);
     if (process.platform === 'darwin') await sortFromGrid(tab, 'row C');
+    await expect(tab.getByRole('grid')).toHaveCSS('font-size', '13.75px');
 
     await (await navigationMenuItem(tab, { name: sort.entry, exact: true })).click();
     const sortPanel = tab.getByRole('region', { name: sort.title, exact: true });

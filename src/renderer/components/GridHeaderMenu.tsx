@@ -12,6 +12,7 @@ import { useWorkspace } from '../store';
 import { tablePreferencesLimits } from '../../shared/tablePreferences';
 import { gridRowHeightLimits } from '../../shared/gridRowHeight';
 import { appModalSelector, gridDialogCurrent } from '../modalSelectors';
+import { gridZoomLevels, useGridZoom } from '../gridZoom';
 import { Field, Modal } from './ui';
 
 export interface GridHeaderFreeze {
@@ -40,6 +41,7 @@ interface HeaderMenuSource {
   findColumn?(key: string): void;
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
+  zoom?: ReturnType<typeof useGridZoom>;
   rowHeaderColumns?: number;
   rowActions?(rowIndex: number, current: () => boolean): readonly GridCellAction[];
   visibility?: GridHeaderVisibility;
@@ -235,6 +237,19 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
         } else useWorkspace.getState().notify(text.staleWidth, true);
       } });
     } });
+    const zoom = source.zoom;
+    if (zoom) {
+      const index = gridZoomLevels.indexOf(zoom.percent);
+      const smaller = index > 0 ? gridZoomLevels[index - 1] : undefined;
+      const larger = index < gridZoomLevels.length - 1 ? gridZoomLevels[index + 1] : undefined;
+      const setZoom = (percent: typeof zoom.percent) => {
+        const now = latest.current.zoom;
+        if (current() && now?.percent === zoom.percent) now.setPercent(percent);
+      };
+      if (larger !== undefined) actions.push({ label: text.zoomIn(larger), run: () => setZoom(larger) });
+      if (smaller !== undefined) actions.push({ label: text.zoomOut(smaller), run: () => setZoom(smaller) });
+      if (zoom.percent !== 100) actions.push({ label: text.zoomReset, run: () => setZoom(100) });
+    }
     // 表头与工具栏共用本标签的显示状态，旧菜单不能反转后来设置的状态。
     const visibility = source.visibility;
     if (visibility?.onShowTypeChange) actions.push({ label: visibility.showType ? detailsText.hideType : detailsText.showType, run: () => {

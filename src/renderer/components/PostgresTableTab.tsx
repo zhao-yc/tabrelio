@@ -1801,7 +1801,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           return postgresFindPlan(page, findRows, gridLayout.columns, patches,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
-        renderGrid={(findTarget, findMarks) => <ResultsGrid showGridImages={showGridImages} key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
+        renderGrid={(findTarget, findMarks) => <ResultsGrid zoomable showGridImages={showGridImages} key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
         rowJump={canFind} rowJumpCurrent={findIsCurrent} onFindColumn={canFind ? key => openFind(false, key) : undefined}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}

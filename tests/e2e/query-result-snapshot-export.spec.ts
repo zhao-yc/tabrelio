@@ -8,6 +8,7 @@ import { queryResultSortZh as sort } from '../../src/renderer/locales/queryResul
 import { queryResultFilterZh as filter } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { gridRangeExportZh as rangeText } from '../../src/renderer/locales/gridRangeExport.zh-CN';
+import { gridHeaderMenuZh as gridText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { queryResultSnapshotFileMessages as filesText } from '../../src/main/queryResultSnapshotFiles';
@@ -101,6 +102,15 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     const viewer = page.getByRole('dialog', { name: text.title, exact: true });
     await viewer.getByRole('button', { name: text.choose, exact: true }).click();
     await expect(viewer.getByText(text.opened('离线源.dbark-result.json'), { exact: true })).toBeVisible();
+    const snapshotGrid = viewer.getByRole('grid');
+    const column = snapshotGrid.getByRole('columnheader').filter({ hasText: /^内容/ });
+    const columnMenu = page.getByRole('menu', { name: gridText.menu, exact: true });
+    await column.press('Shift+F10');
+    await columnMenu.getByRole('menuitem', { name: gridText.zoomIn(110), exact: true }).click();
+    await expect(snapshotGrid).toHaveCSS('font-size', '12.1px');
+    await column.click({ button: 'right' });
+    await columnMenu.getByRole('menuitem', { name: gridText.zoomReset, exact: true }).click();
+    await expect(snapshotGrid).toHaveCSS('font-size', '11px');
     const shown = viewer.getByRole('button', { name: text.exportShown, exact: true });
     const checked = viewer.getByRole('button', { name: text.exportChecked, exact: true });
     const undo = viewer.getByRole('button', { name: historyText.undo, exact: true });

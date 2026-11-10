@@ -491,7 +491,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       </div>}
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
-        <ResultsGrid rowJump columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
+        <ResultsGrid zoomable rowJump columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
           frozenKeys={frozenKeys} columnVisibility={columnVisibility} onColumnReorder={reorderResultColumns} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
           onColumnWidthsChange={binding ? resizeColumns : undefined} onRowHeightChange={binding ? resizeRowHeight : undefined}
           onSelectionChange={binding ? selectRows : undefined}
