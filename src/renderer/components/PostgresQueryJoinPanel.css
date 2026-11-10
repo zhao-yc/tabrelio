@@ -1,0 +1,13 @@
+.postgres-join-step > .expanded-filter-panel .filter-chip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  align-items: center;
+  gap: 8px 12px;
+  max-width: 42rem;
+  margin-block: 6px;
+  padding: 6px 10px;
+}
+
+.postgres-join-step > .expanded-filter-panel .filter-chip > span {
+  overflow-wrap: anywhere;
+}

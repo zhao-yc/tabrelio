@@ -11,7 +11,7 @@ type Leaf = { kind: 'rule'; id: number; index: number };
 type Group = { kind: 'group'; id: number; mode: FilterMode; children: (Leaf | Group)[] };
 type EventSignal = { defaultPrevented?: boolean; nativeEvent?: { defaultPrevented?: boolean } };
 /** 只改变本地说明和条件来源摘要；调用方不能替换分组校验、编辑身份或应用协议。 */
-export interface TableFilterGroupPresentation { hint: string; stale: string; declined: string; summary(index: number, rule: FilterRule): string; }
+export interface TableFilterGroupPresentation { title?: string; hint: string; limits?: string; stale: string; declined: string; summary(index: number, rule: FilterRule): string; }
 interface Props {
   filters: readonly FilterRule[]; mode: FilterMode; initial?: FilterGroup;
   presentation?: TableFilterGroupPresentation;
@@ -142,10 +142,11 @@ export function TableFilterGroupsDialog({ filters, mode, initial, presentation, 
         if (current() && !composition.current && groups.length < FILTER_LIMITS.groups && depth < FILTER_LIMITS.depth) replace(editGroup(draft!, group.id, item => ({ ...item, children: [...item.children, { kind: 'group', id: sequence.current++, mode: 'any', children: [] }] })));
       }}>{text.addGroup(path)}</button></>;
   }
-  return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title} onKeyDown={keyDown}
+  const title = presentation?.title ?? text.title;
+  return <section className="filter-panel expanded-filter-panel" role="region" aria-label={title} onKeyDown={keyDown}
     onCompositionStart={() => { if (current()) { composition.current = true; setComposing(true); } }}
     onCompositionEnd={() => { if (current()) { composition.current = false; setComposing(false); } }}>
-    <strong>{text.title}</strong><UsageHelp><p>{presentation?.hint ?? text.hint}</p><p>{text.limits}</p><p>{text.shortcuts}</p></UsageHelp>
+    <strong>{title}</strong><UsageHelp><p>{presentation?.hint ?? text.hint}</p><p>{presentation?.limits ?? text.limits}</p><p>{text.shortcuts}</p></UsageHelp>
     {empty && <p>{text.empty}</p>}{draft && render(draft)}{composing && <p>{text.composing}</p>}
     <ErrorBox message={error || (!valid && !consumed.current ? presentation?.stale ?? text.stale : '')}/>
     <div className="filter-inputs"><span className="grow"/><button type="button" disabled={composing || consumed.current} onClick={cancel}>{text.cancel}</button><button type="button" className="primary" disabled={disabled || empty} onClick={apply}>{text.apply}</button></div>

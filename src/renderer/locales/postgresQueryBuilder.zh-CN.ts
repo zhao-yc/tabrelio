@@ -5,6 +5,8 @@ export const postgresQueryBuilderZh = {
   joinStep: (alias: string) => '关联来源 ' + alias, joinKind: '连接方式', joinMode: '匹配条件',
   joinLeft: (index: number) => '第 ' + index + ' 条已加入字段', joinRight: (index: number) => '第 ' + index + ' 条当前来源字段',
   joinOperator: (index: number) => '第 ' + index + ' 条关联比较', joinAddPair: '添加字段比较',
+  joinGroups: '组合 ON 条件', joinGroupTitle: 'ON 条件分组', joinGroupHint: '用括号组合本步骤的字段比较。每条比较只放入一个分组。',
+  joinGroupLimits: '每步最多 20 条比较、16 组（含最外层）、8 层。应用前请为每个子组放入条件。',
   joinChooseField: '请选择字段',
   joinRemovePair: (index: number) => '删除第 ' + index + ' 条比较', joinRemoveLast: '移除最后一个关联来源',
   joinReferenced: '最后一个来源仍被筛选、排序或汇总引用，请先移除对应配置。',

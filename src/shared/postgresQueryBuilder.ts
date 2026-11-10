@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { sortRulesSchema } from './filtering';
+import type { FilterGroup } from './contracts';
+import { filterGroupSchema, sortRulesSchema } from './filtering';
+import { manualJoinOnGroup } from './manualJoinDesigns';
 import { postgresDdlLiteral } from './postgresCreateTable';
 import { parsePostgresCatalogName, postgresIdentifier } from './postgresSql';
 import { postgresAdvancedTableFilterSchema, postgresTableTargetSchema } from './postgresTable';
@@ -27,13 +29,20 @@ export const postgresBuilderJoinOperators = ['=', '<>', '<', '<=', '>', '>=', 'I
 const joinPair = z.object({ left: z.string().min(1).max(256), right: z.string().min(1).max(256),
   operator: z.enum(postgresBuilderJoinOperators) }).strict();
 const joinTable = postgresQueryBuilderTargetSchema.shape.table;
-const joinDraftStep = z.object({
+const joinStepFields = z.object({
   table: joinTable,
   kind: z.enum(postgresBuilderJoinKinds), mode: z.enum(['all', 'any']),
   pairs: z.array(joinPair).min(1).max(postgresBuilderJoinLimits.pairs),
+  group: filterGroupSchema.optional(),
 }).strict();
+/** 本地设计和只读检查使用同一验证，每条字段比较必须在括号树中恰好出现一次。 */
+function validateJoinGroup({ mode, group, pairs }: z.infer<typeof joinStepFields>, context: z.RefinementCtx) {
+  try { manualJoinOnGroup({ mode, group }, pairs.length); }
+  catch { context.addIssue({ code: 'custom', path: ['group'], message: 'ON 分组必须与根模式一致，并恰好包含每条比较一次。' }); }
+}
+const joinDraftStep = joinStepFields.superRefine(validateJoinGroup);
 export const postgresBuilderJoinDraftSchema = z.array(joinDraftStep).min(1).max(postgresBuilderJoinLimits.steps);
-const joinStep = joinDraftStep.extend({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/) });
+const joinStep = joinStepFields.extend({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).superRefine(validateJoinGroup);
 export const postgresQueryBuilderDescribeJoinSchema = postgresQueryBuilderTargetSchema.extend({
   joinTables: z.array(joinTable).min(1).max(postgresBuilderJoinLimits.steps),
 });
@@ -92,8 +101,13 @@ export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign,
       used.add(key);
       return field(pair.left) + ' ' + pair.operator + ' ' + field(postgresBuilderColumnKey(position, pair.right));
     });
+    // 只组合已通过目录校验的字段比较，平铺设计继续使用同样的 SQL。
+    function grouped(node: FilterGroup): string {
+      return '(' + node.children.map(child => typeof child === 'number' ? conditions[child] : grouped(child))
+        .join(node.mode === 'all' ? ' AND ' : ' OR ') + ')';
+    }
     return ' ' + step.kind + ' JOIN ' + qualified(step.table) + ' AS ' + postgresBuilderAlias(position) +
-      ' ON (' + conditions.join(step.mode === 'all' ? ' AND ' : ' OR ') + ')';
+      ' ON ' + grouped(step.group ?? { mode: step.mode, children: conditions.map((_, i) => i) });
   }).join('');
   if (selected.size !== columns.length) throw Error('输出字段不能重复。');
   if (summary ? columns.length || sort.length || distinct : !columns.length) throw Error('请明确配置汇总或明细输出。');

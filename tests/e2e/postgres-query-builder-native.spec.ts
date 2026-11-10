@@ -8,6 +8,7 @@ import { queryBuilderSummaryZh as summary } from '../../src/renderer/locales/que
 import { queryViewDraftZh as viewDraft } from '../../src/renderer/locales/queryViewDraft.zh-CN';
 import { postgresCreateViewZh as create } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
+import { tableFilterGroupsZh as groups } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
@@ -54,8 +55,8 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await observer.query(`CREATE SCHEMA "odd.schema";
       CREATE TABLE ${table} (id bigint, label text, ignored bytea);
       CREATE TABLE public."Raw""Rows" (other integer);
-      CREATE TABLE public.builder_link (id bigint PRIMARY KEY, note text);
-      INSERT INTO public.builder_link VALUES (${min}, '匹配来源');
+      CREATE TABLE public.builder_link (id bigint PRIMARY KEY, note text, alternate_id bigint);
+      INSERT INTO public.builder_link VALUES (${min}, '匹配来源', ${max});
       INSERT INTO ${table} SELECT id, '普通行', NULL FROM pg_catalog.generate_series(1, 105) AS id;
       INSERT INTO ${table} VALUES (${min}, '精确整数', NULL), (${max}, NULL, NULL);
       CREATE VIEW ${view} AS SELECT id, label, ignored, pg_catalog.current_setting('transaction_read_only') AS read_mode FROM ${table};`);
@@ -203,6 +204,33 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     }
     await addJoin('t2', 't1.id');
     await addJoin('t3', 't2.id');
+    const third = joinPanel.getByRole('group', { name: text.joinStep('t3'), exact: true });
+    async function addPair(position: number, right: string, operator: string) {
+      await third.getByRole('button', { name: text.joinAddPair, exact: true }).click();
+      await third.getByRole('combobox', { name: text.joinLeft(position), exact: true }).selectOption('t1.id');
+      await third.getByRole('combobox', { name: text.joinRight(position), exact: true }).selectOption(right);
+      await third.getByRole('combobox', { name: text.joinOperator(position), exact: true }).selectOption(operator);
+    }
+    await addPair(2, 'alternate_id', '=');
+    await addPair(3, 'id', '<=');
+    const openGroups = third.getByRole('button', { name: text.joinGroups, exact: true });
+    const groupEditor = third.getByRole('region', { name: text.joinGroupTitle, exact: true });
+    await openGroups.click();
+    await groupEditor.getByRole('button', { name: groups.addGroup(), exact: true }).click();
+    await expect(button(text.open)).toBeDisabled();
+    await groupEditor.getByRole('button', { name: groups.apply, exact: true }).click();
+    await expect(groupEditor.getByRole('alert')).toContainText('筛选子组不能为空');
+    await groupEditor.getByRole('button', { name: groups.cancel, exact: true }).click();
+    await expect(sql).toContainText('ON (t2."id" = t3."id" AND t1."id" = t3."alternate_id" AND t1."id" <= t3."id")');
+    await openGroups.click();
+    await groupEditor.getByRole('button', { name: groups.addGroup(), exact: true }).click();
+    for (const position of [1, 2]) {
+      await groupEditor.getByRole('combobox', { name: groups.destination(position), exact: true })
+        .selectOption({ label: groups.group('1') });
+    }
+    await groupEditor.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('postgres-builder-on-groups.png') });
+    await groupEditor.getByRole('button', { name: groups.apply, exact: true }).click();
     await button(text.none).click();
     await builder.getByRole('checkbox', { name: text.choose('t1.id'), exact: true }).check();
     await builder.getByRole('checkbox', { name: text.choose('t3.note'), exact: true }).check();
@@ -210,7 +238,7 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await builder.getByRole('combobox', { name: zh.table.filterOperatorLabel, exact: true }).selectOption('>=');
     await builder.getByRole('textbox', { name: zh.table.text011, exact: true }).fill(min);
     await button(zh.table.text013).click();
-    const joins = ` FROM ${view} AS t1 LEFT JOIN "public"."builder_link" AS t2 ON (t1."id" = t2."id") LEFT JOIN "public"."builder_link" AS t3 ON (t2."id" = t3."id") WHERE t1."id" >= E'${min}'`;
+    const joins = ` FROM ${view} AS t1 LEFT JOIN "public"."builder_link" AS t2 ON (t1."id" = t2."id") LEFT JOIN "public"."builder_link" AS t3 ON (t1."id" <= t3."id" AND (t2."id" = t3."id" OR t1."id" = t3."alternate_id")) WHERE t1."id" >= E'${min}'`;
     const joinSql = 'SELECT t1."id" AS "t1.id", t3."note" AS "t3.note"' + joins + ';';
     await expect(sql).toHaveText(joinSql);
     await button(text.inspectLabels.explain).click();
@@ -235,6 +263,10 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await savedJoins.getByRole('textbox', { name: joinText.designName, exact: true }).fill('跨 schema 汇总');
     await savedJoins.getByRole('button', { name: joinText.designSave, exact: true }).click();
     await expect(savedJoins.getByText(joinText.designSaved, { exact: true })).toBeVisible();
+    await addPair(4, 'id', '>=');
+    await expect(sql).toContainText('OR t1."id" = t3."alternate_id") AND t1."id" >= t3."id")');
+    await third.getByRole('button', { name: text.joinRemovePair(1), exact: true }).click();
+    await expect(sql).toContainText('ON (t1."id" <= t3."id" AND (t1."id" = t3."alternate_id") AND t1."id" >= t3."id")');
     await approve(text.joinBackConfirm);
     await joinPanel.getByRole('button', { name: text.joinBack, exact: true }).click();
     await expect(sql).toHaveText('SELECT "id", "label", "ignored", "read_mode" FROM ' + view + ';');
@@ -266,10 +298,10 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await builder.locator('summary').filter({ hasText: joinText.designTitle }).click();
     await savedJoins.getByRole('button', { name: joinText.designRefresh, exact: true }).click();
     await savedJoins.getByRole('combobox', { name: joinText.designTitle, exact: true }).selectOption({ label: '跨 schema 汇总' });
-    await observer.query('ALTER TABLE public.builder_link RENAME COLUMN note TO changed_note');
+    await observer.query('ALTER TABLE public.builder_link RENAME COLUMN alternate_id TO changed_alternate');
     await approve(joinText.designRestoreConfirm);
     await savedJoins.getByRole('button', { name: joinText.designLoad, exact: true }).click();
-    await expect(builder.getByRole('alert')).toContainText('来源字段已变化');
+    await expect(builder.getByRole('alert')).toContainText('查询字段已变化');
     await expect(sql).toHaveText('SELECT "id", "label", "ignored", "read_mode" FROM ' + view + ';');
     await button(zh.common.cancel).click();
 

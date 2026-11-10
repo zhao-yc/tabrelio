@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPostgresQueryBuilderSql, postgresQueryBuilderInspectSchema, type PostgresQueryBuilderDesign,
+import { buildPostgresQueryBuilderSql, postgresBuilderJoinDraftSchema, postgresQueryBuilderInspectSchema, type PostgresQueryBuilderDesign,
   type PostgresQueryBuilderSource } from '../../src/shared/postgresQueryBuilder';
 import { splitPostgresSql } from '../../src/shared/postgresSql';
 
@@ -47,6 +47,28 @@ describe('PostgreSQL 单表查询设计', () => {
     expect(splitPostgresSql(sql, true)).toHaveLength(1);
     expect(splitPostgresSql(sql, false)).toHaveLength(1);
     expect(buildPostgresQueryBuilderSql(draft, source)).toBe('SELECT "id", "值" FROM "项目.数据"."表""1"');
+  });
+
+  it('本地设计和 IPC 按同一规则检查 ON 树，并保留括号和旧平铺行为', () => {
+    const pairs = [
+      { left: 't1.id', right: 'id', operator: '=' },
+      { left: 't1.值', right: '值', operator: 'IS NOT DISTINCT FROM' },
+      { left: 't1.id', right: 'id', operator: '<=' },
+    ] as const;
+    const step = { table: source.target.table, kind: 'LEFT' as const, mode: 'all' as const, pairs: [...pairs] };
+    const group = { mode: 'all' as const, children: [{ mode: 'any' as const, children: [0, 1] }, 2] };
+    const input = { ...draft, columns: ['t1.id'], joins: [{ ...step, fingerprint: source.fingerprint }] };
+    expect(postgresBuilderJoinDraftSchema.parse([step])).toEqual([step]);
+    expect(buildPostgresQueryBuilderSql(input, source, [source])).toContain(
+      'ON (t1."id" = t2."id" AND t1."值" IS NOT DISTINCT FROM t2."值" AND t1."id" <= t2."id")');
+    expect(buildPostgresQueryBuilderSql({ ...input, joins: [{ ...input.joins[0], group }] }, source, [source])).toContain(
+      'ON ((t1."id" = t2."id" OR t1."值" IS NOT DISTINCT FROM t2."值") AND t1."id" <= t2."id")');
+    for (const invalid of [{ ...group, mode: 'any' }, { ...group, children: [0, 0, 2] },
+      { ...group, children: [0, 1, 3] }, { ...group, children: [0, 2] }]) {
+      expect(postgresBuilderJoinDraftSchema.safeParse([{ ...step, group: invalid }]).success).toBe(false);
+      expect(postgresQueryBuilderInspectSchema.safeParse({ ...input, inspect: 'rows',
+        joins: [{ ...input.joins[0], group: invalid }] }).success).toBe(false);
+    }
   });
 
   it('拒绝来源变更、停用条件引用的未知字段、去重查询的非投影排序和额外 SQL', () => {

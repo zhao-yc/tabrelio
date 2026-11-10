@@ -64,7 +64,9 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const singleDraft = useRef<PostgresSingleQueryDraft | undefined>(undefined);
   const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
-  const [sort, setSort] = useState<SortRule[]>([]), [editor, setEditor] = useState<'group' | 'sort' | 'having'>();
+  const [sort, setSort] = useState<SortRule[]>([]);
+  const [editor, setEditor] = useState<'group' | 'sort' | 'having' | { join: number }>();
+  const editingJoin = typeof editor === 'object' ? editor.join : undefined;
   const [summaryEnabled, setSummaryEnabled] = useState(false), [summary, setSummary] = useState(emptyQueryBuilderSummary);
   const [havingRules, setHavingRules] = useState<FilterRule[]>([]), [havingMode, setHavingMode] = useState<FilterMode>('all');
   const [havingGroup, setHavingGroup] = useState<FilterGroup>();
@@ -275,14 +277,20 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         <p>{database} / {source.target.table}</p>
         {!joins.length && <SingleQueryDesignPanel scope={ { ...source.target, dialect: 'postgresql' } } draft={preview?.design ? draft : undefined}
           disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>}
-        <details open={joins.length ? true : undefined}><summary>{text.joins}</summary>
+        <details open={joins.length ? true : undefined}><summary onClick={event => {
+          if (editingJoin !== undefined) event.preventDefault();
+        }}>{text.joins}</summary>
           <SingleQueryDesignPanel scope={{ ...source.target, dialect: 'postgresql', join: true }}
             draft={joins.length && preview?.design ? { ...draft,
               joins: joins.map(({ step: { fingerprint: _fingerprint, ...step } }) => step) } : undefined}
             disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>
-          <PostgresQueryJoinPanel source={source} entries={catalogue ?? []} joins={joins} disabled={disabled || !!editor}
+          <PostgresQueryJoinPanel source={source} entries={catalogue ?? []} joins={joins}
+            disabled={disabled || (!!editor && editingJoin === undefined)} editing={editingJoin} current={editable}
+            edit={index => {
+              if (index === undefined || (editable() && !editor)) setEditor(index === undefined ? undefined : { join: index });
+            }}
             add={addJoin} change={(index, step) => {
-              if (!editable() || editor) return;
+              if (!editable() || (editor && editingJoin !== index)) return;
               setError(''); setJoins(previous => previous.map((item, i) => i === index ? { ...item, step } : item));
             }} remove={removeLastJoin} back={backToSingle}/>
         </details>
