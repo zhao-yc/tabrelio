@@ -8,11 +8,13 @@ import{localSqlPageLimits,localSqlPageNextSchema,localSqlPageReleaseSchema,type 
 export const savedQueryPageLimits=localSqlPageLimits;
 const savedQueryPageSortSchema = z.enum(['recent', 'oldest', 'name-asc', 'name-desc']);
 export type SavedQueryPageSort = z.infer<typeof savedQueryPageSortSchema>;
-export const savedQueryPageInputSchema=z.object({taskId:z.string().uuid(),search:z.string().max(512),onError:z.enum(['stop','continue']),group:savedQueryGroupScopeSchema.optional(),scope:savedQueryScopeSchema.optional(),sort:savedQueryPageSortSchema.optional()}).strict();
+export const savedQueryPageInputSchema=z.object({taskId:z.string().uuid(),search:z.string().max(512),onError:z.enum(['stop','continue']),group:savedQueryGroupScopeSchema.optional(),scope:savedQueryScopeSchema.optional(),sort:savedQueryPageSortSchema.optional(),favoritesOnly:z.literal(true).optional()}).strict();
 export const savedQueryPageNextSchema=localSqlPageNextSchema;
 export const savedQueryPageReleaseSchema=localSqlPageReleaseSchema;
 export const savedQueryDeleteCheckedSchema=z.object({id:z.string().min(1).max(200),digest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const savedQueryFavoriteSchema = savedQueryDeleteCheckedSchema.extend({ expectedRevision: z.string().regex(/^[a-f0-9]{64}$/), favorite: z.boolean() }).strict();
+export type SavedQueryFavoriteInput = z.infer<typeof savedQueryFavoriteSchema>;
 export type SavedQueryPageInput=z.infer<typeof savedQueryPageInputSchema>;
-export interface SavedQueryPageEntry{query:Omit<SavedQuery,'sql'>;digest:string;sqlPreview:string;sqlUnits:number;previewTruncated:boolean;groupId?:string}
+export interface SavedQueryPageEntry{query:Omit<SavedQuery,'sql'>;digest:string;sqlPreview:string;sqlUnits:number;previewTruncated:boolean;groupId?:string;favorite?:true}
 export type SavedQueryPage=LocalSqlPage<SavedQueryPageEntry>;
 export interface SavedQueryPagePosition{updatedAt:string;id:string;nameKey?:Uint8Array}

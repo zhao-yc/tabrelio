@@ -3,7 +3,7 @@ import{mkdtempSync,rmSync,mkdirSync,rmdirSync,readFileSync}from'node:fs';
 import{join,dirname,resolve,basename}from'node:path';
 import{tmpdir}from'node:os';
 import{createRequire}from'node:module';
-import{randomUUID}from'node:crypto';
+import{createHash,randomUUID}from'node:crypto';
 import{build}from'esbuild';
 import type{Database}from'sql.js';
 import{LocalStore}from'../../src/main/storage';
@@ -48,6 +48,48 @@ describe('保存查询概要和协议',()=>{
 });
 
 describe('真实SQLite键分页及工作线程',()=>{
+ it('收藏跨页先筛选再读取正文，重开保留且删除同编号后不复活', async () => {
+  const values = Array.from({ length: 29 }, (_, index) => query({
+   id: `fav-${String(index).padStart(2, '0')}`, name: `查询 ${String(index).padStart(2, '0')}`,
+   sql: index === 28 ? 'SELECT 2' : 'SELECT 1 /* 收藏正文 */',
+  }));
+  const path = join(directory, 'test.sqlite'), wasm = require.resolve('sql.js/dist/sql-wasm.wasm');
+  const reference = (id: string) => ({ id, digest: createHash('sha256').update(store.querySearchRaw(id)!).digest('hex'), expectedRevision: store.queryOrganization().revision });
+  for (const value of values) store.saveQuery(value);
+  for (const value of values.slice(1)) store.setSavedQueryFavorite({ ...reference(value.id), favorite: true });
+  await service.close(); store.close();
+  store = await LocalStore.open(path, wasm, protector);
+  service = new SavedQueryPages(store, workerPath);
+  const options = { favoritesOnly: true, search: '收藏正文', sort: 'name-asc' } as const;
+  const first = await service.start(request(options));
+  expect(first.items.map(entry => entry.query.id)).toEqual(values.slice(1, 26).map(value => value.id));
+  expect(first.items.every(entry => entry.favorite && entry.digest === reference(entry.query.id).digest)).toBe(true);
+  const second = await service.next({ taskId: randomUUID(), cursor: first.cursor! });
+  expect(second.items.map(entry => entry.query.id)).toEqual(values.slice(26, 28).map(value => value.id));
+  expect(second).toMatchObject({ scanned: 28, matched: 27, failed: 0 });
+  expect(second.cursor).toBeUndefined();
+
+  const current = await service.start(request(options)), id = values[1].id, before = readFileSync(path), beforeRevision = store.querySearchRevision();
+  const change = { ...reference(id), favorite: false };
+  expect(() => store.setSavedQueryFavorite({ ...change, digest: '0'.repeat(64) })).toThrow('原保存查询已变化');
+  mkdirSync(path + '.tmp');
+  try { expect(() => store.setSavedQueryFavorite(change)).toThrow('修改未保存'); }
+  finally { rmdirSync(path + '.tmp'); }
+  expect(readFileSync(path)).toEqual(before);
+  expect(store.querySearchRevision()).toBe(beforeRevision);
+  store.setSavedQueryFavorite(change);
+  expect(() => store.setSavedQueryFavorite({ ...change, favorite: true })).toThrow('保存查询库已变化');
+  await expect(service.next({ taskId: randomUUID(), cursor: current.cursor! })).rejects.toThrow('已变化');
+  expect(store.querySearchRaw(id)).toBe(JSON.stringify(values[1]));
+  expect((await service.start(request(options))).items[0].query.id).toBe(values[2].id);
+
+  const renamed = reference(values[2].id);
+  store.renameQueryChecked({ id: renamed.id, digest: renamed.digest, name: '改名后仍收藏' });
+  expect((await service.start(request({ favoritesOnly: true, search: '改名后仍收藏' }))).items[0]).toMatchObject({ query: { id: values[2].id }, favorite: true });
+  store.deleteQuery(values[2].id);
+  store.saveQuery(values[2]);
+  expect((await service.start(request(options))).items[0].query.id).toBe(values[3].id);
+ });
  it('名称和更新时间双向跨页，旧库重开建立索引且坏记录仍可单独报告', async () => {
   const database = () => (store as unknown as { db: Database }).db;
   database().run('DROP INDEX queries_name_id');

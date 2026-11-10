@@ -2762,6 +2762,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
 
     case 'queries.pageRelease':return savedQueryPages.release(input);
     case 'queries.deleteChecked':if(shuttingDown)throw Error('客户端正在退出，不能删除保存查询');return savedQueryPages.deleteChecked(input);
+    case 'queries.favoriteSet':
+      if (shuttingDown) throw Error('客户端正在退出，不能更改保存查询收藏');
+      return store.setSavedQueryFavorite(input);
     case 'queries.renameChecked':if(shuttingDown)throw Error('客户端正在退出，不能重命名保存查询');return store.renameQueryChecked(input);
     case 'queries.duplicateChecked':if(shuttingDown)throw Error('客户端正在退出，不能复制保存查询');return store.duplicateQueryChecked(input);
     case 'queries.duplicateSelectedChecked':

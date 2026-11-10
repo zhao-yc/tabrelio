@@ -41,7 +41,7 @@ import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQueryImportLimits,savedQuerySearchLimits,type SavedQueryImportTarget}from'../shared/savedQuerySearch';
-import type{SavedQueryPageInput,SavedQueryPagePosition}from'../shared/savedQueryPages';
+import { savedQueryFavoriteSchema, type SavedQueryFavoriteInput, type SavedQueryPageInput, type SavedQueryPagePosition } from '../shared/savedQueryPages';
 import { historySaveBatchLimits, type HistoryPagePosition, type HistoryPageInput } from '../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
 import { queryCreateSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
@@ -181,6 +181,10 @@ export class LocalStore {
         CREATE INDEX IF NOT EXISTS saved_query_memberships_group ON saved_query_memberships(group_id,query_id);
         -- 旧客户端合法删除留下的孤儿成员不能在同ID重建时复活。
         DELETE FROM saved_query_memberships WHERE NOT EXISTS (SELECT 1 FROM queries WHERE queries.id=saved_query_memberships.query_id);
+        -- 收藏只记录查询编号。删除触发器也覆盖旧客户端或批量删除路径。
+        CREATE TABLE IF NOT EXISTS saved_query_favorites (query_id TEXT NOT NULL PRIMARY KEY);
+        CREATE TRIGGER IF NOT EXISTS saved_query_favorites_cleanup AFTER DELETE ON queries
+          BEGIN DELETE FROM saved_query_favorites WHERE query_id=OLD.id; END;
         PRAGMA user_version=9;`);
     });
     for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
@@ -942,9 +946,10 @@ export class LocalStore {
   /** 二进制主键位置分页，仅取一条正文及下一条存在性，不复制整个查询库。 */
   querySearchNext(after?:string):{id:string;raw:string|null;hasMore:boolean}|null{const statement=this.db.prepare('SELECT id,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM queries '+(after===undefined?'':'WHERE id COLLATE BINARY>? ')+'ORDER BY id COLLATE BINARY LIMIT 2');try{statement.bind(after===undefined?[savedQuerySearchLimits.recordBytes]:[savedQuerySearchLimits.recordBytes,after]);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}}
   /** 同一排序与编号组成续页位置。排序键来自本地索引，仍只读取至多两条正文。 */
-  queryPageNext(after?: SavedQueryPagePosition, input?: Pick<SavedQueryPageInput, 'group' | 'sort'>): (SavedQueryPagePosition & { raw: string | null; hasMore: boolean; groupId?: string }) | null {
+  queryPageNext(after?: SavedQueryPagePosition, input?: Pick<SavedQueryPageInput, 'group' | 'sort' | 'favoritesOnly'>): (SavedQueryPagePosition & { raw: string | null; hasMore: boolean; groupId?: string; favorite?: true }) | null {
     const ids=savedQueryGroupIds(readSavedQueryOrganization(this.db).groups,input?.group??{kind:'all'}),scope=savedQueryMembershipCondition(ids),conditions:string[]=[],params:SqlValue[]=[savedQuerySearchLimits.recordBytes];
     if(scope.condition){conditions.push(scope.condition);params.push(...scope.params);}
+    if (input?.favoritesOnly) conditions.push('f.query_id IS NOT NULL');
     const sort = input?.sort;
     const byName = sort === 'name-asc' || sort === 'name-desc';
     const ascending = sort === 'name-asc' || sort === 'oldest';
@@ -959,8 +964,9 @@ export class LocalStore {
       params.push(previousKey, after.id);
     }
     const columns = byName ? `,${orderKey} AS name_key` : '';
-    const statement = this.db.prepare('SELECT q.id,q.updated_at,m.group_id,CASE WHEN length(CAST(q.data AS BLOB))<=? THEN q.data ELSE NULL END AS data' + columns +
-      ' FROM queries q LEFT JOIN saved_query_memberships m ON m.query_id=q.id ' + (conditions.length ? 'WHERE ' + conditions.join(' AND ') + ' ' : '') +
+    const statement = this.db.prepare('SELECT q.id,q.updated_at,m.group_id,f.query_id AS favorite_id,CASE WHEN length(CAST(q.data AS BLOB))<=? THEN q.data ELSE NULL END AS data' + columns +
+      ' FROM queries q LEFT JOIN saved_query_memberships m ON m.query_id=q.id LEFT JOIN saved_query_favorites f ON f.query_id=q.id ' +
+      (conditions.length ? 'WHERE ' + conditions.join(' AND ') + ' ' : '') +
       `ORDER BY ${orderKey} ${direction},q.id COLLATE BINARY ${direction} LIMIT 2`);
     try {
       statement.bind(params);
@@ -968,8 +974,22 @@ export class LocalStore {
       const row = statement.getAsObject();
       const nameKey = row.name_key instanceof Uint8Array ? row.name_key : undefined;
       return { id: String(row.id), updatedAt: String(row.updated_at), raw: typeof row.data === 'string' ? row.data : null,
-        ...(nameKey ? { nameKey } : {}), ...(typeof row.group_id === 'string' ? { groupId: row.group_id } : {}), hasMore: statement.step() };
+        ...(nameKey ? { nameKey } : {}), ...(typeof row.group_id === 'string' ? { groupId: row.group_id } : {}),
+        ...(typeof row.favorite_id === 'string' ? { favorite: true as const } : {}), hasMore: statement.step() };
     } finally { statement.free(); }
+  }
+  /** 收藏独立于正文摘要，旧列表或写盘失败不能覆盖现有收藏。 */
+  setSavedQueryFavorite(raw: SavedQueryFavoriteInput): void {
+    const input = savedQueryFavoriteSchema.parse(raw);
+    this.mutate(() => {
+      if (input.expectedRevision !== this.queryOrganizationRevision()) throw Error('保存查询库已变化，请刷新后重试');
+      const previous = this.querySearchRaw(input.id);
+      if (previous === undefined || createHash('sha256').update(previous).digest('hex') !== input.digest)
+        throw Error('原保存查询已变化，请刷新后重试');
+      if (input.favorite) this.db.run('INSERT INTO saved_query_favorites VALUES (?) ON CONFLICT(query_id) DO NOTHING', [input.id]);
+      else this.db.run('DELETE FROM saved_query_favorites WHERE query_id=?', [input.id]);
+    });
+    this.queryRevisionValue++;
   }
   /** 只在明确打开时读取一条当前原文，过大记录不会进入渲染进程。 */
   querySearchRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM queries WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('保存查询记录超过128MiB');return raw;}finally{statement.free();}}

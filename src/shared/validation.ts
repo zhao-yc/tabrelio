@@ -132,7 +132,7 @@ import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } fro
 import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
 import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
 import { queryCreateSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
-import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
+import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema,savedQueryFavoriteSchema}from'./savedQueryPages';
 import { savedQueryRenameSchema } from './savedQueryRename';
 import { savedQueryDuplicateBatchSchema, savedQueryDuplicateSchema } from './savedQueryDuplicate';
 import { savedQueryDeleteSelectedSchema } from './savedQueryDeleteSelected';
@@ -548,6 +548,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'queries.copySql': savedQueryReadTextSchema,
   'queries.importSql': savedQueryImportSqlSchema,
   'queries.page':savedQueryPageInputSchema,'queries.pageContinue':savedQueryPageNextSchema,'queries.pageRelease':savedQueryPageReleaseSchema,'queries.deleteChecked':savedQueryDeleteCheckedSchema,
+  'queries.favoriteSet': savedQueryFavoriteSchema,
   'queries.renameChecked': savedQueryRenameSchema,
   'queries.duplicateChecked': savedQueryDuplicateSchema,
   'queries.duplicateSelectedChecked': savedQueryDuplicateBatchSchema,

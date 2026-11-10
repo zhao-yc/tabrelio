@@ -274,6 +274,7 @@ export interface CommandMap {
   'queries.pageContinue':{input:{taskId:string;cursor:string};output:SavedQueryPage};
   'queries.pageRelease':{input:{cursor:string};output:void};
   'queries.deleteChecked':{input:{id:string;digest:string};output:void};
+  'queries.favoriteSet': { input: import('./savedQueryPages').SavedQueryFavoriteInput; output: void };
   'queries.renameChecked':{input:import('./savedQueryRename').SavedQueryRenameInput;output:void};
   'queries.duplicateChecked':{input:import('./savedQueryDuplicate').SavedQueryDuplicateInput;output:void};
   'queries.duplicateSelectedChecked':{input:import('./savedQueryDuplicate').SavedQueryDuplicateBatchInput;output:import('./savedQueryDuplicate').SavedQueryDuplicateBatchResult};

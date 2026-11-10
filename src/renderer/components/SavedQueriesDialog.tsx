@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Clock3, FileCode2, Search, Star, Trash2 } from 'lucide-react';
 import type { SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryGroupTarget, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
 import { savedQueryOpenBatchLimits, type SavedQueryOpenResult, type SavedQueryScope } from '../../shared/savedQuerySearch';
@@ -34,7 +34,7 @@ import '../savedQueryPages.css';
 
 interface Services { request: typeof invoke; id(): string; }
 const services: Services = { request: invoke, id: uid };
-interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; scope: SavedQueryScope; sort: SavedQueryPageSort; }
+interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; scope: SavedQueryScope; sort: SavedQueryPageSort; favoritesOnly: boolean; }
 interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; criteria: string; epoch: number; duplicateRevision?: string; }
 interface DeleteEdit { items: readonly SelectedSavedQuery[]; selection: ReadonlyMap<string, SelectedSavedQuery>; epoch: number; }
 interface OpenSelection extends SelectedSavedQuery { connectionId?: string; }
@@ -44,7 +44,7 @@ const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database,
   databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding,
 });
-const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.sort]);
+const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.sort, value.favoritesOnly]);
 interface OrganizationEdit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 interface RebindEdit { connectionSnapshot: ConnectionOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
 interface DuplicateBatchEdit { duplicateSnapshot: SavedQueryOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
@@ -59,6 +59,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [importConnection, setImportConnection] = useState<ConnectionProfile>(), [importDatabase, setImportDatabase] = useState('');
   const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
   const [sort, setSort] = useState<SavedQueryPageSort>('recent');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
@@ -69,7 +70,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [external, setExternal] = useState<SavedQueryExternalSession>(), externalRef = useRef<SavedQueryExternalSession | true | undefined>(undefined);
   const openBatchTrigger = useRef<HTMLButtonElement>(null);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
-  const criteria: Criteria = { search, policy, group, scope, sort }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
+  const criteria: Criteria = { search, policy, group, scope, sort, favoritesOnly }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
   const currentSqlPreview = sqlPreview?.epoch === renderEpoch ? sqlPreview : undefined;
   // 分页、筛选或其它操作换代时释放大正文，渲染已立即隐藏旧预览。
@@ -124,6 +125,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         ...(value.group.kind === 'all' ? {} : { group: value.group }),
         ...(value.scope.kind === 'all' ? {} : { scope: value.scope }),
         ...(value.sort === 'recent' ? {} : { sort: value.sort }),
+        ...(value.favoritesOnly ? { favoritesOnly: true } : {}),
       }));
       cursor.current = page.cursor; if (!owns(ticket)) { await release(); return; }
       setReply(page); setBatch(count => next ? count + 1 : 1); setApplied(criteriaKey(value)); setTargets(new Map());
@@ -145,6 +147,12 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
   function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
   function selectScope(value: SavedQueryGroupScope) { if (!editable()) return; setGroup(value); criteriaRef.current = { ...criteriaRef.current, group: value }; void load(false, criteriaRef.current); }
+  function selectFavorites(value: boolean) {
+    if (!editable()) return;
+    setFavoritesOnly(value);
+    criteriaRef.current = { ...criteriaRef.current, favoritesOnly: value };
+    void load(false, criteriaRef.current);
+  }
   /** 排序换用首页和新游标，保留已勾选的原记录摘要。 */
   function selectSort(value: SavedQueryPageSort) {
     if (!editable()) return;
@@ -497,6 +505,29 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       }, true);
     });
   }
+  /** 收藏不会改变正文摘要。提交后刷新有界列表和组织版本，并保留跨页勾选。 */
+  function setFavorite(item: SavedQueryPageEntry) {
+    const snapshot = organizationRef.current;
+    if (!editable() || !snapshot || !currentCard(item)) return;
+    const favorite = !item.favorite;
+    void run(async ticket => {
+      let committed = false;
+      try {
+        await io.request('queries.favoriteSet', { id: item.query.id, digest: item.digest, expectedRevision: snapshot.revision, favorite });
+        committed = true;
+        if (!owns(ticket)) return;
+        const raw = await io.request('queries.organizationGet', {});
+        if (!owns(ticket)) return;
+        const group = publish(raw, criteriaRef.current.group);
+        await readPage(ticket, { ...criteriaRef.current, group });
+        if (owns(ticket)) setNotice(favorite ? t.favoriteAdded : t.favoriteRemoved);
+      } catch (reason) {
+        if (!owns(ticket)) return;
+        setNeedsRefresh(true); setError(errorMessage(reason));
+        if (committed) setNotice(t.favoriteRefresh);
+      }
+    });
+  }
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
   const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening || !!external, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
@@ -554,6 +585,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           <option value="recent">{t.sortRecent}</option><option value="oldest">{t.sortOldest}</option>
           <option value="name-asc">{t.sortNameAsc}</option><option value="name-desc">{t.sortNameDesc}</option>
         </select></label>
+        <label className="saved-query-favorites-filter"><input type="checkbox" checked={favoritesOnly} disabled={blocked} onChange={event => selectFavorites(event.target.checked)}/>{t.favoritesOnly}</label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
         <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={beginDuplicateBatch}>{t.duplicateBatchOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         {selected.size > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
@@ -564,7 +596,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         {!external && <button disabled={blocked} onClick={() => beginExternal()}>{externalText.resume}</button>}
         {external && <SavedQueryExternalEditor key={external.sessionId} session={external} request={io.request} onDone={message => finishExternal(external, message)}/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
-        <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
+        <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label>
+          <button type="button" className="icon-button" disabled={blocked || changed || needsRefresh || !organization} aria-label={t.favoriteName(item.query.name)}
+            aria-pressed={!!item.favorite} title={item.favorite ? t.favoriteRemove : t.favoriteAdd} onClick={() => setFavorite(item)}>
+            <Star size={15} fill={item.favorite ? 'currentColor' : 'none'} aria-hidden="true"/>
+          </button><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
           <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<button disabled={blocked || changed || needsRefresh} onClick={() => copySql(item)}>{sqlText.sqlCopy}</button><button disabled={blocked || changed || needsRefresh} title={t.sqlExportHint} onClick={() => exportSql(item)}>{t.sqlExport}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginExternal(item)}>{externalText.open}</button><label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
           <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
