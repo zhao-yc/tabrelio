@@ -40,7 +40,7 @@ import { fullQueryExportProfileMutation, fullQueryExportProfileScope, readFullQu
 import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
-import{savedQueryImportLimits,savedQuerySearchLimits,type SavedQueryImportTarget}from'../shared/savedQuerySearch';
+import{savedQueryImportArchiveLimits,savedQueryImportLimits,savedQuerySearchLimits,type SavedQueryImportTarget}from'../shared/savedQuerySearch';
 import { savedQueryFavoriteSchema, savedQueryRecentLimit, savedQueryRememberOpenSchema, type SavedQueryFavoriteInput, type SavedQueryPageInput, type SavedQueryPagePosition, type SavedQueryRememberOpenInput } from '../shared/savedQueryPages';
 import { historySaveBatchLimits, type HistoryPagePosition, type HistoryPageInput } from '../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
@@ -1181,8 +1181,9 @@ export class LocalStore {
     if (profile.dialect === 'sqlite' && target.database !== 'main') throw Error('SQLite 目标数据库须为 main');
   }
   /** 文件正文、连接上下文和分组同事务写入，目标变化或写盘失败时整批恢复。 */
-  createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void, group?: SavedQueryGroupTarget, target?: SavedQueryImportTarget): void {
-    if (!files.length || files.length > savedQueryImportLimits.files) throw Error('导入文件数量超出限制');
+  createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void, group?: SavedQueryGroupTarget, target?: SavedQueryImportTarget, archive = false): void {
+    const limit = archive ? savedQueryImportArchiveLimits.files : savedQueryImportLimits.files;
+    if (!files.length || files.length > limit) throw Error('导入文件数量超出限制');
     const records = files.map(({ name, sql }) => this.boundQueryRecord(randomUUID(), { name, sql, connectionId: target?.connectionId,
       context: { state: 'known', database: target?.database ?? null } }));
     assertCurrent();

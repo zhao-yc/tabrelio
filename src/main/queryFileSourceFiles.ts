@@ -33,9 +33,11 @@ export function queryFileBom(bytes: Buffer): QueryFileBom {
   return bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) ? 'utf8' : bytes.subarray(0, 2).equals(Buffer.from([0xff, 0xfe])) ? 'utf16le' : 'none';
 }
 /** 只接受单链接普通文件及可证明inode，拒绝符号链接和无法证明的物理身份。 */
-function identity(stat: BigIntStats): PrivateQueryFileSource['identity'] {
+interface QueryFileReadBudget { bytes: number; name: string; }
+const sqlReadBudget = { bytes: queryFileSourceLimits.bytes, name: 'SQL文件' };
+function identity(stat: BigIntStats, budget: QueryFileReadBudget): PrivateQueryFileSource['identity'] {
   if (!stat.isFile() || stat.nlink !== 1n || stat.ino <= 0n) throw new QueryFileSourceFailure('identity-changed', '文件物理身份不在可证明范围，请另存到普通文件');
-  if (stat.size > BigInt(queryFileSourceLimits.bytes)) throw new QueryFileSourceFailure('io', 'SQL文件超过20MiB，未读写文件正文');
+  if (stat.size > BigInt(budget.bytes)) throw new QueryFileSourceFailure('io', `${budget.name}超过${budget.bytes / (1024 * 1024)}MiB，未读写文件正文`);
   return { dev: String(stat.dev), ino: String(stat.ino), size: Number(stat.size), mtime: String(stat.mtimeNs), ctime: String(stat.ctimeNs) };
 }
 /** 完整版本包含物理身份及修改时钟，不能仅靠路径/长度判定相同文件。 */
@@ -43,28 +45,28 @@ export function sameQueryFileVersion(left: QueryFileSnapshot['identity'], right:
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtime === right.mtime && left.ctime === right.ctime;
 }
 /** 有界读取前后核句柄与路径身份；每次await后先核原文档，不跟随迟到授权。 */
-export async function readQueryFileSnapshot(path: string, check: () => void, progress?: QueryFileIoProgress): Promise<QueryFileSnapshot> {
-  const before = await lstat(path, { bigint: true }); check(); const first = identity(before);
+export async function readQueryFileSnapshot(path: string, check: () => void, progress?: QueryFileIoProgress, budget = sqlReadBudget): Promise<QueryFileSnapshot> {
+  const before = await lstat(path, { bigint: true }); check(); const first = identity(before, budget);
   progress?.('reading', 0, first.size); check();
   const canonical = await realpath(path); check();
   const handle = await open(canonical, 'r');
   let result: QueryFileSnapshot;
   try {
     check(); const start = await handle.stat({ bigint: true }); check();
-    if (!sameQueryFileVersion(first, identity(start))) throw new QueryFileSourceFailure('identity-changed', '读取时文件身份已变化，请重新选择');
+    if (!sameQueryFileVersion(first, identity(start, budget))) throw new QueryFileSourceFailure('identity-changed', '读取时文件身份已变化，请重新选择');
     const chunks: Buffer[] = []; let size = 0;
     while (true) {
-      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, queryFileSourceLimits.bytes + 1 - size));
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, budget.bytes + 1 - size));
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null); check();
       if (!bytesRead) break; size += bytesRead;
-      if (size > queryFileSourceLimits.bytes) throw new QueryFileSourceFailure('io', '读取时SQL文件超过20MiB');
+      if (size > budget.bytes) throw new QueryFileSourceFailure('io', `读取时${budget.name}超过${budget.bytes / (1024 * 1024)}MiB`);
       chunks.push(chunk.subarray(0, bytesRead));
       progress?.('reading', size, first.size); check();
     }
     const end = await handle.stat({ bigint: true }); check();
     const named = await lstat(canonical, { bigint: true }); check();
     const resolved = await realpath(path); check();
-    if (canonical !== resolved || !sameQueryFileVersion(first, identity(end)) || !sameQueryFileVersion(first, identity(named)) || size !== first.size) throw new QueryFileSourceFailure('external-change', '读取时文件已变化，请重新读取');
+    if (canonical !== resolved || !sameQueryFileVersion(first, identity(end, budget)) || !sameQueryFileVersion(first, identity(named, budget)) || size !== first.size) throw new QueryFileSourceFailure('external-change', '读取时文件已变化，请重新读取');
     const bytes = Buffer.concat(chunks, size); result = { path: canonical, bytes, identity: first, mode: Number(before.mode & 0o777n), digest: queryFileBytesDigest(bytes) };
   } finally { await handle.close(); }
   check(); return result;

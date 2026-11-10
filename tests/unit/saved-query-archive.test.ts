@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { writeQuerySqlArchive } from '../../src/main/querySqlArchive';
+import { readQuerySqlArchive } from '../../src/main/querySqlArchiveImport';
 import { validateCommand } from '../../src/shared/validation';
 import { savedQueryArchiveLimits } from '../../src/shared/savedQuerySearch';
 
@@ -88,5 +89,22 @@ describe('保存查询批量 ZIP', () => {
     expect(names).toHaveLength(1000);
     expect(names).toEqual([...names].sort());
     expect([names[0], names.at(-1)]).toEqual(['0001-历史.sql', '1000-历史.sql']);
+  });
+
+  it('归档导入读取嵌套 SQL、验证实际 CRC 和解压预算，并拒绝重复路径', async () => {
+    const zip = new JSZip();
+    zip.file('目录/一.sql', Buffer.from('\uFEFF' + sql[0], 'utf16le'));
+    zip.file('目录/二.SQL', Buffer.from(sql[1], 'utf8'));
+    const input = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    await expect(readQuerySqlArchive(input, 'utf8', () => {})).resolves.toEqual([{ name: '一', sql: sql[0] }, { name: '二', sql: sql[1] }]);
+    const duplicate = new JSZip().file('a.sql', 'SELECT 1').file('A.SQL', 'SELECT 2');
+    await expect(readQuerySqlArchive(await duplicate.generateAsync({ type: 'nodebuffer' }), 'utf8', () => {})).rejects.toThrow('重复');
+    const corrupt = new JSZip().file('一.sql', 'SELECT 校验');
+    const bytes = await corrupt.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
+    bytes[bytes.indexOf('SELECT 校验')] ^= 1;
+    await expect(readQuerySqlArchive(bytes, 'utf8', () => {})).rejects.toThrow('校验失败');
+    const oversized = new JSZip().file('一.sql', 'x'.repeat(17 * 1024 * 1024)).file('二.sql', 'x'.repeat(17 * 1024 * 1024));
+    const packed = await oversized.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    await expect(readQuerySqlArchive(packed, 'utf8', () => {})).rejects.toThrow('解压后合计超过 32 MiB');
   });
 });

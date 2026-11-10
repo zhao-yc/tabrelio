@@ -498,13 +498,15 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     });
   }
   /** 写入完成后刷新原筛选。若刷新失败，保留导入成功提示并由用户重新读取列表。 */
-  function importSql(): void {
+  function importSql(archive = false): void {
     if (!editable() || importGroupStale || importConnection && !useWorkspace.getState().connections.includes(importConnection)) return;
     const path = importGroup ? tree.find(item => item.id === importGroup.id)?.path : undefined;
     const target = importConnection && { connectionId: importConnection.id, database: importConnection.dialect === 'sqlite' ? 'main' : importDatabase || null };
     const canRefresh = !reply || criteriaKey(criteriaRef.current) === applied;
     void run(async ticket => {
-      const result = await io.request('queries.importSql', { encoding: importEncoding, ...(importGroup ? { group: importGroup } : {}), ...(target ? { target } : {}) });
+      const result = await io.request('queries.importSql', {
+        encoding: importEncoding, ...(importGroup ? { group: importGroup } : {}), ...(target ? { target } : {}), ...(archive ? { archive: true } : {}),
+      });
       if (!owns(ticket) || result.status !== 'imported') return;
       setNotice(path !== undefined ? formatText(t.sqlGroupImported, result.names.length, path) : result.names.length === 1
         ? formatText(t.sqlImported, result.names[0]) : formatText(t.sqlBatchImported, result.names.length));
@@ -607,7 +609,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           {importConnection && !importConnectionStale && <label>{t.sqlImportDatabase} <input aria-label={t.sqlImportDatabase} value={importConnection.dialect === 'sqlite' ? 'main' : importDatabase}
             readOnly={importConnection.dialect === 'sqlite'} disabled={blocked} maxLength={256} placeholder={queryContextZh.none}
             onChange={event => draft(() => setImportDatabase(event.target.value))}/></label>}
-        </div><button disabled={blocked || importGroupStale || importConnectionStale} onClick={importSql}>{t.sqlImportChoose}</button></details>
+        </div><button disabled={blocked || importGroupStale || importConnectionStale} onClick={() => importSql()}>{t.sqlImportChoose}</button>
+          <button disabled={blocked || importGroupStale || importConnectionStale} title={t.sqlImportArchiveHint} onClick={() => importSql(true)}>{t.sqlImportArchive}</button></details>
         <label className="inline-field">{t.sqlExportEncoding}<select aria-label={t.sqlExportEncoding} value={exportEncoding} disabled={blocked}
           onChange={event => setExportEncoding(event.target.value as QueryFileEncoding)}>
           <option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option>

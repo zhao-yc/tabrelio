@@ -47,11 +47,12 @@ export type SavedQueryExportSqlArchiveResult = { status: 'cancelled' } | { statu
 /** 只接受已保存连接的编号和显式默认库，不接受文件路径、SQL 或认证材料。 */
 export const savedQueryImportTargetSchema = z.object({ connectionId: id, database: name.refine(value => !value.includes('\0')).nullable() }).strict();
 export type SavedQueryImportTarget = z.infer<typeof savedQueryImportTargetSchema>;
-export const savedQueryImportSqlSchema = z.object({ encoding: querySqlExportEncodingSchema, group: savedQueryGroupTargetSchema.optional(), target: savedQueryImportTargetSchema.optional() }).strict();
+export const savedQueryImportSqlSchema = z.object({ encoding: querySqlExportEncodingSchema, group: savedQueryGroupTargetSchema.optional(), target: savedQueryImportTargetSchema.optional(), archive: z.literal(true).optional() }).strict();
 export type SavedQueryImportSqlInput = z.infer<typeof savedQueryImportSqlSchema>;
 /** 导入只回传新记录的名称，文件路径及原文留在主进程。 */
 export type SavedQueryImportSqlResult = { status: 'cancelled' } | { status: 'imported'; names: string[] };
 export const savedQueryImportLimits = { files: 25, bytes: 32 * 1024 * 1024 } as const;
+export const savedQueryImportArchiveLimits = { files: 1000, archiveBytes: 34 * 1024 * 1024 } as const;
 export type SavedQuerySearchInput=z.infer<typeof savedQuerySearchInputSchema>;
 export type SavedQuerySearchNext=z.infer<typeof savedQuerySearchNextSchema>;
 export interface SavedQueryMatch{field:'name'|'sql';line:number;column:number;offset:number;length:number;preview:string;previewTruncated:boolean}

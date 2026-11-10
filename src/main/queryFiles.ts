@@ -6,6 +6,11 @@ import type { QueryFileEncoding } from '../shared/contracts';
 export const queryFileLimit = 20 * 1024 * 1024;
 const queryTextLimit = 20_000_000;
 
+/** 文件导入沿用文件名，截断时保留完整 Unicode 字符。 */
+export function importedQueryName(fileName: string): string {
+  return fileName.replace(/\.sql$/i, '').trim().slice(0, 256).replace(/[\uD800-\uDBFF]$/, '') || '导入的查询';
+}
+
 /** SQL 编辑文件采用有限读写；更大的脚本应通过独立的流式 SQL 文件任务执行。 */
 function checkEncoding(encoding: string): asserts encoding is QueryFileEncoding {
   if (!['utf8', 'utf16le', 'gb18030'].includes(encoding)) throw new Error('SQL 文件编码必须为 UTF-8、UTF-16LE 或 GB18030');

@@ -126,8 +126,9 @@ import type { FileImportPreflightInput, FileImportPreflightReport } from '../sha
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { ExportReservations } from './exportReservations';
 import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
-import { decodeQueryFile, encodeQueryFile, readQueryFile, writeQueryFile, writeQueryFileBytes } from './queryFiles';
+import { decodeQueryFile, encodeQueryFile, importedQueryName, readQueryFile, writeQueryFile, writeQueryFileBytes } from './queryFiles';
 import { writeQuerySqlArchive } from './querySqlArchive';
+import { readQuerySqlArchive } from './querySqlArchiveImport';
 import { readQueryFileSnapshot } from './queryFileSourceFiles';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
@@ -137,7 +138,7 @@ import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
 import{SavedQuerySearches,SavedQuerySearchCancelled}from'./savedQuerySearch';
-import { savedQueryImportLimits } from '../shared/savedQuerySearch';
+import { savedQueryImportArchiveLimits, savedQueryImportLimits } from '../shared/savedQuerySearch';
 import{SavedQueryPages}from'./savedQueryPages';
 import{HistoryPages}from'./historyPages';
 import { HistoryDelete } from './historyDelete';
@@ -2019,6 +2020,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   }
   // 先完整读取并校验，再以单次事务写入查询库；显式选中的连接不能在等待期间换代。
   if (command === 'queries.importSql') {
+    const archive = input.archive === true;
     const target = input.target, revision = target ? store.connectionRevision() : undefined;
     const assertCurrent = () => {
       columnsMain.assertCapturedOwner(columns);
@@ -2032,10 +2034,23 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (target) store.assertSavedQueryTarget(target);
     return queryFileOperation(async () => {
       const selected = await dialog.showOpenDialog(columns!.owner.window, {
-        title: '导入 SQL 到保存查询', properties: ['openFile', 'multiSelections'], filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
+        title: archive ? '导入 SQL ZIP 到保存查询' : '导入 SQL 到保存查询',
+        properties: archive ? ['openFile'] : ['openFile', 'multiSelections'],
+        filters: [archive ? { name: 'ZIP 文件', extensions: ['zip'] } : { name: 'SQL 文件', extensions: ['sql'] }],
       });
       assertCurrent();
       if (selected.canceled || !selected.filePaths.length) return { status: 'cancelled' };
+      if (archive) {
+        if (selected.filePaths.length !== 1) throw Error('每次请选择一个 SQL ZIP 文件');
+        const snapshot = await readQueryFileSnapshot(selected.filePaths[0], assertCurrent, undefined,
+          { bytes: savedQueryImportArchiveLimits.archiveBytes, name: 'ZIP文件' }).catch(reason => {
+          if (reason instanceof Error && 'code' in reason) throw Error('无法读取所选 ZIP 文件');
+          throw reason;
+        });
+        const files = await readQuerySqlArchive(snapshot.bytes, input.encoding, assertCurrent);
+        store.createImportedQueries(files, assertCurrent, input.group, target, true);
+        return { status: 'imported', names: files.map(file => file.name) };
+      }
       if (selected.filePaths.length > savedQueryImportLimits.files) throw Error(`每批最多导入 ${savedQueryImportLimits.files} 个 SQL 文件`);
       const files: { name: string; sql: string }[] = [];
       let bytes = 0;
@@ -2048,7 +2063,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           assertBudget(snapshot.bytes.length);
           bytes += snapshot.bytes.length;
           const { sql } = decodeQueryFile(snapshot.bytes, input.encoding);
-          const name = fileName.replace(/\.sql$/i, '').trim().slice(0, 256).replace(/[\uD800-\uDBFF]$/, '') || '导入的查询';
+          const name = importedQueryName(fileName);
           files.push({ name, sql });
         } catch (reason) {
           const detail = reason instanceof Error && !('code' in reason) ? reason.message : '无法读取所选 SQL 文件';

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import type{Database}from'sql.js';
 import type{HistoryEntry}from'../../src/shared/contracts';
 import{LocalStore}from'../../src/main/storage';
+import { writeQuerySqlArchive } from '../../src/main/querySqlArchive';
 import{test,expect,page,dataDir,pageErrors,desktop,quitDesktop,launchDesktop}from'./desktop-fixture';
 import { historyInsertionZh } from '../../src/renderer/locales/historyInsertion.zh-CN';
 import { historyDeleteZh as deletionText } from '../../src/renderer/locales/historyDelete.zh-CN';
@@ -848,6 +849,80 @@ test('保存查询整组筛选归档包含子组及百条以上匹配，并保�
  expect(await readFile(protectedFile, 'utf8')).toBe('原文件');
  expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __filteredSavedQueryArchive: unknown }).__filteredSavedQueryArchive))
   .toEqual({ choice: undefined, pickers: 3 });
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
+test('从 SQL ZIP 导入完整脚本，整包失败不写入并保留目标分组和库', async ({}, info) => {
+ const count = 27, targetDatabase = '迁移库', groupName = '迁移脚本';
+ const scripts = Array.from({ length: count }, (_, index) => ({
+  id: String(index), digest: 'a'.repeat(64), name: `脚本-${index}`, sql: `SELECT ${index};\r\n-- 精确内容😀`,
+ }));
+ let groupId = '';
+ await seed(store => {
+  source(store);
+  const groups = store.applyQueryOrganization({ expectedRevision: store.queryOrganization().revision, operation: { kind: 'create', name: groupName, parentId: null } });
+  groupId = groups.groups[0].id;
+ });
+ const archive = join(dataDir, 'roundtrip.zip'), bad = join(dataDir, 'corrupt.zip');
+ await writeQuerySqlArchive(archive, scripts, item => scripts[Number(item.id)], () => {}, 'utf16le');
+ const corrupt = new JSZip().file('首条.sql', 'SELECT 1;').file('第二条.sql', 'SELECT CRC失效;');
+ const badBytes = await corrupt.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
+ badBytes[badBytes.indexOf('SELECT CRC失效;')] ^= 1;
+ await writeFile(bad, badBytes);
+ await desktop.evaluate(({ ipcMain, dialog, BrowserWindow }, { archive, bad, groupId, targetDatabase }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args:any[]) => unknown> })._invokeHandlers;
+  const previous = handlers.get('dbark:request'); if (!previous) throw Error('缺少保存查询 IPC 入口');
+  let choices = 0;
+  handlers.set('dbark:request', async (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) throw Error('离线导入禁止数据库请求');
+   if (command !== 'queries.importSql') return previous(event, payload);
+   const input = payload.input;
+   if (input.archive !== true || input.encoding !== 'utf8' || input.group?.id !== groupId ||
+       input.target?.connectionId !== 'source' || input.target.database !== targetDatabase) throw Error('导入目标不准确');
+   const original = dialog.showOpenDialog;
+   dialog.showOpenDialog = (async (...args: unknown[]) => {
+    const options = args[1] as Electron.OpenDialogOptions;
+    if (args[0] !== BrowserWindow.getAllWindows()[0] || options.properties?.join() !== 'openFile' ||
+        options.filters?.[0]?.extensions.join() !== 'zip' || choices >= 3) throw Error('ZIP 原生打开选项不准确');
+    const path = [undefined, bad, archive][choices++];
+    return path ? { canceled: false, filePaths: [path] } : { canceled: true, filePaths: [] };
+   }) as typeof dialog.showOpenDialog;
+   try { return await previous(event, payload); } finally { dialog.showOpenDialog = original; }
+  });
+ }, { archive, bad, groupId, targetDatabase });
+ await open();
+ await dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click();
+ await dialog().getByText(savedText.sqlImport, { exact: true }).click();
+ await dialog().getByLabel(savedText.sqlImportGroup, { exact: true }).selectOption('group:' + groupId);
+ await dialog().getByLabel(savedText.sqlImportConnection, { exact: true }).selectOption('connection:source');
+ await dialog().getByLabel(savedText.sqlImportDatabase, { exact: true }).fill(targetDatabase);
+ const importZip = dialog().getByRole('button', { name: savedText.sqlImportArchive, exact: true });
+ await importZip.scrollIntoViewIfNeeded();
+ await dialog().screenshot({ path: info.outputPath('saved-query-zip-import.png') });
+ const records = () => page.evaluate(() => window.dbark.invoke('queries.list', {}));
+ await importZip.click();
+ await expect(importZip).toBeEnabled();
+ expect(await records()).toEqual([]);
+ await importZip.click();
+ await expect(dialog().getByRole('alert')).toContainText('ZIP 内 SQL 文件校验失败');
+ expect(await records()).toEqual([]);
+ await importZip.click();
+ await expect(dialog().getByText(formatText(savedText.sqlGroupImported, count, groupName), { exact: true })).toBeVisible();
+ const saved = await records();
+ expect(saved).toHaveLength(count);
+ expect(new Set(saved.map(row => row.id)).size).toBe(count);
+ const expected = scripts.map((item, index) => ({
+  name: `${String(index + 1).padStart(3, '0')}-${item.name}`, sql: item.sql, connectionId: 'source',
+  databaseContext: { state: 'known', database: targetDatabase },
+ }));
+ expect(saved.map(({ name, sql, connectionId, databaseContext }) => ({ name, sql, connectionId, databaseContext })).sort((a, b) => a.name.localeCompare(b.name))).toEqual(expected);
+ const readGroups = () => page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}));
+ expect(await readGroups()).toMatchObject({ totalCount: count, unfiledCount: 0, groups: [{ id: groupId, count }] });
+ await quitDesktop(); await launchDesktop();
+ expect(await records()).toEqual(saved);
+ expect(await readGroups()).toMatchObject({ totalCount: count, unfiledCount: 0, groups: [{ id: groupId, count }] });
  expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
  expect(pageErrors).toEqual([]);
 });
