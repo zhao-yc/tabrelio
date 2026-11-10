@@ -62,7 +62,8 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
   test(`${dialect} 在选区内查找替换保留同一行的区外匹配`, async ({}, info) => {
     const prefix = "select 'needle outside', ";
     const fragment = "needle 🚢 A',\n  'needle";
-    const selected = dialect === 'postgresql' || dialect === 'sqlite' ? `'${fragment} B'` : "'needle 🚢 A', 'needle B'";
+    const selected = dialect === 'postgresql' || dialect === 'sqlite' ? `'${fragment} B'` :
+      "'needle 🚢 A', 'needle B'" + (dialect === 'mysql' ? ` /* ${'x '.repeat(1001)}*/` : '');
     const suffix = ", 'needle outside';\n" + (dialect === 'sqlite' ? `select '${fragment} B';` : "select 'needle later';") + (dialect === 'mariadb' ? '\n  ' : '');
     const source = prefix + selected + suffix;
     await seed(dialect, dialect === 'mariadb' ? source.slice(0, -2) : dialect === 'sqlite' ? source.replaceAll('\n', '\r\n') : source);
@@ -137,6 +138,37 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       return model && selection ? model.getValueInRange(selection) : undefined;
     })).toBe('needle');
 
+    if (dialect === 'mysql') {
+      await selectRange();
+      await nativeQueryCommand('sql-find-selection', true);
+      const selectMatches = findPanel.getByRole('button', { name: '选中全部匹配', exact: true });
+      await findQuery.fill('x');
+      await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 1001 处');
+      await expect(selectMatches).toBeDisabled();
+      await expect(findPanel.getByText('一次最多选中 1000 处，请缩小范围后再使用多光标。')).toBeVisible();
+      await findQuery.fill('needle');
+      await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
+      await findQuery.press('Enter');
+      await findPanel.screenshot({ path: info.outputPath('sql-selection-multi-cursor.png') });
+      await selectMatches.click();
+      await expect(findPanel).toBeHidden();
+      const editorState = () => editor.evaluate(node => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const instance = api?.editor.getEditors().find(candidate => candidate.getContainerDomNode().contains(node));
+        const model = instance?.getModel();
+        if (!instance || !model) throw Error('原查询模型不可读');
+        return { sql: model.getValue().replaceAll('\r\n', '\n'), matches: instance.getSelections()?.map(match => ({
+          offset: model.getOffsetAt(match.getStartPosition()), text: model.getValueInRange(match),
+        })) };
+      });
+      expect(await editorState()).toEqual({ sql: source, matches: [selected.lastIndexOf('needle'), selected.indexOf('needle')]
+        .map(offset => ({ offset: prefix.length + offset, text: 'needle' })) });
+      await page.keyboard.type('X');
+      await expect.poll(async () => (await editorState()).sql).toBe(prefix + selected.replaceAll('needle', 'X') + suffix);
+      await page.keyboard.press(`${modifier}+z`);
+      await expect.poll(async () => (await editorState()).sql).toBe(source);
+    }
+
     await selectRange();
     await nativeQueryCommand('sql-replace-selection', true);
     const query = dialect === 'postgresql' ? "needle (🚢 A)',\\r?\\n  'needle (B)" : 'needle';
@@ -147,6 +179,13 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     await replaceQuery.fill(query);
     await expect(replacePanel.getByRole('status')).toHaveText(dialect === 'postgresql' ? '第 1 处，共 1 处' : '第 1 处，共 2 处');
     if (dialect === 'sqlite') {
+      const regex = replacePanel.getByLabel('正则表达式');
+      await regex.check();
+      await replaceQuery.fill('needle|(?= )');
+      await expect(replacePanel.getByLabel('选区匹配预览').locator('mark.zero-width').first()).toBeVisible();
+      await replacePanel.getByRole('button', { name: '选中全部匹配', exact: true }).click();
+      await expect(replacePanel.getByRole('alert')).toHaveText('当前匹配无法分别选中，请调整查找条件。');
+      await regex.uncheck();
       await replaceQuery.fill('absent');
       await expect(replaceAll).toBeDisabled();
       await replaceQuery.fill('🚢 A');

@@ -65,6 +65,8 @@ export function SqlSelectionFindDialog({ mode, target, source: initialSource, se
   }, [target]);
   const ranges = result?.generation === generation.current ? result.ranges : undefined;
   const selected = ranges?.[index], busy = searching || writing;
+  const selectionLimit = target.maxMatchSelections();
+  const tooManySelections = (ranges?.length ?? 0) > selectionLimit;
   const replaceMode = mode === 'sql-replace-selection';
 
   /** 输入发生时同步撤销旧结果和线程，防止旧回包与新输入共存。 */
@@ -213,9 +215,17 @@ export function SqlSelectionFindDialog({ mode, target, source: initialSource, se
       <div className="full inline-field">
         <button type="button" disabled={busy || !ranges?.length} onClick={() => move(-1)}>{text.previous}</button>
         <button type="button" disabled={busy || !ranges?.length} onClick={() => move(1)}>{text.next}</button>
+        <button type="button" disabled={busy || !ranges?.length || tooManySelections} onClick={() => {
+          if (!ranges || !target.selectMatches(ranges, Math.max(0, index))) {
+            setError(target.current() ? text.selectionBoundary : text.changed);
+            return;
+          }
+          flushSync(close); focus();
+        }}>{text.selectMatches}</button>
         {busy && <Spinner text={writing ? text.replacing : text.searching}/>}
       </div>
       {ranges && <p className="full" role="status">{selected ? text.position(index + 1, ranges.length) : ranges.length ? text.end(ranges.length) : text.noMatches}</p>}
+      {tooManySelections && <p className="full muted">{text.selectionLimit(selectionLimit)}</p>}
       {selected && ranges && <MatchPreview source={source} ranges={ranges} index={index}/>}
       <p id="sql-selection-find-keys" className="full muted">{text.keys}</p>
       <p className="full muted">{text.sourceHint}</p>
@@ -224,7 +234,10 @@ export function SqlSelectionFindDialog({ mode, target, source: initialSource, se
     <footer className="modal-footer">
       <button onClick={close}>{text.close}</button><span className="grow"/>
       <button disabled={busy || !selected} onClick={() => {
-        if (!selected || !target.locate(selected.start, selected.end)) { setError(text.changed); return; }
+        if (!selected || !target.locate(selected.start, selected.end)) {
+          setError(target.current() ? text.selectionBoundary : text.changed);
+          return;
+        }
         flushSync(close); focus();
       }}>{text.locate}</button>
       {replaceMode && <>
