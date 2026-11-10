@@ -16,10 +16,11 @@ export const sqlSelectionFindZh = {
   end: (total: number) => `已到选区末尾，仍有 ${total} 处匹配。`,
   changed: '原选区或查询已变化，请关闭并重新发起。',
   limit: '选区超过 128 Ki UTF-16 单元，请缩小范围。',
+  queryLimit: '查找内容超出匹配上限，请缩短后重试。',
   continueLimit: '替换后选区会超过 128 Ki UTF-16 单元，请缩短替换文本或缩小选区。',
   boundary: '当前匹配落在无法单独编辑的换行边界，请调整查找条件。',
   preview: '选区匹配预览',
-  keys: '在查找框按 Enter 跳到下一处，按 Shift+Enter 返回上一处。',
+  keys: 'Enter 跳到下一处，Shift+Enter 返回上一处，Alt/Option+Enter 插入换行。',
   sourceHint: '只在打开面板时圈定的范围内查找，可使用 $1 等捕获组进行正则替换。',
   position: (index: number, total: number) => `第 ${index} 处，共 ${total} 处`,
 };

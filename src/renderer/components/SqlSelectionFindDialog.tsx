@@ -54,7 +54,7 @@ export function SqlSelectionFindDialog({ mode, target, source: initialSource, se
   const [result, setResult] = useState<{ generation: number; ranges: Range[] }>(), [index, setIndex] = useState(0);
   const [searching, setSearching] = useState(false), [writing, setWriting] = useState(false), [error, setError] = useState('');
   const [invalid, setInvalid] = useState(false);
-  const queryInput = useRef<HTMLInputElement>(null);
+  const queryInput = useRef<HTMLTextAreaElement>(null);
   const resume = useRef<Resume | undefined>(undefined);
   const generation = useRef(0), applying = useRef(false), closed = useRef(false), client = useRef<PageFindWorkerClient | undefined>(undefined);
   useEffect(() => {
@@ -94,12 +94,19 @@ export function SqlSelectionFindDialog({ mode, target, source: initialSource, se
   }
 
   function request(operation: 'find' | 'previewText', ticket: number, only?: Range) {
-    const { query, regex, caseSensitive, wholeWord } = criteria;
-    const literal = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = regex ? query : literal;
+    const { regex, caseSensitive, wholeWord } = criteria;
+    let { query } = criteria;
+    if (query.length > pageFindLimits.query) throw Error(text.queryLimit);
+    // 文本框统一使用 LF。字面模式按原选区的换行匹配，正则仍由用户控制实际模式。
+    if (!regex && query.includes('\n') && source.includes('\r\n')) query = query.replaceAll('\n', '\r\n');
+    if (wholeWord) {
+      const pattern = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      query = `(?<![\\p{L}\\p{N}_$])(?:${pattern})(?![\\p{L}\\p{N}_$])`;
+    }
+    if (query.length > pageFindLimits.query) throw Error(text.queryLimit);
     const options: PageFindOptions = {
       kind: 'text', caseSensitive, wholeCell: false, regex: regex || wholeWord,
-      query: wholeWord ? `(?<![\\p{L}\\p{N}_$])(?:${pattern})(?![\\p{L}\\p{N}_$])` : query,
+      query,
       captureReplacement: operation === 'previewText' && regex,
     };
     client.current ??= new PageFindWorkerClient(() => new Worker(new URL('../pageFind.worker.ts', import.meta.url), { type: 'module' }));
@@ -180,18 +187,24 @@ export function SqlSelectionFindDialog({ mode, target, source: initialSource, se
   }
   return createPortal(<Modal title={uiCommandLabels[mode]} onClose={close} initialFocus={queryInput}>
     <form className="modal-content form-grid sql-selection-find" ref={setHost} onSubmit={event => event.preventDefault()}>
-      <Field full label={text.query}><input ref={queryInput} value={criteria.query} maxLength={pageFindLimits.query - 40} disabled={writing || invalid}
+      <Field full label={text.query}><textarea aria-label={text.query} rows={2} ref={queryInput} value={criteria.query} spellCheck={false} disabled={writing || invalid}
         aria-describedby="sql-selection-find-keys" onKeyDown={event => {
-          // Enter 只切换命中。输入法确认及带修饰键的查询执行快捷键不进入这条路径。
-          if (event.key !== 'Enter' || event.altKey || event.ctrlKey || event.metaKey || composing ||
+          // 保留输入法确认和查询执行快捷键。查找框单独接收 Alt+Enter 换行。
+          if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || composing ||
               event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
           event.preventDefault();
+          if (event.altKey) {
+            const input = event.currentTarget;
+            input.setRangeText('\n', input.selectionStart, input.selectionEnd, 'end');
+            change({ query: input.value });
+            return;
+          }
           move(event.shiftKey ? -1 : 1);
         }}
         onChange={event => change({ query: event.target.value })}
         onCompositionStart={() => { if (!applying.current) { reset(); setComposing(true); } }}
         onCompositionEnd={event => { setComposing(false); change({ query: event.currentTarget.value }); }}/></Field>
-      {replaceMode && <Field full label={text.replacement}><textarea rows={2} value={replacement} maxLength={pageFindLimits.replacement} disabled={writing || invalid} onChange={event => setReplacement(event.target.value)}/></Field>}
+      {replaceMode && <Field full label={text.replacement}><textarea aria-label={text.replacement} rows={2} value={replacement} maxLength={pageFindLimits.replacement} disabled={writing || invalid} onChange={event => setReplacement(event.target.value)}/></Field>}
       <div className="full sql-selection-options">
         <label><input type="checkbox" checked={criteria.regex} disabled={writing || invalid} onChange={event => change({ regex: event.target.checked })}/>{text.regex}</label>
         <label><input type="checkbox" checked={criteria.caseSensitive} disabled={writing || invalid} onChange={event => change({ caseSensitive: event.target.checked })}/>{text.matchCase}</label>

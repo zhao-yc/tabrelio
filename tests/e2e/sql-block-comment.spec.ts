@@ -61,10 +61,11 @@ async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql:
 for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
   test(`${dialect} 在选区内查找替换保留同一行的区外匹配`, async ({}, info) => {
     const prefix = "select 'needle outside', ";
-    const selected = dialect === 'postgresql' ? "'needle 🚢 A',\n  'needle B'" : "'needle 🚢 A', 'needle B'";
-    const suffix = ", 'needle outside';\nselect 'needle later';" + (dialect === 'mariadb' ? '\n  ' : '');
+    const fragment = "needle 🚢 A',\n  'needle";
+    const selected = dialect === 'postgresql' || dialect === 'sqlite' ? `'${fragment} B'` : "'needle 🚢 A', 'needle B'";
+    const suffix = ", 'needle outside';\n" + (dialect === 'sqlite' ? `select '${fragment} B';` : "select 'needle later';") + (dialect === 'mariadb' ? '\n  ' : '');
     const source = prefix + selected + suffix;
-    await seed(dialect, dialect === 'mariadb' ? source.slice(0, -2) : source);
+    await seed(dialect, dialect === 'mariadb' ? source.slice(0, -2) : dialect === 'sqlite' ? source.replaceAll('\n', '\r\n') : source);
     const editor = activeEditor();
     if (dialect === 'mariadb') {
       // 模拟 Monaco 留待后续编辑清理的自动缩进，确保替换保留选区外的空白行。
@@ -81,11 +82,12 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     const findPanel = page.getByRole('dialog', { name: '在选区内查找', exact: true });
     const replacePanel = page.getByRole('dialog', { name: '在选区内替换', exact: true });
     async function selectRange() {
-      return editor.evaluate((node, { prefix, selected }) => {
+      return editor.evaluate((node, { prefix, selected, crlf }) => {
         const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
         const instance = api?.editor.getEditors().find(candidate => candidate.getContainerDomNode().contains(node));
         const model = instance?.getModel();
         if (!instance || !model) throw Error('原查询模型不可读');
+        if (crlf && model.getEOL() !== '\r\n') throw Error('测试查询未使用 CRLF');
         const start = model.getPositionAt(prefix.length), end = model.getPositionAt(prefix.length + selected.replaceAll('\n', model.getEOL()).length);
         instance.focus();
         instance.setSelection({ startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column });
@@ -93,7 +95,7 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
         const point = instance.getScrolledVisiblePosition({ lineNumber: start.lineNumber, column: start.column + 4 });
         if (!point) throw Error('选区不可见');
         return { x: bounds.x + point.left, y: bounds.y + point.top + point.height / 2 };
-      }, { prefix, selected });
+      }, { prefix, selected, crlf: dialect === 'sqlite' });
     }
     const point = await selectRange();
     if (dialect === 'sqlite') {
@@ -104,6 +106,10 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     }
     const findQuery = findPanel.getByLabel('查找内容', { exact: true });
     await expect(findQuery).toBeFocused();
+    if (dialect === 'postgresql') {
+      await findQuery.fill(fragment);
+      await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 1 处');
+    }
     await findQuery.fill('NEEDLE');
     await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
     if (dialect === 'mysql') {
@@ -147,6 +153,19 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 1 处');
       await replaceQuery.fill(query);
       await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
+      const oversized = 'needle'.repeat(100);
+      await replaceQuery.fill(oversized);
+      await expect(replaceQuery).toHaveValue(oversized);
+      await expect(replacePanel.getByRole('alert')).toHaveText('查找内容超出匹配上限，请缩短后重试。');
+      await expect(replaceAll).toBeDisabled();
+      await replacePanel.getByLabel('整词匹配').check();
+      const [line1, line2] = fragment.split('\n');
+      await replaceQuery.fill(line1);
+      await replaceQuery.press('Alt+Enter');
+      await page.keyboard.insertText(line2);
+      await expect(replaceQuery).toHaveValue(fragment);
+      await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 1 处');
+      expect(await replacePanel.getByLabel('选区匹配预览').locator('mark').textContent()).toBe(fragment.replaceAll('\n', '\r\n'));
     }
     const read = () => page.evaluate(async () => {
       const settings = await window.dbark.invoke('settings.get', {});
@@ -155,6 +174,7 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     const replacement = replacePanel.getByLabel('替换为', { exact: true });
     const replaceCurrent = replacePanel.getByRole('button', { name: '替换当前匹配', exact: true });
     await replacement.fill(dialect === 'postgresql' ? '组合 $1\n$2' : dialect === 'mariadb' ? 'needle X' : '替换后的值');
+    if (dialect === 'sqlite') await replacePanel.screenshot({ path: info.outputPath('sql-selection-multiline.png') });
     const firstEdit = prefix + selected.replace('needle', 'needle X') + suffix;
     if (dialect === 'mariadb') {
       await replaceCurrent.click();
@@ -176,7 +196,7 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     if (dialect === 'mariadb' || dialect === 'postgresql') await replacePanel.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(replacePanel).toBeHidden();
     const result = dialect === 'postgresql' ? "'组合 🚢 A\nB'" : dialect === 'mariadb'
-      ? selected.replaceAll('needle', 'needle X') : selected.replaceAll('needle', '替换后的值');
+      ? selected.replaceAll('needle', 'needle X') : selected.replaceAll(dialect === 'sqlite' ? fragment : 'needle', '替换后的值');
     await expect.poll(read).toBe(prefix + result + suffix);
     await page.keyboard.press(`${modifier}+z`);
     if (dialect === 'mariadb') {
