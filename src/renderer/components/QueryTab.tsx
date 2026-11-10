@@ -115,6 +115,7 @@ import { QueryWarningsViewIntent, sameQueryWarningsExecution, type QueryWarnings
 import { queryWarningsZh } from '../locales/queryWarnings.zh-CN';
 import type { QueryFailure } from '../../shared/queryFailure';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
+import { queryFailureSourceZh as sourceLocationText } from '../locales/queryFailureSource.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import { pinLimits, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
 import { queryResultTitle } from '../../shared/queryResultTitle';
@@ -1122,7 +1123,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         scriptFailureRanges.current = new Set(failures);
         if (failures.length && locator?.bindRange(failures[0].sourceRange)) { failureSource.current = locator; retainLocator = true; }
       } else if (result.failure?.sourceRange && locator?.bindRange(result.failure.sourceRange)) { failureSource.current = locator; retainLocator = true; }
-      if (!retainLocator && locator && (result.sqliteResultReceipts?.length || result.sqliteExplain?.sourceRange)) {
+      if (!retainLocator && locator && (result.mysqlResultSourceRanges?.length || result.sqliteResultReceipts?.length || result.sqliteExplain?.sourceRange)) {
         // 同一原模型租约可保留成功结果的位置，即使其后失败语句没有可靠范围。
         failureSource.current = locator;
         retainLocator = true;
@@ -2633,15 +2634,17 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultSqlTarget = menuResult.current;
   const canShowResultSql = !!sourceResult?.statement.trim() && !busy && !queryRunning && (!!pin || !!outcome && !outcome.explain && !outcome.analysis);
   const sqlitePlanRange = pin ? undefined : outcome?.sqliteExplain?.sourceRange;
-  const sqliteSourceRange = sqliteReceipt?.sourceRange ?? sqlitePlanRange;
-  const sqliteResultLocation = !busy && !resultModal && !!sqliteSourceRange && !!failureLocator?.canLocateRange(sqliteSourceRange);
+  const mysqlSourceRange = !sqlite && !pin && !queryRunning && sourceResult === outcome?.results[resultIndex]
+    ? outcome?.mysqlResultSourceRanges?.[resultIndex] : undefined;
+  const sourceRange = sqliteReceipt?.sourceRange ?? sqlitePlanRange ?? mysqlSourceRange;
+  const resultLocation = !busy && !resultModal && !!sourceRange && !!failureLocator?.canLocateRange(sourceRange);
   /** 跳转只消费当前结果或计划的原范围，恢复编辑器但不改写正文或布局偏好。 */
-  function locateSqliteResult(): void {
-    if (!sqliteResultLocation || !sqliteSourceRange || !failureLocator || failureSource.current !== failureLocator ||
+  function locateResultSource(): void {
+    if (!resultLocation || !sourceRange || !failureLocator || failureSource.current !== failureLocator ||
         menuResult.current !== resultSqlTarget || !queryMenuCurrent() || fileSource.isBusy()) return;
     if (resultsOnly) flushSync(() => setResultsOnly(false));
     editor.current?.layout();
-    failureLocator.locateRange(sqliteSourceRange);
+    failureLocator.locateRange(sourceRange);
   }
   /** 从仅显示结果定位错误时，先恢复原编辑器，再按已确认的原范围选中。 */
   function locateScriptFailure(failure: QueryFailure): void {
@@ -2818,6 +2821,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     setOriginDialog({ outcome, index: resultIndex, mysql: { sessionId: sessionRef.current, executionId: task.current } });
 }}>{mysqlOriginsText.open}</button>}
 {(pin || sourceResult) && <button disabled={!canShowResultSql} onClick={openResultSql}>{pin ? zh.query.pinnedStatement : zh.query.resultSql}</button>}
+{mysqlSourceRange && <button disabled={!resultLocation} title={resultLocation ? undefined : sourceLocationText.resultUnavailable}
+  onClick={locateResultSource}>{sourceLocationText.locateResult}</button>}
 <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)} title={rowDetailsText.choose} onClick={openRowDetail}>{rowDetailsText.open}</button>{recordEditTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   onClick={openQueryRecord}>{outcome?.sqliteQueryJoined ? originsText.editJoin : originsText.editRecord}</button>}
 {recordTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
@@ -2870,12 +2875,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         {sqliteZh.receiptOrdinal(sqliteReceipt.statementOrdinal ?? resultIndex + 1)} · {sqliteZh.receiptElapsed(sourceResult.elapsedMs)}
         {sourceResult.columns.length ? ' · ' + sqliteZh.receiptRows(sqliteReceipt.producedRows, sourceResult.rows.length) : ''}
         {' · '}<span title={sqliteZh.receiptChangeHint}>{sqliteZh.receiptChanges(sqliteReceipt.changedRows)}</span>
-        {' '}<button disabled={!sqliteResultLocation} title={sqliteResultLocation ? undefined : sqliteZh.resultLocateUnavailable}
-          onClick={locateSqliteResult}>{sqliteZh.resultLocate}</button>
+        {' '}<button disabled={!resultLocation} title={resultLocation ? undefined : sqliteZh.resultLocateUnavailable}
+          onClick={locateResultSource}>{sqliteZh.resultLocate}</button>
       </div>}
       {sqlitePlanRange && <div className="info-strip">
-        <button disabled={!sqliteResultLocation} title={sqliteResultLocation ? undefined : sqliteZh.resultLocateUnavailable}
-          onClick={locateSqliteResult}>{sqliteExplainZh.locate}</button>
+        <button disabled={!resultLocation} title={resultLocation ? undefined : sqliteZh.resultLocateUnavailable}
+          onClick={locateResultSource}>{sqliteExplainZh.locate}</button>
       </div>}
       {filterBinding && organizedResult && keywordFilter.result && <QueryResultKeyword key={keywordFilter.generation}
         keyword={keywordFilter.keyword} total={organizedResult.rows.length} matched={keywordFilter.result.rows.length}

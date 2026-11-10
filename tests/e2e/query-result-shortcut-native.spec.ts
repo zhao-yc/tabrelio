@@ -5,6 +5,7 @@ import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, re
 import { navigationMenuItem } from './navigation-menu';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
+import { queryFailureSourceZh } from '../../src/renderer/locales/queryFailureSource.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -56,6 +57,10 @@ test('原生查询运行、停止与结果数字切换各自遵循焦点和原�
         { id: 'result-shortcut', kind: 'query', title: '结果集快捷键', connectionId: connection.id, database, sql },
       ] });
     }, { profile, database, sql });
+    // 仅测试通过 Monaco 的公开 getter 核对定位后的选区。
+    if (!sqlite && !postgres) await page.addInitScript(() => {
+      self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true };
+    });
     await page.reload();
 
     const query = page.locator('.query-tab:visible');
@@ -166,6 +171,41 @@ test('原生查询运行、停止与结果数字切换各自遵循焦点和原�
     await expect.poll(async () => (await history()).length).toBe(beforeHistory.length + 2);
     const ran = (await history()).slice(0, 2).map(entry => entry.sql.trim().replace(/;$/, ''));
     expect(ran).toEqual([statements[2].slice(0, -1), statements[1].slice(0, -1)]);
+
+    if (!sqlite && !postgres) {
+      const locate = () => navigationMenuItem(result, { name: queryFailureSourceZh.locateResult, exact: true });
+      const selection = () => query.locator('.query-layout-editor .monaco-editor').evaluate(element => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+        const model = instance?.getModel(), range = instance?.getSelection();
+        if (!model || !range) throw Error('缺少原查询编辑器的选区');
+        return { line: range.startLineNumber, text: model.getValueInRange(range) };
+      });
+      await (await locate()).click();
+      await expect.poll(selection).toEqual({ line: 3, text: statements[2].slice(0, -1) });
+      const duplicate = "SELECT '重复🧭' AS marker";
+      const script = [duplicate, "SELECT '中间😀' AS marker", duplicate].join(';\r\n') + ';';
+      await replaceSql(script);
+      await start();
+      await editor.press(runKey);
+      await expect.poll(async () => (await history()).length).toBe(beforeHistory.length + 3);
+      await expect(buttons).toHaveCount(3);
+      const beforeLocate = await history();
+      await buttons.nth(2).click();
+      await result.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
+      await page.getByRole('menu', { name: queryLayoutZh.placement, exact: true })
+        .getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).click();
+      await expect(editor).toBeHidden();
+      await (await locate()).click();
+      await expect(editor).toBeFocused();
+      await expect(query).toHaveAttribute('data-result-layout', 'below');
+      await expect.poll(selection).toEqual({ line: 3, text: duplicate });
+      expect(await history()).toEqual(beforeLocate);
+      await editor.press('ArrowRight');
+      await page.keyboard.insertText(' ');
+      await expect(await locate()).toBeDisabled();
+      await page.keyboard.press('Escape');
+    }
 
     const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
     const known = new Set((await tasks()).map(task => task.id));

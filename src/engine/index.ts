@@ -170,11 +170,18 @@ interface RunningTask {
   relationFields?: FieldPacket[];
   relationTarget?: ReturnType<typeof mysqlQueryRelationTarget>;
   resultOrigins?: MysqlResultOrigins;
+  resultSourceRanges?: NonNullable<QueryOutcome['mysqlResultSourceRanges']>;
   sqlFileImport?: SqlFileImportEvidence;
   fileImportConflict?: FileImportConflictEvidence;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
+
+/** 只给实际保留的完整结果分配来源，包含 CALL 的行集和回执，不接纳失败语句的部分流。 */
+function appendScriptResults(task: RunningTask, results: QueryResult[], completed: QueryResult[], range?: QueryFailureSourceRange): void {
+  if (task.resultSourceRanges) for (const _ of completed) task.resultSourceRanges.push(range ?? null);
+  results.push(...completed);
+}
 interface IndependentTask { externalAbort?: () => void; commitProtected?: () => boolean; connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
 interface IndependentFileFinalizer<T> { abort?(): void; commit(check: () => void, start: () => void): Promise<T>; dispose(): Promise<void>; committed(): boolean; }
 type Input = Record<string, any>;
@@ -2211,14 +2218,16 @@ export class Engine {
     this.queryEdits.delete(task.managed);
     this.resultOriginSources.delete(task.managed);
     const capture = task.resultOrigins = new MysqlResultOrigins();
+    const ranges: NonNullable<QueryOutcome['mysqlResultSourceRanges']> = [];
+    task.resultSourceRanges = ranges;
     const outcome = continueOnError === true ? await this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings) :
       collectWarnings === true ? await this.queryScriptWithWarnings(task, sql, maxRows, parameters, currentStatement, failureMode) :
       await this.queryScriptStop(task, sql, maxRows, parameters, currentStatement, failureMode);
     const context = task.managed.broken ? undefined : task.managed.queryRowContext;
     const origins = capture.finish(outcome.results, !!context);
-    if (!origins) return outcome;
-    if (context) this.resultOriginSources.set(task.managed, { executionId: task.id, context, origins });
-    return { ...outcome, mysqlResultOrigins: origins };
+    if (context && origins) this.resultOriginSources.set(task.managed, { executionId: task.id, context, origins });
+    return { ...outcome, ...(origins ? { mysqlResultOrigins: origins } : {}),
+      ...(ranges.length === outcome.results.length && ranges.some(Boolean) ? { mysqlResultSourceRanges: ranges } : {}) };
   }
 
   /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
@@ -2247,7 +2256,8 @@ export class Engine {
         }
         task.relationTarget = relationTarget;
         try {
-          results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined));
+          const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined);
+          appendScriptResults(task, results, completed, sourceRange);
           if (relationTarget?.joined) {
             joinedPrimaryKey = await this.confirmMysqlJoinSource(task, relationTarget);
             if (!joinedPrimaryKey) { task.managed.sessionObjects?.invalidate(); relationTarget = undefined; }
@@ -2310,7 +2320,8 @@ export class Engine {
         let originalError: unknown, driverError: unknown, commandEnded = false;
         const physicalId = task.managed.connection.threadId;
         try {
-          results.push(...await this.streamQuery(task, item.statement, maxRows, results.length, budget, item.template, currentStatement !== undefined, { driverError: error => { driverError = error; }, commandEnded: () => { commandEnded = true; } }));
+          const accepted = await this.streamQuery(task, item.statement, maxRows, results.length, budget, item.template, currentStatement !== undefined, { driverError: error => { driverError = error; }, commandEnded: () => { commandEnded = true; } });
+          appendScriptResults(task, results, accepted, sourceRange);
           currentCompleted = true; completed++;
         } catch (error) { originalError = error; }
         if (task.cancelled) this.checkCancelled(task);
@@ -2387,7 +2398,7 @@ export class Engine {
         const physicalId = task.managed.connection.threadId;
         try {
           const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined, { driverError: error => { driverError = error; }, commandEnded: () => { commandEnded = true; } });
-          results.push(...completed); currentCompleted = true; report.statementsCompleted++;
+          appendScriptResults(task, results, completed, sourceRange); currentCompleted = true; report.statementsCompleted++;
           if (warnings) await this.captureQueryWarnings(task, warnings, ordinal, sourceRange, 'completed', commandEnded);
           if (task.managed.broken || task.managed.transactionStateKnown !== true || !Number.isInteger(task.managed.serverStatus) || task.managed.serverStatus! < 0 || task.managed.serverStatus! > 65535 || warnings && !this.queryWarningsSessionKnown(task, physicalId)) { activeOrdinal = undefined; sourceRange = undefined; throw Error('当前语句已执行，但无法确认新的原会话协议状态，已停止后续语句'); }
         } catch (error) {

@@ -32,6 +32,7 @@ describe('失败原始模板UTF16位置由当前调度确认', () => {
   it('重复SQL失败定位第二份原文，不用indexOf命中第一份，tail不执行', async () => {
     const source = ' SELECT same;\r\n  SELECT same;\r\nSELECT tail;'; let count = 0; scenario = (_managed, _sql, query) => ++count === 1 ? ok(query) : fail(query);
     const output = await execute(source); const start = source.lastIndexOf('SELECT same'); expect(output.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1, sourceRange: { start, end: start + 'SELECT same'.length } }); expect(source.slice(output.failure!.sourceRange!.start, output.failure!.sourceRange!.end)).toBe('SELECT same'); expect(sent).toEqual(['SELECT same', 'SELECT same']);
+    expect(output.mysqlResultSourceRanges).toEqual([{ start: 1, end: 12 }]);
   });
   it('选区payload只使用自身相对位置，CRLF/emoji按UTF16单元计数不按字节或码点', async () => {
     const selectedPayload = "SELECT '😀';\r\n\tSELECT '失败🧭';\r\nSELECT tail;"; let count = 0; scenario = (_managed, _sql, query) => ++count === 1 ? ok(query) : fail(query);
@@ -51,6 +52,7 @@ describe('失败原始模板UTF16位置由当前调度确认', () => {
     scenario = (_managed, _sql, query) => { if (++count === 1) ok(query); else query.emit('error', Object.assign(Error('秘密值 expanded detail'), { code: 'ER_DUP_ENTRY' })); };
     const output = await execute(source, { parameters: [{ name: 'v', type: 'text', value: '秘密值😀' }] }), start = source.lastIndexOf('SELECT :v');
     expect(output.failure?.sourceRange).toEqual({ start, end: start + 9 }); expect(output.failure?.message).toContain('ER_DUP_ENTRY'); expect(JSON.stringify(output.failure)).not.toContain('秘密值'); expect(JSON.stringify(events)).not.toContain('秘密值'); expect(output.results[0].statement).toBe('SELECT :v'); expect(sent).toHaveLength(2); expect(sent[1].length).toBeGreaterThan(9);
+    expect(output.mysqlResultSourceRanges).toEqual([{ start: 1, end: 10 }]);
   });
   it('动态模式后绑定失败在完整template产生后定位，不发送缺参句或tail', async () => {
     const source = 'SET sql_mode=@future;\r\n SELECT :missing;\r\n DELETE FROM tail;'; scenario = (value, _sql, query) => { value.sqlMode = 'NO_BACKSLASH_ESCAPES'; ok(query); };
@@ -84,8 +86,25 @@ describe('失败原始模板UTF16位置由当前调度确认', () => {
     await vi.waitFor(() => expect(pending).toBeDefined()); driver.execute.mockImplementation(async (_value, sql) => { expect(sql).toBe('KILL QUERY 2'); pending!.emit('error', Error('任务已取消')); return { rows: {}, fields: [] }; });
     await engine.handle('query.cancel', { taskId: 'range' }); await rejected; expect(sent).toEqual(['SELECT wait']); expect(events.at(-1)?.status).toBe('cancelled');
   });
-  it('完整成功输出不新增位置字段，schema.apply仍按旧原语义抛错', async () => {
-    scenario = (_value, _sql, query) => ok(query); const output = await execute('SELECT one;SELECT two;'); expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'results', 'transactionOpen']); expect(output).not.toHaveProperty('failure');
+  it('完整成功只附实际结果范围，schema.apply仍按旧原语义抛错', async () => {
+    scenario = (_value, _sql, query) => ok(query); const output = await execute('SELECT one;SELECT two;');
+    expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'mysqlResultSourceRanges', 'results', 'transactionOpen']);
+    expect(output.mysqlResultSourceRanges).toEqual([{ start: 0, end: 10 }, { start: 11, end: 21 }]); expect(output).not.toHaveProperty('failure');
     scenario = (_value, _sql, query) => fail(query); await expect(engine.handle('schema.apply', { connectionId: profile.id, database: 'db', taskId: 'schema', sql: 'ALTER TABLE subject ADD bad UNKNOWN_TYPE' })).rejects.toThrow('预期失败');
+  });
+  it('CALL 的两个行集及最终状态都指向同一调用，不占用尾句范围', async () => {
+    const source = 'CALL p();SELECT tail;';
+    scenario = (_value, sql, query) => {
+      if (sql !== 'CALL p()') { ok(query, '尾句'); return; }
+      for (const index of [0, 1]) {
+        query.emit('fields', [{ name: 'value', columnType: 253 }], index);
+        query.emit('result', ['调用行集'], index);
+      }
+      query.emit('result', { affectedRows: 0, insertId: 0, warningStatus: 0, serverStatus: 2 });
+      query.emit('end');
+    };
+    const output = await execute(source);
+    expect(output.results.map(result => result.columns.length)).toEqual([1, 1, 0, 1]);
+    expect(output.mysqlResultSourceRanges?.map(range => range && source.slice(range.start, range.end))).toEqual(['CALL p()', 'CALL p()', 'CALL p()', 'SELECT tail']);
   });
 });

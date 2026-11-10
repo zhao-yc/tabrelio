@@ -38,6 +38,7 @@ describe('查询首错停止且只保留完整前序结果', () => {
     const output = await execute('CALL prefix();CALL broken();DELETE FROM tail');
     expect(sent).toEqual(['CALL prefix()', 'CALL broken()']); expect(output.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1, message: expect.stringContaining('首个服务器错误') });
     expect(output.results).toHaveLength(3); expect(output.results[0].columns.map(column => [column.key, column.name])).toEqual([['c0', '同名'], ['c1', '同名']]);
+    expect(output.mysqlResultSourceRanges).toEqual(Array.from({ length: 3 }, () => ({ start: 0, end: 13 })));
     expect(output.results[0].rows).toEqual([{ c0: '18446744073709551615', c1: '12345678901234567890.123456789012345678' }]); expect(output.results[1].rows).toEqual([{ c0: { type: 'binary', base64: 'AP+A' }, c1: null }]); expect(output.results[2].affectedRows).toBe(0);
     expect(events.some(event => event.resultIndex === 3 && event.batch?.length === 200)).toBe(true); expect(JSON.stringify(output)).not.toContain('失败语句未完成的行'); expect(output).not.toHaveProperty('transactionOpen');
     expect(events.at(-1)).toMatchObject({ status: 'failed', message: output.failure!.message }); expect(events.filter(event => event.status === 'completed')).toHaveLength(0); expect(driver.execute).not.toHaveBeenCalled();
@@ -48,7 +49,7 @@ describe('查询首错停止且只保留完整前序结果', () => {
   });
   it('完整成功输出形状不新增failure；空脚本、普通行集及状态包保持兼容', async () => {
     scenario = (_managed, sql, query) => { if (sql.startsWith('UPDATE')) ok(query, 3); else { rows(query, [['成功']]); query.emit('end'); } };
-    const output = await execute('SELECT value;UPDATE t SET n=1'); expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'results', 'transactionOpen']); expect(output.results).toHaveLength(2); expect(output.transactionOpen).toBe(true); expect(events.at(-1)?.status).toBe('completed');
+    const output = await execute('SELECT value;UPDATE t SET n=1'); expect(Object.keys(output).sort()).toEqual(['elapsedMs', 'mysqlResultSourceRanges', 'results', 'transactionOpen']); expect(output.results).toHaveLength(2); expect(output.transactionOpen).toBe(true); expect(events.at(-1)?.status).toBe('completed');
     expect((await execute('/* 空脚本 */', { taskId: 'empty' })).results).toEqual([]);
   });
   it('已完成写操作不自动回滚或重连，扫描尾部失败保留完整状态结果与可信事务位', async () => {

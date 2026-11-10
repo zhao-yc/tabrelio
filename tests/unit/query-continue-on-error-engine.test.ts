@@ -67,6 +67,7 @@ describe('显式继续与默认首错停止隔离', () => {
     expect(report.errors.map(error => [error.kind, error.statementOrdinal, error.statementsCompleted])).toEqual([['server', 2, 1], ['server', 4, 2]]);
     const start = source.indexOf('SELECT bad'); expect(output.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1, sourceRange: { start, end: start + 10 } });
     expect(output.results.map(result => result.rows[0].c0)).toEqual(["SELECT '😀'", 'SELECT after', 'SELECT last']);
+    expect(output.mysqlResultSourceRanges?.map(range => range && source.slice(range.start, range.end))).toEqual(["SELECT '😀'", 'SELECT after', 'SELECT last']);
     expect(driver.execute).toHaveBeenCalledTimes(2); expect(driver.connect).not.toHaveBeenCalled();
     expect(f.events.at(-1)?.status).toBe('failed'); expect(f.session.busy).toBe(false); expect((f.engine as any).tasks.size).toBe(0);
     expect(f.events.filter(event => event.columns).map(event => event.resultIndex)).toEqual([0, 1, 2]);
