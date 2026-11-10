@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import type { TableInfo } from '../../shared/contracts';
-import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinAlias, manualJoinOperators, type ManualJoinPair, type ManualJoinStep } from '../tableForeignKeyJoin';
+import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinAlias, manualJoinOperators, type AdditionalJoinPair, type ManualJoinStep } from '../tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { uid } from '../lib';
 import '../childReferences.css';
 
 export interface ManualJoinSelection {
-  database: string; table: string; pairs: Array<ManualJoinPair & { id: string }>;
+  database: string; table: string; pairs: Array<AdditionalJoinPair & { id: string }>;
 }
 
 /** 只分页显示已读取的目录，过滤和翻页不改变原目标或触发读取。 */
@@ -41,28 +41,42 @@ export function ManualJoinTableFields({ selection, databases, tables, disabled, 
 }
 
 /** 输入是列身份，空选项保留未完成状态，不能作为 SQL 表达式。 */
-export function ManualJoinPairFields({ selection, child, parent, disabled, onAdd, onChange, onRemove }: {
+export function ManualJoinPairFields({ selection, child, parent, disabled, sourceOptions, onAdd, onChange, onRemove }: {
   selection: ManualJoinSelection; child: TableInfo; parent: TableInfo; disabled: boolean;
-  onAdd(): void; onChange(id: string, patch: Partial<ManualJoinPair>): void; onRemove(id: string): void;
+  sourceOptions?: { defaultSource: number; tables: readonly TableInfo[] };
+  onAdd(): void; onChange(id: string, patch: Partial<AdditionalJoinPair>): void; onRemove(id: string): void;
 }) {
   return <fieldset disabled={disabled}>
     <legend>{text.manualPairs}</legend>
-    {selection.pairs.map((pair, index) => <div className="filter-inputs" key={pair.id}>
-      <label>{text.manualChild(index + 1)}<select value={pair.child} onChange={event => onChange(pair.id, { child: event.target.value })}>
-        <option value="">{text.manualSelect}</option>
-        {child.columns.map(column => <option key={column.name} value={column.name}>{column.name}</option>)}
-      </select></label>
-      <label>{text.manualOperator(index + 1)}<select value={pair.operator ?? '='} onChange={event => {
-        if (isManualJoinOperator(event.target.value)) onChange(pair.id, { operator: event.target.value });
-      }}>
-        {manualJoinOperators.map(operator => <option key={operator} value={operator}>{operator} {text.manualOperatorLabels[operator]}</option>)}
-      </select></label>
-      <label>{text.manualParent(index + 1)}<select value={pair.parent} onChange={event => onChange(pair.id, { parent: event.target.value })}>
-        <option value="">{text.manualSelect}</option>
-        {parent.columns.map(column => <option key={column.name} value={column.name}>{column.name}</option>)}
-      </select></label>
-      <button aria-label={text.manualRemove(index + 1)} onClick={() => onRemove(pair.id)}>×</button>
-    </div>)}
+    {selection.pairs.map((pair, index) => {
+      const source = pair.source ?? sourceOptions?.defaultSource;
+      const sourceTable = sourceOptions && source !== undefined ? sourceOptions.tables[source] : child;
+      const columns = sourceTable?.columns ?? [];
+      const childLabel = sourceOptions ? text.additionalChild(index + 1) : text.manualChild(index + 1);
+      return <div className="filter-inputs" key={pair.id}>
+        {sourceOptions && <label>{text.additionalPairSource(index + 1)}<select value={source} title={sourceTable && `${sourceTable.database}.${sourceTable.name}`} onChange={event => {
+          const next = Number(event.target.value);
+          // 改来源只撤销当前行的旧列，即使新来源存在同名列也要求明确选择。
+          if (sourceOptions.tables[next] && next !== source) onChange(pair.id, { source: next, child: '' });
+        }}>
+          {sourceOptions.tables.map((info, index) => <option value={index} key={index}>{manualJoinAlias(index)} · {info.database}.{info.name}</option>)}
+        </select></label>}
+        <label>{childLabel}<select value={pair.child} onChange={event => onChange(pair.id, { child: event.target.value })}>
+          <option value="">{text.manualSelect}</option>
+          {columns.map(column => <option key={column.name} value={column.name}>{column.name}</option>)}
+        </select></label>
+        <label>{text.manualOperator(index + 1)}<select value={pair.operator ?? '='} onChange={event => {
+          if (isManualJoinOperator(event.target.value)) onChange(pair.id, { operator: event.target.value });
+        }}>
+          {manualJoinOperators.map(operator => <option key={operator} value={operator}>{operator} {text.manualOperatorLabels[operator]}</option>)}
+        </select></label>
+        <label>{text.manualParent(index + 1)}<select value={pair.parent} onChange={event => onChange(pair.id, { parent: event.target.value })}>
+          <option value="">{text.manualSelect}</option>
+          {parent.columns.map(column => <option key={column.name} value={column.name}>{column.name}</option>)}
+        </select></label>
+        <button aria-label={text.manualRemove(index + 1)} onClick={() => onRemove(pair.id)}>×</button>
+      </div>;
+    })}
     <button disabled={selection.pairs.length >= foreignKeyJoinLimits.manualPairs} onClick={onAdd}>{text.manualAddPair}</button>
   </fieldset>;
 }
@@ -98,19 +112,13 @@ export function AdditionalJoinFields({ draft, index, sources, databases, disable
       onTarget={(database, table) => onChange({ ...draft, database, table, tables: database === draft.database ? draft.tables : undefined,
         info: undefined, pairs: [], columns: [] })}/>
     <button disabled={!canRetarget || !draft.tables?.includes(draft.table)} onClick={() => onRead('preview')}>{text.manualRead}</button>
-    <label>{text.additionalSource}<select value={draft.source} onChange={event => {
-      const source = Number(event.target.value);
-      if (sources[source] && source !== draft.source) onChange({ ...draft, source, pairs: draft.pairs.map(pair => ({ ...pair, child: '' })) });
-    }}>
-      {sources.map((info, index) => <option value={index} key={index}>{manualJoinAlias(index)} · {info.database}.{info.name}</option>)}
-    </select></label>
     <label>{text.joinKind}<select value={draft.kind} onChange={event => {
       const kind = event.target.value;
       if (kind === 'INNER' || kind === 'LEFT') onChange({ ...draft, kind });
     }}>
       <option value="INNER">{text.additionalInner}</option><option value="LEFT">{text.additionalLeft}</option>
     </select></label>
-    {child && draft.info && <ManualJoinPairFields selection={draft} child={child} parent={draft.info} disabled={disabled}
+    {child && draft.info && <ManualJoinPairFields selection={draft} child={child} parent={draft.info} disabled={disabled} sourceOptions={{ defaultSource: draft.source, tables: sources }}
       onAdd={() => onChange({ ...draft, pairs: [...draft.pairs, newManualJoinPair()] })}
       onChange={(id, patch) => onChange({ ...draft, pairs: draft.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) })}
       onRemove={id => onChange({ ...draft, pairs: draft.pairs.filter(pair => pair.id !== id) })}/>}

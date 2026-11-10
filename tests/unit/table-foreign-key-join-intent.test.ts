@@ -59,6 +59,30 @@ describe('外键JOIN原结构与前置核验租约', () => {
     expect(() => intent.consume(draft)).toThrow(text.stale);
   });
 
+  it('追加 ON 逐条绑定已加入的别名，旧设计和新条件可混用', () => {
+    const { child, parent } = tables();
+    const relation: ManualJoinPair[] = [{ child: 'parent_id', parent: 'id' }];
+    const step: ManualJoinStep = {
+      source: 1, target: parent, kind: 'LEFT', columns: ['value'],
+      pairs: [
+        { child: 'id', parent: 'id' },
+        { source: 0, child: 'id', parent: 'id' },
+        { source: 1, child: 'value', operator: '>=', parent: 'value' },
+      ],
+    };
+    const options = { childColumns: [], parentColumns: [], additionalJoins: [step] };
+    const build = () => buildForeignKeyJoin(child, parent, relation, 'INNER', 10, options);
+    expect(build().sql).toContain('ON\n  p.`id` = t3.`id`\n  AND c.`id` = t3.`id`\n  AND p.`value` >= t3.`value`');
+    step.pairs = [...step.pairs, { source: 1, child: 'id', parent: 'id' }];
+    expect(build).toThrow(text.manualInvalid);
+    step.pairs = [{ source: 2, child: 'id', parent: 'id' }];
+    expect(build).toThrow(text.manualInvalid);
+    step.pairs = [{ source: 0, child: 'value', parent: 'value' }];
+    expect(build).toThrow(text.manualInvalid);
+    const first = [{ source: 0, child: 'parent_id', parent: 'id' }];
+    expect(() => buildForeignKeyJoin(child, parent, first, 'INNER', 10)).toThrow(text.manualInvalid);
+  });
+
   it('追加表字段参与 WHERE、DISTINCT 排序和严格汇总，来源按别名区分', () => {
     const { child, parent } = tables();
     const relation: ManualJoinPair[] = [{ child: 'parent_id', parent: 'id' }];

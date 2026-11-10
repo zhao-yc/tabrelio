@@ -85,11 +85,28 @@ describe('手动 JOIN 设计本地配置库', () => {
     } finally { store.close(); }
   });
 
+  it('旧版单来源设计保持原样，逐条件来源可保存并读回', async () => {
+    const { store } = await fixture();
+    try {
+      const legacy = store.saveManualJoinDesign({ ...scope, name: '原来源', design });
+      const step = design.additional[0];
+      const mixed = manualJoinDesignSaveSchema.parse({ ...scope, name: '混合来源', design: {
+        ...design, additional: [{ ...step, pairs: [...step.pairs, { source: 0, child: 'id', parent: 'id' }] }],
+      } });
+      const saved = store.saveManualJoinDesign(mixed);
+      expect(store.readManualJoinDesign({ ...scope, id: legacy.id })).toEqual(design);
+      expect(store.readManualJoinDesign({ ...scope, id: saved.id })).toEqual(mixed.design);
+    } finally { store.close(); }
+  });
+
   it('IPC 合同拒绝目录原文、未来别名及未知版本', () => {
     const parse = (value: unknown) => manualJoinDesignSaveSchema.safeParse({ ...scope, name: '测试', design: value }).success;
     expect(parse(design)).toBe(true);
     expect(parse({ ...design, sql: 'SELECT 1' })).toBe(false);
     expect(parse({ ...design, version: 2 })).toBe(false);
-    expect(parse({ ...design, additional: [{ ...design.additional[0], source: 2 }] })).toBe(false);
+    const step = design.additional[0];
+    expect(parse({ ...design, additional: [{ ...step, source: 2 }] })).toBe(false);
+    expect(parse({ ...design, additional: [{ ...step, pairs: [{ ...step.pairs[0], source: 2 }] }] })).toBe(false);
+    expect(parse({ ...design, first: { ...design.first, pairs: [{ ...design.first.pairs[0], source: 0 }] } })).toBe(false);
   });
 });

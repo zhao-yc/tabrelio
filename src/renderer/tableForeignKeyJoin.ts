@@ -13,6 +13,7 @@ export { manualJoinOperators } from '../shared/manualJoinDesigns';
 import { manualJoinOperators } from '../shared/manualJoinDesigns';
 export type ManualJoinOperator = typeof manualJoinOperators[number];
 export interface ManualJoinPair { child: string; parent: string; operator?: ManualJoinOperator }
+export interface AdditionalJoinPair extends ManualJoinPair { source?: number }
 
 /** 只允许已知比较符；界面和生成器共用校验，避免任意表达式进入 ON。 */
 export function isManualJoinOperator(value: unknown): value is ManualJoinOperator {
@@ -23,7 +24,7 @@ export interface ManualJoinStep {
   source: number;
   target: TableInfo;
   kind: 'INNER' | 'LEFT';
-  pairs: readonly ManualJoinPair[];
+  pairs: readonly AdditionalJoinPair[];
   columns: readonly string[];
 }
 
@@ -165,32 +166,36 @@ function order(raw: unknown, sources: ReadonlyMap<ForeignKeyJoinSide, ReturnType
   }).join(', ');
 }
 
-type JoinCondition = Required<ManualJoinPair>;
+type JoinCondition = Required<AdditionalJoinPair>;
 
-/** 手动条件只引用真实目录字段和允许的比较符；已声明外键继续按原映射等值关联。 */
-function joinConditions(left: ReturnType<typeof snapshot>, right: ReturnType<typeof snapshot>, input: ForeignKeyJoinRelation): JoinCondition[] {
+/** 追加表逐条件解析左侧来源。旧设计未指定来源时沿用该步骤的原表。 */
+function joinConditions(sources: readonly ReturnType<typeof snapshot>[], defaultSource: number, right: ReturnType<typeof snapshot>, input: ForeignKeyJoinRelation): JoinCondition[] {
   const parentNames = new Set(right.columns.map(column => column.name));
   if (typeof input !== 'string') {
-    const childNames = new Set(left.columns.map(column => column.name)), seen = new Set<string>();
+    const childNames = sources.map(table => new Set(table.columns.map(column => column.name)));
+    const seen = new Set<string>();
     const conditions = array(input, foreignKeyJoinLimits.manualPairs).map(value => {
       const child = own(value, 'child'), parent = own(value, 'parent'), suppliedOperator = own(value, 'operator', true);
+      const suppliedSource = own(value, 'source', true);
+      const source = suppliedSource === undefined ? defaultSource : suppliedSource;
       const operator = suppliedOperator === undefined ? '=' : suppliedOperator;
-      if (Reflect.ownKeys(value as object).some(key => key !== 'child' && key !== 'parent' && key !== 'operator') ||
-          typeof child !== 'string' || typeof parent !== 'string' || !childNames.has(child) || !parentNames.has(parent) ||
+      if (Reflect.ownKeys(value as object).some(key => key !== 'child' && key !== 'parent' && key !== 'operator' && (key !== 'source' || sources.length === 1)) ||
+          typeof source !== 'number' || !Number.isInteger(source) || source < 0 || source >= sources.length ||
+          typeof child !== 'string' || typeof parent !== 'string' || !childNames[source].has(child) || !parentNames.has(parent) ||
           !isManualJoinOperator(operator)) throw Error(text.manualInvalid);
-      const identity = JSON.stringify([child, operator, parent]);
+      const identity = JSON.stringify([source, child, operator, parent]);
       if (seen.has(identity)) throw Error(text.manualInvalid);
       seen.add(identity);
-      return { child, operator, parent };
+      return { source, child, operator, parent };
     });
     if (!conditions.length) throw Error(text.manualInvalid);
     return conditions;
   }
-  const relation = left.foreignKeys.find(key => key.name === input);
+  const relation = sources[0].foreignKeys.find(key => key.name === input);
   if (!relation) throw Error(text.relation);
   if (right.database !== relation.referencedDatabase || right.name !== relation.referencedTable) throw Error(text.target);
   if (relation.referencedColumns.some(column => !parentNames.has(column))) throw Error(text.relation);
-  return relation.columns.map((child, index) => ({ child, operator: '=', parent: relation.referencedColumns[index] }));
+  return relation.columns.map((child, index) => ({ source: 0, child, operator: '=', parent: relation.referencedColumns[index] }));
 }
 
 /** 追加步骤按原顺序验证，仅能连接到已出现的别名。 */
@@ -201,18 +206,18 @@ function additionalJoins(raw: unknown, left: ReturnType<typeof snapshot>, right:
     if (typeof source !== 'number' || !Number.isInteger(source) || source < 0 || source >= sources.length ||
         kind !== 'INNER' && kind !== 'LEFT' || !Array.isArray(pairs) ||
         Reflect.ownKeys(step as object).length !== 5) throw Error(text.manualInvalid);
-    const metadata = snapshot(target as TableInfo), conditions = joinConditions(sources[source], metadata, pairs);
+    const metadata = snapshot(target as TableInfo), conditions = joinConditions(sources, source, metadata, pairs);
     const columns = selected(own(step, 'columns'), metadata.columns);
     sources.push(metadata);
     const alias = `t${index + 3}` as const;
-    return { metadata, kind, conditions, columns, alias, source: manualJoinAlias(source) };
+    return { metadata, kind, conditions, columns, alias };
   });
 }
 
 /** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
 export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: ForeignKeyJoinRelation, kind: ForeignKeyJoinKind, limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
   if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
-  const left = snapshot(child), right = snapshot(parent), conditions = joinConditions(left, right, input);
+  const left = snapshot(child), right = snapshot(parent), conditions = joinConditions([left], 0, right, input);
   let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
   let extra: ReturnType<typeof additionalJoins> = [];
   const sources = new Map<ForeignKeyJoinSide, ReturnType<typeof snapshot>>([['child', left], ['parent', right]]);
@@ -269,7 +274,7 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: 
   conditions.forEach(({ child, operator, parent }, index) => append(`${index ? '  AND ' : '  '}c.${quote(child)} ${operator} p.${quote(parent)}\n`));
   for (const step of extra) {
     append(`${step.kind} JOIN ${quote(step.metadata.database)}.${quote(step.metadata.name)} AS ${step.alias}\nON\n`);
-    step.conditions.forEach(({ child, operator, parent }, index) => append(`${index ? '  AND ' : '  '}${step.source}.${quote(child)} ${operator} ${step.alias}.${quote(parent)}\n`));
+    step.conditions.forEach(({ source, child, operator, parent }, index) => append(`${index ? '  AND ' : '  '}${manualJoinAlias(source)}.${quote(child)} ${operator} ${step.alias}.${quote(parent)}\n`));
   }
   if (where) append('WHERE ' + where + '\n');
   if (summary?.grouping.length) append('GROUP BY '+summary.grouping.join(', ')+'\n');

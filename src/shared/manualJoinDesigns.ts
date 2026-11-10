@@ -11,7 +11,10 @@ const side = z.enum(['child', 'parent', 't3', 't4', 't5', 't6', 't7', 't8']);
 const mode = z.enum(['all', 'any']);
 const kind = z.enum(['LEFT', 'RIGHT', 'INNER']);
 const target = z.object({ database: identifier, table: identifier }).strict();
-const pairs = z.array(z.object({ child: identifier, parent: identifier, operator: z.enum(manualJoinOperators).optional() }).strict()).min(1).max(64);
+const pair = z.object({ child: identifier, parent: identifier, operator: z.enum(manualJoinOperators).optional() }).strict();
+const pairs = z.array(pair).min(1).max(64);
+const source = z.number().int().min(0).max(6);
+const additionalPairs = z.array(pair.extend({ source: source.optional() })).min(1).max(64);
 const columns = z.array(identifier).max(4096);
 const filterDraft = z.object({
   column: z.string().max(256), operator: z.enum(tableFilterOperators),
@@ -26,7 +29,7 @@ const sorts = z.array(z.object({
 export const manualJoinDesignSchema = z.object({
   version: z.literal(1),
   first: target.extend({ pairs }).strict(),
-  additional: z.array(target.extend({ source: z.number().int().min(0).max(6), kind: z.enum(['INNER', 'LEFT']), pairs, columns }).strict()).max(6),
+  additional: z.array(target.extend({ source, kind: z.enum(['INNER', 'LEFT']), pairs: additionalPairs, columns }).strict()).max(6),
   kind, distinct: z.boolean(), unmatchedOnly: z.boolean(),
   child: columns, parent: columns, limit: z.string().regex(/^[1-9]\d{0,5}$/),
   filters: z.array(z.object({ id, side, enabled: z.boolean(), draft: filterDraft }).strict()).max(FILTER_LIMITS.conditions),
@@ -41,7 +44,7 @@ export const manualJoinDesignSchema = z.object({
   havingMode: mode, havingGroup: filterGroupSchema.optional(),
 }).strict().superRefine((design, context) => {
   const invalid = (message: string) => context.addIssue({ code: 'custom', message });
-  if (design.additional.some((step, index) => step.source >= index + 2)) invalid('JOIN 设计不能引用尚未加入的表。');
+  if (design.additional.some((step, index) => step.source >= index + 2 || step.pairs.some(pair => (pair.source ?? step.source) >= index + 2))) invalid('JOIN 设计不能引用尚未加入的表。');
   for (const entries of [design.filters, design.having, design.sort, design.summarySort, design.summaryGroups, design.aggregates]) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) invalid('JOIN 设计包含重复编辑项。');
   }
