@@ -659,7 +659,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     findColumn: onFindColumn ?? (hasResultTools ? key => resultFind.current?.openColumn(key) : undefined),
     filterColumn: onFilterColumn,
     sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
-    current: actionCurrent, canSort: key => !!onSortChange && !sortReasons?.get(key), applySort: changeSortColumns,
+    current: actionCurrent, canSort: key => !!onSortChange && (key === undefined || !sortReasons?.get(key)), applySort: changeSortColumns,
     selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
     columnActions: (column, current) => [
       ...resultHeaderDataActions(current, column),

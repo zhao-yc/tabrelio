@@ -34,7 +34,7 @@ interface HeaderMenuSource {
   columnNameDialect?: ConnectionProfile['dialect'];
   sort: readonly SortColumn[];
   current(): boolean;
-  canSort(key: string): boolean;
+  canSort(key?: string): boolean;
   applySort(next: readonly SortColumn[], current: () => boolean): void;
   selectColumn?(index: number): GridCellAction | undefined;
   columnActions?(column: { key: string; name: string }, current: () => boolean): readonly GridCellAction[];
@@ -167,7 +167,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   }
 
   /** 菜单和快捷键共用排序快照，读取或确认草稿期间仍核对原列和规则。 */
-  function captureSort(key: string, current: () => boolean) {
+  function captureSort(key: string | undefined, current: () => boolean) {
     if (!source.canSort(key)) return;
     const initial = source.sort.find(rule => rule.columnKey === key)?.direction;
     const sortCurrent = () => {
@@ -176,7 +176,12 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
         now.sort.every((rule, i) => rule.columnKey === source.sort[i].columnKey && rule.direction === source.sort[i].direction);
     };
     return { initial, apply(direction?: SortColumn['direction']) {
-      if (direction !== initial && sortCurrent()) latest.current.applySort(changeHeaderSort(source.sort, key, direction), sortCurrent);
+      if (!sortCurrent()) return;
+      if (key === undefined) {
+        if (source.sort.length) latest.current.applySort([], sortCurrent);
+      } else if (direction !== initial) {
+        latest.current.applySort(changeHeaderSort(source.sort, key, direction), sortCurrent);
+      }
     } };
   }
 
@@ -193,6 +198,9 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
         { label: text.desc, disabled: sort.initial === 'DESC', run: () => sort.apply('DESC') },
         { label: text.clear, disabled: sort.initial === undefined, run: () => sort.apply() });
     }
+    // 清除整套排序与命中列的类型无关，也涵盖当前未显示的排序列。
+    const clearSort = source.sort.length ? captureSort(undefined, current) : undefined;
+    if (clearSort) actions.push({ label: text.clearAllSort, run: () => clearSort.apply() });
     if (source.freeze?.current()) {
       const apply = (key?: string) => {
         const now = latest.current;

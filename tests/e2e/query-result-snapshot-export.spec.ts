@@ -263,6 +263,13 @@ test('零连接工作台对快照排序并按显示、选区和勾选范围导�
     await viewer.getByRole('button', { name: sort.clear, exact: true }).click();
     await expect(labels).toHaveText(['匹配甲', '勾选行', '匹配乙', '匹配丙', '范围外']);
     await expect(checked).toBeDisabled();
+    const headerMenu = page.getByRole('menu', { name: gridText.menu, exact: true });
+    await amount.click({ button: 'right' });
+    await headerMenu.getByRole('menuitem', { name: gridText.desc, exact: true }).click();
+    await expect(labels.first()).toHaveText('范围外');
+    await viewer.getByRole('columnheader').filter({ hasText: '字节' }).press('Shift+F10');
+    await headerMenu.getByRole('menuitem', { name: gridText.clearAllSort, exact: true }).press('Enter');
+    await expect(labels).toHaveText(['匹配甲', '勾选行', '匹配乙', '匹配丙', '范围外']);
     await viewer.getByRole('button', { name: text.compare, exact: true }).click();
     const comparison = page.getByRole('dialog', { name: comparisonText.fileTitle, exact: true });
     await comparison.getByRole('checkbox', { name: comparisonText.key('label'), exact: true }).check();

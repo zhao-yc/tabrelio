@@ -54,23 +54,17 @@ async function verifyReadHistory(scope: Locator, reads: Awaited<ReturnType<typeo
 }
 
 async function toggleFromHeader(header: Locator, name: string, keyboard = false): Promise<void> {
+  await headerAction(header, name, keyboard);
+  await expect(header).toBeFocused();
+}
+
+/** 排序重建数据页，筛选会转移焦点，两者共用菜单操作而不假定后续焦点。 */
+async function headerAction(header: Locator, name: string, keyboard = false): Promise<void> {
   if (keyboard) await header.press('Shift+F10');
   else await header.click({ button: 'right' });
   const menu = page.getByRole('menu', { name: headerMenuText.menu, exact: true });
   const action = menu.getByRole('menuitem', { name, exact: true });
   await expect(action).toBeVisible();
-  if (keyboard) await action.press('Enter');
-  else await action.click();
-  await expect(menu).toBeHidden();
-  await expect(header).toBeFocused();
-}
-
-/** 筛选动作的焦点交给条件输入，核对它不同于显示设置的返回表头行为。 */
-async function filterFromHeader(header: Locator, keyboard = false): Promise<void> {
-  if (keyboard) await header.press('Shift+F10');
-  else await header.click({ button: 'right' });
-  const menu = page.getByRole('menu', { name: headerMenuText.menu, exact: true });
-  const action = menu.getByRole('menuitem', { name: headerMenuText.filterColumn, exact: true });
   if (keyboard) await action.press('Enter');
   else await action.click();
   await expect(menu).toBeHidden();
@@ -255,12 +249,12 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(header('label')).toHaveAttribute('aria-sort', 'ascending');
     if (process.platform === 'darwin') await sortFromGrid(tab, 'row B');
     const beforeHeaderFilter = await reads();
-    await filterFromHeader(header('label'), true);
+    await headerAction(header('label'), headerMenuText.filterColumn, true);
     await expect(tab.getByLabel(sqlite.filterColumn(1), { exact: true })).toHaveValue('label');
     const filter = tab.getByLabel(sqlite.filterValue(1), { exact: true });
     await expect(filter).toBeFocused();
     await filter.fill('row B');
-    await filterFromHeader(header('id'));
+    await headerAction(header('id'), headerMenuText.filterColumn);
     await expect(tab.getByLabel(sqlite.filterColumn(2), { exact: true })).toHaveValue('id');
     await expect(tab.getByLabel(sqlite.filterValue(2), { exact: true })).toBeFocused();
     await expect(filter).toHaveValue('row B');
@@ -364,8 +358,23 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     expect(confirmation.message()).toBe(sqliteWorkspace.confirmDiscard);
     await expect(draft).toBeVisible();
     expect(await reads()).toEqual(beforeDraft);
+    await answerDialogs([1]);
+    const [cancelSort] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }),
+      headerAction(header('label'), headerMenuText.clearAllSort)]);
+    expect(cancelSort.message()).toBe(sqliteWorkspace.confirmDiscard);
+    await expect(draft).toBeVisible();
+    expect(await reads()).toEqual(beforeDraft);
     await (await navigationMenuItem(tab, { name: sqliteEdit.undo, exact: true })).click();
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    await headerAction(header('id'), headerMenuText.desc);
+    await expect.poll(async () => (await reads()).at(-1)?.sort).toHaveLength(2);
+    await headerAction(header('id'), headerMenuText.hideColumn);
+    await expect(header('id')).toHaveCount(0);
+    const beforeClearSort = await reads();
+    await headerAction(header('label'), headerMenuText.clearAllSort, true);
+    await expect(rowLabels(tab).first()).toHaveText(/row A$/);
+    expect(await reads()).toEqual([...beforeClearSort, { ...beforeClearSort.at(-1), offset: 0, sort: [] }]);
+    await expect(filter).toHaveValue('row A');
     await (await navigationMenuItem(tab, { name: readHistory.title, exact: true })).click();
     await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
     await expect(header('label')).toBeVisible();
@@ -387,7 +396,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await page.keyboard.press('Escape');
     await verifyColumnChooser(tab, reads);
     const beforeViewFilter = await reads();
-    await filterFromHeader(header('label'));
+    await headerAction(header('label'), headerMenuText.filterColumn);
     await expect(tab.getByLabel(sqlite.filterColumn(1), { exact: true })).toHaveValue('label');
     await expect(tab.getByLabel(sqlite.filterValue(1), { exact: true })).toBeFocused();
     expect(await reads()).toEqual(beforeViewFilter);
@@ -414,6 +423,14 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
       await verifyGridZoom(result, result.getByRole('columnheader').filter({ hasText: /^label/ }));
       await expect(editor).toHaveCSS('font-size', editorSize);
       await sortFromGrid(result, 'row B');
+      const label = result.getByRole('columnheader').filter({ hasText: /^label/ });
+      await headerAction(label, headerMenuText.desc);
+      await expect(rowLabels(result).first()).toHaveText(/row B$/);
+      await headerAction(label, headerMenuText.clearAllSort);
+      await expect(rowLabels(result).first()).toHaveText(/row A$/);
+      await label.press('Shift+F10');
+      await expect(page.getByRole('menuitem', { name: headerMenuText.clearAllSort, exact: true })).toHaveCount(0);
+      await page.keyboard.press('Escape');
       expect(await history()).toEqual(prior);
     }
     await page.locator('[data-workspace-tab-id="physical"] .tab-select').click();
@@ -571,17 +588,17 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     });
     const beforeHeaderFilter = await reads();
     if (dialect === 'postgresql') {
-      await filterFromHeader(headerFor('scope'));
+      await headerAction(headerFor('scope'), headerMenuText.filterColumn);
       await expect(field).toHaveValue('scope');
       await expect(value).toBeFocused();
       await value.fill('B');
       await form.getByRole('button', { name: zh.table.text013, exact: true }).click();
     }
-    await filterFromHeader(headerFor('label'), true);
+    await headerAction(headerFor('label'), headerMenuText.filterColumn, true);
     await expect(field).toHaveValue('label');
     await expect(value).toBeFocused();
     await value.fill('row C');
-    await filterFromHeader(headerFor('id'));
+    await headerAction(headerFor('id'), headerMenuText.filterColumn);
     await expect(field).toHaveValue('label');
     await expect(value).toHaveValue('row C');
     await expect(tab.getByText(headerMenuText.filterDraftPending, { exact: true })).toBeVisible();
@@ -606,6 +623,18 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     const historyPane = await verifyReadHistory(tab, reads, 'update_subject', 'row C', true);
     await page.screenshot({ path: info.outputPath('表页读取SQL.png') });
     await historyPane.getByRole('button', { name: readHistory.close, exact: true }).click();
+    await headerAction(headerFor('scope'), headerMenuText.desc);
+    await expect.poll(async () => (await reads()).at(-1)?.sort).toHaveLength(2);
+    await headerAction(headerFor('scope'), headerMenuText.hideColumn);
+    await expect(headerFor('scope')).toHaveCount(0);
+    const beforeClearSort = await reads();
+    await headerAction(headerFor('id'), headerMenuText.clearAllSort, true);
+    await expect.poll(async () => (await reads()).length).toBe(beforeClearSort.length + 1);
+    expect((await reads()).at(-1)).toEqual({ ...beforeClearSort.at(-1), sort: [] });
+    await expect(rowLabels(tab)).toHaveCount(1);
+    await expect(rowLabels(tab).first()).toHaveText(/row C$/);
+    await headerAction(headerFor('label'), headerMenuText.desc);
+    await expect.poll(async () => (await reads()).at(-1)?.sort).toHaveLength(1);
     const beforeClear = await reads();
     await (await navigationMenuItem(tab, { name: tableFilterEnabledZh.clear, exact: true })).click();
     await expect(rowLabels(tab)).toHaveCount(3);

@@ -3,6 +3,7 @@ export const gridHeaderMenuZh = {
   asc: '按此列升序',
   desc: '按此列降序',
   clear: '取消此列排序',
+  clearAllSort: '清除全部排序',
   freeze: '冻结到此列',
   unfreeze: '取消冻结所有列',
   setWidth: '设置列宽',
