@@ -91,7 +91,8 @@ describe('手动 JOIN 设计本地配置库', () => {
       const legacy = store.saveManualJoinDesign({ ...scope, name: '原来源', design });
       const step = design.additional[0];
       const mixed = manualJoinDesignSaveSchema.parse({ ...scope, name: '混合来源', design: {
-        ...design, additional: [{ ...step, pairs: [...step.pairs, { source: 0, child: 'id', parent: 'id' }] }],
+        ...design, additional: [{ ...step, pairs: [...step.pairs, { source: 0, child: 'id', parent: 'id' }],
+          on: { mode: 'any', group: { mode: 'any', children: [0, 1] } } }],
       } });
       const saved = store.saveManualJoinDesign(mixed);
       expect(store.readManualJoinDesign({ ...scope, id: legacy.id })).toEqual(design);
@@ -104,6 +105,7 @@ describe('手动 JOIN 设计本地配置库', () => {
     expect(parse(design)).toBe(true);
     expect(parse({ ...design, sql: 'SELECT 1' })).toBe(false);
     expect(parse({ ...design, version: 2 })).toBe(false);
+    expect(parse({ ...design, first: { ...design.first, on: { mode: 'all', group: { mode: 'all', children: [1] } } } })).toBe(false);
     const step = design.additional[0];
     expect(parse({ ...design, additional: [{ ...step, source: 2 }] })).toBe(false);
     expect(parse({ ...design, additional: [{ ...step, pairs: [{ ...step.pairs[0], source: 2 }] }] })).toBe(false);

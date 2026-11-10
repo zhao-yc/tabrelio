@@ -1,4 +1,8 @@
 import { useState } from 'react';
+import { FILTER_LIMITS } from '../../shared/filtering';
+import type { ManualJoinOn } from '../../shared/manualJoinDesigns';
+import { foreignKeyJoinGroupAfterChange } from '../tableForeignKeyJoinFilters';
+import { tableFilterGroupSummary, tableFilterGroupWithMode } from '../tableFilterGroups';
 import type { TableInfo } from '../../shared/contracts';
 import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinAlias, manualJoinOperators, type AdditionalJoinPair, type ManualJoinStep } from '../tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
@@ -6,7 +10,7 @@ import { uid } from '../lib';
 import '../childReferences.css';
 
 export interface ManualJoinSelection {
-  database: string; table: string; pairs: Array<AdditionalJoinPair & { id: string }>;
+  database: string; table: string; pairs: Array<AdditionalJoinPair & { id: string }>; on?: ManualJoinOn;
 }
 
 /** 只分页显示已读取的目录，过滤和翻页不改变原目标或触发读取。 */
@@ -40,14 +44,34 @@ export function ManualJoinTableFields({ selection, databases, tables, disabled, 
   </fieldset>;
 }
 
+/** 增删比较按稳定行 ID 更新括号，未编辑的组保留原语义。 */
+export function replaceManualJoinPairs<T extends ManualJoinSelection>(draft: T, pairs: T['pairs']): T {
+  const on = draft.on;
+  return { ...draft, pairs, ...(on?.group ? { on: { ...on, group: foreignKeyJoinGroupAfterChange(draft.pairs, pairs, on.group, on.mode) } } : {}) };
+}
+
 /** 输入是列身份，空选项保留未完成状态，不能作为 SQL 表达式。 */
-export function ManualJoinPairFields({ selection, child, parent, disabled, sourceOptions, onAdd, onChange, onRemove }: {
+export function ManualJoinPairFields({ selection, child, parent, disabled, sourceOptions, onAdd, onChange, onRemove, onMode, onGroups }: {
   selection: ManualJoinSelection; child: TableInfo; parent: TableInfo; disabled: boolean;
   sourceOptions?: { defaultSource: number; tables: readonly TableInfo[] };
+  onMode(on: ManualJoinOn): void; onGroups(trigger: HTMLButtonElement): void;
   onAdd(): void; onChange(id: string, patch: Partial<AdditionalJoinPair>): void; onRemove(id: string): void;
 }) {
+  const mode = selection.on?.mode ?? 'all', group = selection.on?.group;
   return <fieldset disabled={disabled}>
     <legend>{text.manualPairs}</legend>
+    <label>{text.manualOnMode}<select value={mode} onChange={event => {
+      const next = event.target.value;
+      if (next === 'all' || next === 'any') onMode({ mode: next, group: tableFilterGroupWithMode(group, next) });
+    }}>
+      <option value="all">{text.manualOnAll}</option><option value="any">{text.manualOnAny}</option>
+    </select></label>
+    <button type="button" disabled={selection.pairs.length < 2 || selection.pairs.length > FILTER_LIMITS.conditions}
+      onClick={event => onGroups(event.currentTarget)}>{text.manualOnGroups}</button>
+    {group && <>
+      <p>{tableFilterGroupSummary(group)}</p>
+      <button type="button" onClick={() => onMode({ mode })}>{text.manualOnFlat}</button>
+    </>}
     {selection.pairs.map((pair, index) => {
       const source = pair.source ?? sourceOptions?.defaultSource;
       const sourceTable = sourceOptions && source !== undefined ? sourceOptions.tables[source] : child;
@@ -77,7 +101,7 @@ export function ManualJoinPairFields({ selection, child, parent, disabled, sourc
         <button aria-label={text.manualRemove(index + 1)} onClick={() => onRemove(pair.id)}>×</button>
       </div>;
     })}
-    <button disabled={selection.pairs.length >= foreignKeyJoinLimits.manualPairs} onClick={onAdd}>{text.manualAddPair}</button>
+    <button disabled={selection.pairs.length >= (group ? FILTER_LIMITS.conditions : foreignKeyJoinLimits.manualPairs)} onClick={onAdd}>{text.manualAddPair}</button>
   </fieldset>;
 }
 
@@ -92,16 +116,17 @@ export interface AdditionalJoinDraft extends ManualJoinSelection {
 
 /** 只发布已明确读过的目录。缺失表结构时停留在草稿，不生成部分 JOIN。 */
 export function manualJoinSteps(drafts: readonly AdditionalJoinDraft[]): ManualJoinStep[] {
-  return drafts.map(({ source, kind, info, pairs, columns }) => {
+  return drafts.map(({ source, kind, info, pairs, columns, on }) => {
     if (!info) throw Error(text.additionalIncomplete);
-    return { source, kind, target: info, pairs: pairs.map(({ id: _id, ...condition }) => condition), columns };
+    return { source, kind, target: info, pairs: pairs.map(({ id: _id, ...condition }) => condition), columns, ...(on ? { on } : {}) };
   });
 }
 
 /** 追加表复用目录和字段对控件。每个步骤的输出可单独增减。 */
-export function AdditionalJoinFields({ draft, index, sources, databases, disabled, canRetarget, targetReferenced, showColumns, onRead, onChange, onRemove }: {
+export function AdditionalJoinFields({ draft, index, sources, databases, disabled, canRetarget, targetReferenced, showColumns, onRead, onChange, onRemove, onGroups }: {
   draft: AdditionalJoinDraft; index: number; sources: readonly TableInfo[]; databases: readonly string[];
   disabled: boolean; canRetarget: boolean; targetReferenced: boolean; showColumns: boolean;
+  onGroups(trigger: HTMLButtonElement): void;
   onRead(kind: 'databases' | 'tables' | 'preview'): void; onChange(draft: AdditionalJoinDraft): void; onRemove(): void;
 }) {
   const child = sources[draft.source];
@@ -110,7 +135,7 @@ export function AdditionalJoinFields({ draft, index, sources, databases, disable
     <ManualJoinTableFields key={draft.database} selection={draft} databases={databases} tables={draft.tables}
       disabled={!canRetarget} onDatabases={() => onRead('databases')} onTables={() => onRead('tables')}
       onTarget={(database, table) => onChange({ ...draft, database, table, tables: database === draft.database ? draft.tables : undefined,
-        info: undefined, pairs: [], columns: [] })}/>
+        info: undefined, pairs: [], columns: [], on: undefined })}/>
     <button disabled={!canRetarget || !draft.tables?.includes(draft.table)} onClick={() => onRead('preview')}>{text.manualRead}</button>
     <label>{text.joinKind}<select value={draft.kind} onChange={event => {
       const kind = event.target.value;
@@ -119,9 +144,10 @@ export function AdditionalJoinFields({ draft, index, sources, databases, disable
       <option value="INNER">{text.additionalInner}</option><option value="LEFT">{text.additionalLeft}</option>
     </select></label>
     {child && draft.info && <ManualJoinPairFields selection={draft} child={child} parent={draft.info} disabled={disabled} sourceOptions={{ defaultSource: draft.source, tables: sources }}
-      onAdd={() => onChange({ ...draft, pairs: [...draft.pairs, newManualJoinPair()] })}
+      onMode={on => onChange({ ...draft, on })} onGroups={onGroups}
+      onAdd={() => onChange(replaceManualJoinPairs(draft, [...draft.pairs, newManualJoinPair()]))}
       onChange={(id, patch) => onChange({ ...draft, pairs: draft.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) })}
-      onRemove={id => onChange({ ...draft, pairs: draft.pairs.filter(pair => pair.id !== id) })}/>}
+      onRemove={id => onChange(replaceManualJoinPairs(draft, draft.pairs.filter(pair => pair.id !== id)))}/>}
     {showColumns && draft.info && <AdditionalJoinColumns key={draft.info.database + '\0' + draft.info.name}
       info={draft.info} columns={draft.columns} onChange={columns => onChange({ ...draft, columns })}/>}
     {(canRetarget || targetReferenced) && <button disabled={targetReferenced} onClick={onRemove}>{text.additionalRemove}</button>}

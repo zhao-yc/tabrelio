@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo, FilterGroup, FilterMode, FilterRule } from '../../shared/contracts';
-import { manualJoinDesignSchema, type ManualJoinDesign, type ManualJoinDesignSummary } from '../../shared/manualJoinDesigns';
+import { manualJoinDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary } from '../../shared/manualJoinDesigns';
 import { completionIdentifier } from '../../shared/completionLexical';
 import { FILTER_LIMITS, validateFilterGroup } from '../../shared/filtering';
 import { emptyFilterDraft, filterRuleSummary, type FilterDraft } from '../tableFilters';
@@ -20,7 +20,7 @@ import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPre
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
-import { AdditionalJoinFields, ManualJoinPairFields, ManualJoinTableFields, manualJoinSteps, newManualJoinPair, type AdditionalJoinDraft, type ManualJoinSelection } from './ManualJoinFields';
+import { AdditionalJoinFields, ManualJoinPairFields, ManualJoinTableFields, manualJoinSteps, newManualJoinPair, replaceManualJoinPairs, type AdditionalJoinDraft, type ManualJoinSelection } from './ManualJoinFields';
 import type { ForeignKeyJoinSide } from '../tableForeignKeyJoinSources';
 import { relationshipDiagramLimits } from '../relationshipDiagram';
 
@@ -28,7 +28,7 @@ export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget 
 /** 每次正式元数据读取均持有独立任务编号；取消不借普通查询或复用数据库会话。 */
 export const tableForeignKeyJoinServices: TableForeignKeyJoinServices = { read: input => invoke('metadata.table', input), cancel: taskId => invoke('query.cancel', { taskId }) };
 interface Selection { distinct: boolean; unmatchedOnly: boolean; fk: string; manual?: ManualJoinSelection; additional: AdditionalJoinDraft[]; kind: ForeignKeyJoinKind; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; filterGroup?: FilterGroup; summaryEnabled: boolean; summaryGroups: ForeignKeyJoinGroupDraft[]; aggregates: ForeignKeyJoinAggregateDraft[]; summarySort: { id: string; rule: ForeignKeyJoinSort }[]; having: ForeignKeyJoinHavingDraft[]; havingMode: FilterMode; havingGroup?: FilterGroup; }
-interface GroupEditor { selection: Selection; kind: 'where' | 'having'; mode: FilterMode; initial?: FilterGroup; rules: readonly FilterRule[]; presentation: TableFilterGroupPresentation; }
+interface GroupEditor { selection: Selection; kind: 'where' | 'having' | 'on'; applyOn?(group: FilterGroup): Selection; trigger?: HTMLButtonElement; mode: FilterMode; initial?: FilterGroup; rules: readonly FilterRule[]; presentation: TableFilterGroupPresentation; }
 interface Operation { promise: Promise<void>; cancelled: boolean; read?: { taskId: string; cancelPromise?: Promise<unknown> }; cancellation?: Promise<unknown>; }
 const pageSize = 50;
 type DesignOperation = 'listDesigns' | 'saveDesign' | 'replaceDesign' | 'loadDesign' | 'deleteDesign';
@@ -40,9 +40,9 @@ function captureDesign(selection: Selection): ManualJoinDesign {
   const stripIds = ({ pairs }: ManualJoinSelection) => pairs.map(({ id: _id, ...pair }) => pair);
   const first = selection.manual!;
   return manualJoinDesignSchema.parse({
-    version: 1, first: { database: first.database, table: first.table, pairs: stripIds(first) },
+    version: 1, first: { database: first.database, table: first.table, pairs: stripIds(first), on: first.on },
     additional: selection.additional.map(step => ({
-      database: step.database, table: step.table, source: step.source, kind: step.kind, pairs: stripIds(step), columns: step.columns,
+      database: step.database, table: step.table, source: step.source, kind: step.kind, pairs: stripIds(step), columns: step.columns, on: step.on,
     })),
     kind, distinct, unmatchedOnly, child, parent, limit, filters, filterMode, filterGroup,
     sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup,
@@ -88,6 +88,7 @@ function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selectio
   const relation = selection.manual ? selection.manual.pairs.map(({ id: _id, ...condition }) => condition) : selection.fk;
   return foreignKeyJoinPreview(intent, parent, relation, selection.kind, {
     childColumns: selection.child, parentColumns: selection.parent,
+    ...(selection.manual?.on ? { manualOn: selection.manual.on } : {}),
     ...(selection.unmatchedOnly ? { unmatchedOnly: true } : {}),
     ...(!selection.summaryEnabled && selection.distinct ? { distinct: true } : {}),
     ...(selection.summaryEnabled ? { summary: foreignKeyJoinSummaryFromDraft(selection.summaryGroups, selection.aggregates) } : {}),
@@ -122,13 +123,20 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   const [designs, setDesigns] = useState<ManualJoinDesignSummary[]>([]);
   const [designId, setDesignId] = useState(''), [designName, setDesignName] = useState('');
   const [designNotice, setDesignNotice] = useState('');
-  const [groupEditor, setGroupEditor] = useState<GroupEditor>(), groupRef = useRef<GroupEditor | undefined>(undefined), groupPanel = useRef<HTMLDivElement>(null), groupTrigger = useRef<HTMLButtonElement>(null), havingGroupTrigger = useRef<HTMLButtonElement>(null), hadGroup = useRef<GroupEditor['kind'] | undefined>(undefined);
+  const [groupEditor, setGroupEditor] = useState<GroupEditor>(), groupRef = useRef<GroupEditor | undefined>(undefined), groupPanel = useRef<HTMLDivElement>(null), groupTrigger = useRef<HTMLButtonElement>(null), havingGroupTrigger = useRef<HTMLButtonElement>(null), hadGroup = useRef<GroupEditor | undefined>(undefined);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [invalid, setInvalid] = useState(false), [message, setMessage] = useState('');
   const alive = useRef(true), closingRef = useRef(false), operation = useRef<Operation | null>(null), revision = useRef(0), consumed = useRef(false), committed = useRef<object | null>(null), ticket = {};
   const cleanupError = useRef(onCleanupError), closeCallback = useRef(onClose); cleanupError.current = onCleanupError; closeCallback.current = onClose;
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = null; }; });
   /** 打开时把键盘交给内联编辑区；应用/取消后返回原入口，不将Esc留在被禁用的旧按钮。 */
-  useLayoutEffect(() => { if (groupEditor) groupPanel.current?.querySelector<HTMLElement>('select,button')?.focus(); else if (hadGroup.current) (hadGroup.current==='having'?havingGroupTrigger:groupTrigger).current?.focus(); hadGroup.current = groupEditor?.kind; }, [groupEditor]);
+  useLayoutEffect(() => {
+    if (groupEditor) groupPanel.current?.querySelector<HTMLElement>('select,button')?.focus();
+    else if (hadGroup.current) {
+      const previous = hadGroup.current;
+      (previous.trigger ?? (previous.kind === 'having' ? havingGroupTrigger : groupTrigger).current)?.focus();
+    }
+    hadGroup.current = groupEditor;
+  }, [groupEditor]);
   /** 当前渲染和原来源同时有效；本组件自己的占用由父页精确owner租约认可。 */
   function current(): boolean {
     if (!alive.current || closingRef.current || consumed.current || origin.intent !== intent || origin.services !== services || !origin.intent.current()) return false;
@@ -359,12 +367,37 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   /** 环境检查也用于子面板首次渲染，不能提前要求父layoutEffect提交；实际Apply另核当前渲染。 */
   function groupCurrent(owner: GroupEditor): boolean { return groupRef.current === owner && selectionRef.current === owner.selection && !operation.current && current(); }
   /** 仅从有效预览建立独占本地分组草稿，保留原值和字段来源；不读取数据库。 */
-  function openGroups(kind:GroupEditor['kind']): void {
+  function openGroups(kind: 'where' | 'having'): void {
     if (!editable() || !preview.value || !(kind==='having'?selection.having.length:selection.filters.length)) return;
     const filters = preview.value.options.filters??[], having=kind==='having';
     const rules=having?preview.value.options.having!.filters:filters.map(({side:_side,...rule})=>rule);
     const owner: GroupEditor = { selection, kind, mode:having?selection.havingMode:selection.filterMode, initial:having?selection.havingGroup:selection.filterGroup, rules: Object.freeze(rules.map(rule=>Object.freeze({...rule}))), presentation: having?{hint:havingText.groupHint,stale:havingText.groupStale,declined:havingText.groupDeclined,summary:(_index,rule)=>`${havingText.aggregate} · ${filterRuleSummary(rule)}`}:{ hint: filterText.groupHint, stale: filterText.groupStale, declined: filterText.groupDeclined, summary: (index,rule) => `${label(filters[index].side)} · ${filterRuleSummary(rule)}` } };
     groupRef.current = owner; setGroupEditor(owner); setError('');
+  }
+  /** ON 分组只引用当前步骤的比较行，可编辑括号而不重读表或改写字段。 */
+  function openOnGroups(trigger: HTMLButtonElement, index?: number): void {
+    const step = index === undefined ? selection.manual : selection.additional[index];
+    if (!editable() || !step || step.pairs.length < 2 || step.pairs.length > FILTER_LIMITS.conditions) return;
+    const owner: GroupEditor = {
+      selection, kind: 'on', trigger, mode: step.on?.mode ?? 'all', initial: step.on?.group,
+      rules: manualJoinOnRules(step.pairs.length),
+      presentation: {
+        hint: text.manualOnGroupHint, stale: text.stale, declined: filterText.groupDeclined,
+        summary: position => {
+          const pair = step.pairs[position];
+          const alias = manualJoinAlias(pair.source ?? (index === undefined ? 0 : selection.additional[index].source));
+          return `${alias}.${pair.child || text.manualSelect} ${pair.operator ?? '='} ${manualJoinAlias(index === undefined ? 1 : index + 2)}.${pair.parent || text.manualSelect}`;
+        },
+      },
+      applyOn(group) {
+        const on = { mode: group.mode, group };
+        return index === undefined ? { ...selection, manual: { ...step, on } } :
+          { ...selection, additional: selection.additional.map((draft, position) => position === index ? { ...draft, on } : draft) };
+      },
+    };
+    groupRef.current = owner;
+    setGroupEditor(owner);
+    setError('');
   }
   /** 取消不改原条件；立即撤销本次渲染，不能在下一次提交前借旧禁用按钮改写父选择。 */
   function cancelGroups(owner: GroupEditor): void { if (groupRef.current !== owner || !rendered()) return; groupRef.current = undefined; committed.current = null; setGroupEditor(undefined); }
@@ -372,7 +405,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   function applyGroups(owner: GroupEditor, group: FilterGroup): boolean {
     if (!groupCurrent(owner) || !rendered()) return false;
     const checked = validateFilterGroup(owner.rules, group.mode, group)!;
-    groupRef.current = undefined; setGroupEditor(undefined); revise(owner.kind==='having'?{...owner.selection,havingGroup:checked,havingMode:checked.mode}:{ ...owner.selection, filterGroup: checked, filterMode: checked.mode }); return true;
+    groupRef.current = undefined; setGroupEditor(undefined); revise(owner.applyOn ? owner.applyOn(checked) : owner.kind==='having'?{...owner.selection,havingGroup:checked,havingMode:checked.mode}:{ ...owner.selection, filterGroup: checked, filterMode: checked.mode }); return true;
   }
   /** 条件增删按稳定ID重映射原树；暂时无效的值不会导致括号被悄然清空。 */
   function reviseFilters(filters: ForeignKeyJoinFilterDraft[]): void {
@@ -505,15 +538,16 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     <UsageHelp><p>{{ LEFT: text.leftHint, RIGHT: text.rightHint, INNER: text.innerHint }[selection.kind]}</p>
       {selection.kind !== 'INNER' && <p>{text.unmatchedHint}</p>}{!selection.manual && <p>{text.relationship}</p>}<p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
     {selection.manual && parent && <ManualJoinPairFields selection={selection.manual} child={origin.intent.source} parent={parent.info} disabled={busy || unavailable}
-      onAdd={() => { const manual = selection.manual!; if (manual.pairs.length < foreignKeyJoinLimits.manualPairs) revise({ ...selection, manual: { ...manual, pairs: [...manual.pairs, newManualJoinPair()] } }); }}
+      onMode={on => revise({ ...selection, manual: { ...selection.manual!, on } })} onGroups={trigger => openOnGroups(trigger)}
+      onAdd={() => { const manual = selection.manual!; revise({ ...selection, manual: replaceManualJoinPairs(manual, [...manual.pairs, newManualJoinPair()]) }); }}
       onChange={(id, patch) => { const manual = selection.manual!; revise({ ...selection, manual: { ...manual, pairs: manual.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) } }); }}
-      onRemove={id => { const manual = selection.manual!; revise({ ...selection, manual: { ...manual, pairs: manual.pairs.filter(pair => pair.id !== id) } }); }}/>}
+      onRemove={id => { const manual = selection.manual!; revise({ ...selection, manual: replaceManualJoinPairs(manual, manual.pairs.filter(pair => pair.id !== id)) }); }}/>}
     {selection.manual && parent && <>
       <p>{text.additionalHint}</p>
       {selection.additional.map((draft, index) => <AdditionalJoinFields key={draft.id} draft={draft} index={index}
         sources={[origin.intent.source, parent.info, ...selection.additional.slice(0, index).flatMap(step => step.info ? [step.info] : [])]}
         databases={databases} disabled={busy || unavailable} canRetarget={canRetargetAdditional(index)} targetReferenced={index === selection.additional.length - 1 && !canRetargetAdditional(index)}
-        showColumns={!selection.summaryEnabled} onRead={kind => run(kind, index)}
+        showColumns={!selection.summaryEnabled} onRead={kind => run(kind, index)} onGroups={trigger => openOnGroups(trigger, index)}
         onChange={value => {
           if ((value.database !== draft.database || value.table !== draft.table) && !canRetargetAdditional(index)) return;
           revise({ ...selection, additional: selection.additional.map(step => step === draft ? value : step) });
@@ -530,7 +564,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
       <button ref={havingGroupTrigger} type="button" disabled={busy||unavailable||!selection.having.length||!preview.value} onClick={()=>openGroups('having')}>{havingText.groups}</button>{selection.havingGroup&&<><p aria-label={havingText.structure}>{tableFilterGroupSummary(selection.havingGroup)}</p><button type="button" disabled={busy||unavailable} onClick={()=>revise({...selection,havingGroup:undefined})}>{havingText.flat}</button></>}</>}
     {parent && parent.fk === selection.fk && <><TableForeignKeyJoinFilters sources={sources} sourceLabel={label} entries={selection.filters} mode={selection.filterMode} disabled={busy || unavailable} onAdd={addFilter} onChange={editFilter} onMode={filterMode => revise({ ...selection, filterMode, filterGroup: tableFilterGroupWithMode(selection.filterGroup, filterMode) })} onRemove={entry => { if (selection.filters.includes(entry)) reviseFilters(selection.filters.filter(item => item !== entry)); }} onClear={() => reviseFilters([])}/>
       <button ref={groupTrigger} type="button" disabled={busy || unavailable || !selection.filters.length || !preview.value} onClick={()=>openGroups('where')}>{filterText.groups}</button>{selection.filterGroup && <><p aria-label={filterText.structure}>{tableFilterGroupSummary(selection.filterGroup)}</p><button type="button" disabled={busy || unavailable} onClick={() => revise({ ...selection, filterGroup: undefined })}>{filterText.flat}</button></>}</>}
-    {groupEditor && <div ref={groupPanel}><p role="status">{groupEditor.kind==='having'?havingText.grouping:filterText.grouping}</p><TableFilterGroupsDialog filters={groupEditor.rules} mode={groupEditor.mode} initial={groupEditor.initial} presentation={groupEditor.presentation} isCurrent={() => groupCurrent(groupEditor)} onApply={group => applyGroups(groupEditor, group)} onClose={() => cancelGroups(groupEditor)}/></div>}
+    {groupEditor && <div ref={groupPanel}><p role="status">{groupEditor.kind === 'on' ? text.manualOnEditing : groupEditor.kind==='having'?havingText.grouping:filterText.grouping}</p><TableFilterGroupsDialog filters={groupEditor.rules} mode={groupEditor.mode} initial={groupEditor.initial} presentation={groupEditor.presentation} isCurrent={() => groupCurrent(groupEditor)} onApply={group => applyGroups(groupEditor, group)} onClose={() => cancelGroups(groupEditor)}/></div>}
     {parent && parent.fk === selection.fk && <fieldset disabled={busy || unavailable} aria-label={text.sortTitle}><legend>{text.sortTitle}</legend><UsageHelp><p>{selection.summaryEnabled?summaryText.sort:selection.distinct?text.distinctSortHint:text.sortHint}</p></UsageHelp>{!sorting.length && <p>{text.sortEmpty}</p>}
       {sorting.map(({ id, rule }, index) => <div className="filter-inputs" key={id}><span>{index + 1}.</span>
         <label>{text.sortSide(index + 1)}<select aria-label={text.sortSide(index + 1)} disabled={busy || unavailable} value={rule.side} onChange={event => {

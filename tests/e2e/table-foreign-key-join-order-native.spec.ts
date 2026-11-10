@@ -183,6 +183,10 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       await step(() => field(text.joinKind).selectOption('LEFT'));
       await step(() => manual.getByRole('checkbox', { name: text.unmatchedOnly, exact: true }).check());
       await step(() => expect(preview).toContainText('AND c.`amount` >= p.`total`\nWHERE p.`order_id` IS NULL'));
+      const firstMode = manual.getByRole('combobox', { name: text.manualOnMode, exact: true }).first();
+      await step(() => firstMode.selectOption('any'));
+      await step(() => expect(preview).toContainText('OR c.`amount` >= p.`total`\nWHERE p.`order_id` IS NULL AND p.`total` IS NULL'));
+      await step(() => firstMode.selectOption('all'));
       const add = button(text.additionalAdd);
       const extra = (alias: string) => manual.getByRole('group', { name: text.additionalTitle(alias), exact: true });
       await step(() => add.click());
@@ -215,7 +219,30 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       await step(() => expect(fourth.getByRole('combobox', { name: text.additionalChild(1), exact: true })).toHaveValue('total'));
       await step(() => secondChild.selectOption('id'));
       await step(() => fourth.getByRole('combobox', { name: text.manualParent(2), exact: true }).selectOption('order_id'));
-      const sql = 'LEFT JOIN `另一库`.`other_payments` AS t3\nON\n  p.`order_id` = t3.`order_id`\nINNER JOIN `另一库`.`payments` AS t4\nON\n  t3.`total` = t4.`total`\n  AND c.`id` = t4.`order_id`\nWHERE p.`order_id` IS NULL';
+      const fourthMode = fourth.getByRole('combobox', { name: text.manualOnMode, exact: true });
+      await step(() => fourthMode.selectOption('any'));
+      await step(() => expect(preview).toContainText('t3.`total` = t4.`total`\n  OR c.`id` = t4.`order_id`'));
+      await step(() => fourthMode.selectOption('all'));
+      await step(() => fourth.getByRole('button', { name: text.manualAddPair, exact: true }).click());
+      await step(() => fourth.getByRole('combobox', { name: text.additionalPairSource(3), exact: true }).selectOption('0'));
+      await step(() => fourth.getByRole('combobox', { name: text.additionalChild(3), exact: true }).selectOption('amount'));
+      await step(() => fourth.getByRole('combobox', { name: text.manualOperator(3), exact: true }).selectOption('>='));
+      await step(() => fourth.getByRole('combobox', { name: text.manualParent(3), exact: true }).selectOption('total'));
+      const onGroups = fourth.getByRole('button', { name: text.manualOnGroups, exact: true });
+      await step(() => onGroups.click());
+      const onEditor = manual.getByRole('region', { name: groupText.title, exact: true });
+      await step(() => expect(open).toBeDisabled());
+      await step(() => onEditor.getByRole('button', { name: groupText.addGroup(), exact: true }).click());
+      for (const position of [1, 2]) {
+        const destination = onEditor.getByLabel(groupText.destination(position), { exact: true });
+        const groupId = await step(() => destination.getByRole('option', { name: groupText.group('1'), exact: true }).getAttribute('value'));
+        if (!groupId) throw Error('ON 条件分组不存在');
+        await step(() => destination.selectOption(groupId));
+      }
+      await step(() => onEditor.getByLabel(groupText.groupMode(), { exact: true }).focus());
+      await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter'));
+      await step(() => expect(onGroups).toBeFocused());
+      const sql = 'LEFT JOIN `另一库`.`other_payments` AS t3\nON\n  p.`order_id` = t3.`order_id`\nINNER JOIN `另一库`.`payments` AS t4\nON\n  (c.`amount` >= t4.`total` AND (t3.`total` = t4.`total` OR c.`id` = t4.`order_id`))\nWHERE p.`order_id` IS NULL';
       await step(() => expect(preview).toContainText(sql));
       await step(() => expect(preview).toContainText('t3.`total` AS `t3_2_total`'));
       const select = (name: string, value: string) => step(() => manual.getByLabel(name, { exact: true }).selectOption(value));
@@ -272,8 +299,8 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       const pairGroup = fourth.getByRole('group', { name: text.manualPairs, exact: true });
       const geometry = await step(() => pairGroup.evaluate(element => ({ width: element.clientWidth, content: element.scrollWidth })));
       expect(geometry.content).toBeLessThanOrEqual(geometry.width);
-      await step(() => secondSource.scrollIntoViewIfNeeded());
-      await step(() => page.screenshot({ path: info.outputPath('manual-join-mixed-on.png') }));
+      await step(() => preview.scrollIntoViewIfNeeded());
+      await step(() => page.screenshot({ path: info.outputPath('manual-join-on-groups.png') }));
       await step(() => open.click());
       const draft = page.getByLabel('本例独立查询SQL', { exact: true });
       await step(() => expect(draft).toContainText(sql));

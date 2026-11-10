@@ -59,6 +59,29 @@ describe('外键JOIN原结构与前置核验租约', () => {
     expect(() => intent.consume(draft)).toThrow(text.stale);
   });
 
+  it('手动 ON 支持 OR 与嵌套括号，外连接只识别整侧补空行', () => {
+    const { child, parent } = tables();
+    const relation: ManualJoinPair[] = [
+      { child: 'parent_id', parent: 'id' }, { child: 'id', parent: 'value' },
+    ];
+    const base = { childColumns: ['id'], parentColumns: ['value'], unmatchedOnly: true };
+    const left = buildForeignKeyJoin(child, parent, relation, 'LEFT', 1, { ...base, manualOn: { mode: 'any' } }).sql;
+    expect(left).toContain('ON\n  c.`parent_id` = p.`id`\n  OR c.`id` = p.`value`\nWHERE p.`id` IS NULL AND p.`value` IS NULL');
+    const right = buildForeignKeyJoin(child, parent, relation, 'RIGHT', 1, { ...base, manualOn: { mode: 'any' } }).sql;
+    expect(right).toContain('WHERE c.`parent_id` IS NULL AND c.`id` IS NULL');
+    const step: ManualJoinStep = { source: 1, target: parent, kind: 'LEFT', columns: [],
+      pairs: [{ child: 'id', parent: 'id' }, { source: 0, child: 'id', parent: 'value' }, { child: 'value', parent: 'value' }],
+      on: { mode: 'all', group: { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2] } } };
+    expect(buildForeignKeyJoin(child, parent, relation, 'LEFT', 1, { ...base, additionalJoins: [step] }).sql).toContain(
+      'ON\n  ((p.`id` = t3.`id` OR c.`id` = t3.`value`) AND p.`value` = t3.`value`)\nWHERE p.`id` IS NULL');
+    for (const children of [[0], [0, 0], [0, 2]]) {
+      expect(() => buildForeignKeyJoin(child, parent, relation, 'LEFT', 1, { ...base, manualOn: {
+        mode: 'any', group: { mode: 'any', children },
+      } })).toThrow(text.manualOnInvalid);
+    }
+    expect(() => buildForeignKeyJoin(child, parent, 'fk', 'LEFT', 1, { ...base, manualOn: { mode: 'any' } })).toThrow(text.manualOnInvalid);
+  });
+
   it('追加 ON 逐条绑定已加入的别名，旧设计和新条件可混用', () => {
     const { child, parent } = tables();
     const relation: ManualJoinPair[] = [{ child: 'parent_id', parent: 'id' }];
