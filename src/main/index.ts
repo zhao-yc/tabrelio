@@ -1368,7 +1368,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   }
   if (command === 'postgres.sequence.read' || command === 'postgres.sequence.targets' || command === 'postgres.routine.read' ||
       command === 'postgres.routine.dependencies' || command === 'postgres.routine.ownerTargets' ||
-      command.startsWith('postgres.structure.') || command.startsWith('postgres.storage.') || command === 'postgres.completion' || command === 'postgres.resultOrigins') {
+      command.startsWith('postgres.structure.') || command.startsWith('postgres.storage.') || command.startsWith('postgres.queryBuilder.') ||
+      command === 'postgres.completion' || command === 'postgres.resultOrigins') {
     // 原文档、连接修订和实际会话必须一致，关闭中的会话也不再发布目录。
     const revision = store.connectionRevision();
     const scoped = (command === 'postgres.completion' || command === 'postgres.resultOrigins') && input.sessionId;
@@ -3843,6 +3844,7 @@ else {
         if (payload.command.startsWith('mysql.join.preview')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('joinDesigns.')) columns = columnsMain.capture(event);
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('postgres.queryBuilder.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'mysql.view.inspectQuery' || payload.command === 'mysql.view.dependencies' || payload.command === 'mysql.view.renamePreview' || payload.command === 'mysql.view.renameApply' || payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);

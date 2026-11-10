@@ -1,6 +1,7 @@
 import { mysqlJoinPreviewSchema } from './mysqlJoinPreview';
 import { manualJoinDesignScopeSchema, manualJoinDesignSelectSchema, manualJoinDesignSaveSchema } from './manualJoinDesigns';
 import { postgresQueryRecordPageSchema } from './postgresQueryRecord';
+import { postgresQueryBuilderCatalogueSchema, postgresQueryBuilderInspectSchema, postgresQueryBuilderTargetSchema } from './postgresQueryBuilder';
 import { postgresResultOriginsSchema } from './postgresResultOrigins';
 import { mysqlViewDependenciesSchema, sqliteViewDependenciesSchema } from './viewDependencies';
 import { mysqlViewRenameApplySchema, mysqlViewRenamePreviewSchema } from './mysqlViewRename';
@@ -348,6 +349,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.createView.preview': postgresCreateViewPreviewSchema,
   'postgres.createView.apply': postgresCreateTableApplySchema,
   'postgres.createView.inspectQuery': postgresViewQueryInspectSchema,
+  'postgres.queryBuilder.catalogue': postgresQueryBuilderCatalogueSchema,
+  'postgres.queryBuilder.describe': postgresQueryBuilderTargetSchema,
+  'postgres.queryBuilder.inspect': postgresQueryBuilderInspectSchema,
   'postgres.editView.preview': postgresEditViewPreviewSchema,
   'postgres.editView.apply': postgresCreateTableApplySchema,
   'postgres.tableManage.preview': postgresTableManagePreviewSchema,

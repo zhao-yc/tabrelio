@@ -72,7 +72,7 @@ describe('SQLite 原查询入口的真实目标与未知事务保护', () => {
 });
 
 describe('SQLite 新查询和声明快捷键的正式组件接线', () => {
-  it.each(['sqlite', 'mysql'] as const)('新查询 %s 只固定 SQLite main，网络库名和原 SQL 草稿保持原行为', dialect => {
+  it.each(['sqlite', 'mysql', 'postgresql'] as const)('新查询 %s 只固定 SQLite main，网络库名和原 SQL 草稿保持原行为', dialect => {
     const connection = dialect === 'sqlite' ? profile : { id: profile.id, name: '网络', dialect, database: '网络默认库' };
     const state = { connections: [connection], selection: { connectionId: profile.id, database: '原库foo' }, settings: { tabs: [], activeTabId: '' }, openTab: vi.fn() };
     const hook = Object.assign((select: (value: typeof state) => unknown) => select(state), { getState: () => state });

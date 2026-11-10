@@ -1,0 +1,190 @@
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { FilterGroup, FilterMode, FilterRule, SortRule } from '../../shared/contracts';
+import { buildPostgresQueryBuilderSql, postgresQueryBuilderLimits, type PostgresQueryBuilderSource } from '../../shared/postgresQueryBuilder';
+import { parsePostgresCatalogName, postgresRelationName } from '../../shared/postgresSql';
+import { queryDatabasePatch } from '../../shared/queryContext';
+import { errorMessage, invoke } from '../lib';
+import { postgresQueryBuilderZh as text } from '../locales/postgresQueryBuilder.zh-CN';
+import { postgresTableZh } from '../locales/postgresTable.zh-CN';
+import { zh } from '../locales/zh-CN';
+import { useWorkspace } from '../store';
+import { tableFilterGroupAfterChange } from '../tableFilterGroups';
+import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
+import { TableFilterPanel } from './TableFilterPanel';
+import { TableSortPanel } from './TableSortPanel';
+import { ViewQueryInspect } from './ViewQueryInspect';
+import { ErrorBox, Field, Modal, Spinner } from './ui';
+
+interface CatalogueEntry { key: string; schema: string; name: string }
+
+/** 从连接和数据库创建独立草稿。预览结果与待打开的 SQL 只归属当前设计和原活动标签。 */
+export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onClose }: {
+  connectionId: string; database: string; onBack(): void; onClose(): void;
+}) {
+  const [owner] = useState(() => {
+    const workspace = useWorkspace.getState();
+    return { profile: workspace.connections.find(item => item.id === connectionId),
+      version: workspace.connectionVersions[connectionId] ?? 0, tab: workspace.settings.activeTabId, stale: false };
+  });
+  const [catalogue, setCatalogue] = useState<CatalogueEntry[]>();
+  const [table, setTable] = useState(''), [schema, setSchema] = useState(''), [search, setSearch] = useState('');
+  const [source, setSource] = useState<PostgresQueryBuilderSource>();
+  const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
+  const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
+  const [sort, setSort] = useState<SortRule[]>([]), [editor, setEditor] = useState<'group' | 'sort'>();
+  const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
+  const mounted = useRef(false), pending = useRef(false);
+  const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
+  const schemas = useMemo(() => [...new Set(catalogue?.map(item => item.schema))], [catalogue]);
+  const choices = catalogue?.filter(item => (!schema || item.schema === schema) &&
+    (item.key === table || (item.schema + '.' + item.name).toLowerCase().includes(search.toLowerCase())));
+  const preview = useMemo(() => {
+    if (!source) return;
+    try {
+      if (!selected.length) throw Error(text.noColumns);
+      const rowLimit = limit ? Number(limit) : undefined;
+      if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > postgresQueryBuilderLimits.rowLimit)) throw Error(text.invalidLimit);
+      const design = { ...source.target, fingerprint: source.fingerprint, columns: selected, distinct, rowLimit, sort,
+        filter: rules.length ? { rules, mode, group } : undefined };
+      return { design, sql: buildPostgresQueryBuilderSql(design, source) };
+    } catch (reason) { return { error: errorMessage(reason) }; }
+  }, [source, selected, distinct, limit, sort, rules, mode, group]);
+
+  function current(): boolean {
+    if (!mounted.current || owner.stale) return false;
+    const workspace = useWorkspace.getState();
+    owner.stale = owner.profile?.dialect !== 'postgresql' || workspace.connections.find(item => item.id === connectionId) !== owner.profile ||
+      (workspace.connectionVersions[connectionId] ?? 0) !== owner.version || workspace.settings.activeTabId !== owner.tab;
+    return !owner.stale;
+  }
+  useLayoutEffect(() => {
+    mounted.current = true;
+    const check = () => { if (!current() && owner.stale) setStale(true); };
+    const unsubscribe = useWorkspace.subscribe(check);
+    check();
+    return () => { mounted.current = false; unsubscribe(); };
+  }, []);
+
+  const editable = () => current() && !pending.current;
+  const disabled = stale || !!message;
+  function close(next: () => void) { if (mounted.current) { mounted.current = false; next(); } }
+
+  /** 目录读取和草稿交接串行，同一点击只消费一次。晚回包在原窗口关闭后丢弃。 */
+  async function run(label: string, read: () => Promise<void>) {
+    if (!editable()) return;
+    pending.current = true; setError(''); setMessage(label);
+    try { await read(); }
+    catch (reason) { if (current()) setError(errorMessage(reason)); }
+    finally { pending.current = false; if (mounted.current) setMessage(''); }
+  }
+
+  function loadCatalogue() {
+    void run(text.loading, async () => {
+      const objects = await invoke('postgres.queryBuilder.catalogue', { connectionId, database });
+      if (!current()) return;
+      const entries = objects.flatMap(object => {
+        const parts = parsePostgresCatalogName(object.name);
+        return parts ? [{ key: object.name, ...parts }] : [];
+      });
+      setCatalogue(entries);
+      if (!entries.some(item => item.key === table)) setTable('');
+      if (!entries.some(item => item.schema === schema)) setSchema('');
+    });
+  }
+
+  function loadSource() {
+    if (!table) return;
+    void run(text.loading, async () => {
+      const result = await invoke('postgres.queryBuilder.describe', { connectionId, database, table });
+      if (!current()) return;
+      if (result.target.connectionId !== connectionId || result.target.database !== database || result.target.table !== table)
+        throw Error(text.stale);
+      setSource(result); setSelected(result.columns.map(column => column.name));
+      setRules([]); setMode('all'); setGroup(undefined); setSort([]); setDistinct(false); setLimit('');
+    });
+  }
+
+  function open() {
+    if (!source || !preview?.design || editor) return;
+    void run(text.checking, async () => {
+      const fresh = await invoke('postgres.queryBuilder.describe', source.target);
+      if (!current()) return;
+      const sql = buildPostgresQueryBuilderSql(preview.design, fresh);
+      if (sql !== preview.sql) throw Error(text.stale);
+      const workspace = useWorkspace.getState();
+      if (workspace.settings.tabs.length >= 100) throw Error(text.tabs);
+      close(onClose);
+      workspace.openTab({ kind: 'query', title: text.queryTitle(postgresRelationName(source.target.table).name), connectionId,
+        ...queryDatabasePatch({ state: 'known', database }), sql: sql + ';' });
+    });
+  }
+
+  return <Modal title={text.title} wide={!!source} onClose={() => close(onClose)}>
+    <div className="modal-content" aria-busy={!!message}>
+      {!source ? <>
+        <p>{text.hint} {database}</p>
+        <div className="child-reference-tools"><button disabled={disabled} onClick={loadCatalogue}>{text.catalogue}</button></div>
+        {catalogue && <>
+          <Field label={text.schema}><select aria-label={text.schema} value={schema} disabled={disabled} onChange={event => {
+            if (editable()) { setSchema(event.target.value); setTable(''); }
+          }}><option value="">{text.allSchemas}</option>{schemas.map(name => <option key={name}>{name}</option>)}</select></Field>
+          <Field label={text.search}><input type="search" value={search} disabled={disabled}
+            onChange={event => { if (editable()) setSearch(event.target.value); }}/></Field>
+        </>}
+        <Field label={text.source}><select aria-label={text.source} value={table} disabled={disabled || !choices?.length}
+          onChange={event => { if (editable()) setTable(event.target.value); }}>
+          <option value="">{text.chooseSource}</option>{choices?.map(item => <option key={item.key} value={item.key}>{item.key}</option>)}
+        </select></Field>
+        {choices?.length === 0 && <p role="status">{text.empty}</p>}
+      </> : <>
+        <p>{database} / {source.target.table}</p>
+        <fieldset disabled={disabled || !!editor}><legend>{text.columns}</legend>
+          <div className="child-reference-tools">
+            <button onClick={() => { if (editable()) setSelected(names); }}>{text.all}</button>
+            <button onClick={() => { if (editable()) setSelected([]); }}>{text.none}</button>
+          </div>
+          <div style={{ maxHeight: 180, overflow: 'auto' }}>{source.columns.map(({ name, type }) => <label key={name} className="check">
+            <input type="checkbox" aria-label={text.choose(name)} checked={selected.includes(name)} onChange={event => {
+              if (!editable()) return;
+              const checked = event.target.checked;
+              setSelected(previous => names.filter(column => column === name ? checked : previous.includes(column)));
+            }}/>{name} <small className="muted">{type}</small>
+          </label>)}</div>
+          <label className="check"><input type="checkbox" checked={distinct} onChange={event => { if (editable()) setDistinct(event.target.checked); }}/>{text.distinct}</label>
+        </fieldset>
+        <fieldset><legend>{text.filter}</legend>
+          <TableFilterPanel columns={names} filters={rules} mode={mode} disabled={disabled || !!editor} multilineScalar applyShortcut
+            onFiltersChange={next => {
+              if (!editable()) return false;
+              setGroup(tableFilterGroupAfterChange(rules, next, group, mode)); setRules(next); return true;
+            }} onModeChange={next => {
+              if (!editable()) return false;
+              setMode(next); setGroup(previous => previous && { ...previous, mode: next }); return true;
+            }}/>
+          <button disabled={disabled || !!editor || !rules.length} onClick={() => { if (editable()) setEditor('group'); }}>{postgresTableZh.filterGroups}</button>
+          {editor === 'group' && <TableFilterGroupsDialog filters={rules} mode={mode} initial={group} isCurrent={editable}
+            onApply={next => { if (!editable()) return false; setMode(next.mode); setGroup(next); setEditor(undefined); return true; }}
+            onClose={() => setEditor(undefined)}/>}
+        </fieldset>
+        <div className="child-reference-tools"><button disabled={disabled || !!editor} onClick={() => { if (editable()) setEditor('sort'); }}>{text.sort}</button>
+          <span className="muted small">{text.sorted(sort.length)}</span></div>
+        {editor === 'sort' && <TableSortPanel columns={names} initial={sort} hint={text.sortHint} ties={text.sortTies} isCurrent={editable}
+          onApply={next => { if (!editable()) return false; setSort(next); setEditor(undefined); return true; }} onClose={() => setEditor(undefined)}/>}
+        <Field label={text.limit}><input inputMode="numeric" maxLength={7} disabled={disabled || !!editor} value={limit}
+          onChange={event => { if (editable()) setLimit(event.target.value); }}/></Field>
+        <p>{text.limitHint}</p>
+        {preview?.design && <ViewQueryInspect owner={preview} labels={text.inspectLabels} hint={text.inspection(postgresQueryBuilderLimits.rows)}
+          disabled={disabled || !!editor} current={current} read={inspect => invoke('postgres.queryBuilder.inspect', { ...preview.design, inspect })}/>}
+        {preview?.sql && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.sql};</pre></section>}
+      </>}
+      <ErrorBox message={stale ? text.stale : error || preview?.error}/>{message && <Spinner text={message}/>}
+    </div>
+    <footer className="modal-footer">
+      {source ? <button disabled={disabled || !!editor} onClick={() => { if (editable()) { setSource(undefined); setError(''); } }}>{text.changeSource}</button> :
+        <button onClick={() => close(onBack)}>{text.back}</button>}
+      <span className="grow"/><button onClick={() => close(onClose)}>{zh.common.cancel}</button>
+      {source ? <button className="primary" disabled={disabled || !!editor || !preview?.design} onClick={open}>{text.open}</button> :
+        <button className="primary" disabled={disabled || !table} onClick={loadSource}>{text.read}</button>}
+    </footer>
+  </Modal>;
+}
