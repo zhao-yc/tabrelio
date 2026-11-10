@@ -162,3 +162,41 @@ it('MERGE 表函数与 LATERAL 查询只能关联可见的 JOIN 左侧', () => {
   expect(at('MERGE INTO orders d USING generate_series(1,¦d.n) g(n) ON d.id=g.n WHEN MATCHED THEN DELETE'))
     .toMatchObject({ status: 'blocked' });
 });
+
+it('表函数识别带类型的列定义及 ROWS FROM 的外层关系别名', () => {
+  expect(at('SELECT ¦r.n FROM get_records() AS r(n numeric(12,3), names text[], label text COLLATE "C")'))
+    .toMatchObject({ status: 'ready' });
+  expect(at('SELECT r.n FROM get_records() AS r(n ¦r.money_type)')).toMatchObject({ status: 'blocked' });
+  const rows = 'ROWS FROM (get_records() AS (id int), generate_series(1,2)) WITH ORDINALITY AS r(id,n,seq)';
+  expect(at('SELECT ¦r.seq FROM ' + rows)).toMatchObject({ status: 'ready' });
+  expect(at('DELETE FROM orders d USING ' + rows + ' WHERE d.id=r.id RETURNING ¦r.seq')).toMatchObject({ status: 'ready' });
+  expect(at('MERGE INTO orders d USING ' + rows + ' ON d.id=r.id WHEN MATCHED THEN UPDATE SET n=¦r.n'))
+    .toMatchObject({ status: 'ready' });
+  for (const invalid of ['get_records() (id int)', 'get_records() WITH ORDINALITY AS r(id int)',
+    'ROWS FROM (get_records() AS (id int), generate_series(1,2)) AS r(id int)',
+    'ROWS FROM (get_records() AS (id int),) AS r', 'ROWS FROM (get_records() AS (id)) AS r']) {
+    expect(at('SELECT ¦s.id FROM orders s, ' + invalid), invalid).toMatchObject({ status: 'blocked' });
+  }
+});
+
+it('ROWS FROM 只用第一个函数的默认名称遮蔽外层关系', () => {
+  expect(at('SELECT (SELECT ¦get_records.id FROM ROWS FROM (get_records() AS (id int), generate_series(1,2))) FROM orders get_records'))
+    .toMatchObject({ status: 'blocked' });
+  expect(at('SELECT (SELECT ¦get_records.id FROM ROWS FROM (generate_series(1,2), get_records() AS (id int))) FROM orders get_records'))
+    .toMatchObject({ status: 'ready' });
+  expect(at('SELECT (SELECT ¦get_records.id FROM pg_catalog.get_records() AS (id int)) FROM orders get_records'))
+    .toMatchObject({ status: 'blocked' });
+});
+
+it('ROWS FROM 的实参共用外层范围，并遵守 JOIN 和写入目标的关联限制', () => {
+  expect(at('SELECT r.id FROM incoming p, incoming s RIGHT JOIN ROWS FROM (generate_series(1,¦p.n)) AS r(id) ON true'))
+    .toMatchObject({ status: 'ready' });
+  expect(at('SELECT r.id FROM incoming p, incoming s RIGHT JOIN ROWS FROM (generate_series(1,¦s.n)) AS r(id) ON true'))
+    .toMatchObject({ status: 'blocked' });
+  expect(at('SELECT r.id FROM incoming s CROSS JOIN ROWS FROM (get_records(¦s.n) AS (id int), generate_series(1,s.n)) r'))
+    .toMatchObject({ status: 'ready' });
+  expect(at('UPDATE orders d SET n=1 FROM ROWS FROM (generate_series(1,¦d.n)) r(id) WHERE d.id=r.id'))
+    .toMatchObject({ status: 'blocked' });
+  expect(at('MERGE INTO orders d USING ROWS FROM (generate_series(1,¦d.n)) r(id) ON d.id=r.id WHEN MATCHED THEN DELETE'))
+    .toMatchObject({ status: 'blocked' });
+});

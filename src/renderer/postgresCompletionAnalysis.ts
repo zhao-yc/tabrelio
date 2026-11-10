@@ -40,7 +40,7 @@ const expressionEntries = new Set(['SELECT', 'WHERE', 'HAVING', 'ON', 'RETURNING
 const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '^', '~']);
 const unknown: Projection = { names: [], stars: [], exact: false };
 const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE']);
-const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'ORDINALITY', 'SEARCH', 'CYCLE', 'XMLTABLE', 'JSON_TABLE']);
+const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'SEARCH', 'CYCLE', 'XMLTABLE', 'JSON_TABLE']);
 
 /** PostgreSQL 未引用标识符折叠 ASCII 大写字母，引用名称保留原大小写。 */
 const identifier = (part?: Part) => part?.kind === 'identifier' && !part.open ? part.text
@@ -419,8 +419,10 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
   return !trace.unsupported;
 }
 
-/** 读取关系别名及列列表。MERGE 目标的别名只允许重命名关系。 */
-function mergeAlias(parts: Part[], index: number, columns: boolean): { declaration?: Part; alias?: string; next: number } | undefined {
+interface RelationAlias { declaration?: Part; alias?: string; next: number; }
+
+/** 读取关系别名。普通关系列表只重命名列，表函数的带类型列定义由调用方读取。 */
+function readRelationAlias(parts: Part[], index: number, columns: boolean): RelationAlias | undefined {
   const explicit = keyword(parts[index]) === 'AS';
   if (explicit) index++;
   const declaration = parts[index];
@@ -433,6 +435,87 @@ function mergeAlias(parts: Part[], index: number, columns: boolean): { declarati
     index++;
   }
   return { declaration, alias, next: index };
+}
+
+function readFunctionCall(parts: Part[], start: number): { name: string; args: Group; next: number } | undefined {
+  let index = start;
+  let name = identifier(parts[index]);
+  if (!name || stop.has(keyword(parts[index++]))) return;
+  if (punct(parts[index], '.')) {
+    name = identifier(parts[index + 1]);
+    index += 2;
+  }
+  const args = parts[index];
+  if (!name || name.length > limits.name || args?.kind !== 'group' || args.closing !== ')') return;
+  return { name, args, next: index + 1 };
+}
+
+/** 类型和排序规则是列定义的元数据，只有调用实参进入引用作用域。 */
+function hasTypedColumns(group?: Part): boolean {
+  if (group?.kind !== 'group' || group.closing !== ')') return false;
+  const parts = group.parts;
+  let start = 0;
+  for (let i = 0; i <= parts.length; i++) {
+    if (i < parts.length && !punct(parts[i], ',')) continue;
+    if (i - start < 2 || !identifier(parts[start]) || !identifier(parts[start + 1]) || punct(parts[i - 1], '.')) return false;
+    if (parts.slice(start + 1, i).some(part => !identifier(part) && part.kind !== 'group' && !punct(part, '.'))) return false;
+    start = i + 1;
+  }
+  return true;
+}
+
+interface TableFunctionSource { relation: ScopedRelation; args: Group[]; next: number; }
+
+/** ROWS FROM 的各个实参共享外部可见关系，函数名和成员列定义不会引入新的关系别名。 */
+function readTableFunction(parts: Part[], start: number): TableFunctionSource | false | undefined {
+  const rows = keyword(parts[start]) === 'ROWS' && keyword(parts[start + 1]) === 'FROM';
+  const group = parts[start + 2];
+  if (rows && (group?.kind !== 'group' || group.closing !== ')')) return false;
+  const body = rows && group.kind === 'group' ? group.parts : parts;
+  const first = readFunctionCall(body, rows ? 0 : start);
+  if (!first) return rows ? false : undefined;
+  const args = [first.args];
+  let memberColumns = false;
+  if (rows) {
+    let member = first;
+    for (;;) {
+      let index = member.next;
+      if (keyword(body[index]) === 'AS') {
+        if (!hasTypedColumns(body[index + 1])) return false;
+        memberColumns = true;
+        index += 2;
+      }
+      if (index === body.length) break;
+      if (!punct(body[index], ',')) return false;
+      const following = readFunctionCall(body, index + 1);
+      if (!following) return false;
+      member = following;
+      args.push(member.args);
+    }
+  }
+  let next = rows ? start + 3 : first.next;
+  const ordinal = keyword(parts[next]) === 'WITH' && keyword(parts[next + 1]) === 'ORDINALITY';
+  if (ordinal) next += 2;
+  const anonymousColumns = keyword(parts[next]) === 'AS' && parts[next + 1]?.kind === 'group';
+  const renamed: RelationAlias | undefined = anonymousColumns ? { next: next + 1 } : readRelationAlias(parts, next, false);
+  if (!renamed) return false;
+  const columns = parts[renamed.next];
+  next = renamed.next;
+  if (columns?.kind === 'group') {
+    if (!anonymousColumns && !renamed.declaration) return false;
+    if (anonymousColumns || !nameList(columns).length) {
+      if (args.length !== 1 || memberColumns || ordinal || !hasTypedColumns(columns)) return false;
+    }
+    next++;
+  }
+  return { relation: { name: first.name, alias: renamed.alias, declaration: renamed.declaration }, args, next };
+}
+
+function traceTableFunction(source: TableFunctionSource, scope: Scope,
+  preceding: ScopedRelation[], outer: ScopedRelation[][], trace: ReferenceTrace): void {
+  const { declaration } = source.relation;
+  if (declaration) trace.declarations.set(declaration.start, 'alias');
+  for (const args of source.args) traceExpressions(args.parts, scope, preceding, outer, new Map(), trace);
 }
 
 /** 括号中的 JOIN 可以从子查询开始，子查询后的别名或 JOIN 不属于该查询。 */
@@ -452,6 +535,12 @@ function traceMergeRelation(parts: Part[], start: number, target: boolean, scope
   const modifier = keyword(parts[start]);
   const only = modifier === 'ONLY', lateral = modifier === 'LATERAL';
   let next = start + (only || lateral ? 1 : 0);
+  const call = !target && !only ? readTableFunction(parts, next) : undefined;
+  if (call === false) return;
+  if (call) {
+    traceTableFunction(call, scope, preceding, outer, trace);
+    return call;
+  }
   const first = parts[next];
   let name = '', schema: string | undefined, cte: LocalReferenceRange | undefined;
   if (!target && !only && first?.kind === 'group' && isMergeSourceQuery(first)) {
@@ -473,20 +562,13 @@ function traceMergeRelation(parts: Part[], start: number, target: boolean, scope
     }
     if (wrapped && index !== names.length) return;
     next = wrapped ? next + 1 : index;
-    const args = parts[next];
-    if (!target && !only && args?.kind === 'group' && args.closing === ')') {
-      traceExpressions(args.parts, scope, preceding, outer, new Map(), trace);
-      next++;
-      if (keyword(parts[next]) === 'WITH' && keyword(parts[next + 1]) === 'ORDINALITY') next += 2;
-    } else {
-      if (lateral) return;
-      if (!only && punct(parts[next], '*')) next++;
-      if (!target && !schema) cte = scope.get(name)?.declaration;
-      if (cte && token.kind !== 'group') trace.edges.set(token, cte);
-    }
+    if (lateral) return;
+    if (!only && punct(parts[next], '*')) next++;
+    if (!target && !schema) cte = scope.get(name)?.declaration;
+    if (cte && token.kind !== 'group') trace.edges.set(token, cte);
   }
   if (name.length > limits.name || schema && schema.length > limits.name) return;
-  const renamed = mergeAlias(parts, next, !target);
+  const renamed = readRelationAlias(parts, next, !target);
   if (!renamed) return;
   const { alias, declaration } = renamed;
   if (declaration) trace.declarations.set(declaration.start, 'alias');
@@ -516,7 +598,7 @@ function traceMergeOperand(parts: Part[], start: number, scope: Scope, outer: Sc
   if (part?.kind === 'group' && part.closing === ')' && !isMergeSourceQuery(part)) {
     const inner = traceMergeSource(part.parts, 0, scope, outer, preceding, trace, depth + 1);
     if (!inner?.joined || inner.next !== part.parts.length) return;
-    const renamed = mergeAlias(parts, start + 1, true);
+    const renamed = readRelationAlias(parts, start + 1, true);
     if (!renamed) return;
     if (!renamed.declaration) return { ...inner, next: renamed.next };
     // 整个 JOIN 的别名会遮蔽输入表，只保留已收集的内部引用。
@@ -757,6 +839,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   const spans = trace ? new Map<number, RelationSpan>() : undefined;
   const commas = new Set<number>();
   let from = false, deleteUsing = false;
+  let joinChainStart = 0;
   for (let i = 0; i < (returning < 0 ? main.length : returning); i++) {
     const word = keyword(main[i]);
     if (endsFrom.has(word)) from = false;
@@ -766,11 +849,23 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     if (!usingSource && !(tableSource && i === 0) && !relationEntry(main, i) && !commas.has(i)) continue;
     const target = write && writeTarget(main, i);
     if (!target && (word === 'FROM' || word === 'JOIN' || usingSource)) from = true;
+    if (!target && word !== 'JOIN') joinChainStart = refs.length;
     let next = i + 1;
     const modifier = keyword(main[next]);
     if (modifier === 'ONLY' || modifier === 'LATERAL') next++;
     // PostgreSQL 的 FROM/USING 来源子查询及表函数不能引用本语句的写入目标。
-    const preceding = write ? refs.slice(1) : refs;
+    const joinType = keyword(main[i - (keyword(main[i - 1]) === 'OUTER' ? 2 : 1)]);
+    const available = trace && word === 'JOIN' && ['RIGHT', 'FULL'].includes(joinType) ? refs.slice(0, joinChainStart) : refs;
+    const preceding = write ? available.slice(1) : available;
+    const call = trace && !target && !tableSource && modifier !== 'ONLY' ? readTableFunction(main, next) : undefined;
+    if (call === false) return unsupported();
+    if (call) {
+      traceTableFunction(call, scope, preceding, outer, trace!);
+      spans!.set(i, { end: call.next, relation: refs.length });
+      refs.push(call.relation);
+      i = call.next - 1;
+      continue;
+    }
     let part = main[next];
     let name = '', schema: string | undefined, projection: Projection | undefined;
     let cte: LocalReferenceRange | undefined;
@@ -792,11 +887,9 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       }
       if (!name || punct(main[next], '.')) { if (trace) return unsupported(); continue; }
       if (main[next]?.kind === 'group' && word !== 'INTO') {
-        if (target) return unsupported();
+        if (trace) return unsupported();
         // 表函数的别名仍会遮蔽外层关系，未声明字段时不查询同名物理表。
         projection = unknown;
-        const args = main[next];
-        if (trace && args.kind === 'group') traceExpressions(args.parts, scope, preceding, outer, new Map(), trace);
         next++;
       } else if (!schema && !writeTarget(main, i)) {
         projection = scope.get(name);

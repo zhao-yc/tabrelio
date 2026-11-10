@@ -181,3 +181,10 @@ it('MERGE 重命名保护服务器自动生成的来源关系名', () => {
   expect(rename('MERGE INTO orders ¦d USING (incoming s JOIN flags f ON s.id=f.id) j ON d.id=1 WHEN MATCHED THEN DELETE', 'unnamed_join'))
     .toMatchObject({ status: 'ready' });
 });
+
+it('重命名跨 ROWS FROM 的各个实参，但保留函数名和列定义', () => {
+  expect(edited('SELECT s.id FROM incoming ¦s CROSS JOIN ROWS FROM (get_records(s.doc) AS (id int), generate_series(1,s.n)) WITH ORDINALITY AS r(id,n,seq) WHERE s.id=r.id', '来源'))
+    .toBe('SELECT "来源".id FROM incoming "来源" CROSS JOIN ROWS FROM (get_records("来源".doc) AS (id int), generate_series(1,"来源".n)) WITH ORDINALITY AS r(id,n,seq) WHERE "来源".id=r.id');
+  expect(edited('MERGE INTO orders d USING get_records() AS ¦r(id int, n numeric(12,3)) ON d.id=r.id WHEN MATCHED THEN UPDATE SET n=r.n RETURNING r.id', 'records'))
+    .toBe('MERGE INTO orders d USING get_records() AS "records"(id int, n numeric(12,3)) ON d.id="records".id WHEN MATCHED THEN UPDATE SET n="records".n RETURNING "records".id');
+});

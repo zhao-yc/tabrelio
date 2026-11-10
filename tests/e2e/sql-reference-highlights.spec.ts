@@ -11,7 +11,7 @@ test.skip(process.env.DBARK_SQL_REFERENCE_HIGHLIGHTS_TEST !== '1', '仅在隔离
 
 const sql = ['SELECT s.id,', '(SELECT s.id FROM child s)', 'FROM parent s', 'WHERE s.id=1;'].join('\n');
 const cteSql = 'WITH local_cte AS (SELECT 1 AS id) SELECT local_cte.id FROM local_cte;';
-const dmlDrafts = [
+const postgresDrafts = [
   {
     id: 'update-draft', title: 'UPDATE 导航草稿',
     sql: 'UPDATE orders d SET n=d.n+1 WHERE d.id=1 RETURNING WITH (OLD AS previous) previous.n, d.n;',
@@ -49,6 +49,14 @@ const dmlDrafts = [
       'WHEN MATCHED THEN UPDATE SET n="来源".n', 'WHEN NOT MATCHED THEN INSERT (id) VALUES ("来源".id)',
       'RETURNING "来源".id;'].join('\n'),
   },
+  {
+    id: 'rows-from-draft', title: 'ROWS FROM 导航草稿',
+    sql: ['SELECT r.id,r.seq', 'FROM ROWS FROM (', '  jsonb_to_recordset(\'[{"id":1}]\') AS (id integer),',
+      '  generate_series(1,2)', ') WITH ORDINALITY AS r(id,n,seq)', 'WHERE r.n>0;'].join('\n'),
+    referenceAfter: 'SELECT ', declarationAfter: 'ORDINALITY AS ', original: 'r', name: '行集', highlights: 4,
+    renamed: ['SELECT "行集".id,"行集".seq', 'FROM ROWS FROM (', '  jsonb_to_recordset(\'[{"id":1}]\') AS (id integer),',
+      '  generate_series(1,2)', ') WITH ORDINALITY AS "行集"(id,n,seq)', 'WHERE "行集".n>0;'].join('\n'),
+  },
 ];
 const command = 'editor-local-references';
 
@@ -72,7 +80,7 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
       }
       await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
       // 真实持久化接口准备草稿，网络方言使用不可连接的回环配置，无需实库或凭据。
-      await page.evaluate(async ({ dialect, sql, cteSql, dmlDrafts }) => {
+      await page.evaluate(async ({ dialect, sql, cteSql, postgresDrafts }) => {
         const id = 'sql-reference-highlights', base = { id, name: '引用高亮样本', group: '', color: '#51bda5' };
         if (dialect === 'sqlite') {
           const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
@@ -87,10 +95,10 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
           { id: 'other', kind: 'query', title: '另一个查询', connectionId: id, sql: 'SELECT 1;' },
           ...(dialect === 'postgresql' ? [
             { id: 'cte', kind: 'query' as const, title: 'CTE 导航草稿', connectionId: id, sql: cteSql },
-            ...dmlDrafts.map(({ id: tabId, title, sql }) => ({ id: tabId, kind: 'query' as const, title, sql, connectionId: id })),
+            ...postgresDrafts.map(({ id: tabId, title, sql }) => ({ id: tabId, kind: 'query' as const, title, sql, connectionId: id })),
           ] : []),
         ] });
-      }, { dialect, sql, cteSql, dmlDrafts });
+      }, { dialect, sql, cteSql, postgresDrafts });
       await page.reload();
       const tab = page.locator('.query-tab:visible'), input = tab.locator('.monaco-editor').getByRole('textbox');
       const lines = tab.locator('.view-lines .view-line');
@@ -195,7 +203,7 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
         await page.keyboard.press(undo);
         await expect.poll(async () => (await snapshot()).source).toBe(cteSql);
 
-        for (const draft of dmlDrafts) {
+        for (const draft of postgresDrafts) {
           await page.locator('.tab-strip').getByRole('button', { name: draft.title, exact: true }).click();
           if (draft.highlights && !(await setting())) { await toggle(); await expect.poll(setting).toBe(true); }
           const reference = draft.sql.indexOf(draft.referenceAfter) + draft.referenceAfter.length + 1;
