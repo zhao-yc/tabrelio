@@ -31,6 +31,10 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
   const builder = page.getByRole('dialog', { name: text.title, exact: true });
   const results = builder.getByRole('region', { name: text.inspectLabels.region, exact: true });
   const button = (name: string) => builder.getByRole('button', { name, exact: true });
+  const approve = (label: string) => page.evaluate(expected => {
+    const original = window.confirm;
+    window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是预期的设计确认'); return true; };
+  }, label);
   async function selectSource(name: string) {
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true })).click();
     const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
@@ -222,9 +226,30 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await button(aggregate.addAggregate).click();
     await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('COUNT');
     await builder.getByRole('combobox', { name: aggregate.column(1), exact: true }).selectOption('t3.note');
-    await expect(sql).toHaveText('SELECT t1."id" AS "t1.id", pg_catalog.COUNT(t3."note") AS "统计_1"' + joins + ' GROUP BY t1."id";');
+    const joinSummarySql = 'SELECT t1."id" AS "t1.id", pg_catalog.COUNT(t3."note") AS "统计_1"' + joins + ' GROUP BY t1."id";';
+    await expect(sql).toHaveText(joinSummarySql);
     await button(text.inspectLabels.rows).click();
     await expect(results.getByRole('row').filter({ hasText: max }).getByRole('gridcell', { name: '0', exact: true })).toBeVisible();
+    const savedJoins = builder.getByRole('group', { name: joinText.designTitle, exact: true });
+    await builder.locator('summary').filter({ hasText: joinText.designTitle }).click();
+    await savedJoins.getByRole('textbox', { name: joinText.designName, exact: true }).fill('跨 schema 汇总');
+    await savedJoins.getByRole('button', { name: joinText.designSave, exact: true }).click();
+    await expect(savedJoins.getByText(joinText.designSaved, { exact: true })).toBeVisible();
+    await approve(text.joinBackConfirm);
+    await joinPanel.getByRole('button', { name: text.joinBack, exact: true }).click();
+    await expect(sql).toHaveText('SELECT "id", "label", "ignored", "read_mode" FROM ' + view + ';');
+    await button(zh.common.cancel).click();
+    await selectSource(view);
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    await builder.locator('summary').filter({ hasText: joinText.designTitle }).click();
+    await savedJoins.getByRole('button', { name: joinText.designRefresh, exact: true }).click();
+    await savedJoins.getByRole('combobox', { name: joinText.designTitle, exact: true }).selectOption({ label: '跨 schema 汇总' });
+    await approve(joinText.designRestoreConfirm);
+    await savedJoins.getByRole('button', { name: joinText.designLoad, exact: true }).click();
+    await expect(savedJoins.getByText(joinText.designRestored, { exact: true })).toBeVisible();
+    await expect(sql).toHaveText(joinSummarySql);
+    await savedJoins.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('postgres-builder-join-design.png') });
     await summaryMode.uncheck();
     await expect(sql).toHaveText(joinSql);
     await button(text.open).click();
@@ -235,6 +260,18 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await query.locator('.monaco-editor').getByRole('textbox').focus();
     await page.keyboard.press('ControlOrMeta+Enter');
     await expect(query.getByRole('gridcell', { name: '匹配来源', exact: true })).toBeVisible();
+
+    await selectSource(view);
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    await builder.locator('summary').filter({ hasText: joinText.designTitle }).click();
+    await savedJoins.getByRole('button', { name: joinText.designRefresh, exact: true }).click();
+    await savedJoins.getByRole('combobox', { name: joinText.designTitle, exact: true }).selectOption({ label: '跨 schema 汇总' });
+    await observer.query('ALTER TABLE public.builder_link RENAME COLUMN note TO changed_note');
+    await approve(joinText.designRestoreConfirm);
+    await savedJoins.getByRole('button', { name: joinText.designLoad, exact: true }).click();
+    await expect(builder.getByRole('alert')).toContainText('来源字段已变化');
+    await expect(sql).toHaveText('SELECT "id", "label", "ignored", "read_mode" FROM ' + view + ';');
+    await button(zh.common.cancel).click();
 
     await selectSource(table);
     const beforeChange = await settings();

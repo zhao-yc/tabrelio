@@ -779,8 +779,9 @@ export class LocalStore {
   private singleQueryDesignLocation(input: SingleQueryDesignScope): QueryDesignLocation {
     const [profile] = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [input.connectionId]);
     if (profile?.dialect !== input.dialect) throw Error('查询设计与当前连接类型不符。');
-    return { table: 'single_relation_query_designs',
-      args: [input.connectionId, input.database, JSON.stringify([input.dialect, input.table, input.dialect === 'sqlite' ? input.kind : null])] };
+    // 原单表键按原字节生成，只有 JOIN 使用独立作用域。
+    const kind = input.dialect === 'sqlite' ? input.kind : input.join ? 'join' : null;
+    return { table: 'single_relation_query_designs', args: [input.connectionId, input.database, JSON.stringify([input.dialect, input.table, kind])] };
   }
 
   /** 列表只返回当前表的名称和编号。正文留在本地，直到用户明确选择恢复。 */
@@ -808,7 +809,8 @@ export class LocalStore {
   }
   readSingleQueryDesign(input: SingleQueryDesignSelect): SingleQueryDraft {
     const design = singleQueryDraftSchema.parse(this.readQueryDesign(this.singleQueryDesignLocation(input), input.id));
-    if (design.dialect !== input.dialect) throw Error('查询设计与当前连接类型不符。');
+    if (design.dialect !== input.dialect || input.dialect === 'postgresql' && design.dialect === 'postgresql' &&
+        Boolean(input.join) !== Boolean(design.joins)) throw Error('查询设计与当前连接类型或关联模式不符。');
     return design;
   }
   private readQueryDesign({ table, args }: QueryDesignLocation, id: string): unknown {

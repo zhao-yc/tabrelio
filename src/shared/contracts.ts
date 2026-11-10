@@ -394,6 +394,7 @@ export interface CommandMap {
   'postgres.createView.inspectQuery': { input: import('./postgresCreateView').PostgresViewQueryInspectInput; output: QueryOutcome };
   'postgres.queryBuilder.catalogue': { input: Pick<import('./postgresQueryBuilder').PostgresQueryBuilderTarget, 'connectionId' | 'database'>; output: DatabaseObject[] };
   'postgres.queryBuilder.describe': { input: import('./postgresQueryBuilder').PostgresQueryBuilderTarget; output: import('./postgresQueryBuilder').PostgresQueryBuilderSource };
+  'postgres.queryBuilder.describeJoin': { input: import('./postgresQueryBuilder').PostgresQueryBuilderDescribeJoinInput; output: import('./postgresQueryBuilder').PostgresQueryBuilderSource[] };
   'postgres.queryBuilder.inspect': { input: import('./postgresQueryBuilder').PostgresQueryBuilderInspectInput; output: QueryOutcome };
   'postgres.editView.preview': { input: import('./postgresCreateView').PostgresEditViewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.editView.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

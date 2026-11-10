@@ -10,6 +10,7 @@ export function SingleQueryDesignPanel({ scope, draft, disabled, current, run, r
   scope: SingleQueryDesignScope; draft?: SingleQueryDraft; disabled: boolean; current(): boolean;
   run(action: () => Promise<void>): void; restore(value: SingleQueryDraft): Promise<void>;
 }) {
+  const title = scope.dialect === 'postgresql' && scope.join ? text.designTitle : text.singleDesignTitle;
   const [entries, setEntries] = useState<ManualJoinDesignSummary[]>([]);
   const [id, setId] = useState(''), [name, setName] = useState(''), [notice, setNotice] = useState('');
 
@@ -50,11 +51,11 @@ export function SingleQueryDesignPanel({ scope, draft, disabled, current, run, r
   }
 
   return <details>
-    <summary>{text.singleDesignTitle}</summary>
-    <fieldset aria-label={text.singleDesignTitle} disabled={disabled}>
+    <summary>{title}</summary>
+    <fieldset aria-label={title} disabled={disabled}>
       <p className="muted small">{text.designHint}</p>
       <button type="button" onClick={() => act('list')}>{text.designRefresh}</button>
-      <Field label={text.singleDesignTitle}><select aria-label={text.singleDesignTitle} value={id} onChange={event => {
+      <Field label={title}><select aria-label={title} value={id} onChange={event => {
         if (!current()) return;
         const selected = entries.find(item => item.id === event.target.value);
         setId(selected?.id ?? ''); setName(selected?.name ?? ''); setNotice('');

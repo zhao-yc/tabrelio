@@ -1,5 +1,5 @@
 import type { DatabaseObject, QueryOutcome } from '../../shared/contracts';
-import { buildPostgresQueryBuilderSql, postgresQueryBuilderLimits, type PostgresQueryBuilderInspectInput,
+import { buildPostgresQueryBuilderSql, postgresQueryBuilderLimits, type PostgresQueryBuilderDescribeJoinInput, type PostgresQueryBuilderInspectInput,
   type PostgresQueryBuilderSource, type PostgresQueryBuilderTarget } from '../../shared/postgresQueryBuilder';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
@@ -50,14 +50,31 @@ export function describePostgresQueryBuilder(connection: PostgresConnection, tar
   return readOnly(connection, target.database, () => readSource(connection, target));
 }
 
+/** 同一只读事务取得全部关系的锁，按原序返回；同表复用目录，保留每个别名的位置。 */
+async function readSources(connection: PostgresConnection, target: PostgresQueryBuilderTarget, joinTables: readonly string[]) {
+  const found = new Map<string, PostgresQueryBuilderSource>(), ordered: PostgresQueryBuilderSource[] = [];
+  for (const table of [target.table, ...joinTables]) {
+    let source = found.get(table);
+    if (!source) {
+      source = await readSource(connection, { ...target, table });
+      found.set(table, source);
+    }
+    ordered.push(source);
+  }
+  return ordered;
+}
+
+export function describePostgresQueryBuilderJoin(connection: PostgresConnection, input: PostgresQueryBuilderDescribeJoinInput) {
+  const { joinTables, ...target } = input;
+  return readOnly(connection, target.database, () => readSources(connection, target, joinTables));
+}
+
 /** 结构化输入复核后在原只读事务内生成 SQL；估算计划不会执行查询。 */
 export function inspectPostgresQueryBuilder(connection: PostgresConnection, input: PostgresQueryBuilderInspectInput): Promise<QueryOutcome> {
   const { connectionId, database, table, inspect, ...design } = input;
   const target = { connectionId, database, table };
   return readOnly(connection, database, async () => {
-    const source = await readSource(connection, target);
-    const joined: PostgresQueryBuilderSource[] = [];
-    for (const step of design.joins ?? []) joined.push(await readSource(connection, { ...target, table: step.table }));
+    const [source, ...joined] = await readSources(connection, target, (design.joins ?? []).map(step => step.table));
     const query = buildPostgresQueryBuilderSql({ ...target, ...design }, source, joined);
     if (inspect === 'validate') return { results: [], elapsedMs: 0 };
     return readPostgresQueryPreview(connection, query, inspect, postgresQueryBuilderLimits.rows);

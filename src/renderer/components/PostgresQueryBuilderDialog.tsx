@@ -149,13 +149,22 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   async function restore(value: SingleQueryDraft) {
     if (!source || value.dialect !== 'postgresql') throw Error(designText.designModeMismatch);
     const target = source.target;
-    const fresh = await invoke('postgres.queryBuilder.describe', target);
+    const steps = value.joins ?? [];
+    const joinTables = steps.map(step => step.table);
+    const sources = steps.length ? await invoke('postgres.queryBuilder.describeJoin', { ...target, joinTables }) :
+      [await invoke('postgres.queryBuilder.describe', target)];
     if (!current()) return;
-    if (fresh.target.connectionId !== target.connectionId || fresh.target.database !== target.database ||
-        fresh.target.table !== target.table) throw Error(text.stale);
-    assertSingleQueryDraftColumns(value, fresh.columns.map(column => column.name));
-    compileDesign(value, fresh);
-    setSource(fresh); applyDraft(value);
+    const tables = [target.table, ...joinTables];
+    if (sources.length !== tables.length || sources.some(({ target: actual }, index) =>
+      actual.connectionId !== target.connectionId || actual.database !== target.database || actual.table !== tables[index])) throw Error(text.stale);
+    const [fresh, ...related] = sources;
+    const next = steps.map((step, index) => ({ source: related[index], step: { ...step, fingerprint: related[index].fingerprint } }));
+    const available = sources.flatMap((relation, index) => relation.columns.map(column =>
+      next.length ? postgresBuilderColumnKey(index, column.name) : column.name));
+    assertSingleQueryDraftColumns(value, available);
+    compileDesign(value, fresh, next);
+    if (next.length && !joins.length) singleDraft.current = draft;
+    setSource(fresh); setJoins(next); applyDraft(value);
   }
 
   function applyDraft(value: PostgresSingleQueryDraft) {
@@ -267,6 +276,10 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         {!joins.length && <SingleQueryDesignPanel scope={ { ...source.target, dialect: 'postgresql' } } draft={preview?.design ? draft : undefined}
           disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>}
         <details open={joins.length ? true : undefined}><summary>{text.joins}</summary>
+          <SingleQueryDesignPanel scope={{ ...source.target, dialect: 'postgresql', join: true }}
+            draft={joins.length && preview?.design ? { ...draft,
+              joins: joins.map(({ step: { fingerprint: _fingerprint, ...step } }) => step) } : undefined}
+            disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>
           <PostgresQueryJoinPanel source={source} entries={catalogue ?? []} joins={joins} disabled={disabled || !!editor}
             add={addJoin} change={(index, step) => {
               if (!editable() || editor) return;

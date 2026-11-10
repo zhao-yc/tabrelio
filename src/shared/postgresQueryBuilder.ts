@@ -26,11 +26,18 @@ export const postgresBuilderJoinKinds = ['INNER', 'LEFT', 'RIGHT', 'FULL'] as co
 export const postgresBuilderJoinOperators = ['=', '<>', '<', '<=', '>', '>=', 'IS NOT DISTINCT FROM'] as const;
 const joinPair = z.object({ left: z.string().min(1).max(256), right: z.string().min(1).max(256),
   operator: z.enum(postgresBuilderJoinOperators) }).strict();
-const joinStep = postgresQueryBuilderTargetSchema.pick({ table: true }).extend({
-  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+const joinTable = postgresQueryBuilderTargetSchema.shape.table;
+const joinDraftStep = z.object({
+  table: joinTable,
   kind: z.enum(postgresBuilderJoinKinds), mode: z.enum(['all', 'any']),
   pairs: z.array(joinPair).min(1).max(postgresBuilderJoinLimits.pairs),
+}).strict();
+export const postgresBuilderJoinDraftSchema = z.array(joinDraftStep).min(1).max(postgresBuilderJoinLimits.steps);
+const joinStep = joinDraftStep.extend({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/) });
+export const postgresQueryBuilderDescribeJoinSchema = postgresQueryBuilderTargetSchema.extend({
+  joinTables: z.array(joinTable).min(1).max(postgresBuilderJoinLimits.steps),
 });
+export type PostgresQueryBuilderDescribeJoinInput = z.infer<typeof postgresQueryBuilderDescribeJoinSchema>;
 export type PostgresBuilderJoin = z.infer<typeof joinStep>;
 export const postgresBuilderAlias = (index: number) => 't' + (index + 1);
 export const postgresBuilderColumnKey = (index: number, name: string) => postgresBuilderAlias(index) + '.' + name;

@@ -7,7 +7,8 @@ import initSqlJs from 'sql.js';
 import { mainColumnsHarness } from './main-columns-owner-harness';
 import { LocalStore } from '../../src/main/storage';
 import { manualJoinDesignSaveSchema, singleTableQueryDesignSchema, type ManualJoinDesign } from '../../src/shared/manualJoinDesigns';
-import { assertSingleQueryDraftColumns, singleQueryDesignSaveSchema, type SqliteSingleQueryDraft } from '../../src/shared/singleQueryDesigns';
+import { assertSingleQueryDraftColumns, singleQueryDesignSaveSchema, type PostgresSingleQueryDraft,
+  type SqliteSingleQueryDraft } from '../../src/shared/singleQueryDesigns';
 
 const require = createRequire(import.meta.url);
 const wasm = require.resolve('sql.js/dist/sql-wasm.wasm'), directories: string[] = [];
@@ -42,6 +43,37 @@ async function fixture() {
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('手动 JOIN 设计本地配置库', () => {
+  it('PostgreSQL 单表和 JOIN 同名隔离，关联顺序及精确条件可恢复且不保存目录摘要', async () => {
+    const { file, store } = await fixture();
+    const pg = { connectionId: 'pg-design', dialect: 'postgresql', database: 'orders', table: '"sales"."orders"' } as const;
+    const joined = { ...pg, join: true } as const;
+    const single: PostgresSingleQueryDraft = {
+      version: 1, dialect: 'postgresql', selected: ['id'], distinct: false, limit: '', rules: [], mode: 'all', sort: [],
+      summaryEnabled: false, summary: { groups: [], aggregates: [], sort: [] }, havingRules: [], havingMode: 'all',
+    };
+    const step = { table: '"public"."details"', kind: 'LEFT' as const, mode: 'all' as const,
+      pairs: [{ left: 't1.id', right: 'id', operator: '=' as const }] };
+    const draft: PostgresSingleQueryDraft = { ...single, selected: ['t1.id', 't3.value'],
+      joins: [step, { ...step, pairs: [{ left: 't2.id', right: 'id', operator: '=' }] }],
+      rules: [{ column: 't3.value', operator: '>=', value: '9223372036854775807' }] };
+    let id: string;
+    try {
+      store.saveConnection({ ...profile, id: pg.connectionId, dialect: pg.dialect, port: 5432, database: pg.database });
+      store.saveSingleQueryDesign({ ...pg, name: '日报', design: single });
+      id = store.saveSingleQueryDesign({ ...joined, name: '日报', design: draft }).id;
+      expect(() => store.saveSingleQueryDesign({ ...pg, name: '误入单表', design: draft })).toThrow('关联模式');
+      expect(singleQueryDesignSaveSchema.safeParse({ ...joined, name: '多余元数据', design: { ...draft, joins: [{ ...step, fingerprint: 'a'.repeat(64) }] } }).success).toBe(false);
+    } finally { store.close(); }
+    const reopened = await LocalStore.open(file, wasm, protector);
+    try {
+      expect(reopened.readSingleQueryDesign({ ...joined, id })).toEqual(draft);
+      expect(() => reopened.readSingleQueryDesign({ ...pg, id })).toThrow('已变化');
+      expect(reopened.listSingleQueryDesigns({ ...joined, table: '"elsewhere"."orders"' })).toEqual([]);
+      reopened.deleteSingleQueryDesign({ ...joined, id });
+      expect(reopened.listSingleQueryDesigns(joined)).toEqual([]);
+      expect(reopened.listSingleQueryDesigns(pg)).toHaveLength(1);
+    } finally { reopened.close(); }
+  });
   it('SQLite 单表设计独立于旧设计，真实配置库重开后保留双模式及精确值', async () => {
     const { file, store } = await fixture();
     const sqlite = { ...scope, connectionId: 'sqlite-source', dialect: 'sqlite', database: 'main', kind: 'table' } as const;
