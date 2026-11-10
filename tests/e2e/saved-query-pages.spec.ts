@@ -118,6 +118,20 @@ test('从查询库切回最近使用的同源草稿，选择替代连接可切�
   await expect.poll(async () => (await readSettings()).activeTabId).toBe('focus-original-recent');
 
   await open();
+  const compare = card.getByRole('button', { name: pagesText.compareDraft, exact: true });
+  const difference = card.getByRole('region', { name: pagesText.comparison, exact: true });
+  await update({ ...saved, sql: 'SELECT 9007199254740993' });
+  await compare.click();
+  await expect(dialog().locator('.error-box')).toContainText('已修改');
+  await expect(difference).toHaveCount(0);
+  await dialog().getByRole('button', { name: pagesText.refresh, exact: true }).click();
+  await expect(card.locator('pre')).toHaveText('SELECT 9007199254740993');
+  await compare.click();
+  await expect(difference.getByRole('region', { name: pagesText.draftDifference, exact: true }).locator('pre')).toHaveText('22');
+  await expect(difference.getByRole('region', { name: pagesText.savedDifference, exact: true }).locator('pre')).toHaveText('9007199254740993');
+  await page.keyboard.press('Escape');
+  await expect(difference).toHaveCount(0);
+  await expect(dialog()).toBeVisible();
   await card.getByLabel('打开查询的连接：' + saved.name, { exact: true }).selectOption(alternate.id);
   await expect(switchTab).toHaveAttribute('title', pagesText.openExistingHint('替代连接草稿'));
   await switchTab.click();
@@ -125,6 +139,14 @@ test('从查询库切回最近使用的同源草稿，选择替代连接可切�
   await expect(page.locator('.query-tab:visible .view-lines')).toContainText('23');
   await expect.poll(async () => (await readSettings()).activeTabId).toBe('focus-alternate');
   expect((await readSettings()).tabs).toEqual(initial);
+  await open();
+  await compare.click();
+  await expect(difference).toBeVisible();
+  await card.getByRole('button', { name: '在新标签打开', exact: true }).click();
+  await expect(dialog()).toBeHidden();
+  await expect(page.locator('.query-tab:visible .view-lines')).toContainText('9007199254740993');
+  await expect.poll(async () => (await readSettings()).tabs).toHaveLength(5);
+  expect((await readSettings()).tabs.slice(0, initial.length)).toEqual(initial);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
   expect(pageErrors).toEqual([]);

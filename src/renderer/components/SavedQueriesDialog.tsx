@@ -26,6 +26,9 @@ import { SavedQueryDeleteSelectedPreview } from './SavedQueryDeleteSelectedPrevi
 import { savedQueryDeleteSelectedSchema, readSavedQueryDeleteSelectedResult, savedQueryDeleteSelectedZh as deleteText } from '../../shared/savedQueryDeleteSelected';
 import { Empty, ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import { SqlTextPreview } from './SqlTextPreview';
+import { queryFileTextDifference, type QueryFileTextDifference } from '../../shared/queryFileReload';
+import { queryFileReloadZh } from '../../shared/queryFileReload.zh-CN';
+import '../query-file-reload.css';
 import { SavedQueryExternalEditor } from './SavedQueryExternalEditor';
 import { savedQueryExternalZh as externalText, type SavedQueryExternalSession } from '../../shared/savedQueryExternalEdit';
 import { QueryBatchOpenPreview } from './QueryBatchOpenPreview';
@@ -92,8 +95,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const criteria: Criteria = { search, policy, group, scope, database, sort, favoritesOnly }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
   const currentSqlPreview = sqlPreview?.epoch === renderEpoch ? sqlPreview : undefined;
+  const [comparison, setComparison] = useState<{ item: SavedQueryPageEntry; tab: WorkspaceTab; difference: QueryFileTextDifference; epoch: number }>();
+  const currentComparison = comparison?.epoch === renderEpoch && tabs.includes(comparison.tab) ? comparison : undefined;
   // 分页、筛选或其它操作换代时释放大正文，渲染已立即隐藏旧预览。
   useEffect(() => { if (sqlPreview && !currentSqlPreview) setSqlPreview(value => value === sqlPreview ? undefined : value); }, [sqlPreview, currentSqlPreview]);
+  useEffect(() => { if (comparison && !currentComparison) setComparison(value => value === comparison ? undefined : value); }, [comparison, currentComparison]);
   const insertionRef = useRef(insertion), previousInsertion = useRef(insertion), insertionClosing = useRef(false), cancelledInsertion = useRef(false);
   insertionRef.current = insertion;
   const [insertAvailable, setInsertAvailable] = useState(() => insertion?.current() ?? false);
@@ -471,6 +477,21 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       setSqlPreview({ item, sql: result.query.sql, epoch: ticket });
     });
   }
+  /** 只比较打开时看到的草稿和经摘要校验的保存正文。任一来源变化都需要重新对比。 */
+  function compareDraft(item: SavedQueryPageEntry, tab: WorkspaceTab): void {
+    if (!editable() || !currentCard(item)) return;
+    try {
+      const workspace = useWorkspace.getState();
+      const ref = workspace.tabOrderSnapshot().find(ref => ref.id === tab.id);
+      if (!ref || workspace.resolveTabOrder(ref) !== tab) throw Error(t.compareStale);
+      void run(async ticket => {
+        const { query } = await io.request('queries.readText', { id: item.query.id, digest: item.digest });
+        if (!owns(ticket)) return;
+        if (!currentCard(item) || useWorkspace.getState().resolveTabOrder(ref) !== tab) throw Error(t.compareStale);
+        setComparison({ item, tab, difference: queryFileTextDifference(tab.sql ?? '', query.sql), epoch: ticket });
+      });
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   /** 复制不传回正文，主进程核对当前卡片后写入剪贴板。 */
   function copySql(item: SavedQueryPageEntry): void {
     if (!editable() || !currentCard(item)) return;
@@ -582,7 +603,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const importConnectionStale = !!importConnection && !connections.includes(importConnection);
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
   return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else if (editRef.current && !('value' in editRef.current)) cancelEdit(); else void close(); }}
-    onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
+    onEscape={currentSqlPreview || currentComparison ? event => {
+      event.stopPropagation();
+      if (currentComparison) setComparison(value => value === currentComparison ? undefined : value);
+      else setSqlPreview(value => value === currentSqlPreview ? undefined : value);
+    } : undefined}>
     <div className="dialog-tabs"><button disabled={closing || !!external} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><UsageHelp><p>{text.metadataOnly}</p><p>{insertionText.hint}</p><p>{t.hint}</p><p>{t.openHint}</p></UsageHelp><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
       <details className="saved-query-organization-tree" open><summary>{text.title}</summary><nav aria-label={text.tree}>
@@ -658,6 +683,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => {
           const opened = findOpenedSavedQuery(item.query.id, target(item), tabs, recentTabs, connections);
+          const preview = currentComparison?.item === item ? currentComparison : undefined;
+          const difference = preview?.difference;
           return <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label>
           <button type="button" className="icon-button" disabled={blocked || changed || needsRefresh || !organization} aria-label={t.favoriteName(item.query.name)}
             aria-pressed={!!item.favorite} title={item.favorite ? t.favoriteRemove : t.favoriteAdd} onClick={() => setFavorite(item)}>
@@ -665,9 +692,24 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           </button><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
           <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<button disabled={blocked || changed || needsRefresh} onClick={() => copySql(item)}>{sqlText.sqlCopy}</button><button disabled={blocked || changed || needsRefresh} title={t.sqlExportHint} onClick={() => exportSql(item)}>{t.sqlExport}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginExternal(item)}>{externalText.open}</button><label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
           <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button>
-            {opened && <button type="button" disabled={blocked || changed || needsRefresh} title={t.openExistingHint(opened.title)}
-              onClick={() => activateOpenedTab(item, opened)}>{t.openExisting}</button>}
+            {opened && <>
+              <button type="button" disabled={blocked || changed || needsRefresh} aria-expanded={!!difference}
+                onClick={() => preview ? setComparison(value => value === preview ? undefined : value) : compareDraft(item, opened)}>{t.compareDraft}</button>
+              <button type="button" disabled={blocked || changed || needsRefresh} title={t.openExistingHint(opened.title)}
+                onClick={() => activateOpenedTab(item, opened)}>{t.openExisting}</button>
+            </>}
             <button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
+          {preview && difference && <section aria-label={t.comparison}>
+            <p>{t.comparisonHint(preview.tab.title)}</p>
+            {difference.beforeUnits || difference.afterUnits ? <>
+              <p>{queryFileReloadZh.counts(difference.prefixUnits, difference.suffixUnits, difference.beforeUnits, difference.afterUnits)}</p>
+              <div className="query-file-reload-diff">
+                <section aria-label={t.draftDifference}><h4>{t.draftDifference}</h4><pre>{difference.before}</pre></section>
+                <section aria-label={t.savedDifference}><h4>{t.savedDifference}</h4><pre>{difference.after}</pre></section>
+              </div>
+              {(difference.beforeTruncated || difference.afterTruncated) && <p>{t.compareOmitted}</p>}
+            </> : <p>{t.compareIdentical}</p>}
+          </section>}
         </article>;
         })}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}
