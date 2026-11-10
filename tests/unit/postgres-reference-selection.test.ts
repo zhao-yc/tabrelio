@@ -35,6 +35,10 @@ describe('PostgreSQL 外键选值', () => {
     expect(postgresTableReferenceSchema.safeParse({ ...input, lookup: { ...input.lookup, table: '自定义表' } }).success).toBe(false);
     expect(postgresTableReferenceSchema.safeParse({ ...input, lookup: { ...input.lookup, offset: 100_001 } }).success).toBe(false);
     expect(postgresTableReferenceSchema.safeParse({ ...input, lookup: { ...input.lookup, search: '\0' } }).success).toBe(false);
+    const sorted = { ...input, lookup: { ...input.lookup, sort: { column: '原字段', direction: 'DESC' } } };
+    expect(postgresTableReferenceSchema.safeParse(sorted).success).toBe(true);
+    expect(postgresTableReferenceSchema.safeParse({ ...sorted, childrenRow: 0 }).success).toBe(false);
+    expect(postgresTableReferenceSchema.safeParse({ ...sorted, lookup: { ...sorted.lookup, sort: { column: '原字段', direction: 'ASC NULLS FIRST' } } }).success).toBe(false);
   });
 
   it('浏览引用记录只接受原页行号及精确目录定位', () => {

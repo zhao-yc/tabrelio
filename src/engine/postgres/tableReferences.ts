@@ -113,6 +113,13 @@ export async function readPostgresTableReferences(connection: PostgresConnection
   const metadata = [...selected.pairs.map((pair, index) => ({ name: keyNames[index], type: pair.type })),
     ...extras.rows.map(row => ({ name: String(row.c0), type: String(row.c1) }))];
   const expressions = metadata.map(item => postgresIdentifier(item.name));
+  const candidateSort = lookup.sort;
+  if (candidateSort && (sourceRow || !metadata.some(item => item.name === candidateSort.column)))
+    throw Error('父候选排序列不可用，请重新选择');
+  const candidateOrder = candidateSort
+    ? [`p.${postgresIdentifier(candidateSort.column)} ${candidateSort.direction === 'DESC' ? 'DESC' : 'ASC'}`,
+      ...keyNames.filter(name => name !== candidateSort.column).map(name => 'p.' + postgresIdentifier(name))]
+    : keys;
   const projection = expressions.map((expression, index) => index < keys.length ? expression : `pg_catalog.left(${expression}::text, 400)`);
   const filter = expressions.map(expression => `pg_catalog.strpos(pg_catalog.lower(${expression}::text), pg_catalog.lower($1::text)) > 0`).join(' OR ');
   // 只允许目录产生标识符；实际名称再次解析为原 OID，避免并发改名使本次查询指向别的关系。
@@ -136,11 +143,11 @@ export async function readPostgresTableReferences(connection: PostgresConnection
   `, [sourceRow.tid, sourceRow.version, sourceRow.tableOid, sourceRow.name, sourceRow.oid, relation, selected.target,
     ...(incoming ? [lookup.search, lookup.offset] : [])], { rows: incoming ? limits.page + 1 : 2, bytes: 2 * 1024 * 1024 })
     : await connection.query(`
-    SELECT ${projection.join(', ')} FROM ${relation}
+    SELECT ${projection.join(', ')} FROM ${relation} AS p
     WHERE pg_catalog.to_regclass($3)::oid = $4::oid
       AND ${keys.map(key => `${key} IS NOT NULL`).join(' AND ')}
       AND ($1::text = '' OR ${filter})
-    ORDER BY ${keys.join(', ')} LIMIT ${limits.page + 1} OFFSET $2
+    ORDER BY ${candidateOrder.join(', ')} LIMIT ${limits.page + 1} OFFSET $2
   `, [lookup.search, lookup.offset, relation, selected.target], { rows: limits.page + 1, bytes: 2 * 1024 * 1024 });
   const identity = await connection.query('SELECT pg_catalog.to_regclass($1)::oid::text', [relation], { rows: 1, bytes: 8192 });
   if (identity.rows[0]?.c0 !== selected.target) throw Error('被引用关系已变化，请重新打开外键记录');

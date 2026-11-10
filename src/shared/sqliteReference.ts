@@ -4,6 +4,7 @@ import { sqliteEditValueSchema } from './sqliteTableEdit';
 import { sqliteRelationshipName as fold, sqliteRelationshipTableSchema, type SqliteRelationshipTable } from './sqliteRelationships';
 import { validateResultExportData } from './resultExport';
 import { sqliteResultCellMatches } from './sqliteResultStorage';
+import { referenceCandidateSortSchema } from './referenceCandidateSort';
 
 export const sqliteReferenceLimits = { active: 2, rows: 200, parts: 64, bytes: 16 * 1024 * 1024 } as const;
 const base = { connectionId: sqliteTablePageSchema.shape.connectionId, database: z.literal('main'), table: sqliteTablePageSchema.shape.table,
@@ -15,7 +16,8 @@ const paging = { foreignKey: z.number().int().min(0).max(2147483647), offset: sq
 export const sqliteReferenceInputSchema = z.discriminatedUnion('reference', [
   z.object({ ...base, reference: z.literal('catalog') }).strict(),
   z.object({ ...base, ...paging, reference: z.literal('page'), values: z.array(sqliteEditValueSchema).min(1).max(sqliteReferenceLimits.parts) }).strict(),
-  z.object({ ...base, ...paging, reference: z.literal('candidates'), search: sqliteReferenceSearchSchema.optional() }).strict(),
+  z.object({ ...base, ...paging, reference: z.literal('candidates'), search: sqliteReferenceSearchSchema.optional(),
+    sort: referenceCandidateSortSchema.optional() }).strict(),
 ]);
 export type SqliteReferenceInput = z.infer<typeof sqliteReferenceInputSchema>;
 export interface SqliteReferenceOutput { request: SqliteReferenceInput; source: SqliteRelationshipTable; parent?: SqliteRelationshipTable; referencedColumns?: string[]; page?: SqliteTablePage; }

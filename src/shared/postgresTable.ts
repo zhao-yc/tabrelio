@@ -17,6 +17,7 @@ import { postgresHistogramBins } from './postgresTableHistogram';
 import { postgresIdentifier, postgresRelationName } from './postgresSql';
 import { dataFileFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
 import { postgresTableLimits } from './postgresTableLimits';
+import { referenceCandidateSortSchema } from './referenceCandidateSort';
 
 export { postgresTableLimits } from './postgresTableLimits';
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -183,10 +184,12 @@ export const postgresTableReferenceSchema = postgresTableReleaseSchema.extend({
     stamp: z.string().regex(/^[0-9a-f]{64}$/),
     search: referenceSearch,
     offset: referenceOffset,
+    sort: referenceCandidateSortSchema.optional(),
   }).strict().optional(),
   relatedTabId: relatedTabId.optional(),
 }).strict().refine(input => input.parentRow === undefined ||
   (input.childrenRow === undefined && (!input.lookup || (input.lookup.search === '' && input.lookup.offset === 0))))
+  .refine(input => !input.lookup?.sort || (input.parentRow === undefined && input.childrenRow === undefined))
   .refine(input => input.relatedTabId === undefined || (input.relatedTabId !== input.tabId && !!input.lookup &&
     input.lookup.offset === 0 && (input.parentRow !== undefined || input.childrenRow !== undefined)));
 export type PostgresTableReferenceInput = z.infer<typeof postgresTableReferenceSchema>;

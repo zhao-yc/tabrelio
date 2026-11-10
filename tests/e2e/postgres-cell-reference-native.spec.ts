@@ -1,3 +1,4 @@
+import { referenceCandidateSortZh as sortText } from '../../src/renderer/locales/referenceCandidateSort.zh-CN';
 import { referenceCandidateColumnsZh as displayText } from '../../src/renderer/locales/referenceCandidateColumns.zh-CN';
 import { Client } from 'pg';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
@@ -78,6 +79,17 @@ test('PostgreSQL 从命中的单元格选择复合父键并保留该行已有草
     const target = picker.getByRole('row').filter({ hasText: '目标配对' });
     const use = target.getByRole('button', { name: text.use, exact: true });
     await expect(use).toBeEnabled();
+    const candidateTable = picker.getByRole('table'), sortBy = picker.getByRole('combobox', { name: sortText.column, exact: true });
+    const direction = picker.getByRole('combobox', { name: sortText.direction, exact: true });
+    const firstCandidate = candidateTable.getByRole('row').nth(1);
+    await expect(candidateTable.getByRole('cell', { name: '9007199254741001', exact: true })).toHaveCount(0);
+    await sortBy.selectOption('b');
+    await direction.selectOption('DESC');
+    await expect(firstCandidate.getByRole('cell', { name: '9007199254741001', exact: true })).toBeVisible();
+    await picker.getByRole('button', { name: text.next, exact: true }).click();
+    await expect(firstCandidate.getByRole('cell', { name: '6', exact: true })).toBeVisible();
+    await picker.getByRole('button', { name: text.previous, exact: true }).click();
+    await expect(firstCandidate.getByRole('cell', { name: '9007199254741001', exact: true })).toBeVisible();
     await picker.getByText(displayText.title, { exact: true }).click();
     await picker.getByRole('button', { name: displayText.keysOnly, exact: true }).click();
     await expect(picker.getByRole('columnheader', { name: 'label', exact: true })).toHaveCount(0);
@@ -85,6 +97,7 @@ test('PostgreSQL 从命中的单元格选择复合父键并保留该行已有草
     await picker.getByRole('searchbox', { name: text.query, exact: true }).fill('目标配对');
     await picker.getByRole('button', { name: text.search, exact: true }).click();
     await expect(picker.getByRole('cell', { name: '9007199254740997', exact: true })).toBeVisible();
+    await expect(direction).toHaveValue('DESC');
     await expect(picker.getByRole('cell', { name: '9007199254740995', exact: true })).toHaveCount(0);
     await expect(picker.getByRole('columnheader', { name: 'label', exact: true })).toHaveCount(0);
     await picker.getByText(displayText.title, { exact: true }).click();

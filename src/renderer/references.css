@@ -9,3 +9,6 @@
 .reference-content [role="alertdialog"] button { margin-right: 8px; }
 .reference-column-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
 .reference-columns .check { width: fit-content; }
+.reference-candidate-sort { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin: 8px 0; }
+.reference-candidate-sort label { display: flex; align-items: center; gap: 8px; }
+.reference-candidate-sort select { width: auto; max-width: 260px; }

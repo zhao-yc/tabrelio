@@ -4,6 +4,7 @@ import type { DataRow } from '../../shared/contracts';
 import { sqliteRelationshipName as fold } from '../../shared/sqliteRelationships';
 import type { SqliteOriginalValue } from '../../shared/sqliteTableEdit';
 import type { SqliteReferenceOutput, SqliteReferenceSearch } from '../../shared/sqliteReference';
+import type { ReferenceCandidateSort as CandidateSort } from '../../shared/referenceCandidateSort';
 import { sqliteReferenceTuple, assertSqliteReferenceChoice, type SqliteReferenceChoice } from '../sqliteReferenceChoice';
 import { SqliteReferenceReader, type SqliteReferenceServices } from '../sqliteReferenceReader';
 import { sqliteReferenceZh as text } from '../locales/sqliteReference.zh-CN';
@@ -12,6 +13,7 @@ import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner } from './ui';
 import { ResultsGrid } from './ResultsGrid';
 import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
+import { ReferenceCandidateSort } from './ReferenceCandidateSort';
 
 export const sqliteReferenceServices: SqliteReferenceServices = { read: input => invoke('sqlite.referencePage', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid };
 type ReferenceKey = SqliteReferenceOutput['source']['foreignKeys'][number];
@@ -25,6 +27,7 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
   const [catalog, setCatalog] = useState<SqliteReferenceOutput>(), [selected, setSelected] = useState<number>(), [data, setData] = useState<SqliteReferenceOutput>();
   const [chosen, setChosen] = useState<number>(), selection = useRef<{ data: SqliteReferenceOutput; index: number; values: SqliteOriginalValue[] } | undefined>(undefined);
   const [searchColumns, setSearchColumns] = useState<string[]>([]);
+  const [sort, setSort] = useState<CandidateSort | null>(null);
   const [searchColumn, setSearchColumn] = useState(''), [searchText, setSearchText] = useState(''), appliedSearch = useRef<SqliteReferenceSearch | undefined>(undefined);
   const [clearConfirmed, setClearConfirmed] = useState(false);
   const choosing = !!origin.onStage;
@@ -51,20 +54,20 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     })(); work.current = pending;
   }
   /** 目录切换后只采用新约束的候选列，分页则保留已选搜索列。 */
-  async function readCandidates(key: ReferenceKey, offset: number, search?: SqliteReferenceSearch) {
-    const value = await reader.candidates(key, offset, search);
+  async function readCandidates(key: ReferenceKey, offset: number, search?: SqliteReferenceSearch, sort?: CandidateSort) {
+    const value = await reader.candidates(key, offset, search, sort);
     if (!environment() || closing.current) return;
     setData(value);
     setSearchColumns(value.page!.columns.map(column => column.name));
     setSearchColumn(current => current || value.referencedColumns![0]);
   }
   /** 换页保留已应用搜索；编辑搜索草稿不发送任务，并撤销上一条父候选选择。 */
-  function read(offset: number, restart = false): void {
+  function read(offset: number, restart = false, order = sort): void {
     if (!actionCurrent()) return; const key = keys.find(key => key.ordinal === selected); if (!key) return;
     if (choosing && restart) appliedSearch.current = searchText ? { column: searchColumn, text: searchText } : undefined;
     resetSelection(); setData(undefined);
     run(async () => {
-      if (choosing) await readCandidates(key, offset, appliedSearch.current);
+      if (choosing) await readCandidates(key, offset, appliedSearch.current, order ?? undefined);
       else { const value = await reader.page(key, offset); if (environment() && !closing.current) setData(value); }
     });
   }
@@ -108,6 +111,7 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     data.referencedColumns?.some(name => fold(name) === fold(column.name))).map(column => column.name) : undefined;
   function resetDirectorySelection() {
     resetSelection(); setData(undefined); setSearchColumns([]); setSearchColumn(''); setSearchText(''); appliedSearch.current = undefined;
+    setSort(null);
   }
   function loadCatalog() {
     if (!actionCurrent()) return;
@@ -135,6 +139,10 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     : <p>{column === undefined ? text.emptyKeys : text.emptyColumn}</p>)}
     {key && <p>{key.columns.join(', ')} → {key.referencedTable} ({key.referencedColumns?.join(', ') ?? text.implicit})</p>}
     {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<input aria-label={text.search} maxLength={256} disabled={disabled} value={searchText} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchText(event.target.value); } }}/></label><p>{text.searchHint}</p></div>}
+    {choosing && <ReferenceCandidateSort columns={searchColumns} sort={sort} disabled={disabled || !key} onChange={next => {
+      if (!actionCurrent()) return;
+      setSort(next); read(0, false, next);
+    }}/>}
     {!contextual && <p>{text.unloaded}</p>}<div className="reference-pagination"><button disabled={disabled || !key} onClick={() => read(0, true)}>{choosing ? text.candidates : text.read}</button><button disabled={disabled || !data?.page || data.page.offset === 0} onClick={() => read(Math.max(0, data!.page!.offset - data!.page!.limit))}>{text.previous}</button><button disabled={disabled || !data?.page?.hasMore} onClick={() => read(data!.page!.offset + data!.page!.limit)}>{text.next}</button>{busy && <button disabled={closeBusy} onClick={() => { if (renderCurrent() && !closing.current) void reader.stop().catch(failure => { if (alive.current) setError(errorMessage(failure)); }); }}>{text.stop}</button>}</div>
     <ErrorBox message={invalid ? text.stale : error}/>{busy && <Spinner text={text.loading}/>}
     <ReferenceCandidateColumns key={selected} columns={data?.page?.result.columns} keyNames={candidateKeys}>

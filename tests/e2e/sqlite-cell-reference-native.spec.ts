@@ -1,3 +1,4 @@
+import { referenceCandidateSortZh as sortText } from '../../src/renderer/locales/referenceCandidateSort.zh-CN';
 import { referenceCandidateColumnsZh as displayText } from '../../src/renderer/locales/referenceCandidateColumns.zh-CN';
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -18,6 +19,8 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
   const fixture = new DatabaseSync(file);
   try {
     fixture.exec("CREATE TABLE paired(a TEXT,b INTEGER,label TEXT,details TEXT,PRIMARY KEY(a,b)); INSERT INTO paired VALUES('Alpha',1,'原配对','说明甲'),('Beta',2,'目标配对','说明乙');" +
+      "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<55) INSERT INTO paired SELECT printf('Z%02d',i),100+i,'同类候选','分页验证' FROM n;" +
+      "INSERT INTO paired VALUES('ZZ',1000,'末页候选','数值排序');" +
       'CREATE TABLE alternative(id INTEGER PRIMARY KEY); INSERT INTO alternative VALUES(1),(2);' +
       'CREATE TABLE distant(id INTEGER PRIMARY KEY); INSERT INTO distant VALUES(9);' +
       'CREATE TABLE child(id INTEGER PRIMARY KEY,a TEXT,b INTEGER,other INTEGER,note TEXT,' +
@@ -93,6 +96,17 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
     await expect(option()).toHaveCount(1);
     await expect(option()).toContainText('paired');
     await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toBeVisible();
+    const candidateGrid = picker.getByRole('grid'), sortBy = picker.getByRole('combobox', { name: sortText.column, exact: true });
+    const direction = picker.getByRole('combobox', { name: sortText.direction, exact: true });
+    const firstCandidate = candidateGrid.getByRole('row').nth(1);
+    await expect(candidateGrid.getByRole('gridcell', { name: '1000', exact: true })).toHaveCount(0);
+    await sortBy.selectOption('b');
+    await direction.selectOption('DESC');
+    await expect(firstCandidate.getByRole('gridcell', { name: '1000', exact: true })).toBeVisible();
+    await picker.getByRole('button', { name: text.next, exact: true }).click();
+    await expect(firstCandidate.getByRole('gridcell', { name: '106', exact: true })).toBeVisible();
+    await sortBy.selectOption('');
+    await expect(firstCandidate.getByRole('gridcell', { name: 'Alpha', exact: true })).toBeVisible();
     await picker.getByText(displayText.title, { exact: true }).click();
     await picker.getByRole('checkbox', { name: displayText.show('label'), exact: true }).uncheck();
     await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toHaveCount(0);

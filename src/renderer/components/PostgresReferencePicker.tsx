@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DataRow } from '../../shared/contracts';
+import type { ReferenceCandidateSort as CandidateSort } from '../../shared/referenceCandidateSort';
 import { postgresTableReferenceLimits as limits, type PostgresTableField, type PostgresTableReference, type PostgresTableReferenceInput, type PostgresTableReferenceResult } from '../../shared/postgresTable';
 import { postgresReferencePickerZh as text } from '../locales/postgresReferencePicker.zh-CN';
 import { postgresRelatedTabPrefix } from '../../shared/postgresRelatedTab';
@@ -8,6 +9,7 @@ import { postgresReferenceSelection } from '../postgresReferenceSelection';
 import { ErrorBox } from './ui';
 import { PostgresReferenceRecord } from './PostgresReferenceRecord';
 import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
+import { ReferenceCandidateSort } from './ReferenceCandidateSort';
 
 export interface PostgresReferenceSource {
   input: Omit<PostgresTableReferenceInput, 'lookup'>;
@@ -29,6 +31,9 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
   const [choice, setChoice] = useState<PostgresTableReference>();
   const [view, setView] = useState<View>();
   const [query, setQuery] = useState(''), [details, setDetails] = useState(true);
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [sort, setSort] = useState<CandidateSort | null>(null);
+  const [sortColumns, setSortColumns] = useState<string[]>([]);
   const [childIndex, setChildIndex] = useState<number>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const latest = useRef(source); latest.current = source;
@@ -37,7 +42,7 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
   const opening = useRef(false);
 
   /** 查询开始立即收起旧结果，避免搜索和翻页过程中使用旧行。 */
-  async function load(key?: PostgresTableReference, search = '', offset = 0) {
+  async function load(key?: PostgresTableReference, search = '', offset = 0, order: CandidateSort | null = null) {
     if (opening.current) return;
     const request = ++generation.current, { input, column } = latest.current;
     const scopedChoices = (result: PostgresTableReferenceResult) => column
@@ -51,8 +56,11 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
     setChildIndex(undefined);
     setBusy(true);
     setError('');
+    setAppliedSearch(search);
+    setSort(order);
     try {
       if (!key) {
+        setSortColumns([]);
         const result = await invoke('postgres.table.references', input);
         if (!current()) return;
         const available = scopedChoices(result);
@@ -62,13 +70,14 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
         if (!key) return;
       }
       const wanted = key;
-      const result = await invoke('postgres.table.references', { ...input, lookup: { id: wanted.id, stamp: wanted.stamp, search, offset } });
+      const result = await invoke('postgres.table.references', { ...input, lookup: { id: wanted.id, stamp: wanted.stamp, search, offset, ...(order ? { sort: order } : {}) } });
       if (!current()) return;
       const available = scopedChoices(result);
       const confirmed = available.find(item => item.id === wanted.id && item.stamp === wanted.stamp);
       if (!confirmed || !result.page) throw Error(text.expired);
       const next = { choice: confirmed, page: result.page, offset, search };
       setChoices(available);
+      if (!browse) setSortColumns(next.page.columns.map(column => column.name));
       liveView.current = next;
       setView(next);
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
@@ -124,7 +133,7 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
       <select aria-label={text.constraint} value={choice?.id ?? ''} disabled={busy || !choices?.length} onChange={event => {
         const selected = choices?.find(item => item.id === event.target.value);
         if (!selected) return;
-        setChoice(selected); setQuery(''); void load(selected);
+        setChoice(selected); setQuery(''); setSortColumns([]); void load(selected);
       }}>
         {!choices?.length && <option value="">{text.constraint}</option>}
         {choices?.map(item => <option key={item.id} value={item.id}>{item.name} · {item.schema}.{item.table}</option>)}
@@ -133,9 +142,9 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
         value={query} maxLength={limits.search} disabled={busy || !choice}
         onChange={event => setQuery(event.target.value)} onKeyDown={event => {
           if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229 || busy || !choice) return;
-          event.preventDefault(); event.stopPropagation(); void load(choice, query);
+          event.preventDefault(); event.stopPropagation(); void load(choice, query, 0, sort);
         }}/>
-      <button type="button" disabled={busy || !choice} onClick={() => void load(choice, query)}>{children ? text.childSearch : text.search}</button></>}
+      <button type="button" disabled={busy || !choice} onClick={() => void load(choice, query, 0, sort)}>{children ? text.childSearch : text.search}</button></>}
       <button type="button" disabled={busy} onClick={() => { setQuery(''); void load(); }}>{text.refresh}</button>
       {browse && onOpen && <button type="button" disabled={busy || !view || (parent && !view.page.rows.length)}
         onClick={() => void openRelated()}>{text.openRelated}</button>}
@@ -146,6 +155,8 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
     {choice && <p>{choice.pairs.map(pair => (children ? text.childPair : text.pair)(pair.localName, pair.remote)).join('，')}</p>}
     {busy && <p role="status">{text.loading}</p>}
     <ErrorBox message={error}/>
+    {!browse && choice && <ReferenceCandidateSort columns={sortColumns} sort={sort} disabled={busy}
+      onChange={next => { if (!busy) void load(choice, appliedSearch, 0, next); }}/>}
     {!busy && choices?.length === 0 && <p>{emptyDirectory}</p>}
     {children && record && <button type="button" onClick={() => setChildIndex(undefined)}>{text.backToChildren}</button>}
     {view && record && <PostgresReferenceRecord columns={view.page.columns} row={record}/>}
@@ -154,9 +165,9 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
     {candidateColumns => !parent && !record && view && <>
       <div className="pg-table-controls">
         <button type="button" disabled={view.offset === 0 || busy}
-          onClick={() => void load(view.choice, view.search, view.offset - limits.page)}>{children ? text.childPrevious : text.previous}</button>
+          onClick={() => void load(view.choice, view.search, view.offset - limits.page, sort)}>{children ? text.childPrevious : text.previous}</button>
         <button type="button" disabled={!view.page.hasNext || busy || view.offset + limits.page > limits.offset}
-          onClick={() => void load(view.choice, view.search, view.offset + limits.page)}>{children ? text.childNext : text.next}</button>
+          onClick={() => void load(view.choice, view.search, view.offset + limits.page, sort)}>{children ? text.childNext : text.next}</button>
         <span>{view.page.rows.length ? (children ? text.childRange : text.range)(view.offset, view.page.rows.length)
           : children ? text.emptyChildren : text.emptyRows}</span>
         {children && <label className="check"><input type="checkbox" checked={details} onChange={event => setDetails(event.target.checked)}/>{text.details}</label>}

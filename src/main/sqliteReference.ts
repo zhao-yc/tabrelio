@@ -37,8 +37,17 @@ export async function readSqliteReference(driver: SqliteDriverSession, source: S
       const field = quote(parentName) + '.' + quote(column.name);
       where = "instr(lower(CASE WHEN typeof(" + field + ")='blob' THEN hex(" + field + ') ELSE CAST(' + field + ' AS TEXT) END), lower(?)) > 0'; parameters.push(request.search.text);
     }
+    let order = '';
+    if (request.reference === 'candidates' && request.sort) {
+      const { column, direction } = request.sort;
+      if (!catalogue.columns.some(field => field.name === column)) throw Error('SQLite父候选排序列已变化');
+      const field = (name: string) => quote(parentName) + '.' + quote(name);
+      // 用存储列排序，避免精度保护的SELECT投影将大整数按文字排序。
+      order = ' ORDER BY ' + [field(column) + ' ' + direction,
+        ...referencedColumns.filter(name => name !== column).map(field)].join(', ');
+    }
     const sql = 'SELECT ' + catalogue.columns.map(column => sqliteExactTextProjection(quote(parentName) + '.' + quote(column.name)) + ' AS ' + quote(column.name)).join(', ') + ' FROM "main".' + quote(parentName)
-      + (where ? ' WHERE ' + where : '') + ' LIMIT ? OFFSET ?';
+      + (where ? ' WHERE ' + where : '') + order + ' LIMIT ? OFFSET ?';
     const values = await rows(driver, sql, [...parameters, { type: 'integer', value: String(request.limit + 1) }, { type: 'integer', value: String(request.offset) }], request.limit + 1, control,
       actual => { if (actual.length !== catalogue.columns.length || actual.some((column, i) => column.name !== catalogue.columns[i].name)) throw Error('SQLite父记录列目录不一致'); });
     const original = values.slice(0, request.limit);

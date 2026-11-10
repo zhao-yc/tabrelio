@@ -19,12 +19,13 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 function fixture() { let current = true, n = 0; const services = { read: vi.fn(async (request: SqliteReferenceInput) => reply(request)), cancel: vi.fn(async (_id: string) => {}), id: () => '00000000-0000-4000-8000-' + String(++n).padStart(12, '0') }, source = page(), reader = new SqliteReferenceReader(source, [{ kind: 'text', value: '001' }], () => current, services); return { services, reader, source, invalidate: () => { current = false; }, restore: () => { current = true; } }; }
 
 it('父候选不发送子值；搜索分页与确认复读绑定父结构，未填写的新行也能读候选', async () => {
-  const f = fixture(), search = { column: 'id', text: '1' };
-  const candidate = await f.reader.candidates(key, 0, search); await f.reader.candidates(key, 50, search);
-  expect(f.services.read.mock.calls[0][0]).toMatchObject({ reference: 'candidates', search }); expect(f.services.read.mock.calls[0][0]).not.toHaveProperty('values');
-  expect(f.services.read.mock.calls[1][0]).toHaveProperty('parentSchemaKey', candidate.page!.schemaKey);
+  const f = fixture(), search = { column: 'id', text: '1' }, sort = { column: 'id', direction: 'DESC' as const };
+  const candidate = await f.reader.candidates(key, 0, search, sort); await f.reader.candidates(key, 50, search, sort);
+  expect(f.services.read.mock.calls[0][0]).toMatchObject({ reference: 'candidates', search, sort }); expect(f.services.read.mock.calls[0][0]).not.toHaveProperty('values');
+  expect(f.services.read.mock.calls[1][0]).toMatchObject({ search, sort, offset: 50, parentSchemaKey: candidate.page!.schemaKey });
   const values = sqliteReferenceTuple(candidate, 0), proof = await f.reader.verify(key, values, candidate.page!.schemaKey);
   assertSqliteReferenceChoice(proof, values); expect(f.services.read.mock.calls[2][0]).toMatchObject({ reference: 'page', values: [{ kind: 'integer', value: '1' }], limit: 200, parentSchemaKey: candidate.page!.schemaKey });
+  expect(f.services.read.mock.calls[2][0]).not.toHaveProperty('sort');
   const fresh = new SqliteReferenceReader(f.source, [undefined], () => true, f.services); await fresh.candidates(key, 0);
 });
 it.each(['null', 'missing', 'collation'] as const)('%s父键不能伪装为原选择仍存在', mode => {
