@@ -16,6 +16,13 @@ export const savedQueryDatabaseScopeSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('unknown')}).strict(), z.object({kind:z.literal('legacy')}).strict(),
 ]);
 export type SavedQueryDatabaseScope = z.infer<typeof savedQueryDatabaseScopeSchema>;
+/** 只匹配原记录的明确上下文，旧版库名不能代替已确认的默认库。 */
+export function queryDatabaseScopeMatches(context: QueryDatabaseContext | undefined, filter?: SavedQueryDatabaseScope): boolean {
+  if (filter?.kind === 'known') return context?.state === 'known' && context.database === filter.database;
+  if (filter?.kind === 'unknown') return context?.state === 'unknown';
+  if (filter?.kind === 'legacy') return context === undefined;
+  return true;
+}
 export const savedQuerySearchInputSchema=z.object({taskId:z.string().uuid(),scope:savedQueryScopeSchema,database:savedQueryDatabaseScopeSchema,fields:z.array(z.enum(['name','sql'])).min(1).max(2).refine(values=>new Set(values).size===values.length,'搜索字段不能重复'),pattern:databaseSearchPatternSchema,maxResults:z.number().int().min(1).max(savedQuerySearchLimits.maxHits),onError:z.enum(['stop','continue'])}).strict();
 export const savedQuerySearchNextSchema=z.object({taskId:z.string().uuid(),cursor:z.string().uuid()}).strict();
 export const savedQuerySearchReleaseSchema=z.object({cursor:z.string().uuid()}).strict();

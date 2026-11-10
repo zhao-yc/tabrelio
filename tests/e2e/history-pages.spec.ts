@@ -12,6 +12,7 @@ import { historyDeleteZh as deletionText } from '../../src/renderer/locales/hist
 import { historyPagesZh as text } from '../../src/renderer/locales/historyPages.zh-CN';
 import { savedQueryPagesZh as savedText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQueryOrganizationZh as savedOrganizationText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
+import { savedQuerySearchZh as searchText } from '../../src/renderer/locales/savedQuerySearch.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({trace:'off',screenshot:'off',video:'off'});
@@ -128,6 +129,53 @@ test('执行历史按原始耗时跨批次排序并保留筛选和勾选', async
  await expect.poll(ids).toEqual([...slowest].reverse().slice(0, 25).filter(record => record.elapsedMs >= 10).map(record => record.id));
  await order.selectOption('oldest');
  await expect.poll(ids).toEqual(entries.slice(0, 25).filter(record => record.elapsedMs >= 10).map(record => record.id));
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
+test('执行历史按执行库跨批次筛选，清理只移除该库和来源的记录', async ({}, info) => {
+ const known = { state: 'known', database: 'Sales' } as const;
+ const targets = ['A-target', 'Z-target'];
+ const retained = [
+  ...Array.from({ length: 25 }, (_, index) => entry({ id: `M-${index}`, databaseContext: { state: 'known', database: 'sales' } })),
+  entry({ id: 'M-none', databaseContext: { state: 'known', database: null } }),
+  entry({ id: 'M-unknown', databaseContext: { state: 'unknown' } }),
+  entry({ id: 'M-legacy', database: 'Sales' }),
+  entry({ id: 'Z-other', connectionId: 'other', databaseContext: known }),
+ ];
+ await seed(store => {
+  source(store); source(store, 'other');
+  for (const record of [...retained, ...targets.map(id => entry({ id, databaseContext: known }))]) store.addHistory(record);
+ });
+ await open();
+ const kind = dialog().getByLabel(text.databaseFilter, { exact: true });
+ const database = dialog().getByLabel(searchText.databaseName, { exact: true });
+ const apply = dialog().getByRole('button', { name: text.databaseFilterApply, exact: true });
+ const filtered = dialog().getByRole('button', { name: deletionText.filtered, exact: true });
+ const cards = dialog().locator('.history-card');
+ const ids = () => cards.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-history-id')));
+ await dialog().getByLabel(text.scope, { exact: true }).selectOption('connection:source');
+ await kind.selectOption('known');
+ await expect(filtered).toBeDisabled();
+ await apply.click();
+ await expect(dialog().getByText(text.databaseFilterInvalid, { exact: true })).toBeVisible();
+ await expect(cards).toHaveCount(25);
+ await database.fill('Sales');
+ await database.press('Enter');
+ await expect.poll(ids).toEqual(['Z-target']);
+ await dialog().getByRole('button', { name: text.next, exact: true }).click();
+ await expect.poll(ids).toEqual(['A-target']);
+ await filtered.click();
+ const deletion = page.getByRole('dialog', { name: deletionText.title, exact: true });
+ await expect(deletion.getByText(`${searchText.databaseKinds.known} Sales`, { exact: true })).toBeVisible();
+ await deletion.getByRole('button', { name: deletionText.preview, exact: true }).click();
+ await expect(deletion.getByRole('status')).toHaveText(deletionText.summary(2, retained.length + targets.length));
+ await deletion.screenshot({ path: info.outputPath('history-database-filter.png') });
+ await deletion.getByRole('checkbox', { name: deletionText.acknowledge, exact: true }).check();
+ await deletion.getByRole('button', { name: deletionText.confirm, exact: true }).click();
+ await expect(deletion).toBeHidden();
+ await expect(progress()).toContainText('匹配0条');
+ expect((await page.evaluate(() => window.dbark.invoke('history.list', {}))).map(record => record.id).sort()).toEqual(retained.map(record => record.id).sort());
  expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
  expect(pageErrors).toEqual([]);
 });

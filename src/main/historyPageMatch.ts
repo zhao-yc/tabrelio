@@ -2,7 +2,7 @@ import{createHash}from'node:crypto';
 import { historyTimeMatches } from '../shared/historyTimeRange';
 import { historyDurationMatches } from '../shared/historyDurationRange';
 import{historyPageInputSchema,historyRecordSchema,historyPageLimits,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition}from'../shared/historyPages';
-import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
+import{queryDatabaseScopeMatches,savedQuerySearchLimits}from'../shared/savedQuerySearch';
 
 /** 损坏记录只给出有界字段路径，绝不回显JSON正文、SQL或运行时原始异常。 */
 export function parseHistoryRecord(id:string,raw:string){
@@ -22,6 +22,7 @@ export function summarizeHistoryRecord(id:string,raw:string,request:HistoryPageI
  // 旧时间校验优先；负耗时即便被来源、状态、正文或时间范围排除也不能被隐藏为无命中。
  const durationMatches=historyDurationMatches(entry.elapsedMs,input.durationRange);if(!timeMatches||!durationMatches)return;
  if(input.scope.kind==='connection'&&entry.connectionId!==input.scope.connectionId||input.scope.kind==='unbound'&&!!entry.connectionId)return;
+ if(!queryDatabaseScopeMatches(entry.databaseContext,input.database))return;
  if(input.status==='success'&&!entry.success||input.status==='failed'&&entry.success)return;
  const needle=input.search.toLowerCase();if(needle&&!input.fields.some(field=>(entry[field]??'').toLowerCase().includes(needle)))return;
  const{sql,error,...summary}=entry,sqlPreview=preview(sql,historyPageLimits.previewUnits),errorPreview=error===undefined||error===null?undefined:preview(error,historyPageLimits.errorPreviewUnits);

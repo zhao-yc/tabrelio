@@ -3,6 +3,7 @@ import type { HistoryDeleteApplyOutput, HistoryDeletePreviewInput, HistoryDelete
 import { HistoryDeleteIntent, checkHistoryDeleteApply, checkHistoryDeletePreview } from '../historyDeleteUi';
 import { historyDeleteZh as text } from '../locales/historyDelete.zh-CN';
 import { historyPagesZh as historyText } from '../locales/historyPages.zh-CN';
+import { savedQuerySearchZh as searchText } from '../locales/savedQuerySearch.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner } from './ui';
 
@@ -120,12 +121,17 @@ export function HistoryDeleteDialog({ intent, services: port = services, ...call
     return () => { mounted.current = false; unsubscribe(); observer?.disconnect(); clearInterval(interval); document.removeEventListener('keydown', block, true); const active = operation.current; cancel(active); void (async () => { if (active) { await active.promise; await active.cancel; } await release(); })().catch(cleanup); };
   }, []);
   const expired = !!preview && Date.parse(preview.expiresAt) <= clock, disabled = busy || closing || stale || invalid.current;
+  const database = owner.intent.scope.kind === 'filtered' ? owner.intent.scope.filters.database : undefined;
+  const databaseLabel = database?.kind === 'known'
+    ? database.database === null ? searchText.databaseKinds.none : `${searchText.databaseKinds.known} ${database.database}`
+    : searchText.databaseKinds[database?.kind ?? 'all'];
   return <Modal title={text.title} wide onClose={close}><div className="modal-content" data-history-delete-dialog aria-busy={busy || closing}>
     <p>{owner.intent.scope.kind === 'filtered' ? text.fullScope : text.selectedScope(owner.intent.scope.records.length)}</p>
     {owner.intent.scope.kind === 'filtered' && <section aria-label={text.conditions}><strong>{text.conditions}</strong><dl>
       <dt>{historyText.search}</dt><dd>{owner.intent.scope.filters.search || text.unlimited}</dd>
       <dt>{historyText.fields}</dt><dd>{owner.intent.scope.filters.fields.map(field => field === 'sql' ? historyText.sql : historyText.error).join('、')}</dd>
       <dt>{historyText.scope}</dt><dd>{owner.intent.scope.filters.scope.kind === 'connection' ? `${text.connection} ${owner.intent.scope.filters.scope.connectionId}` : owner.intent.scope.filters.scope.kind === 'unbound' ? historyText.unbound : historyText.all}</dd>
+      <dt>{historyText.databaseFilter}</dt><dd>{databaseLabel}</dd>
       <dt>{historyText.status}</dt><dd>{owner.intent.scope.filters.status === 'all' ? historyText.allStatus : owner.intent.scope.filters.status === 'success' ? historyText.success : historyText.failed}</dd>
       <dt>{historyText.timeRange}</dt><dd>{owner.intent.scope.filters.timeRange?.from || text.unlimited} ≤ {text.startedAt} ＜ {owner.intent.scope.filters.timeRange?.until || text.unlimited}</dd>
       <dt>{historyText.durationRange}</dt><dd>{owner.intent.scope.filters.durationRange?.minMs ?? text.unlimited} ≤ {text.durationMs} ≤ {owner.intent.scope.filters.durationRange?.maxMs ?? text.unlimited}</dd>

@@ -2,7 +2,7 @@ import { UsageHelp } from './ui';
 import{useEffect,useRef,useState}from'react';
 import{ArrowUpRight,Clock3,FileCode2,Search,CheckCircle2,XCircle}from'lucide-react';
 import { historySaveBatchLimits, type HistoryPageInput, type HistoryPage, type HistoryPageEntry, type HistoryPageSort } from '../../shared/historyPages';
-import { savedQueryOpenBatchLimits } from '../../shared/savedQuerySearch';
+import { savedQueryDatabaseScopeSchema, savedQueryOpenBatchLimits } from '../../shared/savedQuerySearch';
 import type { QueryFileEncoding } from '../../shared/contracts';
 import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
 import { SavedQuerySaveGroup } from './SavedQuerySaveGroup';
@@ -10,6 +10,7 @@ import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import{zh,formatText}from'../locales/zh-CN';
 import{queryContextZh}from'../locales/queryContext.zh-CN';
 import{historyPagesZh as t}from'../locales/historyPages.zh-CN';
+import { savedQuerySearchZh as searchText } from '../locales/savedQuerySearch.zh-CN';
 import{errorMessage,invoke,uid}from'../lib';
 import { openQueryTabBatch, useWorkspace, watchQueryBatchConnections } from '../store';
 import{Empty,ErrorBox,Field,Modal,Spinner}from'./ui';
@@ -40,6 +41,8 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  const[filters,setFilters]=useState<Filters>(()=>({search:'',fields:['sql','error'],scope:initialConnectionId?{kind:'connection',connectionId:initialConnectionId}:{kind:'all'},status:'all',onError:'continue'})),[applied,setApplied]=useState('');
  // 若原连接在窗口期间被删除，仍显示准确的本地历史范围，不退回全部来源。
  const selectedConnectionId=filters.scope.kind==='connection'?filters.scope.connectionId:undefined;
+ const database = filters.database;
+ const databaseKind = database?.kind === 'known' && database.database === null ? 'none' : database?.kind ?? 'all';
  const missingScope=selectedConnectionId&&!connections.some(profile=>profile.id===selectedConnectionId);
  const[reply,setReply]=useState<HistoryPage>(),[batch,setBatch]=useState(0),[busy,setBusy]=useState(true),[closing,setClosing]=useState(false),[error,setError]=useState(''),[targets,setTargets]=useState(new Map<string,string>()),[errorView,setErrorView]=useState<{id:string;error:string}>();
  const [sqlView,setSqlView]=useState<{ item: HistoryPageEntry; sql: string }>();
@@ -77,6 +80,12 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  /** 每次草稿修改立即使旧范围选择失效；不会把新范围卡片混入旧选择。 */
  function draftChanged(){generation.current++;setSqlView(undefined);setCopiedItem(undefined);setExportNotice(undefined);setArchiveNotice('');setBatchDraft(undefined);setBatchNotice('');setOpenDraft(undefined);selectionMetadata.current.clear();setSaveDraft(undefined);setSaveNotice(undefined);deleteRef.current?.invalidate();if(selectedRef.current.length){selectedRef.current=[];setSelected([]);setSelectionNotice(deletion.selectionCleared);}}
  function changeFilters(value:Filters){draftChanged();setFilters(value);}
+ function selectDatabaseKind(kind: keyof typeof searchText.databaseKinds) {
+  const { database: _previous, ...other } = filters;
+  if (kind === 'all') changeFilters(other);
+  else changeFilters({ ...other, database: kind === 'known' || kind === 'none'
+   ? { kind: 'known', database: kind === 'none' ? null : '' } : { kind } });
+ }
  /** 一个原任务只发送一次取消，并一直持有ACK直至原任务也终结。 */
  function cancelPage(){if(!active.current)return cancellation.current;const taskId=active.current;if(!cancellation.current)cancellation.current=invoke('query.cancel',{taskId});return cancellation.current;}
  /** 失败不抹掉句柄，用户可以重试收尾；成功才删除准确的当前句柄。 */
@@ -95,6 +104,9 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
  /** 明确搜索或续读一批；不累计卡片、原文或失败明细。 */
  async function load(next=false,exact?:Omit<HistoryPageInput,'taskId'>,exactKey?:string,requested=filters){
   if(locked.current||closed.current)return;if(next&&filterKey!==applied){setError(t.pending);return;}if(!requested.fields.length){setError(t.fieldsRequired);return;}
+  if (!next && !exact && requested.database && !savedQueryDatabaseScopeSchema.safeParse(requested.database).success) {
+   setError(t.databaseFilterInvalid); return;
+  }
   // 所有草稿先完整校验；非法耗时不释放旧游标、不抹页，也不发出搜索请求。
   let timeRange:HistoryPageInput['timeRange'],durationRange:HistoryDurationInputRange|undefined;try{if(!next&&!exact){timeRange=historyInputRange(timeDraft.from,timeDraft.until,timeZone);durationRange=historyDurationInputRange(durationDraft.minimum,durationDraft.maximum);}}catch(reason){setError(errorMessage(reason));return;}locked.current=true;generation.current++;deleteRef.current?.invalidate();setBusy(true);setError('');const taskId=uid(),source=exact??{...requested,...(timeRange?{timeRange}:{}),...(durationRange?{durationRange}:{})};
   try{const previous=cursor.current;if(!next){await release();if(closed.current)return;setReply(undefined);setBatch(0);setTargets(new Map());}else if(!previous)return;
@@ -432,6 +444,17 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   <div className="search-box"><Search size={15}/><input aria-label={t.search} value={filters.search} maxLength={512} disabled={busy||closing} onChange={event=>changeFilters({...filters,search:event.target.value})} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();void load();}}}/><button disabled={busy||closing} onClick={()=>void load()}>{t.searchButton}</button></div>
   <div className="inline-field" role="group" aria-label={t.fields}>{(['sql','error']as const).map(field=><label key={field}><input type="checkbox" checked={filters.fields.includes(field)} disabled={busy||closing} onChange={event=>changeFilters({...filters,fields:(['sql','error']as const).filter(value=>value===field?event.target.checked:filters.fields.includes(value))})}/>{field==='sql'?t.sql:t.error}</label>)}</div>
   <label className="inline-field">{t.scope}<select aria-label={t.scope} disabled={busy||closing} value={selectedConnectionId?'connection:'+selectedConnectionId:filters.scope.kind} onChange={event=>changeFilters({...filters,scope:event.target.value.startsWith('connection:')?{kind:'connection',connectionId:event.target.value.slice(11)}:{kind:event.target.value as'all'|'unbound'}})}><option value="all">{t.all}</option><option value="unbound">{t.unbound}</option>{missingScope&&<option value={'connection:'+selectedConnectionId}>{t.sourceMissing}</option>}{connections.map(profile=><option value={'connection:'+profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
+  <div className="inline-field saved-query-database-filter">
+    <label>{t.databaseFilter} <select aria-label={t.databaseFilter} value={databaseKind} disabled={busy || closing}
+      onChange={event => selectDatabaseKind(event.target.value as keyof typeof searchText.databaseKinds)}>
+      {Object.entries(searchText.databaseKinds).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+    </select></label>
+    {databaseKind === 'known' && <label>{searchText.databaseName} <input aria-label={searchText.databaseName}
+      value={database?.kind === 'known' ? database.database ?? '' : ''} maxLength={256} disabled={busy || closing}
+      onChange={event => changeFilters({ ...filters, database: { kind: 'known', database: event.target.value } })}
+      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(); } }}/></label>}
+    <button type="button" disabled={busy || closing || filterKey === applied} onClick={() => void load()}>{t.databaseFilterApply}</button>
+  </div>
   <label className="inline-field">{t.status}<select aria-label={t.status} disabled={busy||closing} value={filters.status} onChange={event=>changeFilters({...filters,status:event.target.value as Filters['status']})}><option value="all">{t.allStatus}</option><option value="success">{t.success}</option><option value="failed">{t.failed}</option></select></label>
   <label className="inline-field">{t.sort}<select aria-label={t.sort} disabled={busy || closing} value={filters.sort ?? 'recent'} onChange={event => selectSort(event.target.value as HistoryPageSort)}>
     <option value="recent">{t.sortRecent}</option><option value="oldest">{t.sortOldest}</option><option value="slowest">{t.sortSlowest}</option><option value="fastest">{t.sortFastest}</option>

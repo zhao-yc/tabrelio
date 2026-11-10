@@ -33,6 +33,27 @@ beforeEach(async()=>{directory=mkdtempSync(join(tmpdir(),'dbark-test-historypage
 afterEach(async()=>{await service?.close();for(const worker of workers)expect(worker.threadId).toBe(-1);store?.close();removeDirectory(directory);});
 
 describe('历史概要和严格协议',()=>{
+ it('执行库条件严格匹配原记录状态，且只可在首批和清理预览提交', () => {
+  const records = [
+   history({ id: 'named', database: 'old', databaseContext: { state: 'known', database: 'Sales' } }),
+   history({ id: 'lower', databaseContext: { state: 'known', database: 'sales' } }),
+   history({ id: 'none', database: 'Sales', databaseContext: { state: 'known', database: null } }),
+   history({ id: 'unknown', database: 'Sales', databaseContext: { state: 'unknown' } }),
+   history({ id: 'legacy', database: 'Sales' }),
+  ];
+  const cases = [
+   [{ kind: 'known', database: 'Sales' }, 'named'], [{ kind: 'known', database: null }, 'none'],
+   [{ kind: 'unknown' }, 'unknown'], [{ kind: 'legacy' }, 'legacy'],
+  ] as const;
+  for (const [database, id] of cases) {
+   const input = request({ database });
+   expect(records.filter(record => summarizeHistoryRecord(record.id, JSON.stringify(record), input, position(record))).map(record => record.id)).toEqual([id]);
+   const { taskId, onError, ...filters } = input;
+   expect(validateCommand('history.deletePreview', { taskId, scope: { kind: 'filtered', filters } })).toMatchObject({ scope: { filters: { database } } });
+  }
+  expect(() => validateCommand('history.page', request({ database: { kind: 'known', database: '' } }))).toThrow();
+  expect(() => validateCommand('history.pageContinue', { taskId: randomUUID(), cursor: randomUUID(), database: { kind: 'unknown' } })).toThrow();
+ });
  it('只允许在历史首批设置排序，续页和清理范围不接受排序字段', () => {
   for (const sort of ['recent', 'oldest', 'slowest', 'fastest'] as const)
    expect(validateCommand('history.page', request({ sort }))).toMatchObject({ sort });
