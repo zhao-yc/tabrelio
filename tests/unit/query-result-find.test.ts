@@ -8,6 +8,20 @@ function finish(scan: QueryResultFindScan) { for (let n = 0; n < 1000 && scan.pr
 function positions(scan: QueryResultFindScan) { return Array.from({ length: scan.progress().count }, (_, index) => scan.match(index)); }
 
 describe('已返回结果的有界字面查找', () => {
+  it('字段名扫描在空结果也逐列返回重名标题，既不读取行值也不返回匹配行', () => {
+    const read = vi.fn(() => { throw Error('字段名查找不应读取行值'); });
+    const headers = [{ key: 'left', name: 'ClientID', type: 'TEXT' }, { key: 'right', name: 'ClientID', type: 'TEXT' }];
+    for (const rows of [[], [Object.defineProperty({}, 'left', { get: read })]]) {
+      const scan = new QueryResultFindScan(rows, headers, 'client', false, () => true, 'left', 'field', undefined, []);
+      expect(finish(scan)).toEqual({ phase: 'complete', count: 2, scannedCells: 2, totalCells: 2 });
+      expect(positions(scan)).toEqual([{ row: -1, column: 0 }, { row: -1, column: 1 }]);
+      expect(scan.hasMatch(-1, 1)).toBe(true);
+      expect(scan.hasMatch(0, 1)).toBe(false);
+      expect(scan.matchingRows()).toBeUndefined();
+    }
+    expect(finish(new QueryResultFindScan([], headers, 'client', true, () => true, undefined, 'field')).count).toBe(0);
+    expect(read).not.toHaveBeenCalled();
+  });
   it('仅扫描勾选行，命中和匹配行仍使用网格原索引', () => {
     const outside = vi.fn(() => { throw Error('不应访问未勾选行'); });
     const rows = [Object.defineProperty({}, 'a', { get: outside }), { a: '命中' }, { a: null }, { a: '命中' }];
@@ -44,6 +58,7 @@ describe('已返回结果的有界字面查找', () => {
     expect(queryResultFindTextFilterable(pg, { ...source, columns: [pg] }, 'postgresql')).toBe(true);
     expect(queryResultFindFilterRule(pg, 'endsWith', literal, true, true)).toEqual({ column: 'a', operator: 'endsWith', value: literal });
     expect(queryResultFindFilterRule(pg, 'regex', '^A', true, true)).toBeUndefined();
+    expect(queryResultFindFilterRule(pg, 'field', '名称', true, true)).toBeUndefined();
     expect(queryResultFindFilterRule(pg, 'startsWith', '\ud800', true, true)).toBeUndefined();
     expect(queryResultFindFilterRule(pg, 'contains', 'x'.repeat(limits.queryUnits + 1), true, true)).toBeUndefined();
     expect(queryResultFindFilterRule(undefined, 'null', '', false, false)).toBeUndefined();

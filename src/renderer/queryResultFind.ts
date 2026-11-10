@@ -8,7 +8,7 @@ export const queryResultFindLimits = { queryUnits: 256, chunkUnits: 8192, batchU
 export interface QueryResultFindMatch { readonly row: number; readonly column: number; }
 type RegexFailure = 'regex-invalid' | 'regex-timeout' | 'regex-budget' | 'regex-worker';
 export type QueryResultFindPhase = 'searching' | 'complete' | 'limited' | 'invalid' | 'stopped' | RegexFailure;
-export type QueryResultFindMode = 'contains' | 'whole' | 'startsWith' | 'endsWith' | 'null' | 'empty' | 'regex';
+export type QueryResultFindMode = 'contains' | 'whole' | 'startsWith' | 'endsWith' | 'null' | 'empty' | 'regex' | 'field';
 export const isTextResultFind = (mode: QueryResultFindMode): boolean => mode !== 'null' && mode !== 'empty';
 export interface QueryResultFindProgress { phase: QueryResultFindPhase; count: number; scannedCells: number; totalCells: number; }
 
@@ -30,10 +30,10 @@ export class QueryResultFindScan {
   private phase: QueryResultFindPhase;
   constructor(private readonly rows: DataRow[], private readonly columns: ResultColumn[], query: string, private readonly caseSensitive: boolean, private readonly isCurrent: () => boolean, columnKey?: string, private readonly mode: QueryResultFindMode = 'contains', private readonly regex?: QueryResultRegexWorkerClient, rowIndices?: readonly number[]) {
     this.rowCount = rows.length; this.keys = columns.map(column => column.key);
-    this.targetColumn = columnKey === undefined ? undefined : this.keys.indexOf(columnKey);
+    this.targetColumn = mode === 'field' || columnKey === undefined ? undefined : this.keys.indexOf(columnKey);
     this.scanColumnCount = this.targetColumn === undefined ? this.keys.length : this.targetColumn < 0 ? 0 : 1;
-    this.rowIndices = rowIndices && [...rowIndices];
-    this.totalCells = (this.rowIndices?.length ?? this.rowCount) * this.scanColumnCount;
+    this.rowIndices = mode !== 'field' && rowIndices ? [...rowIndices] : undefined;
+    this.totalCells = (mode === 'field' ? 1 : this.rowIndices?.length ?? this.rowCount) * this.scanColumnCount;
     // 勾选范围必须有序且无重复；扫描位置映射回网格的原行索引。
     const invalidRows = this.rowIndices?.some((row, index, indices) => !Number.isSafeInteger(row) || row < 0 || row >= this.rowCount || index > 0 && row <= indices[index - 1]);
     const usesText = isTextResultFind(mode), invalid = usesText && query.length > queryResultFindLimits.queryUnits;
@@ -58,15 +58,16 @@ export class QueryResultFindScan {
   match(index: number): QueryResultFindMatch | undefined { return this.current() && Number.isSafeInteger(index) && index >= 0 ? this.matches[index] : undefined; }
   /** 只有完整结果才能用于批量勾选；同一原行的多个匹配单元格只消费一次。 */
   matchingRows(): ReadonlySet<number> | undefined {
-    if (!this.current() || this.phase !== 'complete') return;
+    if (this.mode === 'field' || !this.current() || this.phase !== 'complete') return;
     return new Set(this.matches.map(match => match.row));
   }
   /** 网格已核对扫描归属。仅按有界命中索引取样，每个渲染单元格无需重新检查列布局。 */
   hasMatch(row: number, column: number): boolean {
-    return row >= 0 && row < this.rowCount && column >= 0 && column < this.keys.length &&
+    return (this.mode === 'field' ? row === -1 : row >= 0 && row < this.rowCount) && column >= 0 && column < this.keys.length &&
       this.matchCells.has(row * this.keys.length + column);
   }
   private position(cursor: number): QueryResultFindMatch {
+    if (this.mode === 'field') return { row: -1, column: cursor };
     const row = Math.floor(cursor / this.scanColumnCount);
     return { row: this.rowIndices?.[row] ?? row, column: this.targetColumn ?? cursor % this.scanColumnCount };
   }
@@ -123,11 +124,14 @@ export class QueryResultFindScan {
         const { row, column } = this.position(this.cursor);
         const remaining = queryResultFindLimits.batchUnits - units;
         let found: boolean, complete = true;
-        if (this.mode === 'contains') {
+        if (this.mode === 'contains' || this.mode === 'field') {
           if (this.text === undefined) {
-            const value = ownCell(this.rows[row], this.keys[column]);
-            // 默认模式沿用原显示语义和有界二进制预览。
-            this.text = value && typeof value === 'object' ? cellPreview(value) : value === null ? 'NULL' : value === undefined ? '' : String(value);
+            // 字段名模式只读标题元数据；数据模式沿用原显示语义和有界二进制预览。
+            if (this.mode === 'field') this.text = this.columns[column].name;
+            else {
+              const value = ownCell(this.rows[row], this.keys[column]);
+              this.text = value && typeof value === 'object' ? cellPreview(value) : value === null ? 'NULL' : value === undefined ? '' : String(value);
+            }
           }
           // 余量不足时保留原offset，下一批接着处理原长值。
           if (Math.min(queryResultFindLimits.chunkUnits, this.text.length - this.offset) > remaining) break;

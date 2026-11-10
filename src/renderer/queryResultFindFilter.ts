@@ -19,7 +19,7 @@ export function queryResultFindFilterRule(
   column: ResultColumn | undefined, mode: QueryResultFindMode, query: string, caseSensitive: boolean,
   textFilterable: boolean,
 ): QueryResultFilterRule | undefined {
-  if (!column || mode === 'regex') return;
+  if (!column || mode === 'regex' || mode === 'field') return;
   if (mode === 'null') return { column: column.key, operator: 'null', value: '' };
 
   if (!textFilterable) return;

@@ -16,7 +16,7 @@ export const queryResultFindZh = {
   matchViewInvalid: '查找结果行已变化，请重新查找。',
   open: '查找结果', input: '在当前结果中查找', sensitive: '区分大小写', previous: '上一个匹配', next: '下一个匹配', close: '关闭结果查找',
   columns: '查找列范围', allColumns: '全部可见列', columnOption: (name: string, position: number) => `第 ${position} 列 · ${name || '未命名'}`,
-  mode: '结果查找方式', modes: { contains: '包含文字', whole: '整格匹配', startsWith: '开头匹配', endsWith: '结尾匹配', null: 'SQL NULL', empty: '空字符串', regex: '正则表达式' },
+  mode: '结果查找方式', modes: { contains: '包含文字', whole: '整格匹配', startsWith: '开头匹配', endsWith: '结尾匹配', null: 'SQL NULL', empty: '空字符串', regex: '正则表达式', field: '查找字段名' },
   regexErrors: {
     'regex-invalid': '正则表达式无效。',
     'regex-timeout': '正则查找超时，已停止线程并清除本次命中。',
@@ -30,4 +30,9 @@ export const queryResultFindZh = {
   limited: '已达到 5000 个匹配单元格上限，仅在这些命中中跳转；其余未继续检索。',
   scope: (rows: number, columns: number) => `范围：已返回 ${rows} 行、${columns} 个可见列。`,
   location: (row: number, column: number) => `命中：第 ${row + 1} 行，第 ${column + 1} 个可见列`,
+  fieldEmpty: '输入要查找的字段名', fieldNone: '无匹配字段',
+  fieldSearching: (count: number, scanned: number, total: number) => `正在查找：${count} 个匹配字段，已检查 ${scanned}/${total} 列`,
+  fieldCount: (count: number, index: number) => `${count} 个匹配字段${index >= 0 ? `，当前第 ${index + 1} 个` : ''}`,
+  fieldScope: (columns: number) => `范围：${columns} 个可见列标题。`,
+  fieldLocation: (column: number) => `命中：第 ${column + 1} 个可见列标题`,
 } as const;

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。四库查询结果和离线快照的查找栏可搜索可见字段名或别名，支持空结果、重名标题、高亮及按可见位置跳转。D06 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
+
 2026-11-11 源码增量。四库表页、查询结果和离线快照的查找面板支持增量和手动模式切换，查询结果在输入法组词期间暂停扫描。D06 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
 
 2026-11-11 源码增量。表页、查询结果和离线快照统一支持拖动数据列标题重排，以及通过标题菜单左移或右移。重排按原列身份保留宽度及有效的查询结果整理规则。D06 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)

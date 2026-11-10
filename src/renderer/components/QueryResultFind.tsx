@@ -54,6 +54,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   const checkedScope = checkedOnly ? checkedRows ?? null : undefined;
   const emptyChecked = checkedScope === null;
   const usesText = isTextResultFind(mode);
+  const fieldMode = mode === 'field';
   const [highlightAll, setHighlightAll] = useState(false);
   const [incremental, setIncremental] = useState(true), [composing, setComposing] = useState(false);
   const composingInput = useRef(false);
@@ -78,6 +79,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   /** 条件变化同步撤销旧命中；手动或组词状态只保存新条件，不创建扫描。 */
   function start(value: string, caseSensitive: boolean, selectedColumn: string | undefined, nextMode: QueryResultFindMode, restrict = checkedOnly, scan = incremental) {
     if (!panelCurrent()) return;
+    if (nextMode === 'field') { selectedColumn = undefined; restrict = false; }
     cancel(); setQuery(value); setSensitive(caseSensitive); setColumnKey(selectedColumn); setMode(nextMode); setCheckedOnly(restrict); onHit(undefined);
     if (!scan || composingInput.current) { setView(undefined); return; }
     // RDG每次render重发handle；实例以本挂载/原scope及可取得的原宿主核验，导航使用最新handle。
@@ -107,7 +109,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
     if (!own() || !grid.current || !region.current || gridFindModalBlocked(region.current, true)) return false;
     if (key !== undefined && !columns.some(column => column.key === key)) return false;
     if (panelCurrent()) {
-      if (key !== undefined && columnKey !== key) start(query, sensitive, key, mode);
+      if (key !== undefined && (columnKey !== key || fieldMode)) start(query, sensitive, key, fieldMode ? 'contains' : mode);
       (usesText ? input.current : modeSelect.current)?.focus({ preventScroll: true });
       return true;
     }
@@ -142,7 +144,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
     const match = active.run.scan.match(index); if (!match || !grid.current || !own()) return;
     // 大跨度跳转会卸载原数据格，先保留网格宿主焦点以便继续按 F3。
     if (keepGridFocus) grid.current.element?.focus({ preventScroll: true });
-    grid.current.scrollToCell({ rowIdx: match.row, idx: match.column + 1 });
+    grid.current.scrollToCell(match.row === -1 ? { idx: match.column + 1 } : { rowIdx: match.row, idx: match.column + 1 });
     if (!active.run.scan.current() || run.current !== active.run) return;
     active.run.index = index; setView({ run: active.run, progress, index }); onHit({ scan: active.run.scan, match });
   }
@@ -167,10 +169,12 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   }
   const progress = active?.progress;
   const canSearch = available && !emptyChecked && !composing && (!usesText || !!query);
-  const canCheckMatches = available && progress?.phase === 'complete' && progress.count > 0;
-  const status = composing ? text.composing : emptyChecked ? text.checkedEmpty : usesText && !query ? text.empty : !active ? (incremental ? text.stopped : text.awaitingSearch) : progress?.phase === 'invalid' ? text.invalid :
-    progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
-      (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
+  const canCheckMatches = !fieldMode && available && progress?.phase === 'complete' && progress.count > 0;
+  const searching = fieldMode ? text.fieldSearching : text.searching;
+  const count = fieldMode ? text.fieldCount : text.count;
+  const status = composing ? text.composing : emptyChecked ? text.checkedEmpty : usesText && !query ? (fieldMode ? text.fieldEmpty : text.empty) : !active ? (incremental ? text.stopped : text.awaitingSearch) : progress?.phase === 'invalid' ? text.invalid :
+    progress?.phase === 'searching' ? searching(progress.count, progress.scannedCells, progress.totalCells) :
+      (progress && regexErrors[progress.phase]) ?? (progress?.count ? count(progress.count, active.index) : fieldMode ? text.fieldNone : text.noMatch);
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
   const filterColumn = visible && findFilterSource ? columns.find(column => column.key === columnKey) : undefined;
   const textFilterable = useMemo(() => queryResultFindTextFilterable(filterColumn, findFilterSource, filterDialect), [filterColumn, findFilterSource, filterDialect]);
@@ -196,32 +200,32 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
             composingInput.current = false; setComposing(false);
             start(event.currentTarget.value, sensitive, columnKey, mode);
           }} onChange={event => start(event.target.value, sensitive, columnKey, mode)}/>
-        <select aria-label={text.columns} value={columnKey === undefined ? '' : 'column:' + columnKey} disabled={!available}
+        {!fieldMode && <select aria-label={text.columns} value={columnKey === undefined ? '' : 'column:' + columnKey} disabled={!available}
           onChange={event => { const value = event.target.value; start(query, sensitive, value ? value.slice('column:'.length) : undefined, mode); }}>
           <option value="">{text.allColumns}</option>
           {columns.map((column, index) => <option key={column.key} value={'column:' + column.key}>{text.columnOption(column.name, index + 1)}</option>)}
-        </select>
+        </select>}
         <label className="check"><input type="checkbox" checked={sensitive} disabled={!usesText} onChange={event => start(query, event.target.checked, columnKey, mode)}/>{text.sensitive}</label>
         <label className="check"><input type="checkbox" checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{text.highlightAll}</label>
         <label className="check"><input type="checkbox" checked={incremental} disabled={!available || composing} onChange={event => {
           const enabled = event.target.checked;
           setIncremental(enabled); start(query, sensitive, columnKey, mode, checkedOnly, enabled);
         }}/>{text.incremental}</label>
-        <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!available}
-          onChange={event => start(query, sensitive, columnKey, mode, event.target.checked)}/>{checkedText.checkedOnly}</label>
+        {!fieldMode && <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!available}
+          onChange={event => start(query, sensitive, columnKey, mode, event.target.checked)}/>{checkedText.checkedOnly}</label>}
         {!incremental && <button type="button" disabled={!canSearch} onClick={() => start(query, sensitive, columnKey, mode, checkedOnly, true)}>{text.search}</button>}
         <button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button>
         <button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button>
-        <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches || checkedOnly} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, true))}>{text.checkRows}</button>
-        <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, false))}>{text.uncheckRows}</button>
-        {onShowMatchingRows && <button type="button" disabled={!available || emptyChecked || progress?.phase !== 'complete' || usesText && !query}
+        {!fieldMode && <><button type="button" title={text.checkRowsHint} disabled={!canCheckMatches || checkedOnly} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, true))}>{text.checkRows}</button>
+        <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, false))}>{text.uncheckRows}</button></>}
+        {!fieldMode && onShowMatchingRows && <button type="button" disabled={!available || emptyChecked || progress?.phase !== 'complete' || usesText && !query}
           onClick={() => applyMatchingRows(onShowMatchingRows)}>{text.showMatchingRows}</button>}
-        {onStageFindFilter && <button type="button" disabled={!filterRule} title={checkedOnly ? text.stageFilterChecked : filterRule ? text.stageFilterHint : text.stageFilterUnavailable}
+        {!fieldMode && onStageFindFilter && <button type="button" disabled={!filterRule} title={checkedOnly ? text.stageFilterChecked : filterRule ? text.stageFilterHint : text.stageFilterUnavailable}
           onClick={stageFilter}>{text.stageFilter}</button>}
         <button type="button" aria-label={text.close} onClick={close}>×</button>
       </>}
     </div>
-    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{checkedOnly ? checkedText.checkedScope(checkedScope?.indices.length ?? 0) : text.scope(rows.length, columnKey === undefined ? columns.length : 1)}</span></div>}
+    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{fieldMode ? text.fieldLocation(hit.column) : text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={fieldMode ? undefined : text.hint}>{fieldMode ? text.fieldScope(columns.length) : checkedOnly ? checkedText.checkedScope(checkedScope?.indices.length ?? 0) : text.scope(rows.length, columnKey === undefined ? columns.length : 1)}</span></div>}
     <div className="query-result-find-grid">{children}</div>
   </div>;
 }

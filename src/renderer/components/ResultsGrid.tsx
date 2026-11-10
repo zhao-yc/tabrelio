@@ -577,7 +577,10 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       resizeColumn(column.key, width);
     } catch { useWorkspace.getState().notify(gridColumnWidthBatchZh.fitUnavailable, true); }
   }
-  const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, draggable: !!onColumnReorder, frozen: index < frozenCount, headerCellClass: findTarget?.row === -1 && findTarget.key === column.key ? 'query-result-find-hit' : findMarks?.has('-1:' + column.key) ? 'pg-find-match' : undefined, cellClass: row => {
+  const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, draggable: !!onColumnReorder, frozen: index < frozenCount,
+    headerCellClass: (activeHit?.row === -1 && activeHit.column === index || findTarget?.row === -1 && findTarget.key === column.key) ? 'query-result-find-hit'
+      : activeHighlights?.scan.hasMatch(-1, index) ? 'query-result-find-match' : findMarks?.has('-1:' + column.key) ? 'pg-find-match' : undefined,
+    cellClass: row => {
     const rowIndex = rowIndexes.get(row);
     const rangeClass = !skipRowInInversion?.(row) && gridCellRangeClass(cellRange.rectangle, rowIndex, index);
     if (activeHit?.row === rowIndex && activeHit?.column === index || findTarget?.row === rowIndex && findTarget?.key === column.key)

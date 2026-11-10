@@ -353,6 +353,25 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(columnSql(updateSqlCopyZh.all)).toHaveCount(0);
     await expect(columnMenu.getByRole('menuitem', { name: headerText.copyColumnData, exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
+    const emptyFind = query.locator('.query-result-find-region');
+    await emptyFind.getByRole('button', { name: findText.open, exact: true }).click();
+    await emptyFind.getByRole('combobox', { name: findText.mode, exact: true }).selectOption('field');
+    const nameSearch = emptyFind.getByRole('textbox', { name: findText.input, exact: true });
+    await nameSearch.fill('DUPLICATE');
+    const nameStatus = emptyFind.getByRole('status');
+    await expect(nameStatus).toHaveText(findText.fieldCount(2, -1));
+    await emptyFind.getByRole('checkbox', { name: findText.highlightAll, exact: true }).check();
+    const duplicateHeaders = grid.getByRole('columnheader').filter({ hasText: /^duplicate/i });
+    await expect(duplicateHeaders.nth(0)).toHaveClass(/query-result-find-match/);
+    await expect(duplicateHeaders.nth(1)).toHaveClass(/query-result-find-match/);
+    await nameSearch.press('Enter');
+    await expect(duplicateHeaders.nth(0)).toHaveClass(/query-result-find-hit/);
+    await nameSearch.press('F3');
+    await expect(duplicateHeaders.nth(1)).toHaveClass(/query-result-find-hit/);
+    await expect(emptyFind.getByRole('button', { name: findText.checkRows, exact: true })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('空查询结果查找字段名.png') });
+    await emptyFind.getByRole('button', { name: findText.close, exact: true }).click();
+    expect(await history()).toEqual(historyBefore);
     const layout = page.getByRole('dialog', { name: columnsText.title, exact: true });
     const arrange = async () => {
       await (await navigationMenuItem(query, { name: columnsText.open, exact: true })).click();
