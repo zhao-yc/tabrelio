@@ -1669,7 +1669,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     <div className="query-toolbar pg-table-toolbar">
       <button data-table-refresh title={navigationZh.tableRefreshShortcut} disabled={refreshDisabled}
         onClick={refreshTable}>{retryPreset ? tablePresetsZh.treeRetry : text.refresh}</button>
-      <button type="button" disabled={!active || busy} onClick={() => readHistory.setOpen(true)}>{tableReadHistoryZh.title}</button>
+      <button type="button" disabled={!active || busy} {...readHistory.toggleProps}>{tableReadHistoryZh.title}</button>
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
       {onCopyTable && <button disabled={blocked || requiresRefresh || page?.relationKind !== 'r' || !!draft.length} onClick={onCopyTable}>{postgresTableCopyZh.open}</button>}
       <button disabled={!canBrowseReference} onClick={() => browseReference('parent')}>{referenceText.browse}</button>

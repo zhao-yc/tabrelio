@@ -1,12 +1,38 @@
-.table-read-history details {
-  margin-block: 8px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+.table-read-history[hidden] { display: none; }
+
+.table-read-history {
+  display: flex;
+  flex: 0 0 clamp(112px, 29%, 260px);
+  min-block-size: 0;
+  min-inline-size: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-block-start: 1px solid var(--line);
+  background: var(--surface);
 }
-.table-read-history summary { cursor: pointer; }
+
+.table-read-history-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+  border-block-end: 1px solid var(--line-soft);
+}
+
+.table-read-history-header h2 { margin: 0; font-size: 12px; font-weight: 600; }
+.table-read-history-count { margin-inline-end: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.table-read-history-entries { min-block-size: 0; overflow: auto; overscroll-behavior: contain; }
+.table-read-history-entries > p { margin: 0; padding: 6px 12px; color: var(--muted); }
+.table-read-history details { border-block-start: 1px solid var(--line-soft); }
+.table-read-history summary { padding: 5px 12px; cursor: pointer; }
+.table-read-history summary:hover, .table-read-history details[open] > summary { background: var(--bg); }
+.table-read-history time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.table-read-history details p { margin: 0; padding: 4px 12px; color: var(--muted); }
 .table-read-history pre {
-  padding: 10px;
+  margin: 0;
+  padding: 6px 12px 6px 24px;
+  border-inline-start: 2px solid var(--accent);
   background: var(--bg);
   user-select: text;
   white-space: pre-wrap;

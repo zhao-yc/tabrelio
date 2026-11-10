@@ -62,7 +62,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
   const preview = () => page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
   const verifyWriteHistory = async (outcome?: 'committed' | 'rolled-back', hidden: string[] = []) => {
     await (await navigationMenuItem(table(), { name: sqlHistory.title, exact: true })).click();
-    const history = page.getByRole('dialog', { name: sqlHistory.title, exact: true });
+    const history = page.getByRole('region', { name: sqlHistory.title, exact: true });
     await expect(history).toBeVisible();
     const writes = history.locator('details').filter({ hasText: '表格提交 ·' });
     if (!outcome) await expect(writes).toHaveCount(0);

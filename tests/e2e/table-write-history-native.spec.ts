@@ -56,7 +56,7 @@ test('网络数据库表页按真实事务结果记录 SQL 模板', async ({}, i
     const tab = page.locator('.table-tab:visible, .postgres-table-tab:visible');
     const button = (name: string) => navigationMenuItem(tab, { name, exact: true });
     const preview = page.getByRole('dialog', { name: postgres ? pgText.preview : zh.table.text031, exact: true });
-    const history = page.getByRole('dialog', { name: historyText.title, exact: true });
+    const history = page.getByRole('region', { name: historyText.title, exact: true });
     const writes = history.locator('details').filter({ hasText: '表格提交 ·' });
 
     async function stage(from: string, to: string) {

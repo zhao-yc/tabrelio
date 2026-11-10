@@ -131,7 +131,7 @@ test('隔离数据库保留未完成的末页读取模板并允许恢复', async
     const error = tab.locator('.error-box');
     await expect(error).toContainText(dialect === 'sqlite' ? 'SQLite语句执行失败' : /预算|上限|大字段|计数与本次页|超出/);
     await (await menu(historyText.title)).click();
-    const history = page.getByRole('dialog', { name: historyText.title, exact: true });
+    const history = page.getByRole('region', { name: historyText.title, exact: true });
     const failed = history.locator('details').filter({ hasText: historyText.readFailed });
     await expect(failed).toHaveCount(1);
     await expect(failed).toBeVisible();

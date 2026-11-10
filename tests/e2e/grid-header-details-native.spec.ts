@@ -29,7 +29,15 @@ const rowLabels = (grid: Locator) => grid.getByRole('gridcell').filter({ hasText
 async function verifyReadHistory(scope: Locator, reads: Awaited<ReturnType<typeof observeReads>>, table: string, filter: string, counted = false) {
   const before = await reads();
   await (await navigationMenuItem(scope, { name: readHistory.title, exact: true })).click();
-  const history = page.getByRole('dialog', { name: readHistory.title, exact: true });
+  const history = scope.getByRole('region', { name: readHistory.title, exact: true });
+  await expect(history).toBeVisible();
+  await expect(page.getByRole('dialog', { name: readHistory.title, exact: true })).toHaveCount(0);
+  const grid = scope.getByRole('grid');
+  await expect(grid).toBeVisible();
+  const [gridBox, historyBox] = await Promise.all([grid.boundingBox(), history.boundingBox()]);
+  expect(gridBox).not.toBeNull();
+  expect(historyBox).not.toBeNull();
+  expect(historyBox!.y).toBeGreaterThanOrEqual(gridBox!.y + gridBox!.height - 1);
   const latest = history.locator('details').first().locator('pre');
   await expect(latest).toHaveCount(counted ? 2 : 1);
   if (counted) await expect(latest.first()).toContainText(/count\(\*\)/i);
@@ -192,13 +200,26 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await filter.press(applyKey);
     await expect(rowLabels(tab)).toHaveCount(1);
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
-    await verifyReadHistory(tab, reads, 'subject', 'row B');
-    await page.keyboard.press('Escape');
+    const historyPane = await verifyReadHistory(tab, reads, 'subject', 'row B');
+    await historyPane.getByRole('button', { name: readHistory.close, exact: true }).click();
     const beforeLast = (await reads()).length;
     await tab.getByRole('button', { name: sqlite.last, exact: true }).click();
     await expect.poll(async () => (await reads()).length).toBe(beforeLast + 1);
-    await verifyReadHistory(tab, reads, 'subject', 'row B', true);
-    await page.keyboard.press('Escape');
+    const countedHistoryPane = await verifyReadHistory(tab, reads, 'subject', 'row B', true);
+    const entries = countedHistoryPane.locator('details');
+    const retained = entries.first();
+    // 显式选中带计数的条目后，从仍可操作的网格刷新，新条目不能挤掉当前展开项。
+    await entries.nth(1).locator('summary').press('Enter');
+    await retained.locator('summary').press('Enter');
+    const entryCount = await entries.count();
+    await rowLabels(tab).first().click();
+    await refreshFromGrid(tab, reads, 'F5');
+    await expect(entries).toHaveCount(entryCount + 1);
+    await expect(entries.nth(1).locator('pre').first()).toContainText(/count\(\*\)/i);
+    await expect(entries.first().locator('pre')).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('SQLite表页底部SQL历史.png') });
+    await countedHistoryPane.getByRole('button', { name: readHistory.close, exact: true }).press('Escape');
+    await expect(countedHistoryPane).toBeHidden();
     await tab.getByRole('button', { name: sqlite.removeFilter(1), exact: true }).click();
     const direction = tab.getByLabel(sqlite.sortDirection(1), { exact: true });
     await direction.selectOption('desc');
@@ -237,8 +258,11 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     expect(await reads()).toEqual(beforeDraft);
     await (await navigationMenuItem(tab, { name: sqliteEdit.undo, exact: true })).click();
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    await (await navigationMenuItem(tab, { name: readHistory.title, exact: true })).click();
     await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
     await expect(header('label')).toBeVisible();
+    const visibleHistory = tab.getByRole('region', { name: readHistory.title, exact: true });
+    await expect(visibleHistory).toHaveCount(0);
     const viewReads = await reads();
     await expect(tab.getByRole('grid')).toHaveCSS('font-size', '11px');
     await toggleFromHeader(header('label'), text.showType, true);
@@ -253,6 +277,14 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await tab.getByRole('gridcell').filter({ hasText: 'row A' }).click({ button: 'right' });
     await expect(page.getByRole('menuitem', { name: sqlite.showRowId, exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
+    await (await navigationMenuItem(tab, { name: readHistory.title, exact: true })).click();
+    await expect(visibleHistory.locator('pre')).toContainText('"subject_view"');
+    await page.locator('[data-workspace-tab-id="subject"] .tab-select').click();
+    await expect(visibleHistory.locator('pre')).toContainText('"subject"');
+    await visibleHistory.getByRole('button', { name: readHistory.close, exact: true }).click();
+    await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
+    await expect(visibleHistory.locator('pre')).toContainText('"subject_view"');
+    await visibleHistory.getByRole('button', { name: readHistory.close, exact: true }).click();
     if (process.platform === 'darwin') {
       await sortFromGrid(tab, 'row B');
       await page.locator('[data-workspace-tab-id="header-query"] .tab-select').click();
@@ -436,9 +468,9 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     const beforeLast = (await reads()).length;
     await tab.getByRole('button', { name: dialect === 'postgresql' ? postgres.lastPage : zh.table.lastPage, exact: true }).click();
     await expect.poll(async () => (await reads()).length).toBe(beforeLast + 1);
-    await verifyReadHistory(tab, reads, 'update_subject', 'row C', true);
+    const historyPane = await verifyReadHistory(tab, reads, 'update_subject', 'row C', true);
     await page.screenshot({ path: info.outputPath('表页读取SQL.png') });
-    await page.keyboard.press('Escape');
+    await historyPane.getByRole('button', { name: readHistory.close, exact: true }).click();
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

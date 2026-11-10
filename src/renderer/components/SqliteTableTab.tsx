@@ -1782,7 +1782,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       isCurrent={() => !!page && available() && (controller.pageCurrent(page) || editActionCurrent())}
       items={[
         { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} aria-label={text.refresh} disabled={refreshDisabled} onClick={refreshTable}>{text.refresh}</button>) },
-        { key: 'read-history', content: <button type="button" disabled={!active || view.busy || externalBusy} onClick={() => readHistory.setOpen(true)}>{tableReadHistoryZh.title}</button> },
+        { key: 'read-history', content: <button type="button" disabled={!active || view.busy || externalBusy} {...readHistory.toggleProps}>{tableReadHistoryZh.title}</button> },
         { key: 'stop', content: (<button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button>) },
         { key: 'conditions', content: (<button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button>) },
         ...(page?.target.kind === 'table' ? [{ key: 'import', content: (<button aria-label={importText.entry} title={editView?.dirty || editView?.busy || editView?.unknown || externalBusy ? importText.busyDraft : undefined} disabled={!active || invalidTarget || view.busy || externalBusy || !!fullExport || !!exportData || !!tableImport || drafts.dirty || drafts.busy || !!editView?.unknown || !!cellInput || !!previewOpen} onClick={openImport}>{importText.entry}</button>) }] : []),
