@@ -20,6 +20,33 @@ describe('工作空间设置与连接上下文', () => {
 
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+  it('最近标签按实际切换记录，重排和改名保留身份，关闭重建与换绑撤销旧项', async () => {
+    const store = workspace.useWorkspace;
+    const visit = (activeTabId: string) => store.getState().updateSettings({ activeTabId });
+    const history = () => store.getState().recentTabRefs;
+    const ids = () => history().map(tab => tab.id);
+    const draft = { kind: 'query' as const, title: '查询', connectionId: 'c' };
+    const tabs = ['a', 'b', 'c', 'never'].map(id => ({ ...draft, id }));
+    store.getState().updateSettings({ tabs, activeTabId: 'a' });
+    visit('c'); visit('b');
+    expect(ids()).toEqual(['b', 'c', 'a']);
+    const original = history(), c = original[1];
+    store.getState().updateTab('c', { title: '新标题', sql: 'SELECT 1;' });
+    expect(store.getState().moveTab(c, { kind: 'direction', direction: 'first' })).toBe(true);
+    expect(history()).toBe(original);
+    visit('c'); visit('b');
+    expect(ids()).toEqual(['b', 'c', 'a']);
+    store.getState().closeTab('c');
+    expect(ids()).toEqual(['b', 'a']);
+    store.getState().updateSettings({ tabs: [...store.getState().settings.tabs, tabs[2]] });
+    expect(ids()).toEqual(['b', 'a']);
+    expect(store.getState().resolveTabOrder(c)).toBeUndefined();
+    store.getState().updateTab('a', { connectionId: '另一个连接' });
+    expect(ids()).toEqual(['b']);
+    await workspace.flushSettings();
+    expect(request.mock.calls.every(([command, input]) => command !== 'settings.save' || !Object.hasOwn(input, 'recentTabRefs'))).toBe(true);
+  });
+
   it('批量打开超过工作区上限时不写设置也不添加部分标签', async () => {
     const { openStatementDraftBatch } = await import('../../src/renderer/statementNavigationExtract');
     const store = workspace.useWorkspace;

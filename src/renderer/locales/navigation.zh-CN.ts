@@ -28,5 +28,6 @@ export const navigationZh = {
     ['全库搜索', 'Ctrl / ⌘ + Shift + F'], ['查找已打开标签', 'Ctrl / ⌘ + Shift + A'],
     ['下一个标签', 'Windows 用 Ctrl + Tab，macOS 用 ⌘ + Shift + ]'],
     ['上一个标签', 'Windows 用 Ctrl + Shift + Tab，macOS 用 ⌘ + Shift + ['],
+    ['切换到上次使用的标签', 'Ctrl / ⌘ + Shift + F6'],
     ['关闭当前标签', 'Ctrl / ⌘ + W'], ['打开右键菜单', 'Shift + F10'], ['关闭菜单', 'Escape'] ]
 } as const;

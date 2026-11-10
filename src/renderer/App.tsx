@@ -1168,6 +1168,14 @@ function WorkspaceApp() {
     workbenchNavigation.invalidate();
     current.updateSettings({ activeTabId: tabs[(index + direction + tabs.length) % tabs.length].id });
   }
+  /** 当前命令只可激活原本的上次使用项，旧菜单事件不能改选新候选。 */
+  function switchToLastUsedTab(target: TabOrderRef | undefined) {
+    if (!target || queryCloseInProgress() || document.querySelector(appModalSelector)) return;
+    const current = useWorkspace.getState();
+    if (current.recentTabRefs[1]?.token !== target.token || !current.resolveTabOrder(target)) return;
+    workbenchNavigation.invalidate();
+    current.updateSettings({ activeTabId: target.id });
+  }
   function closeSide(side: 'left' | 'right') {
     const current = useWorkspace.getState(), anchor = current.tabOrderSnapshot().find(item => item.id === current.settings.activeTabId);
     if (anchor) closeWorkspaceTabs(anchor, side);
@@ -1175,6 +1183,7 @@ function WorkspaceApp() {
   const selectedObject = treeSelection.target?.kind !== 'connection' ? treeSelection.target : undefined;
   const selectedFavorite = selectedObject && workbench.snapshot.document.favorites.some(item => targetKey(item.target) === targetKey(selectedObject));
   const activeIndex = settings.tabs.findIndex(tab => tab.id === activeTab?.id);
+  const lastUsedTab = state.recentTabRefs[1];
   const available = ready && !closingOtherQueries && !queryCloseRequest;
   const handler = (run: () => void | Promise<void>, enabled = true, checked?: boolean): UiCommandHandler => ({ run: () => {
     // 同步store先变化、React尚未提交时也不能借新菜单修订执行原目标闭包。
@@ -1255,6 +1264,7 @@ function WorkspaceApp() {
     'close-left-queries': handler(() => closeSide('left'), activeTab?.kind === 'query' && settings.tabs.some((tab, index) => tab.kind === 'query' && !tab.queryPinned && index < activeIndex)),
     'close-right-queries': handler(() => closeSide('right'), activeTab?.kind === 'query' && settings.tabs.some((tab, index) => tab.kind === 'query' && !tab.queryPinned && index > activeIndex)),
     'next-tab': handler(() => switchTab(1), settings.tabs.length > 1), 'previous-tab': handler(() => switchTab(-1), settings.tabs.length > 1),
+    'last-used-tab': handler(() => switchToLastUsedTab(lastUsedTab), !!lastUsedTab),
     'help': handler(() => setNavigationHelp('usage')), 'shortcuts': handler(() => setNavigationHelp('shortcuts')), 'about': handler(() => setAbout(true))
   };
   useUiCommandScope('app', appCommands, { active: ready, contextKey: JSON.stringify([settings.activeTabId, state.selection, selectedObject, state.connectionVersions, workbench.snapshot.revision, tabOrderKey]) });

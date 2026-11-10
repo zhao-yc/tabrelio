@@ -38,6 +38,7 @@ import { assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileS
 import type { QueryFileTaskState } from './queryFileTasks';
 import { queryFilesZh } from './locales/queryFiles.zh-CN';
 import { TabOrderRegistry, type TabOrderRef, type TabOrderMove } from './tabOrder';
+import { rememberWorkspaceTab } from './recentWorkspaceTabs';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
@@ -49,6 +50,7 @@ const tabOrder = new TabOrderRegistry();
 
 interface WorkspaceState {
   ready: boolean; settings: AppSettings; connections: ConnectionProfile[]; tasks: TaskRecord[];
+  recentTabRefs: readonly TabOrderRef[];
   notice?: { text: string; error: boolean }; selection?: ConnectionSelection; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>; connectionVersions: Record<string, number>;
   tableLayoutDrafts: Record<string, boolean>; setTableLayoutDraft(id: string, dirty: boolean): void;
   queryFileDirty: Record<string, boolean>; setQueryFileDirty(id: string, dirty: boolean, snapshot: WorkspaceTab): void;
@@ -86,12 +88,18 @@ function commitWorkspaceSettings(update: Partial<AppSettings>, openings = useWor
   }
   for (const id of Object.keys(queryFileDirty)) if (!settings.tabs.some(tab => tab.id === id)) delete queryFileDirty[id];
   const fileDirtyUnchanged = Object.keys(queryFileDirty).length === Object.keys(state.queryFileDirty).length && Object.keys(queryFileDirty).every(id => queryFileDirty[id] === state.queryFileDirty[id]);
-  useWorkspace.setState({ settings, queryFileDirty: fileDirtyUnchanged ? state.queryFileDirty : queryFileDirty, queryFileOpenings: openings });
-  try { tabOrder.observe(settings.tabs); } catch { /* settings自身的校验保持原入口，重排不发布部分列表。 */ }
+  const recentTabRefs = workspaceTabHistory(settings, state.recentTabRefs);
+  useWorkspace.setState({ settings, recentTabRefs, queryFileDirty: fileDirtyUnchanged ? state.queryFileDirty : queryFileDirty, queryFileOpenings: openings });
   // 标签身份立即投递；正文仍防抖，保持原settings.save通道及400毫秒合并规则。
   const identities = (value: AppSettings) => JSON.stringify(value.tabs.map(tab => [tab.id, tab.connectionId, tab.kind]));
   if (identities(previous) !== identities(settings)) { clearTimeout(saveTimer); saveTimer = undefined; void invoke('settings.save', settings).catch(error => useWorkspace.getState().notify(errorMessage(error), true)); }
   else persist(settings);
+}
+
+/** 活动页和访问记录随同一设置快照发布，坏标签组撤销历史且不阻止恢复配置。 */
+function workspaceTabHistory(settings: AppSettings, previous: readonly TabOrderRef[] = []): readonly TabOrderRef[] {
+  try { return rememberWorkspaceTab(previous, tabOrder.snapshot(settings.tabs), settings.activeTabId); }
+  catch { return previous.length ? [] : previous; }
 }
 
 /** 新文件占位尚未创建编辑器；完整原文与来源就位后才一次解除，旧回包不能接管新文档。 */
@@ -201,7 +209,7 @@ export function watchQueryBatchConnections(ids: readonly string[]) {
 
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {}, queryFileTasks: {}, queryFileOpenings: {},
+  ready: false, settings: defaults, recentTabRefs: [], connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {}, queryFileTasks: {}, queryFileOpenings: {},
   /** 文件任务保留进度合同与取消状态，不保存SQL或路径；终态由真实文件结果推进。 */
   setQueryFileTask: task => set(state => {
     const previous = state.tasks.find(item => item.id === task.taskId), record: TaskRecord = { id: task.taskId, kind: queryFilesZh.taskTitle, status: task.status, progress: task.progress, message: task.message, startedAt: previous?.startedAt ?? task.startedAt };
@@ -220,7 +228,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       const [settings, connections, tasks] = await Promise.all([invoke('settings.get', {}), invoke('connections.list', {}), invoke('tasks.list', {})]);
       tabOrder.reset();
-      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces), ...(Object.hasOwn(settings, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(settings.sqlKeywordCase) } : {}), ...(Object.hasOwn(settings, 'sqlExpressionWidth') ? { sqlExpressionWidth: readSqlExpressionWidth(settings.sqlExpressionWidth) } : {}) }, connections, tasks, ready: true });
+      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces), ...(Object.hasOwn(settings, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(settings.sqlKeywordCase) } : {}), ...(Object.hasOwn(settings, 'sqlExpressionWidth') ? { sqlExpressionWidth: readSqlExpressionWidth(settings.sqlExpressionWidth) } : {}) }, recentTabRefs: workspaceTabHistory(settings), connections, tasks, ready: true });
     } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
   },
   /** 连接编辑成功后整体替换概要列表，不缓存表单中的明文秘密。 */

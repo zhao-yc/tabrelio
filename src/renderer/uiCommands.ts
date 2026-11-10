@@ -80,7 +80,10 @@ export function useUiCommandRuntime(): void {
           !event.metaKey && !event.ctrlKey) return;
       const mac = globalThis.navigator?.platform?.startsWith('Mac');
       let id: UiCommandId;
-      if (mac && event.metaKey && event.shiftKey && !event.ctrlKey) {
+      const primary = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (primary && event.shiftKey && event.key === 'F6') {
+        id = 'last-used-tab';
+      } else if (mac && event.metaKey && event.shiftKey && !event.ctrlKey) {
         if (event.key === '}' || event.key === ']') id = 'next-tab';
         else if (event.key === '{' || event.key === '[') id = 'previous-tab';
         else return;
@@ -98,7 +101,8 @@ export function useUiCommandRuntime(): void {
     let previous = useWorkspace.getState();
     const offStore = useWorkspace.subscribe(next => {
       const changed = next.settings.activeTabId !== previous.settings.activeTabId || next.connections !== previous.connections
-        || next.connectionVersions !== previous.connectionVersions || next.selection !== previous.selection;
+        || next.connectionVersions !== previous.connectionVersions || next.selection !== previous.selection
+        || next.recentTabRefs[1]?.token !== previous.recentTabRefs[1]?.token;
       previous = next; if (changed) uiCommands.invalidate();
     });
     return () => { alive = false; document.removeEventListener('keydown', gridShortcut, true); document.removeEventListener('keydown', tabShortcut, true); observer.disconnect(); off(); offNative?.(); offInternal?.(); offStore(); uiCommands.setBlocked(true); };

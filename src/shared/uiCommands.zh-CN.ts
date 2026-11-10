@@ -54,7 +54,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'pin-query-tab': '固定当前查询标签',
   'close-all-tabs': '关闭所有未固定标签',
   'close-other-queries': '关闭其他查询', 'close-left-queries': '关闭左侧查询', 'close-right-queries': '关闭右侧查询',
-  'next-tab': '下一个标签', 'previous-tab': '上一个标签', 'help': '使用说明', 'shortcuts': '快捷键', 'about': '关于 tabrelio'
+  'next-tab': '下一个标签', 'previous-tab': '上一个标签', 'last-used-tab': '切换到上次使用的标签', 'help': '使用说明', 'shortcuts': '快捷键', 'about': '关于 tabrelio'
 };
 export const uiMenuLabels = {
   file: '文件', edit: '编辑', view: '查看', favorites: '收藏夹', tools: '工具', window: '窗口', help: '帮助',
