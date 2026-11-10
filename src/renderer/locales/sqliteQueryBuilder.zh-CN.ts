@@ -1,4 +1,7 @@
+import { queryBuilderJoinZh } from './queryBuilderJoin.zh-CN';
+
 export const sqliteQueryBuilderZh = {
+  ...queryBuilderJoinZh,
   title: 'SQLite 查询构建器', catalog: '读取表和视图', source: '查询来源', select: '请选择表或视图', search: '搜索表和视图',
   empty: '当前目录没有匹配的表或视图。',
   read: '读取来源结构', back: '返回新建查询', changeSource: '重新选择来源',

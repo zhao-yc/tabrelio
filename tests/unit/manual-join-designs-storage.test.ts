@@ -83,18 +83,30 @@ describe('手动 JOIN 设计本地配置库', () => {
       filters: [], mode: 'and', sort: [{ id: 'sort', column: 'id', direction: 'desc' }], summaryEnabled: true, havingMode: 'and',
       summary: { groups: [], aggregates: [{ id: 'sum', fn: 'SUM', column: 'id', alias: '合计' }], sort: [] },
       havingFilters: [{ id: 'filter', column: 'aggregate:sum', operator: 'gte', kind: 'integer', value: '9223372036854775807' }] };
-    let id: string;
+    const joined = { ...sqlite, join: true } as const;
+    const joinedDraft: SqliteSingleQueryDraft = { ...draft, selected: ['t1.id'], sort: [], summaryEnabled: false,
+      summary: { ...draft.summary, aggregates: [{ ...draft.summary.aggregates[0], column: 't2.id' }] },
+      joins: [{ target: { table: 'link', kind: 'view' }, kind: 'LEFT', mode: 'all',
+        pairs: [{ left: 't1.id', right: 'id', operator: '=' }], group: { mode: 'all', children: [0] } }] };
+    let id: string, joinId: string;
     try {
       store.saveConnection(sqliteProfile);
       const main = mainColumnsHarness(); main.context.store = store; main.setRevision(store.connectionRevision());
       const entry = await main.run('singleQueryDesigns.save', { ...sqlite, name: '汇总', design: draft });
       id = entry.id;
+      joinId = (await main.run('singleQueryDesigns.save', { ...joined, name: '汇总', design: joinedDraft })).id;
       expect((await main.invoke('singleQueryDesigns.delete', { ...sqlite, id }, { ...main.event(), senderFrame: {} })).ok).toBe(false);
       expect(main.request).not.toHaveBeenCalled();
     } finally { store.close(); }
     const reopened = await LocalStore.open(file, wasm, protector);
     try {
       expect(reopened.readSingleQueryDesign({ ...sqlite, id })).toEqual(draft);
+      expect(reopened.readSingleQueryDesign({ ...joined, id: joinId })).toEqual(joinedDraft);
+      expect(() => reopened.readSingleQueryDesign({ ...sqlite, id: joinId })).toThrow('已变化');
+      expect(singleQueryDesignSaveSchema.safeParse({ ...sqlite, name: '错配', design: joinedDraft }).success).toBe(false);
+      reopened.deleteSingleQueryDesign({ ...joined, id: joinId });
+      expect(reopened.listSingleQueryDesigns(joined)).toEqual([]);
+      expect(reopened.listSingleQueryDesigns(sqlite)).toHaveLength(1);
       expect(reopened.listSingleQueryDesigns({ ...sqlite, kind: 'view' })).toEqual([]);
       expect(() => assertSingleQueryDraftColumns(draft, ['renamed'])).toThrow('来源字段已变化');
       expect(singleQueryDesignSaveSchema.safeParse({ ...sqlite, name: '错配', design: { ...draft, sql: 'SELECT 1' } }).success).toBe(false);

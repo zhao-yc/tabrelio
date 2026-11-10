@@ -10,7 +10,7 @@ export function SingleQueryDesignPanel({ scope, draft, disabled, current, run, r
   scope: SingleQueryDesignScope; draft?: SingleQueryDraft; disabled: boolean; current(): boolean;
   run(action: () => Promise<void>): void; restore(value: SingleQueryDraft): Promise<void>;
 }) {
-  const title = scope.dialect === 'postgresql' && scope.join ? text.designTitle : text.singleDesignTitle;
+  const title = scope.join ? text.designTitle : text.singleDesignTitle;
   const [entries, setEntries] = useState<ManualJoinDesignSummary[]>([]);
   const [id, setId] = useState(''), [name, setName] = useState(''), [notice, setNotice] = useState('');
 

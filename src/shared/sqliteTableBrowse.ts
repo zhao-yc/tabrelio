@@ -121,6 +121,12 @@ export const sqliteTablePageSchema = z.object({
 });
 export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;
 export type SqliteTablePageInput = z.infer<typeof sqliteTablePageSchema>;
+// JOIN 字段在原 512 字符名称前加 t1. 等短别名，只有构建器可使用扩展后的长度。
+export const sqliteQueryBuilderColumnSchema = z.string().min(1).max(515).refine(value => !/[\0\r\n]/.test(value) && validUnicode(value));
+export const sqliteQueryBuilderPageSchema = sqliteTablePageSchema.safeExtend({
+  filters: z.array(sqliteTableFilterSchema.safeExtend({ column: sqliteQueryBuilderColumnSchema })).max(sqliteTableBrowseLimits.filters),
+  sort: z.array(sqliteTablePageSchema.shape.sort.element.extend({ column: sqliteQueryBuilderColumnSchema })).max(sqliteTableBrowseLimits.sorts),
+});
 export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
 export interface SqliteTablePrimaryKey { name: string; collation: 'BINARY' | 'NOCASE' | 'RTRIM'; }
 export interface SqliteTablePage {

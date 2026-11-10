@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { buildSqliteFilteredSelect, buildSqliteReadPlan, quoteSqliteIdentifier } from '../../src/shared/sqliteReadSql';
 import { buildSqliteQueryBuilderSql, sqliteQueryBuilderInspectSchema, type SqliteQueryBuilderDesign, type SqliteQueryBuilderSource } from '../../src/shared/sqliteQueryBuilder';
+import { queryBuilderColumnKey } from '../../src/shared/queryBuilderJoin';
 import { buildSqliteTableSelect } from '../../src/main/sqliteTableBrowse';
 import type { SqliteTableFilter, SqliteTablePageInput } from '../../src/shared/sqliteTableBrowse';
 import type { SqliteValue } from '../../src/engine/sqlite/protocol';
@@ -32,6 +33,41 @@ function input(filters: SqliteTableFilter[] = [], patch: Partial<SqliteTablePage
 /** 与原driver绑定类型一致，INTEGER不转Number，REAL显式double，BLOB原字节。 */
 function bound(value: SqliteValue): SQLInputValue { if (value === null || typeof value === 'string' || typeof value === 'number') return value; if (value.type === 'integer') return BigInt(value.value); if (value.type === 'real') return Number(value.value); return Buffer.from(value.base64, 'base64'); }
 function rows(db: DatabaseSync, sql: string, parameters: SQLInputValue[] = []) { const statement = db.prepare(sql); statement.setReadBigInts(true); return statement.all(...parameters); }
+
+it('SQLite RIGHT／FULL JOIN 保留对应未匹配行，合格字段保持原名与存储类型', () => {
+  const long = '字'.repeat(512), longKey = queryBuilderColumnKey(1, long);
+  const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table: 'lhs', kind: 'table' },
+    schemaKey: 'a'.repeat(64), columns: [{ name: 'id', declaredType: '' }] };
+  const related: SqliteQueryBuilderSource = { target: { ...source.target, table: 'rhs"表' }, schemaKey: 'b'.repeat(64),
+    columns: [{ name: 'id', declaredType: '' }, { name: long, declaredType: '' }] };
+  const right = { target: { table: related.target.table, kind: related.target.kind }, schemaKey: related.schemaKey,
+    kind: 'RIGHT' as const, mode: 'all' as const, pairs: [{ left: 't1.id', right: 'id', operator: 'IS NOT DISTINCT FROM' as const }] };
+  const draft: SqliteQueryBuilderDesign = { ...source.target, schemaKey: source.schemaKey,
+    columns: ['t1.id', 't2.id'], joins: [right], mode: 'and', filters: [], sort: [{ column: 't2.id', direction: 'asc' }], distinct: false };
+  const file = new DatabaseSync(join(directory, 'sqlite-builder-join.sqlite'));
+  try {
+    file.exec('CREATE TABLE lhs (id); INSERT INTO lhs VALUES (1),(2);' +
+      'CREATE TABLE "rhs""表" (id,' + quoteSqliteIdentifier(long) + ');' +
+      "INSERT INTO \"rhs\"\"表\" VALUES (2,9223372036854775807),(3,'9223372036854775807');");
+    expect(rows(file, buildSqliteQueryBuilderSql(draft, source, [related]))).toEqual([
+      { 't1.id': 2n, 't2.id': 2n }, { 't1.id': null, 't2.id': 3n },
+    ]);
+    const full = { ...draft, joins: [{ ...right, kind: 'FULL' as const }] };
+    expect(rows(file, buildSqliteQueryBuilderSql(full, source, [related]))).toEqual([
+      { 't1.id': 1n, 't2.id': null }, { 't1.id': 2n, 't2.id': 2n }, { 't1.id': null, 't2.id': 3n },
+    ]);
+    const typed = buildSqliteQueryBuilderSql({ ...full, columns: [], sort: [],
+      filters: [{ column: longKey, operator: 'eq', value: { kind: 'integer', value: '9223372036854775807' } }],
+      summary: { groups: [longKey], aggregates: [{ fn: 'COUNT_ALL', alias: '计数' }], sort: [],
+        having: { mode: 'and', filters: [{ column: '计数', operator: 'eq', value: { kind: 'integer', value: '1' } }] } } },
+    source, [related]);
+    expect(rows(file, typed)).toEqual([{ [longKey]: 9223372036854775807n, 计数: 1n }]);
+    expect(() => buildSqliteQueryBuilderSql(full, source, [{ ...related, schemaKey: source.schemaKey }])).toThrow('关联来源已变化');
+    expect(() => buildSqliteQueryBuilderSql({ ...draft, joins: [{ ...right, pairs: [{ ...right.pairs[0], left: 't2.id' }] }] },
+      source, [related])).toThrow('已加入的表');
+    expect(sqliteQueryBuilderInspectSchema.safeParse({ ...draft, inspect: 'rows', joins: [{ ...right, group: { mode: 'all', children: [1] } }] }).success).toBe(false);
+  } finally { file.close(); }
+});
 const values: NonNullable<SqliteTableFilter['value']>[] = [{ kind: 'integer', value: '1' }, { kind: 'integer', value: '9223372036854775807' }, { kind: 'integer', value: '-9223372036854775808' }, { kind: 'real', value: '-0' }, { kind: 'real', value: '1.000' }, { kind: 'real', value: '5e-1' }, { kind: 'text', value: '' }, { kind: 'text', value: 'ABC' }, { kind: 'text', value: needle }, { kind: 'blob', value: '' }, { kind: 'blob', value: '00FF' }];
 const cases = [field, 'tc', 'nc', 'rc'].flatMap(column => values.flatMap(value => (value.kind === 'blob' ? ['eq', 'ne'] as const : ['eq', 'ne', 'gt', 'lte'] as const).map(operator => ({ column, value, operator }))));
 describe('真实SQLite三编码与不同亲和性／排序规则的绑定查询逐行对照', () => {

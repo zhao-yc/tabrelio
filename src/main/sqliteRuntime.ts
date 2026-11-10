@@ -40,7 +40,7 @@ import { sqliteReferenceInputSchema, sqliteReferenceLimits, type SqliteReference
 import { readSqliteSchemaScript } from './sqliteSchemaExport';
 import { sqliteSchemaScriptSchema } from '../shared/sqliteSchemaScript';
 import { inspectSqliteViewQuery, readSqliteQueryPreview } from './sqliteViewQueryInspect';
-import { buildSqliteQueryBuilderSql, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderSampleRows, sqliteQueryBuilderTargetSchema } from '../shared/sqliteQueryBuilder';
+import { buildSqliteQueryBuilderSql, sqliteQueryBuilderDescribeJoinSchema, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderSampleRows, sqliteQueryBuilderTargetSchema } from '../shared/sqliteQueryBuilder';
 import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type SqliteRelationshipsOutput } from '../shared/sqliteRelationships';
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import { sqliteQueryExportSchema } from '../shared/sqliteQueryExport';
@@ -1442,19 +1442,33 @@ export class SqliteRuntime {
         });
       }
       case 'sqlite.queryBuilder.describe':
+      case 'sqlite.queryBuilder.describeJoin':
       case 'sqlite.queryBuilder.inspect': {
         const request = command === 'sqlite.queryBuilder.inspect' ? sqliteQueryBuilderInspectSchema.parse(input) : undefined;
-        const target = request ? { connectionId: request.connectionId, database: request.database, table: request.table, kind: request.kind }
-          : sqliteQueryBuilderTargetSchema.parse(input);
+        const description = command === 'sqlite.queryBuilder.describeJoin' ? sqliteQueryBuilderDescribeJoinSchema.parse(input) : undefined;
+        const raw = request ?? description ?? sqliteQueryBuilderTargetSchema.parse(input);
+        const target = { connectionId: raw.connectionId, database: raw.database, table: raw.table, kind: raw.kind };
+        const related = description?.joinTargets ?? request?.joins?.map(step => step.target) ?? [];
         return this.metadata(target, (driver, check) => {
           const control = { check, beginCleanup: () => {}, cleanupFailed: () => {} };
           // 目录与预览使用同一只读快照，跨连接结构变化不能让旧字段落到新对象。
           return withSqliteReadSnapshot(driver, control, async () => {
-            const catalogue = await readSqliteTableCatalogue(driver, target.table, control);
-            if (catalogue.kind !== target.kind) throw Error('SQLite 查询来源已变化，请重新读取结构。');
-            const source = { target, schemaKey: catalogue.schemaKey, columns: catalogue.columns };
+            const catalogues = new Map<string, Awaited<ReturnType<typeof readSqliteTableCatalogue>>>();
+            const sources = [];
+            for (const object of [target, ...related]) {
+              let catalogue = catalogues.get(object.table);
+              if (!catalogue) {
+                catalogue = await readSqliteTableCatalogue(driver, object.table, control);
+                catalogues.set(object.table, catalogue);
+              }
+              if (catalogue.kind !== object.kind) throw Error('SQLite 查询来源已变化，请重新读取结构。');
+              sources.push({ target: { ...target, table: object.table, kind: object.kind },
+                schemaKey: catalogue.schemaKey, columns: catalogue.columns });
+            }
+            if (description) return sources;
+            const [source, ...joined] = sources;
             if (!request) return source;
-            const { inspect, ...design } = request, sql = buildSqliteQueryBuilderSql(design, source);
+            const { inspect, ...design } = request, sql = buildSqliteQueryBuilderSql(design, source, joined);
             check();
             return readSqliteQueryPreview(driver, inspect === 'explain' ? 'EXPLAIN QUERY PLAN\n' + sql : sql, inspect === 'explain', sqliteQueryBuilderSampleRows);
           });

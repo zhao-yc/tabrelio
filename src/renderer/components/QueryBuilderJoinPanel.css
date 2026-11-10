@@ -1,4 +1,4 @@
-.postgres-join-step > .expanded-filter-panel .filter-chip {
+.query-builder-join-step > .expanded-filter-panel .filter-chip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
   align-items: center;
@@ -8,6 +8,6 @@
   padding: 6px 10px;
 }
 
-.postgres-join-step > .expanded-filter-panel .filter-chip > span {
+.query-builder-join-step > .expanded-filter-panel .filter-chip > span {
   overflow-wrap: anywhere;
 }

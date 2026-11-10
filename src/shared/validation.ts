@@ -24,7 +24,7 @@ import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport
 import { txtImportOptionsSchema, txtImportZh, validTxtImport } from './txtImport';
 import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, xmlImportZh } from './xmlImport';
 import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
-import { sqliteQueryBuilderInspectSchema, sqliteQueryBuilderTargetSchema } from './sqliteQueryBuilder';
+import { sqliteQueryBuilderDescribeJoinSchema, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderTargetSchema } from './sqliteQueryBuilder';
 import { mysqlWorkbookExportSchema } from './mysqlWorkbookExport';
 import { postgresWorkbookExportSchema } from './postgresWorkbookExport';
 import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRoleAttributesDraftSchema, postgresRoleRenameDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordResetDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresColumnPrivilegeDraftSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from './postgresRoles';
@@ -504,6 +504,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.view.dependencies': sqliteViewDependenciesSchema,
   'sqlite.view.inspectQuery': sqliteViewQueryInspectSchema,
   'sqlite.queryBuilder.describe': sqliteQueryBuilderTargetSchema,
+  'sqlite.queryBuilder.describeJoin': sqliteQueryBuilderDescribeJoinSchema,
   'sqlite.queryBuilder.inspect': sqliteQueryBuilderInspectSchema,
   'sqlite.tableMaintenance.preview': sqliteTableMaintenancePreviewSchema,
   'sqlite.tableRename.preview': sqliteTableRenamePreviewSchema,

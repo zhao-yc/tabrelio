@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import type { FilterGroup } from './contracts';
-import { filterGroupSchema, sortRulesSchema } from './filtering';
-import { manualJoinOnGroup } from './manualJoinDesigns';
+import { sortRulesSchema } from './filtering';
+import { compileQueryBuilderOn, queryBuilderAlias as postgresBuilderAlias, queryBuilderColumnKey as postgresBuilderColumnKey,
+  queryBuilderJoinLimits as postgresBuilderJoinLimits, queryBuilderJoinSchema, validateQueryBuilderJoin } from './queryBuilderJoin';
 import { postgresDdlLiteral } from './postgresCreateTable';
 import { parsePostgresCatalogName, postgresIdentifier } from './postgresSql';
 import { postgresAdvancedTableFilterSchema, postgresTableTargetSchema } from './postgresTable';
@@ -23,33 +23,18 @@ export interface PostgresQueryBuilderSource {
 }
 
 export const postgresQueryBuilderLimits = { columns: 1600, rows: 100, rowLimit: 1000000, sqlUnits: 1024 * 1024 };
-export const postgresBuilderJoinLimits = { steps: 7, pairs: 20 } as const;
-export const postgresBuilderJoinKinds = ['INNER', 'LEFT', 'RIGHT', 'FULL'] as const;
-export const postgresBuilderJoinOperators = ['=', '<>', '<', '<=', '>', '>=', 'IS NOT DISTINCT FROM'] as const;
-const joinPair = z.object({ left: z.string().min(1).max(256), right: z.string().min(1).max(256),
-  operator: z.enum(postgresBuilderJoinOperators) }).strict();
+export { postgresBuilderAlias, postgresBuilderColumnKey, postgresBuilderJoinLimits };
 const joinTable = postgresQueryBuilderTargetSchema.shape.table;
-const joinStepFields = z.object({
-  table: joinTable,
-  kind: z.enum(postgresBuilderJoinKinds), mode: z.enum(['all', 'any']),
-  pairs: z.array(joinPair).min(1).max(postgresBuilderJoinLimits.pairs),
-  group: filterGroupSchema.optional(),
-}).strict();
-/** 本地设计和只读检查使用同一验证，每条字段比较必须在括号树中恰好出现一次。 */
-function validateJoinGroup({ mode, group, pairs }: z.infer<typeof joinStepFields>, context: z.RefinementCtx) {
-  try { manualJoinOnGroup({ mode, group }, pairs.length); }
-  catch { context.addIssue({ code: 'custom', path: ['group'], message: 'ON 分组必须与根模式一致，并恰好包含每条比较一次。' }); }
-}
-const joinDraftStep = joinStepFields.superRefine(validateJoinGroup);
+const joinColumn = z.string().min(1).max(256);
+const joinStepFields = queryBuilderJoinSchema(joinColumn, joinColumn).extend({ table: joinTable });
+const joinDraftStep = joinStepFields.superRefine(validateQueryBuilderJoin);
 export const postgresBuilderJoinDraftSchema = z.array(joinDraftStep).min(1).max(postgresBuilderJoinLimits.steps);
-const joinStep = joinStepFields.extend({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).superRefine(validateJoinGroup);
+const joinStep = joinStepFields.extend({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).superRefine(validateQueryBuilderJoin);
 export const postgresQueryBuilderDescribeJoinSchema = postgresQueryBuilderTargetSchema.extend({
   joinTables: z.array(joinTable).min(1).max(postgresBuilderJoinLimits.steps),
 });
 export type PostgresQueryBuilderDescribeJoinInput = z.infer<typeof postgresQueryBuilderDescribeJoinSchema>;
 export type PostgresBuilderJoin = z.infer<typeof joinStep>;
-export const postgresBuilderAlias = (index: number) => 't' + (index + 1);
-export const postgresBuilderColumnKey = (index: number, name: string) => postgresBuilderAlias(index) + '.' + name;
 const designFields = postgresQueryBuilderTargetSchema.extend({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   columns: z.array(z.string().min(1).max(256)).max(postgresQueryBuilderLimits.columns),
@@ -93,21 +78,12 @@ export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign,
     const right = joinedSources[index], position = index + 1;
     if (right.target.connectionId !== connectionId || right.target.database !== database || right.target.table !== step.table ||
         right.fingerprint !== step.fingerprint) throw Error('PostgreSQL 关联来源已变化，请重新读取结构。');
-    const used = new Set<string>();
-    const conditions = step.pairs.map(pair => {
-      const key = JSON.stringify([pair.left, pair.right, pair.operator]);
+    const on = compileQueryBuilderOn(step, pair => {
       const previous = references.get(pair.left);
-      if (!previous || previous.source >= position || used.has(key)) throw Error('关联条件必须引用已加入的表，且不能重复。');
-      used.add(key);
+      if (!previous || previous.source >= position) throw Error('关联条件必须引用已加入的表，且不能重复。');
       return field(pair.left) + ' ' + pair.operator + ' ' + field(postgresBuilderColumnKey(position, pair.right));
     });
-    // 只组合已通过目录校验的字段比较，平铺设计继续使用同样的 SQL。
-    function grouped(node: FilterGroup): string {
-      return '(' + node.children.map(child => typeof child === 'number' ? conditions[child] : grouped(child))
-        .join(node.mode === 'all' ? ' AND ' : ' OR ') + ')';
-    }
-    return ' ' + step.kind + ' JOIN ' + qualified(step.table) + ' AS ' + postgresBuilderAlias(position) +
-      ' ON ' + grouped(step.group ?? { mode: step.mode, children: conditions.map((_, i) => i) });
+    return ' ' + step.kind + ' JOIN ' + qualified(step.table) + ' AS ' + postgresBuilderAlias(position) + ' ON ' + on;
   }).join('');
   if (selected.size !== columns.length) throw Error('输出字段不能重复。');
   if (summary ? columns.length || sort.length || distinct : !columns.length) throw Error('请明确配置汇总或明细输出。');

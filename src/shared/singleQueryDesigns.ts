@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { FILTER_LIMITS, filterRuleSchema, filterGroupSchema, sortRulesSchema, validateFilterGroup } from './filtering';
 import { manualJoinDesignLimits } from './manualJoinDesigns';
-import { sqliteQueryBuilderTargetSchema } from './sqliteQueryBuilder';
+import { sqliteBuilderJoinDraftSchema, sqliteQueryBuilderTargetSchema } from './sqliteQueryBuilder';
 import { postgresBuilderJoinDraftSchema, postgresQueryBuilderTargetSchema } from './postgresQueryBuilder';
 import { sqliteTableBrowseLimits, sqliteTableFilterSchema, sqliteFilterSelectionSchema } from './sqliteTableBrowse';
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits } from './tableForeignKeyJoinSummary';
@@ -35,6 +35,7 @@ const sqliteDraft = base.extend({
   filters: z.array(sqliteFilter).max(sqliteTableBrowseLimits.filters),
   havingFilters: z.array(sqliteFilter).max(sqliteTableBrowseLimits.filters),
   sort: z.array(z.object({ id, column: field, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
+  joins: sqliteBuilderJoinDraftSchema.optional(),
 });
 const postgresDraft = base.extend({
   dialect: z.literal('postgresql'), mode, havingMode: mode,
@@ -64,7 +65,7 @@ export type SingleQueryDraft = z.infer<typeof singleQueryDraftSchema>;
 export type SqliteSingleQueryDraft = Extract<SingleQueryDraft, { dialect: 'sqlite' }>;
 export type PostgresSingleQueryDraft = Extract<SingleQueryDraft, { dialect: 'postgresql' }>;
 
-const sqliteScope = sqliteQueryBuilderTargetSchema.extend({ dialect: z.literal('sqlite') });
+const sqliteScope = sqliteQueryBuilderTargetSchema.extend({ dialect: z.literal('sqlite'), join: z.literal(true).optional() });
 const postgresScope = postgresQueryBuilderTargetSchema.extend({ dialect: z.literal('postgresql'), join: z.literal(true).optional() });
 export const singleQueryDesignScopeSchema = z.discriminatedUnion('dialect', [sqliteScope, postgresScope]);
 export const singleQueryDesignSelectSchema = z.discriminatedUnion('dialect', [sqliteScope.extend({ id }), postgresScope.extend({ id })]);
@@ -72,8 +73,7 @@ const saved = { name: z.string().trim().min(1).max(80).refine(value => !/[\u0000
   replaceId: id.optional(), design: singleQueryDraftSchema };
 export const singleQueryDesignSaveSchema = z.discriminatedUnion('dialect', [sqliteScope.extend(saved), postgresScope.extend(saved)])
   .refine(input => input.dialect === input.design.dialect, '查询设计与所选连接类型不符。')
-  .refine(input => input.dialect !== 'postgresql' || input.design.dialect !== 'postgresql' ||
-    Boolean(input.join) === Boolean(input.design.joins), '查询设计与所选关联模式不符。');
+  .refine(input => Boolean(input.join) === Boolean(input.design.joins), '查询设计与所选关联模式不符。');
 export type SingleQueryDesignScope = z.infer<typeof singleQueryDesignScopeSchema>;
 export type SingleQueryDesignSelect = z.infer<typeof singleQueryDesignSelectSchema>;
 export type SingleQueryDesignSave = z.infer<typeof singleQueryDesignSaveSchema>;

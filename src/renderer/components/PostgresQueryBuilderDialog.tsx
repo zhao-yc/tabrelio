@@ -2,7 +2,7 @@ import { assertSingleQueryDraftColumns, type PostgresSingleQueryDraft, type Sing
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FilterGroup, FilterMode, FilterRule, SortRule } from '../../shared/contracts';
 import { buildPostgresQueryBuilderSql, postgresBuilderAlias, postgresBuilderColumnKey, postgresBuilderJoinLimits,
-  postgresQueryBuilderLimits, type PostgresQueryBuilderSource } from '../../shared/postgresQueryBuilder';
+  postgresQueryBuilderLimits, type PostgresBuilderJoin, type PostgresQueryBuilderSource } from '../../shared/postgresQueryBuilder';
 import { parsePostgresCatalogName, postgresRelationName } from '../../shared/postgresSql';
 import { queryDatabasePatch } from '../../shared/queryContext';
 import { errorMessage, invoke } from '../lib';
@@ -22,14 +22,14 @@ import { TableSortPanel } from './TableSortPanel';
 import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
 import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
-import { PostgresQueryJoinPanel, type PostgresJoinDraft } from './PostgresQueryJoinPanel';
+import { QueryBuilderJoinPanel, type QueryBuilderJoinDraft } from './QueryBuilderJoinPanel';
 import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 interface CatalogueEntry { key: string; schema: string; name: string }
 
-function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBuilderSource, joins: readonly PostgresJoinDraft[] = []) {
+function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBuilderSource, joins: readonly QueryBuilderJoinDraft<PostgresQueryBuilderSource, PostgresBuilderJoin>[] = []) {
   const { selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup } = draft;
   const outputs = queryBuilderSummaryOutputs(summary);
   if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
@@ -60,7 +60,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>();
   const [table, setTable] = useState(''), [schema, setSchema] = useState(''), [search, setSearch] = useState('');
   const [source, setSource] = useState<PostgresQueryBuilderSource>();
-  const [joins, setJoins] = useState<PostgresJoinDraft[]>([]);
+  const [joins, setJoins] = useState<QueryBuilderJoinDraft<PostgresQueryBuilderSource, PostgresBuilderJoin>[]>([]);
   const singleDraft = useRef<PostgresSingleQueryDraft | undefined>(undefined);
   const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
@@ -284,7 +284,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
             draft={joins.length && preview?.design ? { ...draft,
               joins: joins.map(({ step: { fingerprint: _fingerprint, ...step } }) => step) } : undefined}
             disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>
-          <PostgresQueryJoinPanel source={source} entries={catalogue ?? []} joins={joins}
+          <QueryBuilderJoinPanel stale={text.stale} source={source} entries={catalogue ?? []} joins={joins}
             disabled={disabled || (!!editor && editingJoin === undefined)} editing={editingJoin} current={editable}
             edit={index => {
               if (index === undefined || (editable() && !editor)) setEditor(index === undefined ? undefined : { join: index });

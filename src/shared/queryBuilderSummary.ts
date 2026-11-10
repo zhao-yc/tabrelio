@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits } from './tableForeignKeyJoinSummary';
 
-const fieldName = z.string().min(1).max(512).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value), '汇总字段名不能含换行、空字符或无效 Unicode');
+const fieldName = z.string().min(1).max(515).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value), '汇总字段名不能含换行、空字符或无效 Unicode');
 const alias = fieldName.refine(value => value.trim().length > 0 && new TextEncoder().encode(value).length <= 63, '聚合别名须为 1～63 个 UTF-8 字节');
 const aggregate = z.discriminatedUnion('fn', [
   z.object({ fn: z.literal('COUNT_ALL'), alias }).strict(),

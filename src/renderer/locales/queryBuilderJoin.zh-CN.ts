@@ -1,0 +1,14 @@
+export const queryBuilderJoinZh = {
+  chooseSource: '请选择表或视图',
+  joins: '关联查询（JOIN）', joinSearch: '搜索关联来源', joinTarget: '待加入的表或视图', joinAdd: '加入关联来源',
+  joinBack: '返回单表设计', joinBackConfirm: '返回单表设计会放弃本次关联配置。继续？',
+  joinHint: '在同一数据库中按顺序加入表或视图。可重复使用同一来源，t1、t2 等别名区分每次加入。',
+  joinStep: (alias: string) => '关联来源 ' + alias, joinKind: '连接方式', joinMode: '匹配条件',
+  joinLeft: (index: number) => '第 ' + index + ' 条已加入字段', joinRight: (index: number) => '第 ' + index + ' 条当前来源字段',
+  joinOperator: (index: number) => '第 ' + index + ' 条关联比较', joinAddPair: '添加字段比较',
+  joinGroups: '组合 ON 条件', joinGroupTitle: 'ON 条件分组', joinGroupHint: '用括号组合本步骤的字段比较。每条比较只放入一个分组。',
+  joinGroupLimits: '每步最多 20 条比较、16 组（含最外层）、8 层。应用前请为每个子组放入条件。',
+  joinChooseField: '请选择字段',
+  joinRemovePair: (index: number) => '删除第 ' + index + ' 条比较', joinRemoveLast: '移除最后一个关联来源',
+  joinReferenced: '最后一个来源仍被筛选、排序或汇总引用，请先移除对应配置。',
+} as const;

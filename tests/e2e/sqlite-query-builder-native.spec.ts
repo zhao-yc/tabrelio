@@ -10,6 +10,7 @@ import { tableForeignKeyJoinZh as joinText } from '../../src/renderer/locales/ta
 import { tableForeignKeyJoinSummaryZh as aggregate } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
 import { queryBuilderSummaryZh as summary } from '../../src/renderer/locales/queryBuilderSummary.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
+import { tableFilterGroupsZh as groups } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
 import { queryViewDraftZh as viewDraft } from '../../src/renderer/locales/queryViewDraft.zh-CN';
 import { sqliteObjectsZh as objects } from '../../src/renderer/locales/sqliteObjects.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -58,6 +59,11 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
       INSERT INTO "原""表" SELECT n, '普通行', X'00ff' FROM seq;
       INSERT INTO "原""表" VALUES (${maxInteger}, '精确整数', NULL), ('${maxInteger}', '同形文本', NULL);
       CREATE VIEW "查询视图" AS SELECT value, label FROM "原""表";`);
+    setup('CREATE TABLE "JOIN起点" (id, note);' +
+      "INSERT INTO \"JOIN起点\" VALUES (1,'整数一'),(2,'整数二'),(3,'整数三'),('1','同形文本');" +
+      'CREATE TABLE "关联""表" (id, alternate_id, note);' +
+      "INSERT INTO \"关联\"\"表\" VALUES (1,2,'关联命中'),(4,9,'仅右侧');" +
+      'CREATE VIEW "关联视图" AS SELECT * FROM "关联""表";');
     const originalFile = readFileSync(database);
     // 只替换本例文件选择，目录、数据、计划与执行使用真实 IPC 和 SQLite 文件。
     await desktop.evaluate(({ dialog }, file) => {
@@ -191,6 +197,105 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await page.locator('.query-tab:visible .query-execute-split > button.primary').click();
     await expect(page.locator('.query-tab:visible').getByRole('gridcell', { name: '精确整数', exact: true })).toBeVisible();
     expect(readFileSync(database)).toEqual(fileAfterView);
+
+    await selectSource('JOIN起点');
+    await button(browse.addFilter).click();
+    await builder.getByLabel(browse.filterOperator(1)).selectOption('gte');
+    await builder.getByLabel(browse.filterKind(1)).selectOption('integer');
+    await builder.getByLabel(browse.filterValue(1)).fill('1');
+    const single = 'SELECT "id", "note" FROM "main"."JOIN起点" WHERE (typeof("id") = \'integer\' AND "id" >= 1);';
+    await expect(sql).toHaveText(single);
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    const joinPanel = builder.getByRole('group', { name: text.joins, exact: true });
+    for (const [alias, left] of [['t2', 't1.id'], ['t3', 't2.id']]) {
+      await joinPanel.getByLabel(text.joinTarget, { exact: true }).selectOption('关联视图');
+      await joinPanel.getByRole('button', { name: text.joinAdd, exact: true }).click();
+      const step = joinPanel.getByRole('group', { name: text.joinStep(alias), exact: true });
+      await step.getByLabel(text.joinKind, { exact: true }).selectOption('LEFT');
+      await step.getByLabel(text.joinLeft(1), { exact: true }).selectOption(left);
+      await step.getByLabel(text.joinRight(1), { exact: true }).selectOption('id');
+    }
+    const third = joinPanel.getByRole('group', { name: text.joinStep('t3'), exact: true });
+    for (const [position, right, operator] of [[2, 'alternate_id', '='], [3, 'id', '<=']] as const) {
+      await third.getByRole('button', { name: text.joinAddPair, exact: true }).click();
+      await third.getByLabel(text.joinLeft(position), { exact: true }).selectOption('t1.id');
+      await third.getByLabel(text.joinRight(position), { exact: true }).selectOption(right);
+      await third.getByLabel(text.joinOperator(position), { exact: true }).selectOption(operator);
+    }
+    await third.getByRole('button', { name: text.joinGroups, exact: true }).click();
+    const on = third.getByRole('region', { name: text.joinGroupTitle, exact: true });
+    await on.getByRole('button', { name: groups.addGroup(), exact: true }).click();
+    for (const position of [1, 2]) await on.getByLabel(groups.destination(position), { exact: true }).selectOption({ label: groups.group('1') });
+    await on.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('sqlite-builder-join.png') });
+    await on.getByRole('button', { name: groups.apply, exact: true }).click();
+    await button(text.none).click();
+    for (const field of ['t1.id', 't3.note']) await builder.getByRole('checkbox', { name: text.choose(field), exact: true }).check();
+    await button(browse.addSort).click();
+    const joinFrom = ' FROM "main"."JOIN起点" AS t1 LEFT JOIN "main"."关联视图" AS t2 ON (t1."id" = t2."id")' +
+      ' LEFT JOIN "main"."关联视图" AS t3 ON (t1."id" <= t3."id" AND (t2."id" = t3."id" OR t1."id" = t3."alternate_id"))' +
+      ' WHERE (typeof(t1."id") = \'integer\' AND t1."id" >= 1)';
+    const joined = 'SELECT t1."id" AS "t1.id", t3."note" AS "t3.note"' + joinFrom + ' ORDER BY t1."id" ASC;';
+    await expect(sql).toHaveText(joined);
+    await button(text.inspectLabels.explain).click();
+    await expect(results.getByRole('tree')).toBeVisible();
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(3), { exact: true })).toBeVisible();
+    await expect(results.getByRole('gridcell', { name: '关联命中', exact: true })).toHaveCount(1);
+    await expect(results.getByRole('gridcell', { name: 'NULL', exact: true })).toHaveCount(2);
+    const designs = builder.getByRole('group', { name: joinText.designTitle, exact: true });
+    await builder.locator('summary').filter({ hasText: joinText.designTitle }).click();
+    await designs.getByRole('textbox', { name: joinText.designName, exact: true }).fill('关联设计');
+    await designs.getByRole('button', { name: joinText.designSave, exact: true }).click();
+    await expect(designs.getByText(joinText.designSaved, { exact: true })).toBeVisible();
+    await button(viewDraft.builderEntry).click();
+    await prepareView('builder_join');
+    await viewButton(objects.apply.create).click();
+    await expect(editor.getByText(objects.committed, { exact: true })).toBeVisible();
+    await viewButton(objects.close).click();
+    const joinReader = new DatabaseSync(database, { readOnly: true });
+    try {
+      expect(joinReader.prepare('SELECT * FROM builder_join').all()).toEqual([
+        { 't1.id': 1, 't3.note': '关联命中' }, { 't1.id': 2, 't3.note': null }, { 't1.id': 3, 't3.note': null },
+      ]);
+    } finally { joinReader.close(); }
+    async function approve(label: string) {
+      await page.evaluate(expected => {
+        const original = window.confirm;
+        window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是预期的确认'); return true; };
+      }, label);
+    }
+    await approve(text.joinBackConfirm);
+    await joinPanel.getByRole('button', { name: text.joinBack, exact: true }).click();
+    await expect(sql).toHaveText(single);
+    await button(zh.common.cancel).click();
+    await selectSource('JOIN起点');
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    await builder.locator('summary').filter({ hasText: joinText.designTitle }).click();
+    await designs.getByRole('button', { name: joinText.designRefresh, exact: true }).click();
+    await designs.getByRole('combobox', { name: joinText.designTitle, exact: true }).selectOption({ label: '关联设计' });
+    await approve(joinText.designRestoreConfirm);
+    await designs.getByRole('button', { name: joinText.designLoad, exact: true }).click();
+    await expect(sql).toHaveText(joined);
+    const joinedFile = readFileSync(database);
+    await button(text.open).click();
+    await expect(builder).toBeHidden();
+    await page.locator('.query-tab:visible .query-execute-split > button.primary').click();
+    await expect(page.locator('.query-tab:visible').getByRole('gridcell', { name: '关联命中', exact: true })).toBeVisible();
+    expect(readFileSync(database)).toEqual(joinedFile);
+
+    await selectSource('JOIN起点');
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    await builder.locator('summary').filter({ hasText: joinText.designTitle }).click();
+    await designs.getByRole('button', { name: joinText.designRefresh, exact: true }).click();
+    await designs.getByRole('combobox', { name: joinText.designTitle, exact: true }).selectOption({ label: '关联设计' });
+    // 只重建相关视图，起始表和已确认的单表设计保持原样。
+    setup('DROP VIEW builder_join; DROP VIEW "关联视图"; CREATE VIEW "关联视图" AS SELECT id, alternate_id AS changed, note FROM "关联""表";');
+    await approve(joinText.designRestoreConfirm);
+    await designs.getByRole('button', { name: joinText.designLoad, exact: true }).click();
+    await expect(builder.locator('.modal-content > [role=alert]')).toContainText('SQLite 查询字段已变化');
+    await expect(sql).toHaveText('SELECT "id", "note" FROM "main"."JOIN起点";');
+    await button(zh.common.cancel).click();
 
     await selectSource(table);
     const beforeChange = await settings();
