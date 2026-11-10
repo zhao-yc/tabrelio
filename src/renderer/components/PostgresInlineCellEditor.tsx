@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { postgresTableLimits, type PostgresTableColumn, type PostgresTableField } from '../../shared/postgresTable';
 import { errorMessage } from '../lib';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
+import { recordTemporalSpec } from '../recordTemporal';
+import { RecordTemporalControls } from './RecordTemporalControls';
 import { ErrorBox } from './ui';
 
 export type PostgresInlineCellValue = Exclude<PostgresTableField['value'], { mode: 'binary' }>;
@@ -14,6 +16,7 @@ export function PostgresInlineCellEditor({ anchor, column, originalText, initial
 }) {
   const [mode, setMode] = useState<PostgresInlineCellValue['mode']>(typed === undefined ? initial.mode : 'text');
   const [value, setValue] = useState(typed ?? (initial.mode === 'text' ? initial.value : originalText));
+  const temporal = mode === 'text' ? recordTemporalSpec(column.type, 'postgresql') : undefined;
   const [error, setError] = useState('');
   const panel = useRef<HTMLFormElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -78,6 +81,7 @@ export function PostgresInlineCellEditor({ anchor, column, originalText, initial
     </label>
     {mode === 'text' && <textarea ref={input} rows={2} aria-label={text.value} value={value} maxLength={postgresTableLimits.value}
       onChange={event => { setValue(event.target.value); setError(''); }}/>}
+    {temporal && <RecordTemporalControls spec={temporal} value={value} disabled={!visible} onChange={next => { setValue(next); setError(''); }}/>}
     <ErrorBox message={error}/>
     <div className="pg-inline-cell-actions">
       <button type="button" onClick={onCancel}>{text.cancel}</button>

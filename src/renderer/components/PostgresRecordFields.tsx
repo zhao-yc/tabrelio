@@ -15,6 +15,8 @@ import { BinaryCellViewer } from './BinaryCellViewer';
 import { binaryByteLength } from '../binaryCell';
 import { postgresBinaryEditBytes, postgresBinaryInputHex } from '../postgresBinaryInput';
 import { postgresByteaZh as byteaText } from '../locales/postgresBytea.zh-CN';
+import { recordTemporalSpec } from '../recordTemporal';
+import { RecordTemporalControls } from './RecordTemporalControls';
 import { ErrorBox, Modal } from './ui';
 import '../recordProjections.css';
 
@@ -75,6 +77,12 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
     const originalOpen = binaryView?.column === column.key && binaryView.mode === 'original';
     const inputOpen = binaryView?.column === column.key && binaryView.mode === 'input' && value?.mode === 'binary';
     const valueLabel = column.name + ' ' + text.value;
+    const temporal = value?.mode === 'text' ? recordTemporalSpec(column.type, 'postgresql') : undefined;
+    const valueInput = value && 'value' in value && <textarea aria-label={valueLabel} value={value.value}
+      maxLength={postgresTableLimits.value} readOnly={disabled} rows={2} onChange={event => {
+        const next = event.target.value;
+        onChange(previous => new Map(previous).set(column.key, { ...value, value: next }));
+      }}/>;
     const writeHex = (hex: string) => {
       const next = postgresBinaryInputHex(hex);
       onChange(previous => new Map(previous).set(column.key, { mode: 'binary', value: next }));
@@ -111,11 +119,12 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
         {inputOpen && value?.mode === 'binary' ? <BinaryCellViewer value={emptyBinary} hexInput={value.value} label={valueLabel}
           reason={disabled ? viewText.expired : undefined} source={[original, column, fields]} isCurrent={filesCurrent}
           onHexChange={disabled ? undefined : writeHex}/>
-        : value && 'value' in value && <textarea aria-label={valueLabel} value={value.value}
-          maxLength={postgresTableLimits.value} readOnly={disabled} rows={2} onChange={event => {
-            const next = event.target.value;
-            onChange(previous => new Map(previous).set(column.key, { ...value, value: next }));
-          }}/>}
+        : temporal && value?.mode === 'text' ? <div className="record-temporal-text">{valueInput}
+          <RecordTemporalControls spec={temporal} value={value.value} disabled={disabled} onChange={next => onChange(previous => {
+            if (previous.get(column.key) !== value) return previous;
+            return new Map(previous).set(column.key, { mode: 'text', value: next });
+          })}/>
+        </div> : valueInput}
       </div>}
     </div>;
   })}</>;

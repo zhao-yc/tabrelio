@@ -1,0 +1,34 @@
+.record-temporal-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.record-temporal-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.record-temporal-controls label.record-temporal-sign {
+  flex-direction: row;
+  align-items: center;
+  align-self: center;
+}
+
+.record-temporal-controls :is(input[type="number"], input[inputmode="numeric"]) {
+  width: calc(7ch + 22px);
+}
+
+.pg-record-inputs > .record-temporal-text {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.pg-record-inputs > .record-temporal-text > textarea {
+  width: 100%;
+}

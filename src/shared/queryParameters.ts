@@ -1,3 +1,4 @@
+import { isCivilDate } from './civilDate';
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 
 /** 参数只代表 SQL 值，不能代替数据库、表、字段等标识符。 */
@@ -11,15 +12,6 @@ const encoder = new TextEncoder();
 
 /** 文本以 UTF-8 十六进制编码，值中的引号、NUL 和 SQL 分隔符均无法影响 SQL 结构。 */
 function textLiteral(value: string): string { return `CONVERT(X'${Array.from(encoder.encode(value), byte => byte.toString(16).padStart(2, '0')).join('')}' USING utf8mb4)`; }
-
-/** 时间只检查明确格式和日历边界；拒绝零日期，避免 sql_mode 导致悄然转成 NULL 或零值。 */
-function validDate(value: string): boolean {
-  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!parts) return false;
-  const year = Number(parts[1]), month = Number(parts[2]), day = Number(parts[3]);
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  return year >= 1000 && year <= 9999 && month >= 1 && month <= 12 && day >= 1 && day <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
-}
 
 /** 严格验证后生成模式无关的类型表达式，精确数字从不经过 JavaScript Number。 */
 export function queryParameterLiteral(parameter: QueryParameter, maxDecimalScale: 30 | 38 = 30, allowTimeEndpointFraction = false): string {
@@ -44,9 +36,9 @@ export function queryParameterLiteral(parameter: QueryParameter, maxDecimalScale
     }
     case 'boolean': if (!['true', 'false'].includes(value)) throw new Error('布尔参数只能为 true 或 false'); return value === 'true' ? 'TRUE' : 'FALSE';
     case 'binary': if (!/^(?:[0-9a-fA-F]{2})*$/.test(value)) throw new Error('二进制参数必须为偶数位十六进制，不带 0x 前缀'); return `X'${value}'`;
-    case 'date': if (!validDate(value)) throw new Error('日期参数要求有效的 YYYY-MM-DD，年份 1000～9999，不接受零日期'); return `CAST('${value}' AS DATE)`;
+    case 'date': if (!isCivilDate(value, 1000)) throw new Error('日期参数要求有效的 YYYY-MM-DD，年份 1000～9999，不接受零日期'); return `CAST('${value}' AS DATE)`;
     case 'datetime': {
-      if (!/^\d{4}-\d{2}-\d{2} [0-2]\d:[0-5]\d:[0-5]\d(?:\.\d{1,6})?$/.test(value) || !validDate(value.slice(0, 10)) || Number(value.slice(11, 13)) > 23) throw new Error('日期时间要求 YYYY-MM-DD HH:mm:ss[.微秒]，不接受时区或零日期');
+      if (!/^\d{4}-\d{2}-\d{2} [0-2]\d:[0-5]\d:[0-5]\d(?:\.\d{1,6})?$/.test(value) || !isCivilDate(value.slice(0, 10), 1000) || Number(value.slice(11, 13)) > 23) throw new Error('日期时间要求 YYYY-MM-DD HH:mm:ss[.微秒]，不接受时区或零日期');
       return `CAST('${value}' AS DATETIME(6))`;
     }
     case 'time': {
