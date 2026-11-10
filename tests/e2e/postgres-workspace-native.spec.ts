@@ -48,6 +48,7 @@ import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryR
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { queryResultNavigatorZh as resultNavigatorText } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultPresetsZh as presetsText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
@@ -1329,7 +1330,13 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await execute();
     const setupResults = tab().getByRole('combobox', { name: 'PostgreSQL结果集' });
     await expect(setupResults.getByRole('option', { name: '4 · SELECT · 1 行' })).toHaveCount(1);
-    await setupResults.selectOption('3');
+    await button(resultNavigatorText.open).click();
+    const resultNavigator = page.getByRole('dialog', { name: resultNavigatorText.open, exact: true });
+    const resultSearch = resultNavigator.getByRole('combobox', { name: resultNavigatorText.input, exact: true });
+    await resultSearch.fill('会话值');
+    await expect(resultNavigator.getByRole('option')).toHaveCount(1);
+    await resultSearch.press('Enter');
+    await expect(setupResults).toHaveValue('3');
     await expect(tab().getByRole('grid')).toContainText('7');
     await expect(button(postgresZh.execute)).toBeEnabled();
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);

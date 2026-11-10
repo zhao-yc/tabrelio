@@ -12,6 +12,7 @@ import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRec
 import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
+import { QueryResultNavigator } from './QueryResultNavigator';
 import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -2340,6 +2341,8 @@ export function PostgresQueryTab({
                 onChange={event => selectCurrentResult(Number(event.target.value))}>
                 {results.map((r, i) => <option key={i} value={i}>{text.result(resultSources?.[i]?.statementOrdinal ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
+              {results.length > 1 && <QueryResultNavigator tabId={tab.id} results={results} names={resultNames} selected={pin ? undefined : selected}
+                disabled={locked} isCurrent={pinNavigationCurrent} onSelect={selectCurrentResult}/>}
               {archiveAvailable && <button disabled={locked} onClick={() => {
                 if (outcome && resultScopeCurrent() && !document.querySelector(appModalSelector)) setArchiveOutcome(outcome);
               }}>{archiveText.open}</button>}

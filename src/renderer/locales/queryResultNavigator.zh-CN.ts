@@ -1,0 +1,18 @@
+export const queryResultNavigatorZh = {
+  open: '查找结果集',
+  input: '搜索结果名称、序号或字段名',
+  placeholder: '输入名称、字段名或 #序号',
+  list: '匹配结果集',
+  result: (ordinal: number) => `结果 ${ordinal}`,
+  rows: (rows: number) => `${rows} 行`,
+  affected: (rows: number) => `影响 ${rows} 行`,
+  status: '执行状态',
+  current: '当前结果',
+  truncated: '仅已返回部分',
+  count: (matches: number, total: number) => `匹配 ${matches} / ${total} 个结果集`,
+  page: (page: number, total: number) => `第 ${page} / ${total} 页`,
+  previous: '上一页结果集',
+  next: '下一页结果集',
+  empty: '没有匹配的结果集',
+  close: '取消',
+} as const;
