@@ -112,6 +112,7 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
     await searchBox.fill('目标配对');
     await searchBox.press('Enter');
     await expect(firstCandidate.getByRole('gridcell', { name: 'Beta', exact: true })).toBeVisible();
+    await expect(searchBox).toBeFocused();
     await searchBox.fill('');
     await searchBox.press('Enter');
     await expect(firstCandidate.getByRole('gridcell', { name: 'Alpha', exact: true })).toBeVisible();
@@ -127,7 +128,12 @@ test('SQLite 按命中格选择外键，复合键一次暂存和提交', async (
     await picker.getByRole('button', { name: displayText.showAll, exact: true }).click();
     await expect(picker.getByRole('gridcell', { name: '目标配对', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('命中列外键候选.png') });
-    await picker.getByRole('gridcell', { name: '目标配对', exact: true }).dblclick();
+    await searchBox.focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(candidateGrid.getByRole('gridcell', { name: 'Alpha', exact: true })).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(candidateGrid.getByRole('gridcell', { name: 'Beta', exact: true })).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(picker).toHaveCount(0);
     await expect(await cell('a', 1)).toContainText('Alpha');
     await expect(await cell('a', 2)).toContainText('Beta');

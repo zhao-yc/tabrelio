@@ -28,6 +28,7 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
   const [catalog, setCatalog] = useState<SqliteReferenceOutput>(), [selected, setSelected] = useState<number>(), [data, setData] = useState<SqliteReferenceOutput>();
   const [chosen, setChosen] = useState<number>(), selection = useRef<{ data: SqliteReferenceOutput; index: number; values: SqliteOriginalValue[] } | undefined>(undefined);
   const [searchColumns, setSearchColumns] = useState<string[]>([]);
+  const focusCandidate = useRef<() => boolean>(null);
   const [sort, setSort] = useState<CandidateSort | null>(null);
   const [searchColumn, setSearchColumn] = useState(''), [searchText, setSearchText] = useState(''), appliedSearch = useRef<SqliteReferenceSearch | undefined>(undefined);
   const [clearConfirmed, setClearConfirmed] = useState(false);
@@ -139,7 +140,9 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     }}>{keys.map(key => <option key={key.ordinal} value={key.ordinal}>{text.key(key.ordinal)} · {key.columns.join(', ')} → {key.referencedTable}</option>)}</select></label>
     : <p>{column === undefined ? text.emptyKeys : text.emptyColumn}</p>)}
     {key && <p>{key.columns.join(', ')} → {key.referencedTable} ({key.referencedColumns?.join(', ') ?? text.implicit})</p>}
-    {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<ReferenceSearchInput label={text.search} value={searchText} limit={256} disabled={disabled} onChange={value => { if (actionCurrent()) { resetSelection(); setSearchText(value); } }} onSearch={() => read(0, true)}/></label><p>{text.searchHint}</p></div>}
+    {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<ReferenceSearchInput label={text.search} value={searchText} limit={256}
+      disabled={invalid || closeBusy} pending={busy} onChange={value => { if (actionCurrent()) { resetSelection(); setSearchText(value); } }}
+      onSearch={() => read(0, true)} onCandidates={() => focusCandidate.current?.() ?? false}/></label><p>{text.searchHint}</p></div>}
     {choosing && <ReferenceCandidateSort columns={searchColumns} sort={sort} disabled={disabled || !key} onChange={next => {
       if (!actionCurrent()) return;
       setSort(next); read(0, false, next);
@@ -148,7 +151,8 @@ export function SqliteReferenceDialog({ source, column, values, current, onActiv
     <ErrorBox message={invalid ? text.stale : error}/>{busy && <Spinner text={text.loading}/>}
     <ReferenceCandidateColumns key={selected} columns={data?.page?.result.columns} keyNames={candidateKeys}>
       {columns => data?.page && <><p>{data.page.target.table} · {data.referencedColumns?.join(', ')} · {data.page.offset + 1}–{data.page.offset + data.page.result.rows.length}</p>{!data.page.result.rows.length && <p role="status">{text.empty}</p>}<div className="reference-grid"><ResultsGrid columns={columns} rows={data.page.result.rows} selectionScope={data.page} isCurrent={() => reader.current() && !busy} binaryFileActions={false}
-        onActiveRowChange={choosing ? selectCandidate : undefined} onRowDoubleClick={choosing && editableKey ? row => { stage(row); return true; } : undefined}/></div></>}
+        onActiveRowChange={choosing ? selectCandidate : undefined} onActivateRow={choosing && editableKey ? stage : undefined}
+        focusFirstRowRef={focusCandidate}/></div></>}
     </ReferenceCandidateColumns>
       {choosing && <><p>{chosen === undefined ? text.selectRow : text.selectedRow(chosen + 1)}</p><label><input type="checkbox" checked={clearConfirmed} disabled={disabled || !clearable} onChange={event => { if (actionCurrent()) setClearConfirmed(event.target.checked); }}/>{text.clearConfirm}</label><button disabled={disabled || !clearable || !clearConfirmed} onClick={clear}>{text.clear}</button></>}
   </div><footer className="modal-footer">{choosing && <button disabled={disabled || !editableKey || chosen === undefined || clearConfirmed} onClick={() => stage()}>{text.stage}</button>}<button disabled={closeBusy} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;

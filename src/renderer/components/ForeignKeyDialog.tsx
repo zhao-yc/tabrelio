@@ -22,6 +22,7 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
   const [pageIndex, setPageIndex] = useState(1); const [jump, setJump] = useState('1'); const [pageSize, setPageSize] = useState(50);
   const [filters, setFilters] = useState<FilterRule[]>([]); const [filterMode, setFilterMode] = useState<FilterMode>('all'); const [sort, setSort] = useState<SortRule[]>([]);
   const [searchText, setSearchText] = useState(''), [candidateSearch, setCandidateSearch] = useState('');
+  const focusCandidate = useRef<() => boolean>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [clearConfirm, setClearConfirm] = useState(false); const [refresh, setRefresh] = useState(0);
   const alive = useRef(true); const generation = useRef(0); const pending = useRef(new Set<string>()); const verifying = useRef(false); const activity = useRef(onActivity); activity.current = onActivity;
   const match = mode === 'browse' ? referenceTuple(snapshot.data, key.columns) : undefined;
@@ -104,7 +105,8 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
     <p>{text.target}：{key.referencedDatabase}.{key.referencedTable}</p><p className="reference-mapping">{text.mapping}：{key.columns.map((column, index) => `${column} → ${key.referencedColumns[index]}`).join('，')}</p>
     {mode === 'choose' && <>
       <div className="reference-search"><ReferenceSearchInput label={text.search} value={searchText} limit={referenceCandidateSearchLimit}
-        disabled={busy || clearConfirm} onChange={setSearchText} onSearch={() => search()}/>
+        disabled={clearConfirm} pending={busy} onChange={setSearchText} onSearch={() => search()}
+        onCandidates={() => focusCandidate.current?.() ?? false}/>
         <button type="button" disabled={busy || clearConfirm} onClick={() => search()}>{text.applySearch}</button>
         <button type="button" disabled={busy || clearConfirm || (!searchText && !candidateSearch)} onClick={() => {
           setSearchText(''); search('');
@@ -116,7 +118,8 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, 
     <ReferenceCandidateColumns key={referenceSignature(key)} columns={data?.page.columns}
       keyNames={mode === 'choose' ? data?.foreignKey.referencedColumns : undefined}>
       {columns => data && <div className="reference-grid"><ResultsGrid columns={columns} rows={data.page.rows} onActiveRowChange={selectCandidate}
-        onRowDoubleClick={writable ? row => { void confirm(row); return true; } : undefined} sort={sort} onSortChange={changeSort}/></div>}
+        onActivateRow={writable ? row => { void confirm(row); } : undefined} focusFirstRowRef={focusCandidate}
+        isCurrent={() => alive.current && !busy && !clearConfirm && !verifying.current} sort={sort} onSortChange={changeSort}/></div>}
     </ReferenceCandidateColumns>
     {data && !data.page.rows.length && <p>{text.empty}</p>}
     <div className="reference-pagination"><button disabled={busy || pageIndex === 1} aria-label={text.previous} onClick={() => setPageIndex(index => index - 1)}>{zh.common.pagePrevious}</button><form onSubmit={event => { event.preventDefault(); try { if (!busy) setPageIndex(parsePageJump(jump)); } catch (reason) { setError(errorMessage(reason)); } }}><input aria-label={text.page} value={jump} disabled={busy} onChange={event => setJump(event.target.value)}/><button disabled={busy} type="submit">{text.jump}</button></form><button disabled={busy || !data?.page.hasMore || pageIndex >= maxTablePage} aria-label={text.next} onClick={() => setPageIndex(index => index + 1)}>{zh.common.pageNext}</button><select aria-label={text.pageSize} value={pageSize} disabled={busy} onChange={event => { setPageSize(Number(event.target.value)); setPageIndex(1); }}>{[50, 100, 200, 500].map(size => <option key={size}>{size}</option>)}</select><button disabled={busy} onClick={() => setRefresh(value => value + 1)}>{text.refresh}</button>{busy && <button onClick={cancel}>{text.cancelRead}</button>}</div>

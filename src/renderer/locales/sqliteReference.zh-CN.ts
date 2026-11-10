@@ -1,7 +1,7 @@
 export const sqliteReferenceZh = {
   choiceEntry: '选择 SQLite 外键值', choiceTitle: 'SQLite 外键值选择', candidates: '读取父键候选', stage: '使用所选键值',
   choiceHint: '双击候选记录或使用底部按钮可暂存本地草稿，复合键整组替换并可一步撤销；最终写入须经原 SQL 预览及提交。确认前重新读取父键，不验证声明唯一性；约束由最终数据库提交判断。',
-  searchColumn: '父候选搜索列', search: '父候选包含文本', searchHint: '字面子串搜索，ASCII不区分大小写；BLOB按HEX搜索。输入后按 Enter 或点击读取父键候选，分页沿用已应用搜索。',
+  searchColumn: '父候选搜索列', search: '父候选包含文本', searchHint: '字面子串搜索，ASCII不区分大小写；BLOB按HEX搜索。输入后按 Enter 或点击读取父键候选，分页沿用已应用搜索。按 ↓ 进入候选，选中一行后按 Enter 采用。',
   columnScope: (column: string) => '仅显示包含字段「' + column + '」的外键声明。',
   emptyColumn: '此字段没有可选择的外键声明。', shortcut: 'Control+Enter Meta+Enter',
   selectRow: '请在当前父候选页选择一行；NULL父键不能建立关联。', selectedRow: (row: number) => '已选择当前页第 ' + row + ' 行，确认时将重新核对。',

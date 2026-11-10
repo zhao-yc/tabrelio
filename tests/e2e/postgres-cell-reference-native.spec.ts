@@ -98,6 +98,7 @@ test('PostgreSQL 从命中的单元格选择复合父键并保留该行已有草
     await searchBox.fill('目标配对');
     await searchBox.press('Enter');
     await expect(picker.getByRole('cell', { name: '9007199254740997', exact: true })).toBeVisible();
+    await expect(searchBox).toBeFocused();
     await expect(direction).toHaveValue('DESC');
     await expect(picker.getByRole('cell', { name: '9007199254740995', exact: true })).toHaveCount(0);
     await expect(picker.getByRole('columnheader', { name: 'label', exact: true })).toHaveCount(0);
@@ -105,7 +106,17 @@ test('PostgreSQL 从命中的单元格选择复合父键并保留该行已有草
     await picker.getByRole('checkbox', { name: displayText.show('label'), exact: true }).check();
     await expect(use).toBeEnabled();
     await page.screenshot({ path: info.outputPath('PostgreSQL外键候选.png') });
-    await target.getByRole('cell', { name: '目标配对', exact: true }).dblclick();
+    await searchBox.fill('组');
+    await searchBox.press('Enter');
+    await expect(use).toBeEnabled();
+    await expect(searchBox).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(use).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(candidateTable.getByRole('row').filter({ hasText: '起始二' }).getByRole('button', { name: text.use, exact: true })).toBeFocused();
+    await page.keyboard.press('ArrowUp');
+    await expect(use).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(picker).toHaveCount(0);
     await expect(cell('第二条草稿').locator('..')).toContainText('目标组');
     await expect(cell('第二条草稿').locator('..')).toContainText('9007199254740997');

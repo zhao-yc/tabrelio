@@ -95,7 +95,13 @@ test('从外键格限定约束并将复合父键暂存到右键命中的记录',
     await modal.getByRole('button', { name: displayText.showAll, exact: true }).click();
     await expect(candidate).toBeVisible();
     await page.screenshot({ path: info.outputPath('命中字段的父键候选.png') });
-    await candidate.dblclick();
+    await searchBox.fill('目标配对');
+    await searchBox.press('Enter');
+    await expect(candidate).toBeVisible();
+    await expect(searchBox).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(modal.getByRole('gridcell', { name: '目标组', exact: true })).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(modal).toHaveCount(0);
 
     // 仅命中的第二条记录改变，且超出 JS 安全整数范围的键值保持精确。

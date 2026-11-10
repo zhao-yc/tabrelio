@@ -11,6 +11,7 @@ import { PostgresReferenceRecord } from './PostgresReferenceRecord';
 import { ReferenceCandidateColumns } from './ReferenceCandidateColumns';
 import { ReferenceCandidateSort } from './ReferenceCandidateSort';
 import { ReferenceSearchInput } from './ReferenceSearchInput';
+import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 
 export interface PostgresReferenceSource {
   input: Omit<PostgresTableReferenceInput, 'lookup'>;
@@ -40,6 +41,7 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
   const latest = useRef(source); latest.current = source;
   const generation = useRef(0);
   const liveView = useRef<View>(undefined);
+  const candidateBody = useRef<HTMLTableSectionElement>(null);
   const opening = useRef(false);
 
   /** 查询开始立即收起旧结果，避免搜索和翻页过程中使用旧行。 */
@@ -129,6 +131,14 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
       else if (onChoose) { onChoose(postgresReferenceSelection(candidateView.choice, row)); onClose(); }
     } catch (reason) { setError(errorMessage(reason)); }
   }
+  /** 保留原生表格与按钮语义，方向键只在当前候选表中移动焦点。 */
+  function focusCandidate(candidateView: View | undefined, index: number): boolean {
+    if (!candidateView || busy || liveView.current !== candidateView || !candidateView.page.rows[index] || !latest.current.current()) return false;
+    const button = candidateBody.current?.rows.item(index)?.querySelector<HTMLButtonElement>('button');
+    if (!button || button.disabled) return false;
+    button.focus();
+    return button.ownerDocument.activeElement === button;
+  }
   return <section className="pg-reference-picker" aria-label={children ? text.childrenTitle : parent ? text.browseTitle : text.title}>
     <div className="pg-table-controls">
       <select aria-label={text.constraint} value={choice?.id ?? ''} disabled={busy || !choices?.length} onChange={event => {
@@ -140,7 +150,8 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
         {choices?.map(item => <option key={item.id} value={item.id}>{item.name} · {item.schema}.{item.table}</option>)}
       </select>
       {!parent && <><ReferenceSearchInput label={children ? text.childQuery : text.query} value={query} limit={limits.search}
-        disabled={busy || !choice} onChange={setQuery} onSearch={() => { if (choice) void load(choice, query, 0, sort); }}/>
+        disabled={!choice} pending={busy} onChange={setQuery} onSearch={() => { if (choice) void load(choice, query, 0, sort); }}
+        onCandidates={!browse && onChoose ? () => focusCandidate(view, 0) : undefined}/>
       <button type="button" disabled={busy || !choice} onClick={() => void load(choice, query, 0, sort)}>{children ? text.childSearch : text.search}</button></>}
       <button type="button" disabled={busy} onClick={() => { setQuery(''); void load(); }}>{text.refresh}</button>
       {browse && onOpen && <button type="button" disabled={busy || !view || (parent && !view.page.rows.length)}
@@ -171,7 +182,7 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
       </div>
       {!!view.page.rows.length && <div className={children ? 'pg-reference-candidates pg-reference-children' : 'pg-reference-candidates'}><table>
         <thead><tr>{(children ? columns : candidateColumns).map(column => <th key={column.key}>{column.name}</th>)}<th>{children ? text.inspectChild : text.use}</th></tr></thead>
-        <tbody>{view.page.rows.map((row, index) => <tr key={index} onDoubleClick={!browse && onChoose ? event => {
+        <tbody ref={candidateBody}>{view.page.rows.map((row, index) => <tr key={index} onDoubleClick={!browse && onChoose ? event => {
           if (event.defaultPrevented || !(event.target instanceof Element) || event.target.closest('button')) return;
           event.preventDefault();
           useCandidate(view, row, index);
@@ -180,11 +191,23 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
             const value = cellPreview(row[column.key]);
             return <td key={column.key}>{children ? <span>{value}</span> : value}</td>;
           })}
-          <td><button type="button" disabled={busy} onClick={() => useCandidate(view, row, index)}>{children ? text.inspectChild : text.use}</button></td>
+          <td><button type="button" disabled={busy} onClick={() => useCandidate(view, row, index)}
+            onKeyDown={!browse && onChoose ? event => {
+              const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && !tableCellKeyIsComposing(event.nativeEvent);
+              if (event.defaultPrevented || event.target !== event.currentTarget) return;
+              if (event.key === 'Enter') {
+                event.preventDefault(); event.stopPropagation();
+                if (plain && !event.repeat) useCandidate(view, row, index);
+              } else if (plain && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                event.preventDefault(); event.stopPropagation();
+                focusCandidate(view, index + (event.key === 'ArrowUp' ? -1 : 1));
+              }
+            } : undefined}>{children ? text.inspectChild : text.use}</button></td>
         </tr>)}</tbody>
       </table></div>}
     </>}
     </ReferenceCandidateColumns>
+    {!browse && onChoose && <p className="muted small">{text.keyboardHint}</p>}
     <p className="muted small">{queryResult ? text.queryHint : children ? text.childrenHint : parent ? text.browseHint : source.column ? text.cellHint : text.hint}</p>
   </section>;
 }

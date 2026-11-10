@@ -1,3 +1,4 @@
+import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
 import { sqliteRowIdColumn, sqliteRowIdKey } from './SqliteRowIdColumn';
 import { useGridHeaderMenu, type GridHeaderColumnVisibility, type GridHeaderFreeze } from './GridHeaderMenu';
@@ -82,7 +83,7 @@ function displayedValue(row: DataRow, key: string, present?: PresentGridCell) {
 }
 
 /** 表页可覆盖展示值，定位、编辑及原页能力仍引用原网格数据。查询结果默认使用原值。 */
-export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, onFindColumn, frozenKeys, columnWidths, rowHeight, onRowHeightChange, rowJump = false, rowJumpCurrent, freezeColumns, columnVisibility, onColumnReorder, tableCopy, insertSql, updateSql, deleteSql, primaryKeySql, onOpenRowSql, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, onRowDoubleClick, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, onCheckedRows, matchRowsRef, onShowRows, onStageFindFilter, findFilterSource, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, showGridImages, ownDialog, sqliteSource, sqliteRowIds, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, cellMenuFilters, cellReference, onCellEdit, onCellPaste, onFillRange, onExportRange, onFilterTableRange, findTarget, findMarks, navigateTo, restoreCell, onGridAnchor, quickValueActions, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; headerDetails?: GridHeaderDetailsOptions; columnNameDialect?: ConnectionProfile['dialect']; onFindColumn?(key: string): void; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; freezeColumns?: GridHeaderFreeze; columnVisibility?: GridHeaderColumnVisibility; onColumnReorder?(source: string, target: string): void; tableCopy?: { enabled: boolean; isCurrent(): boolean }; insertSql?(indices: ReadonlySet<number>): string; updateSql?(indices: ReadonlySet<number>): string; deleteSql?(indices: ReadonlySet<number>): string; primaryKeySql?(indices: ReadonlySet<number>): string; onOpenRowSql?(kind: RowSqlKind, sql: string): void; rowHeight?: GridRowHeight; onRowHeightChange?(height: number): void; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; onRowDoubleClick?(row: DataRow): boolean; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; onCheckedRows?(checked: ResultCheckedRows | undefined): void; matchRowsRef?: Ref<GridMatchRowsAction<number>>; onShowRows?(indices: ReadonlySet<number>, kind?: QueryResultRowViewKind): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean; showGridImages?: boolean; ownDialog?(): Element | undefined; sqliteSource?: QueryResult; sqliteRowIds?: readonly string[]; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, mode?: QueryResultSelectedFilterMode):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; cellMenuFilters?(cell: QueryResultCopyCell): { label?: string; actions: GridCellAction[] } | undefined; cellReference?: { label: string; allowed(cell: QueryResultCopyCell): boolean; open(cell: QueryResultCopyCell): void }; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer, range?: GridRangeTarget<DataRow>): void; onFillRange?(range: GridRangeTarget<DataRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<DataRow>; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; restoreCell?: { row: DataRow; key: string }; onGridAnchor?(anchor: GridFindTarget | undefined): void; quickValueActions?: { allowed(cell: QueryResultCopyCell, kind: GridQuickValue): boolean; apply(cell: QueryResultCopyCell, kind: GridQuickValue): void }; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
+export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, onFindColumn, frozenKeys, columnWidths, rowHeight, onRowHeightChange, rowJump = false, rowJumpCurrent, freezeColumns, columnVisibility, onColumnReorder, tableCopy, insertSql, updateSql, deleteSql, primaryKeySql, onOpenRowSql, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, onActivateRow, focusFirstRowRef, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, onCheckedRows, matchRowsRef, onShowRows, onStageFindFilter, findFilterSource, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, showGridImages, ownDialog, sqliteSource, sqliteRowIds, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, cellMenuFilters, cellReference, onCellEdit, onCellPaste, onFillRange, onExportRange, onFilterTableRange, findTarget, findMarks, navigateTo, restoreCell, onGridAnchor, quickValueActions, renderRowSelectionAction, presentCell, skipRowInInversion }: { columns: ResultColumn[]; rows: DataRow[]; headerDetails?: GridHeaderDetailsOptions; columnNameDialect?: ConnectionProfile['dialect']; onFindColumn?(key: string): void; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowJumpCurrent?(): boolean; freezeColumns?: GridHeaderFreeze; columnVisibility?: GridHeaderColumnVisibility; onColumnReorder?(source: string, target: string): void; tableCopy?: { enabled: boolean; isCurrent(): boolean }; insertSql?(indices: ReadonlySet<number>): string; updateSql?(indices: ReadonlySet<number>): string; deleteSql?(indices: ReadonlySet<number>): string; primaryKeySql?(indices: ReadonlySet<number>): string; onOpenRowSql?(kind: RowSqlKind, sql: string): void; rowHeight?: GridRowHeight; onRowHeightChange?(height: number): void; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; onActivateRow?(row: DataRow): void; focusFirstRowRef?: Ref<() => boolean>; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; onCheckedRows?(checked: ResultCheckedRows | undefined): void; matchRowsRef?: Ref<GridMatchRowsAction<number>>; onShowRows?(indices: ReadonlySet<number>, kind?: QueryResultRowViewKind): void; onStageFindFilter?(rule: QueryResultFilterRule): void; findFilterSource?: QueryResult; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean; showGridImages?: boolean; ownDialog?(): Element | undefined; sqliteSource?: QueryResult; sqliteRowIds?: readonly string[]; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture, rangeCurrent?: () => boolean, mode?: QueryResultSelectedFilterMode):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; cellMenuFilters?(cell: QueryResultCopyCell): { label?: string; actions: GridCellAction[] } | undefined; cellReference?: { label: string; allowed(cell: QueryResultCopyCell): boolean; open(cell: QueryResultCopyCell): void }; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer, range?: GridRangeTarget<DataRow>): void; onFillRange?(range: GridRangeTarget<DataRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<DataRow>; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; restoreCell?: { row: DataRow; key: string }; onGridAnchor?(anchor: GridFindTarget | undefined): void; quickValueActions?: { allowed(cell: QueryResultCopyCell, kind: GridQuickValue): boolean; apply(cell: QueryResultCopyCell, kind: GridQuickValue): void }; renderRowSelectionAction?(indices: ReadonlySet<number>, current: () => boolean, tools?: ReactNode): ReactNode; presentCell?: PresentGridCell; skipRowInInversion?(row: DataRow): boolean }) {
   const height = readGridRowHeight(rowHeight);
   const rowSql = useRef({ insertSql, updateSql });
   rowSql.current = { insertSql, updateSql };
@@ -356,6 +357,18 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     if (column && element?.isConnected) return { cell: { row, index: rowIdx, column }, element };
   }
 
+  /** 键盘和双击只作用于候选所属的唯一窗口；叠加确认框时暂停候选操作。 */
+  function candidateGridCurrent(element: HTMLElement) {
+    const modal = element.closest(appModalSelector);
+    return !!onActivateRow && actionCurrent() && gridDialogCurrent(element, modal ? () => modal : ownDialog);
+  }
+
+  useImperativeHandle(focusFirstRowRef, () => () => {
+    const handle = gridRef.current;
+    return !!handle?.element && !!rows.length && !!columns.length && candidateGridCurrent(handle.element) &&
+      focusGridColumn(handle, onActiveRowChange ? 0 : 1, 0);
+  });
+
   const cellActionMenu = useGridCellActionMenu(ownDialog);
   function stageGridRangeFill(rectangle: GridCellRectangle, input: GridRangeFillInput) {
     const range = cellRange.capture(rectangle);
@@ -548,6 +561,15 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
         return;
       }
     }
+    if (onActivateRow && args.mode === 'ACTIVE' && key === 'enter' && !event.ctrlKey && !event.metaKey &&
+        !event.altKey && !event.shiftKey && !event.defaultPrevented && !event.isGridDefaultPrevented()) {
+      const located = locateCell(row, args.rowIdx, column?.key, event.target);
+      if (located && event.target === located.element && document.activeElement === located.element && candidateGridCurrent(located.element)) {
+        event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
+        if (!event.repeat && !tableCellKeyIsComposing(event.nativeEvent)) onActivateRow(located.cell.row);
+        return;
+      }
+    }
     if (onCellEdit && args.mode === 'ACTIVE' && !event.defaultPrevented && !event.isGridDefaultPrevented() &&
       !event.nativeEvent.isComposing && event.keyCode !== 229 && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey) {
       const typed = Array.from(event.key).length === 1 && !(event.shiftKey && event.key === ' ');
@@ -649,24 +671,19 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     visibility: headerDetails,
     columnVisibility, reorderColumns: onColumnReorder, freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,
   });
-  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} onColumnsReorder={onColumnReorder ? reorderColumns : undefined} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}`} style={{ '--grid-data-row-height': `${height}px` } as CSSProperties} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellMouseDown={(args, event) => cellRange.mouse(args, event)} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
+  const dataGrid = <DataGrid<DataRow, unknown, number> ref={gridRef} aria-keyshortcuts={onActivateRow ? 'Enter' : undefined} onColumnsReorder={onColumnReorder ? reorderColumns : undefined} aria-description={onHistoryTravel ? historyText.shortcuts : undefined} className={`results-grid rdg-${theme} grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}`} style={{ '--grid-data-row-height': `${height}px` } as CSSProperties} columns={gridColumns} rows={rows} columnWidths={onColumnWidthsChange ? controlledWidths : undefined} onColumnWidthsChange={onColumnWidthsChange ? widths => { if (actionCurrent()) onColumnWidthsChange(widths); } : undefined} onColumnResize={onColumnResize ? (column, width) => { if (actionCurrent() && !document.querySelector('[role="dialog"], [role="alertdialog"]')) onColumnResize(column.key, width); } : undefined} onCellMouseDown={(args, event) => cellRange.mouse(args, event)} onCellClick={rowJump || tableCopy || selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellContextMenu={({ row, rowIdx, column }, event) => {
     if (event.defaultPrevented || !openCellActions(row, rowIdx, column.key, event.target, { x: event.clientX, y: event.clientY })) return;
     event.preventGridDefault();
     event.preventDefault();
     event.stopPropagation();
   } } onCellDoubleClick={({ row, rowIdx, column }, event) => {
-    if ((onRowDoubleClick || onCellEdit) && !event.defaultPrevented) {
+    if ((onActivateRow || onCellEdit) && !event.defaultPrevented) {
       const located = locateCell(row, rowIdx, column.key, event.target);
-      if (located) {
-        // 候选只能从实际命中的当前格取值；有叠加确认框时不把双击交给候选。
-        const candidateModal = onRowDoubleClick && located.element.closest(appModalSelector);
-        if ((onRowDoubleClick && gridDialogCurrent(located.element, candidateModal ? () => candidateModal : ownDialog) &&
-            onRowDoubleClick(located.cell.row)) ||
-            onCellEdit?.(located.cell, located.element)) {
-          event.preventGridDefault();
-          event.preventDefault();
-          return;
-        }
+      if (located && onActivateRow && candidateGridCurrent(located.element)) {
+        event.preventGridDefault(); event.preventDefault(); onActivateRow(located.cell.row); return;
+      }
+      if (located && onCellEdit?.(located.cell, located.element)) {
+        event.preventGridDefault(); event.preventDefault(); return;
       }
     }
     viewBinary(row, column.key);
