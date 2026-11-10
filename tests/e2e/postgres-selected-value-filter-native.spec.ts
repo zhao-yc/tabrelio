@@ -3,6 +3,7 @@ import { test, expect, page, confirmOwnedDesktopExit, retainOwnedDesktopResource
 import { postgresTableZh as table } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableSelectedFilterZh as selected } from '../../src/renderer/locales/tableSelectedFilter.zh-CN';
 import { tableCellFilterZh as cellFilter } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -88,10 +89,11 @@ test('PostgreSQL 表页按勾选原值包含与排除', async ({}, info) => {
     await expectRows([5]);
     await clear();
     await expectRows([3, 4, 5]);
-    await tab.getByRole('button', { name: table.advancedFilter, exact: true }).click();
-    await advanced.getByRole('button', { name: table.valueOptions.open, exact: true }).click();
+    await grid.getByRole('columnheader', { name: 'note', exact: true }).click({ button: 'right' });
+    await page.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.columnValues, exact: true }).click();
     const values = page.getByRole('dialog', { name: table.valueOptions.open, exact: true });
-    await values.getByLabel(table.valueOptions.column, { exact: true }).selectOption('c1');
+    await expect(values.getByLabel(table.valueOptions.column, { exact: true })).toHaveValue('c1');
+    await expect(values.getByRole('row').filter({ hasText: '"后页其他值"' })).toHaveCount(0);
     await values.getByRole('button', { name: table.valueOptions.read, exact: true }).click();
     await values.getByRole('row').filter({ hasText: '"后页其他值"' }).getByRole('checkbox').check();
     await values.getByRole('button', { name: table.valueOptions.add, exact: true }).click();

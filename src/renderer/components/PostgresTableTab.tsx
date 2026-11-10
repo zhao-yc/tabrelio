@@ -1331,15 +1331,18 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   }, [active, connectionVersion, page, columnDialog]);
 
   /** 统计可与草稿共存。候选会加入筛选草稿，仍要求没有待提交记录。 */
-  function openColumnReader(kind: 'values' | 'statistics') {
+  function openColumnReader(kind: 'values' | 'statistics', key?: string) {
     const pageToken = page?.exportToken, allowed = kind === 'values' ? canReadValues : canReadStatistics;
     if (!allowed || !page || !pageToken || !layoutScope.current.current() || lease.current ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const columns = kind === 'values' ? valueColumns : page.columns;
+    const column = key === undefined ? columns.find(item => item.name === filterColumn) : columns.find(item => item.key === key);
+    if (key !== undefined && (!column || !canFilterCell() || selectedFilter || columnDialog)) return;
     const current = () => issued.current === pageToken && layoutScope.current.current() && !lease.current &&
       (kind === 'statistics' || !recordDirty.current);
     setColumnDialog({ kind, source: { input: { ...target, pageToken }, columns, current,
-      initialColumn: columns.find(column => column.name === filterColumn)?.key } });
+      initialColumn: column?.key } });
+    if (kind === 'values') setAdvancedFilters(true);
   }
 
   /** 仅保存明确调整后的宽度，跳过虚拟网格的自动测量和无变化事件。 */
@@ -1851,6 +1854,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid zoomable preserveCheckedRowsOnColumnLayout showGridImages={showGridImages} key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
         rowJump={canFind} rowJumpCurrent={findIsCurrent} onFindColumn={canFind ? key => openFind(false, key) : undefined} onFilterColumn={cellMenuEnabled && !selectedFilter && !columnDialog ? stageColumnFilter : undefined}
+        columnValueOptions={canReadValues && !selectedFilter && !columnDialog ? {
+          available: key => valueColumns.some(column => column.key === key),
+          open: key => openColumnReader('values', key),
+        } : undefined}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}
         insertSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind)

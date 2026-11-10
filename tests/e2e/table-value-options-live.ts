@@ -11,6 +11,7 @@ import { bindTableValueOptionsUiEnvironment, installTableValueOptionsConfirmatio
 import { closeMysqlConnection } from '../../src/engine/connection';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { tableValueOptionsZh as text } from '../../src/renderer/locales/tableValueOptions.zh-CN';
+import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { tableSortZh as sortText } from '../../src/renderer/locales/tableSort.zh-CN';
 import { recordViewZh as recordText } from '../../src/renderer/locales/recordViews.zh-CN';
 
@@ -98,8 +99,18 @@ export function registerTableValueOptionsUiTests(): void {
       let explicitReads = 0;
       /** 选择字段不请求；每次仅通过读取按钮获取服务端候选。 */
       const openValues = async (columnName: string) => {
-        await step(() => tab.getByRole('button', { name: text.open, exact: true }).click()); const dialog = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => expect(dialog.locator('[data-table-value-options-dialog]')).toHaveCount(1));
-        await step(() => dialog.getByRole('combobox', { name: text.column, exact: true }).selectOption(columnName)); await step(() => expect(dialog.getByRole('checkbox')).toHaveCount(0));
+        const dialog = page.getByRole('dialog', { name: text.title, exact: true });
+        const column = dialog.getByRole('combobox', { name: text.column, exact: true });
+        if (explicitReads === 0) {
+          await step(() => grid.getByRole('columnheader', { name: columnName, exact: true }).click({ button: 'right' }));
+          await step(() => page.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.columnValues, exact: true }).click());
+          await step(() => expect(column).toHaveValue(columnName));
+        } else {
+          await step(() => tab.getByRole('button', { name: text.open, exact: true }).click());
+          await step(() => column.selectOption(columnName));
+        }
+        await step(() => expect(dialog.locator('[data-table-value-options-dialog]')).toHaveCount(1));
+        await step(() => expect(dialog.getByRole('checkbox')).toHaveCount(0));
         const before = await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {}))); expect(before.filter(item => item.kind === 'table.valueOptions')).toHaveLength(explicitReads);
         await step(() => dialog.getByRole('button', { name: text.read, exact: true }).click()); explicitReads++; await step(() => expect(dialog.getByRole('button', { name: text.refresh, exact: true })).toBeEnabled()); return dialog;
       };

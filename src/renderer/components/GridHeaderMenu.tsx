@@ -27,6 +27,11 @@ export interface GridHeaderColumnVisibility {
   apply(key?: string): void;
 }
 
+export interface GridHeaderValueOptions {
+  available(key: string): boolean;
+  open(key: string): void;
+}
+
 interface HeaderMenuSource {
   owner: object | null | undefined;
   grid(): HTMLElement | null | undefined;
@@ -40,6 +45,7 @@ interface HeaderMenuSource {
   columnActions?(column: { key: string; name: string }, current: () => boolean): readonly GridCellAction[];
   findColumn?(key: string): void;
   filterColumn?(key: string): void;
+  valueOptions?: GridHeaderValueOptions;
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
   zoom?: ReturnType<typeof useGridZoom>;
@@ -286,6 +292,10 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     } });
     if (source.filterColumn) actions.push({ label: text.filterColumn, run: () => {
       if (current()) latest.current.filterColumn?.(column.key);
+    } });
+    if (source.valueOptions?.available(column.key)) actions.push({ label: text.columnValues, run: () => {
+      const options = latest.current.valueOptions;
+      if (current() && options?.available(column.key)) options.open(column.key);
     } });
     return openMenu(target, grid, { title: column.name, label: text.menu, targetRole: 'columnheader', current, actions }, point);
   }

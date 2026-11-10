@@ -1007,9 +1007,12 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     relationshipRef.current = owner; presetUiEpoch.current++; setRelationshipDialog(owner);
   }
   /** 候选绑定原页、原条件和连接；读取不碰父草稿，也不要求活动行。 */
-  function openTableValueOptions() {
+  function openTableValueOptions(name?: string) {
     if (tableReadAction.current !== tableReadRender || blockedRef.current || tableValueOptionsIntent.current || !connection || !info || !['table', 'view'].includes(info.objectKind ?? '') || !page || externalStale || gridEditing || record.hasInput() || document.querySelector('[role="dialog"]') || useWorkspace.getState().settings.activeTabId !== tab.id) return;
-    const column = info.columns.find(item => item.name === selectionRef.current?.key && tableValueOptionsColumnCapability(item.type) !== 'unsupported') ?? info.columns.find(item => tableValueOptionsColumnCapability(item.type) !== 'unsupported');
+    const supported = info.columns.filter(item => tableValueOptionsColumnCapability(item.type) !== 'unsupported');
+    const column = name === undefined
+      ? supported.find(item => item.name === selectionRef.current?.key) ?? supported[0]
+      : supported.find(item => item.name === name);
     if (!column) return;
     const source = info, originalPage = page, originalRows = rowsRef.current, originalSelection = selectionRef.current, generation = loadGeneration.current, version = connectionVersion, profile = connection;
     const currentTab = JSON.stringify(useWorkspace.getState().settings.tabs.find(item => item.id === tab.id));
@@ -2388,6 +2391,11 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       setColumnFilterRequest({ name });
       setShowFilter(true);
     } : undefined,
+    valueOptions: {
+      available: name => !!(page && info && ['table', 'view'].includes(info.objectKind ?? '') &&
+        info.columns.some(column => column.name === name && tableValueOptionsColumnCapability(column.type) !== 'unsupported')),
+      open: openTableValueOptions,
+    },
     visibility: page && !blocked ? { showType: showFieldType, showComment: showFieldComment,
       onShowTypeChange: setShowFieldType, onShowCommentChange: setShowFieldComment } : undefined,
     rowActions: (index, current) => {
@@ -2490,7 +2498,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
 <button type="button" disabled={!page || blocked} onClick={() => setShowFieldComment(value => !value)}>{showFieldComment ? headerText.hideComment : headerText.showComment}</button>
 <button aria-label={tableGridZh.preferences} title={tableGridZh.preferences} disabled={!page || blocked || preferencesLoading} onClick={() => setShowPreferences(true)}>{tableGridZh.preferences}</button>
 <button aria-label={tableStatisticsZh.title} title={tableStatisticsZh.title} disabled={!statisticsAvailable} onClick={() => openTableStatistics()}>{tableStatisticsZh.title}</button>
-<button aria-label={tableValueOptionsZh.open} title={tableValueOptionsZh.scope} disabled={blocked || !connection || !info || !info.columns.some(column => tableValueOptionsColumnCapability(column.type) !== 'unsupported') || !['table', 'view'].includes(info.objectKind ?? '') || !page || externalStale || gridEditing || record.hasInput()} onClick={openTableValueOptions}>{tableValueOptionsZh.open}</button></ActionMenuSection>
+<button aria-label={tableValueOptionsZh.open} title={tableValueOptionsZh.scope} disabled={blocked || !connection || !info || !info.columns.some(column => tableValueOptionsColumnCapability(column.type) !== 'unsupported') || !['table', 'view'].includes(info.objectKind ?? '') || !page || externalStale || gridEditing || record.hasInput()} onClick={() => openTableValueOptions()}>{tableValueOptionsZh.open}</button></ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.filter}><button type="button" aria-label={groupText.open} title={groupText.hint} className={filterGroup ? 'selected' : ''} disabled={!filters.length || !page || !info || blocked || externalStale || gridEditing || !!filterGroups} onClick={openFilterGroups}>{groupText.open}</button>
 <button title={cellFilterText.hint} disabled={!cellFilterAvailable} onClick={() => stageCellFilter(false)}>{cellFilterText.equal}</button>
 <button title={cellFilterText.hint} disabled={!cellFilterAvailable} onClick={() => stageCellFilter(true)}>{cellFilterText.exclude}</button>

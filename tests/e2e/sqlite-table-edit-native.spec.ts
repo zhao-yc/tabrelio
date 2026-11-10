@@ -7,6 +7,7 @@ import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sq
 import { sqliteTablePresetsZh as presetText } from '../../src/renderer/locales/sqliteTablePresets.zh-CN';
 import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
 import { sqliteValueOptionsZh as valuesText } from '../../src/renderer/locales/sqliteValueOptions.zh-CN';
+import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { tableGridZh as layoutFields } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { sqliteTableRangePasteZh as rangeText } from '../../src/renderer/locales/sqliteTableRangePaste.zh-CN';
 import { binaryCellFilesZh as binaryFilesText } from '../../src/renderer/locales/binaryCellFiles.zh-CN';
@@ -401,8 +402,11 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(await step(audit), command)).toHaveLength(operations(beforeValues, command).length);
     const conditionSnapshot = () => table().locator('[aria-label^="SQLite 筛选 "]').evaluateAll(nodes => nodes.map(node => ({ label: node.getAttribute('aria-label'), value: (node as HTMLInputElement).value, checked: (node as HTMLInputElement).checked })));
     const originalConditions = await step(conditionSnapshot), filterCount = await step(() => table().getByRole('combobox', { name: /^SQLite 筛选 \d+ 运算符$/ }).count());
-    await step(() => table().getByRole('button', { name: valuesText.entry, exact: true }).click()); const valuesModal = () => page.getByRole('dialog', { name: valuesText.title, exact: true }); await step(() => expect(valuesModal()).toBeVisible());
-    expect(operations(await step(audit), 'sqlite.valueOptions')).toHaveLength(0); await step(() => valuesModal().getByLabel(valuesText.column, { exact: true }).selectOption('note')); await step(() => valuesModal().getByLabel(valuesText.search, { exact: true }).fill(oldNote + '1')); expect(operations(await step(audit), 'sqlite.valueOptions')).toHaveLength(0);
+    await step(() => grid().getByRole('columnheader', { name: 'note', exact: true }).click({ button: 'right' }));
+    await step(() => page.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.columnValues, exact: true }).click());
+    const valuesModal = () => page.getByRole('dialog', { name: valuesText.title, exact: true });
+    await step(() => expect(valuesModal().getByLabel(valuesText.column, { exact: true })).toHaveValue('note'));
+    expect(operations(await step(audit), 'sqlite.valueOptions')).toHaveLength(0); await step(() => valuesModal().getByLabel(valuesText.search, { exact: true }).fill(oldNote + '1')); expect(operations(await step(audit), 'sqlite.valueOptions')).toHaveLength(0);
     await step(() => valuesModal().getByRole('button', { name: valuesText.read, exact: true }).click()); await step(() => expect(valuesModal().getByLabel(valuesText.choice(1), { exact: true })).toBeEnabled());
     const valuesFact = operations(await step(audit), 'sqlite.valueOptions'); expect(valuesFact).toHaveLength(1); expect(valuesFact[0].request).toMatchObject({ connectionId: rw.id, database: 'main', table: pkTable, column: 'note', search: oldNote + '1', filters: [] }); expect(result(valuesFact[0].reply)).toMatchObject({ values: [{ value: { kind: 'text', value: oldNote + '1' }, count: '1' }], truncated: false });
     await step(() => valuesModal().getByLabel(valuesText.choice(1), { exact: true }).check()); await step(() => valuesModal().getByRole('button', { name: valuesText.add, exact: true }).click()); await step(() => expect(valuesModal()).toBeHidden());

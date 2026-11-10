@@ -8,11 +8,11 @@ import { acquireWorkspaceBusy } from '../store';
 import { invoke, uid, errorMessage } from '../lib';
 import { ErrorBox, Modal, Spinner } from './ui';
 
-interface Props { tabId: string; base: Omit<SqliteValueOptionsInput, 'column' | 'search' | 'taskId' | 'order'>; columns: readonly string[]; mode: 'and' | 'or'; current(): boolean; onApply(filter: SqliteTableFilter): boolean; onClose(): void; onCleanup(reason: unknown): void; }
+interface Props { tabId: string; base: Omit<SqliteValueOptionsInput, 'column' | 'search' | 'taskId' | 'order'>; columns: readonly string[]; initialColumn?: string; mode: 'and' | 'or'; current(): boolean; onApply(filter: SqliteTableFilter): boolean; onClose(): void; onCleanup(reason: unknown): void; }
 /** 只在显式读取时访问数据库；加入草稿和搜索输入均不自动查询。 */
 export function SqliteValueOptionsDialog(props: Props) {
   const origin = useRef(props).current, latest = useRef(props); latest.current = props;
-  const [view, setView] = useState<SqliteValuesView>({ busy: false, stopping: false, error: '' }), [column, setColumn] = useState(origin.columns[0] ?? ''), [search, setSearch] = useState(''), [exclude, setExclude] = useState(false), [selected, setSelected] = useState<readonly number[]>([]), [page, setPage] = useState(0), [problem, setProblem] = useState(''), [closing, setClosing] = useState(false);
+  const [view, setView] = useState<SqliteValuesView>({ busy: false, stopping: false, error: '' }), [column, setColumn] = useState(origin.initialColumn ?? origin.columns[0] ?? ''), [search, setSearch] = useState(''), [exclude, setExclude] = useState(false), [selected, setSelected] = useState<readonly number[]>([]), [page, setPage] = useState(0), [problem, setProblem] = useState(''), [closing, setClosing] = useState(false);
   const composing = useRef(false), mounted = useRef(true), closingRef = useRef(false), applying = useRef(false), closed = useRef(false), render = {}, committed = useRef<object | undefined>(undefined);
   const [order, setOrder] = useState<SqliteValueOptionsOrder>('value');
   useLayoutEffect(() => { committed.current = render; return () => { if (committed.current === render) committed.current = undefined; }; });
