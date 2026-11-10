@@ -1,3 +1,5 @@
+import { savedQueryPagesZh as pagesText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
+import { savedQueryOrganizationZh as organizationText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import{readFile}from'node:fs/promises';
 import{join}from'node:path';
 import{test,expect,page,dataDir,pageErrors,answerDialogs,quitDesktop,launchDesktop}from'./desktop-fixture';
@@ -35,6 +37,23 @@ test('列表打开保持四种默认库、精确SQL和独立原草稿，重启�
  test.setTimeout(120000);const profile=await connection('原来源'),source="-- 原文\r\nSELECT 9007199254740993, '0.12345678901234567890';\r\n-- 😀";const contexts:[string,Partial<SavedQuery>][]=[['已知指定库',{database:'旧库',databaseContext:{state:'known',database:'实际库'}}],['已知无库',{database:'旧库',databaseContext:{state:'known',database:null}}],['未知库',{database:'旧库',databaseContext:{state:'unknown'}}],['遗留',{database:'历史库'}]];for(const[name,context]of contexts)await save({id:name,name,connectionId:profile.id,sql:source,...context});await page.evaluate(async id=>{const state=await window.dbark.invoke('settings.get',{});await window.dbark.invoke('settings.save',{...state,activeTabId:'constructor',tabs:[{id:'constructor',kind:'query',title:'原始未执行草稿',connectionId:id,databaseContext:{state:'unknown'},sql:'SELECT 不覆盖'}]});},profile.id);await page.reload();await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();const original=(await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).tabs[0];
  for(const[name,context]of contexts){await open();const card=dialog().locator('.history-card').filter({has:page.getByText(name,{exact:true})});await expect(card).toHaveCount(1);await expect(card.getByLabel('打开查询的连接：'+name,{exact:true})).toHaveValue(profile.id);await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'在新标签打开',exact:true})).click();await expect(dialog()).toHaveCount(0);await expect.poll(async()=>{const state=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));return state.tabs.find(tab=>tab.id===state.activeTabId);}).toMatchObject({title:name,sql:source,connectionId:profile.id});const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{})),active=settings.tabs.find(tab=>tab.id===settings.activeTabId)!;expect(active.databaseContext).toEqual(context.databaseContext);expect(active.database).toBe(context.databaseContext?context.databaseContext.state==='known'?context.databaseContext.database??undefined:undefined:context.database);expect(settings.tabs.find(tab=>tab.id==='constructor')).toEqual(original);}
  expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);await answerDialogs([1,1]);await quitDesktop();await launchDesktop();await open();await expect(dialog().locator('.history-card')).toHaveCount(4);expect((await page.evaluate(()=>window.dbark.invoke('queries.list',{}))).every(item=>item.sql===source)).toBe(true);expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('saved-query-pages-context.png')});
+ const recentSort = () => dialog().getByLabel(pagesText.sort, { exact: true });
+ const names = () => dialog().locator('.history-card strong');
+ await recentSort().selectOption('opened');
+ await expect(names()).toHaveText([...contexts].reverse().map(([name]) => name));
+ await dialog().getByLabel(organizationText.select('已知指定库'), { exact: true }).check();
+ await dialog().getByLabel(organizationText.select('已知无库'), { exact: true }).check();
+ await dialog().getByRole('button', { name: pagesText.openBatch, exact: true }).click();
+ await dialog().getByRole('button', { name: pagesText.openBatchConfirm(2), exact: true }).click();
+ await expect(dialog()).toHaveCount(0);
+ await open();
+ await recentSort().selectOption('opened');
+ await expect(names()).toHaveText(['已知指定库', '已知无库', '遗留', '未知库']);
+ await names().first().scrollIntoViewIfNeeded();
+ await dialog().screenshot({ path: info.outputPath('saved-query-recent-opens.png') });
+ expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
 });
 
 test('失效来源须明确替代，旧摘要不能打开或删除新内容，成功删除刷新首批且保留其他记录',async({},info)=>{

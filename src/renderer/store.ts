@@ -19,6 +19,7 @@ import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordW
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { zh } from './locales/zh-CN';
 import { queryDuplicateZh } from './locales/queryDuplicate.zh-CN';
+import { savedQueryPagesZh } from './locales/savedQueryPages.zh-CN';
 import { sqliteWriteFactMessage, sqliteWriteFactSchema } from '../shared/sqliteWriteFact';
 import { sqliteImportWriteFactSchema, assertSqliteImportWriteFactTransition } from '../shared/sqliteTableImport';
 import { sqliteImportFactMessage, sqliteImportTaskMessage } from '../shared/sqliteTableImportFact';
@@ -172,6 +173,11 @@ export function openQueryTabBatch(drafts: readonly Omit<WorkspaceTab, 'id'>[]): 
   if (original.length + drafts.length > 100) throw Error(queryDuplicateZh.batchCapacity);
   const tabs = drafts.map(draft => ({ ...draft, id: uid() }));
   workspace.updateSettings({ tabs: [...original, ...tabs], activeTabId: tabs[0].id });
+}
+
+/** 标签发布后才记录打开顺序，记录写盘失败时提示用户并保留已经打开的标签。 */
+export function rememberOpenedSavedQueries(ids: string[], request = invoke): void {
+  void request('queries.rememberOpened', { ids }).catch(() => useWorkspace.getState().notify(savedQueryPagesZh.rememberOpenFailed, true));
 }
 
 /** 批量打开等待期间监视原连接配置与版本，变化后即使切回也不能发布旧草稿。 */

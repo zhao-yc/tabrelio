@@ -1,6 +1,7 @@
 /** 保存查询分页列表的文案集中管理，历史列表仍走原有兼容路径。 */
 export const savedQueryPagesZh={
  sort:'保存查询排序',sortRecent:'最近更新',sortOldest:'最早更新',sortNameAsc:'名称升序',sortNameDesc:'名称降序',
+ sortOpened:'最近打开（仅已打开）',rememberOpenFailed:'查询已打开，但未能保存最近打开记录。',
  search:'搜索名称或完整SQL',searchButton:'搜索保存查询',refresh:'刷新到第一页',next:'读取下一批',cancel:'取消列表读取',
  scope:'保存查询来源',allSources:'全部来源',unbound:'未绑定连接',
  favoritesOnly:'仅显示收藏',favoriteName:(name:string)=>`收藏查询「${name}」`,

@@ -29,7 +29,7 @@ afterEach(async()=>{await service?.close();for(const worker of workers)expect(wo
 
 describe('保存查询概要和协议',()=>{
  it('排序只允许在第一页提交枚举，不能通过续页改变顺序', () => {
-  for (const sort of ['recent', 'oldest', 'name-asc', 'name-desc'] as const)
+  for (const sort of ['recent', 'oldest', 'name-asc', 'name-desc', 'opened'] as const)
    expect(validateCommand('queries.page', request({ sort }))).toMatchObject({ sort });
   expect(() => validateCommand('queries.page', { ...request(), sort: 'name; DROP TABLE queries' })).toThrow();
   expect(() => validateCommand('queries.pageContinue', { taskId: randomUUID(), cursor: randomUUID(), sort: 'name-asc' })).toThrow();
@@ -48,6 +48,41 @@ describe('保存查询概要和协议',()=>{
 });
 
 describe('真实SQLite键分页及工作线程',()=>{
+ it('最近打开最多100条，跨页维持顺序，记录变动只使对应游标失效', async () => {
+  const ids = Array.from({ length: 102 }, (_, index) => `opened-${index}`);
+  for (const id of ids) store.saveQuery(query({ id, name: id }));
+  const original = store.queries(), normal = await service.start(request());
+  for (let start = 0; start < 101; start += 20) store.rememberOpenedSavedQueries({ ids: ids.slice(start, Math.min(start + 20, 101)) });
+  expect(store.queries()).toEqual(original);
+  await expect(service.next({ taskId: randomUUID(), cursor: normal.cursor! })).resolves.toMatchObject({ scanned: 50 });
+  const input = request({ sort: 'opened' }), first = await service.start(input);
+  expect(first.items.map(item => item.query.id)).toEqual([ids[100], ...ids.slice(80, 100), ...ids.slice(60, 64)]);
+  const pending = first.cursor!, before = store.queryPageRevision(input), path = join(directory, 'test.sqlite');
+  const bytes = readFileSync(path);
+  mkdirSync(path + '.tmp');
+  try { expect(() => store.rememberOpenedSavedQueries({ ids: [ids[0]] })).toThrow('修改未保存'); }
+  finally { rmdirSync(path + '.tmp'); }
+  expect(readFileSync(path)).toEqual(bytes);
+  expect(store.queryPageRevision(input)).toBe(before);
+  store.rememberOpenedSavedQueries({ ids: [ids[0], '已删除'] });
+  await expect(service.next({ taskId: randomUUID(), cursor: pending })).rejects.toThrow('已变化');
+  await service.close(); store.close();
+  store = await LocalStore.open(path, require.resolve('sql.js/dist/sql-wasm.wasm'), protector);
+  service = new SavedQueryPages(store, workerPath);
+  let page = await service.start(request({ sort: 'opened' }));
+  const opened = page.items.map(item => item.query.id);
+  while (page.cursor) {
+   page = await service.next({ taskId: randomUUID(), cursor: page.cursor });
+   opened.push(...page.items.map(item => item.query.id));
+  }
+  expect(opened).toHaveLength(100);
+  expect(new Set(opened).size).toBe(100);
+  expect(opened[0]).toBe(ids[0]);
+  expect(opened).not.toContain(ids[101]);
+  expect(opened).not.toContain('已删除');
+  store.deleteQuery(ids[0]); store.saveQuery(query({ id: ids[0] }));
+  expect((await service.start(request({ sort: 'opened', search: ids[0] }))).items).toEqual([]);
+ });
  it('收藏跨页先筛选再读取正文，重开保留且删除同编号后不复活', async () => {
   const values = Array.from({ length: 29 }, (_, index) => query({
    id: `fav-${String(index).padStart(2, '0')}`, name: `查询 ${String(index).padStart(2, '0')}`,

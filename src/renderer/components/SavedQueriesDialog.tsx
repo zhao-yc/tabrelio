@@ -11,7 +11,7 @@ import { historyPagesZh as sqlText } from '../locales/historyPages.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
-import { openQueryTabBatch, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
+import { openQueryTabBatch, rememberOpenedSavedQueries, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { SavedQueryRebindEditor } from './SavedQueryRebindEditor';
@@ -345,6 +345,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         if (!owns(ticket)) return;
         if (!targets.current() || selectedRef.current !== origin.selection || openRef.current !== origin) throw Error(t.openBatchStale);
         openQueryTabBatch(result.queries.map(queryTab));
+        rememberOpenedSavedQueries(items.map(item => item.id), io.request);
         opened = true;
       } finally { targets.dispose(); }
     }, origin.epoch);
@@ -389,7 +390,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function open(item: SavedQueryPageEntry) {
     if (!editable()) return; const connectionId = target(item); if (!connectionId) { setError(t.choose); return; }
     let opened: SavedQueryOpenResult | undefined; const work = run(async ticket => { const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId }); if (owns(ticket)) opened = result; });
-    if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => { useWorkspace.getState().openTab({ id: io.id(), ...queryTab(result) }); onClose(); }); } });
+    if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => {
+      useWorkspace.getState().openTab({ id: io.id(), ...queryTab(result) });
+      rememberOpenedSavedQueries([result.query.id], io.request);
+      onClose();
+    }); } });
   }
   /** 只有已应用范围内的原卡片可以读取或导出，旧页事件不能复用。 */
   function currentCard(item: SavedQueryPageEntry): boolean {
@@ -584,6 +589,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         <label className="inline-field">{t.sort}<select aria-label={t.sort} disabled={blocked} value={sort} onChange={event => selectSort(event.target.value as SavedQueryPageSort)}>
           <option value="recent">{t.sortRecent}</option><option value="oldest">{t.sortOldest}</option>
           <option value="name-asc">{t.sortNameAsc}</option><option value="name-desc">{t.sortNameDesc}</option>
+          <option value="opened">{t.sortOpened}</option>
         </select></label>
         <label className="saved-query-favorites-filter"><input type="checkbox" checked={favoritesOnly} disabled={blocked} onChange={event => selectFavorites(event.target.checked)}/>{t.favoritesOnly}</label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}

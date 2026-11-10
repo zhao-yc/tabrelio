@@ -41,7 +41,7 @@ import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQueryImportLimits,savedQuerySearchLimits,type SavedQueryImportTarget}from'../shared/savedQuerySearch';
-import { savedQueryFavoriteSchema, type SavedQueryFavoriteInput, type SavedQueryPageInput, type SavedQueryPagePosition } from '../shared/savedQueryPages';
+import { savedQueryFavoriteSchema, savedQueryRecentLimit, savedQueryRememberOpenSchema, type SavedQueryFavoriteInput, type SavedQueryPageInput, type SavedQueryPagePosition, type SavedQueryRememberOpenInput } from '../shared/savedQueryPages';
 import { historySaveBatchLimits, type HistoryPagePosition, type HistoryPageInput } from '../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
 import { queryCreateSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
@@ -87,6 +87,7 @@ export class LocalStore {
   private readonly queryFileReloadGenerations = new Map<string, number>();
   private queryFileDocumentSnapshot?: AppSettings['tabs'];
   private queryRevisionValue=0;
+  private queryOpenRevision = 0;
   private readonly queryOrganizationGeneration = randomUUID();
   private readonly importPresetGeneration = randomUUID();
   private historyRevisionValue=0;
@@ -185,6 +186,9 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS saved_query_favorites (query_id TEXT NOT NULL PRIMARY KEY);
         CREATE TRIGGER IF NOT EXISTS saved_query_favorites_cleanup AFTER DELETE ON queries
           BEGIN DELETE FROM saved_query_favorites WHERE query_id=OLD.id; END;
+        CREATE TABLE IF NOT EXISTS saved_query_recent_opens (query_id TEXT NOT NULL PRIMARY KEY, ordinal INTEGER NOT NULL UNIQUE);
+        CREATE TRIGGER IF NOT EXISTS saved_query_recent_opens_cleanup AFTER DELETE ON queries
+          BEGIN DELETE FROM saved_query_recent_opens WHERE query_id=OLD.id; END;
         PRAGMA user_version=9;`);
     });
     for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
@@ -928,6 +932,11 @@ export class LocalStore {
   queries(): SavedQuery[] { return this.records('SELECT data FROM queries ORDER BY updated_at DESC'); }
   /** 搜索绑定查询及连接库修订；失败写盘不会改变修订。 */
   querySearchRevision():string{return this.queryRevisionValue+':'+this.connectionRevisionValue+':'+readSavedQueryOrganization(this.db).revision;}
+  /** 打开记录只影响按打开顺序读取的游标，普通列表和组织修订保持原语义。 */
+  queryPageRevision(input: Pick<SavedQueryPageInput, 'sort'>): string {
+    const revision = this.querySearchRevision();
+    return input.sort === 'opened' ? revision + ':' + this.queryOpenRevision : revision;
+  }
   /** 分组CAS同时绑定整个查询库和组织修订；读取只统计元数据，不解密连接。 */
   queryOrganization() { return savedQueryOrganizationSnapshot(this.db, this.queryOrganizationRevision()); }
   /** 每次重启更换世代，防止旧渲染文档或ABA修订重新获得写入资格。 */
@@ -952,20 +961,22 @@ export class LocalStore {
     if (input?.favoritesOnly) conditions.push('f.query_id IS NOT NULL');
     const sort = input?.sort;
     const byName = sort === 'name-asc' || sort === 'name-desc';
+    const byOpen = sort === 'opened';
     const ascending = sort === 'name-asc' || sort === 'oldest';
-    const orderKey = byName ? `(${savedQueryNameKey})` : 'q.updated_at COLLATE BINARY';
+    const orderKey = byName ? `(${savedQueryNameKey})` : byOpen ? 'r.ordinal' : 'q.updated_at COLLATE BINARY';
     const direction = ascending ? 'ASC' : 'DESC';
     if (after) {
-      const previousKey = byName ? after.nameKey : after.updatedAt;
-      if (previousKey === undefined) throw Error('保存查询名称排序位置无效，请刷新列表');
+      const previousKey = byName ? after.nameKey : byOpen ? after.openOrder : after.updatedAt;
+      if (previousKey === undefined) throw Error('保存查询排序位置无效，请刷新列表');
       const comparison = ascending ? '>' : '<';
       if (byName) { conditions.push(`${orderKey}${comparison}=?`); params.push(previousKey); }
       conditions.push(`(${orderKey},q.id COLLATE BINARY)${comparison}(?,?)`);
       params.push(previousKey, after.id);
     }
-    const columns = byName ? `,${orderKey} AS name_key` : '';
+    const columns = byName ? `,${orderKey} AS name_key` : byOpen ? ',r.ordinal AS open_order' : '';
     const statement = this.db.prepare('SELECT q.id,q.updated_at,m.group_id,f.query_id AS favorite_id,CASE WHEN length(CAST(q.data AS BLOB))<=? THEN q.data ELSE NULL END AS data' + columns +
       ' FROM queries q LEFT JOIN saved_query_memberships m ON m.query_id=q.id LEFT JOIN saved_query_favorites f ON f.query_id=q.id ' +
+      (byOpen ? 'JOIN saved_query_recent_opens r ON r.query_id=q.id ' : '') +
       (conditions.length ? 'WHERE ' + conditions.join(' AND ') + ' ' : '') +
       `ORDER BY ${orderKey} ${direction},q.id COLLATE BINARY ${direction} LIMIT 2`);
     try {
@@ -975,8 +986,23 @@ export class LocalStore {
       const nameKey = row.name_key instanceof Uint8Array ? row.name_key : undefined;
       return { id: String(row.id), updatedAt: String(row.updated_at), raw: typeof row.data === 'string' ? row.data : null,
         ...(nameKey ? { nameKey } : {}), ...(typeof row.group_id === 'string' ? { groupId: row.group_id } : {}),
+        ...(typeof row.open_order === 'number' ? { openOrder: row.open_order } : {}),
         ...(typeof row.favorite_id === 'string' ? { favorite: true as const } : {}), hasMore: statement.step() };
     } finally { statement.free(); }
+  }
+  /** 只保存最近使用的编号，批次中第一个打开的标签为活动项，排在其余标签之前。 */
+  rememberOpenedSavedQueries(raw: SavedQueryRememberOpenInput): void {
+    const { ids } = savedQueryRememberOpenSchema.parse(raw);
+    this.mutate(() => {
+      let ordinal = Number(this.db.exec('SELECT COALESCE(MAX(ordinal),0) FROM saved_query_recent_opens')[0].values[0][0]);
+      if (!Number.isSafeInteger(ordinal + ids.length)) throw Error('保存查询的打开顺序超出范围');
+      for (const id of [...ids].reverse()) {
+        this.db.run('INSERT INTO saved_query_recent_opens SELECT id,? FROM queries WHERE id=? ON CONFLICT(query_id) DO UPDATE SET ordinal=excluded.ordinal',
+          [++ordinal, id]);
+      }
+      this.db.run('DELETE FROM saved_query_recent_opens WHERE ordinal IN (SELECT ordinal FROM saved_query_recent_opens ORDER BY ordinal DESC LIMIT -1 OFFSET ?)', [savedQueryRecentLimit]);
+    });
+    this.queryOpenRevision++;
   }
   /** 收藏独立于正文摘要，旧列表或写盘失败不能覆盖现有收藏。 */
   setSavedQueryFavorite(raw: SavedQueryFavoriteInput): void {

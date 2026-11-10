@@ -2761,6 +2761,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
 
     case 'queries.pageRelease':return savedQueryPages.release(input);
+    case 'queries.rememberOpened':
+      if (shuttingDown) throw Error('客户端正在退出，不能记录最近打开的查询');
+      return store.rememberOpenedSavedQueries(input);
     case 'queries.deleteChecked':if(shuttingDown)throw Error('客户端正在退出，不能删除保存查询');return savedQueryPages.deleteChecked(input);
     case 'queries.favoriteSet':
       if (shuttingDown) throw Error('客户端正在退出，不能更改保存查询收藏');

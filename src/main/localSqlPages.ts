@@ -6,7 +6,7 @@ import{SavedQuerySearchCancelled}from'./savedQuerySearch';
 export interface LocalPageRecord<Position>{id:string;orderValue:string;raw:string|null;position:Position;hasMore:boolean}
 interface PageInput{taskId:string;onError:'stop'|'continue'}
 export interface LocalPageSource<Input,Entry,Position>{
- label:string;parse(raw:unknown):Input;revision():string;
+ label:string;parse(raw:unknown):Input;revision(input:Input):string;
  next(after:Position|undefined,input:Input):LocalPageRecord<Position>|null;
  match(matcher:SavedQueryMatcher,record:LocalPageRecord<Position>,input:Input):Promise<Entry|undefined>;
  verify?(entry:Entry,record:LocalPageRecord<Position>):void;
@@ -22,9 +22,9 @@ export class LocalSqlPages<Input extends PageInput,Entry,Position>{
  /** 到期状态和最近请求仅有界保留，不保存正文、预览或活动线程。 */
  private prune(){const now=Date.now();for(const[id,value]of this.cursors)if(value.expires<=now)this.cursors.delete(id);for(const[id,expires]of this.recent)if(expires<=now&&!this.jobs.has(id))this.recent.delete(id);}
  /** 每次等待后核对取消和资料源修订，不能发布混合了新旧记录的一页。 */
- private check(job:Job,state:State<Input,Position>){if(job.cancelled||this.closing)throw new SavedQuerySearchCancelled(this.source.label+'列表读取已取消');if(state.revision!==this.source.revision())throw Error(this.source.label+'或连接库已变化，请刷新列表');}
+ private check(job:Job,state:State<Input,Position>){if(job.cancelled||this.closing)throw new SavedQuerySearchCancelled(this.source.label+'列表读取已取消');if(state.revision!==this.source.revision(state.input))throw Error(this.source.label+'或连接库已变化，请刷新列表');}
  /** 初次请求由资料源严格校验，复制条件并从最新索引位置读取。 */
- start(raw:unknown){const input=this.source.parse(raw);return this.run({input,revision:this.source.revision(),scanned:0,matched:0,failed:0},input.taskId);}
+ start(raw:unknown){const input=this.source.parse(raw);return this.run({input,revision:this.source.revision(input),scanned:0,matched:0,failed:0},input.taskId);}
  /** 消费一次句柄，后续编号不能篡改原筛选和位置。 */
  next(raw:unknown){const input=localSqlPageNextSchema.parse(raw);this.prune();const cursor=this.cursors.get(input.cursor);if(!cursor)throw Error(this.source.label+'列表已过期或已翻页，请刷新');this.cursors.delete(input.cursor);return this.run(cursor.state,input.taskId);}
  /** 幂等释放指定来源的句柄，不能释放另一资料源的游标。 */

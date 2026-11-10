@@ -2,13 +2,13 @@ import{createHash}from'node:crypto';
 import{savedQueryPageInputSchema,savedQueryDeleteCheckedSchema,type SavedQueryPageInput,type SavedQueryPageEntry,type SavedQueryPagePosition}from'../shared/savedQueryPages';
 import{LocalSqlPages}from'./localSqlPages';
 
-interface PageStore{querySearchRevision():string;queryPageNext(after?:SavedQueryPagePosition,input?:SavedQueryPageInput):(SavedQueryPagePosition & {raw:string|null;hasMore:boolean;groupId?:string;favorite?:true})|null;querySearchRaw(id:string):string|undefined;deleteQuery(id:string):void}
+interface PageStore{queryPageRevision(input:SavedQueryPageInput):string;queryPageNext(after?:SavedQueryPagePosition,input?:SavedQueryPageInput):(SavedQueryPagePosition & {raw:string|null;hasMore:boolean;groupId?:string;favorite?:true})|null;querySearchRaw(id:string):string|undefined;deleteQuery(id:string):void}
 
 /** 保存查询与执行历史共用有界分页生命周期，资料源和句柄保持独立。 */
 export class SavedQueryPages extends LocalSqlPages<SavedQueryPageInput,SavedQueryPageEntry,SavedQueryPagePosition>{
  constructor(private readonly store:PageStore,workerPath:string){super({
-  label:'保存查询',parse:raw=>savedQueryPageInputSchema.parse(raw),revision:()=>store.querySearchRevision(),
-  next:(after,input)=>{const record=store.queryPageNext(after,input);return record?{...record,orderValue:record.updatedAt,position:{id:record.id,updatedAt:record.updatedAt,nameKey:record.nameKey}}:null;},
+  label:'保存查询',parse:raw=>savedQueryPageInputSchema.parse(raw),revision:input=>store.queryPageRevision(input),
+  next:(after,input)=>{const record=store.queryPageNext(after,input);return record?{...record,orderValue:record.updatedAt,position:{id:record.id,updatedAt:record.updatedAt,nameKey:record.nameKey,openOrder:record.openOrder}}:null;},
   match:(matcher,record,input)=>matcher.summarize(record.id,record.raw!,input.search,input.scope),
   // 原SQLite成员关系在字节预算之前加入概要，不能通过额外字段绕过128KiB门槛。
   verify:(entry,record)=>{
