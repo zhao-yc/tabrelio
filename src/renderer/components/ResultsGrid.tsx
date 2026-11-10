@@ -411,6 +411,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
             format === 'headers' ? range.keys.map(key => columns.find(column => column.key === key)!.name) : undefined));
         } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
       }));
+      actions.push(...resultRowSqlActions(cell.index, current, rectangle));
       const selectRow = rangeTools ? cellRange.selectRowAction(cell.row, rowIdx, key) : undefined;
       const selectAll = rangeTools ? cellRange.selectAllAction(cell.row, rowIdx, key) : undefined;
       if (selectAll) actions.unshift(selectAll);
@@ -637,9 +638,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     rowActions: insertSql || updateSql ? (index, current) => {
       const row = rows[index];
       if (!row || skipRowInInversion?.(row) || tableCopy?.enabled === false || tableCopy?.isCurrent() === false) return [];
-      const checked = selectedRows.has(index), menu = { index, current: () => current() && rows[index] === row };
-      return gridRowSqlActions(checked, insertSql ? () => handleRowOutput(rowSql.current.insertSql, checked, insertCopyText.copied, menu) : undefined,
-        updateSql ? () => handleRowOutput(rowSql.current.updateSql, checked, updateSqlCopyZh.copied, menu) : undefined);
+      return resultRowSqlActions(index, () => current() && rows[index] === row && selectedActionCurrent(), undefined, selectedRows.has(index));
     } : undefined,
     visibility: headerDetails,
     freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,
@@ -662,15 +661,31 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     };
   }, [needsCheckedRows, selectionBefore, rowScope, scope, gridRevision]);
   useLayoutEffect(() => { onCheckedRows?.(checkedRows); }, [onCheckedRows, checkedRows]);
+  /** 原 SQL 生成器接收显示行下标，矩形中的不可用行整组选中时拒绝。 */
+  function resultRowSqlActions(index: number, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
+    const menu = { current, indices: () => {
+      if (checked) return selectedRows;
+      if (!rectangle) return new Set([index]);
+      const range = cellRange.capture(rectangle, null);
+      if (!range) return;
+      if (range.rows.some(row => skipRowInInversion?.(row))) throw Error(insertCopyText.selection);
+      return new Set(range.rows.map((_, offset) => range.startRow + offset));
+    } };
+    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : 'current',
+      insertSql ? () => handleRowOutput(rowSql.current.insertSql, checked, insertCopyText.copied, menu) : undefined,
+      updateSql ? () => handleRowOutput(rowSql.current.updateSql, checked, updateSqlCopyZh.copied, menu) : undefined);
+  }
   /** 复制与打开查询草稿共用活动格或勾选代次，生成失败时不产生副作用。 */
   function handleRowOutput(build: ((indices: ReadonlySet<number>) => string) | undefined, checked: boolean, destination: string | ((sql: string) => void),
-    menu?: { index: number; current(): boolean }) {
-    const current = () => tableCopy?.enabled !== false && selectedActionCurrent() &&
-      (menu ? menu.current() : copyRevisionRef.current === copyRevision) && tableCopy?.isCurrent() !== false && !document.querySelector(appModalSelector);
-    const index = menu?.index ?? (activeCopyCell && rows[activeCopyCell.index] === activeCopyCell.row ? activeCopyCell.index : undefined);
-    if (!build || !current() || (!checked && index === undefined)) return;
+    menu?: { indices(): ReadonlySet<number> | undefined; current(): boolean }) {
+    const current = () => tableCopy?.enabled !== false && (menu ? menu.current() : selectedActionCurrent() && copyRevisionRef.current === copyRevision) &&
+      tableCopy?.isCurrent() !== false && !document.querySelector(appModalSelector);
+    if (!build || !current()) return;
     try {
-      const sql = build(checked ? selectedRows : new Set([index!]));
+      const indices = menu ? menu.indices() : checked ? selectedRows :
+        activeCopyCell && rows[activeCopyCell.index] === activeCopyCell.row ? new Set([activeCopyCell.index]) : undefined;
+      if (!indices) return;
+      const sql = build(indices);
       if (typeof destination === 'function') {
         if (current()) destination(sql);
         return;

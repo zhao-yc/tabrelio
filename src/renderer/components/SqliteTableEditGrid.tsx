@@ -250,12 +250,13 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
   }
   /** 只从本次勾选或活动数据格取得原行，生成失败时不产生副作用。 */
   function handleTableSql(build: typeof sqliteCopyInsertDraftRows, checked: boolean, destination: string | ((sql: string) => void),
-    menu?: { row: SqliteDraftRow; current(): boolean }) {
+    menu?: { records(): readonly SqliteDraftRow[] | undefined; current(): boolean }) {
     const allowed = () => !disabled && (menu ? menu.current() : current()) && noModal();
     if (!allowed()) return;
     try {
-      const row = menu?.row ?? activeCell.current.position?.row;
-      const records = checked ? rows.filter(row => selectedRows.has(row.id)) : row ? [row] : [];
+      const row = activeCell.current.position?.row;
+      const records = menu ? menu.records() : checked ? rows.filter(row => selectedRows.has(row.id)) : row ? [row] : [];
+      if (!records) return;
       if (checked && records.length !== selectedRows.size) throw Error(insertCopyText.selection);
       const sql = build(page, records);
       if (typeof destination === 'function') {
@@ -269,6 +270,15 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
       setError('');
       useWorkspace.getState().notify(destination);
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : insertCopyText.invalid); }
+  }
+  /** 矩形覆盖的行按显示顺序提交给原快照校验，不跳过其中的草稿或删除行。 */
+  function sqliteRowSqlActions(row: SqliteDraftRow, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
+    if (row.deleted || row.index === undefined) return [];
+    const menu = { current, records: () => checked ? rows.filter(item => selectedRows.has(item.id))
+      : rectangle ? cellRange.capture(rectangle, null)?.rows : [row] };
+    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : 'current',
+      page.insertCopy ? () => handleTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied, menu) : undefined,
+      page.primaryKey?.length ? () => handleTableSql(sqliteCopyUpdateDraftRows, checked, updateSqlCopyZh.copied, menu) : undefined);
   }
   const hasActiveDataColumn = order.some(index => activeCell.current.position?.key === 'c' + index);
   /** 原动态类型用于判断文件格式，未填值和已删草稿不参与。 */
@@ -289,12 +299,10 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
     resizeColumn: onColumnResize, rowHeaderColumns: 2,
     rowActions: (index, current) => {
       const row = rows[index];
-      if (!row || row.deleted || row.index === undefined || !baseCurrent(row)) return [];
-      const checked = selectedRows.has(row.id);
+      if (!row || !baseCurrent(row)) return [];
       // 打开菜单会重渲染网格。行菜单用最新网格状态和原勾选代次核对行，不绑定打开前的渲染票据。
-      const menu = { row, current: () => current() && rows[index] === row && selection.current.revision === selectionTicket };
-      return gridRowSqlActions(checked, page.insertCopy ? () => handleTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied, menu) : undefined,
-        page.primaryKey?.length ? () => handleTableSql(sqliteCopyUpdateDraftRows, checked, updateSqlCopyZh.copied, menu) : undefined);
+      return sqliteRowSqlActions(row, () => current() && rows[index] === row && selection.current.revision === selectionTicket,
+        undefined, selectedRows.has(row.id));
     },
     visibility: { showType: !!showFieldType, onShowTypeChange: onShowFieldTypeChange },
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined,
@@ -339,6 +347,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
           writeTableClipboardEvent(current, data => writeSqliteClipboardData(data, content));
         } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
       }) : []),
+      ...sqliteRowSqlActions(row, current, rectangle),
       ...(rectangle && onExportRange ? [{ label: rangeExportText.action, run: () => {
         try {
           const range = cellRange.capture(rectangle, null);

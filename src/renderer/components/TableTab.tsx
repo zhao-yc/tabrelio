@@ -1816,7 +1816,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制 SQL 和打开查询草稿共享原页租约。活动页或勾选变更时撤销旧入口。 */
-  function handleRowSql(kind: RowSqlKind, destination: 'clipboard' | 'draft', menu?: { row: DraftRow; current(): boolean }) {
+  function handleRowSql(kind: RowSqlKind, destination: 'clipboard' | 'draft', menu?: { ids(): ReadonlySet<string> | undefined; current(): boolean }) {
     const current = () => (menu ? menu.current() : tableToolbarCurrent() && selectionRef.current === selection) &&
       !insertCopyBlockedRef.current && !restoredDraftView &&
       !externalStaleRef.current && !activeGridEditor.current && !record.hasInput() &&
@@ -1824,8 +1824,9 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       copyPage.current?.page === page;
     if (!current()) return;
     try {
-      const ids = menu ? selectedRows.has(menu.row.id) ? selectedRows : new Set([menu.row.id])
+      const ids = menu ? menu.ids()
         : selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
+      if (!ids) return;
       const context = getRecordContext();
       const prepare = { select: prepareCopyPrimaryKeyQuery, update: prepareCopyUpdateSql, delete: prepareCopyDeleteSql };
       const sql = kind === 'insert' ? buildCopyInsertSql(prepareCopyInsertSql(context, copyPage.current, page, rows, ids))
@@ -2101,7 +2102,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       !recordReadonlyReason(getRecordContext(), row, column.name) && mysqlQuickValueAllowed(column, kind);
   }
   function cellActionCurrent(row: DraftRow): boolean {
-    return tableToolbarCurrent() && rowsRef.current === rows && rows.includes(row) && !row.deleted &&
+    // 数据格菜单以命中的行和列为准，焦点回到命中格时活动格可能变化。
+    return tableTabCurrent() && sortScopeRef.current === sortScope && rowsRef.current === rows && rows.includes(row) && !row.deleted &&
       layoutRevision.current === headerCopyLayoutRevision && !blockedRef.current && !activeGridEditor.current && !record.hasInput();
   }
   /** 原格从工具栏选择或菜单事件传入，写入仍沿用表页单步撤销。 */
@@ -2131,6 +2133,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       } catch { return []; }
     }) : [];
     const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
+    const sqlActions = tableRowSqlActions(row, current, rectangle);
     return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
       ...(selectAll ? [selectAll] : []),
@@ -2144,6 +2147,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
           else copyGridCells(selected.values, current, format === 'headers' ? names : undefined);
         } catch (reason) { if (current()) setError(errorMessage(reason)); }
       }) : []),
+      ...sqlActions,
       ...(rectangle ? [{ label: rangeExportText.action, run: () => {
         if (pageExportRef.current) return;
         try {
@@ -2233,12 +2237,27 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   if (tableToolbarOwner.current.scope !== tableToolbarScope) tableToolbarOwner.current = { scope: tableToolbarScope, revision: tableToolbarOwner.current.revision + 1 };
   const tableToolbarContextKey = JSON.stringify([tab.id, connectionVersion, refreshVersion, tableToolbarOwner.current.revision]);
   /** 执行前读取同步工作区，不能将原菜单动作转交给后来选中的表或隐藏标签。 */
-  function tableToolbarCurrent(): boolean {
+  function tableTabCurrent(): boolean {
     const state = useWorkspace.getState();
-    return mounted.current && tableToolbarOwner.current.scope === tableToolbarScope && state.settings.activeTabId === tab.id
+    return mounted.current && state.settings.activeTabId === tab.id
       && state.settings.tabs.find(item => item.id === tab.id) === tab && state.connections.find(item => item.id === tab.connectionId) === connection
       && (state.connectionVersions[tab.connectionId] ?? 0) === connectionVersion
       && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+  function tableToolbarCurrent(): boolean {
+    return tableToolbarOwner.current.scope === tableToolbarScope && tableTabCurrent();
+  }
+  /** 矩形只提供涉及的行，原值和字段范围继续由行 SQL 生成器核对。 */
+  function tableRowSqlActions(row: DraftRow, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
+    if (row.inserted || info?.objectKind !== 'table' || insertCopyBlockedRef.current || restoredDraftView || copyMetadataReason) return [];
+    const menu = { current, ids: () => {
+      if (checked) return selectedRows;
+      if (!rectangle) return new Set([row.id]);
+      const range = cellRange.capture(rectangle, null);
+      return range && new Set(range.rows.map(item => item.id));
+    } };
+    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : 'current', () => handleRowSql('insert', 'clipboard', menu),
+      info.primaryKey.length ? () => handleRowSql('update', 'clipboard', menu) : undefined);
   }
   /** 菜单与原列头点击共用丢稿确认及分页读取，确认返回后仍检查菜单来源。 */
   function applyGridSort(next: readonly SortColumn[], guard?: () => boolean): void {
@@ -2261,11 +2280,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       onShowTypeChange: setShowFieldType, onShowCommentChange: setShowFieldComment } : undefined,
     rowActions: (index, current) => {
       const row = rows[index];
-      if (!row || !cellActionCurrent(row) || info?.objectKind !== 'table' || insertCopyBlockedRef.current || restoredDraftView || copyMetadataReason) return [];
-      // 焦点回到行标题时会清掉活动数据格，复制仍绑定菜单打开时的行与布局。
-      const menu = { row, current: () => current() && rowsRef.current[index] === row && layoutRevision.current === headerCopyLayoutRevision };
-      return gridRowSqlActions(selectedRows.has(row.id), () => handleRowSql('insert', 'clipboard', menu),
-        info.primaryKey.length ? () => handleRowSql('update', 'clipboard', menu) : undefined);
+      if (!row || !cellActionCurrent(row)) return [];
+      return tableRowSqlActions(row, () => current() && cellActionCurrent(row), undefined, selectedRows.has(row.id));
     },
     resizeRows: page && !externalStale && !preferencesLoading && !preferencesLock.current ? { height,
       apply: next => updatePreferences(setTableRowHeight(preferencesRef.current, next)),

@@ -180,13 +180,15 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     const secondHeader = local ? indexedCell(tableGrid, 3, 2).getByRole('button') : secondCheck;
     const rowMenu = page.getByRole('menu', { name: headerText.rowMenu, exact: true });
     const sqlAction = (name: string) => rowMenu.getByRole('menuitem', { name, exact: true });
-    const copySql = async (name: string) => {
-      await sqlAction(name).click();
+    const copySqlAction = async (action: ReturnType<typeof sqlAction>, keyboard = false) => {
+      if (keyboard) await action.press('Enter');
+      else await action.click();
       const data = await packets();
       expect(data, (await page.getByRole('alert').allTextContents()).join('\n')).toHaveLength(++count);
       expect(data.at(-1)?.formats).toEqual(['text/plain']);
       return data.at(-1)!.text;
     };
+    const copySql = (name: string) => copySqlAction(sqlAction(name));
     await firstCheck.check();
     await secondHeader.click({ button: 'right' });
     const one = await copySql(copyInsertSqlZh.current);
@@ -207,8 +209,31 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(firstCheck).toBeChecked();
     await expect(secondCheck).toBeChecked();
     await expect(secondHeader).toBeFocused();
-    await firstCheck.uncheck();
     await secondCheck.uncheck();
+    const tableAmountFirst = indexedCell(tableGrid, 2, amountIndex), tableAmountSecond = indexedCell(tableGrid, 3, amountIndex);
+    await tableAmountFirst.click();
+    await tableAmountSecond.click({ modifiers: ['Shift'] });
+    await expect(tableGrid.locator('.grid-cell-in-range')).toHaveCount(2);
+    await tableAmountFirst.click({ button: 'right' });
+    const cellSql = (name: string) => page.getByRole('menuitem', { name, exact: true });
+    await expect(cellSql(updateSqlCopyZh.range)).toBeVisible();
+    await page.screenshot({ path: info.outputPath('数据格选区复制SQL.png') });
+    const rangeSql = await copySqlAction(cellSql(updateSqlCopyZh.range), true);
+    expect(rangeSql.match(/^UPDATE /gm)).toHaveLength(2);
+    expect(rangeSql.match(/^WHERE /gm)).toHaveLength(2);
+    expect(rangeSql).toContain('9007199254740993');
+    expect(rangeSql).toContain('9007199254740994');
+    expect(rangeSql).toContain('payload');
+    await expect(tableAmountSecond).toBeFocused();
+    await expect(tableGrid.locator('.grid-cell-in-range')).toHaveCount(2);
+    await indexedCell(tableGrid, 3, amountIndex + 1).click({ button: 'right' });
+    const cellInsert = await copySqlAction(cellSql(copyInsertSqlZh.current));
+    expect(cellInsert).toMatch(/^INSERT INTO /);
+    expect(cellInsert).toContain('9007199254740994');
+    expect(cellInsert).not.toContain('9007199254740993');
+    await expect(firstCheck).toBeChecked();
+    await expect(secondCheck).not.toBeChecked();
+    await firstCheck.uncheck();
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -335,6 +360,12 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
       expect(sql).toContain('9007199254740994');
       expect(sql).not.toContain('9007199254740993');
       await expect(queryRow).not.toBeChecked();
+      const queryAmount = grid.getByRole('gridcell').filter({ hasText: '9007199254740994' });
+      await queryAmount.click({ button: 'right' });
+      const insert = await copySqlAction(cellSql(copyInsertSqlZh.current));
+      expect(insert).toMatch(/^INSERT INTO /);
+      expect(insert).toContain('9007199254740994');
+      expect(insert).not.toContain('9007199254740993');
     }
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);

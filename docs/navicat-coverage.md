@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。四种数据库的表页及已有原行 SQL 能力的 PostgreSQL 查询结果可从数据格菜单复制 INSERT 或 UPDATE。单格使用所在行，矩形选区使用覆盖的整行，范围独立于行勾选。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
+
 2026-11-10 源码增量。四种数据库的表页可从行标题复制 INSERT 或 UPDATE SQL。点中已勾选行时使用当前勾选，未勾选行只复制该行。已有原行 SQL 能力的 PostgreSQL 查询结果沿用同一入口。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
 
 2026-11-10 源码增量。SQLite 普通表可在网格切换真实 ROWID 的只读末列。值随同一分页快照读取并保留 64 位精度，独立于声明字段、编辑及导出。D06、R02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
