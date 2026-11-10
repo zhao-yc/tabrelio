@@ -1,4 +1,6 @@
 import { tableSortRuleSummary } from '../tableSort';
+import { writeTableClipboardEvent } from '../gridClipboard';
+import { errorMessage } from '../lib';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TableInfo } from '../../shared/contracts';
 import { postgresTableSortRules } from '../../shared/postgresTable';
@@ -42,6 +44,7 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
       : templateText;
   const origin = useRef({ info, postgres, limit, readScope }).current;
   const [selection, setSelection] = useState<Selection>(() => ({ kind: 'SELECT', columns: readScope ? info!.columns.map(column => column.name) : defaultColumns(info, postgres, 'SELECT'), search: '', page: 1 })), [error, setError] = useState('');
+  const [copyFeedback, setCopyFeedback] = useState<{ message: string; failed: boolean }>();
   const selectionRef = useRef(selection), live = useRef<object | null>(null), consumed = useRef(false), invalid = useRef(false), ticket = {};
   // 新模式绑定最初只读范围；父props先改再恢复也不能复用旧预览。旧模板保持原合同。
   if ((origin.readScope || readScope) && (origin.info !== info || origin.limit !== limit || origin.readScope !== readScope)) invalid.current = true;
@@ -81,7 +84,7 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
   /** 先同步换掉身份再排队渲染，阻止同一轮旧打开、旧排序、旧分页回调操作新选项。 */
   function revise(next: Selection): void {
     if (!current()) return;
-    selectionRef.current = next; setSelection(next); setError('');
+    selectionRef.current = next; setSelection(next); setError(''); setCopyFeedback(undefined);
   }
   /** 切换模板一次性恢复该类型默认列和第一页，不把另一模板的写列资格沿用过来。 */
   function changeKind(value: string): void {
@@ -105,6 +108,15 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
   }
   /** 关闭可以清理失效窗口，但迟到的旧窗口回调不能关闭当前的新选择。 */
   function close(): void { if (live.current === ticket && selectionRef.current === selection) onClose(); }
+  /** 只复制本次已显示的精确预览，不消费打开动作。复制事件触发时再核当前选择和父表。 */
+  function copy(): void {
+    const sql = preview.value?.sql;
+    if (!filtered || !sql || !current()) return;
+    try {
+      writeTableClipboardEvent(current, data => data.setData('text/plain', sql));
+      setCopyFeedback({ message: filteredText.copied, failed: false });
+    } catch (reason) { setCopyFeedback({ message: errorMessage(reason), failed: true }); }
+  }
   /** 原子消费打开动作；预览与回调共享冻结选列，默认预览继续只传原有两个参数。 */
   function open(): void {
     if (!current() || !preview.value) return;
@@ -161,5 +173,11 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
     </section>}
     {preview.value && <><p>{preview.value.parameters ? text.parameters(preview.value.parameters) : kind === 'SELECT' ? text.selectHint : text.noParameters}</p><pre className="sql-preview" aria-label={text.preview}>{preview.value.sql}</pre></>}
     <ErrorBox message={error || ((readScope || postgres) && invalid.current ? text.changed : preview.error)}/>
-  </div><footer className="modal-footer"><button onClick={close}>{text.close}</button><span className="grow"/><button className="primary" disabled={!preview.value || !!error || !!(readScope || postgres) && invalid.current} onClick={open}>{text.open}</button></footer></Modal>;
+  </div><footer className="modal-footer">
+    <button onClick={close}>{text.close}</button>
+    {copyFeedback && !invalid.current && <span className="muted small" role={copyFeedback.failed ? 'alert' : 'status'}>{copyFeedback.message}</span>}
+    <span className="grow"/>
+    {filtered && <button type="button" disabled={!preview.value || invalid.current} onClick={copy}>{filteredText.copy}</button>}
+    <button className="primary" disabled={!preview.value || !!error || !!(readScope || postgres) && invalid.current} onClick={open}>{text.open}</button>
+  </footer></Modal>;
 }

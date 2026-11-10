@@ -1,7 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SqliteFilteredSelectIntent, SqliteFilteredSelectPlan } from '../sqliteFilteredSelectUi';
 import { sqliteFilteredSelectZh as text } from '../locales/sqliteFilteredSelect.zh-CN';
-import { ErrorBox, Modal } from './ui';
+import { tableFilteredSelectZh as copyText } from '../locales/tableFilteredSelect.zh-CN';
+import { writeTableClipboardEvent } from '../gridClipboard';
+import { errorMessage } from '../lib';
+import { ErrorBox, Field, Modal } from './ui';
 
 interface Props { intent: SqliteFilteredSelectIntent; ownerId: string; onOpen(plan: SqliteFilteredSelectPlan): boolean; onClose(): void; }
 interface Draft { order: string[]; selected: ReadonlySet<string>; limited: boolean; limit: string; revision: object; inputEpoch: object; plan?: SqliteFilteredSelectPlan; error: string; }
@@ -10,6 +13,7 @@ export function SqliteFilteredSelectDialog({ intent, ownerId, onOpen, onClose }:
   const owner = useRef({ intent, ownerId, onOpen, onClose }).current;
   const propsInvalid = useRef(false), invalid = useRef(false), closed = useRef(false), mounted = useRef(false), opening = useRef(false), attempted = useRef(new WeakSet<SqliteFilteredSelectPlan>());
   const [draft, setDraft] = useState<Draft>(() => ({ order: [...intent.columns], selected: new Set(intent.columns), limited: false, limit: String(intent.defaultLimit), revision: {}, inputEpoch: {}, error: '' })), live = useRef(draft); live.current = draft;
+  const [copyFeedback, setCopyFeedback] = useState<{ plan: SqliteFilteredSelectPlan; message: string; failed: boolean }>();
   const renderTicket = {}, committed = useRef<object | undefined>(undefined);
   if (owner.intent !== intent || owner.ownerId !== ownerId) propsInvalid.current = true;
   function sourceCurrent(): boolean { try { if (propsInvalid.current || !owner.intent.current()) invalid.current = true; } catch { invalid.current = true; } return !invalid.current && !closed.current; }
@@ -30,6 +34,17 @@ export function SqliteFilteredSelectDialog({ intent, ownerId, onOpen, onClose }:
   function changeLimit(value: string, epoch: object): void { if (!mounted.current || live.current.inputEpoch !== epoch || !live.current.limited || opening.current || !sourceCurrent()) return; change({ ...live.current, limit: value }, false); }
   function mode(limited: boolean): void { if (local()) change({ ...draft, limited }, true); }
   function limitValid(value: Draft): boolean { const limit = Number(value.limit); return !value.limited || !!value.limit.trim() && Number.isSafeInteger(limit) && limit >= 1 && limit <= 1000000; }
+  /** 复制时只读本轮计划，变化后旧的列顺序或 LIMIT 不得再写入剪贴板。 */
+  function copy(): void {
+    const plan = draft.plan;
+    if (!plan) return;
+    const current = () => local() && !opening.current && sourceCurrent() && owner.intent.previewCurrent(plan);
+    if (!current()) return;
+    try {
+      writeTableClipboardEvent(current, data => data.setData('text/plain', plan.sql));
+      setCopyFeedback({ plan, message: copyText.copied, failed: false });
+    } catch (reason) { setCopyFeedback({ plan, message: errorMessage(reason), failed: true }); }
+  }
   /** 只交原plan一次；成功可同步激活新查询标签，绝不以post-current误判原成功。 */
   function open(): void {
     const plan = draft.plan; if (!local() || opening.current || !plan || attempted.current.has(plan)) return; opening.current = true;
@@ -57,17 +72,24 @@ export function SqliteFilteredSelectDialog({ intent, ownerId, onOpen, onClose }:
     }
   }, [draft.revision]);
   const valid = sourceCurrent(), selected = draft.order.filter(name => draft.selected.has(name)), disabled = !valid || opening.current;
-  return <Modal title={text.title} wide onClose={close}><div className="dialog-body" data-sqlite-filtered-select-owner={owner.ownerId}>
+  const feedback = valid && copyFeedback?.plan === draft.plan ? copyFeedback : undefined;
+  return <Modal title={text.title} wide onClose={close}><div className="modal-content" data-sqlite-filtered-select-owner={owner.ownerId}>
     <p>{owner.intent.target.database}.{owner.intent.target.table}</p><p>{text.hint}</p><p>{text.orderHint}</p>
     <div><button type="button" disabled={disabled} onClick={() => all(true)}>{text.all}</button><button type="button" disabled={disabled} onClick={() => all(false)}>{text.none}</button></div>
     <ol aria-label={text.projection} style={{ listStyle: 'none', padding: 0, maxHeight: 248, overflow: 'auto' }}>{draft.order.map((name, index) => <li key={name} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 31 }}>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}><input type="checkbox" aria-label={text.choose(name)} checked={draft.selected.has(name)} disabled={disabled} onChange={event => choose(name, event.target.checked)}/><span className="sqlite-filtered-select-field-name" title={name} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span></label>
       <button type="button" aria-label={text.moveUp(name)} disabled={disabled || index === 0} onClick={() => move(name, -1)}>{text.up}</button><button type="button" aria-label={text.moveDown(name)} disabled={disabled || index === draft.order.length - 1} onClick={() => move(name, 1)}>{text.down}</button>
     </li>)}</ol><p role="status">{text.selected(selected.length)}</p><p>{text.limitHint}</p>
-    <label><input type="radio" name={'sqlite-filtered-select-limit-' + owner.ownerId} aria-label={text.noLimit} checked={!draft.limited} disabled={disabled} onChange={() => mode(false)}/>{text.noLimit}</label>
-    <label><input type="radio" name={'sqlite-filtered-select-limit-' + owner.ownerId} aria-label={text.limited} checked={draft.limited} disabled={disabled} onChange={() => mode(true)}/>{text.limited}</label>
-    <label>{text.limit}<input type="number" aria-label={text.limit} value={draft.limit} min={1} max={1000000} step={1} disabled={disabled || !draft.limited} onChange={event => changeLimit(event.target.value, draft.inputEpoch)}/></label>
+    <label className="check"><input type="radio" style={{ width: 'auto' }} name={'sqlite-filtered-select-limit-' + owner.ownerId} aria-label={text.noLimit} checked={!draft.limited} disabled={disabled} onChange={() => mode(false)}/>{text.noLimit}</label>
+    <label className="check"><input type="radio" style={{ width: 'auto' }} name={'sqlite-filtered-select-limit-' + owner.ownerId} aria-label={text.limited} checked={draft.limited} disabled={disabled} onChange={() => mode(true)}/>{text.limited}</label>
+    <Field label={text.limit}><input type="number" aria-label={text.limit} value={draft.limit} min={1} max={1000000} step={1} disabled={disabled || !draft.limited} onChange={event => changeLimit(event.target.value, draft.inputEpoch)}/></Field>
     <textarea aria-label={text.preview} readOnly value={draft.plan?.sql ?? ''} rows={10} style={{ fontFamily: 'monospace' }}/>
     <ErrorBox message={!valid ? text.stale : draft.error}/>
-  </div><footer><button type="button" aria-label={text.cancel} onClick={close}>{text.cancel}</button><button type="button" className="primary" aria-label={text.open} disabled={disabled || !selected.length || !limitValid(draft) || !draft.plan || attempted.current.has(draft.plan)} onClick={open}>{text.open}</button></footer></Modal>;
+  </div><footer className="modal-footer">
+    <button type="button" aria-label={text.cancel} onClick={close}>{text.cancel}</button>
+    {feedback && <span className="muted small" role={feedback.failed ? 'alert' : 'status'}>{feedback.message}</span>}
+    <span className="grow"/>
+    <button type="button" disabled={disabled || !draft.plan} onClick={copy}>{copyText.copy}</button>
+    <button type="button" className="primary" aria-label={text.open} disabled={disabled || !selected.length || !limitValid(draft) || !draft.plan || attempted.current.has(draft.plan)} onClick={open}>{text.open}</button>
+  </footer></Modal>;
 }

@@ -61,6 +61,12 @@ export class SqliteFilteredSelectIntent {
     const sql = buildSqliteFilteredSelect(this.snapshot.input, this.snapshot.columns, selected, limit); if (!this.current() || this.revision !== revision) throw Error(sqliteFilteredSelectMessages.stale);
     const plan: SqliteFilteredSelectPlan = Object.freeze({ sql, columns: Object.freeze([...selected]), ...(limit === undefined ? {} : { limit }) }); plans.set(plan, { owner: this, revision, used: false }); return plan;
   }
+  /** 复制保留最新计划，随后仍可用同一计划打开查询。 */
+  previewCurrent(plan: SqliteFilteredSelectPlan): boolean {
+    const proof = plans.get(plan);
+    return !!proof && proof.owner === this && !proof.used && proof.revision === this.revision &&
+      this.current() && !proof.used && proof.revision === this.revision;
+  }
   /** 仅最新准确计划可消费一次；成功同时消费本意图，旧Modal重入不能再开第二个查询。 */
   consume(plan: SqliteFilteredSelectPlan): boolean { const proof = plans.get(plan); if (!proof || proof.owner !== this || proof.used || proof.revision !== this.revision) return false; proof.used = true; if (!this.current() || proof.revision !== this.revision) return false; this.invalidate(); return true; }
 }

@@ -400,6 +400,8 @@ PostgreSQL 表页的「生成查询SQL」可预览 SELECT、INSERT、UPDATE 或 
 
 在 PostgreSQL 表页点击「从当前筛选生成 SELECT」，可把已应用的筛选、排序和选定字段带入独立查询。查询从完整匹配范围的开头读取，沿用查询结果上限。筛选值会写入 SQL 正文，保存或分享草稿时请核对。[PostgreSQL 当前筛选 SELECT](development/postgres-filtered-select-20261106.md)
 
+MySQL、MariaDB、PostgreSQL 和 SQLite 的筛选 SELECT 预览都可点「复制 SELECT SQL」。复制内容与预览逐字一致，包含选定字段、已应用筛选值和排序。复制后仍可调整预览或打开独立查询草稿。
+
 PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件。重新打开同一连接、数据库和表后，在没有待提交修改时点击「恢复 PostgreSQL 草稿」。核对通过后恢复活动页、已应用筛选和排序，以及各原页的草稿。文件未加密，包含暂存值和筛选条件。[PostgreSQL 跨页草稿文件](development/postgres-draft-files-20261106.md)
 
 在 PostgreSQL 网格选中一行，或定位到记录表单中的一条记录后，点击「查看引用记录」。窗口按数据库中的原外键值显示当前账号可读的父记录，可切换约束并展开字段原值。关闭后保留源表草稿。[PostgreSQL 查看引用记录](development/postgres-browse-parent-20261106.md)

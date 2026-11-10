@@ -7,6 +7,7 @@ export const tableFilteredSelectZh = {
   disabledRule: '（已停用）', columns: 'SELECT 字段', filterColumns: '搜索 SELECT 字段',
   changed: '原表页、结构、筛选、排序或结果上限已变化，请关闭后重新生成。',
   invalid: '未能确认当前已载入页及完整已应用条件，未生成 SELECT。',
+  copy: '复制 SELECT SQL', copied: '已复制当前预览 SQL。',
   tabs: '查询标签已达100个，请先关闭部分标签。',
   queryTitle: (table: string) => `${table} · 筛选 SELECT`,
   postgresComment: '-- PostgreSQL 当前筛选 SELECT。请核对范围后执行。',

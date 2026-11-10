@@ -10,6 +10,7 @@ import { tableQueryTemplateZh as templates } from '../../src/renderer/locales/ta
 import { tablePresetsZh as presets } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import type { TableFilteredSelectScope } from '../../src/renderer/tableFilteredSelectUi';
+import type { PostgresTemplateSource } from '../../src/renderer/postgresTableQueryTemplate';
 
 const grid = vi.hoisted(() => ({ props: null as any, rows: [] as DraftRow[] }));
 /** 仅替换没有布局的网格和Monaco呈现；父组件、store、筛选面板和生成对话框均运行生产代码。 */
@@ -71,6 +72,46 @@ function oldCallback(node: MemoryNode, event = 'onClick'): (...args: any[]) => a
 async function applyScope() { await click(zh.table.text006); await select(presets.choose, 'original-scope'); await click(presets.apply); expect(pages.at(-1)).toMatchObject(readScope()); }
 
 describe('当前筛选SELECT真实TableTab及共用对话框RAM（非数据库/原生验收）', () => {
+  it.each(['mysql', 'postgresql'] as const)('%s 复制最新预览不消费草稿，旧选列和失败复制不会打开标签', async dialect => {
+    const { info } = await mount(), onOpen = vi.fn(() => true), onClose = vi.fn(), packets: Array<Record<string, string>> = [];
+    const postgres: PostgresTemplateSource = {
+      table: '"public"."items"',
+      page: {
+        columns: ['id', 'label'].map(name => ({ key: name, name, type: 'text', nullable: false, defaultValue: false, generated: false, primary: false, binary: false })),
+        rows: [], capabilities: { insert: false, update: false, delete: false }, hasNext: false, truncated: false, order: 'primary', relationKind: 'v',
+      },
+      readScope: { filter: { column: 'label', text: '原值' } },
+    };
+    const source = dialect === 'mysql' ? { info, readScope: readScope() } : { postgres };
+    await act(async () => root!.render(<Dialog {...source} limit={1000} isCurrent={() => true} onOpen={onOpen} onClose={onClose}/>));
+    let accept = false;
+    Object.defineProperty(doc, 'execCommand', { configurable: true, value: () => {
+      if (!accept) return false;
+      const packet: Record<string, string> = {};
+      const event = new MemoryEvent('copy');
+      Object.assign(event, { stopImmediatePropagation: () => event.stopPropagation(), clipboardData: { setData: (type: string, value: string) => { packet[type] = value; } } });
+      doc.dispatchEvent(event);
+      packets.push(packet);
+      return true;
+    } });
+    try {
+      await click(text.copy);
+      expect(packets).toEqual([]);
+      expect(button(templates.open).disabled).toBe(false);
+      accept = true;
+      const stale = oldCallback(button(text.copy));
+      await choose('id');
+      await act(async () => stale());
+      expect(packets).toEqual([]);
+      await click(text.copy);
+      expect(packets).toEqual([{ 'text/plain': sql() }]);
+      expect(doc.body.textContent).toContain(text.copied);
+      expect(onOpen).not.toHaveBeenCalled();
+      await click(templates.open);
+      expect(onOpen).toHaveBeenCalledOnce();
+      expect(onOpen.mock.calls[0]).toContain(packets[0]['text/plain']);
+    } finally { Reflect.deleteProperty(doc, 'execCommand'); }
+  });
   it('第二页完整嵌套OR/停用/多排序、选列顺序进入SQL，取消保草稿/勾选且零新增IPC', async () => {
     await mount(); await applyScope(); await click(zh.common.pageNext);
     await act(async () => { grid.props.onSelectedRowsChange(new Set([grid.rows[0].id])); grid.props.onRowsChange(grid.rows.map(row => ({ ...row, data: { ...row.data, note: '不得进入生成SQL的父草稿' } }))); });
