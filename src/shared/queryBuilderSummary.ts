@@ -17,16 +17,21 @@ export type QueryBuilderSummary = z.infer<typeof queryBuilderSummarySchema>;
 
 /** 两种引擎只共享表达式形状。函数的类型、比较规则和空值由对应数据库决定。 */
 export function compileQueryBuilderSummary(summary: QueryBuilderSummary, field: (name: string) => string,
-  quote: (name: string) => string, functionPrefix = '') {
+  quote: (name: string) => string, functionPrefix = '', groupAlias?: (name: string) => string) {
   const { groups, aggregates, sort } = summary;
   const outputs = new Map<string, { position: number; expression: string }>(), folded = new Set<string>();
-  function addOutput(name: string, expression: string) {
-    const key = name.toLowerCase();
-    if (folded.has(key)) throw Error('分组字段和聚合别名必须唯一。');
+  function addOutput(name: string, expression: string, alias = name) {
+    const key = alias.toLowerCase();
+    if (folded.has(key) || outputs.has(name)) throw Error('分组字段和聚合别名必须唯一。');
     folded.add(key);
     outputs.set(name, { position: outputs.size + 1, expression });
   }
-  const grouping = groups.map(name => { const expression = field(name); addOutput(name, expression); return expression; });
+  const grouping = groups.map(field);
+  const groupOutputs = groups.map((name, index) => {
+    const expression = grouping[index], alias = groupAlias?.(name);
+    addOutput(name, expression, alias);
+    return alias === undefined ? expression : expression + ' AS ' + quote(alias);
+  });
   const expressions = aggregates.map(item => {
     const fn = item.fn === 'COUNT_ALL' || item.fn === 'COUNT_DISTINCT' ? 'COUNT' : item.fn;
     const operand = item.fn === 'COUNT_ALL' ? '*' : (item.fn === 'COUNT_DISTINCT' ? 'DISTINCT ' : '') + field(item.column);
@@ -49,6 +54,6 @@ export function compileQueryBuilderSummary(summary: QueryBuilderSummary, field: 
     if (!output) throw Error('HAVING 条件引用的汇总输出已移除，请重选或删除该条件。');
     return output.expression;
   }
-  return { projection: [...grouping, ...expressions].join(', '),
+  return { projection: [...groupOutputs, ...expressions].join(', '),
     groupBy: grouping.length ? ' GROUP BY ' + grouping.join(', ') : '', order, havingField };
 }

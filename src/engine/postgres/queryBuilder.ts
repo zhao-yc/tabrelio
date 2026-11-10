@@ -56,7 +56,10 @@ export function inspectPostgresQueryBuilder(connection: PostgresConnection, inpu
   const target = { connectionId, database, table };
   return readOnly(connection, database, async () => {
     const source = await readSource(connection, target);
-    const query = buildPostgresQueryBuilderSql({ ...target, ...design }, source);
+    const joined: PostgresQueryBuilderSource[] = [];
+    for (const step of design.joins ?? []) joined.push(await readSource(connection, { ...target, table: step.table }));
+    const query = buildPostgresQueryBuilderSql({ ...target, ...design }, source, joined);
+    if (inspect === 'validate') return { results: [], elapsedMs: 0 };
     return readPostgresQueryPreview(connection, query, inspect, postgresQueryBuilderLimits.rows);
   });
 }

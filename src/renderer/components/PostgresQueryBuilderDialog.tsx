@@ -1,7 +1,8 @@
 import { assertSingleQueryDraftColumns, type PostgresSingleQueryDraft, type SingleQueryDraft } from '../../shared/singleQueryDesigns';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FilterGroup, FilterMode, FilterRule, SortRule } from '../../shared/contracts';
-import { buildPostgresQueryBuilderSql, postgresQueryBuilderLimits, type PostgresQueryBuilderSource } from '../../shared/postgresQueryBuilder';
+import { buildPostgresQueryBuilderSql, postgresBuilderAlias, postgresBuilderColumnKey, postgresBuilderJoinLimits,
+  postgresQueryBuilderLimits, type PostgresQueryBuilderSource } from '../../shared/postgresQueryBuilder';
 import { parsePostgresCatalogName, postgresRelationName } from '../../shared/postgresSql';
 import { queryDatabasePatch } from '../../shared/queryContext';
 import { errorMessage, invoke } from '../lib';
@@ -21,13 +22,14 @@ import { TableSortPanel } from './TableSortPanel';
 import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
 import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
+import { PostgresQueryJoinPanel, type PostgresJoinDraft } from './PostgresQueryJoinPanel';
 import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 interface CatalogueEntry { key: string; schema: string; name: string }
 
-function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBuilderSource) {
+function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBuilderSource, joins: readonly PostgresJoinDraft[] = []) {
   const { selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup } = draft;
   const outputs = queryBuilderSummaryOutputs(summary);
   if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
@@ -39,8 +41,9 @@ function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBui
       rules: havingRules.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })),
       mode: havingMode, group: havingGroup,
     } : undefined } : undefined,
-    filter: rules.length ? { rules, mode, group } : undefined };
-  return { design, sql: buildPostgresQueryBuilderSql(design, source) };
+    filter: rules.length ? { rules, mode, group } : undefined,
+    joins: joins.length ? joins.map(item => item.step) : undefined };
+  return { design, sql: buildPostgresQueryBuilderSql(design, source, joins.map(item => item.source)) };
 }
 
 /** 从连接和数据库创建独立草稿。预览结果与待打开的 SQL 只归属当前设计和原活动标签。 */
@@ -57,6 +60,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>();
   const [table, setTable] = useState(''), [schema, setSchema] = useState(''), [search, setSearch] = useState('');
   const [source, setSource] = useState<PostgresQueryBuilderSource>();
+  const [joins, setJoins] = useState<PostgresJoinDraft[]>([]);
+  const singleDraft = useRef<PostgresSingleQueryDraft | undefined>(undefined);
   const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
   const [sort, setSort] = useState<SortRule[]>([]), [editor, setEditor] = useState<'group' | 'sort' | 'having'>();
@@ -67,7 +72,9 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [viewSeed, setViewSeed] = useState<ViewQuerySeed>();
   const [restoreEpoch, setRestoreEpoch] = useState(0);
   const mounted = useRef(false), pending = useRef(false);
-  const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
+  const fields = useMemo(() => source ? [source, ...joins.map(item => item.source)].flatMap((relation, index) =>
+    relation.columns.map(({ name, type }) => ({ name: joins.length ? postgresBuilderColumnKey(index, name) : name, type }))) : [], [source, joins]);
+  const names = useMemo(() => fields.map(column => column.name), [fields]);
   const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
   const schemas = useMemo(() => [...new Set(catalogue?.map(item => item.schema))], [catalogue]);
   const choices = catalogue?.filter(item => (!schema || item.schema === schema) &&
@@ -77,9 +84,9 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const preview = useMemo<(ReturnType<typeof compileDesign> & { error?: never }) |
     { error: string; design?: never; sql?: never } | undefined>(() => {
     if (!source) return;
-    try { return compileDesign(draft, source); }
+    try { return compileDesign(draft, source, joins); }
     catch (reason) { return { error: errorMessage(reason) }; }
-  }, [draft, source]);
+  }, [draft, source, joins]);
 
   function current(): boolean {
     if (!mounted.current || owner.stale) return false;
@@ -134,6 +141,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       setRules([]); setMode('all'); setGroup(undefined); setSort([]); setDistinct(false); setLimit('');
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
       setHavingRules([]); setHavingMode('all'); setHavingGroup(undefined);
+      setJoins([]); singleDraft.current = undefined;
     });
   }
 
@@ -147,12 +155,59 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         fresh.target.table !== target.table) throw Error(text.stale);
     assertSingleQueryDraftColumns(value, fresh.columns.map(column => column.name));
     compileDesign(value, fresh);
-    setSource(fresh); setSelected(value.selected); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
+    setSource(fresh); applyDraft(value);
+  }
+
+  function applyDraft(value: PostgresSingleQueryDraft) {
+    setSelected(value.selected); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
     setSummaryEnabled(value.summaryEnabled); setSummary(value.summary);
     setRules(value.rules); setMode(value.mode); setGroup(value.group);
     setHavingRules(value.havingRules); setHavingMode(value.havingMode); setHavingGroup(value.havingGroup);
     // 条件编辑器可能持有旧行下标，恢复后必须重新建立未提交的输入。
     setRestoreEpoch(epoch => epoch + 1);
+  }
+
+  /** 首次进入关联模式时冻结原单表设计，追加来源时已有别名和条件保持。 */
+  function addJoin(table: string) {
+    if (!source || editor || joins.length >= postgresBuilderJoinLimits.steps || !catalogue?.some(item => item.key === table)) return;
+    void run(text.loading, async () => {
+      const right = await invoke('postgres.queryBuilder.describe', { connectionId, database, table });
+      if (!current()) return;
+      if (right.target.connectionId !== connectionId || right.target.database !== database || right.target.table !== table) throw Error(text.stale);
+      const next = right.columns.map(column => postgresBuilderColumnKey(joins.length + 1, column.name));
+      if (!joins.length) {
+        singleDraft.current = draft;
+        const root = source.columns.map(column => postgresBuilderColumnKey(0, column.name));
+        applyDraft({ ...draft, selected: [...root, ...next].slice(0, postgresQueryBuilderLimits.columns),
+          distinct: false, rules: [], mode: 'all', group: undefined, sort: [], summaryEnabled: false, summary: emptyQueryBuilderSummary,
+          havingRules: [], havingMode: 'all', havingGroup: undefined });
+      } else {
+        setSelected(previous => [...previous, ...next].slice(0, postgresQueryBuilderLimits.columns));
+      }
+      setJoins([...joins, { source: right, step: { table, fingerprint: right.fingerprint, kind: 'INNER', mode: 'all',
+        pairs: [{ left: '', right: '', operator: '=' }] } }]);
+    });
+  }
+
+  function removeLastJoin() {
+    if (!editable() || editor || joins.length < 2) return;
+    const prefix = postgresBuilderAlias(joins.length) + '.';
+    if ([...rules.map(item => item.column), ...sort.map(item => item.column), ...summary.groups,
+      ...summary.aggregates.map(item => item.column)].some(name => name.startsWith(prefix))) {
+      setError(text.joinReferenced);
+      return;
+    }
+    setError('');
+    setSelected(previous => previous.filter(name => !name.startsWith(prefix)));
+    setJoins(previous => previous.slice(0, -1));
+    setRestoreEpoch(epoch => epoch + 1);
+  }
+
+  function backToSingle() {
+    if (!editable() || editor || !singleDraft.current || !window.confirm(text.joinBackConfirm)) return;
+    applyDraft(singleDraft.current);
+    singleDraft.current = undefined;
+    setJoins([]); setError('');
   }
 
   /** 原设计保持在当前组件中；提交视图前再次对照同一份结构和查询。 */
@@ -162,6 +217,11 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
     const target = source.target;
     async function verify() {
       if (!current()) throw Error(text.stale);
+      if (design.joins) {
+        await invoke('postgres.queryBuilder.inspect', { ...design, inspect: 'validate' });
+        if (!current()) throw Error(text.stale);
+        return;
+      }
       const fresh = await invoke('postgres.queryBuilder.describe', target);
       if (!current() || buildPostgresQueryBuilderSql(design, fresh) !== sql) throw Error(text.stale);
     }
@@ -204,8 +264,15 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         {choices?.length === 0 && <p role="status">{text.empty}</p>}
       </> : <>
         <p>{database} / {source.target.table}</p>
-        <SingleQueryDesignPanel scope={ { ...source.target, dialect: 'postgresql' } } draft={preview?.design ? draft : undefined}
-          disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>
+        {!joins.length && <SingleQueryDesignPanel scope={ { ...source.target, dialect: 'postgresql' } } draft={preview?.design ? draft : undefined}
+          disabled={disabled || !!editor} current={current} run={action => void run(designText.designWorking, action)} restore={restore}/>}
+        <details open={joins.length ? true : undefined}><summary>{text.joins}</summary>
+          <PostgresQueryJoinPanel source={source} entries={catalogue ?? []} joins={joins} disabled={disabled || !!editor}
+            add={addJoin} change={(index, step) => {
+              if (!editable() || editor) return;
+              setError(''); setJoins(previous => previous.map((item, i) => i === index ? { ...item, step } : item));
+            }} remove={removeLastJoin} back={backToSingle}/>
+        </details>
         <label className="check"><input type="checkbox" checked={summaryEnabled} disabled={disabled || !!editor}
           onChange={event => { if (editable()) setSummaryEnabled(event.target.checked); }}/>{summaryText.enabled}</label>
         {!summaryEnabled && <fieldset disabled={disabled || !!editor}><legend>{text.columns}</legend>
@@ -213,7 +280,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
             <button onClick={() => { if (editable()) setSelected(names); }}>{text.all}</button>
             <button onClick={() => { if (editable()) setSelected([]); }}>{text.none}</button>
           </div>
-          <div style={{ maxHeight: 180, overflow: 'auto' }}>{source.columns.map(({ name, type }) => <label key={name} className="check">
+          <div style={{ maxHeight: 180, overflow: 'auto' }}>{fields.map(({ name, type }) => <label key={name} className="check">
             <input type="checkbox" aria-label={text.choose(name)} checked={selected.includes(name)} onChange={event => {
               if (!editable()) return;
               const checked = event.target.checked;

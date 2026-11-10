@@ -50,6 +50,8 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await observer.query(`CREATE SCHEMA "odd.schema";
       CREATE TABLE ${table} (id bigint, label text, ignored bytea);
       CREATE TABLE public."Raw""Rows" (other integer);
+      CREATE TABLE public.builder_link (id bigint PRIMARY KEY, note text);
+      INSERT INTO public.builder_link VALUES (${min}, '匹配来源');
       INSERT INTO ${table} SELECT id, '普通行', NULL FROM pg_catalog.generate_series(1, 105) AS id;
       INSERT INTO ${table} VALUES (${min}, '精确整数', NULL), (${max}, NULL, NULL);
       CREATE VIEW ${view} AS SELECT id, label, ignored, pg_catalog.current_setting('transaction_read_only') AS read_mode FROM ${table};`);
@@ -183,6 +185,56 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await query.locator('.monaco-editor').getByRole('textbox').focus();
     await page.keyboard.press('ControlOrMeta+Enter');
     await expect(query.getByRole('gridcell', { name: '精确整数', exact: true })).toBeVisible();
+
+    await selectSource(view);
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    const joinPanel = builder.getByRole('group', { name: text.joins, exact: true });
+    async function addJoin(alias: string, left: string) {
+      await joinPanel.getByRole('combobox', { name: text.joinTarget, exact: true }).selectOption('"public"."builder_link"');
+      await joinPanel.getByRole('button', { name: text.joinAdd, exact: true }).click();
+      const step = joinPanel.getByRole('group', { name: text.joinStep(alias), exact: true });
+      await step.getByRole('combobox', { name: text.joinKind, exact: true }).selectOption('LEFT');
+      await step.getByRole('combobox', { name: text.joinLeft(1), exact: true }).selectOption(left);
+      await step.getByRole('combobox', { name: text.joinRight(1), exact: true }).selectOption('id');
+    }
+    await addJoin('t2', 't1.id');
+    await addJoin('t3', 't2.id');
+    await button(text.none).click();
+    await builder.getByRole('checkbox', { name: text.choose('t1.id'), exact: true }).check();
+    await builder.getByRole('checkbox', { name: text.choose('t3.note'), exact: true }).check();
+    await builder.getByRole('combobox', { name: zh.table.text009, exact: true }).selectOption('t1.id');
+    await builder.getByRole('combobox', { name: zh.table.filterOperatorLabel, exact: true }).selectOption('>=');
+    await builder.getByRole('textbox', { name: zh.table.text011, exact: true }).fill(min);
+    await button(zh.table.text013).click();
+    const joins = ` FROM ${view} AS t1 LEFT JOIN "public"."builder_link" AS t2 ON (t1."id" = t2."id") LEFT JOIN "public"."builder_link" AS t3 ON (t2."id" = t3."id") WHERE t1."id" >= E'${min}'`;
+    const joinSql = 'SELECT t1."id" AS "t1.id", t3."note" AS "t3.note"' + joins + ';';
+    await expect(sql).toHaveText(joinSql);
+    await button(text.inspectLabels.explain).click();
+    await expect(results.getByRole('tree')).toBeVisible();
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(2), { exact: true })).toBeVisible();
+    await expect(results.getByRole('row').filter({ hasText: max })).toContainText('NULL');
+    await expect(results.getByRole('row').filter({ hasText: min })).toContainText('匹配来源');
+    await sql.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('postgres-builder-join.png') });
+    await summaryMode.check();
+    await button(aggregate.addGroup).click();
+    await button(aggregate.addAggregate).click();
+    await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('COUNT');
+    await builder.getByRole('combobox', { name: aggregate.column(1), exact: true }).selectOption('t3.note');
+    await expect(sql).toHaveText('SELECT t1."id" AS "t1.id", pg_catalog.COUNT(t3."note") AS "统计_1"' + joins + ' GROUP BY t1."id";');
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByRole('row').filter({ hasText: max }).getByRole('gridcell', { name: '0', exact: true })).toBeVisible();
+    await summaryMode.uncheck();
+    await expect(sql).toHaveText(joinSql);
+    await button(text.open).click();
+    await expect(builder).toBeHidden();
+    await expect.poll(async () => {
+      const saved = await settings(); return saved.tabs.find(tab => tab.id === saved.activeTabId)?.sql;
+    }).toBe(joinSql);
+    await query.locator('.monaco-editor').getByRole('textbox').focus();
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await expect(query.getByRole('gridcell', { name: '匹配来源', exact: true })).toBeVisible();
 
     await selectSource(table);
     const beforeChange = await settings();

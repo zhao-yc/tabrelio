@@ -10,6 +10,30 @@ const source: PostgresQueryBuilderSource = {
 const draft: PostgresQueryBuilderDesign = { ...source.target, fingerprint: source.fingerprint, columns: ['id', '值'], sort: [], distinct: false };
 
 describe('PostgreSQL 单表查询设计', () => {
+  it('跨 schema 多表与自关联使用有序别名，ON 只能引用本步及先前来源', () => {
+    const right = { ...source, target: { ...source.target, table: '"public"."other"' },
+      columns: [{ name: 'id', type: 'bigint' }, { name: 'x'.repeat(63), type: 'text' }] };
+    const join = { table: right.target.table, fingerprint: right.fingerprint, kind: 'LEFT' as const, mode: 'all' as const,
+      pairs: [{ left: 't1.id', right: 'id', operator: '=' as const }] };
+    const multi: PostgresQueryBuilderDesign = { ...draft, columns: ['t1.id', 't2.id', 't3.' + 'x'.repeat(63)],
+      joins: [join, { ...join, kind: 'INNER', mode: 'any',
+        pairs: [{ left: 't2.id', right: 'id', operator: '=' }, { left: 't1.id', right: 'id', operator: '<>' }] }],
+      filter: { mode: 'all', rules: [{ column: 't2.id', operator: 'IS NULL' }] },
+      sort: [{ column: 't3.id', direction: 'DESC' }] };
+    const sql = buildPostgresQueryBuilderSql(multi, source, [right, right]);
+    expect(sql).toBe('SELECT t1."id" AS "t1.id", t2."id" AS "t2.id", t3."' + 'x'.repeat(63) +
+      '" AS "t3#2" FROM "项目.数据"."表""1" AS t1 LEFT JOIN "public"."other" AS t2 ON (t1."id" = t2."id")' +
+      ' INNER JOIN "public"."other" AS t3 ON (t2."id" = t3."id" OR t1."id" <> t3."id") WHERE t2."id" IS NULL ORDER BY t3."id" DESC');
+    expect(() => buildPostgresQueryBuilderSql(multi, source, [right, { ...right, fingerprint: 'b'.repeat(64) }])).toThrow('关联来源已变化');
+    expect(() => buildPostgresQueryBuilderSql({ ...multi, joins: [{ ...join, pairs: [{ left: 't2.id', right: 'id', operator: '=' }] }, multi.joins![1]] },
+      source, [right, right])).toThrow('已加入的表');
+    const grouped = buildPostgresQueryBuilderSql({ ...multi, columns: [], sort: [], summary: {
+      groups: ['t1.id', 't2.id'], aggregates: [{ fn: 'COUNT', column: 't3.id', alias: '关联数' }], sort: [{ column: '关联数', direction: 'DESC' }],
+      having: { mode: 'all', rules: [{ column: 't2.id', operator: 'IS NULL' }] },
+    } }, source, [right, right]);
+    expect(grouped).toContain('SELECT t1."id" AS "t1.id", t2."id" AS "t2.id", pg_catalog.COUNT(t3."id") AS "关联数"');
+    expect(grouped).toContain('GROUP BY t1."id", t2."id" HAVING t2."id" IS NULL ORDER BY 3 DESC');
+  });
   it('保留限定名、嵌套分组、原始精确值、空值顺序及显式行数上限', () => {
     const sql = buildPostgresQueryBuilderSql({
       ...draft, distinct: true, rowLimit: 8, sort: [{ column: '值', direction: 'DESC', nulls: 'LAST' }],
