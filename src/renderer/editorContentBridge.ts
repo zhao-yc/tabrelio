@@ -5,6 +5,19 @@ export type EditorContentFlushPolicy = 'preserve-equivalent-draft-eol';
 const bodyFlushers = new WeakMap<monaco.editor.IStandaloneCodeEditor, (expected?: string, policy?: EditorContentFlushPolicy) => string>();
 export interface EditorReloadLease { current(): boolean; apply(sql: string, commit: () => void): Promise<boolean>; dispose(): void; }
 const reloaders = new WeakMap<monaco.editor.IStandaloneCodeEditor, (expected: string) => EditorReloadLease>();
+const workspaceEditors = new Map<string, monaco.editor.IStandaloneCodeEditor>();
+
+/** 查询库可以重载非活动标签。只登记已就绪的查询编辑器，旧清理不能移除新实例。 */
+export function registerWorkspaceQueryEditor(tabId: string, editor: monaco.editor.IStandaloneCodeEditor): () => void {
+  workspaceEditors.set(tabId, editor);
+  return () => { if (workspaceEditors.get(tabId) === editor) workspaceEditors.delete(tabId); };
+}
+
+export function beginWorkspaceQueryReload(tabId: string, expected: string): EditorReloadLease {
+  const editor = workspaceEditors.get(tabId);
+  if (!editor) throw Error(zh.editor.bodyUnavailable);
+  return beginEditorReload(editor, expected);
+}
 /** 只对正式存活正文桥申请模型锁，不从旧tab正文创建替代模型。 */
 export function beginEditorReload(editor: monaco.editor.IStandaloneCodeEditor, expected: string): EditorReloadLease {
   const begin = reloaders.get(editor); if (!begin) throw Error(zh.editor.bodyUnavailable); return begin(expected);

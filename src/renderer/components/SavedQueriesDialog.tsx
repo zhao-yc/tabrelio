@@ -12,7 +12,7 @@ import { historyPagesZh as sqlText } from '../locales/historyPages.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
-import { captureOpenedSavedQuery, findOpenedSavedQuery, openQueryTabBatch, rememberOpenedSavedQueries, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
+import { acquireWorkspaceBusy, captureOpenedSavedQuery, findOpenedSavedQuery, openQueryTabBatch, rememberOpenedSavedQueries, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { SavedQueryRebindEditor } from './SavedQueryRebindEditor';
@@ -28,6 +28,8 @@ import { Empty, ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import { SqlTextPreview } from './SqlTextPreview';
 import { queryFileTextDifference, type QueryFileTextDifference } from '../../shared/queryFileReload';
 import { queryFileReloadZh } from '../../shared/queryFileReload.zh-CN';
+import { sameSavedQueryContext } from '../../shared/queryBinding';
+import { beginWorkspaceQueryReload } from '../editorContentBridge';
 import '../query-file-reload.css';
 import { SavedQueryExternalEditor } from './SavedQueryExternalEditor';
 import { savedQueryExternalZh as externalText, type SavedQueryExternalSession } from '../../shared/savedQueryExternalEdit';
@@ -96,6 +98,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
   const currentSqlPreview = sqlPreview?.epoch === renderEpoch ? sqlPreview : undefined;
   const [comparison, setComparison] = useState<{ item: SavedQueryPageEntry; tab: WorkspaceTab; difference: QueryFileTextDifference; epoch: number }>();
+  const [reloadConfirmed, setReloadConfirmed] = useState(false);
   const currentComparison = comparison?.epoch === renderEpoch && tabs.includes(comparison.tab) ? comparison : undefined;
   // 分页、筛选或其它操作换代时释放大正文，渲染已立即隐藏旧预览。
   useEffect(() => { if (sqlPreview && !currentSqlPreview) setSqlPreview(value => value === sqlPreview ? undefined : value); }, [sqlPreview, currentSqlPreview]);
@@ -488,9 +491,46 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         const { query } = await io.request('queries.readText', { id: item.query.id, digest: item.digest });
         if (!owns(ticket)) return;
         if (!currentCard(item) || useWorkspace.getState().resolveTabOrder(ref) !== tab) throw Error(t.compareStale);
+        setReloadConfirmed(false);
         setComparison({ item, tab, difference: queryFileTextDifference(tab.sql ?? '', query.sql), epoch: ticket });
       });
     } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 只接纳预览版本；保存连接或库变化需要另开标签。撤销正文仍沿用新的保存基线。 */
+  function loadSavedDraft(preview: NonNullable<typeof currentComparison>): void {
+    if (!reloadConfirmed || preview !== currentComparison || !editable() || !currentCard(preview.item)) return;
+    const { tab, item } = preview, previous = tab.sourceBinding;
+    if (!previous) return;
+    void run(async ticket => {
+      const workspace = useWorkspace.getState();
+      const profile = workspace.connections.find(connection => connection.id === tab.connectionId);
+      const ref = workspace.tabOrderSnapshot().find(ref => ref.id === tab.id);
+      const version = workspace.connectionVersions[tab.connectionId];
+      const current = () => {
+        const live = useWorkspace.getState();
+        return owns(ticket) && currentCard(item) && !!ref && live.resolveTabOrder(ref) === tab &&
+          !!profile && live.connections.includes(profile) && live.connectionVersions[tab.connectionId] === version;
+      };
+      if (!current() || workspace.activeJobs[tab.id]) throw Error(t.compareStale);
+      const editor = beginWorkspaceQueryReload(tab.id, tab.sql ?? '');
+      try {
+        const job = acquireWorkspaceBusy(tab.id);
+        try {
+          const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId: tab.connectionId });
+          const source = result.sourceBinding;
+          if (!current() || !job.owns() || !editor.current()) throw Error(t.compareStale);
+          if (!source || source.id !== previous.id || source.digest !== item.digest ||
+              source.connectionId !== previous.connectionId || source.connectionDigest !== previous.connectionDigest ||
+              !sameSavedQueryContext(source.context, previous.context)) throw Error(t.reloadContextChanged);
+          const applied = await editor.apply(result.query.sql, () => {
+            if (!current() || !job.owns()) throw Error(t.compareStale);
+            useWorkspace.getState().updateTab(tab.id, { sql: result.query.sql, sourceBinding: source });
+          });
+          if (!applied) throw Error(t.compareStale);
+          if (owns(ticket)) setNotice(t.reloadDone);
+        } finally { job.release(); }
+      } finally { editor.dispose(); }
+    });
   }
   /** 复制不传回正文，主进程核对当前卡片后写入剪贴板。 */
   function copySql(item: SavedQueryPageEntry): void {
@@ -605,7 +645,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else if (editRef.current && !('value' in editRef.current)) cancelEdit(); else void close(); }}
     onEscape={currentSqlPreview || currentComparison ? event => {
       event.stopPropagation();
-      if (currentComparison) setComparison(value => value === currentComparison ? undefined : value);
+      if (currentComparison) draft(() => setComparison(value => value === currentComparison ? undefined : value));
       else setSqlPreview(value => value === currentSqlPreview ? undefined : value);
     } : undefined}>
     <div className="dialog-tabs"><button disabled={closing || !!external} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
@@ -694,7 +734,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button>
             {opened && <>
               <button type="button" disabled={blocked || changed || needsRefresh} aria-expanded={!!difference}
-                onClick={() => preview ? setComparison(value => value === preview ? undefined : value) : compareDraft(item, opened)}>{t.compareDraft}</button>
+                onClick={() => preview ? draft(() => setComparison(value => value === preview ? undefined : value)) : compareDraft(item, opened)}>{t.compareDraft}</button>
               <button type="button" disabled={blocked || changed || needsRefresh} title={t.openExistingHint(opened.title)}
                 onClick={() => activateOpenedTab(item, opened)}>{t.openExisting}</button>
             </>}
@@ -708,6 +748,10 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
                 <section aria-label={t.savedDifference}><h4>{t.savedDifference}</h4><pre>{difference.after}</pre></section>
               </div>
               {(difference.beforeTruncated || difference.afterTruncated) && <p>{t.compareOmitted}</p>}
+              <label className="check"><input type="checkbox" checked={reloadConfirmed} disabled={blocked}
+                onChange={event => setReloadConfirmed(event.target.checked)}/>{t.reloadConfirm}</label>
+              <button type="button" disabled={blocked || changed || needsRefresh || !reloadConfirmed}
+                onClick={() => loadSavedDraft(preview)}>{t.reloadDraft}</button>
             </> : <p>{t.compareIdentical}</p>}
           </section>}
         </article>;

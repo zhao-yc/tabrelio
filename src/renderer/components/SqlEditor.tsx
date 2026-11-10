@@ -38,7 +38,7 @@ import { currentStatementZh } from '../locales/currentStatement.zh-CN';
 import { sqlStatementFoldingProvider } from '../sqlStatementFolding';
 import { StatementNavigationWorkerClient } from '../statementNavigationWorkerClient';
 import StatementNavigationWorker from '../statementNavigation.worker?worker';
-import { editorContentBridge } from '../editorContentBridge';
+import { editorContentBridge, registerWorkspaceQueryEditor } from '../editorContentBridge';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import { createSqlFieldHoverProvider } from '../sqlFieldHoverProvider';
 import SqliteCompletionWorker from '../sqliteCompletion.worker?worker';
@@ -108,6 +108,10 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const dialectRef = useRef(dialect);
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
+  useLayoutEffect(() => {
+    const editor = editorRef.current;
+    if (queryTabId && contentReady && editor) return registerWorkspaceQueryEditor(queryTabId, editor);
+  }, [queryTabId, contentReady]);
   const queryEditor = !!onExecute;
   type ClipboardRequest = { intent: NonNullable<ReturnType<typeof captureSqlClipboardSelection>>; unsubscribe(): void } &
     ({ kind: 'paste'; entries: readonly string[] } | { kind: 'quoted'; sql: string });

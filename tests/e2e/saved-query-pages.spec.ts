@@ -152,6 +152,83 @@ test('从查询库切回最近使用的同源草稿，选择替代连接可切�
   expect(pageErrors).toEqual([]);
 });
 
+for (const dialect of ['mysql', 'postgresql'] as const) test(`对比后载入保存版本到后台草稿，拒绝迟到的旧版本且可撤销正文（${dialect}）`, async () => {
+  const profile = dialect === 'mysql' ? await connection('保存版本的离线连接') :
+    await page.evaluate(() => window.dbark.invoke('connections.save', {
+      id: '', dialect: 'postgresql', name: '保存版本的离线 PostgreSQL', group: '', color: '#123456',
+      host: '127.0.0.1', port: 1, database: 'offline_default', user: 'offline',
+    }));
+  const saved = { id: 'load-checked-source', name: '可更新的保存查询', connectionId: profile.id, sql: 'SELECT 1' };
+  const originalSql = 'SELECT 22', updatedSql = 'SELECT 9007199254740993';
+  await save(saved);
+  const original = await page.evaluate(async ({ saved, originalSql }) => {
+    const listing = await window.dbark.invoke('queries.page', { taskId: crypto.randomUUID(), search: saved.name, onError: 'stop' });
+    const entry = listing.items.find(item => item.query.id === saved.id);
+    if (!entry) throw Error('缺少保存查询夹具');
+    const { sourceBinding } = await window.dbark.invoke('queries.read', { id: saved.id, digest: entry.digest, connectionId: saved.connectionId });
+    if (!sourceBinding) throw Error('缺少查询来源绑定');
+    const settings = await window.dbark.invoke('settings.get', {});
+    const original = { id: 'reload-saved-original', kind: 'query' as const, title: '原后台草稿', connectionId: saved.connectionId, sql: originalSql, sourceBinding };
+    const active = { id: 'reload-saved-other', kind: 'query' as const, title: '另一个查询', connectionId: saved.connectionId, sql: 'SELECT 33' };
+    await window.dbark.invoke('settings.save', { ...settings, tabs: [original, active], activeTabId: original.id });
+    return original;
+  }, { saved, originalSql });
+  await page.reload();
+  const editor = page.locator('.query-tab:visible .monaco-editor');
+  await expect(editor.locator('.view-lines')).toContainText(originalSql);
+  await page.locator('[data-workspace-tab-id="reload-saved-other"] .tab-select').click();
+  const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  const draft = async () => (await settings()).tabs.find(tab => tab.id === original.id);
+  await open();
+  const card = dialog().locator('.history-card').filter({ has: page.getByText(saved.name, { exact: true }) });
+  const compare = card.getByRole('button', { name: pagesText.compareDraft, exact: true });
+  const load = card.getByRole('button', { name: pagesText.reloadDraft, exact: true });
+  await compare.click();
+  await expect(load).toBeDisabled();
+  await card.getByRole('checkbox', { name: pagesText.reloadConfirm, exact: true }).check();
+  await update({ ...saved, sql: updatedSql });
+  await load.click();
+  await expect(dialog().locator('.error-box')).toContainText('已修改');
+  expect(await draft()).toEqual(original);
+  await dialog().getByRole('button', { name: pagesText.refresh, exact: true }).click();
+  await expect(card.locator('pre')).toHaveText(updatedSql);
+  await compare.click();
+  await card.getByRole('checkbox', { name: pagesText.reloadConfirm, exact: true }).check();
+  await load.click();
+  await expect(dialog().getByText(pagesText.reloadDone, { exact: true })).toBeVisible();
+  await expect.poll(async () => (await draft())?.sql).toBe(updatedSql);
+  const adopted = await draft();
+  expect(adopted?.sourceBinding?.digest).not.toBe(original.sourceBinding.digest);
+  expect((await settings()).activeTabId).toBe('reload-saved-other');
+  await card.getByRole('button', { name: pagesText.openExisting, exact: true }).click();
+  await expect(dialog()).toBeHidden();
+  await expect(editor.locator('.view-lines')).toContainText(updatedSql);
+  await editor.getByRole('textbox').press('ControlOrMeta+z');
+  await expect.poll(draft).toEqual({ ...adopted, sql: originalSql });
+  await page.evaluate(async saved => {
+    const connections = await window.dbark.invoke('connections.organizationGet', {});
+    const listing = await window.dbark.invoke('queries.page', { taskId: crypto.randomUUID(), search: saved.name, onError: 'stop' });
+    const entry = listing.items.find(item => item.query.id === saved.id);
+    if (!entry) throw Error('缺少改绑夹具');
+    await window.dbark.invoke('queries.rebindSelectedChecked', {
+      expectedConnectionRevision: connections.revision,
+      target: { connectionId: saved.connectionId, database: '另一个默认库' },
+      queries: [{ id: saved.id, digest: entry.digest }],
+    });
+  }, saved);
+  await open();
+  await compare.click();
+  await card.getByRole('checkbox', { name: pagesText.reloadConfirm, exact: true }).check();
+  await load.click();
+  await expect(dialog().locator('.error-box')).toContainText(pagesText.reloadContextChanged);
+  expect(await draft()).toEqual({ ...adopted, sql: originalSql });
+  expect((await settings()).tabs).toHaveLength(2);
+  expect((await page.evaluate(() => window.dbark.invoke('queries.list', {})))[0].sql).toBe(updatedSql);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('失效来源须明确替代，旧摘要不能打开或删除新内容，成功删除刷新首批且保留其他记录',async({},info)=>{
  test.setTimeout(120000);const removed=await connection('将删除来源'),replacement=await connection('替代来源');await save({id:'missing',name:'失效来源记录',connectionId:removed.id,databaseContext:{state:'known',database:'旧库'},sql:'SELECT 1'});await save({id:'stale',name:'陈旧记录',connectionId:replacement.id,sql:'SELECT 旧内容'});await page.evaluate(id=>window.dbark.invoke('connections.delete',{id}),removed.id);await page.reload();await expect(page.locator('.app-statusbar')).toBeVisible();await open();let card=dialog().locator('.history-card').filter({hasText:'失效来源记录'});await expect(card.getByLabel('打开查询的连接：失效来源记录',{exact:true})).toHaveValue('');await expect(card.getByRole('button',{name:'在新标签打开',exact:true})).toBeDisabled();await card.getByLabel('打开查询的连接：失效来源记录',{exact:true}).selectOption(replacement.id);await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'在新标签打开',exact:true})).click();await expect(dialog()).toHaveCount(0);await expect(page.locator('.query-tab:visible').getByLabel('当前查询默认库',{exact:true})).toHaveText('默认库待确认');let before:unknown;await expect.poll(async()=>{const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{})),active=settings.tabs.find(tab=>tab.id===settings.activeTabId);if(active?.title==='失效来源记录'&&active.sql==='SELECT 1'&&active.connectionId===replacement.id&&active.databaseContext?.state==='unknown')before=settings.tabs;return before;}).toHaveLength(1);
  await open();card=dialog().locator('.history-card').filter({hasText:'陈旧记录'});await update({id:'stale',name:'陈旧记录',connectionId:replacement.id,sql:'SELECT 新内容'});await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'在新标签打开',exact:true})).click();await expect(dialog().locator('.error-box')).toContainText('已修改');await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'删除保存的查询',exact:true})).click();await expect(dialog().locator('.error-box')).toContainText('未删除新内容');expect((await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).tabs).toEqual(before);expect((await page.evaluate(()=>window.dbark.invoke('queries.list',{}))).find(item=>item.id==='stale')?.sql).toBe('SELECT 新内容');await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'刷新到第一页',exact:true})).click();await expect(card.locator('pre')).toHaveText('SELECT 新内容');await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'删除保存的查询',exact:true})).click();await expect(dialog().locator('.history-card')).toHaveCount(1);await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();expect((await page.evaluate(()=>window.dbark.invoke('queries.list',{}))).map(item=>item.id)).toEqual(['missing']);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('saved-query-pages-stale-delete.png')});
