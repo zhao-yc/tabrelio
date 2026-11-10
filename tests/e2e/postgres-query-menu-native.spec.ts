@@ -5,7 +5,7 @@ import ExcelJS from 'exceljs';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { test, expect, page, desktop, pageErrors, quitDesktop } from './desktop-fixture';
+import { test, expect, page, desktop, pageErrors, quitDesktop, confirmOwnedDesktopExit, retainOwnedDesktopResources } from './desktop-fixture';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
@@ -1876,6 +1876,82 @@ test('PostgreSQL 两种着色模式保留真实目录补全和参数提示', asy
     expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
   await quitDesktop();
+});
+
+test.describe('MERGE 目录与例程补全', () => {
+  test.use({ preserveOnUnconfirmedExit: true });
+  test('PostgreSQL MERGE 实库目标、CTE、表函数和参数提示', async ({}, info) => {
+    test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+    test.setTimeout(60000);
+    const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+    const port = Number(process.env.DBARK_PGSEARCH_PORT), host = '127.0.0.1';
+    if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+        !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+    const observer = new Client({ host, port, user, password, database: user, connectionTimeoutMillis: 3000 });
+    try {
+      await observer.connect();
+      await observer.query(`CREATE SCHEMA merge_test;
+        CREATE TABLE merge_test.dst_table(id integer, label text);
+        CREATE VIEW merge_test.dst_view AS SELECT * FROM merge_test.dst_table;
+        CREATE MATERIALIZED VIEW merge_test.dst_mat AS SELECT * FROM merge_test.dst_table;
+        CREATE TABLE merge_test.dst_ruled(id integer);
+        CREATE RULE no_insert AS ON INSERT TO merge_test.dst_ruled DO INSTEAD NOTHING;
+        CREATE FUNCTION merge_test.feed_rows(input_number integer, input_label text)
+          RETURNS TABLE(id integer, label text) LANGUAGE SQL AS 'SELECT input_number, input_label';
+        CREATE FUNCTION merge_test.match_label(input_label text)
+          RETURNS boolean LANGUAGE SQL AS 'SELECT input_label IS NOT NULL'`);
+      const into = 'MERGE INTO merge_test.dst_';
+      await prepare({ id: '', name: 'MERGE 目录测试', dialect: 'postgresql', group: '', color: '#123456',
+        host, port, user, database: user, password, rememberPassword: false }, into);
+      const widget = tab().locator('.suggest-widget.visible');
+      const rows = widget.locator('.monaco-list-row');
+      const focused = widget.locator('.monaco-list-row.focused');
+      const suggest = () => page.keyboard.press('Control+Space');
+      const undo = () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+      await editor().getByRole('textbox').focus();
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
+      await expect.poll(async () => (await inspectModel()).position?.column).toBe(into.length + 1);
+      await suggest();
+      await expect(focused).toContainText('dst_table');
+      await expect(rows).toHaveCount(2);
+      await expect(rows.filter({ hasText: 'dst_view' })).toHaveCount(1);
+      await tab().screenshot({ path: info.outputPath('postgresql-merge-target-catalog.png') });
+      await page.keyboard.press('Enter');
+      await expect.poll(async () => (await inspectModel()).sql).toBe('MERGE INTO merge_test."dst_table"');
+      await undo();
+      await expect.poll(async () => (await inspectModel()).sql).toBe(into);
+
+      const cte = 'WITH local_feed AS (SELECT 1 AS id) MERGE INTO merge_test.dst_table USING local_fe';
+      await replaceDraft(cte);
+      await suggest();
+      await expect(focused).toContainText('local_feed');
+      await page.keyboard.press('Enter');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(cte.replace(/local_fe$/, '"local_feed"'));
+
+      const using = 'MERGE INTO merge_test.dst_table d USING merge_test.feed_ro';
+      await replaceDraft(using);
+      await suggest();
+      await expect(focused).toContainText('feed_rows');
+      await page.keyboard.press('Enter');
+      await expect.poll(async () => (await inspectModel()).sql).toBe(using.replace(/feed_ro$/, '"feed_rows"()'));
+      const active = tab().locator('.parameter-hints-widget:visible .signature .parameter.active');
+      await expect(active).toContainText('input_number');
+      await page.keyboard.type('1,');
+      await expect(active).toContainText('input_label');
+      await tab().screenshot({ path: info.outputPath('postgresql-merge-source-signature.png') });
+      await page.keyboard.press('Escape');
+
+      await replaceDraft('MERGE INTO merge_test.dst_table d USING (SELECT 1 id) s ON merge_test.match_la');
+      await suggest();
+      await expect(focused).toContainText('match_label');
+      await expect.poll(async () => (await observer.query('SELECT count(*)::int AS total FROM merge_test.dst_table')).rows[0].total).toBe(0);
+      expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) })))
+        .toEqual({ tasks: [], history: [] });
+      expect(pageErrors).toEqual([]);
+      await confirmOwnedDesktopExit(info);
+    } catch (reason) { retainOwnedDesktopResources(info); throw reason; }
+    finally { await observer.end(); }
+  });
 });
 
 test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑失效', async ({}, info) => {

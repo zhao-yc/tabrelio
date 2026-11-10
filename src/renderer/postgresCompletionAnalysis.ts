@@ -16,7 +16,7 @@ interface ReferenceTrace {
 }
 interface RelationSpan { end: number; relation: number; }
 type Scope = ReadonlyMap<string, Projection>;
-type Query = { kind: 'relations'; schema?: string; ctes?: string[] } |
+type Query = { kind: 'relations'; schema?: string; ctes?: string[]; mergeTarget?: true } |
   { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean };
 export interface PostgresCompletionAnalysis {
   start: number;
@@ -126,12 +126,13 @@ interface Parsed { projection: Projection; query?: Query; routine?: PostgresRout
 
 /** 只接受一个 schema 限定符，关系别名和赋值左侧继续由字段补全处理。 */
 function expressionRoutine(main: Part[], left: PostgresEditorToken[], cursorGroup: Part | undefined,
-  refs: PostgresCompletionRelation[][]): PostgresRoutineCompletionTarget | undefined {
+  refs: PostgresCompletionRelation[][], expressionStart?: number): PostgresRoutineCompletionTarget | undefined {
   const dotted = punct(left.at(-1), '.');
   const schema = dotted ? identifier(left.at(-2)) : undefined;
   if (dotted && (!schema || refs.some(level => level.some(ref => (ref.alias ?? ref.name) === schema)))) return;
   const before = left.at(dotted ? -3 : -1);
-  if (!before || !(expressionEntries.has(keyword(before)) || (before.kind === 'punct' && expressionOperators.has(before.text)))) return;
+  if (!before || !(before.end === expressionStart || expressionEntries.has(keyword(before)) ||
+      (before.kind === 'punct' && expressionOperators.has(before.text)))) return;
   const command = keyword(main[0]);
   if (cursorGroup) {
     const index = main.indexOf(cursorGroup);
@@ -566,6 +567,7 @@ interface MergeAnalysis {
   context?: QueryContext;
   trace?: ReferenceTrace;
   active?: Parsed;
+  names: Set<string>;
 }
 
 /** 引用和补全沿用同一作用域，补全只进入包含光标的表达式或子查询。 */
@@ -574,7 +576,8 @@ function mergeExpression(parts: Part[], refs: ScopedRelation[], analysis: MergeA
   if (trace) {
     traceExpressions(parts, scope, refs, outer, new Map(), trace);
   } else if (context && !analysis.active && context.offset >= start && context.offset <= end) {
-    let group = parts.find(part => part.kind === 'group' && contains(part, context.offset));
+    const cursorGroup = parts.find(part => part.kind === 'group' && contains(part, context.offset));
+    let group = cursorGroup;
     while (group?.kind === 'group') {
       if (commands.has(keyword(group.parts[0]))) {
         analysis.active = parseQuery(group.parts, scope, [refs, ...outer], context);
@@ -582,20 +585,65 @@ function mergeExpression(parts: Part[], refs: ScopedRelation[], analysis: MergeA
       }
       group = group.parts.find(part => part.kind === 'group' && contains(part, context.offset));
     }
-    analysis.active = { projection: unknown, query: keyword(context.left.at(-1)) === 'AS' ? undefined : columns(refs, outer, context.left) };
+    const qualifier = punct(context.left.at(-1), '.') ? identifier(context.left.at(-2)) : undefined;
+    const routine = !qualifier || !analysis.names.has(qualifier) ? expressionRoutine(parts, context.left, cursorGroup, [refs, ...outer], start) : undefined;
+    analysis.active = { projection: unknown, query: keyword(context.left.at(-1)) === 'AS' ? undefined : columns(refs, outer, context.left), routine };
+  }
+}
+
+/** 只匹配入口之后的首段名称或 schema 限定符，别名和 JOIN 条件属于各自作用域。 */
+function mergeNamePrefix(context: QueryContext, entryEnd: number): { schema?: string } | undefined {
+  const { left } = context;
+  const dotted = punct(left.at(-1), '.');
+  if (left.at(dotted ? -3 : -1)?.end !== entryEnd) return;
+  const schema = dotted ? identifier(left.at(-2)) : undefined;
+  return dotted ? schema ? { schema } : undefined : {};
+}
+
+function completeMergeRelation(parts: Part[], start: number, entryEnd: number, target: boolean, analysis: MergeAnalysis): void {
+  const { context, scope } = analysis;
+  if (!context || analysis.active) return;
+  const modifier = keyword(parts[start]);
+  const only = modifier === 'ONLY', lateral = modifier === 'LATERAL';
+  const index = start + (only || lateral ? 1 : 0);
+  const first = parts[index];
+  if ((only || lateral) && parts[start].end <= context.start) entryEnd = parts[start].end;
+  if (only && first?.kind === 'group' && contains(first, context.offset)) entryEnd = first.start + 1;
+  const prefix = mergeNamePrefix(context, entryEnd);
+  if (prefix) {
+    const ctes = !target && !prefix.schema ? [...scope.keys()].slice(0, limits.items) : undefined;
+    const query: Query | undefined = lateral ? undefined : { kind: 'relations', ...prefix,
+      ...(target ? { mergeTarget: true } : {}), ...(ctes?.length ? { ctes } : {}) };
+    const routine: PostgresRoutineCompletionTarget | undefined = target || only ? undefined : { context: 'from', ...prefix };
+    analysis.active = { projection: unknown, query, routine };
+    return;
+  }
+  // ROWS FROM 的括号内每个成员都从函数名开始，列定义和实参继续走原有作用域。
+  const group = parts[index + 2];
+  if (!target && !only && keyword(first) === 'ROWS' && keyword(parts[index + 1]) === 'FROM' &&
+      group?.kind === 'group' && contains(group, context.offset)) {
+    let memberStart = group.start + 1;
+    for (const part of group.parts) {
+      if (part.end > context.start) break;
+      if (punct(part, ',')) memberStart = part.end;
+    }
+    const member = mergeNamePrefix(context, memberStart);
+    if (member) analysis.active = { projection: unknown, routine: { context: 'from', ...member } };
   }
 }
 
 /** 目标在外层 MERGE ON 前尚未进入作用域。表函数和 LATERAL 子查询可以看到允许关联的 JOIN 左侧。 */
-function readMergeRelation(parts: Part[], start: number, target: boolean, preceding: ScopedRelation[],
+function readMergeRelation(parts: Part[], start: number, entryEnd: number, target: boolean, preceding: ScopedRelation[],
   analysis: MergeAnalysis): { relation: ScopedRelation; next: number } | undefined {
   const { scope, outer, trace, context } = analysis;
+  completeMergeRelation(parts, start, entryEnd, target, analysis);
   const modifier = keyword(parts[start]);
   const only = modifier === 'ONLY', lateral = modifier === 'LATERAL';
   let next = start + (only || lateral ? 1 : 0);
   const call = !target && !only ? readTableFunction(parts, next) : undefined;
   if (call === false) return;
   if (call) {
+    analysis.names.add(call.relation.alias ?? call.relation.name);
     if (trace) traceTableFunction(call, scope, preceding, outer, trace);
     else for (const args of call.args) mergeExpression(args.parts, preceding, analysis, args.start + 1, args.end - Number(args.closed));
     return call;
@@ -635,6 +683,7 @@ function readMergeRelation(parts: Part[], start: number, target: boolean, preced
   const renamed = readRelationAlias(parts, next, !target);
   if (!renamed) return;
   const { alias, declaration } = renamed;
+  if (alias || name) analysis.names.add(alias ?? name);
   if (declaration) trace?.declarations.set(declaration.start, 'alias');
   if (renamed.names) projection = rename(projection ?? unknown, renamed.names);
   return { relation: { name, schema, alias, projection, declaration: declaration ?? cte }, next: renamed.next };
@@ -672,35 +721,39 @@ function mergeJoin(parts: Part[], start: number): { next: number; qualified: boo
   return { next: index + 1, qualified: !natural && type !== 'CROSS', lateral: type !== 'RIGHT' && type !== 'FULL', natural };
 }
 
-function readMergeOperand(parts: Part[], start: number, preceding: ScopedRelation[], analysis: MergeAnalysis, depth: number): MergeSource | undefined {
+function readMergeOperand(parts: Part[], start: number, entryEnd: number, preceding: ScopedRelation[], analysis: MergeAnalysis,
+  depth: number): MergeSource | undefined {
   const part = parts[start];
   if (part?.kind === 'group' && part.closing === ')' && !isMergeSourceQuery(part)) {
-    const inner = readMergeSource(part.parts, 0, preceding, analysis, depth + 1);
+    const inner = readMergeSource(part.parts, 0, part.start + 1, preceding, analysis, depth + 1);
     if (!inner?.joined || inner.next !== part.parts.length) return;
     const renamed = readRelationAlias(parts, start + 1, true);
     if (!renamed) return;
     if (!renamed.declaration) return { ...inner, next: renamed.next };
     // 整个 JOIN 的别名会遮蔽输入表，只保留已收集的内部引用。
     analysis.trace?.declarations.set(renamed.declaration.start, 'alias');
+    analysis.names.add(renamed.alias!);
     const projection = rename(inner.projection, renamed.names ?? []);
     const root = { name: renamed.alias!, declaration: renamed.declaration, projection };
     return { relations: [root], root, projection, next: renamed.next, joined: true };
   }
-  const atom = readMergeRelation(parts, start, false, preceding, analysis);
+  const atom = readMergeRelation(parts, start, entryEnd, false, preceding, analysis);
   if (atom) return { relations: [atom.relation], root: atom.relation, projection: relationProjection(atom.relation), next: atom.next, joined: false };
 }
 
 /** JOIN ON 只可见当前两个操作数。右侧尚未遇到 ON／USING 时，继续解析其未加括号的 JOIN。 */
-function readMergeSource(parts: Part[], start: number, preceding: ScopedRelation[], analysis: MergeAnalysis, depth = 0): MergeSource | undefined {
+function readMergeSource(parts: Part[], start: number, entryEnd: number, preceding: ScopedRelation[], analysis: MergeAnalysis,
+  depth = 0): MergeSource | undefined {
   const { trace } = analysis;
   if (depth >= 24 || trace?.unsupported) return;
-  const first = readMergeOperand(parts, start, preceding, analysis, depth);
+  const first = readMergeOperand(parts, start, entryEnd, preceding, analysis, depth);
   if (!first) return;
   let left: MergeSource = first;
   for (let join = mergeJoin(parts, left.next); join && !trace?.unsupported; join = mergeJoin(parts, left.next)) {
     const lateral: ScopedRelation[] = join.lateral ? [...preceding, ...left.relations] : preceding;
-    const right = join.qualified ? readMergeSource(parts, join.next, lateral, analysis, depth + 1)
-      : readMergeOperand(parts, join.next, lateral, analysis, depth);
+    const joinEnd = parts[join.next - 1].end;
+    const right = join.qualified ? readMergeSource(parts, join.next, joinEnd, lateral, analysis, depth + 1)
+      : readMergeOperand(parts, join.next, joinEnd, lateral, analysis, depth);
     if (!right) return;
     let next = right.next;
     const relations = [...left.relations, ...right.relations];
@@ -715,6 +768,7 @@ function readMergeSource(parts: Part[], start: number, preceding: ScopedRelation
           const declaration = parts[next + 1], name = identifier(declaration);
           if (!name || name.length > limits.name || stop.has(keyword(declaration))) return;
           trace?.declarations.set(declaration.start, 'alias');
+          analysis.names.add(name);
           root = { name, declaration, usingColumns: keys, qualifiedOnly: true, projection: { names: keys, stars: [], exact: true } };
           relations.push(root);
           next += 2;
@@ -793,9 +847,10 @@ function completeMergeAction(parts: Part[], refs: ScopedRelation[], target: Scop
 function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined {
   const { scope, outer, trace, context } = analysis;
   if (keyword(parts[1]) !== 'INTO') return;
-  const target = readMergeRelation(parts, 2, true, [], analysis);
-  if (!target || keyword(parts[target.next]) !== 'USING') return;
+  const target = readMergeRelation(parts, 2, parts[1].end, true, [], analysis);
+  if (!target || keyword(parts[target.next]) !== 'USING') return analysis.active;
   const sourceStart = target.next + 1;
+  const usingEnd = parts[target.next].end;
   const clauses: { when: number; then?: number }[] = [];
   let depth = 0, end = parts.length, join = -1;
   for (let i = sourceStart; i < parts.length; i++) {
@@ -816,16 +871,17 @@ function parseMerge(parts: Part[], analysis: MergeAnalysis): Parsed | undefined 
   }
   if (trace && (depth || !clauses.length || clauses[0].when <= join + 1)) return;
   const sourceParts = parts.slice(sourceStart, join < 0 ? parts.length : join);
-  const source = readMergeSource(sourceParts, 0, [], analysis);
+  const source = readMergeSource(sourceParts, 0, usingEnd, [], analysis);
   if (!source || source.next !== sourceParts.length || join <= sourceStart) {
     // 尚未写外层 ON 时，最后一个 ON 仍可能是来源 JOIN 的条件。
-    if (!trace && !clauses.length && join >= sourceStart) readMergeSource(parts.slice(sourceStart), 0, [], analysis);
+    if (!trace && !clauses.length && join >= sourceStart) readMergeSource(parts.slice(sourceStart), 0, usingEnd, [], analysis);
     return analysis.active;
   }
   const { relation } = target;
   const rootName = source.root?.alias ?? source.root?.name;
   const implicit = rootName ? undefined : source.joined ? 'unnamed_join' : 'unnamed_subquery';
-  if ((relation.alias ?? relation.name) === (rootName || implicit)) return;
+  if ((relation.alias ?? relation.name) === (rootName || implicit)) return trace ? undefined : analysis.active;
+  if (implicit) analysis.names.add(implicit);
   const refs = [relation, ...source.relations];
   if (implicit && trace) for (const ref of refs) reserveImplicitName(trace, ref.declaration, implicit);
   // 自动生成的来源名由服务器在处理匹配动作时打开，没有可跳转的原文声明。
@@ -942,7 +998,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   }
   if (command === 'MERGE') {
     if (first === 'WITH' && keyword(parts[1]) === 'RECURSIVE') return unsupported();
-    return parseMerge(main, { scope, outer, trace, context }) ?? unsupported();
+    return parseMerge(main, { scope, outer, trace, context, names: new Set() }) ?? unsupported();
   }
   if (trace && main.some((part, i) => unsupportedReferenceSyntax.has(keyword(part)) || keyword(part) === 'INTO' ||
     keyword(part) === 'USING' && main[i + 1]?.kind === 'group' && keyword(main[i + 2]) === 'AS')) return unsupported();

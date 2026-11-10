@@ -11,7 +11,7 @@ export type PostgresRoutineCompletionTarget = z.infer<typeof routine>;
 
 /** 只接受解析后的目录目标，绝不把编辑器 SQL 交给数据库补全入口。 */
 export const postgresCompletionSchema = z.discriminatedUnion('kind', [
-  target.extend({ kind: z.literal('relations'), schema: name.optional(), routine: routine.optional() }).strict(),
+  target.extend({ kind: z.literal('relations'), schema: name.optional(), routine: routine.optional(), mergeTarget: z.literal(true).optional() }).strict(),
   target.extend({ kind: z.literal('columns'), relations: z.array(postgresCompletionReferenceSchema).min(1).max(postgresCompletionLimits.relations),
     routine: routine.optional() }).strict(),
   target.extend({ kind: z.literal('routines'), routine }).strict(),

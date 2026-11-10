@@ -144,6 +144,34 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('WITH feed(id, extra) AS (VALUES (1,2)), changed AS (' + merge + ' RETURNING *) SELECT changed.| FROM changed')?.query)
       .toMatchObject({ relations: [{ projection: { names: ['id', 'extra'], stars: [{ schema: 'app', name: 'orders' }] } }] });
   });
+  it('MERGE 关系提示支持未完成的 INTO、USING、JOIN 和 ROWS FROM', () => {
+    expect(at('WITH orders AS (SELECT 1) MERGE INTO or|')?.query).toEqual({ kind: 'relations', mergeTarget: true });
+    expect(at('MERGE INTO ONLY ("业务".订|)')?.query).toEqual({ kind: 'relations', schema: '业务', mergeTarget: true });
+    expect(at('MERGE INTO orders AS d| USING feed s ON true')?.query).toBeUndefined();
+    expect(at('WITH feed AS (SELECT 1) MERGE INTO orders d USING fe|'))
+      .toMatchObject({ query: { kind: 'relations', ctes: ['feed'] }, routine: { context: 'from' } });
+    expect(at('MERGE INTO orders d USING ONLY staging.fe|'))
+      .toMatchObject({ query: { kind: 'relations', schema: 'staging' } });
+    expect(at('MERGE INTO orders d USING s LEFT JOIN LATERAL tool.ge|'))
+      .toMatchObject({ routine: { context: 'from', schema: 'tool' } });
+    const member = at('MERGE INTO orders d USING ROWS FROM (series(1), tool.re|cords(2)) ON true');
+    expect(member).toMatchObject({ routine: { context: 'from', schema: 'tool' }, existingCall: true });
+    expect(member?.query).toBeUndefined();
+    expect(at('MERGE INTO orders d USING a JOIN b USING (i|d) ON true')?.routine).toBeUndefined();
+  });
+  it('MERGE 函数提示只在来源调用和分支表达式开启，识别现有调用参数', () => {
+    const merge = 'MERGE INTO orders d USING incoming s ON true ';
+    expect(at(merge + 'WHEN MATCHED AND tools.is_ok| THEN DELETE')?.routine).toEqual({ context: 'expression', schema: 'tools' });
+    expect(at(merge + 'WHEN NOT MATCHED BY SOURCE AND s.is_ok| THEN DELETE')?.routine).toBeUndefined();
+    expect(at(merge + 'WHEN MATCHED THEN UPDATE SET fo|')?.routine).toBeUndefined();
+    expect(at(merge + 'WHEN MATCHED THEN DELETE RETURNING WITH (OLD AS previous) tools.show|')?.routine)
+      .toEqual({ context: 'expression', schema: 'tools' });
+    const signature = (marked: string) => analyzePostgresSignature(marked.replace('|', ''), marked.indexOf('|'));
+    expect(signature('MERGE INTO orders d USING ROWS FROM (series(1), tool.records(1, |)) r ON true'))
+      .toMatchObject({ name: 'records', argument: 1, routine: { context: 'from', schema: 'tool' } });
+    expect(signature(merge + 'WHEN NOT MATCHED THEN INSERT (id) VALUES (tool.to_id(value => |))'))
+      .toMatchObject({ name: 'to_id', named: 'value', routine: { context: 'expression', schema: 'tool' } });
+  });
   it('作用域跟随光标，区分普通派生表、LATERAL、相关子查询与集合分支', () => {
     expect(at('SELECT (SELECT p.| FROM child) FROM parent p')?.query)
       .toMatchObject({ relations: [{ name: 'parent', alias: 'p' }] });
@@ -285,6 +313,24 @@ it('MERGE 只向目录发送当前目标身份，本地来源字段直接补全'
     expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', prefix: 'no', kind: 'columns',
       relations: [{ schema: 'app', name: 'orders' }] }]);
   } finally { source.provider.dispose(); target.provider.dispose(); }
+});
+
+it('MERGE 目录请求区分目标和来源，保留原会话与例程类别', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const request = async (input: PostgresCompletionInput) => {
+    inputs.push(input);
+    return { items: [], incomplete: false };
+  };
+  const target = editor('WITH orders AS (SELECT 1) MERGE INTO app.or|', request, '原会话');
+  const source = editor('WITH local_feed AS (SELECT 1) MERGE INTO orders USING local_|', request, '原会话');
+  try {
+    expect((await target.suggest())?.suggestions).toEqual([]);
+    expect((await source.suggest())?.suggestions).toMatchObject([{ insertText: '"local_feed"' }]);
+    expect(inputs).toEqual([
+      { connectionId: '原连接', database: '原库', sessionId: '原会话', prefix: 'or', kind: 'relations', schema: 'app', mergeTarget: true },
+      { connectionId: '原连接', database: '原库', sessionId: '原会话', prefix: 'local_', kind: 'relations', routine: { context: 'from' } },
+    ]);
+  } finally { target.provider.dispose(); source.provider.dispose(); }
 });
 
 it('切走再返回原标签时丢弃迟到目录，并由原承诺串行收尾', async () => {

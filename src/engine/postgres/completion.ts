@@ -22,12 +22,22 @@ function namespaces(session: boolean): string {
 
 /** 表建议携带实际 schema，临时表用 pg_temp，前缀中的百分号和下划线按文字匹配。 */
 async function relations(connection: PostgresConnection, input: Extract<PostgresCompletionInput, { kind: 'relations' }>, session: boolean): Promise<PostgresCompletionResult> {
+  // 动作和权限仍由服务器校验，这里只排除确定不能作为 MERGE 目标的关系。
+  const serverVersion = "pg_catalog.current_setting('server_version_num')::pg_catalog.int4";
+  const mergeAvailable = input.mergeTarget ? `AND ${serverVersion} OPERATOR(pg_catalog.>=) 150000` : '';
+  const mergeTarget = input.mergeTarget ? `${mergeAvailable}
+    AND (c.relkind::pg_catalog.text ${eq} ANY (ARRAY['r','p']::pg_catalog.text[])
+      OR (c.relkind::pg_catalog.text ${eq} 'v' AND ${serverVersion} OPERATOR(pg_catalog.>=) 170000))
+    AND (NOT c.relhasrules OR (c.relkind::pg_catalog.text ${eq} 'v' AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_rewrite r WHERE r.ev_class ${eq} c.oid AND r.rulename::pg_catalog.text ${ne} '_RETURN'
+    )))` : '';
   const result = await connection.query(`
     WITH ${namespaces(session)}
     SELECT kind, schema, name FROM (
       SELECT 'schema' AS kind, n.schema, n.schema AS name, 0 AS priority
       FROM namespaces n
       WHERE $2::pg_catalog.text IS NULL
+        ${mergeAvailable}
         AND pg_catalog.strpos(pg_catalog.lower(n.schema), pg_catalog.lower($1::pg_catalog.text)) ${eq} 1
       UNION ALL
       SELECT CASE WHEN c.relkind::pg_catalog.text ${eq} ANY (ARRAY['v','m']::pg_catalog.text[]) THEN 'view' ELSE 'table' END,
@@ -35,6 +45,7 @@ async function relations(connection: PostgresConnection, input: Extract<Postgres
         ${session ? "CASE WHEN pg_catalog.pg_table_is_visible(c.oid) THEN 1 ELSE 2 END" : '1'}
       FROM pg_catalog.pg_class c JOIN namespaces n ON n.oid ${eq} c.relnamespace
       WHERE c.relkind::pg_catalog.text ${eq} ANY ${relationKinds} AND ${relationPermission}
+        ${mergeTarget}
         AND ($2::pg_catalog.text IS NULL OR n.schema ${eq} $2)
         AND pg_catalog.strpos(pg_catalog.lower(c.relname::pg_catalog.text), pg_catalog.lower($1::pg_catalog.text)) ${eq} 1
     ) directory ORDER BY priority, name, schema LIMIT $3

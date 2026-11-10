@@ -127,7 +127,7 @@ export function createPostgresCompletionProvider(options: {
         const base = { ...target, prefix, ...(routine ? { routine } : {}) };
         // CTE 名称、别名和投影只在编辑器中使用，目录只接收实际物理目标。
         const input: PostgresCompletionInput | undefined = query?.kind === 'relations'
-          ? { ...base, kind: 'relations', ...(query.schema ? { schema: query.schema } : {}) }
+          ? { ...base, kind: 'relations', ...(query.schema ? { schema: query.schema } : {}), ...(query.mergeTarget ? { mergeTarget: true } : {}) }
           : references.length > 0 && references.length <= postgresCompletionLimits.relations
             ? { ...base, kind: 'columns', relations: references } : routine ? { ...base, kind: 'routines', routine } : undefined;
         let result: PostgresCompletionResult = { items: [], incomplete: false };
