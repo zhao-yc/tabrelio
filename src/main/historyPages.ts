@@ -1,5 +1,5 @@
-import{createHash}from'node:crypto';
-import{historyPageInputSchema,historyReadBatchSchema,historyReadSchema,historyRecordReferenceSchema,historySaveBatchLimits,historySaveQueryBatchSchema,historySaveQuerySchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult,type HistoryRecord}from'../shared/historyPages';
+import{createHash,randomUUID}from'node:crypto';
+import{historyPageInputSchema,historyPageLimits,historyReadBatchSchema,historyReadSchema,historyRecordReferenceSchema,historySaveBatchLimits,historySaveQueryBatchSchema,historySaveQuerySchema,type HistoryExportArchiveFilters,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult,type HistoryRecord}from'../shared/historyPages';
 import { savedQueryOriginContext, type QueryCreate } from '../shared/queryBinding';
 import { savedQueryOpenBatchLimits } from '../shared/savedQuerySearch';
 import{LocalSqlPages}from'./localSqlPages';
@@ -42,6 +42,27 @@ export class HistoryPages extends LocalSqlPages<HistoryPageInput,HistoryPageEntr
   const { startedAt, sql } = this.current(id, digest);
   const utc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(startedAt);
   return { name: utc ? startedAt.replace(/:/g, '-') : '执行历史', sql };
+ }
+ /** 按浏览排序扫描完整筛选，只保留编号和摘要，任一坏记录或来源变化均拒绝归档。 */
+ async collectArchiveReferences(filters: HistoryExportArchiveFilters, assertCurrent: () => void) {
+  const items: { id: string; digest: string }[] = [];
+  const deadline = performance.now() + 30_000;
+  let cursor: string | undefined;
+  try {
+   assertCurrent();
+   let page = await this.start({ ...filters, taskId: randomUUID(), onError: 'stop' });
+   do {
+    cursor = page.cursor;
+    assertCurrent();
+    if (page.failed || page.stoppedOnError) throw Error('筛选范围内存在无法读取的执行历史，未导出 ZIP');
+    if (page.scanned > historyPageLimits.retained || performance.now() > deadline) throw Error('扫描历史筛选超出预算，请缩小范围后重试');
+    for (const item of page.items) items.push({ id: item.entry.id, digest: item.digest });
+    if (!cursor) return items;
+    page = await this.next({ cursor, taskId: randomUUID() });
+   } while (true);
+  } finally {
+   if (cursor) this.release({ cursor });
+  }
  }
  /** 保存来源只能取自原历史。未绑定时清除库上下文，随后打开须明确选库。 */
  querySaveContent(raw: unknown): QueryCreate {

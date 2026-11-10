@@ -88,6 +88,14 @@ describe('历史概要和严格协议',()=>{
 });
 
 describe('真实SQLite与工作线程历史分页',()=>{
+ it('归档收集范围内的坏历史会拒绝整包，即使浏览选择略过失败', async () => {
+  store.addHistory(history({ id: 'z-valid' }));
+  insert(history({ id: 'a-bad' }), '{损坏');
+  const { taskId, onError, ...filters } = request();
+  await expect(service.collectArchiveReferences(filters, () => {})).rejects.toThrow('存在无法读取的执行历史');
+  await expect(service.collectArchiveReferences({ ...filters, scope: { kind: 'connection', connectionId: 'other' } }, () => {})).resolves.toEqual([]);
+  expect(store.historyRaw('a-bad')).toBe('{损坏');
+ });
  it('历史批量打开按勾选顺序重读正文，逐条核对连接和摘要', async () => {
   store.saveConnection(profile());
   store.saveConnection(profile('replacement'));

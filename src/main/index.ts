@@ -1983,24 +1983,32 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   // 批量另存共享文件目标锁，只在主进程按选中摘要读取原文。
   if (command === 'queries.exportSqlArchive' || command === 'history.exportSqlArchive') {
     const fromHistory = command === 'history.exportSqlArchive';
+    const filters = fromHistory ? input.filters : undefined;
+    const historyRevision = filters ? store.historyPageRevision() : undefined;
     const assertCurrent = () => {
       columnsMain.assertCapturedOwner(columns);
       if (shuttingDown) throw Error('客户端正在退出，不能导出所选查询');
+      if (historyRevision !== undefined && historyRevision !== store.historyPageRevision())
+        throw Error('执行历史或连接配置已变化，请重新筛选后导出');
     };
     assertCurrent();
     return queryFileOperation(async () => {
+      const items = filters ? await historyPages.collectArchiveReferences(filters, assertCurrent) : input.items;
+      assertCurrent();
+      if (!items.length) throw Error('当前筛选没有匹配的执行历史，未导出 ZIP');
       const selected = await dialog.showSaveDialog(columns!.owner.window, {
-        title: fromHistory ? '导出所选历史为 ZIP' : '导出所选查询为 ZIP',
-        defaultPath: fromHistory ? '执行历史.zip' : '保存查询.zip', filters: [{ name: 'ZIP 文件', extensions: ['zip'] }],
+        title: filters ? `导出筛选匹配的 ${items.length} 条历史为 ZIP` : fromHistory ? '导出所选历史为 ZIP' : '导出所选查询为 ZIP',
+        defaultPath: filters ? '筛选执行历史.zip' : fromHistory ? '执行历史.zip' : '保存查询.zip',
+        filters: [{ name: 'ZIP 文件', extensions: ['zip'] }],
       });
       assertCurrent();
       if (selected.canceled || !selected.filePath) return { status: 'cancelled' };
       const release = await exportReservations.acquire(selected.filePath);
       try {
-        await writeQuerySqlArchive(selected.filePath, input.items,
+        await writeQuerySqlArchive(selected.filePath, items,
           item => fromHistory ? historyPages.readArchiveItem(item) : savedQuerySearches.readText(item).query,
           assertCurrent, input.encoding ?? 'utf8');
-        return { status: 'saved', name: basename(selected.filePath), count: input.items.length };
+        return { status: 'saved', name: basename(selected.filePath), count: items.length };
       } finally { release(); }
     });
   }

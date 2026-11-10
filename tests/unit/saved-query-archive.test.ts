@@ -74,4 +74,19 @@ describe('保存查询批量 ZIP', () => {
     expect(await readFile(target, 'utf8')).toBe('原文件');
     expect(await readdir(root)).toEqual(['查询.zip']);
   });
+
+  it('筛选归档请求只接收浏览条件，1000 条的编号仍按名称排序', async () => {
+    const filters = { search: '原始文字', fields: ['sql'], scope: { kind: 'all' }, status: 'failed', database: { kind: 'known', database: 'Sales' }, sort: 'slowest' };
+    const input = { filters, encoding: 'utf8' };
+    expect(validateCommand('history.exportSqlArchive', input)).toEqual(input);
+    for (const invalid of [{ ...input, items: refs }, { ...input, filters: { ...filters, onError: 'continue' } }, { ...input, filters: { ...filters, taskId: '外部任务' } }])
+      expect(() => validateCommand('history.exportSqlArchive', invalid)).toThrow();
+    const { target } = await fixture(), items = Array.from({ length: 1000 }, (_, index) => ({ ...refs[0], id: String(index) }));
+    await writeQuerySqlArchive(target, items, () => ({ name: '历史', sql: 'SELECT 1;' }), () => {});
+    const zip = await JSZip.loadAsync(await readFile(target), { checkCRC32: true });
+    const names = Object.keys(zip.files);
+    expect(names).toHaveLength(1000);
+    expect(names).toEqual([...names].sort());
+    expect([names[0], names.at(-1)]).toEqual(['0001-历史.sql', '1000-历史.sql']);
+  });
 });

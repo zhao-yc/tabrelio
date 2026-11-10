@@ -24,11 +24,17 @@ export type HistoryReadBatchInput = z.infer<typeof historyReadBatchSchema>;
 export const historyRecordReferenceSchema=z.object({id,digest}).strict();
 export type HistoryRecordReference = z.infer<typeof historyRecordReferenceSchema>;
 export const historyExportSqlSchema = historyRecordReferenceSchema.extend({ encoding: querySqlExportEncodingSchema }).strict();
-export const historyExportSqlArchiveSchema = z.object({
+const historyExportSelectedArchiveSchema = z.object({
   items: z.array(historyRecordReferenceSchema).min(1).max(savedQueryArchiveLimits.files)
     .refine(items => new Set(items.map(item => item.id)).size === items.length, '所选历史不能重复'),
   encoding: querySqlExportEncodingSchema,
 }).strict();
+const historyExportArchiveFiltersSchema = historyPageInputSchema.omit({ taskId: true, onError: true });
+export type HistoryExportArchiveFilters = z.infer<typeof historyExportArchiveFiltersSchema>;
+export const historyExportSqlArchiveSchema = z.union([
+  historyExportSelectedArchiveSchema,
+  z.object({ filters: historyExportArchiveFiltersSchema, encoding: querySqlExportEncodingSchema }).strict(),
+]);
 export type HistoryExportSqlArchiveInput = z.infer<typeof historyExportSqlArchiveSchema>;
 export type HistoryExportSqlInput = z.infer<typeof historyExportSqlSchema>;
 export type HistoryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };

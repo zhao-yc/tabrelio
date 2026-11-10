@@ -646,6 +646,102 @@ test('跨批次导出历史 ZIP，保留原文和已有目标文件', async () =
  expect(pageErrors).toEqual([]);
 });
 
+test('筛选历史 ZIP 归档超过百条，保存前确认条数并拒绝变化的来源', async ({}, info) => {
+ const count = 105, filterText = '归档筛选标记';
+ const sql = (index: number) => `SELECT ${index};\r\n-- ${filterText}😀`;
+ await seed(store => {
+  for (let index = 0; index < count; index++) store.addHistory(entry({
+   id: `filtered-${String(index).padStart(3, '0')}`, sql: sql(index), databaseContext: { state: 'known', database: 'Sales' },
+  }));
+  store.addHistory(entry({ id: 'different-case', sql: sql(1001), databaseContext: { state: 'known', database: 'sales' } }));
+  store.addHistory(entry({ id: 'no-keyword', sql: 'SELECT 1002;', databaseContext: { state: 'known', database: 'Sales' } }));
+ });
+ const directory = dataDir;
+ await desktop.evaluate(({ ipcMain, dialog, BrowserWindow }, { count, filterText }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args:any[]) => unknown> })._invokeHandlers;
+  const original = handlers.get('dbark:request'); if (!original) throw Error('缺少历史 IPC 入口');
+  const state = { choice: undefined as { path: string | null; stale?: { id: string; digest: string } } | undefined, requests: 0, pickers: 0 };
+  Object.assign(globalThis, { __filteredHistoryArchive: state });
+  handlers.set('dbark:request', async (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) throw Error('离线归档禁止数据库请求');
+   if (command !== 'history.exportSqlArchive') return original(event, payload);
+   const { filters, encoding } = payload.input;
+   if (Object.keys(payload.input).sort().join() !== 'encoding,filters' || encoding !== 'utf16le' ||
+       (filters.search !== filterText && filters.search !== '没有对应历史') ||
+       filters.sort !== 'oldest' || filters.database?.kind !== 'known' || filters.database.database !== 'Sales') throw Error('归档条件不准确');
+   const choice = state.choice; state.choice = undefined; state.requests++;
+   const pick = dialog.showSaveDialog;
+   dialog.showSaveDialog = (async (...args: unknown[]) => {
+    const options = args[1] as Electron.SaveDialogOptions;
+    if (!choice || args[0] !== BrowserWindow.getAllWindows()[0] || options.title !== `导出筛选匹配的 ${count} 条历史为 ZIP` ||
+        options.defaultPath !== '筛选执行历史.zip' || !options.filters?.[0]?.extensions.includes('zip')) throw Error('归档保存范围不准确');
+    state.pickers++;
+    if (choice.stale) {
+     const preview = await original(event, { command: 'history.deletePreview', input: { taskId: crypto.randomUUID(), scope: { kind: 'selected', records: [choice.stale] } } }) as { ok: boolean; result?: { previewToken: string } };
+     if (!preview.ok || !preview.result) throw Error('隔离历史变更预览失败');
+     const result = await original(event, { command: 'history.deleteApply', input: { previewToken: preview.result.previewToken } }) as { ok: boolean; result?: { deleted: number } };
+     if (!result.ok || result.result?.deleted !== 1) throw Error('隔离历史变更失败');
+    }
+    return choice.path ? { canceled: false, filePath: choice.path } : { canceled: true };
+   }) as typeof dialog.showSaveDialog;
+   try { return await original(event, payload); } finally { dialog.showSaveDialog = pick; }
+  });
+ }, { count, filterText });
+ await open();
+ await dialog().getByLabel(text.sort, { exact: true }).selectOption('oldest');
+ await expect(dialog().getByRole('button', { name: text.refresh, exact: true })).toBeEnabled();
+ await dialog().getByLabel(text.databaseFilter, { exact: true }).selectOption('known');
+ await dialog().getByLabel(searchText.databaseName, { exact: true }).fill('Sales');
+ const button = dialog().getByRole('button', { name: text.sqlArchiveFiltered, exact: true });
+ await expect(button).toBeDisabled();
+ await search(filterText);
+ await dialog().getByRole('button', { name: text.next, exact: true }).click();
+ await expect(progress()).toContainText('第2批');
+ await expect(dialog().getByRole('button', { name: text.sqlArchive, exact: true })).toBeDisabled();
+ await dialog().getByLabel(text.sqlExportEncoding, { exact: true }).selectOption('utf16le');
+ async function exportTo(path: string | null, stale?: { id: string; digest: string }) {
+  await desktop.evaluate((_electron, choice) => {
+   const state = (globalThis as typeof globalThis & { __filteredHistoryArchive: { choice?: typeof choice } }).__filteredHistoryArchive;
+   if (state.choice) throw Error('上一轮归档尚未结束');
+   state.choice = choice;
+  }, { path, stale });
+  await button.click();
+  await expect(button).toBeEnabled();
+ }
+ await exportTo(null);
+ await expect(dialog().getByText(/已导出/)).toHaveCount(0);
+ const target = join(directory, 'filtered-history.zip');
+ await exportTo(target);
+ await expect(dialog().getByText(text.sqlArchiveSaved(basename(target), count), { exact: true })).toBeVisible();
+ await dialog().getByText(text.sqlArchiveSaved(basename(target), count), { exact: true }).scrollIntoViewIfNeeded();
+ await dialog().screenshot({ path: info.outputPath('history-filtered-archive.png') });
+ const zip = await JSZip.loadAsync(await readFile(target), { checkCRC32: true });
+ const names = Object.keys(zip.files);
+ expect(names).toEqual(Array.from({ length: count }, (_, index) => `${String(index + 1).padStart(3, '0')}-2026-10-15T00-00-00Z.sql`));
+ expect(await Promise.all(names.map(name => zip.files[name].async('nodebuffer')))).toEqual(
+  Array.from({ length: count }, (_, index) => Buffer.from('\uFEFF' + sql(index), 'utf16le')),
+ );
+ await search('没有对应历史');
+ await button.click();
+ await expect(dialog().getByRole('alert')).toContainText('当前筛选没有匹配');
+ await search(filterText);
+ const first = await page.evaluate(() => window.dbark.invoke('history.page', {
+  taskId: crypto.randomUUID(), search: 'SELECT 0;', fields: ['sql'], scope: { kind: 'all' }, status: 'all', onError: 'stop', sort: 'oldest',
+ }));
+ const firstItem = first.items.find(item => item.entry.id === 'filtered-000')!;
+ if (first.cursor) await page.evaluate(cursor => window.dbark.invoke('history.pageRelease', { cursor }), first.cursor);
+ const stale = join(directory, 'filtered-stale.zip');
+ await writeFile(stale, '原文件');
+ await exportTo(stale, { id: firstItem.entry.id, digest: firstItem.digest });
+ await expect(dialog().getByRole('alert')).toContainText('执行历史或连接配置已变化');
+ expect(await readFile(stale, 'utf8')).toBe('原文件');
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __filteredHistoryArchive: unknown }).__filteredHistoryArchive))
+  .toEqual({ choice: undefined, requests: 4, pickers: 3 });
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('在两类只读 SQL 预览循环查找并高亮跨段正文', async () => {
  const needle = 'K😀[Q?]';
  const sql = 'x'.repeat(65535) + needle + '\r\n' + 'y'.repeat(65540) + 'k😀[Q?]\n' + needle;

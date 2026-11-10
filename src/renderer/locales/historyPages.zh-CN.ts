@@ -22,6 +22,8 @@ export const historyPagesZh={
  sqlExportHint:'保存该条历史的完整 SQL 正文，保留原换行。可以在离线状态下另存。',
  sqlExported:(name:string)=>`已保存历史 SQL 至 ${name}`,
  sqlArchive:'导出所选历史为 ZIP',
+ sqlArchiveFiltered:'导出当前筛选全部匹配为 ZIP',
+ sqlArchiveFilteredHint:'按已应用的筛选及排序扫描全部批次。保存窗口会显示准确条数。',
  sqlArchiveHint:'每条勾选历史生成一个 SQL 文件，使用所选编码，包含其他批次中仍被勾选的记录。',
  sqlArchiveSaved:(name:string,count:number)=>`已导出 ${count} 条历史至 ${name}`,
  saveQuery:'保存为新查询', saveQueryName:'查询名称', saveQueryConfirm:'保存到查询库', saveQuerySource:'保留原连接和默认库',

@@ -1,7 +1,7 @@
 import { UsageHelp } from './ui';
 import{useEffect,useRef,useState}from'react';
 import{ArrowUpRight,Clock3,FileCode2,Search,CheckCircle2,XCircle}from'lucide-react';
-import { historySaveBatchLimits, type HistoryPageInput, type HistoryPage, type HistoryPageEntry, type HistoryPageSort } from '../../shared/historyPages';
+import { historySaveBatchLimits, type HistoryExportSqlArchiveInput, type HistoryPageInput, type HistoryPage, type HistoryPageEntry, type HistoryPageSort } from '../../shared/historyPages';
 import { savedQueryDatabaseScopeSchema, savedQueryOpenBatchLimits } from '../../shared/savedQuerySearch';
 import type { QueryFileEncoding } from '../../shared/contracts';
 import type { SavedQueryGroupTarget } from '../../shared/savedQueryOrganization';
@@ -303,18 +303,28 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
     if (!closed.current) setBusy(false);
   }
  }
- /** 冻结跨批次选择，只有原筛选及对话框仍有效时显示完成状态。 */
- async function exportSqlArchive() {
-  const items = selectedRef.current;
+ /** 冻结已应用条件或勾选摘要，导出全部匹配时不受当前页和勾选范围限制。 */
+ async function exportSqlArchive(mode: 'selected' | 'filtered') {
   const revision = generation.current;
   const current = () => !closed.current && generation.current === revision && view.current.filterKey === view.current.applied;
-  if (locked.current || deleteRef.current || !items.length || !current()) return;
+  if (locked.current || deleteRef.current || !current()) return;
+  let input: HistoryExportSqlArchiveInput;
+  if (mode === 'filtered') {
+    const applied = appliedInput.current;
+    if (!applied || !view.current.reply) return;
+    const { onError: _onError, ...filters } = applied;
+    input = { filters, encoding: exportEncoding };
+  } else {
+    const items = selectedRef.current;
+    if (!items.length) return;
+    input = { items, encoding: exportEncoding };
+  }
   locked.current = true;
   setBusy(true);
   setError('');
   setArchiveNotice('');
   try {
-    const request = invoke('history.exportSqlArchive', { items, encoding: exportEncoding });
+    const request = invoke('history.exportSqlArchive', input);
     pending.current = request;
     const result = await request;
     if (current() && result.status === 'saved') setArchiveNotice(t.sqlArchiveSaved(result.name, result.count));
@@ -471,7 +481,8 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   </select></label>
   <UsageHelp><p>{t.timeHint}</p><p>{t.durationHint}</p><p>{t.hint}</p><p>{insertionText.hint}</p><p>{t.openHint}</p></UsageHelp><p role="status">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p>{applied&&filterKey!==applied&&<p role="status" aria-label={t.filterStatus}>{t.pending}</p>}<ErrorBox message={error}/>{busy&&<Spinner/>}{reply&&<p role="status" aria-label={t.pageStatus}>{formatText(t.summary,batch,reply.scanned,reply.matched,reply.failed)} {reply.stoppedOnError?t.failedStop:reply.cursor?t.more:t.done}</p>}
   <section aria-label={deletion.title}><p role="status" aria-label={deletion.selectionStatus}>{deletion.selection(selected.length)}</p>{selectionNotice&&<p role="status" aria-label={deletion.selectionNoticeStatus}>{selectionNotice}</p>}<div className="inline-field"><button disabled={busy||closing||filterKey!==applied||!reply?.items.length} onClick={()=>selectItems(reply?.items??[])}>{deletion.selectBatch}</button><button disabled={busy||closing||!selected.length} onClick={clearSelection}>{deletion.clearSelection}</button><button disabled={busy || closing || filterKey !== applied || !selected.length} title={t.sqlArchiveHint}
-    onClick={() => void exportSqlArchive()}>{t.sqlArchive}</button><button ref={openTrigger} disabled={busy || closing || filterKey !== applied || !selected.length || selected.length > savedQueryOpenBatchLimits.queries}
+    onClick={() => void exportSqlArchive('selected')}>{t.sqlArchive}</button><button disabled={busy || closing || filterKey !== applied || !reply}
+    title={t.sqlArchiveFilteredHint} onClick={() => void exportSqlArchive('filtered')}>{t.sqlArchiveFiltered}</button><button ref={openTrigger} disabled={busy || closing || filterKey !== applied || !selected.length || selected.length > savedQueryOpenBatchLimits.queries}
     aria-expanded={!!openVisible} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={busy || closing || filterKey !== applied || !selected.length || selected.length > historySaveBatchLimits.items}
     ref={batchTrigger} aria-expanded={!!batchVisible} onClick={beginSaveBatch}>{t.saveBatch}</button><button disabled={busy||closing||filterKey!==applied||!selected.length} onClick={()=>beginDelete({kind:'selected',records:selectedRef.current})}>{deletion.selected}</button><button disabled={busy||closing||!reply||filterKey!==applied} onClick={()=>{const source=appliedInput.current;if(source){const{onError,sort,...matching}=source;beginDelete({kind:'filtered',filters:matching});}}}>{deletion.filtered}</button></div>{archiveNotice && <p role="status">{archiveNotice}</p>}
   {selected.length > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
