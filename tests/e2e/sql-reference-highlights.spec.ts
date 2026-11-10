@@ -30,6 +30,16 @@ const dmlDrafts = [
     referenceAfter: 'WHERE ', declarationAfter: 'orders AS ', original: 'd', name: '目标', highlights: 4,
     renamed: 'INSERT INTO orders AS "目标"(id,n) SELECT d.id,d.n FROM incoming d ON CONFLICT (id) DO UPDATE SET n=excluded.n+"目标".n WHERE "目标".id=excluded.id RETURNING "目标".n;',
   },
+  {
+    id: 'merge-draft', title: 'MERGE 导航草稿',
+    sql: ['MERGE INTO orders AS d USING staging AS s ON d.id=s.id', 'WHEN MATCHED THEN UPDATE SET n=s.n',
+      'WHEN NOT MATCHED THEN INSERT (id,n) VALUES (s.id,s.n)',
+      'WHEN NOT MATCHED BY SOURCE AND d.closed THEN DELETE', 'RETURNING d.id;'].join('\n'),
+    referenceAfter: 'ON ', declarationAfter: 'orders AS ', original: 'd', name: '目标', highlights: 4,
+    renamed: ['MERGE INTO orders AS "目标" USING staging AS s ON "目标".id=s.id', 'WHEN MATCHED THEN UPDATE SET n=s.n',
+      'WHEN NOT MATCHED THEN INSERT (id,n) VALUES (s.id,s.n)',
+      'WHEN NOT MATCHED BY SOURCE AND "目标".closed THEN DELETE', 'RETURNING "目标".id;'].join('\n'),
+  },
 ];
 const command = 'editor-local-references';
 
@@ -178,7 +188,7 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
 
         for (const draft of dmlDrafts) {
           await page.locator('.tab-strip').getByRole('button', { name: draft.title, exact: true }).click();
-          if (draft.highlights) { await toggle(); await expect.poll(setting).toBe(true); }
+          if (draft.highlights && !(await setting())) { await toggle(); await expect.poll(setting).toBe(true); }
           const reference = draft.sql.indexOf(draft.referenceAfter) + draft.referenceAfter.length + 1;
           const declaration = draft.sql.indexOf(draft.declarationAfter) + draft.declarationAfter.length;
           await move(0, reference);

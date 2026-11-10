@@ -408,6 +408,140 @@ function traceInsert(parts: Part[], scope: Scope, outer: ScopedRelation[][], tra
   return !trace.unsupported;
 }
 
+/** 识别 MERGE 的目标和单个来源，来源查询可见 WITH 声明，目标在 ON 之前尚未加入关系作用域。 */
+function traceMergeRelation(parts: Part[], start: number, target: boolean, scope: Scope, outer: ScopedRelation[][],
+  trace: ReferenceTrace): { relation: ScopedRelation; next: number } | undefined {
+  const modifier = keyword(parts[start]);
+  const only = modifier === 'ONLY', lateral = modifier === 'LATERAL';
+  let next = start + (only || lateral ? 1 : 0);
+  const first = parts[next];
+  let name = '', schema: string | undefined, cte: LocalReferenceRange | undefined;
+  if (!target && !only && first?.kind === 'group' && startsReferenceQuery(first)) {
+    parseQuery(first.parts, scope, outer, undefined, trace);
+    next++;
+  } else {
+    if (lateral) return;
+    const wrapped = only && first?.kind === 'group' && first.closing === ')' ? first : undefined;
+    const names = wrapped?.parts ?? parts;
+    let index = wrapped ? 0 : next;
+    let token = names[index++];
+    name = identifier(token) ?? '';
+    if (!name || stop.has(keyword(token))) return;
+    if (punct(names[index], '.')) {
+      schema = name;
+      token = names[index + 1];
+      name = identifier(token) ?? '';
+      if (!name || stop.has(keyword(token))) return;
+      index += 2;
+    }
+    if (wrapped && index !== names.length) return;
+    next = wrapped ? next + 1 : index;
+    if (!only && punct(parts[next], '*')) next++;
+    if (!target && !schema) cte = scope.get(name)?.declaration;
+    if (cte && token.kind !== 'group') trace.edges.set(token, cte);
+  }
+  const explicitAlias = keyword(parts[next]) === 'AS';
+  if (explicitAlias) next++;
+  const declaration = parts[next];
+  const alias = stop.has(keyword(declaration)) ? undefined : identifier(declaration);
+  if (explicitAlias && !alias || [name, schema, alias].some(value => value && value.length > limits.name)) return;
+  if (alias) {
+    trace.declarations.set(declaration.start, 'alias');
+    next++;
+    if (!target && parts[next]?.kind === 'group') {
+      if (!nameList(parts[next]).length) return;
+      next++;
+    }
+  }
+  return { relation: { name, schema, alias, declaration: alias ? declaration : cte }, next };
+}
+
+/** 只扫描动作右侧的表达式。INSERT 列表和 UPDATE 赋值左侧可以包含复合字段路径。 */
+function traceMergeAction(parts: Part[], inserts: boolean, scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][],
+  trace: ReferenceTrace): boolean {
+  const action = keyword(parts[0]);
+  if (action === 'DO') return keyword(parts[1]) === 'NOTHING' && parts.length === 2;
+  if (!inserts) {
+    if (action === 'DELETE') return parts.length === 1;
+    if (action !== 'UPDATE' || keyword(parts[1]) !== 'SET' || parts.length < 5) return false;
+    traceExpressions(parts, scope, refs, outer, new Map(), trace);
+    return !trace.unsupported;
+  }
+  if (action !== 'INSERT') return false;
+  if (keyword(parts[1]) === 'DEFAULT') return keyword(parts[2]) === 'VALUES' && parts.length === 3;
+  let index = 1;
+  const columns = parts[index];
+  if (columns?.kind === 'group') {
+    if (columns.closing !== ')' || !identifier(columns.parts[0])) return false;
+    index++;
+  }
+  if (keyword(parts[index]) === 'OVERRIDING') {
+    if (!['SYSTEM', 'USER'].includes(keyword(parts[index + 1])) || keyword(parts[index + 2]) !== 'VALUE') return false;
+    index += 3;
+  }
+  const values = parts[index + 1];
+  if (keyword(parts[index]) !== 'VALUES' || values?.kind !== 'group' || values.closing !== ')' ||
+      !values.parts.length || parts.length !== index + 2) return false;
+  traceExpressions(values.parts, scope, refs, outer, new Map(), trace);
+  return !trace.unsupported;
+}
+
+/** MERGE 的 WHEN 条件和动作共用分支作用域。CASE 中的 WHEN/THEN 仍属于所在表达式。 */
+function traceMerge(parts: Part[], scope: Scope, outer: ScopedRelation[][], trace: ReferenceTrace): boolean {
+  if (keyword(parts[1]) !== 'INTO') return false;
+  const target = traceMergeRelation(parts, 2, true, scope, outer, trace);
+  if (!target || keyword(parts[target.next]) !== 'USING') return false;
+  const source = traceMergeRelation(parts, target.next + 1, false, scope, outer, trace);
+  if (!source || keyword(parts[source.next]) !== 'ON') return false;
+  const refs = [target.relation, source.relation];
+  if ((refs[0].alias ?? refs[0].name) === (refs[1].alias ?? refs[1].name)) return false;
+
+  const join = source.next + 1;
+  const clauses: { when: number; then?: number }[] = [];
+  let depth = 0, end = parts.length;
+  for (let i = join; i < parts.length; i++) {
+    const word = keyword(parts[i]);
+    if (word === 'CASE') depth++;
+    else if (word === 'END' && depth) depth--;
+    else if (!depth && word === 'WHEN') clauses.push({ when: i });
+    else if (!depth && word === 'THEN') {
+      const clause = clauses.at(-1);
+      if (!clause || clause.then !== undefined) return false;
+      clause.then = i;
+    } else if (!depth && word === 'RETURNING') {
+      end = i;
+      break;
+    }
+  }
+  if (depth || !clauses.length || clauses[0].when === join) return false;
+  traceExpressions(parts.slice(join, clauses[0].when), scope, refs, outer, new Map(), trace);
+  for (const [i, { when, then }] of clauses.entries()) {
+    if (then === undefined) return false;
+    let index = when + 1;
+    const unmatched = keyword(parts[index]) === 'NOT';
+    if (unmatched) index++;
+    if (keyword(parts[index++]) !== 'MATCHED') return false;
+    let side = '';
+    if (unmatched && keyword(parts[index]) === 'BY') {
+      side = keyword(parts[index + 1]);
+      if (side !== 'SOURCE' && side !== 'TARGET') return false;
+      index += 2;
+    }
+    const inserts = unmatched && side !== 'SOURCE';
+    const visible = unmatched ? [inserts ? source.relation : target.relation] : refs;
+    if (index !== then) {
+      if (keyword(parts[index]) !== 'AND' || index + 1 >= then) return false;
+      traceExpressions(parts.slice(index + 1, then), scope, visible, outer, new Map(), trace);
+    }
+    if (!traceMergeAction(parts.slice(then + 1, clauses[i + 1]?.when ?? end), inserts, scope, visible, outer, trace)) return false;
+  }
+  if (end < parts.length) {
+    if (end + 1 === parts.length) return false;
+    traceReturning(parts.slice(end + 1), scope, refs, outer, trace);
+  }
+  return !trace.unsupported;
+}
+
 /** 推导当前查询输出。引用模式只收集同一作用域树中的局部绑定，跳过投影计算。 */
 function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], context?: QueryContext, trace?: ReferenceTrace): Parsed {
   if (trace?.unsupported) return { projection: unknown };
@@ -415,7 +549,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return parseQuery(parts[0].parts, inherited, outer, context && contains(parts[0], context.offset) ? context : undefined, trace);
   }
   const unsupported = (): Parsed => { if (trace) trace.unsupported = true; return { projection: unknown }; };
-  if (parts.length && parts[0].kind !== 'group' && !commands.has(keyword(parts[0])) && !(trace && keyword(parts[0]) === 'TABLE')) return unsupported();
+  const first = keyword(parts[0]);
+  if (parts.length && parts[0].kind !== 'group' && !commands.has(first) && !(trace && ['TABLE', 'MERGE'].includes(first))) return unsupported();
   let start = 0;
   let scope = inherited;
   if (keyword(parts[0]) === 'WITH') {
@@ -460,6 +595,10 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
   const command = keyword(main[0]);
   if (trace && command === 'INSERT') {
     if (!traceInsert(main, scope, outer, trace)) return unsupported();
+    return { projection: unknown };
+  }
+  if (trace && command === 'MERGE') {
+    if (first === 'WITH' && keyword(parts[1]) === 'RECURSIVE' || !traceMerge(main, scope, outer, trace)) return unsupported();
     return { projection: unknown };
   }
   if (trace && main.some((part, i) => unsupportedReferenceSyntax.has(keyword(part)) || keyword(part) === 'INTO' ||

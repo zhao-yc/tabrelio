@@ -92,3 +92,34 @@ it('INSERT 区分来源、冲突动作和 RETURNING，避免把索引操作符�
   expect(at('INSERT INTO orders AS excluded VALUES(1) ON CONFLICT (id) DO UPDATE SET n=1 RETURNING ¦excluded.id'))
     .toMatchObject({ status: 'ready', declaration: { start: 'INSERT INTO orders AS '.length } });
 });
+
+it('MERGE 按 WHEN 类型限制条件和动作可见的关系', () => {
+  const header = 'MERGE INTO orders d USING staging s ON d.id=s.id ';
+  for (const clause of [
+    'WHEN MATCHED AND ¦d.active THEN UPDATE SET n=s.n',
+    'WHEN MATCHED THEN UPDATE SET n=¦s.n',
+    'WHEN NOT MATCHED BY SOURCE AND ¦d.active THEN DELETE',
+    'WHEN NOT MATCHED BY SOURCE THEN UPDATE SET n=¦d.n',
+    'WHEN NOT MATCHED BY TARGET AND ¦s.active THEN INSERT (n) VALUES (s.n)',
+    'WHEN NOT MATCHED THEN INSERT (n) VALUES (¦s.n)',
+    'WHEN MATCHED THEN DO NOTHING RETURNING ¦s.id, d.id',
+  ]) expect(at(header + clause), clause).toMatchObject({ status: 'ready' });
+  for (const clause of [
+    'WHEN NOT MATCHED BY SOURCE AND ¦s.active THEN DELETE',
+    'WHEN NOT MATCHED BY SOURCE THEN UPDATE SET n=(SELECT ¦s.n)',
+    'WHEN NOT MATCHED BY TARGET AND ¦d.active THEN DO NOTHING',
+    'WHEN NOT MATCHED THEN INSERT (n) VALUES ((SELECT ¦d.n))',
+    'WHEN MATCHED THEN UPDATE SET ¦s.n=d.n',
+    'WHEN NOT MATCHED THEN INSERT (¦s.n) VALUES (s.n)',
+  ]) expect(at(header + clause), clause).toMatchObject({ status: 'blocked' });
+});
+
+it('MERGE 的目标不参与来源查询，输出别名只在 RETURNING 可见', () => {
+  expect(at('MERGE INTO ONLY (public.orders) d USING LATERAL (SELECT ¦d.id) s ON true WHEN MATCHED THEN DO NOTHING'))
+    .toMatchObject({ status: 'blocked' });
+  const header = 'MERGE INTO public.orders * d USING (VALUES (1)) s(id) ON d.id=s.id ';
+  expect(at(header + 'WHEN MATCHED THEN DELETE RETURNING WITH (OLD AS previous) ¦previous.id, s.id'))
+    .toMatchObject({ status: 'ready', declaration: { start: (header + 'WHEN MATCHED THEN DELETE RETURNING WITH (OLD AS ').length } });
+  expect(at(header + 'WHEN MATCHED AND ¦previous.id=1 THEN DELETE RETURNING WITH (OLD AS previous) previous.id'))
+    .toMatchObject({ status: 'blocked' });
+});

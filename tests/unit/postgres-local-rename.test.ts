@@ -126,3 +126,34 @@ it('避免隐式 excluded 冲突并保留冲突更新左侧复合字段', () => 
   expect(rename('INSERT INTO orders AS ¦d VALUES(1) ON CONFLICT (id) DO UPDATE SET d.field=1 RETURNING d.id', 'target'))
     .toEqual({ status: 'blocked', reason: 'unresolved' });
 });
+
+it('MERGE 中的嵌套 CASE 保留 ON、WHEN 条件及 UPDATE 表达式内的绑定', () => {
+  const prefix = 'MERGE INTO public.orders AS d USING staging AS ¦s ON CASE WHEN s.active THEN d.id=s.id ELSE false END ';
+  const clauses = 'WHEN MATCHED AND CASE WHEN d.active THEN s.n>0 ELSE false END THEN UPDATE SET ' +
+    'n=CASE WHEN s.n>9 THEN CASE WHEN d.n>0 THEN s.n ELSE 0 END ELSE d.n END ' +
+    'WHEN NOT MATCHED BY TARGET THEN INSERT (id,n) OVERRIDING SYSTEM VALUE VALUES (s.id,s.n) ' +
+    'WHEN NOT MATCHED BY SOURCE AND d.n=0 THEN DELETE RETURNING d.id,s.id';
+  expect(edited(prefix + clauses, '来源')).toBe((prefix + clauses).replace('¦s', '"来源"').replaceAll('s.', '"来源".'));
+});
+
+it('MERGE 可重命名 CTE 来源及显式输出别名，并保留来源内的同名局部关系', () => {
+  expect(edited('WITH ¦q AS (SELECT 1 id) MERGE INTO orders d USING q ON d.id=q.id WHEN NOT MATCHED THEN INSERT DEFAULT VALUES RETURNING q.id', 'incoming'))
+    .toBe('WITH "incoming" AS (SELECT 1 id) MERGE INTO orders d USING "incoming" ON d.id="incoming".id WHEN NOT MATCHED THEN INSERT DEFAULT VALUES RETURNING "incoming".id');
+  expect(edited('MERGE INTO orders ¦d USING (SELECT d.id FROM staging d) AS s(id) ON d.id=s.id WHEN MATCHED THEN DELETE', 'target'))
+    .toBe('MERGE INTO orders "target" USING (SELECT d.id FROM staging d) AS s(id) ON "target".id=s.id WHEN MATCHED THEN DELETE');
+  expect(edited('MERGE INTO orders d USING staging s ON d.id=s.id WHEN MATCHED THEN UPDATE SET n=s.n RETURNING WITH (NEW AS after) ¦after.id,s.id', 'updated'))
+    .toBe('MERGE INTO orders d USING staging s ON d.id=s.id WHEN MATCHED THEN UPDATE SET n=s.n RETURNING WITH (NEW AS "updated") "updated".id,s.id');
+});
+
+it('MERGE 拒绝改写不完整的分支、重名关系和未确认的同名词', () => {
+  const header = 'MERGE INTO orders ¦d USING staging s ON d.id=s.id ';
+  expect(rename(header + 'WHEN MATCHED THEN DELETE', 's')).toEqual({ status: 'blocked', reason: 'collision' });
+  expect(rename(header + 'WHEN NOT MATCHED THEN INSERT (id) VALUES (d.id)', 'target'))
+    .toEqual({ status: 'blocked', reason: 'unresolved' });
+  expect(rename(header + 'WHEN MATCHED THEN UPDATE SET d.n=1', 'target'))
+    .toEqual({ status: 'blocked', reason: 'unresolved' });
+  for (const clause of ['WHEN MATCHED', 'WHEN MATCHED AND THEN DELETE', 'WHEN NOT MATCHED THEN DELETE',
+    'WHEN MATCHED THEN UPDATE SET n=CASE WHEN d.n=1 THEN 2', 'WHEN MATCHED THEN DELETE RETURNING']) {
+    expect(rename(header + clause, 'target'), clause).toMatchObject({ status: 'blocked' });
+  }
+});
