@@ -40,6 +40,14 @@ export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTableP
   if (JSON.stringify(page.relation) !== JSON.stringify(input.relation)) throw Error(text.invalidPage);
   validateResultExportData(resultExportData(page.result));
   assertSqliteStorageTypes(page);
+  if (page.rowIds !== undefined) {
+    if (page.insertCopy !== true || page.target.kind !== 'table' || !Array.isArray(page.rowIds) || page.rowIds.length !== page.result.rows.length)
+      throw Error(text.invalidPage);
+    for (const id of page.rowIds) {
+      if (typeof id !== 'string' || !/^(?:0|-?[1-9]\d{0,18})$/.test(id) || BigInt(id) < -9223372036854775808n || BigInt(id) > 9223372036854775807n)
+        throw Error(text.invalidPage);
+    }
+  }
   if (page.insertCopy !== undefined && (page.insertCopy !== true || page.target.kind !== 'table' || !page.storageTypes)) throw Error(text.invalidPage);
   if (page.primaryKey !== undefined) {
     if (page.insertCopy !== true || !Array.isArray(page.primaryKey) || !page.primaryKey.length ||

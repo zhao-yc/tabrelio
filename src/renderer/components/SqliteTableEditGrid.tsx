@@ -1,4 +1,5 @@
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
+import { sqliteRowIdColumn, sqliteRowIdKey } from './SqliteRowIdColumn';
 import { useGridHeaderMenu, type GridHeaderFreeze } from './GridHeaderMenu';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
@@ -47,9 +48,9 @@ import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { onFindColumn?(key: string): void; showFieldType?: boolean; onShowFieldTypeChange?(show: boolean): void; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; matchRowsRef?: Ref<GridMatchRowsAction<string>>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor, range?: GridRangeTarget<SqliteDraftRow>): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<SqliteDraftRow>; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; onRowHeightChange?(height: number): void; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
+interface Props { onFindColumn?(key: string): void; showFieldType?: boolean; showRowId?: boolean; onShowFieldTypeChange?(show: boolean): void; page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; initialCheckedRows?: ReadonlySet<string>; matchRowsRef?: Ref<GridMatchRowsAction<string>>; isCurrent(): boolean; onOpenRowSql?(kind: RowSqlKind, sql: string): void; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor, range?: GridRangeTarget<SqliteDraftRow>): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onQuickValue?(anchor: SqlitePasteAnchor, kind: GridQuickValue): void; onFillRange?(range: GridRangeTarget<SqliteDraftRow>, input: GridRangeFillInput): void; onExportRange?(result: GridRangeExportData): void; onFilterTableRange?: TableRangeFilter<SqliteDraftRow>; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; cellMenuFilters?(row: SqliteDraftRow, column: number): { actions: GridCellAction[] } | undefined; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; findHighlights?: ReadonlyMap<string, ReadonlySet<number>>; rowHeight?: GridRowHeight; onRowHeightChange?(height: number): void; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; freezeColumns?: GridHeaderFreeze; fitSource?(): GridColumnFitSource | undefined; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ onFindColumn, showFieldType, onShowFieldTypeChange, page, rows, disabled, selected, initialCheckedRows, matchRowsRef, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFillRange, onExportRange, onFilterTableRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight, onRowHeightChange }: Props) {
+export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, onShowFieldTypeChange, page, rows, disabled, selected, initialCheckedRows, matchRowsRef, isCurrent, onOpenRowSql, onSelect, onEdit, onPaste, onActiveCell, onQuickValue, onFillRange, onExportRange, onFilterTableRange, onFilterCell, cellMenuFilters, onCheckedRows, findHit, findHighlights, sort, onSortChange, projection, onColumnResize, freezeColumns, fitSource, rowHeight, onRowHeightChange }: Props) {
   const height = readGridRowHeight(rowHeight);
   const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
   if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
@@ -154,6 +155,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, onShowFieldTy
   /** 输入控件保留自己的剪贴板语义，不截获文字编辑器、搜索框或其它模态的copy/paste。 */
   function inputTarget(event: ClipboardEvent<HTMLDivElement>): boolean { const node = event.target as HTMLElement | null; return !!node && (node.isContentEditable || ['TEXTAREA', 'SELECT'].includes(node.tagName) || node.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes((node as HTMLInputElement).type)); }
   const currentFindHit = findHit?.page === page && findHit.rows === rows ? findHit : undefined;
+  const rowIdFor = (row: SqliteDraftRow) => row.index === undefined ? undefined : page.rowIds?.[row.index];
   const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...display.map(({ index, width, frozen }, position): Column<SqliteDraftRow> => ({
     key: 'c' + index, name: page.columns[index].name + (page.columns[index].generated ? ' · ' + text.generated : ''), minWidth: 64, width: width ?? 180, frozen, resizable: true, sortable: !!onSortChange && !disabled,
     cellClass: row => {
@@ -172,7 +174,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, onShowFieldTy
       const precise = range && Number.isInteger(range.start) && Number.isInteger(range.end) && range.start >= 0 && range.end >= range.start && range.end <= raw.length;
       return <span title={raw} className={matched ? 'grid-row-preview sqlite-find-hit' : 'grid-row-preview'} data-sqlite-find-current={matched ? 'true' : undefined}>{value && value.kind !== 'null' ? value.kind.toUpperCase() + ' · ' : ''}{precise ? <>{raw.slice(0, range.start)}<mark className="sqlite-find-range">{raw.slice(range.start, range.end) || '\u200b'}</mark>{raw.slice(range.end)}</> : raw}</span>;
     },
-  }))];
+  })), ...(showRowId && page.rowIds ? [sqliteRowIdColumn(rowIdFor)] : [])];
   /** F2和双击只打开本地typed编辑，不直接投递写入。 */
   function edit(row: SqliteDraftRow, key: string): void { const column = Number(key.slice(1)); if (current(row) && !disabled && !row.deleted && /^c\d+$/.test(key) && page.columns[column] && !page.columns[column].generated) onEdit(row, column); }
   /** 复制沿当前可见列取原值；SQLite 类型化格式始终保留原始数据行。 */
@@ -187,6 +189,11 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, onShowFieldTy
   function copy(row: SqliteDraftRow, key: string, event: ClipboardEvent<HTMLDivElement>): void {
     if (inputTarget(event)) return; event.preventDefault();
     if (!current(row) || !noModal()) return;
+    if (key === sqliteRowIdKey && showRowId) {
+      const value = rowIdFor(row);
+      if (value !== undefined) event.clipboardData.setData('text/plain', value);
+      return;
+    }
     try {
       const selected = rangeCurrent() ? cellRange.copy(row, key, (item, column) => item.values[Number(column.slice(1))], item => item.deleted) : undefined;
       if (selected ? !selected.values.length : row.deleted) return;
@@ -277,7 +284,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, onShowFieldTy
     sort: sort ?? [], current: () => !disabled && baseCurrent() && noModal(),
     canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
     selectColumn: index => cellRange.selectColumnAction(index - 2),
-    resizeColumn: onColumnResize,
+    resizeColumn: onColumnResize, rowHeaderColumns: 2,
     visibility: { showType: !!showFieldType, onShowTypeChange: onShowFieldTypeChange },
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined,
     freeze: freezeColumns, frozenThrough: page.result.columns[display.filter(column => column.frozen).at(-1)?.index ?? -1]?.key,

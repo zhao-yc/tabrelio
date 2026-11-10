@@ -247,6 +247,35 @@ async function closedRead(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾', () => {
+  it('同一原页返回真实 64 位 ROWID，排除视图、无 ROWID 表及被遮蔽的名称', async () => {
+    const profile = fixture();
+    disk(profile, db => db.exec(`
+      CREATE TABLE physical(rowid TEXT, label TEXT);
+      INSERT INTO physical(_rowid_, rowid, label) VALUES (-9223372036854775808, '字段甲', '乙'), (9223372036854775807, '字段乙', '甲');
+      CREATE TABLE covered(rowid TEXT, _rowid_ TEXT, oid TEXT);
+      INSERT INTO covered VALUES ('一', '二', '三');
+      CREATE TABLE alias(id INTEGER PRIMARY KEY, rowid TEXT, _rowid_ TEXT, oid TEXT);
+      INSERT INTO alias VALUES (9007199254740993, '一', '二', '三');
+      CREATE TABLE ordinary_desc(id INTEGER PRIMARY KEY DESC, label TEXT);
+      INSERT INTO ordinary_desc(rowid, id, label) VALUES (9223372036854775807, 8, '甲');
+      CREATE TABLE without_id(id INTEGER PRIMARY KEY) WITHOUT ROWID;
+      INSERT INTO without_id VALUES (9);
+    `));
+    const { app } = runtime(profile);
+    const read = (table: string, options: Partial<SqliteTablePageInput> = {}) => page(app, input(profile, randomUUID(), { table, sort: [], ...options }));
+    for (const editing of [false, true]) {
+      const ordered = await read('physical', { editing, limit: 1, sort: [{ column: 'label', direction: 'desc' }] });
+      expect(ordered.rowIds).toEqual(['9223372036854775807']);
+      expect(ordered.result.columns.map(column => column.name)).toEqual(['rowid', 'label']);
+      expect(ordered.result.rows[0]).toEqual({ c0: '字段乙', c1: '甲' });
+      expect(ordered.storageTypes).toEqual(['tt']);
+      if (editing) expect(ordered.edit).toMatchObject({ kind: 'editable', rows: [[{ kind: 'text', value: '字段乙' }, { kind: 'text', value: '甲' }]] });
+    }
+    expect((await read('physical', { limit: 1, offset: 1, sort: [{ column: 'label', direction: 'desc' }] })).rowIds).toEqual(['-9223372036854775808']);
+    expect((await read('alias')).rowIds).toEqual(['9007199254740993']);
+    expect((await read('ordinary_desc')).rowIds).toEqual(['9223372036854775807']);
+    for (const table of ['covered', 'without_id', 'mix_view']) expect((await read(table)).rowIds).toBeUndefined();
+  });
   it('末页计数后外部插入不会混入原快照，后继末页读取才看到新增记录', async () => {
     const profile = fixture(); let counting = false, inserted = false;
     const { app } = runtime(profile, () => transport((message, forward) => {

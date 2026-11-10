@@ -7,6 +7,7 @@ import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridHeaderDetailsZh as text } from '../../src/renderer/locales/gridHeaderDetails.zh-CN';
 import { gridHeaderMenuZh as headerMenuText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
+import { readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { sqliteTableBrowseZh as sqlite } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { postgresTableZh as postgres } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
@@ -83,16 +84,18 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
   const file = join(await realpath(dataDir), 'grid-header.sqlite');
   const fixture = new DatabaseSync(file);
   try {
-    fixture.exec("CREATE TABLE subject (id INTEGER PRIMARY KEY, label VARCHAR(17), dynamic_value); INSERT INTO subject VALUES(1,'row A',2),(2,'row B','x'); CREATE VIEW subject_view AS SELECT * FROM subject;");
+    fixture.exec("CREATE TABLE subject (id INTEGER PRIMARY KEY, label VARCHAR(17), dynamic_value); INSERT INTO subject VALUES(1,'row A',2),(2,'row B','x'); CREATE VIEW subject_view AS SELECT * FROM subject;" +
+      "CREATE TABLE physical (rowid TEXT, label TEXT); INSERT INTO physical(_rowid_,rowid,label) VALUES (9223372036854775807,'声明列','物理行');");
   } finally { fixture.close(); }
   const baseline = await readFile(file);
   try {
     await desktop.evaluate(({ dialog, BrowserWindow }, file) => {
       const original = dialog.showOpenDialog;
+      let picks = 0;
       dialog.showOpenDialog = (async (...args: unknown[]) => {
-        dialog.showOpenDialog = original;
         if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.OpenDialogOptions).filters?.[0]?.extensions.includes('sqlite'))
           throw Error('越过本例文件选择范围');
+        if (++picks === 2) dialog.showOpenDialog = original;
         return { canceled: false, filePaths: [file] };
       }) as typeof original;
     }, file);
@@ -102,9 +105,15 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
       if (!picked) throw Error('本例 SQLite 文件未授权');
       const connection = await window.dbark.invoke('connections.save', { id, dialect: 'sqlite', name: 'SQLite',
         group: '', color: '#123456', sqlite: { fileToken: picked.token, readOnly: false, busyTimeoutMs: 1000 } });
+      const readOnlyId = 'grid-header-sqlite-readonly';
+      const readOnlyPick = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: readOnlyId });
+      if (!readOnlyPick) throw Error('本例 SQLite 只读连接未授权');
+      const readOnly = await window.dbark.invoke('connections.save', { id: readOnlyId, dialect: 'sqlite', name: 'SQLite 只读',
+        group: '', color: '#123456', sqlite: { fileToken: readOnlyPick.token, readOnly: true, busyTimeoutMs: 1000 } });
       const settings = await window.dbark.invoke('settings.get', {});
       await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'subject', tabs: [
-        ...['subject', 'subject_view'].map(table => ({ id: table, kind: 'table' as const, title: table, table, connectionId: connection.id, database: 'main' })),
+        ...['subject', 'subject_view', 'physical'].map(table => ({ id: table, kind: 'table' as const, title: table, table, connectionId: connection.id, database: 'main' })),
+        { id: 'physical-readonly', kind: 'table', title: '只读物理表', table: 'physical', connectionId: readOnly.id, database: 'main' },
         { id: 'header-query', kind: 'query', title: '结果排序', connectionId: connection.id, database: 'main', sql: 'SELECT label FROM subject ORDER BY id' },
       ] });
     });
@@ -189,6 +198,9 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await page.screenshot({ path: info.outputPath('SQLite表头类型.png') });
     await page.keyboard.press('Escape');
     expect(await reads()).toEqual(viewReads);
+    await tab.getByRole('gridcell').filter({ hasText: 'row A' }).click({ button: 'right' });
+    await expect(page.getByRole('menuitem', { name: sqlite.showRowId, exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape');
     if (process.platform === 'darwin') {
       await sortFromGrid(tab, 'row B');
       await page.locator('[data-workspace-tab-id="header-query"] .tab-select').click();
@@ -201,6 +213,35 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
       await sortFromGrid(result, 'row B');
       expect(await history()).toEqual(prior);
     }
+    await page.locator('[data-workspace-tab-id="physical"] .tab-select').click();
+    const physical = tab.getByRole('gridcell').filter({ hasText: /物理行$/ });
+    await expect(physical).toBeVisible();
+    const beforeRowId = await reads();
+    const checked = tab.getByRole('grid').getByRole('row').nth(1).getByRole('checkbox');
+    await checked.check();
+    await physical.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: sqlite.showRowId, exact: true }).click();
+    const rowIdHeader = tab.getByRole('columnheader', { name: sqlite.rowId, exact: true });
+    await expect(rowIdHeader).toBeVisible();
+    await expect(tab.getByRole('columnheader').last()).toHaveText(sqlite.rowId);
+    const rowId = tab.getByRole('gridcell', { name: '9223372036854775807', exact: true });
+    await rowId.click();
+    expect(await readGridRangeClipboard(page)).toEqual({ text: '9223372036854775807', sqlite: '', typed: '' });
+    await expect(tab.getByRole('gridcell').filter({ hasText: /声明列$/ })).toBeVisible();
+    await expect(checked).toBeChecked();
+    await page.screenshot({ path: info.outputPath('SQLite真实ROWID.png') });
+    await toggle(sqlite.hideRowId);
+    await expect(rowIdHeader).toHaveCount(0);
+    await expect(checked).toBeChecked();
+    expect(await reads()).toEqual(beforeRowId);
+    await page.locator('[data-workspace-tab-id="physical-readonly"] .tab-select').click();
+    await expect(physical).toBeVisible();
+    const readOnlyBefore = await reads();
+    await toggle(sqlite.showRowId);
+    await expect(rowIdHeader).toBeVisible();
+    await rowId.click();
+    expect(await readGridRangeClipboard(page)).toEqual({ text: '9223372036854775807', sqlite: '', typed: '' });
+    expect(await reads()).toEqual(readOnlyBefore);
     expect(await readFile(file)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

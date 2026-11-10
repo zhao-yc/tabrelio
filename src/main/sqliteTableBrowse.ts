@@ -113,45 +113,48 @@ export async function readSqliteTableCatalogue(driver: SqliteDriverSession, tabl
 }
 
 /** 显式主键查询使用索引排序规则，字段声明的排序规则可能与主键索引不同。 */
-async function readSqliteBrowsePrimaryKey(driver: SqliteDriverSession, table: string, catalogue: SqliteTableCatalogue,
-  control: SqliteTableBrowseControl): Promise<SqliteTablePage['primaryKey']> {
+async function readSqliteBrowseKeys(driver: SqliteDriverSession, table: string, catalogue: SqliteTableCatalogue,
+  control: SqliteTableBrowseControl): Promise<{ primaryKey?: SqliteTablePage['primaryKey']; rowidAlias?: string }> {
   const fields = catalogue.xinfo.flatMap(row => {
     const rank = row[5];
     return rank && typeof rank === 'object' && rank.type === 'integer' && rank.value !== '0'
       ? [{ rank: Number(rank.value), name: row[1], type: row[2] }] : [];
   }).sort((left, right) => left.rank - right.rank);
   if (!fields.length || fields.some((field, index) => field.rank !== index + 1 || typeof field.name !== 'string' ||
-      !catalogue.columns.some(column => column.name === field.name))) return;
+      !catalogue.columns.some(column => column.name === field.name))) return {};
   const parts = await rows(driver, "SELECT part.name, part.coll FROM pragma_index_list(?, 'main') AS idx " +
     "LEFT JOIN pragma_index_xinfo(idx.name, 'main') AS part ON part.key=1 WHERE idx.origin='pk' ORDER BY part.seqno LIMIT ?",
   [table, { type: 'integer', value: String(fields.length + 1) }], fields.length + 1, control);
   if (!parts.length && fields.length === 1 && String(fields[0].type).toUpperCase() === 'INTEGER')
-    return [{ name: fields[0].name as string, collation: 'BINARY' }];
-  if (parts.length !== fields.length) return;
+    return { primaryKey: [{ name: fields[0].name as string, collation: 'BINARY' }], rowidAlias: fields[0].name as string };
+  if (parts.length !== fields.length) return {};
   const keys: NonNullable<SqliteTablePage['primaryKey']> = [];
   for (const [index, [name, rawCollation]] of parts.entries()) {
     const collation = typeof rawCollation === 'string' ? rawCollation.toUpperCase() : undefined;
     if (typeof name !== 'string' || name !== fields[index].name ||
-        (collation !== 'BINARY' && collation !== 'NOCASE' && collation !== 'RTRIM')) return;
+        (collation !== 'BINARY' && collation !== 'NOCASE' && collation !== 'RTRIM')) return {};
     keys.push({ name, collation });
   }
-  return keys;
+  return { primaryKey: keys };
 }
 
 /** BEGIN后的首个目录读取固定本页快照；元数据、筛选排序和行读取全部使用同一个只读物理连接。 */
 export async function readSqliteTablePage(driver: SqliteDriverSession, source: SqliteTablePageInput, control: SqliteTableBrowseControl): Promise<SqliteTablePage> {
   const requested = sqliteTablePageSchema.parse(source), started = performance.now();
   let page: SqliteTablePage | undefined, failed = false, failure: unknown, editPlan: SqliteEditReadPlan | undefined, originalRows: SqliteValue[][] = [];
+  let browseRowIdColumn = false;
   try {
     control.check(); await driver.execute('BEGIN'); control.check();
     const catalogue = await readSqliteTableCatalogue(driver, requested.table, control), { kind, columns, schemaKey } = catalogue;
     await verifySqliteTableScope(driver, requested, control);
     // sqlite_schema 把虚拟表与影子表也标作 table，复制资格须由同一快照的 table_list 确认。
     const relationType = kind === 'table' && !/^sqlite_/i.test(requested.table)
-      ? await rows(driver, "SELECT type FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY LIMIT 2", [requested.table], 2, control)
+      ? await rows(driver, "SELECT type, wr FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY LIMIT 2", [requested.table], 2, control)
       : [];
-    const insertCopy = relationType.length === 1 && relationType[0].length === 1 && relationType[0][0] === 'table';
-    const primaryKey = insertCopy ? await readSqliteBrowsePrimaryKey(driver, requested.table, catalogue, control) : undefined;
+    const insertCopy = relationType.length === 1 && relationType[0].length === 2 && relationType[0][0] === 'table';
+    const wr = relationType[0]?.[1];
+    const rowidTable = insertCopy && wr && typeof wr === 'object' && wr.type === 'integer' && wr.value === '0';
+    const { primaryKey, rowidAlias } = insertCopy ? await readSqliteBrowseKeys(driver, requested.table, catalogue, control) : {};
     const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control) : undefined;
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
@@ -163,13 +166,22 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const focused = !!(queryRecords || searchRecord);
     editPlan = input.editing && control.prepareEdit ? await control.prepareEdit(catalogue, driver) : undefined;
     // 无编辑快照的只读页也必须核对原TEXT字节，不能将驱动替代字符作为真实数据交给网格。
-    const project = editPlan?.project ?? sqliteExactTextProjection, extra = editPlan?.extraColumn ? 1 : 0;
+    const project = editPlan?.project ?? sqliteExactTextProjection;
+    // INTEGER PRIMARY KEY 别名和编辑定位列可直接复用；其它表仅使用未被真实字段遮蔽的名称。
+    const rowIdField = rowidTable && rowidAlias ? columns.findIndex(column => column.name === rowidAlias) : -1;
+    const rowIdName = rowidTable && rowIdField < 0 && columns.length < limits.columns &&
+      ['rowid', '_rowid_', 'oid'].find(name => !catalogue.xinfo.some(field => String(field[1]).toLowerCase() === name));
+    browseRowIdColumn = !!rowIdName && !editPlan?.extraColumn;
+    const extraColumn = editPlan?.extraColumn ?? (rowIdName ? '"__dbark_source".' + quoteSqliteIdentifier(rowIdName) : undefined);
+    const extra = extraColumn ? 1 : 0;
+    const rowIdIndex = rowIdField >= 0 ? rowIdField + extra : rowIdName ? 0 : -1;
     const request = focused ? undefined : buildSqliteTableSelect(input, columns, undefined, false, project);
     const read = (sql: string, parameters: SqliteValue[], count: number, maxBytes?: number) => {
-      const statement = editPlan?.extraColumn ? 'SELECT ' + editPlan.extraColumn + ' AS "__dbark_edit_locator", ' + sql.slice(7) : sql;
+      const extraAlias = browseRowIdColumn ? '"__dbark_browse_rowid"' : '"__dbark_edit_locator"';
+      const statement = extraColumn ? 'SELECT ' + extraColumn + ' AS ' + extraAlias + ', ' + sql.slice(7) : sql;
       return rows(driver, statement, parameters, count, control, actual => {
         if (actual.length !== columns.length + extra || actual.slice(extra).some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
-      }, maxBytes);
+      }, (maxBytes ?? limits.resultBytes) + (browseRowIdColumn ? count * 64 : 0));
     };
     const values = request ? await read(request.sql, request.parameters, input.limit + 1) : [];
     if (focused) {
@@ -184,13 +196,18 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
         if (found.length !== 1) throw Error(queryRecords
           ? 'SQLite 查询原记录已变化或移除，请重新查询' : 'SQLite 搜索记录已变化或移除，请重新搜索');
         predicate.verify?.(found[0].slice(extra));
-        remaining -= Buffer.byteLength(JSON.stringify(found[0])) + 1;
+        remaining -= Buffer.byteLength(JSON.stringify(browseRowIdColumn ? found[0].slice(1) : found[0])) + 1;
         if (remaining < 0) throw Error('SQLite 查询原记录超过单页预算，请缩小范围');
         values.push(found[0]);
       }
     }
     if (last && values.length !== last.rows) throw Error('SQLite末页行数与同一快照内的计数不一致，请重试');
     originalRows = values.slice(0, input.limit);
+    const rowIds = rowIdIndex < 0 ? undefined : originalRows.map(row => {
+      const value = row[rowIdIndex];
+      if (!value || typeof value !== 'object' || value.type !== 'integer') throw Error('SQLite ROWID 读取结果类型不符');
+      return value.value;
+    });
     const result: QueryResult = {
       columns: columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })),
       rows: originalRows.map(original => { const row = original.slice(extra);
@@ -200,7 +217,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     };
     // 每格一个协议类型码，不新增SQL；与去掉编辑定位列后的本页原值一一对应。
     const storageTypes = originalRows.map(row => row.slice(extra).map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join(''));
-    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, ...(insertCopy ? { insertCopy: true } : {}), ...(primaryKey ? { primaryKey } : {}), offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }), ...(input.relation ? { relation: input.relation } : {}) };
+    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, ...(rowIds ? { rowIds } : {}), ...(insertCopy ? { insertCopy: true } : {}), ...(primaryKey ? { primaryKey } : {}), offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }), ...(input.relation ? { relation: input.relation } : {}) };
   } catch (reason) { failed = true; failure = reason; }
   // 即使边界取消也只回滚本次独立只读快照，绝不借用户查询标签的事务。
   control.beginCleanup();
@@ -214,7 +231,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
   if (failed) throw failure;
   control.check(); page!.result.elapsedMs = performance.now() - started;
   if (Buffer.byteLength(JSON.stringify({ result: page!.result, storageTypes: page!.storageTypes })) > limits.resultBytes) throw Error('SQLite表浏览结果对象超过16MiB预算，请减少每页行数或缩小范围');
-  if (editPlan) page!.edit = editPlan.capture(originalRows);
+  if (editPlan) page!.edit = editPlan.capture(browseRowIdColumn ? originalRows.map(row => row.slice(1)) : originalRows);
   return page!;
 }
 

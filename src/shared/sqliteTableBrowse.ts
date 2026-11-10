@@ -134,6 +134,8 @@ export interface SqliteTablePage {
   relation?: SqliteTableRelation;
   /** 与原页行列一一对应：n=NULL、t=TEXT、i=INTEGER、r=REAL、b=BLOB；不由声明亲和性猜类型。 */
   storageTypes?: string[];
+  /** 同一只读快照中的真实 ROWID，按原页顺序存为精确十进制文本。 */
+  rowIds?: string[];
   /** 目录确认当前来源是普通表，允许用已载入原值生成 INSERT 文本。 */
   insertCopy?: true;
   /** 真实主键索引的顺序与比较规则。INTEGER PRIMARY KEY 别名没有独立索引。 */

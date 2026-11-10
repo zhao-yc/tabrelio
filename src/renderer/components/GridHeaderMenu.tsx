@@ -32,6 +32,7 @@ interface HeaderMenuSource {
   findColumn?(key: string): void;
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
+  rowHeaderColumns?: number;
   visibility?: GridHeaderVisibility;
   ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
@@ -100,7 +101,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     const grid = source.grid(), cell = target.closest<HTMLElement>('[role="gridcell"]');
     if (!grid || !cell || cell.closest('[role="grid"]') !== grid) return false;
     const index = Number(cell.getAttribute('aria-colindex')) - 1;
-    if (!Number.isSafeInteger(index) || index < 0 || source.column(index)) return false;
+    if (!Number.isSafeInteger(index) || index < 0 || index >= (source.rowHeaderColumns ?? 1) || source.column(index)) return false;
     const original = source.resizeRows.height;
     const current = () => {
       const now = latest.current;

@@ -1,5 +1,6 @@
 /** SQLite 只读表浏览的集中中文文案与稳定控件名称。 */
 export const sqliteTableBrowseZh = {
+  rowId: 'ROWID（SQLite）', showRowId: '显示 SQLite ROWID', hideRowId: '隐藏 SQLite ROWID', pendingRowId: '尚无已读取的 ROWID',
   toolbar: 'SQLite 表格操作',
   title: 'SQLite 只读表浏览', browse: '浏览 SQLite 表数据', readonly: '只读浏览：筛选和排序在 SQLite 中执行，不修改表数据，也不占用查询标签的事务。',
   refresh: '刷新 SQLite 表数据', stop: '停止 SQLite 表读取', stopping: '正在停止原读取，等待真实结束', loading: '正在读取 SQLite 表数据',
