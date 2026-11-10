@@ -2038,6 +2038,8 @@ export function PostgresQueryTab({
       run: () => { if (!openFocusedQueryResultFind(layoutRoot.current)) return editorAction('actions.find'); } },
     replace: { enabled: editable || canReplaceResult,
       run: () => runFocusedQueryReplace(layoutRoot.current, openResultReplace, () => editorAction('editor.action.startFindReplaceAction')) },
+    'sql-find-selection': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction('sql-find-selection') },
+    'sql-replace-selection': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction('sql-replace-selection') },
     'sql-goto-line': { enabled: editable, run: () => { if (!openFocusedGridRowJump()) return editorAction(sqlPositionActions['sql-goto-line']); } },
     'sql-toggle-comment': { enabled: editable, run: () => editorAction('editor.action.commentLine') },
     'sql-toggle-block-comment': { enabled: editable && !resultsOnly && editorSelection.single, run: toggleBlockComment },

@@ -58,6 +58,77 @@ async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql:
   await expect(activeEditor().getByRole('textbox')).toBeVisible();
 }
 
+for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
+  test(`${dialect} 在选区内查找替换保留同一行的区外匹配`, async ({}, info) => {
+    const prefix = "select 'needle outside', ";
+    const selected = dialect === 'postgresql' ? "'needle 🚢 A',\n  'needle B'" : "'needle 🚢 A', 'needle B'";
+    const suffix = ", 'needle outside';\nselect 'needle later';";
+    const source = prefix + selected + suffix;
+    await seed(dialect, source);
+    const editor = activeEditor();
+    const findPanel = page.getByRole('dialog', { name: '在选区内查找', exact: true });
+    const replacePanel = page.getByRole('dialog', { name: '在选区内替换', exact: true });
+    async function selectRange() {
+      return editor.evaluate((node, { prefix, selected }) => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const instance = api?.editor.getEditors().find(candidate => candidate.getContainerDomNode().contains(node));
+        const model = instance?.getModel();
+        if (!instance || !model) throw Error('原查询模型不可读');
+        const start = model.getPositionAt(prefix.length), end = model.getPositionAt(prefix.length + selected.replaceAll('\n', model.getEOL()).length);
+        instance.focus();
+        instance.setSelection({ startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column });
+        const bounds = instance.getDomNode()!.getBoundingClientRect();
+        const point = instance.getScrolledVisiblePosition({ lineNumber: start.lineNumber, column: start.column + 4 });
+        if (!point) throw Error('选区不可见');
+        return { x: bounds.x + point.left, y: bounds.y + point.top + point.height / 2 };
+      }, { prefix, selected });
+    }
+    const point = await selectRange();
+    if (dialect === 'sqlite') {
+      await page.mouse.click(point.x, point.y, { button: 'right' });
+      await page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: '在选区内查找', exact: true }).click({ delay: 120 });
+    } else {
+      await nativeQueryCommand('sql-find-selection', true);
+    }
+    await findPanel.getByLabel('查找内容', { exact: true }).fill('needle');
+    await findPanel.getByRole('button', { name: '查找全部', exact: true }).click();
+    await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
+    await findPanel.getByRole('button', { name: '下一处', exact: true }).click();
+    await expect(findPanel.getByRole('status')).toHaveText('第 2 处，共 2 处');
+    await findPanel.getByRole('button', { name: '定位到当前匹配', exact: true }).click();
+    await expect(findPanel).toBeHidden();
+    expect(await editor.evaluate(node => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(candidate => candidate.getContainerDomNode().contains(node));
+      const model = instance?.getModel(), selection = instance?.getSelection();
+      return model && selection ? model.getValueInRange(selection) : undefined;
+    })).toBe('needle');
+
+    await selectRange();
+    await nativeQueryCommand('sql-replace-selection', true);
+    const query = dialect === 'postgresql' ? "needle (🚢 A)',\\r?\\n  'needle (B)" : 'needle';
+    if (dialect === 'postgresql') await replacePanel.getByLabel('正则表达式').check();
+    await replacePanel.getByLabel('查找内容', { exact: true }).fill(query);
+    await replacePanel.getByRole('button', { name: '查找全部', exact: true }).click();
+    await expect(replacePanel.getByRole('status')).toHaveText(dialect === 'postgresql' ? '第 1 处，共 1 处' : '第 1 处，共 2 处');
+    await replacePanel.getByLabel('替换为', { exact: true }).fill(dialect === 'postgresql' ? '组合 $1 $2' : '替换后的值');
+    if (dialect === 'sqlite') await replacePanel.screenshot({ path: info.outputPath('sql-selection-find.png') });
+    await replacePanel.getByRole('button', { name: '全部替换', exact: true }).click();
+    await expect(replacePanel).toBeHidden();
+    const read = () => page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
+    });
+    const result = dialect === 'postgresql' ? "'组合 🚢 A B'" : selected.replaceAll('needle', '替换后的值');
+    await expect.poll(read).toBe(prefix + result + suffix);
+    await page.keyboard.press(`${modifier}+z`);
+    await expect.poll(read).toBe(source);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}
+
 for (const dialect of ['mysql', 'postgresql'] as const) {
   test(`${dialect} 按选项格式化 SQL 绑定原选区并按选择保存偏好`, async ({}, info) => {
     const body = 'select * from t where id in (100,200,300);';

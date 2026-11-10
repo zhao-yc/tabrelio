@@ -33,6 +33,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
   'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
   'compact-sql': '压缩 SQL',
+  'sql-find-selection': '在选区内查找', 'sql-replace-selection': '在选区内替换',
   'sql-format-preferences': 'SQL 格式化偏好',
   'sql-format-options': '按选项格式化 SQL',
   'parameters': '参数执行', 'explain': '执行计划', 'analyze': '实际执行分析', 'transaction-settings': '事务设置',

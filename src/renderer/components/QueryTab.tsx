@@ -2455,9 +2455,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 关闭保持原查询与草稿，不能把旧弹窗的回调交给继任弹窗。 */
   function closeObjectStructure(intent: ObjectDefinitionSource): void { if (objectDefinitionRef.current !== intent) return; objectDefinitionRef.current = null; setObjectDefinition(null); }
   /** 使用当前Monaco实例的正式查找动作，不发送模拟按键或点击旧按钮。 */
-  function openEditorFind(replace = false): void {
+  function openEditorFind(replace = false, selection = false): void {
     if (!queryMenuCurrent() || !editor.current || fileSource.isBusy()) return;
-    const instance = editor.current, action = instance.getAction(replace ? 'editor.action.startFindReplaceAction' : 'actions.find');
+    const instance = editor.current;
+    const action = instance.getAction(selection ? replace ? 'sql-replace-selection' : 'sql-find-selection'
+      : replace ? 'editor.action.startFindReplaceAction' : 'actions.find');
     if (action) { instance.focus(); void action.run().catch(reason => setError(errorMessage(reason))); }
   }
   /** 聚焦原查询编辑器后定位或选中，结果专注模式先恢复编辑区。 */
@@ -2627,6 +2629,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: (!!searchEditor || canReplaceResult) && !closeRequest && !fileSource.busy,
       run: () => runFocusedQueryReplace(layoutRoot.current, openResultReplace, () => openEditorFind(true)) },
+    'sql-find-selection': { enabled: canCompactSql && hasSingleSelection, run: () => openEditorFind(false, true) },
+    'sql-replace-selection': { enabled: canCompactSql && hasSingleSelection, run: () => openEditorFind(true, true) },
     'sql-goto-line': {
       enabled: (!!selectionBinding || !!searchEditor?.getAction?.(sqlPositionActions['sql-goto-line'])) && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !openFocusedGridRowJump()) return openEditorPosition(); },

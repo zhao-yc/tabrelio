@@ -12,8 +12,10 @@ import { sqlQuotedCopyZh as quotedText } from '../locales/sqlQuotedCopy.zh-CN';
 import { quoteSqlForCode, sqlQuotedCopyAction, sqlQuotedCopyMaxUnits, sqlQuoteFormats, type SqlQuoteFormat } from '../sqlQuotedCopy';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { ErrorBox, Modal } from './ui';
+import { SqlSelectionFindDialog, sqlSelectionFindLimit } from './SqlSelectionFindDialog';
+import { sqlSelectionFindZh } from '../locales/sqlSelectionFind.zh-CN';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
-import { sqlEditorZoomCommandIds } from '../../shared/uiCommandIds';
+import { sqlEditorZoomCommandIds, sqlSelectionFindCommandIds } from '../../shared/uiCommandIds';
 import { nextSqlEditorZoomOffset, sqlEditorZoomSize } from '../sqlEditorZoom';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from 'react';
@@ -108,6 +110,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     ({ kind: 'paste'; entries: readonly string[] } | { kind: 'quoted'; sql: string });
   const clipboardRequest = useRef<ClipboardRequest | null>(null), clipboardHost = useRef<HTMLDivElement>(null);
   const [clipboardDialog, setClipboardDialog] = useState<ClipboardRequest>(), [clipboardIndex, setClipboardIndex] = useState(0);
+  const [selectionFind, setSelectionFind] = useState<{
+    mode: typeof sqlSelectionFindCommandIds[number];
+    target: NonNullable<ReturnType<typeof captureSqlClipboardSelection>>;
+    source: string;
+    editor: monaco.editor.IStandaloneCodeEditor;
+  }>();
+  const selectionFindHost = useRef<HTMLFormElement>(null);
   const [clipboardError, setClipboardError] = useState('');
   const [quoteFormat, setQuoteFormat] = useState<SqlQuoteFormat>('javascript');
 
@@ -513,6 +522,32 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       run: () => openClipboard(editor, 'quoted'),
     });
     if (propsRef.current.queryTabId) {
+      sqlSelectionFindCommandIds.forEach((id, index) => editor.addAction({
+        id, label: uiCommandLabels[id], precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
+        contextMenuGroupId: '8_sql_find', contextMenuOrder: index,
+        run: () => {
+          const tabId = propsRef.current.queryTabId;
+          const allowed = () => {
+            const props = propsRef.current, current = useWorkspace.getState();
+            const ownDialog = selectionFindHost.current?.closest(appModalSelector);
+            return !!tabId && props.queryTabId === tabId && aliveRef.current && widgetRef.current === widget && widget.alive &&
+              editorRef.current === editor && contentRef.current?.ready === true && current.settings.activeTabId === tabId &&
+              !props.clipboardDisabled && !current.activeJobs[tabId] && !editor.getRawOptions().readOnly &&
+              Array.from(document.querySelectorAll(appModalSelector)).every(dialog => dialog === ownDialog);
+          };
+          if (document.querySelector(appModalSelector)) return;
+          const target = captureSqlClipboardSelection(editor, allowed);
+          if (!target) return;
+          try {
+            const source = target.selectedText(sqlSelectionFindLimit);
+            if (!source) { target.dispose(); return; }
+            setSelectionFind({ mode: id, target, source, editor });
+          } catch {
+            target.dispose();
+            useWorkspace.getState().notify(sqlSelectionFindZh.limit, true);
+          }
+        },
+      }));
       // 保留应用缩放的原快捷键，编辑器快捷键只在此实例的文本区接收。
       const keys = [monaco.KeyCode.Equal, monaco.KeyCode.Minus, monaco.KeyCode.Digit0];
       sqlEditorZoomCommandIds.forEach((id, index) => editor.addAction({
@@ -534,7 +569,9 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if (bridge.ready) propsRef.current.onReady?.(editor);
   };
   const quoted = clipboardDialog?.kind === 'quoted' ? quoteSqlForCode(clipboardDialog.sql, quoteFormat) : '';
-  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onCopy={rememberSql} onCut={rememberSql} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}{clipboardDialog?.kind === 'paste' && <div ref={clipboardHost}><Modal title={clipboardText.title} onClose={closeClipboard}>
+  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onCopy={rememberSql} onCut={rememberSql} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language={language} theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}{selectionFind && <SqlSelectionFindDialog mode={selectionFind.mode} target={selectionFind.target} source={selectionFind.source}
+    setHost={node => { selectionFindHost.current = node; }} onClose={() => setSelectionFind(undefined)}
+    focus={() => { if (editorRef.current === selectionFind.editor) selectionFind.editor.focus(); }}/>}{clipboardDialog?.kind === 'paste' && <div ref={clipboardHost}><Modal title={clipboardText.title} onClose={closeClipboard}>
     <div className="modal-content">
       <p>{clipboardText.hint}</p>
       {clipboardDialog.entries.length ? <>

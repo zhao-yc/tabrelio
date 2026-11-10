@@ -39,8 +39,29 @@ export function captureSqlClipboardSelection(editor: monaco.editor.IStandaloneCo
     editor.onDidChangeModel(() => { active = false; }), editor.onDidDispose(() => { active = false; }),
     model.onDidChangeContent(() => { active = false; }), editor.onDidChangeCursorSelection(current),
   ];
+  /** 统一原选区的一步编辑；调用方分别校验粘贴或替换的输出预算。 */
+  function replace(text: string, source: string): boolean {
+    if (!current()) return false;
+    active = false;
+    editor.pushUndoStop();
+    const edited = editor.executeEdits(source, [{ range, text, forceMoveMarkers: true }]);
+    if (edited) editor.pushUndoStop();
+    return edited;
+  }
   return {
     current,
+    replace,
+    /** 查找结果是选区内的 UTF-16 偏移，定位前复核边界及原模型。 */
+    locate(start: number, end: number): boolean {
+      if (!current() || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > model.getValueLengthInRange(range)) return false;
+      const offset = model.getOffsetAt(range.getStartPosition());
+      const from = model.getPositionAt(offset + start), to = model.getPositionAt(offset + end);
+      const match = { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column };
+      active = false;
+      editor.setSelection(match);
+      editor.revealRangeInCenterIfOutsideViewport(match);
+      return true;
+    },
     selectedText(limit: number): string | undefined {
       if (!current() || range.isEmpty()) return;
       if (model.getValueLengthInRange(range) > limit) throw new RangeError('原选区超过读取上限');
@@ -48,12 +69,7 @@ export function captureSqlClipboardSelection(editor: monaco.editor.IStandaloneCo
     },
     dispose() { active = false; for (const subscription of subscriptions) subscription.dispose(); },
     paste(text: string): boolean {
-      if (!current() || !text.length || text.length > sqlClipboardLimits.entryUnits) return false;
-      active = false;
-      editor.pushUndoStop();
-      const edited = editor.executeEdits(sqlClipboardStackAction, [{ range, text, forceMoveMarkers: true }]);
-      if (edited) editor.pushUndoStop();
-      return edited;
+      return !!text.length && text.length <= sqlClipboardLimits.entryUnits && replace(text, sqlClipboardStackAction);
     },
   };
 }
