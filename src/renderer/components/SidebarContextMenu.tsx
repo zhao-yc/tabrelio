@@ -1,11 +1,13 @@
 import { Children, Fragment, cloneElement, createContext, isValidElement, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react';
-import { ChevronRight, Copy } from 'lucide-react';
+import { ChevronRight, Copy, FileCode2 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import type { WorkbenchTarget } from '../../shared/workbench';
 import { useWorkspace } from '../store';
 import { sidebarContextMenuZh as text } from '../locales/sidebarContextMenu.zh-CN';
 import { objectQueryKeyShortcuts, objectQueryShortcut, openObjectQuery } from '../objectQueryNavigation';
 import { objectIdentifierCopy } from '../objectIdentifierCopy';
+import { canInsertObjectIdentifier } from '../objectIdentifierInsertion';
+import type { HistoryInsertionRegistry } from '../historyInsertion';
 import { writeTableClipboardEvent } from '../gridClipboard';
 import { errorMessage } from '../lib';
 import '../sidebarContextMenu.css';
@@ -54,7 +56,7 @@ function modalChanged(records: MutationRecord[]): boolean {
 }
 
 /** 全树共享一个菜单；选择与菜单均为会话界面状态，不写配置或发送数据库请求。 */
-export function SidebarTreeProvider({ children }: { children: ReactNode }) {
+export function SidebarTreeProvider({ children, queryInsertion }: { children: ReactNode; queryInsertion?: HistoryInsertionRegistry }) {
   const selection = useWorkspace(state => state.selection);
   const profiles = useWorkspace(state => state.connections), revisions = useWorkspace(state => state.connectionVersions);
   const [selected, setSelected] = useState<SidebarNodeTarget>(), selectedRef = useRef<SidebarNodeTarget | undefined>(undefined);
@@ -143,9 +145,22 @@ export function SidebarTreeProvider({ children }: { children: ReactNode }) {
           useWorkspace.getState().notify(text.copied);
         } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
       };
+      const workspace = useWorkspace.getState();
+      const active = workspace.settings.tabs.find(tab => tab.id === workspace.settings.activeTabId);
+      const insertion = qualified && active && 'database' in target && canInsertObjectIdentifier(active, profile, target.database)
+        ? queryInsertion?.capture(active.id, 'object-identifier') : null;
+      if (insertion) {
+        releases.push(insertion.subscribe(() => retire(owner)));
+        // 正常菜单执行同步关闭后调用动作，释放推到本轮末尾以保留原选区直至动作消费。
+        releases.push(() => queueMicrotask(() => insertion.dispose()));
+      }
       owner.actions = <>{actions}
         <button data-menu-group="copy" aria-label={text.copyName} onClick={() => copy(plain)}><Copy size={12}/></button>
         {qualified && <button data-menu-group="copy" aria-label={text.copyQualifiedName} onClick={() => copy(qualified)}><Copy size={12}/></button>}
+        {qualified && insertion && <button data-menu-group="copy" aria-label={text.insertQualifiedName} onClick={() => {
+          if (ownerRef.current || !targetCurrent(owner)) return;
+          try { insertion.insert(qualified); } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+        }}><FileCode2 size={12}/></button>}
       </>;
     }
     ownerRef.current = owner;

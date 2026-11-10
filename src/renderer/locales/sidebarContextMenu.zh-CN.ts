@@ -6,6 +6,7 @@ export const sidebarContextMenuZh = {
   copyLink: '复制对象链接', copyObjectLink: (name: string) => `复制对象链接 ${name}`,
   copyName: '复制对象名称',
   copyQualifiedName: '复制 SQL 限定名',
+  insertQualifiedName: '插入 SQL 限定名',
   copied: '已复制到剪贴板',
   refreshObject: (name: string) => `刷新对象列表 ${name}`,
   groups: { open: '打开与浏览', copy: '复制', create: '创建', structure: '设计与结构', transfer: '数据传输', favorite: '收藏与链接', refresh: '刷新', danger: '危险操作' }

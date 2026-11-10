@@ -116,7 +116,7 @@ import { SNIPPET_LIMITS } from '../../shared/snippets';
 import { useQueryFileSource } from '../useQueryFileSource';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
 import { flushEditorContent } from '../editorContentBridge';
-import { captureHistoryInsertion, type HistoryInsertionRegistry, type HistoryInsertionTarget } from '../historyInsertion';
+import { captureHistoryInsertion, type HistoryInsertionRegistry, type HistoryInsertionTarget, type QueryInsertionMode } from '../historyInsertion';
 import { SavedQueryMatchNavigation } from './SavedQueryMatchNavigation';
 import { useUiCommandScope, type UiCommandHandler } from '../uiCommands';
 import { bracketCommands, sqlPositionActions, sqlTextActions } from '../sqlEditorActions';
@@ -1061,7 +1061,7 @@ export function PostgresQueryTab({
     if (locked) duplicateIntent.current?.dispose();
   });
   /** 片段模态只放行自身的插入；会话、正文、选区、关闭和其它操作仍沿原意图保护。 */
-  function captureInsertion(instance: monaco.editor.IStandaloneCodeEditor, ownSnippet = false) {
+  function captureInsertion(instance: monaco.editor.IStandaloneCodeEditor, ownSnippet = false, mode?: QueryInsertionMode) {
     flushEditorContent(instance);
     return captureHistoryInsertion(instance, () => {
       const current = useWorkspace.getState();
@@ -1075,16 +1075,16 @@ export function PostgresQueryTab({
         busy: (ownSnippet ? snippetInsertionLocked.current : insertionLocked.current) || !!phase.current ||
           !!current.activeJobs[tab.id] || fileOperation.current(), closing: !!closeRef.current,
       };
-    }, listener => useWorkspace.subscribe(listener));
+    }, listener => useWorkspace.subscribe(listener), mode);
   }
   /** 进入历史或保存查询搜索时才捕获原选区。后续执行、切源、关闭或模型变化会撤销插入资格。 */
   useEffect(() => {
     if (!historyInsertionRegistry) return;
-    const unregister = historyInsertionRegistry.register(tab.id, () => {
+    const unregister = historyInsertionRegistry.register(tab.id, mode => {
       historyInsertion.current?.dispose();
       const instance = editor.current;
       if (!instance) return null;
-      historyInsertion.current = captureInsertion(instance);
+      historyInsertion.current = captureInsertion(instance, false, mode);
       return historyInsertion.current;
     });
     return () => {

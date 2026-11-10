@@ -25,27 +25,38 @@ interface Model {
 export interface HistoryInsertionEditor {
   getModel(): Model | null;
   getSelection(): monaco.IRange | null;
+  getSelections?(): monaco.Selection[] | null;
+  getDomNode?(): HTMLElement | null;
+  getRawOptions?(): { readOnly?: boolean };
+  focus?(): void;
   onDidChangeModel(listener: () => void): monaco.IDisposable;
   onDidChangeCursorSelection(listener: () => void): monaco.IDisposable;
   onDidDispose(listener: () => void): monaco.IDisposable;
   pushUndoStop(): boolean;
-  executeEdits(source: string, edits: monaco.editor.IIdentifiedSingleEditOperation[]): boolean;
+  executeEdits(source: string, edits: monaco.editor.IIdentifiedSingleEditOperation[], cursor?: monaco.editor.ICursorStateComputer): boolean;
 }
+
+export type QueryInsertionMode = 'object-identifier';
 
 /** 注册只删除自身工厂；StrictMode的旧清理不能撤销后来注册的编辑器。 */
 export class HistoryInsertionRegistry {
-  private readonly factories = new Map<string, () => HistoryInsertionTarget | null>();
-  register(tabId: string, capture: () => HistoryInsertionTarget | null): () => void {
+  private readonly factories = new Map<string, (mode?: QueryInsertionMode) => HistoryInsertionTarget | null>();
+  register(tabId: string, capture: (mode?: QueryInsertionMode) => HistoryInsertionTarget | null): () => void {
     this.factories.set(tabId, capture);
     return () => { if (this.factories.get(tabId) === capture) this.factories.delete(tabId); };
   }
-  capture(tabId: string): HistoryInsertionTarget | null { return this.factories.get(tabId)?.() ?? null; }
+  capture(tabId: string, mode?: QueryInsertionMode): HistoryInsertionTarget | null { return this.factories.get(tabId)?.(mode) ?? null; }
 }
 
 /** 捕获原模型版本和选区；任何导航/编辑/选区变化都永久撤销，恢复同值也不复活。 */
-export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: () => HistoryInsertionScope, subscribe: (listener: () => void) => () => void): HistoryInsertionTarget | null {
+export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: () => HistoryInsertionScope, subscribe: (listener: () => void) => () => void, mode?: QueryInsertionMode): HistoryInsertionTarget | null {
   const initial = read(), model = editor.getModel(), selected = editor.getSelection();
   if (!initial.alive || initial.busy || initial.closing || initial.tab?.kind !== 'query' || initial.activeTabId !== initial.tab.id || !initial.connection || !model || model.isDisposed() || !selected) return null;
+  // 侧栏只能插入可见的单一选区，不对结果专注模式、只读正文或多光标作隐式编辑。
+  const cursor = mode === 'object-identifier' ? editor.getSelections?.()?.[0] : undefined;
+  const editable = () => mode !== 'object-identifier' || (!!cursor && editor.getSelections?.()?.length === 1 &&
+    !!editor.getDomNode?.()?.getClientRects().length && !editor.getRawOptions?.().readOnly);
+  if (!editable()) return null;
   const version = model.getVersionId();
   const range = { startLineNumber: selected.startLineNumber, startColumn: selected.startColumn, endLineNumber: selected.endLineNumber, endColumn: selected.endColumn };
   let valid = true, disposed = false;
@@ -55,7 +66,7 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
   const matches = () => {
     try {
       const now = read(), selection = editor.getSelection();
-      return !disposed && now.alive && !now.busy && !now.closing && now.tab === initial.tab && now.activeTabId === initial.activeTabId
+      return !disposed && editable() && now.alive && !now.busy && !now.closing && now.tab === initial.tab && now.activeTabId === initial.activeTabId
         && now.connection === initial.connection && now.connectionVersion === initial.connectionVersion && now.selection === initial.selection
         && now.session === initial.session && now.execution === initial.execution && editor.getModel() === model && !model.isDisposed() && model.getVersionId() === version
         && !!selection && selection.startLineNumber === range.startLineNumber && selection.startColumn === range.startColumn && selection.endLineNumber === range.endLineNumber && selection.endColumn === range.endColumn;
@@ -79,9 +90,15 @@ export function captureHistoryInsertion(editor: HistoryInsertionEditor, read: ()
       if (typeof sql !== 'string' || sql.length > 20_000_000 || model.getValueLength() - model.getValueLengthInRange(range) + sql.length > 20_000_000) throw Error(text.tooLarge);
       dispose();
       editor.pushUndoStop();
-      const accepted = editor.executeEdits('dbark-history-insertion', [snippetEdit(range, sql)]);
+      const edit = snippetEdit(range, sql);
+      const accepted = cursor
+        ? editor.executeEdits('dbark-object-identifier-insertion', [edit], changes => changes.map(({ range: inserted }) =>
+          cursor.setEndPosition(inserted.endLineNumber, inserted.endColumn).setStartPosition(inserted.endLineNumber, inserted.endColumn)
+            .setEndPosition(inserted.endLineNumber, inserted.endColumn)))
+        : editor.executeEdits('dbark-history-insertion', [edit]);
       editor.pushUndoStop();
       if (!accepted) throw Error(text.failed);
+      if (cursor) editor.focus?.();
     },
   };
 }

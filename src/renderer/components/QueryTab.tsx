@@ -410,7 +410,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** App只登记工厂，打开历史时才捕获原查询；隐藏页不会被误认为活动编辑器。 */
   useEffect(() => {
     if (!historyInsertionRegistry) return;
-    const unregister = historyInsertionRegistry.register(tab.id, () => {
+    const unregister = historyInsertionRegistry.register(tab.id, mode => {
       historyInsertion.current?.dispose();
       const instance = editor.current;
       if (!instance) return null;
@@ -419,7 +419,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
         return { tab: current, activeTabId: workspace.settings.activeTabId, connection: workspace.connections.find(item => item.id === current?.connectionId), connectionVersion: workspace.connectionVersions[current?.connectionId ?? ''] ?? 0, selection: workspace.selection,
           session: sessionRef.current, execution: task.current, alive: alive.current && editor.current === instance, busy: busyRef.current || !!pendingSession.current || !!workspace.activeJobs[tab.id] || !!formatting.current || fileSource.isBusy(), closing: !!closeRequestRef.current };
-      }, listener => useWorkspace.subscribe(listener));
+      }, listener => useWorkspace.subscribe(listener), mode);
       return historyInsertion.current;
     });
     return () => { unregister(); historyInsertion.current?.dispose(); historyInsertion.current = null; };

@@ -207,11 +207,12 @@ function consumeIncomingQuery(snapshot: PostgresRecordTransfer) {
 
 /** 统一维护桌面工作空间、标签与对话框，并把退出前的编辑状态交回主进程。 */
 export default function App() {
-  return <SidebarTreeProvider><WorkspaceApp/></SidebarTreeProvider>;
+  const historyInsertionRegistry = useMemo(() => new HistoryInsertionRegistry(), []);
+  return <SidebarTreeProvider queryInsertion={historyInsertionRegistry}><WorkspaceApp historyInsertionRegistry={historyInsertionRegistry}/></SidebarTreeProvider>;
 }
 
 /** 全局导航与页面共用树目标；原生菜单运行时只在此挂接一次。 */
-function WorkspaceApp() {
+function WorkspaceApp({ historyInsertionRegistry }: { historyInsertionRegistry: HistoryInsertionRegistry }) {
   useUiCommandRuntime();
   const incomingQuery = usePostgresRecordTransfer(state => state.snapshot);
   const treeSelection = useSidebarSelection();
@@ -288,7 +289,6 @@ function WorkspaceApp() {
   const [editorIndentPreferences, setEditorIndentPreferences] = useState(false);
   const [navigationHelp, setNavigationHelp] = useState<'usage' | 'shortcuts' | null>(null);
   const [history, setHistory] = useState<{ section: 'history' | 'queries'; connectionId?: string } | null>(null); const [tasks, setTasks] = useState(false); const [preferences, setPreferences] = useState(false); const [about, setAbout] = useState(false);
-  const historyInsertionRegistry = useMemo(() => new HistoryInsertionRegistry(), []);
   const [historyInsertion, setHistoryInsertion] = useState<HistoryInsertionTarget | null>(null);
   const historyInsertionRef = useRef<HistoryInsertionTarget | null>(null);
   const [savedQueryInsertion, setSavedQueryInsertion] = useState<HistoryInsertionTarget | null>(null);
