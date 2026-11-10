@@ -12,7 +12,7 @@ import { historyPagesZh as sqlText } from '../locales/historyPages.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
-import { openQueryTabBatch, rememberOpenedSavedQueries, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
+import { captureOpenedSavedQuery, findOpenedSavedQuery, openQueryTabBatch, rememberOpenedSavedQueries, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { SavedQueryRebindEditor } from './SavedQueryRebindEditor';
@@ -46,11 +46,6 @@ const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database,
   databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding,
 });
-/** 按查询库来源编号匹配，标题、正文和执行后的默认库都可以与原记录不同。 */
-function matchesOpenedQuery(tab: WorkspaceTab, queryId: string, connectionId: string): boolean {
-  return tab.kind === 'query' && !tab.fileSourceBinding && tab.sourceBinding?.id === queryId &&
-    (!connectionId || tab.connectionId === connectionId);
-}
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.database, value.sort, value.favoritesOnly]);
 /** 浏览和筛选归档使用同一份条件投影。 */
 function pageFilters(value: Criteria): SavedQueryArchiveFilters {
@@ -416,28 +411,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }
   /** 丢失来源不回退其它连接；打开仅重读摘要对应原文，不执行SQL。 */
   function target(item: SavedQueryPageEntry) { return targets.has(item.query.id) ? targets.get(item.query.id)! : connections.some(value => value.id === item.query.connectionId) ? item.query.connectionId! : ''; }
-  function openedTab(item: SavedQueryPageEntry): WorkspaceTab | undefined {
-    const connectionId = target(item);
-    const candidates = tabs.filter(tab => matchesOpenedQuery(tab, item.query.id, connectionId) &&
-      connections.some(connection => connection.id === tab.connectionId));
-    return recentTabs.map(ref => candidates.find(tab => tab.id === ref.id)).find(Boolean) ?? candidates[0];
-  }
-  /** 关闭列表后重新核对标签身份，不能激活等待期间被关闭、换绑或重建的标签。 */
   function activateOpenedTab(item: SavedQueryPageEntry, opened: WorkspaceTab): void {
     if (!editable() || !currentCard(item)) return;
     try {
-      const state = useWorkspace.getState();
-      const ref = state.tabOrderSnapshot().find(ref => ref.id === opened.id);
-      const profile = state.connections.find(connection => connection.id === opened.connectionId);
-      if (!ref || state.resolveTabOrder(ref) !== opened || !profile) throw Error(t.openExistingStale);
-      void close(() => {
-        const workspace = useWorkspace.getState(), live = workspace.resolveTabOrder(ref);
-        if (!live || !matchesOpenedQuery(live, item.query.id, opened.connectionId) ||
-            !workspace.connections.includes(profile) ||
-            workspace.connectionVersions[profile.id] !== state.connectionVersions[profile.id]) throw Error(t.openExistingStale);
-        workspace.updateSettings({ activeTabId: live.id });
-        onClose();
-      });
+      const activate = captureOpenedSavedQuery(item.query.id, opened);
+      void close(() => { activate(); onClose(); });
     } catch (reason) { setError(errorMessage(reason)); }
   }
   function open(item: SavedQueryPageEntry) {
@@ -679,7 +657,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         {external && <SavedQueryExternalEditor key={external.sessionId} session={external} request={io.request} onDone={message => finishExternal(external, message)}/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => {
-          const opened = openedTab(item);
+          const opened = findOpenedSavedQuery(item.query.id, target(item), tabs, recentTabs, connections);
           return <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label>
           <button type="button" className="icon-button" disabled={blocked || changed || needsRefresh || !organization} aria-label={t.favoriteName(item.query.name)}
             aria-pressed={!!item.favorite} title={item.favorite ? t.favoriteRemove : t.favoriteAdd} onClick={() => setFavorite(item)}>

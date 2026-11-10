@@ -11,7 +11,11 @@ import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 const { invoke, notify, grid } = vi.hoisted(() => ({ invoke: vi.fn(), notify: vi.fn(), grid: { current: undefined as any } }));
 vi.mock('../../src/renderer/lib', () => ({ invoke, uid: () => randomUUID(), errorMessage: (reason: unknown) => reason instanceof Error ? reason.message : String(reason) }));
 const connections = [{ id: 'target', name: '原查询连接' }];
-vi.mock('../../src/renderer/store', () => ({ useWorkspace: Object.assign(() => ({ connections, settings: { theme: 'dark' } }), { getState: () => ({ notify }) }) }));
+vi.mock('../../src/renderer/store', () => ({
+  findOpenedSavedQuery: () => undefined,
+  captureOpenedSavedQuery: vi.fn(),
+  useWorkspace: Object.assign(() => ({ connections, settings: { theme: 'dark', tabs: [] }, recentTabRefs: [] }), { getState: () => ({ notify }) }),
+}));
 /** 只替代虚拟网格DOM边界；点击仍进入真实搜索组件的select处理，不读写其私有状态。 */
 vi.mock('react-data-grid', () => ({ DataGrid: (props: any) => {
   grid.current = props;

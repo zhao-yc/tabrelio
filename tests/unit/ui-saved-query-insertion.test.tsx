@@ -10,7 +10,13 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 const { notify, openTab } = vi.hoisted(() => ({ notify: vi.fn(), openTab: vi.fn() }));
-vi.mock('../../src/renderer/store', () => ({ useWorkspace: Object.assign((select: (state: any) => unknown) => select({ connections: [{ id: 'target', name: '原查询连接' }] }), { getState: () => ({ notify, openTab }) }) }));
+vi.mock('../../src/renderer/store', () => ({
+  findOpenedSavedQuery: () => undefined,
+  captureOpenedSavedQuery: vi.fn(),
+  useWorkspace: Object.assign((select: (state: any) => unknown) => select({
+    connections: [{ id: 'target', name: '原查询连接' }], settings: { tabs: [] }, recentTabRefs: [],
+  }), { getState: () => ({ notify, openTab }) }),
+}));
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client').createRoot, root: ReturnType<typeof createRoot> | undefined;
 const sql = "SELECT 18446744073709551615, '" + '完整 SQL '.repeat(100) + "尾部 $0';\n-- 保留原文";

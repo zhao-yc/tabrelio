@@ -192,6 +192,39 @@ export function rememberOpenedSavedQueries(ids: string[], request = invoke): voi
   void request('queries.rememberOpened', { ids }).catch(() => useWorkspace.getState().notify(savedQueryPagesZh.rememberOpenFailed, true));
 }
 
+/** 按查询库来源编号匹配，允许标签改名、编辑正文或切换当前默认库。 */
+function matchesOpenedSavedQuery(tab: WorkspaceTab, queryId: string, connectionId: string): boolean {
+  return tab.kind === 'query' && !tab.fileSourceBinding && tab.sourceBinding?.id === queryId &&
+    (!connectionId || tab.connectionId === connectionId);
+}
+
+export function findOpenedSavedQuery(queryId: string, connectionId: string, tabs: readonly WorkspaceTab[],
+  recentTabs: readonly TabOrderRef[], connections: readonly ConnectionProfile[]): WorkspaceTab | undefined {
+  const candidates = tabs.filter(tab => matchesOpenedSavedQuery(tab, queryId, connectionId) &&
+    connections.some(profile => profile.id === tab.connectionId));
+  for (const ref of recentTabs) {
+    const candidate = candidates.find(tab => tab.id === ref.id);
+    if (candidate) return candidate;
+  }
+  return candidates[0];
+}
+
+/** 等待对话框清理后重新核对原令牌及连接。不会因候选变化而改选其它标签。 */
+export function captureOpenedSavedQuery(queryId: string, opened: WorkspaceTab): () => void {
+  const state = useWorkspace.getState();
+  const ref = state.tabOrderSnapshot().find(ref => ref.id === opened.id);
+  const profile = state.connections.find(connection => connection.id === opened.connectionId);
+  if (!ref || !profile || state.resolveTabOrder(ref) !== opened ||
+      !matchesOpenedSavedQuery(opened, queryId, profile.id)) throw Error(savedQueryPagesZh.openExistingStale);
+  const version = state.connectionVersions[profile.id];
+  return () => {
+    const workspace = useWorkspace.getState(), live = workspace.resolveTabOrder(ref);
+    if (!live || !matchesOpenedSavedQuery(live, queryId, profile.id) || !workspace.connections.includes(profile) ||
+        workspace.connectionVersions[profile.id] !== version) throw Error(savedQueryPagesZh.openExistingStale);
+    workspace.updateSettings({ activeTabId: live.id });
+  };
+}
+
 /** 批量打开等待期间监视原连接配置与版本，变化后即使切回也不能发布旧草稿。 */
 export function watchQueryBatchConnections(ids: readonly string[]) {
   const initial = useWorkspace.getState();

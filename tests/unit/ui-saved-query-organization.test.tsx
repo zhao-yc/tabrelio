@@ -12,7 +12,14 @@ import { planSavedQueryGroups, summarizeSavedQueryOrganization } from '../../src
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 const { notify, openTab } = vi.hoisted(() => ({ notify: vi.fn(), openTab: vi.fn() }));
-vi.mock('../../src/renderer/store', () => ({ rememberOpenedSavedQueries: vi.fn(), useWorkspace: Object.assign((select: (state: any) => unknown) => select({ connections: [{ id: 'connection', name: '本例连接' }] }), { getState: () => ({ notify, openTab }) }) }));
+vi.mock('../../src/renderer/store', () => ({
+  rememberOpenedSavedQueries: vi.fn(),
+  findOpenedSavedQuery: () => undefined,
+  captureOpenedSavedQuery: vi.fn(),
+  useWorkspace: Object.assign((select: (state: any) => unknown) => select({
+    connections: [{ id: 'connection', name: '本例连接' }], settings: { tabs: [] }, recentTabRefs: [],
+  }), { getState: () => ({ notify, openTab }) }),
+}));
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 beforeAll(async () => { doc = memoryDocument(); (doc as any).oninput = null; const create = doc.createElement.bind(doc); doc.createElement = name => { const node = create(name); if (name === 'input') { let type = 'text'; Object.defineProperty(node, 'type', { configurable: true, get: () => type, set: value => { type = value; node.attributes.set('type', value); } }); node.type = 'text'; } if (name === 'select') Object.defineProperty(node, 'options', { get: () => node.querySelectorAll('option') }); const set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; if (key === 'type') node.type = value; if (name === 'option' && key === 'value') node.value = String(value); }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; }; ({ createRoot } = await import('react-dom/client')); });

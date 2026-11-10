@@ -18,6 +18,28 @@ describe('工作台重排沿真实store及原配置持久化通道', () => {
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
   function install(tabs: Tab[], activeTabId = tabs[0]?.id) { workspace.useWorkspace.setState({ settings: { ...workspace.useWorkspace.getState().settings, tabs, activeTabId } }); request.mockClear(); return workspace.useWorkspace.getState().tabOrderSnapshot(); }
 
+  it('切回保存查询保留等待期间的新正文，旧回调不能激活同 ID 重开的标签', () => {
+    const profile: ConnectionProfile = { id: 'c', name: '离线合成', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 3306, user: 'offline' };
+    const opened = query('saved', { sourceBinding: { id: 'source', digest: 'a'.repeat(64), context: { state: 'known', database: null } } });
+    const other = query('other');
+    install([opened, other], other.id);
+    workspace.useWorkspace.setState({ connections: [profile] });
+    const state = workspace.useWorkspace.getState();
+    const activate = workspace.captureOpenedSavedQuery('source', opened);
+    state.updateTab(opened.id, { sql: '等待期间的草稿' });
+    activate();
+    const live = workspace.useWorkspace.getState().settings;
+    expect(live.activeTabId).toBe(opened.id);
+    expect(live.tabs[0].sql).toBe('等待期间的草稿');
+
+    const stale = workspace.captureOpenedSavedQuery('source', live.tabs[0]);
+    state.closeTab(opened.id);
+    state.openTab(opened);
+    state.updateSettings({ activeTabId: other.id });
+    expect(stale).toThrow('原查询标签已关闭或来源已变化');
+    expect(workspace.useWorkspace.getState().settings.activeTabId).toBe(other.id);
+  });
+
   it('同关系的普通表页和两个命名方案各用独立标签，重复打开只聚焦原方案', () => {
     const ordinary = table('original'), first = postgresPresetTabId(fileId, '11111111-2222-4333-8444-555555555555');
     const same = postgresPresetTabId(fileId, '11111111-2222-4333-8444-666666666666');
