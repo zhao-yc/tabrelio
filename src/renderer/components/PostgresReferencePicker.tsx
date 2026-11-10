@@ -9,6 +9,7 @@ import { PostgresReferenceRecord } from './PostgresReferenceRecord';
 
 export interface PostgresReferenceSource {
   input: Omit<PostgresTableReferenceInput, 'lookup'>;
+  column?: { key: string; name: string };
   current(): boolean;
 }
 type CandidatePage = NonNullable<PostgresTableReferenceResult['page']>;
@@ -36,7 +37,9 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
   /** 查询开始立即收起旧结果，避免搜索和翻页过程中使用旧行。 */
   async function load(key?: PostgresTableReference, search = '', offset = 0) {
     if (opening.current) return;
-    const request = ++generation.current, input = latest.current.input;
+    const request = ++generation.current, { input, column } = latest.current;
+    const scopedChoices = (result: PostgresTableReferenceResult) => column
+      ? result.choices.filter(item => item.pairs.some(pair => pair.local === column.key)) : result.choices;
     const current = () => generation.current === request && latest.current.input.pageToken === input.pageToken &&
       latest.current.input.parentRow === input.parentRow && latest.current.input.childrenRow === input.childrenRow &&
       latest.current.current();
@@ -50,18 +53,20 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
       if (!key) {
         const result = await invoke('postgres.table.references', input);
         if (!current()) return;
-        setChoices(result.choices);
-        key = result.choices[0];
+        const available = scopedChoices(result);
+        setChoices(available);
+        key = available[0];
         setChoice(key);
         if (!key) return;
       }
       const wanted = key;
       const result = await invoke('postgres.table.references', { ...input, lookup: { id: wanted.id, stamp: wanted.stamp, search, offset } });
       if (!current()) return;
-      const confirmed = result.choices.find(item => item.id === wanted.id && item.stamp === wanted.stamp);
+      const available = scopedChoices(result);
+      const confirmed = available.find(item => item.id === wanted.id && item.stamp === wanted.stamp);
       if (!confirmed || !result.page) throw Error(text.expired);
       const next = { choice: confirmed, page: result.page, offset, search };
-      setChoices(result.choices);
+      setChoices(available);
       liveView.current = next;
       setView(next);
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
@@ -127,6 +132,7 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
       {!browse && <button type="button" onClick={onClose}>{text.close}</button>}
     </div>
     {browse && choice && <p><strong>{children ? text.childTable : text.parentTable}</strong>　{choice.schema}.{choice.table}</p>}
+    {source.column && <p>{text.cellScope(source.column.name)}</p>}
     {choice && <p>{choice.pairs.map(pair => (children ? text.childPair : text.pair)(pair.localName, pair.remote)).join('，')}</p>}
     {busy && <p role="status">{text.loading}</p>}
     <ErrorBox message={error}/>
@@ -161,6 +167,6 @@ export function PostgresReferencePicker({ source, onClose, onChoose, onOpen, que
         </tr>)}</tbody>
       </table></div>}
     </>}
-    <p className="muted small">{queryResult ? text.queryHint : children ? text.childrenHint : parent ? text.browseHint : text.hint}</p>
+    <p className="muted small">{queryResult ? text.queryHint : children ? text.childrenHint : parent ? text.browseHint : source.column ? text.cellHint : text.hint}</p>
   </section>;
 }

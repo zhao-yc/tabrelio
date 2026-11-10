@@ -111,7 +111,8 @@ const pageScope = ({ filter, sort }: Snapshot['options']) =>
   JSON.stringify([filter, postgresTableSortRules(sort).map(({ column, direction, nulls }) => [column, direction, nulls])]);
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
-export async function readRelation(connection: PostgresConnection, table: string, { catalogueOnly = false, headerComments = false } = {}): Promise<Relation> {
+export async function readRelation(connection: PostgresConnection, table: string,
+  { catalogueOnly = false, headerComments = false, referenceHints = false } = {}): Promise<Relation> {
   const { schema, name } = postgresRelationName(table);
   const header = await connection.query(`
     SELECT c.oid, pg_catalog.pg_relation_filenode(c.oid), c.relkind, c.relispartition, c.relhasrules,
@@ -131,6 +132,24 @@ export async function readRelation(connection: PostgresConnection, table: string
   // 复制记录根据标识属性和默认表达式的序列依赖省略字段，避免猜测 DEFAULT 文本。
   // 数据搜索每次只投影少量列，目录可读取宽表的全部列而不放宽表页结果预算。
   const maxColumns = catalogueOnly ? 1600 : 1022;
+  // 表页目录只携带入口提示，不把易变的父表读取权限和外键目录纳入已有草稿指纹。
+  const referenceProjection = referenceHints && info.c2 === 'r' && info.c3 === 'f' && info.c4 === 'f' && info.c6 === 't' ? `
+    , a.attnum IN (
+      SELECT pg_catalog.unnest(f.conkey)
+      FROM pg_catalog.pg_constraint f
+      JOIN pg_catalog.pg_class parent ON parent.oid = f.confrelid
+      JOIN pg_catalog.pg_namespace ns ON ns.oid = parent.relnamespace
+      WHERE f.conrelid = $1::oid AND f.contype = 'f' AND parent.relkind IN ('r','p')
+        AND ns.nspname <> 'information_schema' AND ns.nspname !~ '^pg_'
+        AND pg_catalog.has_schema_privilege(ns.oid, 'USAGE')
+        AND NOT COALESCE((pg_catalog.to_jsonb(f)->>'conperiod')::boolean, false)
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_catalog.unnest(f.conkey) WITH ORDINALITY AS key(attnum, position)
+          JOIN pg_catalog.pg_attribute local ON local.attrelid = f.conrelid AND local.attnum = key.attnum
+          WHERE local.attisdropped OR local.attgenerated <> '' OR local.attidentity = 'a'
+            OR NOT pg_catalog.has_column_privilege(f.confrelid, f.confkey[key.position::int], 'SELECT')
+        )
+    )` : '';
   const fields = await connection.query(`
     SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull,
            a.atthasdef, a.attgenerated, a.attidentity, a.atttypid,
@@ -145,7 +164,8 @@ export async function readRelation(connection: PostgresConnection, table: string
              WHERE dependency.classid = 'pg_catalog.pg_attrdef'::regclass AND dependency.objid = d.oid
                AND dependency.refclassid = 'pg_catalog.pg_class'::regclass AND dependency.refobjsubid = 0
            )
-           ${headerComments ? ', pg_catalog.left(pg_catalog.col_description(a.attrelid, a.attnum), ' + (postgresHeaderCommentLimit + 1) + ')' : ''}
+           ${headerComments || referenceProjection ? ', ' + (headerComments ? 'pg_catalog.left(pg_catalog.col_description(a.attrelid, a.attnum), ' + (postgresHeaderCommentLimit + 1) + ')' : 'NULL::text') : ''}
+           ${referenceProjection}
     FROM pg_catalog.pg_attribute a
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
@@ -159,6 +179,7 @@ export async function readRelation(connection: PostgresConnection, table: string
     ...(valueOptionTypes.has(String(field.c6)) ? { valueOptions: true } : {}),
     ...(field.c11 === 't' ? { sequenceDefault: true } : {}),
     ...(typeof field.c12 === 'string' && field.c12 ? { comment: postgresHeaderComment(field.c12) } : {}),
+    ...(field.c13 === 't' ? { referenceChoice: true } : {}),
   }));
   const keys = fields.rows.map((field, index) => ({ index, position: Number(field.c7) }))
     .filter(item => item.position > 0).sort((a, b) => a.position - b.position)
@@ -170,8 +191,7 @@ export async function readRelation(connection: PostgresConnection, table: string
     valueOptionTypes.has(String(fields.rows[index].c6))).map(column => column.name);
   return {
     oid: info.c0, sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
-    // 注释仅用于展示，不参与原行指纹或草稿修订。
-    fingerprint: digest([info, fields.rows.map(({ c12: _comment, ...field }) => field)]),
+    fingerprint: digest([info, fields.rows.map(({ c12: _comment, c13: _reference, ...field }) => field)]),
     syncColumns,
     syncCompatible: syncEligible &&
       (info.c5 === 't' || info.c6 === 't' || info.c7 === 't') &&
@@ -406,7 +426,7 @@ export class PostgresTableWorkspace {
       }
       const result = await connect(async connection => {
         await begin(connection, 'page');
-        const relation = await readRelation(connection, input.table, { headerComments: true });
+        const relation = await readRelation(connection, input.table, { headerComments: true, referenceHints: true });
         const restored = file ? await this.verifyDraft(connection, relation, file) : undefined;
         let counted: ReturnType<typeof postgresCountedWindow> | undefined;
         if (input.navigation) {

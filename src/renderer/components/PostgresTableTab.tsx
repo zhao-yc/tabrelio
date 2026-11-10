@@ -116,6 +116,7 @@ import type { DataRow, ResultExportData } from '../../shared/contracts';
 import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
+type GridReferenceChoice = PostgresReferenceSource & { stage(fields: PostgresTableField[]): void };
 type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
 type PageRead = PageMovement & Pick<PostgresTablePageInput, 'retainPageTokens' | 'retainHistoryPageTokens'> &
   { keepHistory?: boolean; checkFilterColumns?: true; presetLayout?: TablePreferences };
@@ -243,6 +244,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [message, setMessage] = useState('');
   const [requiresRefresh, setRequiresRefresh] = useState(false);
   const [browsedReference, setBrowsedReference] = useState<PostgresReferenceSource>();
+  const [gridReference, setGridReference] = useState<GridReferenceChoice>();
+  const gridReferenceOwner = useRef<GridReferenceChoice>(undefined);
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
@@ -531,7 +534,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedUpdate || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedUpdate || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || !!gridReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const headerDetails = useMemo(() => ({ showType: showFieldType, showComment: showFieldComment,
     onShowTypeChange: blocked ? undefined : setShowFieldType, onShowCommentChange: blocked ? undefined : setShowFieldComment,
@@ -854,6 +857,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const draftGrid = useMemo(() => page && draft.length ? postgresDraftGrid(page, draft) : undefined, [page, draft]);
   const latestFindScope = useRef(findScope);
   latestFindScope.current = findScope;
+  const gridReferenceScope = useMemo(() => ({}), [tab, findScope, requiresRefresh, recordView, active]);
+  const latestGridReferenceScope = useRef(gridReferenceScope);
+  latestGridReferenceScope.current = gridReferenceScope;
   const findRows = useMemo(() => page && findRequest
     ? postgresFindRows(page, key => draft.find(entry => entry.rowKey === key)?.change) : [], [page, draft, !!findRequest]);
 
@@ -1522,6 +1528,46 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     return { input, current: () => issued.current === input.pageToken && layoutScope.current.current() &&
       !lease.current && !requiresRefresh && current() };
   }
+  function gridReferenceTarget(cell: QueryResultCopyCell) {
+    if (!canEditGrid || !page?.pageToken || !findIsCurrent() || gridReferenceOwner.current ||
+      recordInput.current || page.rows[cell.index] !== cell.row) return;
+    const column = page.columns.find(item => item === cell.column && item.referenceChoice && !item.generated);
+    const key = page.rowKeys?.[cell.index];
+    if (!column || !key) return;
+    const prior = draft.find(entry => entry.rowKey === key)?.change;
+    if (prior?.kind !== 'delete') return { column, prior };
+  }
+
+  /** 整组外键作为一次草稿写入，保留原行其他字段和首次暂存时的行版本。 */
+  function openGridReference(cell: QueryResultCopyCell) {
+    const selected = gridReferenceTarget(cell);
+    if (!selected || !page?.pageToken) return;
+    const input = { ...target, pageToken: page.pageToken };
+    const { column, prior } = selected;
+    const owner: GridReferenceChoice = {
+      input,
+      column: { key: column.key, name: column.name },
+      current: () => gridReferenceOwner.current === owner && latestGridReferenceScope.current === gridReferenceScope &&
+        draftRef.current === draft && issued.current === input.pageToken && layoutScope.current.current() &&
+        !lease.current && !inlineOwner.current && !recordInput.current && !pasteOwner.current,
+      stage(fields) {
+        if (!owner.current() || !fields.some(field => field.column === column.key)) throw Error(referenceText.expired);
+        const replaced = new Set(fields.map(field => field.column));
+        const remaining = prior?.kind === 'update' ? prior.fields.filter(field => !replaced.has(field.column)) : [];
+        if (!stageChanges([{ kind: 'update', row: cell.index, fields: [...remaining, ...fields] }])) throw Error(referenceText.expired);
+        setMessage('');
+        setError('');
+      },
+    };
+    gridReferenceOwner.current = owner;
+    setGridReference(owner);
+  }
+
+  function closeGridReference(owner: GridReferenceChoice) {
+    if (gridReferenceOwner.current !== owner) return;
+    gridReferenceOwner.current = undefined;
+    setGridReference(undefined);
+  }
   const canBrowseReference = active && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion &&
     !!page?.canBrowseReferences && row !== null && !!page.rows[row];
 
@@ -1861,6 +1907,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         onFillRange={canEditGrid ? fillGridRange : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
+        cellReference={canEditGrid ? { label: referenceText.open, allowed: cell => !!gridReferenceTarget(cell), open: openGridReference } : undefined}
         onCellPaste={(cell, data, range) => {
           if (!canEditGrid || !cell.column) return;
           try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell, undefined, range); }
@@ -1995,6 +2042,10 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         setImportPage(undefined); setRequiresRefresh(true); setMessage(outcome);
         if (committed) void run(isCurrent => read(options, isCurrent));
       }}/>}
+    {gridReference && <Modal title={referenceText.title} onClose={() => closeGridReference(gridReference)} wide>
+      <div className="modal-content"><PostgresReferencePicker source={gridReference}
+        onChoose={gridReference.stage} onClose={() => closeGridReference(gridReference)}/></div>
+    </Modal>}
     {browsedReference && <Modal title={browsedReference.input.childrenRow === undefined ? referenceText.browseTitle : referenceText.childrenTitle}
       onClose={() => setBrowsedReference(undefined)} wide>
       <div className="modal-content"><PostgresReferencePicker source={browsedReference} onClose={() => setBrowsedReference(undefined)}

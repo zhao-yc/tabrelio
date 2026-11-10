@@ -324,6 +324,8 @@ export interface PostgresTableColumn extends ResultColumn {
   /** 表头使用有界目录注释，排序和写入仍沿用原列契约。 */
   comment?: string;
   valueOptions?: true;
+  /** 当前表页可从此字段进入外键候选，实际约束和权限仍由候选读取重查。 */
+  referenceChoice?: true;
   nullable: boolean;
   defaultValue: boolean;
   generated: boolean;

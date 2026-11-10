@@ -26,3 +26,21 @@ it('表头摘要在同一目录读取，长注释按字符截断，注释变化�
   expect(updated.columns[0].comment).toBe('新注释');
   expect(updated.fingerprint).toBe(plain.fingerprint);
 });
+
+it('外键入口提示与表页列目录同查，提示变化不改变原表指纹', async () => {
+  const query = vi.fn(async (sql: string) => ({
+    rows: sql.includes('FROM pg_catalog.pg_attribute a') ? [
+      { c0: 'owner_id', c1: 'bigint', c2: 'f', c3: 'f', c4: '', c5: '', c6: '20',
+        c7: '0', c8: '1', c9: '0', c10: null, c11: 'f', ...(sql.includes('f.conkey') ? { c12: null, c13: 't' } : {}) },
+    ] : [{ c0: '900', c1: '1000', c2: 'r', c3: 'f', c4: 'f', c5: 'f', c6: 't', c7: 'f',
+      c8: null, c9: null, c10: 'f', c11: 't', c12: 't' }],
+    truncated: false,
+  }));
+  const connection = { query } as unknown as PostgresConnection;
+  const plain = await readRelation(connection, '"public"."subject"');
+  const hinted = await readRelation(connection, '"public"."subject"', { referenceHints: true });
+  expect(query).toHaveBeenCalledTimes(4);
+  expect(plain.columns[0].referenceChoice).toBeUndefined();
+  expect(hinted.columns[0].referenceChoice).toBe(true);
+  expect(hinted.fingerprint).toBe(plain.fingerprint);
+});

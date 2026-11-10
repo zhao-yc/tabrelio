@@ -410,6 +410,8 @@ MySQL、MariaDB、PostgreSQL 和 SQLite 的筛选 SELECT 预览都可点「复�
 
 PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件。重新打开同一连接、数据库和表后，在没有待提交修改时点击「恢复 PostgreSQL 草稿」。核对通过后恢复活动页、已应用筛选和排序，以及各原页的草稿。文件未加密，包含暂存值和筛选条件。[PostgreSQL 跨页草稿文件](development/postgres-draft-files-20261106.md)
 
+在 PostgreSQL 可编辑表格中，右键点击外键格并选择「选择外键记录」，或聚焦该格后按 Ctrl／⌘+Enter。窗口只列出该字段参与的可编辑约束，可搜索和翻页。选中的复合键会整组暂存到命中行，保留该行其他草稿，可一步撤销。最终仍需预览并确认提交。
+
 在 PostgreSQL 网格选中一行，或定位到记录表单中的一条记录后，点击「查看引用记录」。窗口按数据库中的原外键值显示当前账号可读的父记录，可切换约束并展开字段原值。关闭后保留源表草稿。[PostgreSQL 查看引用记录](development/postgres-browse-parent-20261106.md)
 
 在 PostgreSQL 表页选中一条父记录后，点击「查看子记录」。按子表和外键约束切换，可搜索当前父记录的关联结果、翻页和查看单条原值。查询使用父记录在数据库中的原值，关闭窗口后草稿仍可继续编辑。[PostgreSQL 查看子记录](development/postgres-browse-children-20261106.md)

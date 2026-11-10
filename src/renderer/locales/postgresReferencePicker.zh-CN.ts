@@ -31,6 +31,8 @@ export const postgresReferencePickerZh = {
   relatedRecord: '查看当前关联记录',
   relatedBack: '返回关联记录网格',
   title: 'PostgreSQL 外键选值',
+  cellScope: (column: string) => `仅显示字段「${column}」参与的可编辑外键约束。`,
+  cellHint: '选择后将整组键值暂存到当前单元格所在行，可一步撤销。写库仍需预览和确认。',
   close: '关闭外键选值',
   constraint: '外键约束',
   query: '搜索引用记录',
