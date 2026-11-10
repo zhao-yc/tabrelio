@@ -233,7 +233,27 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     expect(cellInsert).not.toContain('9007199254740993');
     await expect(firstCheck).toBeChecked();
     await expect(secondCheck).not.toBeChecked();
+    const columnMenu = page.getByRole('menu', { name: headerText.menu, exact: true });
+    const columnSql = (name: string) => columnMenu.getByRole('menuitem', { name, exact: true });
+    await header.click({ button: 'right' });
+    await expect(columnSql(updateSqlCopyZh.all)).toHaveCount(0);
+    const checkedColumnSql = await copySqlAction(columnSql(updateSqlCopyZh.selected));
+    expect(checkedColumnSql.match(/^WHERE /gm)).toHaveLength(1);
+    expect(checkedColumnSql).toContain('9007199254740993');
+    expect(checkedColumnSql).not.toContain('9007199254740994');
+    await expect(firstCheck).toBeChecked();
     await firstCheck.uncheck();
+    await header.press('Shift+F10');
+    await expect(columnSql(copyInsertSqlZh.all)).toBeVisible();
+    await page.screenshot({ path: info.outputPath('列标题复制行SQL.png') });
+    const allColumnSql = await copySqlAction(columnSql(copyInsertSqlZh.all), true);
+    expect(allColumnSql.match(/^INSERT INTO /gm)).toHaveLength(2);
+    expect(allColumnSql).toContain('9007199254740993');
+    expect(allColumnSql).toContain('9007199254740994');
+    expect(allColumnSql).toContain('payload');
+    await expect(header).toBeFocused();
+    await expect(firstCheck).not.toBeChecked();
+    await expect(secondCheck).not.toBeChecked();
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -253,6 +273,11 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect.poll(async () => (await history()).map(entry => entry.success)).toEqual([true]);
     const historyBefore = await history();
     expect(await copy(query, ++count)).toBe('duplicate\tduplicate\tthird\thidden');
+    await grid.getByRole('columnheader').filter({ hasText: /^duplicate/i }).first().click({ button: 'right' });
+    await expect(columnMenu).toBeVisible();
+    await expect(columnSql(copyInsertSqlZh.all)).toHaveCount(0);
+    await expect(columnSql(updateSqlCopyZh.all)).toHaveCount(0);
+    await page.keyboard.press('Escape');
     const layout = page.getByRole('dialog', { name: columnsText.title, exact: true });
     const arrange = async () => {
       await (await navigationMenuItem(query, { name: columnsText.open, exact: true })).click();
@@ -366,6 +391,11 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
       expect(insert).toMatch(/^INSERT INTO /);
       expect(insert).toContain('9007199254740994');
       expect(insert).not.toContain('9007199254740993');
+      await grid.getByRole('columnheader').filter({ hasText: /^amount/i }).click({ button: 'right' });
+      const resultSql = await copySqlAction(columnSql(updateSqlCopyZh.all));
+      expect(resultSql.match(/^WHERE /gm)).toHaveLength(2);
+      expect(resultSql).toContain('9007199254740993');
+      expect(resultSql).toContain('9007199254740994');
     }
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);

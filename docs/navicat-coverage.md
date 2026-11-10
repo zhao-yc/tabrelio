@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。四种数据库的表页和已有原行 SQL 能力的 PostgreSQL 查询结果新增列标题复制 INSERT 或 UPDATE。按勾选行或当前网格全部已显示行生成整行 SQL，空结果不显示这两项。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
+
 2026-11-11 源码增量。四种数据库的表页及已有原行 SQL 能力的 PostgreSQL 查询结果可从数据格菜单复制 INSERT 或 UPDATE。单格使用所在行，矩形选区使用覆盖的整行，范围独立于行勾选。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
 
 2026-11-10 源码增量。四种数据库的表页可从行标题复制 INSERT 或 UPDATE SQL。点中已勾选行时使用当前勾选，未勾选行只复制该行。已有原行 SQL 能力的 PostgreSQL 查询结果沿用同一入口。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)

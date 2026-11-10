@@ -2248,15 +2248,15 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     return tableToolbarOwner.current.scope === tableToolbarScope && tableTabCurrent();
   }
   /** 矩形只提供涉及的行，原值和字段范围继续由行 SQL 生成器核对。 */
-  function tableRowSqlActions(row: DraftRow, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
-    if (row.inserted || info?.objectKind !== 'table' || insertCopyBlockedRef.current || restoredDraftView || copyMetadataReason) return [];
+  function tableRowSqlActions(row: DraftRow | undefined, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
+    if (!rows.length || row?.inserted || info?.objectKind !== 'table' || insertCopyBlockedRef.current || restoredDraftView || copyMetadataReason) return [];
     const menu = { current, ids: () => {
       if (checked) return selectedRows;
-      if (!rectangle) return new Set([row.id]);
+      if (!rectangle) return new Set(row ? [row.id] : rows.map(item => item.id));
       const range = cellRange.capture(rectangle, null);
       return range && new Set(range.rows.map(item => item.id));
     } };
-    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : 'current', () => handleRowSql('insert', 'clipboard', menu),
+    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : row ? 'current' : 'all', () => handleRowSql('insert', 'clipboard', menu),
       info.primaryKey.length ? () => handleRowSql('update', 'clipboard', menu) : undefined);
   }
   /** 菜单与原列头点击共用丢稿确认及分页读取，确认返回后仍检查菜单来源。 */
@@ -2275,6 +2275,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
     selectColumn: index => cellRange.selectColumnAction(index - 1),
+    columnActions: current => tableRowSqlActions(undefined, current, undefined, selectedRows.size > 0),
     findColumn: page ? key => openPageFind('query', key) : undefined,
     visibility: page && !blocked ? { showType: showFieldType, showComment: showFieldComment,
       onShowTypeChange: setShowFieldType, onShowCommentChange: setShowFieldComment } : undefined,

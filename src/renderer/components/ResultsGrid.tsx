@@ -633,6 +633,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
     current: actionCurrent, canSort: key => !!onSortChange && !sortReasons?.get(key), applySort: changeSortColumns,
     selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
+    columnActions: current => resultRowSqlActions(undefined, () => current() && selectedActionCurrent(), undefined, selectedRows.size > 0),
     resizeColumn: fitHeader ? resizeColumn : undefined, ownDialog,
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined, rowHeaderColumns: onActiveRowChange ? 0 : 1,
     rowActions: insertSql || updateSql ? (index, current) => {
@@ -661,17 +662,18 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     };
   }, [needsCheckedRows, selectionBefore, rowScope, scope, gridRevision]);
   useLayoutEffect(() => { onCheckedRows?.(checkedRows); }, [onCheckedRows, checkedRows]);
-  /** 原 SQL 生成器接收显示行下标，矩形中的不可用行整组选中时拒绝。 */
-  function resultRowSqlActions(index: number, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
+  /** 原 SQL 生成器接收显示行下标。矩形或当前网格含有不可用行时拒绝整组复制。 */
+  function resultRowSqlActions(index: number | undefined, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
+    if (!rows.length || tableCopy?.enabled === false || tableCopy?.isCurrent() === false || !insertSql && !updateSql) return [];
     const menu = { current, indices: () => {
       if (checked) return selectedRows;
-      if (!rectangle) return new Set([index]);
-      const range = cellRange.capture(rectangle, null);
+      if (index !== undefined && !rectangle) return new Set([index]);
+      const range = rectangle ? cellRange.capture(rectangle, null) : { rows, startRow: 0 };
       if (!range) return;
       if (range.rows.some(row => skipRowInInversion?.(row))) throw Error(insertCopyText.selection);
       return new Set(range.rows.map((_, offset) => range.startRow + offset));
     } };
-    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : 'current',
+    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : index === undefined ? 'all' : 'current',
       insertSql ? () => handleRowOutput(rowSql.current.insertSql, checked, insertCopyText.copied, menu) : undefined,
       updateSql ? () => handleRowOutput(rowSql.current.updateSql, checked, updateSqlCopyZh.copied, menu) : undefined);
   }

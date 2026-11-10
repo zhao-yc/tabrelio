@@ -272,11 +272,11 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : insertCopyText.invalid); }
   }
   /** 矩形覆盖的行按显示顺序提交给原快照校验，不跳过其中的草稿或删除行。 */
-  function sqliteRowSqlActions(row: SqliteDraftRow, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
-    if (row.deleted || row.index === undefined) return [];
+  function sqliteRowSqlActions(row: SqliteDraftRow | undefined, current: () => boolean, rectangle?: GridCellRectangle, checked = false) {
+    if (!rows.length || row && (row.deleted || row.index === undefined)) return [];
     const menu = { current, records: () => checked ? rows.filter(item => selectedRows.has(item.id))
-      : rectangle ? cellRange.capture(rectangle, null)?.rows : [row] };
-    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : 'current',
+      : rectangle ? cellRange.capture(rectangle, null)?.rows : row ? [row] : rows };
+    return gridRowSqlActions(rectangle ? 'range' : checked ? 'selected' : row ? 'current' : 'all',
       page.insertCopy ? () => handleTableSql(sqliteCopyInsertDraftRows, checked, insertCopyText.copied, menu) : undefined,
       page.primaryKey?.length ? () => handleTableSql(sqliteCopyUpdateDraftRows, checked, updateSqlCopyZh.copied, menu) : undefined);
   }
@@ -296,6 +296,8 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
     sort: sort ?? [], current: () => !disabled && baseCurrent() && noModal(),
     canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
     selectColumn: index => cellRange.selectColumnAction(index - 2),
+    columnActions: current => sqliteRowSqlActions(undefined, () => current() && selection.current.revision === selectionTicket,
+      undefined, selectedRows.size > 0),
     resizeColumn: onColumnResize, rowHeaderColumns: 2,
     rowActions: (index, current) => {
       const row = rows[index];
