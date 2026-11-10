@@ -104,6 +104,8 @@ import { validateTableSort, tableSortFromGrid } from '../tableSort';
 import { queryDatabasePatch } from '../../shared/queryContext';
 import { openRowSqlDraft, type RowSqlKind } from '../openRowSqlDraft';
 import { TablePresetPanel } from './TablePresetPanel';
+import { TableReadHistory, useTableReadHistory } from './TableReadHistory';
+import { tableReadHistoryZh } from '../locales/tableReadHistory.zh-CN';
 import { createPresetDialogGuard } from '../tablePresetDialogs';
 import { validateTablePresetColumns, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { ForeignKeyDialog } from './ForeignKeyDialog';
@@ -219,6 +221,7 @@ type TableSelectedFilterLease = { proposal: TableSelectedFilterProposal; fingerp
 export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemplateNavigation, onDesign, onTransfer, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDrop, onTableTruncate, onTableDefaultEncoding, incomingQuery, readIncomingQuery, consumeIncomingQuery, refreshVersion = 0, refreshAutomatically = true }: { incomingQuery?: PostgresRecordTransfer; readIncomingQuery?(): PostgresRecordTransfer | undefined; consumeIncomingQuery?(snapshot: PostgresRecordTransfer): void; tab: WorkspaceTab; onViewApplied?(): void; onOpenGeneratedQuery?(candidate: Omit<WorkspaceTab, 'id'>): void; onQueryTemplateNavigation?(): void; onDesign: (isView: boolean) => void; onTransfer: (mode: 'import' | 'export') => void; onColumnPatches(): void; onIndexPatches(): void; onForeignKeyPatches(): void; onTableCopyData?(): void; onTableCopyStructure?(): void; onTableRename(): void; onTableAutoIncrement(): void; onTableChecks?(): void; onTableComment(): void; onTableDrop?(): void; onTableTruncate?(): void; onTableDefaultEncoding(): void; refreshVersion?: number; refreshAutomatically?: boolean }) {
   const settings = useWorkspace(state => state.settings); const connection = useWorkspace(state => state.connections.find(profile => profile.id === tab.connectionId));
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
+  const readHistory = useTableReadHistory(JSON.stringify([tab.connectionId, connectionVersion, tab.database, tab.table]));
   const presetUiEpoch=useRef(0);
   const [info, setInfo] = useState<TableInfo | null>(null); const [page, setPage] = useState<TablePage | null>(null);
   const [pageRequest, setPageRequest] = useState<number | { from: number }>(1);
@@ -736,7 +739,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       if (generation !== loadGeneration.current || !mounted.current) return;
       if (lastRead?.stopped) throw Error(zh.table.lastPageCancelled);
       if (lastRead) lastRead.sent = true;
-      const settled = await Promise.allSettled([invoke('metadata.table', base), invoke('table.page', { ...base, page: requestedIndex, pageSize, filters, filterMode, filterGroup, sort, copySource: true, taskId: sourceTaskId, ...(last ? { lastPage: true } : {}) })]);
+      const settled = await Promise.allSettled([invoke('metadata.table', base), invoke('table.page', { ...base, page: requestedIndex, pageSize, filters, filterMode, filterGroup, sort, copySource: true, includeReadStatements: true, taskId: sourceTaskId, ...(last ? { lastPage: true } : {}) })]);
       if (lastRead) lastRead.finished = true;
       if (settled[1].status === 'fulfilled' && settled[1].value.copySource) pendingSource = { connectionId: base.connectionId, source: settled[1].value.copySource };
       if (lastRead?.stopped) {
@@ -769,12 +772,15 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       if (retainedNavigation && !writable) throw Error(workspaceText.stale);
       if (retainedNavigation?.target === 'last' && tableEdits.pages.some(entry => entry.index === data.page) && pendingSource) { await releaseCopySources(pendingSource); pendingSource = null; if (generation !== loadGeneration.current || !mounted.current) return; }
       const retained = writable ? tableEdits.adopt(selectScope, connection, metadata, data, nextRows, retainedNavigation) : undefined;
+      const recordRead = () => readHistory.record(data.readStatements, (data.page - 1) * data.pageSize + 1, data.rows.length);
       if (!writable) tableEdits.clear();
       if (retained && retained.page !== data) {
         if (pendingSource) { await releaseCopySources(pendingSource); pendingSource = null; }
         if (last) retiringSource = releaseCopySources();
         adoptWorkspacePage(retained, generation, selectScope);
         if (typeof pageRequest !== 'number') { workspaceSkipLoad.current = { entry: retained, scope: selectScope }; setPageIndex(retained.index); }
+        // 末页查询已经真实完成，复用原草稿页也要记这次读取。
+        if (generation === loadGeneration.current && mounted.current) recordRead();
         return;
       }
       if (last) retiringSource = releaseCopySources();
@@ -789,6 +795,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       }
       publishApplyRecovery();
       if (navigation && recordPages.complete(navigation, getRecordPageContext(), nextRows)) setRecordPageMessage({ revision: navigation.action, text: formatText(nextRows.length ? recordViewZh.pageArrived : recordViewZh.pageEmpty, requestedIndex) });
+      recordRead();
     } catch (reason) {
       if (generation === loadGeneration.current && mounted.current) {
         setError(errorMessage(reason));
@@ -2422,6 +2429,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   }}>{cellActionMenu.menu}{sizeDialog}<div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><AdaptiveToolbar className="table-command-toolbar" ariaLabel={tableToolbarZh.title} contextKey={tableToolbarContextKey} isCurrent={tableToolbarCurrent} moreDisabled={gridEditing}
   items={[
     { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} onClick={refreshTable} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button>) },
+    { key: 'read-history', content: <button type="button" disabled={blocked} onClick={() => readHistory.setOpen(true)}>{tableReadHistoryZh.title}</button> },
     { key: 'insert', content: (<button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button>) },
     { key: 'delete', content: (<button disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button>) },
     { key: 'filter', content: (<button className={showFilter || filters.length ? 'selected' : ''} onClick={() => { setCellFilterSeed(undefined); setShowFilter(!showFilter); }}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button>) },
@@ -2569,6 +2577,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease} target={base} dialect="mysql" columns={templateDialog.columns} candidate={templateDialog.candidate} onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog)}/>}
     {recordBatchDialog && <TableRecordBatchDialog key={recordBatchDialog.id} intent={recordBatchDialog} current={() => recordBatchCurrent(recordBatchDialog)} onStage={candidates => stageRecordBatch(recordBatchDialog, candidates)} onDirty={dirty => recordBatchDirty(recordBatchDialog, dirty)} onClose={() => closeRecordBatch(recordBatchDialog)}/>}
     {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={assignments => stageBatchFill(batchFillDialog, assignments)} onClose={() => closeBatchFill(batchFillDialog)}/>}
+    <TableReadHistory history={readHistory}/>
     {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} fitSource={columnFitSource} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
     {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} column={referenceDialog.column} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
     {childReferenceDialog && <ChildReferenceDialog base={base} intent={childReferenceDialog} onClose={() => closeChildReferences(childReferenceDialog)} onActivity={referenceActivity}/>}

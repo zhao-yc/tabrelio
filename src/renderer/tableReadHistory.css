@@ -1,0 +1,14 @@
+.table-read-history details {
+  margin-block: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.table-read-history summary { cursor: pointer; }
+.table-read-history pre {
+  padding: 10px;
+  background: var(--bg);
+  user-select: text;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

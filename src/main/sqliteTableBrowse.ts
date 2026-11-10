@@ -7,6 +7,7 @@ import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import type { SqliteQueryRecordPredicate } from './sqliteQueryRecord';
 import type { SqliteTableEditPage } from '../shared/sqliteTableEdit';
 import { buildSqliteReadPlan, buildSqliteRelationPredicate, quoteSqliteIdentifier } from '../shared/sqliteReadSql';
+import { tableReadStatements } from '../shared/tableReadStatements';
 export { quoteSqliteIdentifier } from '../shared/sqliteReadSql';
 
 /** 仅供准确目录编译器生成的字段表达式使用；TEXT按源编码逐字节核对，其它存储类型原样返回。 */
@@ -83,15 +84,17 @@ export async function verifySqliteTableScope(driver: SqliteDriverSession, input:
 }
 
 /** 在调用方已打开的快照中计数，只投影常量，不解码无关列的原值。 */
-export async function countSqliteMatchingRows(driver: SqliteDriverSession, input: Pick<SqliteTablePageInput, 'connectionId' | 'database' | 'table' | 'taskId' | 'mode' | 'filters' | 'relation'>, columns: readonly SqliteTableColumn[], control: SqliteTableBrowseControl): Promise<string> {
+export async function countSqliteMatchingRows(driver: SqliteDriverSession, input: Pick<SqliteTablePageInput, 'connectionId' | 'database' | 'table' | 'taskId' | 'mode' | 'filters' | 'relation'>, columns: readonly SqliteTableColumn[], control: SqliteTableBrowseControl, record?: (sql: string) => void): Promise<string> {
   await verifySqliteTableScope(driver, input, control);
   const { connectionId, database, table, taskId, mode, filters, relation } = input;
   const source = buildSqliteTableSelect({ connectionId, database, table, taskId, mode, filters, ...(relation ? { relation } : {}), sort: [], offset: 0, limit: 1 }, columns, [columns[0].name], true, () => '1');
-  const result = await rows(driver, 'SELECT count(*) FROM (' + source.sql + ') AS "__dbark_count"', source.parameters, 1, control, columns => {
+  const sql = 'SELECT count(*) FROM (' + source.sql + ') AS "__dbark_count"';
+  const result = await rows(driver, sql, source.parameters, 1, control, columns => {
     if (columns.length !== 1) throw Error('SQLite匹配行数返回非预期列');
   }, 1024);
   const value = result[0]?.[0];
   if (result.length !== 1 || result[0].length !== 1 || !value || typeof value !== 'object' || value.type !== 'integer') throw Error('SQLite匹配行数返回不完整');
+  record?.(sql);
   return sqliteRowCountSchema.parse(value.value);
 }
 
@@ -141,6 +144,8 @@ async function readSqliteBrowseKeys(driver: SqliteDriverSession, table: string, 
 /** BEGIN后的首个目录读取固定本页快照；元数据、筛选排序和行读取全部使用同一个只读物理连接。 */
 export async function readSqliteTablePage(driver: SqliteDriverSession, source: SqliteTablePageInput, control: SqliteTableBrowseControl): Promise<SqliteTablePage> {
   const requested = sqliteTablePageSchema.parse(source), started = performance.now();
+  const readSql: string[] = [];
+  const record = requested.includeReadStatements ? (sql: string) => { readSql.push(sql); } : undefined;
   let page: SqliteTablePage | undefined, failed = false, failure: unknown, editPlan: SqliteEditReadPlan | undefined, originalRows: SqliteValue[][] = [];
   let browseRowIdColumn = false;
   try {
@@ -155,7 +160,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const wr = relationType[0]?.[1];
     const rowidTable = insertCopy && wr && typeof wr === 'object' && wr.type === 'integer' && wr.value === '0';
     const { primaryKey, rowidAlias } = insertCopy ? await readSqliteBrowseKeys(driver, requested.table, catalogue, control) : {};
-    const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control) : undefined;
+    const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control, record) : undefined;
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
     const queryRecords = input.queryRecord ? await control.queryRecord?.(primaryKey, columns) : undefined;
@@ -179,6 +184,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const read = (sql: string, parameters: SqliteValue[], count: number, maxBytes?: number) => {
       const extraAlias = browseRowIdColumn ? '"__dbark_browse_rowid"' : '"__dbark_edit_locator"';
       const statement = extraColumn ? 'SELECT ' + extraColumn + ' AS ' + extraAlias + ', ' + sql.slice(7) : sql;
+      if (request) record?.(statement);
       return rows(driver, statement, parameters, count, control, actual => {
         if (actual.length !== columns.length + extra || actual.slice(extra).some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
       }, (maxBytes ?? limits.resultBytes) + (browseRowIdColumn ? count * 64 : 0));
@@ -230,6 +236,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
   }
   if (failed) throw failure;
   control.check(); page!.result.elapsedMs = performance.now() - started;
+  if (readSql.length) page!.readStatements = tableReadStatements(...readSql);
   if (Buffer.byteLength(JSON.stringify({ result: page!.result, storageTypes: page!.storageTypes })) > limits.resultBytes) throw Error('SQLite表浏览结果对象超过16MiB预算，请减少每页行数或缩小范围');
   if (editPlan) {
     page!.edit = editPlan.capture(browseRowIdColumn ? originalRows.map(row => row.slice(1)) : originalRows);

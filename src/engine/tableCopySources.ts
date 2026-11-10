@@ -7,6 +7,7 @@ import { completionQuery } from './completionQuery';
 import { tableInfo } from './metadata';
 import { prepareDataSearchRecord, type RecordPreparation } from './dataSearchRecords';
 import { buildPageSql, buildTableFilterSql, deserializeCell, identifier, inlineParameters, qualified, serializeCell, typedCellPlaceholder } from './sql';
+import { tableReadStatements } from '../shared/tableReadStatements';
 import { tableLastPageBounds } from '../shared/tableLastPage';
 
 type Context = Pick<StructureTaskContext, 'managed' | 'checkCancelled' | 'commandStarted'>;
@@ -78,16 +79,18 @@ export class TableCopySources {
   /** 明确opt-in的表页才进入本路径；没有缺列时仍调用原分页读取，不签发来源。 */
   async page(context: Context, input: PageInput, readPage: ReadPage): Promise<TablePage> {
     const epoch = this.epochs.get(input.connectionId) ?? 0, info = await this.ports.info(context, input.database, input.table);
-    let last: ReturnType<typeof tableLastPageBounds> | undefined;
-    const statement = (metadata: TableInfo) => { const built = buildPageSql(metadata, last?.page ?? input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup); return inlineParameters(built.sql, built.params); };
-    const read = async (metadata: TableInfo, sql = statement(metadata)) => {
+    let last: ReturnType<typeof tableLastPageBounds> | undefined, countSql: string | undefined;
+    const statement = (metadata: TableInfo) => buildPageSql(metadata, last?.page ?? input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
+    const read = async (metadata: TableInfo, { sql, params } = statement(metadata)) => {
+      const wireSql = inlineParameters(sql, params);
       context.checkCancelled(); const terminal = context.commandStarted();
       try {
-        const page = await readPage(context.managed, sql, last?.page ?? input.page, input.pageSize, metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+        const page = await readPage(context.managed, wireSql, last?.page ?? input.page, input.pageSize, metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
         context.checkCancelled();
-        if (!last) return page;
+        const trace = input.includeReadStatements ? { readStatements: tableReadStatements(...(countSql ? [countSql, sql] : [sql])) } : undefined;
+        if (!last) return trace ? { ...page, ...trace } : page;
         if (page.page !== last.page || page.pageSize !== input.pageSize || page.hasMore || page.rows.length !== last.rows) throw Error('末页与同一快照的计数不一致，请重新读取');
-        return { ...page, matchingRows: last.matchingRows };
+        return { ...page, matchingRows: last.matchingRows, ...trace };
       } finally { terminal(); }
     };
     let issued: PageLease | undefined; let transaction = false, fallback: TableCopyUnavailable | undefined;
@@ -101,8 +104,8 @@ export class TableCopySources {
         // 只在已锁定的事务型物理表上建立读取快照，后续分页沿用同一连接和筛选表达式。
         if (fresh.objectKind !== 'table' || fresh.engine.toUpperCase() !== 'INNODB') throw Error('末页导航需要 InnoDB 物理表');
         const { where, params } = buildTableFilterSql(fresh, input.filters, input.filterMode, input.filterGroup);
-        const sql = `SELECT CAST(COUNT(*) AS CHAR) AS matchingRows FROM ${qualified(fresh.database, fresh.name)}${where ? ' WHERE ' + where : ''}`;
-        const { rows } = await this.ports.query<{ matchingRows: string }[]>(context, inlineParameters(sql, params));
+        countSql = `SELECT CAST(COUNT(*) AS CHAR) AS matchingRows FROM ${qualified(fresh.database, fresh.name)}${where ? ' WHERE ' + where : ''}`;
+        const { rows } = await this.ports.query<{ matchingRows: string }[]>(context, inlineParameters(countSql, params));
         last = tableLastPageBounds(rows.length === 1 ? rows[0].matchingRows : undefined, input.pageSize);
       }
       // 即使没有 INVISIBLE，也在同一 MDL 内复核并读页。只有可能补取的页才读取物理租约身份。
@@ -116,7 +119,7 @@ export class TableCopySources {
         timeZone: (await this.ports.query<{ timeZone: string }[]>(context, 'SELECT @@SESSION.time_zone AS timeZone')).rows[0]?.timeZone,
       } : undefined;
       const pageSql = statement(fresh);
-      const projection = aliases.size ? pageSql.replace(/^SELECT \* FROM /, 'SELECT *,' + [...aliases].map(([key, alias]) => 'UNIX_TIMESTAMP(' + identifier(key) + ') AS ' + identifier(alias)).join(',') + ' FROM ') : pageSql;
+      const projection = aliases.size ? { ...pageSql, sql: pageSql.sql.replace(/^SELECT \* FROM /, 'SELECT *,' + [...aliases].map(([key, alias]) => 'UNIX_TIMESTAMP(' + identifier(key) + ') AS ' + identifier(alias)).join(',') + ' FROM ') } : pageSql;
       let raw: TablePage; try { raw = await read(fresh, projection); } catch (error) {
         // 内部精度投影不能使原本预算内的页面失败；退回普通页后该行因缺少epoch不能获租约。
         const overBudget = error instanceof Error && /^(?:当前页包含超过 256 KiB|当前页数据超过 16 MiB)/.test(error.message);

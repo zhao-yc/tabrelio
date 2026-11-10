@@ -9,6 +9,7 @@ import { isPostgresRelatedTabId } from '../../shared/postgresRelatedTab';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import { FILTER_LIMITS } from '../../shared/filtering';
+import { tableReadStatements } from '../../shared/tableReadStatements';
 import {
   isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredWriteMaxRows,
   postgresFilteredUpdateSchema, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema, postgresTableValueLimits,
@@ -428,12 +429,12 @@ export class PostgresTableWorkspace {
         await begin(connection, 'page');
         const relation = await readRelation(connection, input.table, { headerComments: true, referenceHints: true });
         const restored = file ? await this.verifyDraft(connection, relation, file) : undefined;
-        let counted: ReturnType<typeof postgresCountedWindow> | undefined;
+        let counted: ReturnType<typeof postgresCountedWindow> | undefined, countSql: string | undefined;
         if (input.navigation) {
           const values: unknown[] = [];
           const condition = postgresTableCondition(options.filter, name => columnIdentifier(relation, name), value => '$' + values.push(value));
-          const count = await connection.query('SELECT pg_catalog.count(*)::text FROM ' + only(relation) +
-            (condition ? ' WHERE ' + condition : ''), values, small());
+          countSql = 'SELECT pg_catalog.count(*)::text FROM ' + only(relation) + (condition ? ' WHERE ' + condition : '');
+          const count = await connection.query(countSql, values, small());
           if (count.truncated || count.rows.length !== 1) throw Error('PostgreSQL 匹配记录计数未完整返回');
           counted = postgresCountedWindow(count.rows[0].c0, input.limit, input.offset, input.navigation);
         }
@@ -458,7 +459,8 @@ export class PostgresTableWorkspace {
           }
           rows.push(row);
         }
-        return { relation, rows, originals, counted, restored, hasNext: records.rows.length > input.limit, truncated: records.truncated };
+        return { relation, rows, originals, counted, restored, hasNext: records.rows.length > input.limit, truncated: records.truncated,
+          readStatements: input.includeReadStatements ? tableReadStatements(...(countSql ? [countSql, sql] : [sql])) : undefined };
       });
       for (const snapshot of retained.values()) if (snapshot.relation.fingerprint !== result.relation.fingerprint)
         throw Error('关系结构或权限已变化，请先核对并处理原草稿');
@@ -496,6 +498,7 @@ export class PostgresTableWorkspace {
       this.snapshots.set(key, { current, retained });
       const page: PostgresTablePage = {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
+        ...(result.readStatements ? { readStatements: result.readStatements } : {}),
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
         ...(result.relation.keys.length ? { primaryKey: result.relation.keys } : {}),
         relationKind: result.relation.kind, capabilities, exportToken,

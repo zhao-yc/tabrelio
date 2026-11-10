@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。四种数据库的表页可查看当前标签成功加载的分页 SQL 模板和随页计数，省略参数值并只在内存保留。表会话历史仍缺少写入、失败和事务语句。D08 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
+
 2026-11-11 源码增量。四种数据库的表页记录表单可选择摘要字段并从本页列表直接跳到某条记录。SQLite 只读行详情也可使用。页内切换沿用各数据库的原输入保护与暂存流程。D04 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
 
 2026-11-11 源码增量。四种数据库的表页、查询结果和离线快照支持从数据列标题独立缩放网格，调整字号与虚拟行高，保留列宽和原数据状态。D06 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)

@@ -2412,11 +2412,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         if (command === 'postgres.table.presets.read') store.selectedTablePreset(input, true);
       };
       if (command === 'postgres.table.presets.open') {
-        const { tabId, limit, ...selected } = input;
+        const { tabId, limit, includeReadStatements, ...selected } = input;
         const configuration = store.selectedTablePreset(selected, true);
         const { connectionId, database, table } = selected, target = { connectionId, database, table, tabId };
         // 按同一次主进程调用中的连接修订领首屏，条件在引擎按当前目录复核。
-        const page = await dispatch('postgres.table.page', { ...target, limit, offset: 0, ...postgresTablePresetOptions(configuration), checkFilterColumns: true }, columns) as PostgresTablePresetOpening['page'];
+        const page = await dispatch('postgres.table.page', { ...target, limit, offset: 0, ...postgresTablePresetOptions(configuration),
+          checkFilterColumns: true, ...(includeReadStatements ? { includeReadStatements } : {}) }, columns) as PostgresTablePresetOpening['page'];
         const owner = postgresTableOwners.get(columns!.owner.document), pageToken = page.exportToken ?? page.pageToken;
         columns!.postgresPresetPublication = () => {
           try { check(); }

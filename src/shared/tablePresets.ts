@@ -75,6 +75,7 @@ export const postgresTablePresetSelectSchema = postgresChecked.extend({ id: z.st
 export const postgresTablePresetOpenSchema = postgresTablePresetSelectSchema.extend({
   tabId: postgresTablePageSchema.shape.tabId,
   limit: postgresTablePageSchema.shape.limit,
+  includeReadStatements: postgresTablePageSchema.shape.includeReadStatements,
 }).refine(value => postgresPresetIdFromTab(value.tabId) === value.id, '方案与目标标签不匹配');
 export type PostgresTablePresetOpen = z.infer<typeof postgresTablePresetOpenSchema>;
 export interface PostgresTablePresetOpening { page: PostgresTablePage; configuration: TablePresetConfiguration; }

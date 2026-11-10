@@ -32,6 +32,8 @@ import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './Postgr
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
 import { PostgresRecordTransferDialog } from './PostgresRecordTransferDialog';
 import { PostgresRecordForm } from './PostgresRecordFields';
+import { TableReadHistory, useTableReadHistory } from './TableReadHistory';
+import { tableReadHistoryZh } from '../locales/tableReadHistory.zh-CN';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTableRecordView';
@@ -170,6 +172,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const limit = useWorkspace(state => state.settings.pageSize);
   const resultLimit = useWorkspace(state => state.settings.resultLimit);
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
+  const readHistory = useTableReadHistory(JSON.stringify([tab.connectionId, connectionVersion, tab.database, tab.table]));
   const workspaceBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
@@ -314,7 +317,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
   async function read(next: PageOptions, isCurrent: () => boolean, extra: PageRead = {}) {
     const { presetLayout, recordEdge, keepHistory, ...readOptions } = extra;
-    const result = await invoke('postgres.table.page', { ...target, ...next, ...readOptions });
+    const result = await invoke('postgres.table.page', { ...target, ...next, ...readOptions, includeReadStatements: true });
     const retained = keepHistory ? new Set([...readOptions.retainPageTokens ?? [], ...result.retainedHistoryPageTokens ?? []]) : undefined;
     return publishPage(result, next, isCurrent, presetLayout, recordEdge, retained);
   }
@@ -343,6 +346,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setPage(result);
     setPageConnectionVersion(connectionVersion);
     const offset = result.counted?.offset ?? next.offset;
+    readHistory.record(result.readStatements, offset + 1, result.rows.length);
     setOptions({ ...next, offset });
     setPageSize(next.limit);
     setPageJump('');
@@ -365,7 +369,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (!isCurrent()) return;
     if (!snapshot.entries.some(entry => entry.id === id)) throw Error(tablePresetsZh.tabMissing);
     const { page: result, configuration } = await invoke('postgres.table.presets.open', { ...relation, id, tabId,
-      limit: options.limit, source: snapshot.source, expectedRevision: snapshot.revision, bindingToken: snapshot.bindingToken });
+      limit: options.limit, includeReadStatements: true, source: snapshot.source, expectedRevision: snapshot.revision, bindingToken: snapshot.bindingToken });
     if (!await publishPage(result, { ...postgresTablePresetOptions(configuration), offset: 0, limit: options.limit }, isCurrent, configuration.layout) || !isCurrent()) return;
     if (configuration.quickFilter) { setFilterColumn(configuration.quickFilter.column); setFilterText(configuration.quickFilter.text); }
     setMessage(configuration.layout ? tablePresetsZh.appliedWithLayout : tablePresetsZh.applied);
@@ -1659,6 +1663,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     <div className="query-toolbar pg-table-toolbar">
       <button data-table-refresh title={navigationZh.tableRefreshShortcut} disabled={refreshDisabled}
         onClick={refreshTable}>{retryPreset ? tablePresetsZh.treeRetry : text.refresh}</button>
+      <button type="button" disabled={!active || busy} onClick={() => readHistory.setOpen(true)}>{tableReadHistoryZh.title}</button>
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
       {onCopyTable && <button disabled={blocked || requiresRefresh || page?.relationKind !== 'r' || !!draft.length} onClick={onCopyTable}>{postgresTableCopyZh.open}</button>}
       <button disabled={!canBrowseReference} onClick={() => browseReference('parent')}>{referenceText.browse}</button>
@@ -2064,6 +2069,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             connectionId: target.connectionId, database: target.database, table: opened.table });
         }}/></div>
     </Modal>}
+    <TableReadHistory history={readHistory}/>
     {form && page && <PostgresRecordForm page={page} row={form.row}
       duplicate={form.duplicate}
       editingDraft={!!form.insertion}

@@ -1,4 +1,5 @@
 import { mysqlJoinPreviewSchema } from '../shared/mysqlJoinPreview';
+import { tableReadStatements } from '../shared/tableReadStatements';
 import { previewMysqlJoin } from './mysqlJoinPreview';
 import { readMysqlViewDependencies } from './mysqlViewDependencies';
 import { mysqlViewDependenciesSchema } from '../shared/viewDependencies';
@@ -818,7 +819,8 @@ export class Engine {
         const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
         // 筛选值用十六进制字面量嵌入已验证模板，避免文本协议受 SQL 转义模式影响。
         const sql = inlineParameters(statement.sql, statement.params);
-        return this.readPage(managed, sql, input.page, input.pageSize, info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+        const page = await this.readPage(managed, sql, input.page, input.pageSize, info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+        return input.includeReadStatements ? { ...page, readStatements: tableReadStatements(statement.sql) } : page;
       });
       case 'table.incomingReferences': {
         this.copySourceProfile(input);

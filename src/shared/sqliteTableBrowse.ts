@@ -103,6 +103,7 @@ export const sqliteTablePageSchema = z.object({
   offset: z.number().int().min(0).max(sqliteTableBrowseLimits.offset), limit: z.number().int().min(1).max(sqliteTableBrowseLimits.pageSize),
   lastPage: z.literal(true).optional(), relation: sqliteTableRelationSchema.optional(), searchRecordRef: z.string().uuid().optional(),
   queryRecord: sqliteQueryRecordSchema.optional(),
+  includeReadStatements: z.literal(true).optional(),
   mode: z.enum(['and', 'or']), filters: z.array(sqliteTableFilterSchema).max(sqliteTableBrowseLimits.filters), editing: z.boolean().optional(),
   sort: z.array(z.object({ column: name, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
 }).strict().superRefine((input, context) => {
@@ -130,6 +131,7 @@ export const sqliteQueryBuilderPageSchema = sqliteTablePageSchema.safeExtend({
 export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
 export interface SqliteTablePrimaryKey { name: string; collation: 'BINARY' | 'NOCASE' | 'RTRIM'; }
 export interface SqliteTablePage {
+  readStatements?: import('./tableReadStatements').TableReadStatement[];
   /** 当前可编辑快照中的外键字段索引，只供网格显示入口。 */
   referenceColumns?: readonly number[];
   /** 已核验的固定关联范围，派生读取不能丢失，也不能由普通OR筛选扩大。 */

@@ -639,7 +639,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.transactionSettings.apply': queryTransactionSettingsApplySchema,
   'query.autocommit.apply': queryAutocommitApplySchema,
   'query.databaseSwitch': queryDatabaseSwitchSchema,
-  'table.page': guardedTablePage(tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional(), lastPage: z.literal(true).optional() }).superRefine((input, context) => {
+  'table.page': guardedTablePage(tablePage.safeExtend({ copySource: z.boolean().optional(), includeReadStatements: z.literal(true).optional(), taskId: z.string().uuid().optional(), lastPage: z.literal(true).optional() }).superRefine((input, context) => {
     if (input.copySource && !input.taskId || input.taskId && !input.copySource) context.addIssue({ code: 'custom', message: '来源表页必须同时显式启用copySource并提供独立任务UUID' });
     if (input.lastPage && (!input.copySource || input.page !== 1)) context.addIssue({ code: 'custom', path: ['lastPage'], message: '末页必须使用独立只读任务，且不能同时指定其它页码' });
   })),

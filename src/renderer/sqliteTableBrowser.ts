@@ -9,7 +9,7 @@ export interface SqliteSortDraft { id: string; column: string; direction: 'asc' 
 export interface SqliteTableScope { tab: unknown; profile: unknown; connectionId: string; database?: string; table?: string; version: number; schemaRevision?: number; present: boolean; active: boolean; sqlite: boolean; editing?: boolean; relation?: import('../shared/sqliteTableBrowse').SqliteTableRelation; }
 interface BusyLease { owns(): boolean; release(): boolean; }
 export interface SqliteTableView { busy: boolean; stopping: boolean; error: string; page?: SqliteTablePage; columns: SqliteTableColumn[]; }
-interface Ports { scope(): SqliteTableScope; acquire(): BusyLease; read(input: SqliteTablePageInput): Promise<SqliteTablePage>; release?(snapshotId: string): Promise<unknown>; cancel(taskId: string): Promise<unknown>; id(): string; changed(view: SqliteTableView): void; subscribe(changed: () => void): () => void; }
+interface Ports { scope(): SqliteTableScope; acquire(): BusyLease; read(input: SqliteTablePageInput): Promise<SqliteTablePage>; received?(page: SqliteTablePage): void; release?(snapshotId: string): Promise<unknown>; cancel(taskId: string): Promise<unknown>; id(): string; changed(view: SqliteTableView): void; subscribe(changed: () => void): () => void; }
 interface Operation { generation: number; scope: SqliteTableScope; input: SqliteTablePageInput; done: Promise<void>; finish(): void; cancelled: boolean; sent: boolean; terminal: boolean; acquiring: boolean; lease?: BusyLease; cancel?: Promise<void>; }
 /** 条件编辑只生成严格合同，NULL 不带值；不猜测列亲和性，也不执行 SQL。 */
 export function sqliteTableDraft(scope: Pick<SqliteTableScope, 'connectionId' | 'database' | 'table'>, limit: number, mode: 'and' | 'or', filters: readonly SqliteFilterDraft[], sort: readonly SqliteSortDraft[], schema = sqliteTablePageSchema): SqliteTableQuery {
@@ -144,7 +144,7 @@ export class SqliteTableBrowser {
     const scope = { ...this.ports.scope() };
     if (this.disposed || !scope.present || !scope.active || !scope.sqlite) return;
     let input: SqliteTablePageInput;
-    try { input = sqliteTablePageSchema.parse({ connectionId: scope.connectionId, database: scope.database, table: scope.table, taskId: this.ports.id(), ...(offset === 'last' ? { offset: 0, lastPage: true } : { offset }), ...query, ...(scope.relation ? { relation: scope.relation } : {}), ...(scope.editing ? { editing: true } : {}) }); }
+    try { input = sqliteTablePageSchema.parse({ connectionId: scope.connectionId, database: scope.database, table: scope.table, taskId: this.ports.id(), ...(offset === 'last' ? { offset: 0, lastPage: true } : { offset }), ...query, ...(this.ports.received ? { includeReadStatements: true } : {}), ...(scope.relation ? { relation: scope.relation } : {}), ...(scope.editing ? { editing: true } : {}) }); }
     catch (reason) { this.emit({ error: scope.database !== 'main' ? text.unsupported : String(reason instanceof Error ? reason.message : reason) }); return; }
     const generation = ++this.generation; this.wanted = generation; this.releaseUnadopted(); this.pageScope = undefined; this.emit({ page: undefined, error: '' });
     const previous = this.operation;
@@ -160,6 +160,7 @@ export class SqliteTableBrowser {
       if (!operation.cancelled && generation === this.generation && this.same(scope) && operation.lease.owns()) {
         try { assertSqliteTablePage(page, input); acceptPage?.(page); } catch (reason) { this.releaseSnapshot(page); throw reason; }
         this.pageScope = scope; if (page.edit?.kind === 'editable') this.unadopted = page;
+        this.ports.received?.(page);
         this.emit({ page, columns: page.columns, error: '' });
       } else this.releaseSnapshot(page);
     } catch (reason) { if (!operation.cancelled && generation === this.generation && this.same(scope)) this.emit({ error: String(reason instanceof Error ? reason.message : reason) }); }

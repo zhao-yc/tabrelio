@@ -74,6 +74,8 @@ import type { SqliteTableMaintenanceAction } from '../../shared/sqliteTableMaint
 import { sqliteTableRenameZh } from '../locales/sqliteTableRename.zh-CN';
 import { ActionMenuSection } from './ActionMenu';
 import { AdaptiveToolbar } from './AdaptiveToolbar';
+import { TableReadHistory, useTableReadHistory } from './TableReadHistory';
+import { tableReadHistoryZh } from '../locales/tableReadHistory.zh-CN';
 import { tableToolbarZh } from '../locales/tableToolbar.zh-CN';
 import { navigationZh } from '../locales/navigation.zh-CN';
 import { sqliteIndexesZh } from '../locales/sqliteIndexes.zh-CN';
@@ -175,6 +177,8 @@ export function SqliteTableTab(props: SqliteTableTabProps) {
 function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatically = true, onIndexes, onColumns, onRename, onSqliteTableRebuild, onCopyTable, onMaintenance, onObject, related }: SqliteTableTabProps & { related?: SqliteRelatedTableScope }) {
   const profile = useWorkspace(state => state.connections.find(item => item.id === tab.connectionId));
   const version = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
+  const readHistory = useTableReadHistory(JSON.stringify([tab.connectionId, version, tab.database, tab.table]));
+  const recordRead = useRef(readHistory.record); recordRead.current = readHistory.record;
   const externalBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const latest = useRef({ tab, active, refreshVersion }); latest.current = { tab, active, refreshVersion };
   // 未知结构回执在原标签内持续阻止自动读取；切换标签或后续回执不能替代用户明确刷新。
@@ -268,6 +272,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     return () => { stop(); observer?.disconnect(); recordPageRef.current?.invalidate(); detailPageIntentRef.current?.invalidate(); };
   }, []);
   const [controller] = useState(() => new SqliteTableBrowser({
+    received: page => recordRead.current(page.readStatements, page.offset + 1, page.result.rows.length),
     scope: () => {
       const current = latest.current, workspace = useWorkspace.getState(), present = workspace.settings.tabs.find(item => item.id === current.tab.id), connection = workspace.connections.find(item => item.id === current.tab.connectionId);
       return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, schemaRevision: current.refreshVersion, present: present === current.tab && present?.kind === 'table' && (!related || related.current()), ...(related ? { relation: related.relation } : {}), active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite', ...(connection?.dialect === 'sqlite' && !connection.sqlite.readOnly ? { editing: true } : {}) };
@@ -1774,6 +1779,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       isCurrent={() => !!page && available() && (controller.pageCurrent(page) || editActionCurrent())}
       items={[
         { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} aria-label={text.refresh} disabled={refreshDisabled} onClick={refreshTable}>{text.refresh}</button>) },
+        { key: 'read-history', content: <button type="button" disabled={!active || view.busy || externalBusy} onClick={() => readHistory.setOpen(true)}>{tableReadHistoryZh.title}</button> },
         { key: 'stop', content: (<button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button>) },
         { key: 'conditions', content: (<button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button>) },
         ...(page?.target.kind === 'table' ? [{ key: 'import', content: (<button aria-label={importText.entry} title={editView?.dirty || editView?.busy || editView?.unknown || externalBusy ? importText.busyDraft : undefined} disabled={!active || invalidTarget || view.busy || externalBusy || !!fullExport || !!exportData || !!tableImport || drafts.dirty || drafts.busy || !!editView?.unknown || !!cellInput || !!previewOpen} onClick={openImport}>{importText.entry}</button>) }] : []),
@@ -1898,6 +1904,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       allNew={fillOpen.mode === 'workspace' ? fillOpen.plan.allNew : fillOpen.source.allNew}
       groups={fillOpen.mode === 'workspace' ? fillOpen.plan.pages : undefined}
       current={() => fillCurrent(fillOpen)} onSave={fields => stageFill(fillOpen, fields)} onClose={() => closeFill(fillOpen)}/>}
+    <TableReadHistory history={readHistory}/>
     {cellInput && <SqliteTableValueDialog key={cellInput.id} ticket={cellInput} page={cellInput.page} row={cellInput.row} column={cellInput.column} duplicate={!!cellInput.duplicate} duplicateOwner={cellInput.duplicate ? cellInput.id : undefined}
       navigation={cellInput.column === undefined && !cellInput.duplicate && cellInput.row.index !== undefined ? {
         ownerId: cellInput.id, previous: !!adjacentRecord(cellInput, -1) || sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, -1) !== undefined, next: !!adjacentRecord(cellInput, 1) || sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, 1) !== undefined,

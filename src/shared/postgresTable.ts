@@ -69,6 +69,7 @@ export const postgresTablePageSchema = target.extend({
   ...postgresTableBrowseSchema.shape,
   searchRecordRef: token.optional(),
   checkFilterColumns: z.literal(true).optional(),
+  includeReadStatements: z.literal(true).optional(),
   navigation: z.enum(['count', 'last']).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
     .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),
@@ -338,6 +339,7 @@ export interface PostgresTableColumn extends ResultColumn {
   binary: boolean;
 }
 export interface PostgresTablePage {
+  readStatements?: import('./tableReadStatements').TableReadStatement[];
   pageToken?: string;
   /** 仅可写原页提供，跨页收集在确认时核对该令牌的真实有效期。 */
   writeExpiresAt?: number;

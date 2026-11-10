@@ -15,6 +15,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { recordViewZh as recordForm } from '../../src/renderer/locales/recordViews.zh-CN';
 import { postgresRecordViewZh as pgForm } from '../../src/renderer/locales/postgresRecordView.zh-CN';
 import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
+import { tableReadHistoryZh as readHistory } from '../../src/renderer/locales/tableReadHistory.zh-CN';
 import { sqliteTableEditZh as sqliteEdit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteEditWorkspaceZh as sqliteWorkspace } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 
@@ -23,6 +24,24 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedE
 const taskIds = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
 const applyKey = process.platform === 'darwin' ? 'Meta+r' : 'Control+r';
 const rowLabels = (grid: Locator) => grid.getByRole('gridcell').filter({ hasText: /row [ABC]$/ });
+
+/** 历史只读本标签已收到的模板，打开面板不发分页请求。 */
+async function verifyReadHistory(scope: Locator, reads: Awaited<ReturnType<typeof observeReads>>, table: string, filter: string, counted = false) {
+  const before = await reads();
+  await (await navigationMenuItem(scope, { name: readHistory.title, exact: true })).click();
+  const history = page.getByRole('dialog', { name: readHistory.title, exact: true });
+  const latest = history.locator('details').first().locator('pre');
+  await expect(latest).toHaveCount(counted ? 2 : 1);
+  if (counted) await expect(latest.first()).toContainText(/count\(\*\)/i);
+  const select = latest.last();
+  await expect(select).toContainText(table);
+  await expect(select).toContainText(/WHERE.+(\?|\$[0-9]+)/);
+  await expect(select).toContainText('LIMIT');
+  await expect(history).not.toContainText(filter);
+  await expect(history).not.toContainText(Buffer.from(filter).toString('hex'));
+  expect(await reads()).toEqual(before);
+  return history;
+}
 
 async function toggleFromHeader(header: Locator, name: string, keyboard = false): Promise<void> {
   if (keyboard) await header.press('Shift+F10');
@@ -173,6 +192,13 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await filter.press(applyKey);
     await expect(rowLabels(tab)).toHaveCount(1);
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    await verifyReadHistory(tab, reads, 'subject', 'row B');
+    await page.keyboard.press('Escape');
+    const beforeLast = (await reads()).length;
+    await tab.getByRole('button', { name: sqlite.last, exact: true }).click();
+    await expect.poll(async () => (await reads()).length).toBe(beforeLast + 1);
+    await verifyReadHistory(tab, reads, 'subject', 'row B', true);
+    await page.keyboard.press('Escape');
     await tab.getByRole('button', { name: sqlite.removeFilter(1), exact: true }).click();
     const direction = tab.getByLabel(sqlite.sortDirection(1), { exact: true });
     await direction.selectOption('desc');
@@ -407,6 +433,12 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     if (process.platform === 'darwin') await refreshFromGrid(tab, reads, 'Meta+r');
     await expect(rowLabels(tab)).toHaveCount(1);
     await expect(rowLabels(tab).first()).toHaveText(/row C$/);
+    const beforeLast = (await reads()).length;
+    await tab.getByRole('button', { name: dialect === 'postgresql' ? postgres.lastPage : zh.table.lastPage, exact: true }).click();
+    await expect.poll(async () => (await reads()).length).toBe(beforeLast + 1);
+    await verifyReadHistory(tab, reads, 'update_subject', 'row C', true);
+    await page.screenshot({ path: info.outputPath('表页读取SQL.png') });
+    await page.keyboard.press('Escape');
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
