@@ -3,12 +3,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vite
 import type { WorkspaceTab } from '../../src/renderer/store';
 import { tabOrderZh as text } from '../../src/renderer/locales/tabOrder.zh-CN';
 import { queryCloseZh as closeText } from '../../src/renderer/locales/queryClose.zh-CN';
+import { queryTabRenameZh } from '../../src/renderer/locales/queryTabRename.zh-CN';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 
 let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client').createRoot, root: ReturnType<typeof createRoot> | undefined;
 let Strip: typeof import('../../src/renderer/components/WorkspaceTabStrip').WorkspaceTabStrip, store: typeof import('../../src/renderer/store').useWorkspace;
-let ui: { stripRef: React.RefObject<HTMLDivElement | null>; onClose: ReturnType<typeof vi.fn>; onNew: ReturnType<typeof vi.fn>; onCloseSide?: ReturnType<typeof vi.fn> };
+let ui: { stripRef: React.RefObject<HTMLDivElement | null>; onClose: ReturnType<typeof vi.fn>; onNew: ReturnType<typeof vi.fn>; onCloseSide?: ReturnType<typeof vi.fn>; onRename?: ReturnType<typeof vi.fn> };
 const bridge = vi.fn(async () => undefined), globals = ['window', 'document', 'navigator', 'MutationObserver', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
 let windowEvents: MemoryNode;
 const observers = new Set<Observer>();
@@ -181,6 +182,24 @@ it('整组snapshot异常或缺ref不抛工作台、不丢原标题，全部旧�
 /** 真实条带菜单不借当前活动标签定位，旧回调仍由原菜单owner约束。 */
 function menuButton(id: string) { return wrapper(id).querySelectorAll('button').find(node => node.classList.contains('tab-query-menu'))!; }
 function sideButton(side: 'left' | 'right') { return doc.querySelectorAll('button').find(node => node.textContent === closeText[side])!; }
+it('重命名菜单只交接原查询锚点，旧回调不能重命名换绑后的同编号标签', async () => {
+  ui.onRename = vi.fn(); await render();
+  const rename = () => doc.querySelectorAll('button').find(node => node.textContent === queryTabRenameZh.action)!;
+  await click(menuButton('c'));
+  expect(rename().disabled).toBe(true);
+  await act(async () => callback(rename(), 'onClick')());
+  expect(ui.onRename).not.toHaveBeenCalled();
+  await act(async () => store.setState({ activeJobs: {} }));
+  expect(rename().disabled).toBe(false);
+  const stale = callback(rename(), 'onClick');
+  await act(async () => store.getState().updateTab('c', { databaseContext: { state: 'known', database: null } }));
+  await act(async () => stale());
+  expect(ui.onRename).not.toHaveBeenCalled();
+  await click(menuButton('c')); await click(rename());
+  expect(ui.onRename).toHaveBeenCalledTimes(1);
+  expect(store.getState().resolveTabOrder(ui.onRename.mock.calls[0][0])?.id).toBe('c');
+  expect(store.getState().settings.activeTabId).toBe('a');
+});
 it('非活动查询锚点只交接准确ref，表标签不提供菜单且活动标签保持', async () => {
   ui.onCloseSide = vi.fn(); await render(); expect(wrapper('b').querySelectorAll('button').some(node => node.classList.contains('tab-query-menu'))).toBe(false);
   await click(menuButton('c')); expect(store.getState().settings.activeTabId).toBe('a'); expect(sideButton('right').disabled).toBe(true);
