@@ -282,11 +282,11 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
         { '命中"说明': null, 原值: 2 }, { '命中"说明': null, 原值: 3 },
       ]);
     } finally { joinReader.close(); }
-    async function approve(label: string) {
-      await page.evaluate(expected => {
+    async function approve(label: string, accepted = true) {
+      await page.evaluate(({ expected, accepted }) => {
         const original = window.confirm;
-        window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是预期的确认'); return true; };
-      }, label);
+        window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是预期的确认'); return accepted; };
+      }, { expected: label, accepted });
     }
     await approve(text.joinBackConfirm);
     await joinPanel.getByRole('button', { name: text.joinBack, exact: true }).click();
@@ -348,6 +348,20 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(chooseKey.locator('option:checked')).toContainText('t2 · 引用目标 · #0 · ref_region = region，ref_id = id');
     await button(text.joinAddKey).click();
     await expect(sql).toContainText(mapped + ' INNER JOIN "main"."fk_parent" AS t3 ON (t2."ref_region" = t3."region" AND t2."ref_id" = t3."id")');
+    const crossStep = joinPanel.getByRole('group', { name: text.joinStep('t2'), exact: true });
+    const crossKind = crossStep.getByLabel(text.joinKind, { exact: true });
+    await approve(text.crossConfirm, false);
+    await crossKind.selectOption('CROSS');
+    await expect(crossKind).toHaveValue('INNER');
+    await expect(sql).toContainText(mapped);
+    await approve(text.crossConfirm);
+    await crossKind.selectOption('CROSS');
+    await expect(crossStep.getByLabel(text.joinLeft(1), { exact: true })).toHaveCount(0);
+    await expect(sql).toContainText('CROSS JOIN "main"."fk_child" AS t2 INNER JOIN "main"."fk_parent" AS t3 ON');
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(2), { exact: true })).toBeVisible();
+    await crossKind.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('sqlite-builder-cross-join.png') });
     await button(zh.common.cancel).click();
 
     await selectSource('fk_child');

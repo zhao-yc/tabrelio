@@ -340,6 +340,16 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await expect(chooseKey.locator('option:checked')).toContainText('t2 · 引用目标 · alt_link');
     await button(text.joinAddKey).click();
     await expect(sql).toContainText(mapped + ' INNER JOIN ' + parent + ' AS t3 ON (t2."ref_region" = t3."region" AND t2."alternate_id" = t3."id")');
+    const crossStep = joinPanel.getByRole('group', { name: text.joinStep('t3'), exact: true });
+    const crossKind = crossStep.getByLabel(text.joinKind, { exact: true });
+    await approve(text.crossConfirm);
+    await crossKind.selectOption('CROSS');
+    await expect(crossStep.getByLabel(text.joinLeft(1), { exact: true })).toHaveCount(0);
+    await expect(sql).toContainText(mapped + ' CROSS JOIN ' + parent + ' AS t3;');
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(2), { exact: true })).toBeVisible();
+    await crossKind.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('postgres-builder-cross-join.png') });
     await button(zh.common.cancel).click();
 
     await selectSource(table);

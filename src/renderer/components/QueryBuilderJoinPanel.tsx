@@ -47,6 +47,17 @@ export function QueryBuilderJoinPanel<Step extends QueryBuilderJoinConditions>({
       const alias = queryBuilderAlias(index + 1);
       const earlier = [source, ...joins.slice(0, index).map(item => item.source)].flatMap((item, position) =>
         item.columns.map(column => queryBuilderColumnKey(position, column.name)));
+      function changeKind(kind: QueryBuilderJoinConditions['kind']) {
+        if (kind === step.kind) return;
+        if (kind === 'CROSS') {
+          if ((step.group || step.pairs.some(pair => pair.left || pair.right)) && !window.confirm(text.crossConfirm)) return;
+          change(index, { ...step, kind, pairs: [], group: undefined, mode: 'all' });
+        } else if (step.kind === 'CROSS') {
+          change(index, { ...step, kind, pairs: [{ left: '', right: '', operator: '=' }] });
+        } else {
+          change(index, { ...step, kind });
+        }
+      }
       function editPair(position: number, patch: Partial<QueryBuilderJoinConditions['pairs'][number]>) {
         change(index, { ...step, pairs: step.pairs.map((pair, i) => i === position ? { ...pair, ...patch } : pair) });
       }
@@ -63,14 +74,15 @@ export function QueryBuilderJoinPanel<Step extends QueryBuilderJoinConditions>({
         <fieldset disabled={editing !== undefined}>
           <div className="child-reference-tools">
             <Field label={text.joinKind}><select aria-label={text.joinKind} value={step.kind} onChange={event =>
-              change(index, { ...step, kind: event.target.value as QueryBuilderJoinConditions['kind'] })}>
+              changeKind(event.target.value as QueryBuilderJoinConditions['kind'])}>
               {queryBuilderJoinKinds.map(kind => <option key={kind} value={kind}>{kind} JOIN</option>)}</select></Field>
-            <Field label={text.joinMode}><select aria-label={text.joinMode} value={step.mode} onChange={event => {
+            {step.kind !== 'CROSS' && <Field label={text.joinMode}><select aria-label={text.joinMode} value={step.mode} onChange={event => {
               const mode = event.target.value as QueryBuilderJoinConditions['mode'];
               change(index, { ...step, mode, group: tableFilterGroupWithMode(step.group, mode) });
             }}>
-              <option value="all">AND</option><option value="any">OR</option></select></Field>
+              <option value="all">AND</option><option value="any">OR</option></select></Field>}
           </div>
+          {step.kind === 'CROSS' ? <p className="muted small">{text.crossHint}</p> : <>
           {step.pairs.map((pair, position) => <div className="filter-inputs" key={position}>
             <select aria-label={text.joinLeft(position + 1)} value={pair.left} onChange={event => editPair(position, { left: event.target.value })}>
               <option value="">{text.joinChooseField}</option>
@@ -90,7 +102,7 @@ export function QueryBuilderJoinPanel<Step extends QueryBuilderJoinConditions>({
           <button type="button" disabled={step.pairs.length >= queryBuilderJoinLimits.pairs}
             onClick={() => resizePairs()}>
             {text.joinAddPair}</button>
-          <button type="button" disabled={step.pairs.length < 2 && !step.group} onClick={() => edit(index)}>{text.joinGroups}</button>
+          <button type="button" disabled={step.pairs.length < 2 && !step.group} onClick={() => edit(index)}>{text.joinGroups}</button></>}
         </fieldset>
         {step.group && <p className="muted small">{tableFilterGroupSummary(step.group)}</p>}
         {editing === index && <TableFilterGroupsDialog filters={groupRules} mode={step.mode} initial={step.group} isCurrent={current}

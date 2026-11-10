@@ -2,6 +2,7 @@ import { readQueryBuilderOffset } from '../../shared/queryBuilderOffset';
 import { mysqlSelectedOutputKeys, type MysqlQueryProjection } from '../../shared/mysqlQueryProjection';
 import { QueryBuilderProjectionOrder } from './QueryBuilderProjectionPanel';
 import { queryBuilderPaginationZh as pagination } from '../locales/queryBuilderPagination.zh-CN';
+import { queryBuilderJoinZh as joinText } from '../locales/queryBuilderJoin.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo, FilterGroup, FilterMode, FilterRule, QueryOutcome } from '../../shared/contracts';
 import { queryBuilderDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary, type QueryBuilderDesign } from '../../shared/manualJoinDesigns';
@@ -31,7 +32,7 @@ import { foreignKeyJoinPreview, mysqlSingleTablePreview, revalidateForeignKeyJoi
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
-import { AdditionalJoinFields, ManualJoinPairFields, ManualJoinTableFields, manualJoinCatalogNames, manualJoinTableNames, manualJoinSteps, newManualJoinPair, replaceManualJoinPairs, type AdditionalJoinDraft, type ManualJoinSelection } from './ManualJoinFields';
+import { AdditionalJoinFields, ManualJoinPairFields, ManualJoinTableFields, changeManualJoinConditions, manualJoinCatalogNames, manualJoinTableNames, manualJoinSteps, newManualJoinPair, replaceManualJoinPairs, type AdditionalJoinDraft, type ManualJoinSelection } from './ManualJoinFields';
 import type { ForeignKeyJoinSide } from '../tableForeignKeyJoinSources';
 
 export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget & { taskId: string }): Promise<TableInfo>; cancel(taskId: string): Promise<unknown>; }
@@ -369,7 +370,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
         if (step) {
           const key = foreignKeyJoinMetadataKey(metadata);
           if (step.info && foreignKeyJoinMetadataKey(step.info) !== key) { origin.intent.invalidate(); throw Error(text.stale); }
-          if (!step.info) publishStep({ ...step, info: structuredClone(metadata), pairs: [newManualJoinPair()] });
+          if (!step.info) publishStep({ ...step, info: structuredClone(metadata), pairs: step.kind === 'CROSS' ? [] : [newManualJoinPair()] });
           return;
         }
         // 用单列小输出验证关系与真实父目标；默认宽表超预算时仍允许用户精简选列。
@@ -377,7 +378,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
         // 同一关系重读只核结构，不重置用户选列；结构变化必须重新打开，不能重签旧意图。
         if (previous && foreignKeyJoinMetadataKey(previous.info) !== metadataKey) { origin.intent.invalidate(); throw Error(text.stale); }
         if (!selected.manual) buildForeignKeyJoin(origin.intent.source, metadata, selected.fk, selected.kind, origin.intent.limit, { childColumns: [origin.intent.source.columns[0].name], parentColumns: [] });
-        const manual = selected.manual && !previous ? { ...selected.manual, pairs: [newManualJoinPair()] } : selected.manual;
+        const manual = selected.manual && !previous && selected.kind !== 'CROSS' ? { ...selected.manual, pairs: [newManualJoinPair()] } : selected.manual;
         const next = reconcileProjection({ ...selected, manual, parent: previous ? selected.parent : metadata.columns.map(column => column.name), parentSearch: previous ? selected.parentSearch : '', parentPage: previous ? selected.parentPage : 1 });
         selectionRef.current = next; setSelection(next); setParent({ fk: selected.fk, info: structuredClone(metadata) });
       } else if (inspectionMode && receipt) {
@@ -637,13 +638,18 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       : <label>{text.fk}<select aria-label={text.fk} disabled={unavailable || !!origin.fixed} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>}
     <label>{text.joinKind}<select aria-label={text.joinKind} disabled={busy || unavailable} value={selection.kind} onChange={event => {
       const kind = event.target.value;
-      if (kind === 'LEFT' || kind === 'RIGHT' || kind === 'INNER') revise({ ...selection, kind, unmatchedOnly: kind !== 'INNER' && selection.unmatchedOnly });
-    }}><option value="LEFT">{text.left}</option><option value="RIGHT">{text.right}</option><option value="INNER">{text.inner}</option></select></label>
-    <label><input type="checkbox" checked={selection.unmatchedOnly} disabled={busy || unavailable || selection.kind === 'INNER'}
+      if (!editable() || (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER' && !(kind === 'CROSS' && selection.manual))) return;
+      const manual = selection.manual && changeManualJoinConditions(selection.manual, selection.kind === 'CROSS', kind === 'CROSS', !!currentParent);
+      if (selection.manual && !manual) return;
+      revise({ ...selection, kind, manual, unmatchedOnly: (kind === 'LEFT' || kind === 'RIGHT') && selection.unmatchedOnly });
+    }}><option value="LEFT">{text.left}</option><option value="RIGHT">{text.right}</option><option value="INNER">{text.inner}</option>
+      {selection.manual && <option value="CROSS">CROSS JOIN</option>}</select></label>
+    <label><input type="checkbox" checked={selection.unmatchedOnly} disabled={busy || unavailable || selection.kind === 'INNER' || selection.kind === 'CROSS'}
       onChange={event => revise({ ...selection, unmatchedOnly: event.target.checked })}/>{text.unmatchedOnly}</label>
-    <UsageHelp><p>{{ LEFT: text.leftHint, RIGHT: text.rightHint, INNER: text.innerHint }[selection.kind]}</p>
-      {selection.kind !== 'INNER' && <p>{text.unmatchedHint}</p>}{!selection.manual && <p>{text.relationship}</p>}<p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
-    {selection.manual && parent && <ManualJoinPairFields selection={selection.manual} child={origin.intent.source} parent={parent.info} disabled={busy || unavailable}
+    {selection.kind === 'CROSS' && <p className="muted small">{joinText.crossHint}</p>}
+    <UsageHelp><p>{{ LEFT: text.leftHint, RIGHT: text.rightHint, INNER: text.innerHint, CROSS: joinText.crossHint }[selection.kind]}</p>
+      {(selection.kind === 'LEFT' || selection.kind === 'RIGHT') && <p>{text.unmatchedHint}</p>}{!selection.manual && <p>{text.relationship}</p>}<p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
+    {selection.kind !== 'CROSS' && selection.manual && parent && <ManualJoinPairFields selection={selection.manual} child={origin.intent.source} parent={parent.info} disabled={busy || unavailable}
       onMode={on => revise({ ...selection, manual: { ...selection.manual!, on } })} onGroups={trigger => openOnGroups(trigger)}
       onAdd={() => { const manual = selection.manual!; revise({ ...selection, manual: replaceManualJoinPairs(manual, [...manual.pairs, newManualJoinPair()]) }); }}
       onChange={(id, patch) => { const manual = selection.manual!; revise({ ...selection, manual: { ...manual, pairs: manual.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) } }); }}

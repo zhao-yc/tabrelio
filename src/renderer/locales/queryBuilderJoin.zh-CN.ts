@@ -4,6 +4,8 @@ export const queryBuilderJoinZh = {
   joinBack: '返回单表设计', joinBackConfirm: '返回单表设计会放弃本次关联配置。继续？',
   joinHint: '在同一数据库中按顺序加入表或视图。可重复使用同一来源，t1、t2 等别名区分每次加入。',
   joinStep: (alias: string) => '关联来源 ' + alias, joinKind: '连接方式', joinMode: '匹配条件',
+  crossHint: 'CROSS JOIN 会组合两侧的每一行，结果可能迅速增大。预览行数上限不会限制汇总或排序所需处理的行数。',
+  crossConfirm: '切换为 CROSS JOIN 会清除本步的 ON 条件。继续？',
   joinReadKeys: '读取匹配外键', joinKeys: '匹配外键', joinSelectKey: '请选择外键', joinAddKey: '按所选外键加入',
   joinNoKeys: '所选来源与已加入的表之间没有可用的外键。',
   joinKeyLabel: (alias: string, direction: 'outgoing' | 'incoming', label: string) =>

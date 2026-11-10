@@ -123,6 +123,13 @@ it('SQLite RIGHT／FULL JOIN 保留对应未匹配行，合格字段保持原名
     expect(rows(file, buildSqliteQueryBuilderSql(full, source, [related]))).toEqual([
       { 't1.id': 1n, 't2.id': null }, { 't1.id': 2n, 't2.id': 2n }, { 't1.id': null, 't2.id': 3n },
     ]);
+    const cross = { ...draft, sort: [...draft.sort, { column: 't1.id', direction: 'asc' as const }],
+      joins: [{ ...right, kind: 'CROSS' as const, pairs: [] }] };
+    expect(rows(file, buildSqliteQueryBuilderSql(cross, source, [related]))).toEqual([
+      { 't1.id': 1n, 't2.id': 2n }, { 't1.id': 2n, 't2.id': 2n }, { 't1.id': 1n, 't2.id': 3n }, { 't1.id': 2n, 't2.id': 3n },
+    ]);
+    expect(sqliteQueryBuilderInspectSchema.safeParse({ ...cross, inspect: 'rows',
+      joins: [{ ...right, kind: 'CROSS' }] }).success).toBe(false);
     const typed = buildSqliteQueryBuilderSql({ ...full, columns: [], sort: [],
       filters: [{ column: longKey, operator: 'eq', value: { kind: 'integer', value: '9223372036854775807' } }],
       summary: { groups: [longKey], aggregates: [{ fn: 'COUNT_ALL', alias: '计数' }], sort: [],

@@ -1,15 +1,17 @@
 import { z } from 'zod';
 import { completionIdentifier } from './completionLexical';
 import { queryBuilderOffsetSchema } from './queryBuilderOffset';
+import { mysqlAdditionalJoinKinds, mysqlManualJoinKinds } from './manualJoinDesigns';
 import type { ForeignKeyJoinOptions, ForeignKeyJoinRelation, ManualJoinStep } from './tableForeignKeyJoin';
 
 export const mysqlJoinSampleRows = 100;
 const name = z.string().refine(completionIdentifier);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const target = z.object({ database: name, table: name, digest }).strict();
-const step = z.object({ target, source: z.number().int().min(0).max(6), kind: z.enum(['INNER', 'LEFT']),
-  pairs: z.array(z.unknown()).min(1).max(64), columns: z.array(name).max(4096), on: z.unknown().optional(),
-}).strict();
+const step = z.object({ target, source: z.number().int().min(0).max(6), kind: z.enum(mysqlAdditionalJoinKinds),
+  pairs: z.array(z.unknown()).max(64), columns: z.array(name).max(4096), on: z.unknown().optional(),
+}).strict().refine(value => value.kind === 'CROSS' ? !value.pairs.length && value.on === undefined : value.pairs.length > 0,
+  'CROSS JOIN 不能带 ON 条件，其他连接方式至少需要一条。');
 
 const base = z.object({
   connectionId: z.string().min(1).max(128),
@@ -27,10 +29,11 @@ const base = z.object({
 }).strict();
 const joinPreview = base.extend({
   parent: target,
-  relation: z.union([name, z.array(z.unknown()).min(1).max(64)]),
-  kind: z.enum(['INNER', 'LEFT', 'RIGHT']),
+  relation: z.union([name, z.array(z.unknown()).max(64)]),
+  kind: z.enum(mysqlManualJoinKinds),
   steps: z.array(step).max(6),
-});
+}).refine(value => value.kind === 'CROSS' ? Array.isArray(value.relation) && !value.relation.length :
+  typeof value.relation === 'string' || value.relation.length > 0, 'CROSS JOIN 必须是无 ON 条件的手动连接。');
 /** IPC 只接收结构化设计和目录摘要。单表与 JOIN 各自验证，SQL 由引擎用实时目录编译。 */
 export const mysqlJoinPreviewSchema = z.union([joinPreview, base.extend({ single: z.literal(true) })]).superRefine((input, context) => {
   // 列、规则及分组的完整语义由共享生成器复核，先限制整体请求大小。

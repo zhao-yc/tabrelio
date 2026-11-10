@@ -100,7 +100,7 @@ function compileSources(source: SqliteQueryBuilderSource, joins: readonly Sqlite
       if (!previous || previous.position >= position) throw Error('关联条件必须引用已加入的表，且不能重复。');
       return field(pair.left) + ' ' + pair.operator + ' ' + field(queryBuilderColumnKey(position, pair.right));
     });
-    return ' ' + step.kind + ' JOIN ' + relationSql(target.table, position) + ' ON ' + on;
+    return ' ' + step.kind + ' JOIN ' + relationSql(target.table, position) + on;
   });
   return { from: relationSql(source.target.table, 0) + joinSql.join(''), field };
 }

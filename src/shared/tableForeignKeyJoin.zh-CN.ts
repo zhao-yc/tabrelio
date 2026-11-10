@@ -70,6 +70,7 @@ export const tableForeignKeyJoinZh = {
   unmatchedOnly: '只看未匹配记录',
   unmatchedHint: '仅保留连接时另一侧没有匹配的记录。所设 WHERE 条件继续应用。',
   unmatchedInvalid: '只看未匹配记录需要 LEFT JOIN 或 RIGHT JOIN。',
+  crossInvalid: 'CROSS JOIN 只能使用手动选择的来源，不能带 ON 条件。',
   childFields: '子表输出字段', parentFields: '父表输出字段', search: '搜索输出字段',
   allFields: '全选本侧字段', clearFields: '清空本侧字段',
   selected: (selected: number, total: number) => `已选 ${selected} / ${total} 个字段`,

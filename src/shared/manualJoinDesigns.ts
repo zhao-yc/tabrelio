@@ -23,12 +23,14 @@ export function manualJoinOnGroup(on: ManualJoinOn | undefined, count: number) {
   if (on?.group === undefined) return undefined;
   return validateFilterGroup(manualJoinOnRules(count), on.mode, on.group);
 }
-const kind = z.enum(['LEFT', 'RIGHT', 'INNER']);
+export const mysqlManualJoinKinds = ['LEFT', 'RIGHT', 'INNER', 'CROSS'] as const;
+export const mysqlAdditionalJoinKinds = ['INNER', 'LEFT', 'CROSS'] as const;
+const kind = z.enum(mysqlManualJoinKinds);
 const target = z.object({ database: identifier, table: identifier }).strict();
 const pair = z.object({ child: identifier, parent: identifier, operator: z.enum(manualJoinOperators).optional() }).strict();
-const pairs = z.array(pair).min(1).max(64);
+const pairs = z.array(pair).max(64);
 const source = z.number().int().min(0).max(6);
-const additionalPairs = z.array(pair.extend({ source: source.optional() })).min(1).max(64);
+const additionalPairs = z.array(pair.extend({ source: source.optional() })).max(64);
 const columns = z.array(identifier).max(4096);
 const filterDraft = z.object({
   column: z.string().max(256), operator: z.enum(tableFilterOperators),
@@ -72,12 +74,18 @@ function validateDesignDraft(design: z.infer<typeof queryDesignFields>, context:
 
 export const manualJoinDesignSchema = queryDesignFields.extend({
   first: target.extend({ pairs, on: onSchema.optional() }).strict(),
-  additional: z.array(target.extend({ source, kind: z.enum(['INNER', 'LEFT']), pairs: additionalPairs, on: onSchema.optional(), columns }).strict()).max(6),
+  additional: z.array(target.extend({ source, kind: z.enum(mysqlAdditionalJoinKinds), pairs: additionalPairs, on: onSchema.optional(), columns }).strict()).max(6),
   kind, unmatchedOnly: z.boolean(), parent: columns,
 }).superRefine((design, context) => {
   const invalid = (message: string) => context.addIssue({ code: 'custom', message });
   if (design.additional.some((step, index) => step.source >= index + 2 || step.pairs.some(pair => (pair.source ?? step.source) >= index + 2))) invalid('JOIN 设计不能引用尚未加入的表。');
-  for (const step of [design.first, ...design.additional]) {
+  if (design.kind === 'CROSS' && design.unmatchedOnly) invalid('CROSS JOIN 不支持只看未匹配记录。');
+  for (const step of [{ ...design.first, kind: design.kind }, ...design.additional]) {
+    if (step.kind === 'CROSS') {
+      if (step.pairs.length || step.on !== undefined) invalid('CROSS JOIN 不能带 ON 条件。');
+      continue;
+    }
+    if (!step.pairs.length) invalid('此连接方式至少需要一条 ON 条件。');
     try { manualJoinOnGroup(step.on, step.pairs.length); }
     catch { invalid('ON 分组必须恰好包含每条比较条件一次。'); }
   }

@@ -12,9 +12,9 @@ import { tableForeignKeyJoinHavingZh as havingText } from './tableForeignKeyJoin
 import { tableForeignKeyJoinZh as text } from './tableForeignKeyJoin.zh-CN';
 
 export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, manualPairs: 64, additionalJoins: 6, metadataUnits: 2 * 1024 * 1024, outputColumns: mysqlQueryProjectionLimit, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
-export type ForeignKeyJoinKind = 'LEFT' | 'RIGHT' | 'INNER';
+export type ForeignKeyJoinKind = typeof mysqlManualJoinKinds[number];
 export { manualJoinOperators } from './manualJoinDesigns';
-import { manualJoinOnGroup, manualJoinOperators, type ManualJoinOn } from './manualJoinDesigns';
+import { manualJoinOnGroup, manualJoinOperators, mysqlAdditionalJoinKinds, mysqlManualJoinKinds, type ManualJoinOn } from './manualJoinDesigns';
 export type ManualJoinOperator = typeof manualJoinOperators[number];
 export interface ManualJoinPair { child: string; parent: string; operator?: ManualJoinOperator }
 export interface AdditionalJoinPair extends ManualJoinPair { source?: number }
@@ -27,7 +27,7 @@ export type ForeignKeyJoinRelation = string | readonly ManualJoinPair[];
 export interface ManualJoinStep {
   source: number;
   target: TableInfo;
-  kind: 'INNER' | 'LEFT';
+  kind: typeof mysqlAdditionalJoinKinds[number];
   pairs: readonly AdditionalJoinPair[];
   on?: ManualJoinOn;
   columns: readonly string[];
@@ -240,25 +240,32 @@ function compileOn(raw: unknown, conditions: readonly JoinCondition[], alias: st
     needsAllMarkers: !!group || mode === 'any' };
 }
 
+/** 笛卡尔积仅允许手动选定的来源，拒绝外键或任何 ON 条件。 */
+function checkCrossJoin(relation: unknown, on?: unknown): void {
+  if (!Array.isArray(relation) || array(relation, foreignKeyJoinLimits.manualPairs).length || on !== undefined) throw Error(text.crossInvalid);
+}
+
 /** 追加步骤按原顺序验证，仅能连接到已出现的别名。 */
 function additionalJoins(raw: unknown, left: ReturnType<typeof snapshot>, right: ReturnType<typeof snapshot>) {
   const sources = [left, right];
   return array(raw, foreignKeyJoinLimits.additionalJoins).map((step, index) => {
     const source = own(step, 'source'), kind = own(step, 'kind'), target = own(step, 'target'), pairs = own(step, 'pairs');
     if (typeof source !== 'number' || !Number.isInteger(source) || source < 0 || source >= sources.length ||
-        kind !== 'INNER' && kind !== 'LEFT' || !Array.isArray(pairs) ||
+        !mysqlAdditionalJoinKinds.includes(kind as ManualJoinStep['kind']) || !Array.isArray(pairs) ||
         Reflect.ownKeys(step as object).some(key => !['source', 'kind', 'target', 'pairs', 'columns', 'on'].includes(key as string))) throw Error(text.manualInvalid);
-    const metadata = snapshot(target as TableInfo), conditions = joinConditions(sources, source, metadata, pairs);
+    const metadata = snapshot(target as TableInfo), rawOn = own(step, 'on', true);
     const columns = selected(own(step, 'columns'), metadata.columns);
-    sources.push(metadata);
     const alias = `t${index + 3}` as const;
-    return { metadata, kind, on: compileOn(own(step, 'on', true), conditions, alias), columns, alias };
+    if (kind === 'CROSS') checkCrossJoin(pairs, rawOn);
+    const on = kind === 'CROSS' ? undefined : compileOn(rawOn, joinConditions(sources, source, metadata, pairs), alias);
+    sources.push(metadata);
+    return { metadata, kind: kind as ManualJoinStep['kind'], on, columns, alias };
   });
 }
 
 /** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
 export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: ForeignKeyJoinRelation, kind: ForeignKeyJoinKind, limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
-  if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER') throw Error(text.invalid);
+  if (!mysqlManualJoinKinds.includes(kind)) throw Error(text.invalid);
   return buildSelect(child, limit, options, { parent, input, kind });
 }
 
@@ -271,10 +278,12 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
   join?: { parent: TableInfo; input: ForeignKeyJoinRelation; kind: ForeignKeyJoinKind }): { sql: string; columns: ForeignKeyJoinColumn[] } {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > foreignKeyJoinLimits.rows) throw Error(text.invalid);
   const left = snapshot(child), right = join && snapshot(join.parent);
-  const conditions = join && right ? joinConditions([left], 0, right, join.input) : [];
+  const cross = join?.kind === 'CROSS';
+  if (cross) checkCrossJoin(join.input);
+  const conditions = join && right && !cross ? joinConditions([left], 0, right, join.input) : [];
   let childColumns: string[], parentColumns: string[] = [], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
   let extra: ReturnType<typeof additionalJoins> = [], resultOffset = 0, rawProjection: unknown;
-  let firstOn = right ? compileOn(undefined, conditions, 'p') : undefined;
+  let firstOn = right && !cross ? compileOn(undefined, conditions, 'p') : undefined;
   const sources = new Map<ForeignKeyJoinSide, ReturnType<typeof snapshot>>([['child', left]]);
   if (right) sources.set('parent', right);
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right?.columns.map(column => column.name) ?? []; }
@@ -288,6 +297,7 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
       parentColumns = selected(own(options, 'parentColumns'), right.columns);
       const manualOn = own(options, 'manualOn', true);
       if (manualOn !== undefined) {
+        if (cross) throw Error(text.crossInvalid);
         if (typeof join.input === 'string') throw Error(text.manualOnInvalid);
         firstOn = compileOn(manualOn, conditions, 'p');
       }
@@ -314,6 +324,7 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
       resultOffset = checked.data;
     }
   }
+  if (unmatchedOnly && !firstOn) throw Error(text.unmatchedInvalid);
   if (join && firstOn && unmatchedOnly) {
     if (join.kind === 'INNER') throw Error(text.unmatchedInvalid);
     // 带 OR 时任一比较都可能单独匹配。只有候选列全部为 NULL 才能认定是外连接补空行。
@@ -348,13 +359,13 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
   const append = (part: string) => { if (sql.length + part.length > foreignKeyJoinLimits.sqlUnits) throw Error(text.budget); sql += part; };
   columns.forEach((column, index) => append(`  ${summary ? summary.expressions[index] : (column.side === 'aggregate' ? column.side : foreignKeyJoinSqlAlias(column.side))+'.'+quote(column.column)+' AS '+quote(column.alias)}${index + 1 === columns.length ? '\n' : ',\n'}`));
   append(`FROM ${quote(left.database)}.${quote(left.name)} AS c\n`);
-  if (join && right && firstOn) {
-    append(`${join.kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\nON\n`);
-    append(firstOn.sql);
+  if (join && right) {
+    append(`${join.kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\n`);
+    if (firstOn) append('ON\n' + firstOn.sql);
   }
   for (const step of extra) {
-    append(`${step.kind} JOIN ${quote(step.metadata.database)}.${quote(step.metadata.name)} AS ${step.alias}\nON\n`);
-    append(step.on.sql);
+    append(`${step.kind} JOIN ${quote(step.metadata.database)}.${quote(step.metadata.name)} AS ${step.alias}\n`);
+    if (step.on) append('ON\n' + step.on.sql);
   }
   if (where) append('WHERE ' + where + '\n');
   if (summary?.grouping.length) append('GROUP BY '+summary.grouping.join(', ')+'\n');

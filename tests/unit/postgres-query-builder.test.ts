@@ -10,6 +10,20 @@ const source: PostgresQueryBuilderSource = {
 const draft: PostgresQueryBuilderDesign = { ...source.target, fingerprint: source.fingerprint, columns: ['id', '值'], sort: [], distinct: false };
 
 describe('PostgreSQL 单表查询设计', () => {
+  it('CROSS JOIN 使用独立来源，设计、预览及生成器拒绝带 ON 或遗漏条件的组合', () => {
+    const step = { table: source.target.table, kind: 'CROSS' as const, mode: 'all' as const, pairs: [] };
+    const input = { ...draft, columns: ['t1.id', 't2.id'], joins: [{ ...step, fingerprint: source.fingerprint }] };
+    expect(postgresBuilderJoinDraftSchema.parse([step])).toEqual([step]);
+    expect(buildPostgresQueryBuilderSql(input, source, [source])).toContain(' CROSS JOIN "项目.数据"."表""1" AS t2');
+    expect(buildPostgresQueryBuilderSql(input, source, [source])).not.toContain(' ON ');
+    for (const invalid of [{ ...step, kind: 'INNER' }, { ...step, mode: 'any' },
+      { ...step, pairs: [{ left: 't1.id', right: 'id', operator: '=' }] }]) {
+      expect(postgresBuilderJoinDraftSchema.safeParse([invalid]).success).toBe(false);
+      expect(postgresQueryBuilderInspectSchema.safeParse({ ...input, inspect: 'rows',
+        joins: [{ ...invalid, fingerprint: source.fingerprint }] }).success).toBe(false);
+    }
+  });
+
   it('行偏移独立于行数上限，并限制数值范围', () => {
     const sql = buildPostgresQueryBuilderSql(draft, source);
     expect(buildPostgresQueryBuilderSql({ ...draft, rowOffset: 9 }, source)).toBe(sql + ' OFFSET 9');

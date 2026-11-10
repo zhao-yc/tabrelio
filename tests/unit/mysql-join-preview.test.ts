@@ -43,6 +43,22 @@ async function resultFrames(consumer: QueryFrameConsumer, key: string, name: str
 }
 
 describe('手动 JOIN 独立预览', () => {
+  it('首步和追加 CROSS JOIN 不生成 ON，拒绝外键、比较和只看未匹配', async () => {
+    const cross = { ...input, kind: 'CROSS', relation: [], steps: [{ ...input.steps[0], kind: 'CROSS', pairs: [] }] };
+    await previewMysqlJoin(context, mysqlJoinPreviewSchema.parse(cross), async () => {});
+    const sql = vi.mocked(consumeQueryFrames).mock.calls[0][1];
+    expect(sql).toContain('CROSS JOIN `joined`.`target` AS p\nCROSS JOIN `joined`.`target` AS t3\nORDER BY');
+    for (const invalid of [{ ...cross, relation: 'fk' }, { ...cross, relation: input.relation },
+      { ...cross, kind: 'INNER' }, { ...cross, steps: [{ ...cross.steps[0], on: { mode: 'all' } }] }]) {
+      expect(mysqlJoinPreviewSchema.safeParse(invalid).success).toBe(false);
+    }
+    await expect(previewMysqlJoin(context, mysqlJoinPreviewSchema.parse({ ...cross,
+      options: { ...input.options as object, unmatchedOnly: true } }), async () => {})).rejects.toThrow('未匹配');
+    await expect(previewMysqlJoin(context, mysqlJoinPreviewSchema.parse({ ...cross,
+      options: { ...input.options as object, manualOn: { mode: 'all' } } }), async () => {})).rejects.toThrow('不能带 ON');
+    expect(consumeQueryFrames).toHaveBeenCalledTimes(1);
+  });
+
   it('只读事务内重读并去重结构，编译带原排序和限制的 SQL，采样保留精度', async () => {
     const stop = vi.fn(async () => {});
     const result = await previewMysqlJoin(context, mysqlJoinPreviewSchema.parse(input), stop);

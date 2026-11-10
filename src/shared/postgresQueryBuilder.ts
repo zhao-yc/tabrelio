@@ -94,7 +94,7 @@ export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign,
       if (!previous || previous.source >= position) throw Error('关联条件必须引用已加入的表，且不能重复。');
       return field(pair.left) + ' ' + pair.operator + ' ' + field(postgresBuilderColumnKey(position, pair.right));
     });
-    return ' ' + step.kind + ' JOIN ' + qualified(step.table) + ' AS ' + postgresBuilderAlias(position) + ' ON ' + on;
+    return ' ' + step.kind + ' JOIN ' + qualified(step.table) + ' AS ' + postgresBuilderAlias(position) + on;
   }).join('');
   if (selected.size !== columns.length) throw Error('输出字段不能重复。');
   if (summary ? columns.length || sort.length || distinct : !columns.length) throw Error('请明确配置汇总或明细输出。');

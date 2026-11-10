@@ -8,11 +8,19 @@ import { completionIdentifier } from '../../shared/completionLexical';
 import { relationshipDiagramLimits } from '../relationshipDiagram';
 import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinAlias, manualJoinOperators, type AdditionalJoinPair, type ManualJoinStep } from '../tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
+import { queryBuilderJoinZh as joinText } from '../locales/queryBuilderJoin.zh-CN';
 import { uid } from '../lib';
 import '../childReferences.css';
 
 export interface ManualJoinSelection {
   database: string; table: string; pairs: Array<AdditionalJoinPair & { id: string }>; on?: ManualJoinOn;
+}
+
+/** 切换为无条件连接前确认会丢弃已填写的比较。切回时从一条空比较开始。 */
+export function changeManualJoinConditions<T extends ManualJoinSelection>(draft: T, wasCross: boolean, cross: boolean, ready: boolean): T | undefined {
+  if (wasCross === cross) return draft;
+  if (cross && (draft.on?.group || draft.pairs.some(pair => pair.child || pair.parent)) && !window.confirm(joinText.crossConfirm)) return undefined;
+  return { ...draft, pairs: !cross && ready ? [newManualJoinPair()] : [], on: undefined };
 }
 
 /** 目录仅用于选取真实名称，超量或异常回包不产生半份列表。 */
@@ -131,7 +139,7 @@ export function ManualJoinPairFields({ selection, child, parent, disabled, sourc
 export interface AdditionalJoinDraft extends ManualJoinSelection {
   id: string;
   source: number;
-  kind: 'INNER' | 'LEFT';
+  kind: ManualJoinStep['kind'];
   tables?: readonly string[];
   info?: TableInfo;
   columns: string[];
@@ -162,11 +170,15 @@ export function AdditionalJoinFields({ draft, index, sources, databases, disable
     <button disabled={!canRetarget || !draft.tables?.includes(draft.table)} onClick={() => onRead('preview')}>{text.manualRead}</button>
     <label>{text.joinKind}<select value={draft.kind} onChange={event => {
       const kind = event.target.value;
-      if (kind === 'INNER' || kind === 'LEFT') onChange({ ...draft, kind });
+      if (kind !== 'INNER' && kind !== 'LEFT' && kind !== 'CROSS') return;
+      const next = changeManualJoinConditions(draft, draft.kind === 'CROSS', kind === 'CROSS', !!draft.info);
+      if (next) onChange({ ...next, kind });
     }}>
       <option value="INNER">{text.additionalInner}</option><option value="LEFT">{text.additionalLeft}</option>
+      <option value="CROSS">CROSS JOIN</option>
     </select></label>
-    {child && draft.info && <ManualJoinPairFields selection={draft} child={child} parent={draft.info} disabled={disabled} sourceOptions={{ defaultSource: draft.source, tables: sources }}
+    {draft.kind === 'CROSS' && <p className="muted small">{joinText.crossHint}</p>}
+    {draft.kind !== 'CROSS' && child && draft.info && <ManualJoinPairFields selection={draft} child={child} parent={draft.info} disabled={disabled} sourceOptions={{ defaultSource: draft.source, tables: sources }}
       onMode={on => onChange({ ...draft, on })} onGroups={onGroups}
       onAdd={() => onChange(replaceManualJoinPairs(draft, [...draft.pairs, newManualJoinPair()]))}
       onChange={(id, patch) => onChange({ ...draft, pairs: draft.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) })}
