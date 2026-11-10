@@ -1,4 +1,5 @@
 export const relationshipDiagramZh = {
+  join: '配置此关系的 JOIN', joinLoading: '正在复核此关系的表结构…',
   title: '表关系图', entry: '查看表关系图', catalog: '读取表目录', read: '读取所选表', refresh: '刷新图中表', stop: '停止读取', close: '关闭',
   search: '搜索表名', selected: '已选择', selectVisible: '选择本页', clear: '清空选择', previous: '上一页', next: '下一页',
   fields: '显示全部字段', zoomOut: '缩小关系图', zoomIn: '放大关系图', fit: '适应宽度', viewport: '表关系图，可使用滚动条移动',

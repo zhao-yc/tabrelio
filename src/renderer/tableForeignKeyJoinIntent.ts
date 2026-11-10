@@ -5,14 +5,14 @@ import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-
 
 export interface ForeignKeyJoinTarget { connectionId: string; database: string; table: string; }
 export type ForeignKeyJoinRead = (target: ForeignKeyJoinTarget) => Promise<TableInfo>;
-export interface IncomingForeignKeyJoinStart { foreignKey: string; parent: TableInfo }
+export interface FixedForeignKeyJoinStart { foreignKey: string; parent: TableInfo; kind: 'LEFT' | 'RIGHT' }
 export interface ForeignKeyJoinPreview {
   readonly parent: TableInfo; readonly parentKey: string; readonly childKey: string; readonly foreignKey: string;
   readonly kind: ForeignKeyJoinKind; readonly options: ForeignKeyJoinOptions; readonly sql: string;
 }
 
 /** 目录只负责定位，生成器仍使用新读到的真实子表外键。按原顺序核对每个映射字段。 */
-export function incomingForeignKeyJoinStart(parent: TableInfo, relation: IncomingReferenceRelation, child: TableInfo): IncomingForeignKeyJoinStart {
+export function fixedForeignKeyJoinStart(parent: TableInfo, relation: Pick<IncomingReferenceRelation, 'database' | 'table' | 'foreignKey'>, child: TableInfo, kind: FixedForeignKeyJoinStart['kind']): FixedForeignKeyJoinStart {
   const key = relation.foreignKey;
   const actual = foreignKeyJoinChoices(child).find(value => value.name === key.name);
   const actions = child.foreignKeys.find(value => value.name === key.name);
@@ -20,8 +20,8 @@ export function incomingForeignKeyJoinStart(parent: TableInfo, relation: Incomin
       actual.referencedDatabase !== key.referencedDatabase || actual.referencedTable !== key.referencedTable ||
       actions?.onDelete !== key.onDelete || actions?.onUpdate !== key.onUpdate ||
       JSON.stringify([actual.columns, actual.referencedColumns]) !== JSON.stringify([key.columns, key.referencedColumns])) throw Error(text.stale);
-  buildForeignKeyJoin(child, parent, actual.name, 'RIGHT', 1, { childColumns: [], parentColumns: [parent.columns[0]?.name] });
-  return { foreignKey: actual.name, parent };
+  buildForeignKeyJoin(child, parent, actual.name, kind, 1, { childColumns: [], parentColumns: [parent.columns[0]?.name] });
+  return { foreignKey: actual.name, parent, kind };
 }
 
 /** 只保留结构和来源身份，不持有行、选中记录或服务器筛选，也不修改父页草稿。 */

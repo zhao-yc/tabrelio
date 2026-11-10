@@ -164,7 +164,7 @@ SQL 编辑器新增[本文别名／CTE 重命名](development/local-rename-20261
 
 MySQL／MariaDB 查询编辑器支持[本文关系引用](development/local-references-20261103.md)，SQLite 已接入[对应入口](development/sqlite-local-references-20261103.md)：在别名、CTE 声明或关系限定段按 `Shift+F12` 查看声明及已确认使用位置，双击跳转并选中原词，不执行 SQL。按各方言处理作用域及名称，SQLite 另支持嵌套 CTE 和非 BMP 引用；不包含字段／变量或跨库依赖，Mac／安装另验。
 
-MySQL／MariaDB 物理表可从“表格操作 → 设计与结构 → 查看表关系图”查看主外键、复合映射和自引用。明确选择后读取其它表，支持缩放、刷新及关联键字段显示；未读目标用虚线标明。详见[关系图使用范围](development/relationship-diagram-20261103.md)，不修改数据库。
+MySQL／MariaDB 物理表可从“表格操作 → 设计与结构 → 查看表关系图”查看主外键、复合映射和自引用。明确选择后读取其它表，支持缩放、刷新及关联键字段显示；未读目标用虚线标明。 展开外键详情后可选择「配置此关系的 JOIN」，重新核对两侧结构，按这条关系打开查询构建器。当前表是父表时默认保留父表行；其它情况默认保留子表行。详见[关系图使用范围](development/relationship-diagram-20261103.md)，不修改数据库。
 
 SQL 编辑器新增[常用函数参数提示](development/sql-signatures-20261103.md)：输入函数括号或逗号即可查看签名和当前参数，支持嵌套及方言差异；Windows 可按 `Ctrl+Shift+Space` 手动查看。只读本地语法资料，不执行 SQL；完整函数语义、Mac／安装另验。
 

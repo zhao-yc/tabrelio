@@ -14,7 +14,7 @@ import { tableForeignKeyJoinHavingZh as havingText } from '../locales/tableForei
 import { tableForeignKeyJoinSummaryZh as summaryText } from '../locales/tableForeignKeyJoinSummary.zh-CN';
 import { tableForeignKeyJoinFilterZh as filterText } from '../locales/tableForeignKeyJoinFilter.zh-CN';
 import { buildForeignKeyJoin, foreignKeyJoinColumnAlias, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, foreignKeyJoinLimits, foreignKeyJoinResultLimit, type ForeignKeyJoinKind, type ForeignKeyJoinSort } from '../tableForeignKeyJoin';
-import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPreview, type ForeignKeyJoinTarget, type IncomingForeignKeyJoinStart, TableForeignKeyJoinIntent } from '../tableForeignKeyJoinIntent';
+import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPreview, type ForeignKeyJoinTarget, type FixedForeignKeyJoinStart, TableForeignKeyJoinIntent } from '../tableForeignKeyJoinIntent';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
@@ -28,16 +28,16 @@ interface Operation { promise: Promise<void>; cancelled: boolean; read?: { taskI
 const pageSize = 50;
 
 /** 一次原读取和最新本地选择共用占门；不持有任何父页行数据或执行SQL的能力。 */
-export function TableForeignKeyJoinDialog({ intent, incoming, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
+export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
   intent: TableForeignKeyJoinIntent; onOpen(preview: ForeignKeyJoinPreview): boolean; onClose(): void;
-  incoming?: IncomingForeignKeyJoinStart; onActivity(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
+  fixed?: FixedForeignKeyJoinStart; onActivity(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
 }) {
-  const origin = useRef({ intent, incoming, services, onActivity }).current;
-  if (origin.intent !== intent || origin.services !== services || origin.incoming !== incoming) origin.intent.invalidate();
-  const choices = useMemo(() => foreignKeyJoinChoices(origin.intent.source).filter(key => !origin.incoming || key.name === origin.incoming.foreignKey), [origin]);
-  const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, fk: choices[0]?.name ?? '', kind: origin.incoming ? 'RIGHT' : 'LEFT', child: origin.intent.source.columns.map(column => column.name), parent: origin.incoming?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
+  const origin = useRef({ intent, fixed, services, onActivity }).current;
+  if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed) origin.intent.invalidate();
+  const choices = useMemo(() => foreignKeyJoinChoices(origin.intent.source).filter(key => !origin.fixed || key.name === origin.fixed.foreignKey), [origin]);
+  const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, fk: choices[0]?.name ?? '', kind: origin.fixed?.kind ?? 'LEFT', child: origin.intent.source.columns.map(column => column.name), parent: origin.fixed?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
   const selectionRef = useRef(selection), [parent, setParent] = useState<{ fk: string; info: TableInfo } | undefined>(() =>
-    origin.incoming && { fk: origin.incoming.foreignKey, info: origin.incoming.parent });
+    origin.fixed && { fk: origin.fixed.foreignKey, info: origin.fixed.parent });
   const [groupEditor, setGroupEditor] = useState<GroupEditor>(), groupRef = useRef<GroupEditor | undefined>(undefined), groupPanel = useRef<HTMLDivElement>(null), groupTrigger = useRef<HTMLButtonElement>(null), havingGroupTrigger = useRef<HTMLButtonElement>(null), hadGroup = useRef<GroupEditor['kind'] | undefined>(undefined);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [invalid, setInvalid] = useState(false), [message, setMessage] = useState('');
   const alive = useRef(true), closingRef = useRef(false), operation = useRef<Operation | null>(null), revision = useRef(0), consumed = useRef(false), committed = useRef<object | null>(null), ticket = {};
@@ -265,7 +265,7 @@ export function TableForeignKeyJoinDialog({ intent, incoming, onOpen, onClose, o
   return <Modal title={text.title} wide onClose={close} onEscape={groupEditor ? event => { if (!event.target || !groupPanel.current?.contains(event.target as Node)) event.stopPropagation(); } : undefined}><div className="modal-content" aria-busy={busy || closing}>
     <p>{text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
     <label>{text.resultLimit}<input aria-label={text.resultLimit} inputMode="numeric" maxLength={128} value={selection.limit} disabled={busy || unavailable} onChange={event => revise({ ...selection, limit: event.target.value })}/></label><p>{text.limitHint}</p>
-    <label>{text.fk}<select aria-label={text.fk} disabled={unavailable || !!origin.incoming} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>
+    <label>{text.fk}<select aria-label={text.fk} disabled={unavailable || !!origin.fixed} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>
     <label>{text.joinKind}<select aria-label={text.joinKind} disabled={busy || unavailable} value={selection.kind} onChange={event => {
       const kind = event.target.value;
       if (kind === 'LEFT' || kind === 'RIGHT' || kind === 'INNER') revise({ ...selection, kind, unmatchedOnly: kind !== 'INNER' && selection.unmatchedOnly });

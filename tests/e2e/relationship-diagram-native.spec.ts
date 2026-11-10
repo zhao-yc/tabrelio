@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { relationshipDiagramZh as text } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
+import { tableForeignKeyJoinZh as joinText } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
 const enabled = !listing && process.env.DBARK_RELATIONSHIP_NATIVE === '1';
@@ -55,6 +56,31 @@ for (const theme of ['dark', 'light']) test('真实表菜单、完整关系图�
     await step(() => modal.getByRole('button', { name: text.refresh, exact: true }).click()); await step(() => expect.poll(async () => (await evidence()).calls.filter(call => call.command === 'metadata.table').length).toBe(5));
     await step(() => modal.getByRole('button', { name: text.close, exact: true }).click()); await step(() => expect(modal).toHaveCount(0));
     const after = await evidence(); expect(after.denied).toEqual([]); expect(after.tabs).toEqual(before.tabs); expect(after.dirty).toEqual(before.dirty); expect(Object.values(after.jobs).every(value => value === false)).toBe(true); expect(errors).toEqual([]);
+    if (theme === 'light') {
+      await step(async () => (await navigationMenuItem(page.locator('.table-tab'), { name: text.entry, exact: true }, check)).click());
+      await step(() => composite.locator('summary').click());
+      const action = composite.getByRole('button', { name: text.join, exact: true });
+      await step(() => expect(action).toBeVisible());
+      await step(() => action.scrollIntoViewIfNeeded());
+      await step(() => page.screenshot({ path: info.outputPath('relationship-diagram-join.png') }));
+      await step(() => action.click());
+      await step(() => expect(modal).toBeHidden());
+      const builder = page.getByRole('dialog', { name: joinText.title, exact: true });
+      await step(() => expect(builder.getByLabel(joinText.fk, { exact: true })).toHaveValue('fk_composite'));
+      await step(() => expect(builder.getByLabel(joinText.fk, { exact: true })).toBeDisabled());
+      await step(() => expect(builder.getByLabel(joinText.joinKind, { exact: true })).toHaveValue('LEFT'));
+      await step(() => expect(builder.getByLabel(joinText.preview, { exact: true })).toContainText('c.`tenant` = p.`tenant`\n  AND c.`parent_id` = p.`id`'));
+      await step(() => builder.getByRole('button', { name: joinText.open, exact: true }).click());
+      await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('LEFT JOIN `diagram_db`.`parent` AS p'));
+      const joined = await evidence();
+      expect(joined.tabs).toHaveLength(2);
+      expect(joined.calls.slice(after.calls.length).filter(call => call.command !== 'settings.save').map(call => [call.command, call.input.table])).toEqual([
+        ['metadata.table', 'child'], ['metadata.table', 'parent'], ['metadata.table', 'child'], ['metadata.table', 'parent'],
+      ]);
+      expect(joined.denied).toEqual([]);
+      expect(Object.values(joined.jobs).every(value => value === false)).toBe(true);
+      expect(errors).toEqual([]);
+    }
     const ids = await step(() => application.evaluate(({ app }) => app.getAppMetrics().map(value => value.pid)));
     const closing = application.waitForEvent('close', { timeout: 12000 }); await application.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); }); await closing; closed = true; expect(await exit).toBe(0);
     await expect.poll(() => [...new Set([pid!, ...ids])].filter(id => { try { process.kill(id, 0); return true; } catch (reason) { if ((reason as NodeJS.ErrnoException).code === 'ESRCH') return false; throw reason; } }), { timeout: 5000 }).toEqual([]);

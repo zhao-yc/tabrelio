@@ -19,4 +19,9 @@ const tab: WorkspaceTab = { id: 'offline-diagram-tab', kind: 'table', connection
 const theme = new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : 'dark'; document.documentElement.dataset.theme = theme;
 useWorkspace.setState({ ready: true, connections: [{ id: 'offline-diagram', name: '合成关系目录', host: '127.0.0.1', port: 1, user: 'offline', group: '', color: '#123456', dialect: 'mysql' }], settings: { ...useWorkspace.getState().settings, theme, tabs: [tab], activeTabId: tab.id } });
 Object.defineProperty(window, '__relationshipEvidence', { value: () => ({ calls: structuredClone(calls), denied: [...denied], tabs: structuredClone(useWorkspace.getState().settings.tabs), dirty: structuredClone(useWorkspace.getState().dirtyTabs), jobs: structuredClone(useWorkspace.getState().activeJobs) }) });
-createRoot(document.getElementById('root')!).render(<div style={{ height: '100vh' }}><TableTab tab={tab} refreshAutomatically={false} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/></div>);
+function Fixture() {
+  const query = useWorkspace(state => state.settings.tabs.find(item => item.kind === 'query'));
+  if (query) return <pre aria-label="本例独立查询SQL">{query.sql}</pre>;
+  return <div style={{ height: '100vh' }}><TableTab tab={tab} refreshAutomatically={false} onOpenGeneratedQuery={query => useWorkspace.getState().openTab(query)} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/></div>;
+}
+createRoot(document.getElementById('root')!).render(<Fixture/>);

@@ -3,23 +3,24 @@ import type { TableInfo } from '../../shared/contracts';
 import { useWorkspace } from '../store';
 import { invoke, errorMessage } from '../lib';
 import { buildRelationshipDiagram, captureDiagramTable, relationshipDiagramLimits, type RelationshipDiagram } from '../relationshipDiagram';
-import { RelationshipDiagramReader, type RelationshipDiagramServices } from '../relationshipDiagramReader';
+import { RelationshipDiagramReader, type RelationshipDiagramServices, type RelationshipJoinDraft } from '../relationshipDiagramReader';
 import { relationshipDiagramZh as text } from '../locales/relationshipDiagram.zh-CN';
 import { ErrorBox, Modal, Spinner } from './ui';
 import '../relationshipDiagram.css';
 import { sqliteRelationshipsZh as sqliteText } from '../locales/sqliteRelationships.zh-CN';
 
 export const relationshipDiagramServices: RelationshipDiagramServices = { objects: target => invoke('metadata.objects', target), table: target => invoke('metadata.table', target), cancel: taskId => invoke('query.cancel', { taskId }) };
-interface Props { connectionId: string; source: TableInfo; current(): boolean; onClose(): void; onActivity?(delta: 1 | -1): void; services?: RelationshipDiagramServices; }
+interface Props { connectionId: string; source: TableInfo; current(): boolean; onClose(): void; onActivity?(delta: 1 | -1): void; onJoin?(draft: RelationshipJoinDraft): boolean; services?: RelationshipDiagramServices; }
 
 /** 只有目录读取和明确刷新触发元数据访问；缩放、选择节点及字段显示完全本地。 */
-export function RelationshipDiagramDialog({ connectionId, source, current, onClose, onActivity, services = relationshipDiagramServices }: Props) {
+export function RelationshipDiagramDialog({ connectionId, source, current, onClose, onActivity, onJoin, services = relationshipDiagramServices }: Props) {
   const origin = useRef({ connectionId, source, current, services, onActivity }).current;
-  const latest = useRef({ connectionId, source, current, services }); latest.current = { connectionId, source, current, services };
+  const latest = useRef({ connectionId, source, current, services, onJoin }); latest.current = { connectionId, source, current, services, onJoin };
   const alive = useRef(true), closingRef = useRef(false), invalidRef = useRef(false);
   const [invalid, setInvalid] = useState(false), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [initial] = useState(() => { try { return { diagram: buildRelationshipDiagram([captureDiagramTable(source)]), error: '' }; } catch (reason) { return { diagram: undefined, error: errorMessage(reason) }; } });
   const [diagram, setDiagram] = useState<RelationshipDiagram | undefined>(initial.diagram), [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set([source.name]));
+  const diagramRef = useRef(initial.diagram);
   const selectedRef = useRef(selection); selectedRef.current = selection;
   const [catalog, setCatalog] = useState<string[]>([source.name]), [search, setSearch] = useState(''), [page, setPage] = useState(0), [progress, setProgress] = useState('');
   /** 持有第一次提交的范围；父props、连接修订或活动标签曾离开便永久撤销。 */
@@ -45,7 +46,17 @@ export function RelationshipDiagramDialog({ connectionId, source, current, onClo
     finally { origin.onActivity?.(-1); if (alive.current) { setBusy(false); if (!environment()) setInvalid(true); } }
   }
   function readCatalog(): void { void perform(async () => { const names = await reader.catalog(); if (!environment() || closingRef.current) return; setCatalog(names); setPage(0); setNotice(text.catalogChanged); }); }
-  function readTables(names: readonly string[]): void { void perform(async () => { const result = await reader.read(names, (done, total) => { if (alive.current) setProgress(text.progress(done, total)); }); if (!environment() || closingRef.current) return; setDiagram(result); setNotice(''); }); }
+  function readTables(names: readonly string[]): void { void perform(async () => { const result = await reader.read(names, (done, total) => { if (alive.current) setProgress(text.progress(done, total)); }); if (!environment() || closingRef.current) return; diagramRef.current = result; setDiagram(result); setNotice(''); }); }
+  /** 复核占用结束后才交给 JOIN 窗口，旧图、取消或关闭都不能打开后继窗口。 */
+  async function prepareJoin(graph: RelationshipDiagram, edgeId: string) {
+    if (diagramRef.current !== graph || !latest.current.onJoin || reader.busy || closingRef.current) return;
+    setProgress(text.joinLoading);
+    let draft: RelationshipJoinDraft | undefined;
+    await perform(async () => { draft = await reader.join(graph, edgeId, origin.source); });
+    if (!draft || closingRef.current || reader.busy || !environment() || diagramRef.current !== graph) return;
+    try { if (!latest.current.onJoin?.(draft)) setError(text.stale); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
   function choose(name: string, checked: boolean): void {
     if (!environment() || reader.busy || closingRef.current) return;
     const next = new Set(selectedRef.current); if (checked) next.add(name); else next.delete(name);
@@ -68,12 +79,12 @@ export function RelationshipDiagramDialog({ connectionId, source, current, onClo
       <div className="relationship-diagram-pick-controls"><button disabled={disabled || !index} onClick={() => setPage(index - 1)}>{text.previous}</button><span>{index + 1} / {pages}</span><button disabled={disabled || index + 1 >= pages} onClick={() => setPage(index + 1)}>{text.next}</button><button disabled={disabled || !selection.size} onClick={() => { if (environment() && !reader.busy && !closingRef.current) { selectedRef.current = new Set(); setSelection(selectedRef.current); setNotice(text.selectionChanged); } }}>{text.clear}</button><button disabled={disabled || !selection.size} onClick={() => readTables([...selectedRef.current])}>{text.read}</button><button disabled={disabled || !diagram} onClick={() => readTables(diagram!.tables.map(table => table.name))}>{text.refresh}</button>{busy && <button disabled={closing} onClick={() => { void reader.stop().catch(reason => { if (alive.current) setError(errorMessage(reason)); }); }}>{text.stop}</button>}</div>
     </div>
     <ErrorBox message={invalid ? text.stale : error || initial.error}/>{notice && <p role="status">{notice}</p>}{busy && <Spinner text={progress || text.catalog}/>}<p className="muted">{text.limit}</p>
-    {diagram && <RelationshipDiagramCanvas diagram={diagram}/>}
+    {diagram && <RelationshipDiagramCanvas diagram={diagram} joinDisabled={disabled} onJoin={onJoin ? id => { void prepareJoin(diagram, id); } : undefined}/>}
   </div><footer className="modal-footer"><span className="grow"/><button disabled={closing} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
 }
 
 /** 图只使用已验证结构，未读取的外部目标采用虚线框；名称始终作为React纯文本。 */
-export function RelationshipDiagramCanvas({ diagram }: { diagram: RelationshipDiagram }) {
+export function RelationshipDiagramCanvas({ diagram, onJoin, joinDisabled }: { diagram: RelationshipDiagram; onJoin?(edgeId: string): void; joinDisabled?: boolean }) {
   const [allFields, setAllFields] = useState(true), [zoom, setZoom] = useState(1), [selected, setSelected] = useState('');
   const viewport = useRef<HTMLDivElement>(null), marker = useRef('relationship-arrow-' + crypto.randomUUID()).current;
   const graph = useMemo(() => buildRelationshipDiagram(diagram.tables, allFields), [diagram, allFields]);
@@ -83,6 +94,6 @@ export function RelationshipDiagramCanvas({ diagram }: { diagram: RelationshipDi
       <svg width={graph.width} height={graph.height} aria-hidden="true"><defs><marker id={marker} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z"/></marker></defs>{graph.edges.map(edge => <path key={edge.id} className={chosen && (edge.source === chosen.id || edge.target === chosen.id) ? 'selected' : ''} d={edge.path} markerEnd={`url(#${marker})`}/>)}</svg>
       {graph.nodes.map(node => <article key={node.id} className={`relationship-diagram-node${node.external ? ' external' : ''}${chosen === node ? ' selected' : ''}`} style={{ left: node.x, top: node.y, width: node.width, height: node.height }}><button className="relationship-diagram-node-title" title={node.database + '.' + node.name} aria-pressed={chosen === node} onClick={() => setSelected(value => value === node.id ? '' : node.id)}>{node.database}.{node.name}</button>{node.external ? <p>{text.external}</p> : node.columns.length ? node.columns.map(column => <div className="relationship-diagram-column" key={column.name} title={`${column.name} · ${column.type || sqliteText.undeclaredType} · ${column.notNullDeclared === undefined ? column.nullable ? text.nullable : text.required : column.notNullDeclared ? sqliteText.notNull : sqliteText.noNotNull}`}><span className="relationship-diagram-key">{node.primaryKey.includes(column.name) ? 'PK' : ''}{node.foreignColumns.includes(column.name) ? ' FK' : ''}</span><span>{column.name}</span><small>{column.type || sqliteText.undeclaredType}</small></div>) : <p>{text.noKeys}</p>}</article>)}
     </div></div></div>
-    <div className="relationship-diagram-relations" aria-label={text.mappings}>{!edges.length && <p>{text.noRelations}</p>}{edges.map(edge => <details key={edge.id}><summary>{graph.nodes.find(node => node.id === edge.source)!.name} → {edge.key.referencedDatabase}.{edge.key.referencedTable} · {edge.key.name}{edge.source === edge.target ? ` · ${text.sameTable}` : ''}</summary><ol>{edge.key.columns.map((name, index) => <li key={index}>{name} → {edge.key.referencedColumns[index] ?? sqliteText.implicitPart(index)}</li>)}</ol>{edge.key.implicit && <p>{sqliteText.implicit}</p>}{edge.key.warning && <p role="note">{edge.key.warning}</p>}<p>{text.update}：{edge.key.onUpdate} · {text.remove}：{edge.key.onDelete}</p></details>)}</div>
+    <div className="relationship-diagram-relations" aria-label={text.mappings}>{!edges.length && <p>{text.noRelations}</p>}{edges.map(edge => <details key={edge.id}><summary>{graph.nodes.find(node => node.id === edge.source)!.name} → {edge.key.referencedDatabase}.{edge.key.referencedTable} · {edge.key.name}{edge.source === edge.target ? ` · ${text.sameTable}` : ''}</summary><ol>{edge.key.columns.map((name, index) => <li key={index}>{name} → {edge.key.referencedColumns[index] ?? sqliteText.implicitPart(index)}</li>)}</ol>{edge.key.implicit && <p>{sqliteText.implicit}</p>}{edge.key.warning && <p role="note">{edge.key.warning}</p>}<p>{text.update}：{edge.key.onUpdate} · {text.remove}：{edge.key.onDelete}</p>{onJoin && <button disabled={joinDisabled} onClick={() => onJoin(edge.id)}>{text.join}</button>}</details>)}</div>
   </section>;
 }

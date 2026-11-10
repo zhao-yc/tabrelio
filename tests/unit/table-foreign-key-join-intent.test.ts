@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TableInfo } from '../../src/shared/contracts';
-import { foreignKeyJoinPreview, incomingForeignKeyJoinStart, revalidateForeignKeyJoin, TableForeignKeyJoinIntent, type ForeignKeyJoinTarget } from '../../src/renderer/tableForeignKeyJoinIntent';
+import { foreignKeyJoinPreview, fixedForeignKeyJoinStart, revalidateForeignKeyJoin, TableForeignKeyJoinIntent, type ForeignKeyJoinTarget } from '../../src/renderer/tableForeignKeyJoinIntent';
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 
 /** 完全合成的目录，不创建数据库会话或伪造查询执行成功。 */
@@ -18,14 +18,14 @@ describe('外键JOIN原结构与前置核验租约', () => {
     child.foreignKeys[0].columns = ['parent_id', 'id'];
     child.foreignKeys[0].referencedColumns = ['id', 'value'];
     const relation = { database: child.database, table: child.name, foreignKey: structuredClone(child.foreignKeys[0]), digest: 'a'.repeat(64) };
-    expect(incomingForeignKeyJoinStart(parent, relation, child)).toEqual({ parent, foreignKey: 'fk' });
-    expect(() => incomingForeignKeyJoinStart(parent, relation, { ...child, database: '另一个库' })).toThrow(text.stale);
-    expect(() => incomingForeignKeyJoinStart(parent, {
+    expect(fixedForeignKeyJoinStart(parent, relation, child, 'RIGHT')).toEqual({ parent, foreignKey: 'fk', kind: 'RIGHT' });
+    expect(() => fixedForeignKeyJoinStart(parent, relation, { ...child, database: '另一个库' }, 'RIGHT')).toThrow(text.stale);
+    expect(() => fixedForeignKeyJoinStart(parent, {
       ...relation, foreignKey: { ...relation.foreignKey, columns: ['id', 'parent_id'] },
-    }, child)).toThrow(text.stale);
-    expect(() => incomingForeignKeyJoinStart(parent, {
+    }, child, 'RIGHT')).toThrow(text.stale);
+    expect(() => fixedForeignKeyJoinStart(parent, {
       ...relation, foreignKey: { ...relation.foreignKey, onUpdate: 'CASCADE' },
-    }, child)).toThrow(text.stale);
+    }, child, 'RIGHT')).toThrow(text.stale);
   });
   it('WHERE及模式冻结，打开前核未输出筛选列，原选项变更不能消费旧SQL',async()=>{const f=fixture(),filters=[{side:'parent' as const,column:'value',operator:'BETWEEN' as const,values:['1','2']}],preview=foreignKeyJoinPreview(f.intent,f.parent,'fk','LEFT',{childColumns:['id'],parentColumns:[],filters,filterMode:'any'});filters[0].values[0]='999';expect(preview.options.filters![0].values).toEqual(['1','2']);expect(Object.isFrozen(preview.options.filters![0].values)).toBe(true);expect(()=>f.intent.consume({...preview,options:{...preview.options,filterMode:'all',filters:[{side:'child',column:'id',operator:'IS NULL'}]}})).toThrow();const read=vi.fn(async(target:ForeignKeyJoinTarget)=>target.table===f.child.name?f.child:{...f.parent,columns:f.parent.columns.map(column=>column.name==='value'?{...column,type:'TEXT'}:column)});await expect(revalidateForeignKeyJoin(f.intent,preview,read,()=>true)).rejects.toThrow(text.stale);expect(f.intent.current()).toBe(false);});
   it('排序和上限共同冻结并参与打开前双表重核，旧字符串不能改写显式选择', async () => {

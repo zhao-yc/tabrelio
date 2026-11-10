@@ -16,6 +16,30 @@ describe('关系图串行元数据读取', () => {
     expect(f.services.table.mock.calls.map(([target]) => target.table)).toEqual(['child', 'parent']); const requests = f.services.table.mock.calls.map(([target]) => target);
     expect(requests.every(target => 'connectionId' in target && target.connectionId === 'c' && 'database' in target && target.database === 'diagram_db')).toBe(true); expect(new Set(requests.map(target => target.taskId)).size).toBe(2); expect(f.services.cancel).not.toHaveBeenCalled(); expect(f.reader.busy).toBe(false);
   });
+  it('选定外键按原方向复核，打开父表时保留父行，自引用只读取一次', async () => {
+    const f = fixture(), graph = await f.reader.read(['child', 'parent'], vi.fn());
+    const relation = (name: string) => graph.edges.find(edge => edge.key.name === name)!.id;
+    f.services.table.mockClear();
+    expect(await f.reader.join(graph, relation('fk_composite'), f.tables[1])).toEqual({
+      child: f.tables[0], start: { parent: f.tables[1], foreignKey: 'fk_composite', kind: 'RIGHT' },
+    });
+    expect(f.services.table.mock.calls.map(([target]) => target.table)).toEqual(['child', 'parent']);
+    f.services.table.mockClear();
+    expect((await f.reader.join(graph, relation('fk_self'), f.tables[0])).start.kind).toBe('LEFT');
+    expect(f.services.table).toHaveBeenCalledOnce();
+  });
+  it('跨库未读目标按真实库名复核，旧图变更后不会继续读取父表', async () => {
+    const f = fixture(), graph = await f.reader.read(['child'], vi.fn());
+    const edge = graph.edges.find(edge => edge.key.name === 'fk_external')!;
+    const external = { ...f.tables[1], database: 'outside_db' };
+    f.services.table.mockClear().mockResolvedValueOnce(f.tables[0]).mockResolvedValueOnce(external);
+    expect((await f.reader.join(graph, edge.id, f.tables[0])).start).toEqual({ foreignKey: 'fk_external', parent: external, kind: 'LEFT' });
+    expect(f.services.table).toHaveBeenLastCalledWith(expect.objectContaining({ database: 'outside_db', table: 'parent' }));
+    const changed = structuredClone(f.tables[0]); changed.foreignKeys[2].referencedColumns = ['tenant'];
+    f.services.table.mockClear().mockResolvedValueOnce(changed);
+    await expect(f.reader.join(graph, edge.id, f.tables[0])).rejects.toThrow('已变化');
+    expect(f.services.table).toHaveBeenCalledOnce();
+  });
   it('不能并行或半途替换选择，目录停止仍等待原请求终态', async () => {
     const f = fixture(), wait = deferred<Awaited<ReturnType<typeof f.services.objects>>>(); f.services.objects.mockImplementationOnce(() => wait.promise);
     const reading = f.reader.catalog(); await Promise.resolve(); expect(f.reader.busy).toBe(true); await expect(f.reader.catalog()).rejects.toThrow();
