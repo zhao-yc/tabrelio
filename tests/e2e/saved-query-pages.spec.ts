@@ -80,6 +80,56 @@ test('列表打开保持四种默认库、精确SQL和独立原草稿，重启�
  expect(pageErrors).toEqual([]);
 });
 
+test('从查询库切回最近使用的同源草稿，选择替代连接可切到对应标签', async () => {
+  const original = await connection('查询库原连接'), alternate = await connection('查询库替代连接');
+  const saved = { id: 'focus-existing-source', name: '保存的查询甲', connectionId: original.id, sql: 'SELECT 1' };
+  await save(saved);
+  const initial = await page.evaluate(async ({ saved, original, alternate }) => {
+    const listing = await window.dbark.invoke('queries.page', { taskId: crypto.randomUUID(), search: saved.name, onError: 'stop' });
+    const entry = listing.items.find(item => item.query.id === saved.id);
+    if (!entry) throw Error('缺少保存查询夹具');
+    const { sourceBinding } = await window.dbark.invoke('queries.read', { id: saved.id, digest: entry.digest, connectionId: original.id });
+    if (!sourceBinding) throw Error('缺少查询库来源绑定');
+    const tabs = [
+      { id: 'focus-original-first', title: '第一个原连接草稿', connectionId: original.id, sourceBinding, sql: 'SELECT 21' },
+      { id: 'focus-original-recent', title: '改名后的原连接草稿', connectionId: original.id, sourceBinding, sql: 'SELECT 22' },
+      { id: 'focus-alternate', title: '替代连接草稿', connectionId: alternate.id, sourceBinding, sql: 'SELECT 23' },
+      { id: 'focus-title-only', title: saved.name, connectionId: original.id, sql: 'SELECT 24' },
+    ].map(tab => ({ ...tab, kind: 'query' as const }));
+    const settings = await window.dbark.invoke('settings.get', {});
+    await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'focus-original-recent', tabs });
+    return tabs;
+  }, { saved, original, alternate });
+  await page.reload();
+  const workspaceTab = (id: string) => page.locator(`[data-workspace-tab-id="${id}"] .tab-select`);
+  await expect(page.locator('.query-tab:visible .view-lines')).toContainText('22');
+  await workspaceTab('focus-title-only').click();
+  await expect(page.locator('.query-tab:visible .view-lines')).toContainText('24');
+
+  const card = dialog().locator('.history-card').filter({ has: page.getByText(saved.name, { exact: true }) });
+  const switchTab = card.getByRole('button', { name: pagesText.openExisting, exact: true });
+  const readSettings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  await open();
+  await expect(switchTab).toHaveAttribute('title', pagesText.openExistingHint('改名后的原连接草稿'));
+  await expect(card.getByRole('button', { name: '在新标签打开', exact: true })).toBeEnabled();
+  await switchTab.click();
+  await expect(dialog()).toBeHidden();
+  await expect(page.locator('.query-tab:visible .view-lines')).toContainText('22');
+  await expect.poll(async () => (await readSettings()).activeTabId).toBe('focus-original-recent');
+
+  await open();
+  await card.getByLabel('打开查询的连接：' + saved.name, { exact: true }).selectOption(alternate.id);
+  await expect(switchTab).toHaveAttribute('title', pagesText.openExistingHint('替代连接草稿'));
+  await switchTab.click();
+  await expect(dialog()).toBeHidden();
+  await expect(page.locator('.query-tab:visible .view-lines')).toContainText('23');
+  await expect.poll(async () => (await readSettings()).activeTabId).toBe('focus-alternate');
+  expect((await readSettings()).tabs).toEqual(initial);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test('失效来源须明确替代，旧摘要不能打开或删除新内容，成功删除刷新首批且保留其他记录',async({},info)=>{
  test.setTimeout(120000);const removed=await connection('将删除来源'),replacement=await connection('替代来源');await save({id:'missing',name:'失效来源记录',connectionId:removed.id,databaseContext:{state:'known',database:'旧库'},sql:'SELECT 1'});await save({id:'stale',name:'陈旧记录',connectionId:replacement.id,sql:'SELECT 旧内容'});await page.evaluate(id=>window.dbark.invoke('connections.delete',{id}),removed.id);await page.reload();await expect(page.locator('.app-statusbar')).toBeVisible();await open();let card=dialog().locator('.history-card').filter({hasText:'失效来源记录'});await expect(card.getByLabel('打开查询的连接：失效来源记录',{exact:true})).toHaveValue('');await expect(card.getByRole('button',{name:'在新标签打开',exact:true})).toBeDisabled();await card.getByLabel('打开查询的连接：失效来源记录',{exact:true}).selectOption(replacement.id);await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'在新标签打开',exact:true})).click();await expect(dialog()).toHaveCount(0);await expect(page.locator('.query-tab:visible').getByLabel('当前查询默认库',{exact:true})).toHaveText('默认库待确认');let before:unknown;await expect.poll(async()=>{const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{})),active=settings.tabs.find(tab=>tab.id===settings.activeTabId);if(active?.title==='失效来源记录'&&active.sql==='SELECT 1'&&active.connectionId===replacement.id&&active.databaseContext?.state==='unknown')before=settings.tabs;return before;}).toHaveLength(1);
  await open();card=dialog().locator('.history-card').filter({hasText:'陈旧记录'});await update({id:'stale',name:'陈旧记录',connectionId:replacement.id,sql:'SELECT 新内容'});await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'在新标签打开',exact:true})).click();await expect(dialog().locator('.error-box')).toContainText('已修改');await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'删除保存的查询',exact:true})).click();await expect(dialog().locator('.error-box')).toContainText('未删除新内容');expect((await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).tabs).toEqual(before);expect((await page.evaluate(()=>window.dbark.invoke('queries.list',{}))).find(item=>item.id==='stale')?.sql).toBe('SELECT 新内容');await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'刷新到第一页',exact:true})).click();await expect(card.locator('pre')).toHaveText('SELECT 新内容');await (await (await import('./navigation-menu')).navigationMenuItem(card, {name:'删除保存的查询',exact:true})).click();await expect(dialog().locator('.history-card')).toHaveCount(1);await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();expect((await page.evaluate(()=>window.dbark.invoke('queries.list',{}))).map(item=>item.id)).toEqual(['missing']);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('saved-query-pages-stale-delete.png')});

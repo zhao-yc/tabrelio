@@ -12,6 +12,8 @@ export const savedQueryPagesZh={
  pending:'筛选尚未应用，请点击搜索。',summary:'当前第{0}批；已检查{1}条，命中{2}条，累计失败{3}条。',more:'仍有未检查记录，请读取下一批。',done:'已检查当前范围的全部记录，请同时核对累计失败数。',
  empty:'本批没有符合条件的保存查询',emptyHint:'如仍有未检查记录，可以继续读取下一批，或缩小搜索范围。',choose:'请明确选择连接',sourceMissing:'未指定或来源连接已失效',connection:'打开查询的连接：{0}',
  openHint:'更换来源连接后，请在执行前确认默认库。',preview:'正文共{0}个UTF16单元；此处仅为预览。',failures:'本批失败记录',failedStop:'已按错误策略停止，仍有未确认范围。',
+ openExisting:'切回已打开的标签',openExistingHint:(title:string)=>`切回「${title}」，保留当前草稿。`,
+ openExistingStale:'原查询标签已关闭或来源已变化，请重新选择。',
  openBatch:'打开所选查询', openBatchTitle:'批量打开查询标签',
  openBatchHint:'按勾选顺序打开独立标签。更换来源后默认库为未知，所有 SQL 等待手动执行。',
  openBatchConfirm:(count:number)=>`打开 ${count} 个查询标签`,

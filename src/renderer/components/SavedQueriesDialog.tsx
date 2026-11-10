@@ -46,6 +46,11 @@ const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database,
   databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding,
 });
+/** 按查询库来源编号匹配，标题、正文和执行后的默认库都可以与原记录不同。 */
+function matchesOpenedQuery(tab: WorkspaceTab, queryId: string, connectionId: string): boolean {
+  return tab.kind === 'query' && !tab.fileSourceBinding && tab.sourceBinding?.id === queryId &&
+    (!connectionId || tab.connectionId === connectionId);
+}
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.database, value.sort, value.favoritesOnly]);
 /** 浏览和筛选归档使用同一份条件投影。 */
 function pageFilters(value: Criteria): SavedQueryArchiveFilters {
@@ -66,6 +71,7 @@ type Edit = OrganizationEdit | RebindEdit | DuplicateBatchEdit;
 /** 原Promise锁覆盖分组和列表；跨页选择只存编号、摘要和名称，不累计SQL正文。 */
 export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConnectionId, services: io = services }: { onClose(): void; onHistory(): void; insertion?: HistoryInsertionTarget | null; initialConnectionId?: string; services?: Services }) {
   const connections = useWorkspace(state => state.connections);
+  const tabs = useWorkspace(state => state.settings.tabs), recentTabs = useWorkspace(state => state.recentTabRefs);
   const [scope, setScope] = useState<SavedQueryScope>(() => initialConnectionId ? { kind: 'connection', connectionId: initialConnectionId } : { kind: 'all' });
   const [database, setDatabase] = useState<SavedQueryDatabaseScope>({ kind: 'all' });
   const [databaseKind, setDatabaseKind] = useState<DatabaseFilterKind>('all'), [databaseName, setDatabaseName] = useState('');
@@ -410,6 +416,30 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }
   /** 丢失来源不回退其它连接；打开仅重读摘要对应原文，不执行SQL。 */
   function target(item: SavedQueryPageEntry) { return targets.has(item.query.id) ? targets.get(item.query.id)! : connections.some(value => value.id === item.query.connectionId) ? item.query.connectionId! : ''; }
+  function openedTab(item: SavedQueryPageEntry): WorkspaceTab | undefined {
+    const connectionId = target(item);
+    const candidates = tabs.filter(tab => matchesOpenedQuery(tab, item.query.id, connectionId) &&
+      connections.some(connection => connection.id === tab.connectionId));
+    return recentTabs.map(ref => candidates.find(tab => tab.id === ref.id)).find(Boolean) ?? candidates[0];
+  }
+  /** 关闭列表后重新核对标签身份，不能激活等待期间被关闭、换绑或重建的标签。 */
+  function activateOpenedTab(item: SavedQueryPageEntry, opened: WorkspaceTab): void {
+    if (!editable() || !currentCard(item)) return;
+    try {
+      const state = useWorkspace.getState();
+      const ref = state.tabOrderSnapshot().find(ref => ref.id === opened.id);
+      const profile = state.connections.find(connection => connection.id === opened.connectionId);
+      if (!ref || state.resolveTabOrder(ref) !== opened || !profile) throw Error(t.openExistingStale);
+      void close(() => {
+        const workspace = useWorkspace.getState(), live = workspace.resolveTabOrder(ref);
+        if (!live || !matchesOpenedQuery(live, item.query.id, opened.connectionId) ||
+            !workspace.connections.includes(profile) ||
+            workspace.connectionVersions[profile.id] !== state.connectionVersions[profile.id]) throw Error(t.openExistingStale);
+        workspace.updateSettings({ activeTabId: live.id });
+        onClose();
+      });
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   function open(item: SavedQueryPageEntry) {
     if (!editable()) return; const connectionId = target(item); if (!connectionId) { setError(t.choose); return; }
     let opened: SavedQueryOpenResult | undefined; const work = run(async ticket => { const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId }); if (owns(ticket)) opened = result; });
@@ -648,14 +678,20 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         {!external && <button disabled={blocked} onClick={() => beginExternal()}>{externalText.resume}</button>}
         {external && <SavedQueryExternalEditor key={external.sessionId} session={external} request={io.request} onDone={message => finishExternal(external, message)}/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
-        <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label>
+        <div className="history-list">{reply?.items.map(item => {
+          const opened = openedTab(item);
+          return <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label>
           <button type="button" className="icon-button" disabled={blocked || changed || needsRefresh || !organization} aria-label={t.favoriteName(item.query.name)}
             aria-pressed={!!item.favorite} title={item.favorite ? t.favoriteRemove : t.favoriteAdd} onClick={() => setFavorite(item)}>
             <Star size={15} fill={item.favorite ? 'currentColor' : 'none'} aria-hidden="true"/>
           </button><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
           <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<button disabled={blocked || changed || needsRefresh} onClick={() => copySql(item)}>{sqlText.sqlCopy}</button><button disabled={blocked || changed || needsRefresh} title={t.sqlExportHint} onClick={() => exportSql(item)}>{t.sqlExport}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginExternal(item)}>{externalText.open}</button><label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
-          <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
-        </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
+          <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button>
+            {opened && <button type="button" disabled={blocked || changed || needsRefresh} title={t.openExistingHint(opened.title)}
+              onClick={() => activateOpenedTab(item, opened)}>{t.openExisting}</button>}
+            <button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
+        </article>;
+        })}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}
       </div>
     </div>{deleting && <SavedQueryDeleteSelectedPreview key={deleting.epoch} items={deleting.items} busy={busy || closing} onCancel={() => cancelDeleteSelected(deleting)} onConfirm={() => applyDeleteSelected(deleting)}/>}{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} mode={renaming.duplicateRevision ? 'duplicate' : 'rename'} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && ('connectionSnapshot' in editing
