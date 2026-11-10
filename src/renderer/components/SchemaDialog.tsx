@@ -1,3 +1,5 @@
+import type { ViewQuerySeed } from '../queryViewDraft';
+import { queryViewDraftZh } from '../locales/queryViewDraft.zh-CN';
 import { duplicateNewTableColumn } from '../newTableColumnCopy';
 import { newTableColumnCopyZh as columnCopy } from '../locales/newTableColumnCopy.zh-CN';
 import { NewTableColumnOrder } from '../newTableColumnOrder';
@@ -292,7 +294,7 @@ function template(kind: string, database: string, name: string) {
 }
 
 /** 统一入口分流：新建库与既有对象编辑分别维护确认生命周期，无默认库也能创建。 */
-interface DdlDialogProps { onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; onViewRenamed?(before: string, after: string, verified: boolean): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; sqliteIndex?: string; }
+interface DdlDialogProps { viewSeed?: ViewQuerySeed; onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; onViewRenamed?(before: string, after: string, verified: boolean): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; sqliteIndex?: string; }
 /** 只读定义使用独立组件生命周期，切换编辑/查看模式不会改变同一组件的Hook顺序。 */
 export function DdlDialog(props: DdlDialogProps) {
   // 新建库走独立编码目录与一次性预览，原对象DDL编辑器保持原生命周期。
@@ -300,8 +302,8 @@ export function DdlDialog(props: DdlDialogProps) {
   return props.readOnly && props.object && props.database ? <DefinitionViewer connectionId={props.connectionId} database={props.database} object={props.object} search={props.definitionSearch} sqliteIndex={props.sqliteIndex} onClose={props.onClose}/> : <DdlEditorDialog {...props}/>;
 }
 /** 原有显式DDL编辑、预览与确认执行路径保持独立。 */
-function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, onViewRenamed, readOnly=false }: DdlDialogProps) {
-  const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(database ? template('view', database, '') : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
+function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, onViewRenamed, readOnly=false, viewSeed }: DdlDialogProps) {
+  const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(() => database ? (viewSeed ? mysqlNewViewHeader(database, zh.schema.text050) + viewSeed.sql + ';' : template('view', database, '')) : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   const [viewLoaded, setViewLoaded] = useState(false);
   const [savedViewSql, setSavedViewSql] = useState('');
@@ -311,6 +313,8 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
   const applying = useRef(false);
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
+  const seedProfile = useRef(profile).current;
+  const seedStale = !!viewSeed && (version !== viewSeed.version || profile !== seedProfile);
   const fileOwner = useMemo(() => ({}), [connectionId, database, object, profile, version, kind, name, sql]);
   const dependenciesOwner = useMemo(() => ({}), [connectionId, database, object, profile, version]);
   useEffect(() => {
@@ -335,7 +339,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
     return () => { active = false; };
   }, [connectionId, database, object, readOnly]);
   const fileView = !!database && !readOnly && kind === 'view' && (profile?.dialect === 'mysql' || profile?.dialect === 'mariadb');
-  const viewReadDisabled = busy || !completionIdentifier(name) || !!object && !viewLoaded;
+  const viewReadDisabled = seedStale || busy || !completionIdentifier(name) || !!object && !viewLoaded;
   const missingName = fileView && !object && !completionIdentifier(name);
   const statement = database ? sql : name ? `CREATE DATABASE ${identifier(name)} CHARACTER SET utf8mb4;` : '';
 
@@ -355,7 +359,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
 
   function fileCurrent(): boolean {
     const state = useWorkspace.getState();
-    return state.connections.find(item => item.id === connectionId) === profile &&
+    return !seedStale && state.connections.find(item => item.id === connectionId) === profile &&
       (state.connectionVersions[connectionId] ?? 0) === version;
   }
   function closeCopy() {
@@ -374,7 +378,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
 
   /** 用户确认后独立准备连接并执行一次 SQL，连接失败或写入失败均不自动重试。 */
   async function apply() {
-    if (readOnly || missingName || applying.current) return;
+    if (readOnly || missingName || applying.current || (viewSeed && !fileCurrent())) return;
     if (copy && (!copy.preview || copy.owner !== fileOwner || !fileCurrent())) return;
     const accepted = copy?.preview ?? statement;
     if (!accepted.trim()) { setError(zh.schema.text053); return; }
@@ -383,7 +387,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
     setBusy(true); setError(''); const taskId = uid(); setApplyTaskId(taskId);
     try {
       await invoke('connections.open', { id: connectionId });
-      if (copy && !fileCurrent()) throw Error(copyText.stale);
+      if ((copy || viewSeed) && !fileCurrent()) throw Error(viewSeed ? queryViewDraftZh.stale : copyText.stale);
       await invoke('schema.apply', { connectionId, database: database ?? '', sql: accepted, taskId });
       useWorkspace.getState().notify(copy ? copyText.saved(copy.name) : zh.schema.text055);
       onApplied();
@@ -426,7 +430,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
       </div>
     </>}
     {/* 预览时保留原 Monaco 模型和撤销历史。 */}
-    <div className="modal-content" hidden={!!copy}>{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} name={name} value={sql} disabled={viewReadDisabled}
+    <div className="modal-content" hidden={!!copy}>{viewSeed && <p>{queryViewDraftZh.context}</p>}{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} disabled={seedStale} onChange={event => changeName(event.target.value)}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} disabled={!!viewSeed} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}{fileView && <ViewSqlFileImport owner={fileOwner} name={name} value={sql} disabled={viewReadDisabled}
       hint={viewSqlFileZh.mysqlHint} current={fileCurrent} prepare={prepareViewFile}
       prepareSave={value => exportMysqlViewFileQuery(value, database, name)} apply={setSql}/>}
     {fileView && object && <button type="button" disabled={viewReadDisabled} onClick={() => {
@@ -442,7 +446,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
       disabled={busy} load={() => invoke('mysql.view.dependencies', { connectionId, database, name: object.name })}/>}
     {fileView && <MysqlViewAttributes database={database} view={name} sql={sql} disabled={viewReadDisabled}
       current={fileCurrent} change={value => { setSql(value); setError(''); }}/>}
-    <SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/>
+    <SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database||seedStale} height={340}/>
     {fileView && <ViewQueryInspect owner={fileOwner} hint={viewQueryInspectZh.mysqlHint(mysqlViewSampleRows)} current={fileCurrent}
       disabled={viewReadDisabled} read={mode => {
         if (mode === 'rows') setPreviewColumns(undefined);
@@ -451,7 +455,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
     {fileView && <MysqlViewColumns owner={fileOwner} database={database} view={name} sql={sql} disabled={viewReadDisabled}
       current={fileCurrent} previewColumns={previewColumns?.owner === fileOwner ? previewColumns.names : undefined}
       change={value => { setSql(value); setError(''); }}/>}
-    {!copy && <ErrorBox message={error}/>}</div>
+    {!copy && <ErrorBox message={seedStale ? queryViewDraftZh.stale : error}/>}</div>
     <footer className="modal-footer">
       {copy && <button type="button" disabled={busy} onClick={closeCopy}>{copyText.back}</button>}
       <span className="grow"/>
@@ -463,7 +467,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
         <button type="button" className="primary" disabled={busy || !copySql} onClick={() => void apply()}>
           {busy ? <Spinner/> : copyText.apply}
         </button>
-      </> : !readOnly && <button className="primary" disabled={busy || missingName || !statement.trim()}
+      </> : !readOnly && <button className="primary" disabled={seedStale || busy || missingName || !statement.trim()}
         onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button>}
     </footer>
   </Modal>;

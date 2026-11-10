@@ -1,3 +1,5 @@
+import type { ViewQuerySeed } from '../queryViewDraft';
+import { queryViewDraftZh } from '../locales/queryViewDraft.zh-CN';
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview, PostgresCreateTableTarget } from '../../shared/postgresCreateTable';
 import { postgresCreateViewPreviewSchema, postgresViewColumnsSchema, preparePostgresViewDefinition, postgresViewQuerySampleRows, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
@@ -24,10 +26,11 @@ export interface PostgresCreateViewCopyDraft {
 }
 
 /** 编辑、预览及确认绑定原数据库和连接修订，提交结果未知时停止再次发送。 */
-export function PostgresCreateViewDialog({ target, kind, copy, onDirtyChange, onCreated, onClose }: {
+export function PostgresCreateViewDialog({ target, kind, copy, viewSeed, onDirtyChange, onCreated, onClose }: {
   target: PostgresCreateTableTarget;
   kind: PostgresCreateViewKind;
   copy?: PostgresCreateViewCopyDraft;
+  viewSeed?: ViewQuerySeed;
   onDirtyChange(value: boolean): void;
   onCreated(view: string, version: number, message: string): void;
   onClose(): void;
@@ -35,11 +38,12 @@ export function PostgresCreateViewDialog({ target, kind, copy, onDirtyChange, on
   const materialized = kind === 'materialized';
   const { connectionId, database } = target;
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
-  const stale = !!copy && version !== copy.version;
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
+  const seedProfile = useRef(profile).current;
+  const stale = (!!copy && version !== copy.version) || (!!viewSeed && (version !== viewSeed.version || profile !== seedProfile));
   const dialect = profile?.dialect;
   const [schemas, setSchemas] = useState<string[]>([]);
-  const [draft, setDraft] = useState(() => ({ schema: copy?.schema ?? '', view: '', definition: copy?.definition ?? '',
+  const [draft, setDraft] = useState(() => ({ schema: copy?.schema ?? '', view: '', definition: copy?.definition ?? viewSeed?.sql ?? '',
     comment: copy?.comment ?? '', populate: !copy, columnNames: copy?.columnNames ?? [] }));
   const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
   const [preview, setPreview] = useState<(PostgresCreateTablePreview & { version: number })>();
@@ -141,6 +145,7 @@ export function PostgresCreateViewDialog({ target, kind, copy, onDirtyChange, on
   return <Modal title={title} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>PostgreSQL / {database}</strong>
+      {viewSeed && <p>{queryViewDraftZh.context}</p>}
       {copy && <p>{text.copySource(copy.schema, copy.name)}</p>}
       {copy && <p>{materialized ? text.materializedCopyHint : text.copyHint}</p>}
       <p>{preview ? text.review : materialized ? text.materializedHint : text.hint}</p>

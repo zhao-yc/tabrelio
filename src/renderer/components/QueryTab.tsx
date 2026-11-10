@@ -1,3 +1,5 @@
+import { queryViewFromEditor, type QueryViewDraft } from '../queryViewDraft';
+import { queryViewDraftZh as queryViewText } from '../locales/queryViewDraft.zh-CN';
 import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
@@ -213,7 +215,7 @@ const completionStatusInfo={sessionUnknown:{text:completionZh.sessionUnknown,hin
 interface SqliteParameterForm { id: string; source: string; intent?: CurrentStatementIntent; connectionId: string; connection: unknown; version: number; fileBinding: unknown; savedBinding: unknown; session: string; recognized: boolean; submitted: boolean; valid: boolean; }
 
 /** 一个标签对应一个固定会话，流式结果和任务事件只接收当前执行编号。 */
-export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseRequestFinished,historyInsertionRegistry,onChooseQueryTarget }: { historyInsertionRegistry?: HistoryInsertionRegistry; closeRequest?: QueryCloseRequest; onCloseRequestFinished?(request: QueryCloseRequest, close: boolean, keep?: WorkspaceTab): void; tab: WorkspaceTab; onHistory: () => void;searchNavigation?:SavedQueryNavigationSource; onChooseQueryTarget?(draft: QueryTargetDraft): void }) {
+export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseRequestFinished,historyInsertionRegistry,onChooseQueryTarget,onCreateView }: { historyInsertionRegistry?: HistoryInsertionRegistry; closeRequest?: QueryCloseRequest; onCloseRequestFinished?(request: QueryCloseRequest, close: boolean, keep?: WorkspaceTab): void; tab: WorkspaceTab; onHistory: () => void;searchNavigation?:SavedQueryNavigationSource; onChooseQueryTarget?(draft: QueryTargetDraft): void; onCreateView?(draft: QueryViewDraft): void }) {
   const alive = useRef(true), closeRequestRef = useRef(closeRequest); closeRequestRef.current = closeRequest;
   const closeIntent = useRef<QuerySaveCloseIntent | undefined>(undefined);
   const closeBusy = useRef<WorkspaceBusyLease | undefined>(undefined);
@@ -2238,6 +2240,18 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function queryMenuCurrent(): boolean {
     return queryOwnerCurrent() && !document.querySelector(appModalSelector);
   }
+  /** 已连接时以原查询会话的默认库为准，未知上下文不退回侧栏选择。 */
+  function openViewDesign(): void {
+    if (!onCreateView || !connection || !queryMenuCurrent() || busyRef.current || pendingSession.current || fileSource.isBusy() ||
+        formatting.current || resultsOnly || useWorkspace.getState().activeJobs[tab.id] || (connection.dialect === 'sqlite' && connection.sqlite.readOnly)) return;
+    try {
+      const context = sessionRef.current ? queryDatabaseFromSession(mysqlEditorMode) : draftContext;
+      const database = connection.dialect === 'sqlite' ? 'main' : context.state === 'known' ? context.database : null;
+      if (!database) throw Error(queryViewText.database);
+      onCreateView({ tabId: tab.id, connectionId: connection.id, version: connectionVersion, database,
+        dialect: connection.dialect, sql: queryViewFromEditor(editor.current, connection.dialect) });
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   function queryOwnerCurrent(): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
     return alive.current && workspace.settings.activeTabId === tab.id && current?.kind === 'query'
@@ -2699,6 +2713,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       ]}
       moreLabel={menuText.queryMore}
       more={<>
+        {onCreateView && <button disabled={busy || !connection || !searchEditor || resultsOnly || fileSource.busy || !!closeRequest || (connection.dialect === 'sqlite' && connection.sqlite.readOnly)}
+          title={queryViewText.hint} onClick={openViewDesign}>{queryViewText.entry}</button>}
         <button disabled={!canCompactSql} onClick={openFormattingOptions}>{sqlFormattingZh.options}</button>
         <button disabled={!canCompactSql} title={sqlFormattingZh.compactHint} onClick={() => formatQuery('compact')}>{sqlFormattingZh.compact}</button>
         <ActionMenuSection label={navigationText.group}><button disabled={busy || !connection || !searchEditor || navigationView?.busy} onClick={() => openStatementNavigation()}>{navigationText.entry}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'previous')}>{uiCommandLabels['previous-statement']}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'next')}>{uiCommandLabels['next-statement']}</button></ActionMenuSection><ActionMenuSection label={sqlite ? sqliteSyntaxCheckZh.title : syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection><ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>

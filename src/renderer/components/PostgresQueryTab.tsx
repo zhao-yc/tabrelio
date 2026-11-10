@@ -1,3 +1,5 @@
+import { queryViewFromEditor, type QueryViewDraft } from '../queryViewDraft';
+import { queryViewDraftZh as queryViewText } from '../locales/queryViewDraft.zh-CN';
 import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { PostgresSearchRecordEditDialog, type PostgresQueryCellEdit, type PostgresQueryRangeEdit,
@@ -192,6 +194,7 @@ export function PostgresQueryTab({
   searchNavigation,
   historyInsertionRegistry,
   onChooseQueryTarget,
+  onCreateView,
 }: {
   tab: WorkspaceTab;
   closeRequest?: QueryCloseRequest;
@@ -200,6 +203,7 @@ export function PostgresQueryTab({
   searchNavigation?: SavedQueryNavigationSource;
   historyInsertionRegistry?: HistoryInsertionRegistry;
   onChooseQueryTarget?(draft: QueryTargetDraft): void;
+  onCreateView?(draft: QueryViewDraft): void;
 }) {
   const workspace = useWorkspace((s) => s),
     profile = workspace.connections.find((p) => p.id === tab.connectionId),
@@ -1831,6 +1835,14 @@ export function PostgresQueryTab({
       return { instance, model };
     }
   }
+  /** 视图设计使用独立连接，复制原编辑器查询并保留当前结果和事务。 */
+  function openViewDesign() {
+    if (!onCreateView || resultsOnly || !available() || files.isBusy() || !profile) return;
+    try {
+      onCreateView({ tabId: tab.id, connectionId: tab.connectionId, version, database: scope.database,
+        dialect: 'postgresql', sql: queryViewFromEditor(editor.current, 'postgresql') });
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   /** 布局只通过既有租约合并当前标签字段，不持有或回写旧SQL快照。 */
   function beginEditorLayout(cancel: () => void, dimension: 'height' | 'width' = 'height') {
     return beginWorkspaceQueryLayout(tab, version, () => alive.current && !closeRef.current && !phase.current && !insertionLocked.current, cancel, dimension);
@@ -2186,6 +2198,8 @@ export function PostgresQueryTab({
               onClick={() => void duplicateQuery('selection')}>{queryDuplicateZh.selection}</button>
             <button disabled={!canOpenStatementQuery} title={queryDuplicateZh.statementHint}
               onClick={() => navigation.open('duplicate')}>{uiCommandLabels['open-current-statement-query']}</button>
+            {onCreateView && <button disabled={!editable || resultsOnly} title={queryViewText.hint}
+              onClick={openViewDesign}>{queryViewText.entry}</button>}
             {onChooseQueryTarget && <button disabled={!canDuplicateQuery} title={queryDuplicateZh.targetHint}
               onClick={() => void duplicateQuery('target')}>{queryDuplicateZh.targetAction}</button>}
             <button disabled={locked} onClick={onHistory}>
