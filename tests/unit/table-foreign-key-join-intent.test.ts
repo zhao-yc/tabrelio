@@ -13,6 +13,22 @@ function tables() {
 function fixture() { const source = tables(), identity = {}, intent = new TableForeignKeyJoinIntent(source.child, 'connection', 77, [identity], () => true); return { ...source, identity, intent, preview: () => foreignKeyJoinPreview(intent, source.parent, 'fk', 'LEFT', { childColumns: ['id'], parentColumns: ['value'] }) }; }
 
 describe('外键JOIN原结构与前置核验租约', () => {
+  it('没有外键也可生成跨库复合 JOIN，配对被快照固定，换目标结构不能打开旧 SQL', async () => {
+    const { child, parent } = tables();
+    child.foreignKeys = [];
+    const intent = new TableForeignKeyJoinIntent(child, 'connection', 50, [], () => true);
+    const pairs = [{ child: 'parent_id', parent: 'id' }, { child: 'id', parent: 'value' }];
+    const options = { childColumns: ['id'], parentColumns: ['value'] };
+    const preview = foreignKeyJoinPreview(intent, parent, pairs, 'INNER', options);
+    expect(preview.sql).toContain('FROM `child_db`.`child` AS c\nINNER JOIN `parent_db`.`parent` AS p\nON\n  c.`parent_id` = p.`id`\n  AND c.`id` = p.`value`');
+    pairs[0].child = 'id';
+    expect(preview.relation).toEqual([{ child: 'parent_id', parent: 'id' }, { child: 'id', parent: 'value' }]);
+    expect(() => intent.consume({ ...preview, relation: pairs })).toThrow(text.stale);
+    for (const wrong of [[], [pairs[0], pairs[0]], [{ child: 'id', parent: '任意表达式()' }]]) {
+      expect(() => foreignKeyJoinPreview(intent, parent, wrong, 'INNER', options)).toThrow(text.manualInvalid);
+    }
+    await expect(revalidateForeignKeyJoin(intent, preview, async target => target.table === child.name ? child : { ...parent, columns: parent.columns.slice(0, 1) }, () => true)).rejects.toThrow(text.stale);
+  });
   it('入向目录必须与新读到的真实子表及完整有序映射一致', () => {
     const { child, parent } = tables();
     child.foreignKeys[0].columns = ['parent_id', 'id'];

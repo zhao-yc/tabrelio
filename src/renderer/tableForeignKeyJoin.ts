@@ -6,8 +6,10 @@ import { buildForeignKeyJoinHaving, type ForeignKeyJoinHaving } from './tableFor
 import { tableForeignKeyJoinHavingZh as havingText } from './locales/tableForeignKeyJoinHaving.zh-CN';
 import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-CN';
 
-export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
+export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, manualPairs: 64, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
 export type ForeignKeyJoinKind = 'LEFT' | 'RIGHT' | 'INNER';
+export interface ManualJoinPair { child: string; parent: string }
+export type ForeignKeyJoinRelation = string | readonly ManualJoinPair[];
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: 'child' | 'parent' | 'aggregate'; column: string; alias: string }
 export interface ForeignKeyJoinSort { side: 'child' | 'parent' | 'aggregate'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
@@ -142,14 +144,34 @@ function order(raw: unknown, child: { columns: { name: string }[] }, parent: { c
   }).join(', ');
 }
 
-/** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
-export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName: string, kind: ForeignKeyJoinKind, limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
-  if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
-  const left = snapshot(child), right = snapshot(parent), relation = left.foreignKeys.find(key => key.name === fkName);
+/** 手动配对独立于物理外键；只接受双方目录中的真实字段及显式的等值配对。 */
+function joinColumns(left: ReturnType<typeof snapshot>, right: ReturnType<typeof snapshot>, input: ForeignKeyJoinRelation) {
+  const parentNames = new Set(right.columns.map(column => column.name));
+  if (typeof input !== 'string') {
+    const childNames = new Set(left.columns.map(column => column.name)), seen = new Set<string>();
+    const columns: string[] = [], referencedColumns: string[] = [];
+    for (const value of array(input, foreignKeyJoinLimits.manualPairs)) {
+      const child = own(value, 'child'), parent = own(value, 'parent');
+      if (Reflect.ownKeys(value as object).length !== 2 || typeof child !== 'string' || typeof parent !== 'string' ||
+          !childNames.has(child) || !parentNames.has(parent)) throw Error(text.manualInvalid);
+      const pair = JSON.stringify([child, parent]);
+      if (seen.has(pair)) throw Error(text.manualInvalid);
+      seen.add(pair); columns.push(child); referencedColumns.push(parent);
+    }
+    if (!columns.length) throw Error(text.manualInvalid);
+    return { columns, referencedColumns };
+  }
+  const relation = left.foreignKeys.find(key => key.name === input);
   if (!relation) throw Error(text.relation);
   if (right.database !== relation.referencedDatabase || right.name !== relation.referencedTable) throw Error(text.target);
-  const parentNames = new Set(right.columns.map(column => column.name));
   if (relation.referencedColumns.some(column => !parentNames.has(column))) throw Error(text.relation);
+  return relation;
+}
+
+/** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
+export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: ForeignKeyJoinRelation, kind: ForeignKeyJoinKind, limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
+  if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
+  const left = snapshot(child), right = snapshot(parent), relation = joinColumns(left, right, input);
   let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right.columns.map(column => column.name); }
   else {

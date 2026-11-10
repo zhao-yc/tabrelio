@@ -243,7 +243,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [queryTemplate, setQueryTemplate] = useState<TableQueryTemplateLease | null>(null), queryTemplateRef = useRef(queryTemplate);
   const [foreignKeyJoinDialog, setForeignKeyJoinDialog] = useState<
     { intent: TableForeignKeyJoinIntent; mode: 'directory'; proceed(child: TableInfo, relation: IncomingReferenceRelation): void } |
-    { intent: TableForeignKeyJoinIntent; mode: 'build'; fixed?: FixedForeignKeyJoinStart } | null>(null);
+    { intent: TableForeignKeyJoinIntent; mode: 'build'; fixed?: FixedForeignKeyJoinStart; manual?: boolean } | null>(null);
   const foreignKeyJoinIntent = useRef<TableForeignKeyJoinIntent | null>(null);
   const foreignKeyJoinBusy = useRef<{ lease?: WorkspaceBusyLease; acquiring: boolean; releasing: boolean } | null>(null);
   const [filteredSelectDialog, setFilteredSelectDialog] = useState<TableFilteredSelectIntent | null>(null), filteredSelectIntent = useRef<TableFilteredSelectIntent | null>(null), filteredSelectPage = useRef<TableFilteredSelectPage | null>(null);
@@ -1368,8 +1368,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const incomingForeignKeyJoinAvailable = templateAvailable && info?.objectKind === 'table';
   let foreignKeyJoinAvailable = incomingForeignKeyJoinAvailable;
   if (foreignKeyJoinAvailable) { try { foreignKeyJoinAvailable = foreignKeyJoinChoices(info!).length > 0; } catch { foreignKeyJoinAvailable = false; } }
-  /** JOIN只消费真实FK结构；已有暂存草稿、选行、筛选排序都留在原表页。 */
-  function openForeignKeyJoin(incoming = false, handoff?: { owner: NonNullable<typeof relationshipDialog>; draft: RelationshipJoinDraft }): boolean {
+  /** JOIN 只消费目录结构；当前行、原表筛选和排序不会写进查询。 */
+  function openForeignKeyJoin(mode: 'outgoing' | 'incoming' | 'manual' = 'outgoing', handoff?: { owner: NonNullable<typeof relationshipDialog>; draft: RelationshipJoinDraft }): boolean {
     if (!info || tableReadAction.current !== tableReadRender || foreignKeyJoinIntent.current || activeGridEditor.current || record.hasInput()) return false;
     const state = useWorkspace.getState(), source = info, version = connectionVersion, profile = connection, generation = loadGeneration.current, refresh = refreshVersion, limit = settings.resultLimit;
     if (state.settings.activeTabId !== tab.id || state.settings.tabs.find(item => item.id === tab.id) !== tab || state.activeJobs[tab.id] || state.connections.find(item => item.id === tab.connectionId) !== profile) return false;
@@ -1379,7 +1379,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       if (!onOpenGeneratedQuery || relationshipRef.current !== handoff.owner || !handoff.owner.current() || referenceCount.current ||
           recordContextRef.current.stale || state.dirtyTabs[tab.id] || record.dirty || record.pending ||
           dialogs.length !== 1 || dialogs[0].getAttribute('aria-label') !== relationshipDiagramZh.title) return false;
-    } else if (!(incoming ? incomingForeignKeyJoinAvailable : foreignKeyJoinAvailable) || reloadBlocked()) return false;
+    } else if (!(mode === 'outgoing' ? foreignKeyJoinAvailable : incomingForeignKeyJoinAvailable) || reloadBlocked()) return false;
     try {
       const originKey = foreignKeyJoinMetadataKey(source);
       /** 来自入向目录的子表加入构建后，原父表标签及其结构仍是整个流程的来源。 */
@@ -1397,7 +1397,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
         setForeignKeyJoinDialog({ intent, mode: 'build', fixed: handoff.draft.start });
         return true;
       }
-      if (!incoming) { setForeignKeyJoinDialog({ intent, mode: 'build' }); return true; }
+      if (mode !== 'incoming') { setForeignKeyJoinDialog({ intent, mode: 'build', manual: mode === 'manual' }); return true; }
       setForeignKeyJoinDialog({ intent, mode: 'directory', proceed(child, relation) {
         if (foreignKeyJoinIntent.current !== intent || !intent.current()) return;
         let setup: FixedForeignKeyJoinStart, childIntent: TableForeignKeyJoinIntent;
@@ -1434,7 +1434,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (useWorkspace.getState().settings.tabs.length >= 100) throw Error(tableForeignKeyJoinZh.tabs);
     const sql = intent.consume(preview);
     foreignKeyJoinIntent.current = null; setForeignKeyJoinDialog(null); onQueryTemplateNavigation?.();
-    onOpenGeneratedQuery({ kind: 'query', title: tableForeignKeyJoinZh.queryTitle(intent.source.name), connectionId: intent.connectionId, ...queryDatabasePatch({ state: 'known', database: intent.source.database }), sql }); return true;
+    const title = typeof preview.relation === 'string' ? tableForeignKeyJoinZh.queryTitle(intent.source.name) : tableForeignKeyJoinZh.manualQueryTitle(intent.source.name);
+    onOpenGeneratedQuery({ kind: 'query', title, connectionId: intent.connectionId, ...queryDatabasePatch({ state: 'known', database: intent.source.database }), sql }); return true;
   }
   /** 关闭只移除已完成原异步收尾的那个窗口，不能放行旧读取或撤掉后来窗口。 */
   function closeForeignKeyJoin(intent: TableForeignKeyJoinIntent): void { if (foreignKeyJoinIntent.current === intent) { intent.invalidate(); foreignKeyJoinIntent.current = null; setForeignKeyJoinDialog(null); onQueryTemplateNavigation?.(); } }
@@ -2344,7 +2345,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     <button disabled={!templateAvailable} onClick={openQueryTemplate}>{templateText.entry}</button>
 <button disabled={!structureScriptAvailable} onClick={openStructureScript}>{schemaScriptLabel}</button>
 <button aria-label={tableForeignKeyJoinZh.entry} title={tableForeignKeyJoinZh.scope} disabled={!foreignKeyJoinAvailable} onClick={() => openForeignKeyJoin()}>{tableForeignKeyJoinZh.entry}</button>
-<button title={tableForeignKeyJoinZh.incomingScope} disabled={!incomingForeignKeyJoinAvailable} onClick={() => openForeignKeyJoin(true)}>{tableForeignKeyJoinZh.incomingEntry}</button>
+<button title={tableForeignKeyJoinZh.incomingScope} disabled={!incomingForeignKeyJoinAvailable} onClick={() => openForeignKeyJoin('incoming')}>{tableForeignKeyJoinZh.incomingEntry}</button>
+<button title={tableForeignKeyJoinZh.manualScope} disabled={!incomingForeignKeyJoinAvailable} onClick={() => openForeignKeyJoin('manual')}>{tableForeignKeyJoinZh.manualEntry}</button>
 <button aria-label={filteredSelectText.entry} title={filteredSelectText.hint} disabled={!filteredSelectAvailable} onClick={openFilteredSelect}>{filteredSelectText.entry}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selection} onClick={() => copyRowsAsInsert(false)}>{copyInsertSqlZh.current}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selectedRows.size} onClick={() => copyRowsAsInsert(true)}>{copyInsertSqlZh.selected}</button>
@@ -2439,13 +2441,13 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     {childReferenceDialog && <ChildReferenceDialog base={base} intent={childReferenceDialog} onClose={() => closeChildReferences(childReferenceDialog)} onActivity={referenceActivity}/>}
     {foreignKeyJoinDialog?.mode === 'directory' && <IncomingForeignKeyJoinDialog intent={foreignKeyJoinDialog.intent} onProceed={foreignKeyJoinDialog.proceed}
       onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog.intent)} onActivity={foreignKeyJoinActivity}/>}
-    {foreignKeyJoinDialog?.mode === 'build' && <TableForeignKeyJoinDialog intent={foreignKeyJoinDialog.intent} fixed={foreignKeyJoinDialog.fixed}
+    {foreignKeyJoinDialog?.mode === 'build' && <TableForeignKeyJoinDialog intent={foreignKeyJoinDialog.intent} fixed={foreignKeyJoinDialog.fixed} manual={foreignKeyJoinDialog.manual}
       onOpen={preview => openForeignKeyJoinQuery(foreignKeyJoinDialog.intent, preview)} onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog.intent)}
       onActivity={foreignKeyJoinActivity} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {tableStatisticsDialog && <TableStatisticsDialog base={base} intent={tableStatisticsDialog.intent} onCount={tableStatisticsDialog.onCount} onClose={() => closeTableStatistics(tableStatisticsDialog.intent)} onActivity={referenceActivity}/>}
     {relationshipDialog && <RelationshipDiagramDialog connectionId={tab.connectionId} source={relationshipDialog.source} current={relationshipDialog.current} onActivity={referenceActivity}
       onJoin={onOpenGeneratedQuery && !record.dirty && !record.pending && !externalStale && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb')
-        ? draft => openForeignKeyJoin(false, { owner: relationshipDialog, draft }) : undefined}
+        ? draft => openForeignKeyJoin('outgoing', { owner: relationshipDialog, draft }) : undefined}
       onClose={() => { if (relationshipRef.current === relationshipDialog) { relationshipRef.current = null; presetUiEpoch.current++; setRelationshipDialog(null); } }}/>}
     {tableValueOptionsDialog && <TableValueOptionsDialog target={base} source={tableValueOptionsDialog.intent.source} column={tableValueOptionsDialog.column} conditions={tableValueOptionsDialog.intent.conditions} isCurrent={() => tableValueOptionsDialog.intent.current()} services={tableValueOptionsServices} onApply={next => applyTableValueOptions(tableValueOptionsDialog.intent, next)} onClose={() => closeTableValueOptions(tableValueOptionsDialog.intent)} onCleanupError={message => useWorkspace.getState().notify(message, true)} onActivity={referenceActivity}/>}
     {filteredUpdateDialog && <TableFilteredUpdateDialog intent={filteredUpdateDialog} initialColumn={selection?.key} onActivity={referenceActivity} onClose={result => closeFilteredUpdate(filteredUpdateDialog,result)} onCommitted={(result,changed) => useWorkspace.getState().notify(changed?filteredUpdateText.committedChanged(result.rows):filteredUpdateText.committed(result.rows),changed)} onCleanupError={message => useWorkspace.getState().notify(message,true)}/>}

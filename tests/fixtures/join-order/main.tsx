@@ -8,17 +8,27 @@ import '../../../src/renderer/styles.css';
 
 const table = (name: string, columns: string[]): TableInfo => ({ database: '合成关联库', name, objectKind: 'table', columns: columns.map(name => ({ name, type: 'BIGINT UNSIGNED', nullable: true, generated: false, extra: '', comment: '', defaultValue: null })), indexes: [], foreignKeys: [], primaryKey: ['id'], editableKey: ['id'], engine: 'InnoDB', ddl: '', comment: '' });
 const child = table('child', ['id', 'parent_id']), parent = table('parent', ['id', 'amount']);
-const options = new URLSearchParams(location.search), incoming = options.get('direction') === 'incoming';
+const options = new URLSearchParams(location.search), incoming = options.get('direction') === 'incoming', manual = options.get('direction') === 'manual';
 parent.columns[1].type = 'DECIMAL(30,4)';
 child.foreignKeys = [{ name: 'fk_parent', columns: ['parent_id'], referencedDatabase: parent.database, referencedTable: parent.name, referencedColumns: ['id'], onDelete: 'RESTRICT', onUpdate: 'RESTRICT' }];
 if (incoming) child.foreignKeys.push({ ...child.foreignKeys[0], name: 'fk_other_parent', columns: ['id'] });
-const source = incoming ? parent : child;
+const source = incoming || manual ? parent : child;
+const other = { ...table('payments', ['order_id', 'total']), database: '另一库' };
+const another = { ...other, name: 'other_payments' };
 const calls: { command: string; input: unknown }[] = [], denied: string[] = [];
 /** 只替代数据库输入；真实TableTab、菜单、JOIN窗口、来源租约及工作区打开行为均参与。 */
 Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string, input: Record<string, unknown>) => {
   calls.push({ command, input: structuredClone(input) });
+  if (manual && input.connectionId === 'offline-join') {
+    if (command === 'metadata.databases') return [source.database, other.database];
+    if (command === 'metadata.objects' && input.database === other.database) return [{ name: other.name, kind: 'table' }, { name: another.name, kind: 'table' }, { name: 'view_only', kind: 'view' }];
+    if (command === 'metadata.table' && input.database === other.database) {
+      const target = [other, another].find(item => item.name === input.table);
+      if (target) return structuredClone(target);
+    }
+  }
   if (command === 'metadata.table' && input.connectionId === 'offline-join' && input.database === child.database && [child.name, parent.name].includes(input.table as string)) return structuredClone(input.table === child.name ? child : parent);
-  if (command === 'table.page' && input.connectionId === 'offline-join' && input.database === source.database && input.table === source.name) return { rows: incoming ? [] : [{ id: '9007199254740993', parent_id: '18446744073709551615' }, { id: '9007199254740994', parent_id: null }], columns: source.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), page: 1, pageSize: 50, hasMore: false } satisfies TablePage;
+  if (command === 'table.page' && input.connectionId === 'offline-join' && input.database === source.database && input.table === source.name) return { rows: incoming || manual ? [] : [{ id: '9007199254740993', parent_id: '18446744073709551615' }, { id: '9007199254740994', parent_id: null }], columns: source.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), page: 1, pageSize: 50, hasMore: false } satisfies TablePage;
   if (command === 'table.incomingReferences' && incoming && input.connectionId === 'offline-join' && input.database === parent.database &&
       input.table === parent.name && (input.cursor === undefined || input.cursor === 'fixture-page-2')) {
     const next = input.cursor === 'fixture-page-2';

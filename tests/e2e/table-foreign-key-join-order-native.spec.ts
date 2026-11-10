@@ -146,6 +146,48 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
     await step(() => dialog().getByRole('button', { name: text.open, exact: true }).click()); await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText(suffix)); const final = await evidence(); expect(final.tabs).toHaveLength(2); expect(final.tabs.filter(tab => tab.kind === 'query')).toHaveLength(1); expect(final.resultLimit).toBe(43); expect(final.denied).toEqual([]); expect(final.dirty).toEqual(before.dirty); expect(final.jobs).toEqual(before.jobs); expect(Object.values(final.jobs).some(Boolean)).toBe(false); expect(final.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'parent', 'child', 'parent']); expect(final.calls.some(call => /query\.|table\.(apply|preview)/.test(call.command))).toBe(false); expect(errors).toEqual([]);
     const sql = final.tabs.find(tab => tab.kind === 'query')?.sql; if (distinct) expect(sql).toMatch(/^SELECT DISTINCT\n/); if (filtering) { expect(sql).toContain('WHERE'); expect(sql).toContain('p.`amount` IN'); expect(sql).toContain('p.`id` IS NULL'); expect(sql).toContain(' OR '); } else expect(sql).not.toContain('WHERE');
     if (mode === 'filter-dark') { expect(sql).toContain('RIGHT JOIN'); expect(sql).toContain('WHERE c.`parent_id` IS NULL AND ('); }
+    if (mode === 'dark') {
+      await step(() => page.goto(address + '?theme=dark&direction=manual'));
+      await step(() => expect(page.getByRole('grid', { name: '当前页数据网格', exact: true })).toBeVisible());
+      await step(async () => (await navigationMenuItem(page.locator('.table-tab'), { name: text.manualEntry, exact: true }, check)).click());
+      const manual = page.getByRole('dialog', { name: text.manualTitle, exact: true });
+      const open = manual.getByRole('button', { name: text.open, exact: true });
+      const button = (name: string) => manual.getByRole('button', { name, exact: true });
+      const field = (name: string) => manual.getByRole('combobox', { name, exact: true });
+      await step(() => expect(field(text.joinKind)).toHaveValue('INNER'));
+      await step(() => button(text.manualDatabases).click());
+      await step(() => field(text.manualDatabase).selectOption('另一库'));
+      await step(() => button(text.manualTables).click());
+      await step(() => expect(field(text.manualTable).getByRole('option', { name: 'view_only' })).toHaveCount(0));
+      await step(() => field(text.manualTable).selectOption('other_payments'));
+      await step(() => button(text.manualRead).click());
+      await step(() => field(text.manualChild(1)).selectOption('id'));
+      await step(() => field(text.manualParent(1)).selectOption('order_id'));
+      await step(() => expect(open).toBeEnabled());
+      await step(() => field(text.manualTable).selectOption('payments'));
+      await step(() => expect(field(text.manualChild(1))).toHaveCount(0));
+      await step(() => expect(open).toBeDisabled());
+      await step(() => button(text.manualRead).click());
+      await step(() => field(text.manualChild(1)).selectOption('id'));
+      await step(() => expect(open).toBeDisabled());
+      await step(() => field(text.manualParent(1)).selectOption('order_id'));
+      await step(() => button(text.manualAddPair).click());
+      await step(() => field(text.manualChild(2)).selectOption('amount'));
+      await step(() => field(text.manualParent(2)).selectOption('total'));
+      const preview = manual.getByLabel(text.preview, { exact: true });
+      await step(() => expect(preview).toContainText('INNER JOIN `另一库`.`payments` AS p\nON\n  c.`id` = p.`order_id`\n  AND c.`amount` = p.`total`'));
+      await step(() => field(text.manualParent(2)).scrollIntoViewIfNeeded());
+      await step(() => page.screenshot({ path: info.outputPath('manual-two-table-join.png') }));
+      await step(() => open.click());
+      await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('c.`amount` = p.`total`'));
+      const result = await evidence();
+      expect(result.tabs).toHaveLength(2);
+      expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['parent', 'other_payments', 'payments', 'parent', 'payments']);
+      expect(result.calls.filter(call => call.command === 'table.page').map(call => call.input.table)).toEqual(['parent']);
+      expect(result.calls.some(call => /query\./.test(call.command))).toBe(false);
+      expect(result.denied).toEqual([]);
+      expect(Object.values(result.jobs).some(Boolean)).toBe(false);
+    }
     if (mode === 'light') {
       // 同一原生窗口换入独立父表夹具，父表没有出向外键，结果表也没有可选记录。
       await step(() => page.goto(address + '?theme=light&direction=incoming'));

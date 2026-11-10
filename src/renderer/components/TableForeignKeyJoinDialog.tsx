@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo, FilterGroup, FilterMode, FilterRule } from '../../shared/contracts';
+import { completionIdentifier } from '../../shared/completionLexical';
 import { FILTER_LIMITS, validateFilterGroup } from '../../shared/filtering';
 import { emptyFilterDraft, filterRuleSummary, type FilterDraft } from '../tableFilters';
 import { foreignKeyJoinFiltersFromDraft, foreignKeyJoinGroupAfterChange, type ForeignKeyJoinFilterDraft } from '../tableForeignKeyJoinFilters';
@@ -18,26 +19,37 @@ import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPre
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
+import { ManualJoinPairFields, ManualJoinTableFields, type ManualJoinSelection } from './ManualJoinFields';
+import { relationshipDiagramLimits } from '../relationshipDiagram';
 
 export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget & { taskId: string }): Promise<TableInfo>; cancel(taskId: string): Promise<unknown>; }
 /** 每次正式元数据读取均持有独立任务编号；取消不借普通查询或复用数据库会话。 */
 export const tableForeignKeyJoinServices: TableForeignKeyJoinServices = { read: input => invoke('metadata.table', input), cancel: taskId => invoke('query.cancel', { taskId }) };
-interface Selection { distinct: boolean; unmatchedOnly: boolean; fk: string; kind: ForeignKeyJoinKind; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; filterGroup?: FilterGroup; summaryEnabled: boolean; summaryGroups: ForeignKeyJoinGroupDraft[]; aggregates: ForeignKeyJoinAggregateDraft[]; summarySort: { id: string; rule: ForeignKeyJoinSort }[]; having: ForeignKeyJoinHavingDraft[]; havingMode: FilterMode; havingGroup?: FilterGroup; }
+interface Selection { distinct: boolean; unmatchedOnly: boolean; fk: string; manual?: ManualJoinSelection; kind: ForeignKeyJoinKind; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; filterGroup?: FilterGroup; summaryEnabled: boolean; summaryGroups: ForeignKeyJoinGroupDraft[]; aggregates: ForeignKeyJoinAggregateDraft[]; summarySort: { id: string; rule: ForeignKeyJoinSort }[]; having: ForeignKeyJoinHavingDraft[]; havingMode: FilterMode; havingGroup?: FilterGroup; }
 interface GroupEditor { selection: Selection; kind: 'where' | 'having'; mode: FilterMode; initial?: FilterGroup; rules: readonly FilterRule[]; presentation: TableFilterGroupPresentation; }
 interface Operation { promise: Promise<void>; cancelled: boolean; read?: { taskId: string; cancelPromise?: Promise<unknown> }; cancellation?: Promise<unknown>; }
 const pageSize = 50;
 
+/** 目录仅用于选取真实名称；超量或异常回包不产生半份列表。 */
+function manualCatalogNames(names: unknown[]): string[] {
+  if (names.length > relationshipDiagramLimits.catalog || !names.every(completionIdentifier)) throw Error(text.invalid);
+  return [...new Set(names)].sort();
+}
+
 /** 一次原读取和最新本地选择共用占门；不持有任何父页行数据或执行SQL的能力。 */
-export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
+export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
   intent: TableForeignKeyJoinIntent; onOpen(preview: ForeignKeyJoinPreview): boolean; onClose(): void;
-  fixed?: FixedForeignKeyJoinStart; onActivity(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
+  fixed?: FixedForeignKeyJoinStart; manual?: boolean; onActivity(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
 }) {
-  const origin = useRef({ intent, fixed, services, onActivity }).current;
-  if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed) origin.intent.invalidate();
-  const choices = useMemo(() => foreignKeyJoinChoices(origin.intent.source).filter(key => !origin.fixed || key.name === origin.fixed.foreignKey), [origin]);
-  const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, fk: choices[0]?.name ?? '', kind: origin.fixed?.kind ?? 'LEFT', child: origin.intent.source.columns.map(column => column.name), parent: origin.fixed?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
+  const origin = useRef({ intent, fixed, manual, services, onActivity }).current;
+  if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed || origin.manual !== manual) origin.intent.invalidate();
+  const title = origin.manual ? text.manualTitle : text.title;
+  const choices = useMemo(() => origin.manual ? [] : foreignKeyJoinChoices(origin.intent.source).filter(key => !origin.fixed || key.name === origin.fixed.foreignKey), [origin]);
+  const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, fk: choices[0]?.name ?? '', manual: origin.manual ? { database: intent.source.database, table: '', pairs: [] } : undefined, kind: origin.fixed?.kind ?? (origin.manual ? 'INNER' : 'LEFT'), child: origin.intent.source.columns.map(column => column.name), parent: origin.fixed?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
   const selectionRef = useRef(selection), [parent, setParent] = useState<{ fk: string; info: TableInfo } | undefined>(() =>
     origin.fixed && { fk: origin.fixed.foreignKey, info: origin.fixed.parent });
+  const [databases, setDatabases] = useState(() => [intent.source.database]);
+  const [tables, setTables] = useState<string[]>();
   const [groupEditor, setGroupEditor] = useState<GroupEditor>(), groupRef = useRef<GroupEditor | undefined>(undefined), groupPanel = useRef<HTMLDivElement>(null), groupTrigger = useRef<HTMLButtonElement>(null), havingGroupTrigger = useRef<HTMLButtonElement>(null), hadGroup = useRef<GroupEditor['kind'] | undefined>(undefined);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [invalid, setInvalid] = useState(false), [message, setMessage] = useState('');
   const alive = useRef(true), closingRef = useRef(false), operation = useRef<Operation | null>(null), revision = useRef(0), consumed = useRef(false), committed = useRef<object | null>(null), ticket = {};
@@ -49,12 +61,14 @@ export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onAc
   function current(): boolean {
     if (!alive.current || closingRef.current || consumed.current || origin.intent !== intent || origin.services !== services || !origin.intent.current()) return false;
     const dialogs = document.querySelectorAll('[role="dialog"]');
-    if (dialogs.length !== 1 || dialogs[0].getAttribute('aria-label') !== text.title || document.querySelector('[role="alertdialog"]')) { origin.intent.invalidate(); return false; }
+    if (dialogs.length !== 1 || dialogs[0].getAttribute('aria-label') !== title || document.querySelector('[role="alertdialog"]')) { origin.intent.invalidate(); return false; }
     return true;
   }
   function rendered(): boolean { return committed.current === ticket && selectionRef.current === selection; }
   function editable(): boolean { return current() && rendered() && !operation.current && !groupRef.current; }
   const choice = choices.find(value => value.name === selection.fk);
+  const target = selection.manual ? tables?.includes(selection.manual.table) && { database: selection.manual.database, table: selection.manual.table }
+    : choice && { database: choice.referencedDatabase, table: choice.referencedTable };
   const sorting = selection.summaryEnabled ? selection.summarySort : selection.sort;
   /** 输出ID绑定原分组/指标对象；别名和列表顺序变化不会让旧条件指向另一个输出。 */
   const havingTargets = useMemo<ForeignKeyJoinHavingTarget[]>(()=>{
@@ -66,12 +80,12 @@ export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onAc
   },[origin.intent,parent,selection.fk,selection.summaryEnabled,selection.summaryGroups,selection.aggregates]);
   const preview = useMemo(() => {
     if (!parent || parent.fk !== selection.fk) return { value: undefined, error: '' };
-    try { const limit = foreignKeyJoinResultLimit(selection.limit), filters = foreignKeyJoinFiltersFromDraft(selection.filters, origin.intent.source, parent.info), having = selection.summaryEnabled?foreignKeyJoinHavingFromDraft(selection.having,havingTargets):[]; return { value: foreignKeyJoinPreview(origin.intent, parent.info, selection.fk, selection.kind, { childColumns: selection.child, parentColumns: selection.parent, ...(selection.unmatchedOnly ? { unmatchedOnly: true } : {}), ...(!selection.summaryEnabled && selection.distinct ? { distinct: true } : {}), ...(selection.summaryEnabled ? { summary: foreignKeyJoinSummaryFromDraft(selection.summaryGroups,selection.aggregates) } : {}), ...(having.length?{having:{filters:having,mode:selection.havingMode,...(selection.havingGroup?{group:selection.havingGroup}:{})}}:{}), ...(filters.length ? { filters, filterMode: selection.filterMode, ...(selection.filterGroup ? { filterGroup: selection.filterGroup } : {}) } : {}), ...(sorting.length ? { sort: sorting.map(item => item.rule) } : {}), ...(limit !== origin.intent.limit ? { limit } : {}) }), error: '' }; }
+    try { const limit = foreignKeyJoinResultLimit(selection.limit), filters = foreignKeyJoinFiltersFromDraft(selection.filters, origin.intent.source, parent.info), having = selection.summaryEnabled?foreignKeyJoinHavingFromDraft(selection.having,havingTargets):[]; return { value: foreignKeyJoinPreview(origin.intent, parent.info, selection.manual ? selection.manual.pairs.map(({ child, parent }) => ({ child, parent })) : selection.fk, selection.kind, { childColumns: selection.child, parentColumns: selection.parent, ...(selection.unmatchedOnly ? { unmatchedOnly: true } : {}), ...(!selection.summaryEnabled && selection.distinct ? { distinct: true } : {}), ...(selection.summaryEnabled ? { summary: foreignKeyJoinSummaryFromDraft(selection.summaryGroups,selection.aggregates) } : {}), ...(having.length?{having:{filters:having,mode:selection.havingMode,...(selection.havingGroup?{group:selection.havingGroup}:{})}}:{}), ...(filters.length ? { filters, filterMode: selection.filterMode, ...(selection.filterGroup ? { filterGroup: selection.filterGroup } : {}) } : {}), ...(sorting.length ? { sort: sorting.map(item => item.rule) } : {}), ...(limit !== origin.intent.limit ? { limit } : {}) }), error: '' }; }
     catch (reason) { return { value: undefined, error: errorMessage(reason) }; }
   }, [origin.intent, parent, selection, havingTargets]);
   const aliases = useMemo(() => {
     if (!preview.value) return new Map<string, string>();
-    return new Map(buildForeignKeyJoin(origin.intent.source, preview.value.parent, preview.value.foreignKey, preview.value.kind, origin.intent.limit, preview.value.options).columns.map(column => [JSON.stringify([column.side, column.column]), column.alias]));
+    return new Map(buildForeignKeyJoin(origin.intent.source, preview.value.parent, preview.value.relation, preview.value.kind, origin.intent.limit, preview.value.options).columns.map(column => [JSON.stringify([column.side, column.column]), column.alias]));
   }, [origin.intent, preview.value]);
 
   /** 只取消原当前任务一次；ACK和真实读取都属于原operation，不能ACK先释放占用。 */
@@ -93,27 +107,40 @@ export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onAc
     finally { if (active.read === request) active.read = undefined; }
   }
   /** 同步占门后才排原异步链，按钮连点和旧DOM均不能建立第二个在途操作。 */
-  function run(kind: 'preview' | 'open'): void {
-    if (!editable() || !choice || kind === 'open' && !preview.value) return;
+  function run(kind: 'preview' | 'open' | 'databases' | 'tables'): void {
+    if (!editable() || (kind === 'preview' && !target) || (kind === 'open' && !preview.value) ||
+        ((kind === 'databases' || kind === 'tables') && !selection.manual)) return;
     const selected = selection, generation = ++revision.current, receipt = preview.value;
     let active: Operation;
     const owns = () => current() && operation.current === active && !active.cancelled && generation === revision.current && selectionRef.current === selected;
     active = { promise: Promise.resolve(), cancelled: false }; operation.current = active;
     try { origin.onActivity(1); } catch (reason) { operation.current = null; setError(errorMessage(reason)); return; }
-    setBusy(true); setError(''); setMessage(kind === 'open' ? text.checking : text.parentLoading);
+    setBusy(true); setError(''); setMessage(kind === 'open' ? text.checking : kind === 'databases' ? text.manualDatabases : kind === 'tables' ? text.manualTables : text.parentLoading);
     active.promise = Promise.resolve().then(async () => {
       if (!owns()) return;
-      if (kind === 'preview') {
-        const metadata = await read(active, { connectionId: origin.intent.connectionId, database: choice.referencedDatabase, table: choice.referencedTable }, owns);
+      if (kind === 'databases') {
+        const names = await invoke('metadata.databases', { connectionId: origin.intent.connectionId });
+        if (owns()) setDatabases(manualCatalogNames([...names, origin.intent.source.database]));
+      } else if (kind === 'tables') {
+        const objects = await invoke('metadata.objects', { connectionId: origin.intent.connectionId, database: selected.manual!.database });
+        if (!owns()) return;
+        if (objects.length > relationshipDiagramLimits.catalog) throw Error(text.invalid);
+        const names = manualCatalogNames(objects.filter(object => object.kind === 'table').map(object => object.name));
+        if (selected.manual!.table && !names.includes(selected.manual!.table)) { origin.intent.invalidate(); throw Error(text.stale); }
+        setTables(names);
+      } else if (kind === 'preview' && target) {
+        const metadata = await read(active, { connectionId: origin.intent.connectionId, ...target }, owns);
         if (!owns()) return;
         // 用单列小输出验证关系与真实父目标；默认宽表超预算时仍允许用户精简选列。
         const metadataKey = foreignKeyJoinMetadataKey(metadata), previous = parent?.fk === selected.fk ? parent : undefined;
+        if (metadata.database !== target.database || metadata.name !== target.table) throw Error(text.target);
         // 同一关系重读只核结构，不重置用户选列；结构变化必须重新打开，不能重签旧意图。
         if (previous && foreignKeyJoinMetadataKey(previous.info) !== metadataKey) { origin.intent.invalidate(); throw Error(text.stale); }
-        buildForeignKeyJoin(origin.intent.source, metadata, selected.fk, selected.kind, origin.intent.limit, { childColumns: [origin.intent.source.columns[0].name], parentColumns: [] });
-        const next = { ...selected, parent: previous ? selected.parent : metadata.columns.map(column => column.name), parentSearch: previous ? selected.parentSearch : '', parentPage: previous ? selected.parentPage : 1 };
+        if (!selected.manual) buildForeignKeyJoin(origin.intent.source, metadata, selected.fk, selected.kind, origin.intent.limit, { childColumns: [origin.intent.source.columns[0].name], parentColumns: [] });
+        const manual = selected.manual && !previous ? { ...selected.manual, pairs: [{ id: uid(), child: '', parent: '' }] } : selected.manual;
+        const next = { ...selected, manual, parent: previous ? selected.parent : metadata.columns.map(column => column.name), parentSearch: previous ? selected.parentSearch : '', parentPage: previous ? selected.parentPage : 1 };
         selectionRef.current = next; setSelection(next); setParent({ fk: selected.fk, info: structuredClone(metadata) });
-      } else {
+      } else if (kind === 'open' && receipt) {
         await revalidateForeignKeyJoin(origin.intent, receipt!, target => read(active, target, owns), owns);
         if (!owns()) return;
         if (!onOpen(receipt!)) throw Error(text.stale);
@@ -128,9 +155,20 @@ export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onAc
   /** FK改变立即撤销旧父回执，取消仅本地原任务；原Promise收尾前不并发读新FK。 */
   function changeForeignKey(value: string): void {
     if (!current() || !rendered() || groupRef.current || !choices.some(item => item.name === value) || value === selection.fk) return;
+    resetRelation({ ...selection, fk: value });
+  }
+  /** 更换目标会废弃原结构及依赖该目标的草稿。筛选、排序和字段映射都不跨表套用。 */
+  function resetRelation(selection: Selection): void {
     cancel(); revision.current++; setParent(undefined); setError('');
-    const next = { ...selection, distinct: false, fk: value, child: origin.intent.source.columns.map(column => column.name), parent: [], parentSearch: '', childPage: 1, parentPage: 1, sort: [], filters: [], filterMode: 'all' as const, filterGroup: undefined, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' as const, havingGroup: undefined };
+    const next = { ...selection, distinct: false, child: origin.intent.source.columns.map(column => column.name), parent: [], parentSearch: '', childPage: 1, parentPage: 1, sort: [], filters: [], filterMode: 'all' as const, filterGroup: undefined, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' as const, havingGroup: undefined };
     selectionRef.current = next; setSelection(next);
+  }
+  function changeManualTarget(database: string, table: string) {
+    const manual = selection.manual;
+    if (!manual || !editable() || !databases.includes(database) || (table && (database !== manual.database || !tables?.includes(table))) ||
+        (database === manual.database && table === manual.table)) return;
+    if (database !== manual.database) setTables(undefined);
+    resetRelation({ ...selection, manual: { database, table, pairs: [] } });
   }
   /** 搜索只影响本地分页；字段变化后同步废弃旧打开闭包，未选字段不会改变JOIN条件。 */
   function revise(next: Selection): void { if (!editable()) return; revision.current++; selectionRef.current = next; setSelection(next); setError(''); }
@@ -262,10 +300,12 @@ export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onAc
       <button disabled={busy || unavailable || page <= 1} onClick={() => revise({ ...selection, [pageKey]: page - 1 })}>{text.previous}</button><span>{text.page(page, pages)}</span><button disabled={busy || unavailable || page >= pages} onClick={() => revise({ ...selection, [pageKey]: page + 1 })}>{text.next}</button>
     </fieldset>;
   }
-  return <Modal title={text.title} wide onClose={close} onEscape={groupEditor ? event => { if (!event.target || !groupPanel.current?.contains(event.target as Node)) event.stopPropagation(); } : undefined}><div className="modal-content" aria-busy={busy || closing}>
-    <p>{text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
+  return <Modal title={title} wide onClose={close} onEscape={groupEditor ? event => { if (!event.target || !groupPanel.current?.contains(event.target as Node)) event.stopPropagation(); } : undefined}><div className="modal-content" aria-busy={busy || closing}>
+    <p>{selection.manual ? text.manualScope : text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
     <label>{text.resultLimit}<input aria-label={text.resultLimit} inputMode="numeric" maxLength={128} value={selection.limit} disabled={busy || unavailable} onChange={event => revise({ ...selection, limit: event.target.value })}/></label><p>{text.limitHint}</p>
-    <label>{text.fk}<select aria-label={text.fk} disabled={unavailable || !!origin.fixed} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>
+    {selection.manual ? <ManualJoinTableFields key={selection.manual.database} selection={selection.manual} databases={databases} tables={tables} disabled={busy || unavailable}
+      onDatabases={() => run('databases')} onTables={() => run('tables')} onTarget={changeManualTarget}/>
+      : <label>{text.fk}<select aria-label={text.fk} disabled={unavailable || !!origin.fixed} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>}
     <label>{text.joinKind}<select aria-label={text.joinKind} disabled={busy || unavailable} value={selection.kind} onChange={event => {
       const kind = event.target.value;
       if (kind === 'LEFT' || kind === 'RIGHT' || kind === 'INNER') revise({ ...selection, kind, unmatchedOnly: kind !== 'INNER' && selection.unmatchedOnly });
@@ -273,7 +313,11 @@ export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onAc
     <label><input type="checkbox" checked={selection.unmatchedOnly} disabled={busy || unavailable || selection.kind === 'INNER'}
       onChange={event => revise({ ...selection, unmatchedOnly: event.target.checked })}/>{text.unmatchedOnly}</label>
     <UsageHelp><p>{{ LEFT: text.leftHint, RIGHT: text.rightHint, INNER: text.innerHint }[selection.kind]}</p>
-      {selection.kind !== 'INNER' && <p>{text.unmatchedHint}</p>}<p>{text.relationship}</p><p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
+      {selection.kind !== 'INNER' && <p>{text.unmatchedHint}</p>}{!selection.manual && <p>{text.relationship}</p>}<p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
+    {selection.manual && parent && <ManualJoinPairFields selection={selection.manual} child={origin.intent.source} parent={parent.info} disabled={busy || unavailable}
+      onAdd={() => { const manual = selection.manual!; if (manual.pairs.length < foreignKeyJoinLimits.manualPairs) revise({ ...selection, manual: { ...manual, pairs: [...manual.pairs, { id: uid(), child: '', parent: '' }] } }); }}
+      onChange={(id, patch) => { const manual = selection.manual!; revise({ ...selection, manual: { ...manual, pairs: manual.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) } }); }}
+      onRemove={id => { const manual = selection.manual!; revise({ ...selection, manual: { ...manual, pairs: manual.pairs.filter(pair => pair.id !== id) } }); }}/>}
     <label><input type="checkbox" aria-label={summaryText.enabled} checked={selection.summaryEnabled} disabled={busy || unavailable || !parent || parent.fk!==selection.fk} onChange={event=>revise({...selection,summaryEnabled:event.target.checked})}/>{summaryText.enabled}</label>
     {!selection.summaryEnabled && <><label><input type="checkbox" aria-label={text.distinct} checked={selection.distinct} disabled={busy || unavailable} onChange={event => revise({ ...selection, distinct: event.target.checked })}/>{text.distinct}</label><UsageHelp><p>{text.distinctHint}</p></UsageHelp></>}
     {selection.summaryEnabled ? parent && parent.fk===selection.fk && <TableForeignKeyJoinSummary child={origin.intent.source} parent={parent.info} groups={selection.summaryGroups} aggregates={selection.aggregates} disabled={busy||unavailable} onAddGroup={addSummaryGroup} onGroup={editSummaryGroup} onRemoveGroup={entry=>{if(selection.summaryGroups.includes(entry))revise({...selection,summaryGroups:selection.summaryGroups.filter(item=>item!==entry)});}} onMoveGroup={(entry,offset)=>moveSummary('summaryGroups',entry,offset)} onClearGroups={()=>revise({...selection,summaryGroups:[]})} onAddAggregate={addAggregate} onAggregate={editAggregate} onRemoveAggregate={entry=>{if(selection.aggregates.includes(entry))revise({...selection,aggregates:selection.aggregates.filter(item=>item!==entry)});}} onMoveAggregate={(entry,offset)=>moveSummary('aggregates',entry,offset)} onClearAggregates={()=>revise({...selection,aggregates:[]})}/> : <>{fieldList('child',origin.intent.source)}{parent && parent.fk===selection.fk && fieldList('parent',parent.info)}</>}
@@ -294,5 +338,5 @@ export function TableForeignKeyJoinDialog({ intent, fixed, onOpen, onClose, onAc
     </fieldset>}
     <ErrorBox message={sourceUnavailable && !closing ? text.stale : error || preview.error}/>{closing ? <p role="status">{text.closing}</p> : message && <Spinner text={message}/>}
     {preview.value && !unavailable && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.value.sql}</pre></section>}
-  </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button><button disabled={busy || unavailable || !choice} onClick={() => run('preview')}>{text.preview}</button><button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;
+  </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button><button disabled={busy || unavailable || !target} onClick={() => run('preview')}>{selection.manual ? text.manualRead : text.preview}</button><button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;
 }
