@@ -70,6 +70,8 @@ import { queryCloseZh } from '../locales/queryClose.zh-CN';
 import type * as monaco from 'monaco-editor';
 import { formatSqlEditor, type SqlFormattingMode } from '../sqlFormatting';
 import { DeferredUpperSqlFormatting } from '../sqlFormattingDeferred';
+import { captureQueryFormattingOptions, type QueryFormattingOptions } from '../queryFormattingOptions';
+import { QueryFormattingOptionsDialog } from './QueryFormattingOptionsDialog';
 import { readSqlKeywordCase } from '../../shared/sqlKeywordCase';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import { Play, Square, AlignLeft, Save, History, Gauge, ChevronDown, Check, RotateCcw, LockKeyhole, Pin, X, Download, BookOpen, Braces, Copy } from 'lucide-react';
@@ -216,6 +218,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const closeIntent = useRef<QuerySaveCloseIntent | undefined>(undefined);
   const closeBusy = useRef<WorkspaceBusyLease | undefined>(undefined);
   const formatting = useRef<DeferredUpperSqlFormatting | null>(null);
+  const [formatOptions, setFormatOptions] = useState<QueryFormattingOptions>();
   const duplicateIntent = useRef<QueryDuplicateIntent | null>(null); const [duplicating, setDuplicating] = useState(false);
   const [closePhase, setClosePhase] = useState<'choose' | 'save' | null>(null);
   useEffect(() => { alive.current = true; return () => { alive.current = false; failureSource.current?.dispose(); parameterFailureSource.current?.dispose(); formatting.current?.dispose(); formatting.current = null; duplicateIntent.current?.dispose(); if (closeIntent.current) { closeIntent.current.dispose(); closeBusy.current?.release(); } }; }, []);
@@ -600,6 +603,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       }, preferences);
       formatting.current = operation; const captured = operation;
       return captured.run().catch(reason => { if (alive.current && formatting.current === captured && useWorkspace.getState().settings.tabs.find(item => item.id === tab.id) === owner) setError(errorMessage(reason)); }).finally(() => { if (formatting.current === captured) formatting.current = null; });
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  function openFormattingOptions() {
+    if (formatOptions || resultsOnly) return;
+    try {
+      setFormatOptions(captureQueryFormattingOptions(tab.id, () => editor.current, sqlite ? 'sqlite' : 'mysql',
+        () => alive.current && !busyRef.current && !pendingSession.current && !closeRequestRef.current && !fileSource.isBusy() && !formatting.current));
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制仅占本地意图，不占SQL任务、不清结果；关闭/换连/新作业会永久撤销等待中的复制。 */
@@ -2600,6 +2610,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     stop: { enabled: queryRunning, run: () => { void cancelCurrentQuery().catch(reason => setError(errorMessage(reason))); } },
     format: { enabled: !busy && !closeRequest && !fileSource.busy, run: async () => { await formatQuery(); } },
     'compact-sql': { enabled: canCompactSql, run: () => { formatQuery('compact'); } },
+    'sql-format-options': { enabled: canCompactSql, run: openFormattingOptions },
     parameters: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => openParameters() },
     explain: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute('explain'); } },
     analyze: { enabled: !sqlite && !busy && !!connection && !closeRequest, run: () => { void openAnalyze(); } },
@@ -2665,7 +2676,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         if (pin || resultIndex !== index) selectCurrentResult(index);
         return true;
       });
-    }}>{objectDefinition && <ObjectDefinitionDialog key={objectDefinition.id} source={objectDefinition} onClose={() => closeObjectStructure(objectDefinition)}/>}<div className="context-bar query-context-bar"><div className="query-context-target"><span className="connection-dot" style={{ background: connection?.color }}/><strong title={connection?.name ?? zh.common.connectionDeleted}>{connection?.name ?? zh.common.connectionDeleted}</strong><ChevronDown size={12}/><span className="breadcrumb-divider">/</span><span className="query-database-caption" aria-label="当前查询默认库" title={databaseCaption}>{databaseCaption}</span></div><QueryFileSourceCaption tab={tab} files={fileSource} compact/><span className="muted small query-session-state" title={sessionId ? zh.query.text008 : zh.query.text009}>{sessionId ? zh.query.text008 : zh.query.text009}</span><ActionMenu label={menuText.sessionOptions} className="query-context-options" contextKey={queryMenuKey} isCurrent={queryMenuCurrent} disabled={resultModal || !!transactionSettingsDialog || !!analyzeDialog || settings.activeTabId !== tab.id || !!closeRequest}><button aria-label={queryDatabaseSwitchZh.open} disabled={busy||!sessionId||!connection||settings.activeTabId!==tab.id||!!closeRequest||!!databaseSwitchDialog} onClick={openDatabaseSwitch}>{queryDatabaseSwitchZh.open}</button>{!sessionId&&draftContext.state==='unknown'&&<button disabled={busy} onClick={()=>{invalidateResultSelection();setRecoveryDatabase('');setRecovery(true);}}>{queryContextZh.choose}</button>}<button disabled={busy||!sessionId} title={!sessionId?sessionObjectsZh.needsSession:sessionObjectsZh.title} onClick={()=>{invalidateResultSelection();setSessionObjects(true);}}>{sessionObjectsZh.open}</button><div className="query-execution-options query-menu-options" role="group" aria-label={menuText.executionOptions}>{!sqlite && <label className="check" title={queryWarningsZh.hint}><input type="checkbox" aria-label={queryWarningsZh.option} checked={collectWarnings} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setCollectWarnings(event.target.checked); }}/>{queryWarningsZh.option}</label>}<label className="check" title={sqlite ? queryContinueOnErrorZh.sqliteHint : queryContinueOnErrorZh.hint}><input type="checkbox" aria-label={queryContinueOnErrorZh.option} checked={continueOnError} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setContinueOnError(event.target.checked); }}/>{queryContinueOnErrorZh.option}</label>{sqlite && <label className="inline-field" title={sqliteZh.statementTimeoutHint}>{sqliteZh.statementTimeout}
+    }}>{formatOptions && <QueryFormattingOptionsDialog options={formatOptions} onClose={() => setFormatOptions(undefined)}/>}{objectDefinition && <ObjectDefinitionDialog key={objectDefinition.id} source={objectDefinition} onClose={() => closeObjectStructure(objectDefinition)}/>}<div className="context-bar query-context-bar"><div className="query-context-target"><span className="connection-dot" style={{ background: connection?.color }}/><strong title={connection?.name ?? zh.common.connectionDeleted}>{connection?.name ?? zh.common.connectionDeleted}</strong><ChevronDown size={12}/><span className="breadcrumb-divider">/</span><span className="query-database-caption" aria-label="当前查询默认库" title={databaseCaption}>{databaseCaption}</span></div><QueryFileSourceCaption tab={tab} files={fileSource} compact/><span className="muted small query-session-state" title={sessionId ? zh.query.text008 : zh.query.text009}>{sessionId ? zh.query.text008 : zh.query.text009}</span><ActionMenu label={menuText.sessionOptions} className="query-context-options" contextKey={queryMenuKey} isCurrent={queryMenuCurrent} disabled={resultModal || !!transactionSettingsDialog || !!analyzeDialog || settings.activeTabId !== tab.id || !!closeRequest}><button aria-label={queryDatabaseSwitchZh.open} disabled={busy||!sessionId||!connection||settings.activeTabId!==tab.id||!!closeRequest||!!databaseSwitchDialog} onClick={openDatabaseSwitch}>{queryDatabaseSwitchZh.open}</button>{!sessionId&&draftContext.state==='unknown'&&<button disabled={busy} onClick={()=>{invalidateResultSelection();setRecoveryDatabase('');setRecovery(true);}}>{queryContextZh.choose}</button>}<button disabled={busy||!sessionId} title={!sessionId?sessionObjectsZh.needsSession:sessionObjectsZh.title} onClick={()=>{invalidateResultSelection();setSessionObjects(true);}}>{sessionObjectsZh.open}</button><div className="query-execution-options query-menu-options" role="group" aria-label={menuText.executionOptions}>{!sqlite && <label className="check" title={queryWarningsZh.hint}><input type="checkbox" aria-label={queryWarningsZh.option} checked={collectWarnings} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setCollectWarnings(event.target.checked); }}/>{queryWarningsZh.option}</label>}<label className="check" title={sqlite ? queryContinueOnErrorZh.sqliteHint : queryContinueOnErrorZh.hint}><input type="checkbox" aria-label={queryContinueOnErrorZh.option} checked={continueOnError} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setContinueOnError(event.target.checked); }}/>{queryContinueOnErrorZh.option}</label>{sqlite && <label className="inline-field" title={sqliteZh.statementTimeoutHint}>{sqliteZh.statementTimeout}
         <input type="number" aria-label={sqliteZh.statementTimeout} min={0} max={sqliteStatementTimeoutMaximumMs} step={1}
           disabled={busy || parameterSource !== null} value={sqliteStatementTimeoutMs || ''} placeholder="0"
           onChange={event => {
@@ -2684,6 +2695,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       ]}
       moreLabel={menuText.queryMore}
       more={<>
+        <button disabled={!canCompactSql} onClick={openFormattingOptions}>{sqlFormattingZh.options}</button>
         <button disabled={!canCompactSql} title={sqlFormattingZh.compactHint} onClick={() => formatQuery('compact')}>{sqlFormattingZh.compact}</button>
         <ActionMenuSection label={navigationText.group}><button disabled={busy || !connection || !searchEditor || navigationView?.busy} onClick={() => openStatementNavigation()}>{navigationText.entry}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'previous')}>{uiCommandLabels['previous-statement']}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'next')}>{uiCommandLabels['next-statement']}</button></ActionMenuSection><ActionMenuSection label={sqlite ? sqliteSyntaxCheckZh.title : syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection><ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
         <ActionMenuSection label={menuText.execution}>{sqlite && <>

@@ -17,6 +17,8 @@ import { flushSync } from 'react-dom';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { formatSqlEditor, type SqlFormattingMode } from '../sqlFormatting';
+import { captureQueryFormattingOptions, type QueryFormattingOptions } from '../queryFormattingOptions';
+import { QueryFormattingOptionsDialog } from './QueryFormattingOptionsDialog';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import type { DataRow, PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
@@ -212,6 +214,7 @@ export function PostgresQueryTab({
   const [editorInstance, setEditorInstance] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
   const layoutRoot = useRef<HTMLDivElement>(null);
   const [layoutWidth, setLayoutWidth] = useState(0), [resultsOnly, setResultsOnly] = useState(false);
+  const [formatOptions, setFormatOptions] = useState<QueryFormattingOptions>();
   const [editorPreview, setEditorPreview] = useState<number | null>(null), [editorWidthPreview, setEditorWidthPreview] = useState<number | null>(null);
   const preferredPlacement = readQueryResultPlacement(tab.queryResultPlacement);
   const besideAvailable = layoutWidth >= queryResultBesideMinimum;
@@ -405,7 +408,7 @@ export function PostgresQueryTab({
       (current.database || (p?.dialect === 'postgresql' && p.database) || 'postgres') === original.database
     );
   }
-  function available() {
+  function available(allowFormattingDialog?: true) {
     const now = useWorkspace.getState();
     return (
       same(scope) &&
@@ -426,7 +429,7 @@ export function PostgresQueryTab({
       !snapshotOperation.current &&
       !fileBusy &&
       !closeRef.current &&
-      !document.querySelector(appModalSelector)
+      (allowFormattingDialog === true || !document.querySelector(appModalSelector))
     );
   }
   /** 撤销确认来源，后续事件不能使用已经关闭或换代的弹窗。 */
@@ -1863,6 +1866,12 @@ export function PostgresQueryTab({
       formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces, expressionWidth: settings.sqlExpressionWidth }, mode);
     } catch (reason) { setError(errorMessage(reason)); }
   }
+  function openFormattingOptions() {
+    if (formatOptions || !commandEditor()) return;
+    try {
+      setFormatOptions(captureQueryFormattingOptions(tab.id, () => editor.current, 'postgresql', () => available(true) && !files.isBusy()));
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   function openSaveQuery() {
     if (commandEditor()) setSave(true);
   }
@@ -2020,6 +2029,7 @@ export function PostgresQueryTab({
     parameters: { enabled: canRun, run: openParameters },
     format: { enabled: editable, run: formatQuery },
     'compact-sql': { enabled: editable, run: () => formatQuery('compact') },
+    'sql-format-options': { enabled: editable, run: openFormattingOptions },
     'save-query': { enabled: editable, run: openSaveQuery },
     'sql-copy-quoted': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction(sqlQuotedCopyAction) },
     'sql-clipboard-stack': { enabled: editable && !resultsOnly, run: () => editorAction(sqlClipboardStackAction) },
@@ -2120,6 +2130,7 @@ export function PostgresQueryTab({
         if (handleQueryExecutionShortcut(event, tab.id, focused) || handleQueryResultReplaceShortcut(event, openResultReplace)) return;
         handleQueryResultShortcut(event, focused, results.length, selectCurrentResult);
       }}>
+      {formatOptions && <QueryFormattingOptionsDialog options={formatOptions} onClose={() => setFormatOptions(undefined)}/>}
       <div className="context-bar">
         <strong>{profile?.name}</strong>
         <span>PostgreSQL / {scope.database}</span>
@@ -2160,6 +2171,7 @@ export function PostgresQueryTab({
               {text.format}
             </button>
             <button disabled={!editable} title={sqlFormattingZh.compactHint} onClick={() => formatQuery('compact')}>{sqlFormattingZh.compact}</button>
+            <button disabled={!editable} onClick={openFormattingOptions}>{sqlFormattingZh.options}</button>
             <button disabled={!editable} onClick={openSaveQuery}>
               {text.save}
             </button>

@@ -34,6 +34,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
   'compact-sql': '压缩 SQL',
   'sql-format-preferences': 'SQL 格式化偏好',
+  'sql-format-options': '按选项格式化 SQL',
   'parameters': '参数执行', 'explain': '执行计划', 'analyze': '实际执行分析', 'transaction-settings': '事务设置',
   'object-definition': '查看对象结构',
   'syntax-check': '检查 SQL 语法',

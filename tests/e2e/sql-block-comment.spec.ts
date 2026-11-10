@@ -13,6 +13,19 @@ const label = uiCommandLabels['sql-toggle-block-comment'];
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const activeEditor = () => page.locator('.query-tab:visible .monaco-editor');
 
+/** 等原生菜单已投影当前选区再点击一次，避免使用仍来自空选区的旧菜单代次。 */
+async function nativeQueryCommand(id: string, selection: boolean) {
+  await expect.poll(() => desktop.evaluate(({ Menu }, { id, selection }) => {
+    const menu = Menu.getApplicationMenu();
+    return menu?.getMenuItemById(id)?.enabled === true && menu.getMenuItemById('execute-selection')?.enabled === selection;
+  }, { id, selection })).toBe(true);
+  await desktop.evaluate(({ Menu, BrowserWindow }, { id, selection }) => {
+    const menu = Menu.getApplicationMenu(), item = menu?.getMenuItemById(id), [window] = BrowserWindow.getAllWindows();
+    if (!item?.enabled || !window || menu?.getMenuItemById('execute-selection')?.enabled !== selection) throw Error('原生命令所属的查询或选区不可用');
+    item.click(item, window, {} as Electron.KeyboardEvent);
+  }, { id, selection });
+}
+
 /** 用正式存储准备离线查询和本例专用的 SQLite 文件，实际操作经过原生窗口。 */
 async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql: string, secondQuery?: string) {
   await quitDesktop();
@@ -43,6 +56,76 @@ async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql:
   await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
   await page.reload();
   await expect(activeEditor().getByRole('textbox')).toBeVisible();
+}
+
+for (const dialect of ['mysql', 'postgresql'] as const) {
+  test(`${dialect} 按选项格式化 SQL 绑定原选区并按选择保存偏好`, async ({}, info) => {
+    const body = 'select * from t where id in (100,200,300);';
+    const source = 'select 1;\n' + body + '\nselect 2;';
+    const result = 'select 1;\n' + (dialect === 'mysql'
+      ? 'SELECT\n  *\nFROM\n  t\nWHERE\n  id IN (\n    100,\n    200,\n    300\n  );'
+      : 'select\n  *\nfrom\n  t\nwhere\n  id in (\n    100,\n    200,\n    300\n  );') + '\nselect 2;';
+    await seed(dialect, source);
+    async function select(line: number, empty = false) {
+      await activeEditor().evaluate((element, { line, empty }) => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const editor = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+        const model = editor?.getModel();
+        if (!editor || !model) throw Error('原查询模型不可读');
+        editor.setSelection({ startLineNumber: line, endLineNumber: line, startColumn: 1, endColumn: empty ? 1 : model.getLineMaxColumn(line) });
+      }, { line, empty });
+    }
+    const panel = page.getByRole('dialog', { name: '按选项格式化 SQL', exact: true });
+    const once = panel.getByRole('button', { name: '仅本次格式化', exact: true });
+    const read = () => page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      return { width: settings.sqlExpressionWidth, sql: settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n') };
+    });
+    async function openOptions() {
+      if (dialect === 'mysql') {
+        await nativeQueryCommand('sql-format-options', true);
+      } else {
+        await (await navigationMenuItem(page.locator('.query-tab:visible'), { name: '按选项格式化 SQL', exact: true })).click();
+      }
+      await expect(panel).toBeVisible();
+    }
+    await select(2);
+    await openOptions();
+    await select(3);
+    await once.click();
+    await expect(panel.getByRole('alert')).toBeVisible();
+    expect(await read()).toEqual({ width: undefined, sql: source });
+    await panel.getByRole('button', { name: '取消', exact: true }).click();
+    await select(2);
+    await openOptions();
+    await panel.getByRole('spinbutton', { name: '括号内单行宽度', exact: true }).fill('10');
+    if (dialect === 'mysql') {
+      await panel.getByRole('combobox', { name: '关键字大小写', exact: true }).selectOption('upper');
+      await panel.screenshot({ path: info.outputPath('sql-format-options.png') });
+      await once.click();
+    } else {
+      await panel.getByRole('button', { name: '格式化并保存偏好', exact: true }).click();
+    }
+    const width = dialect === 'mysql' ? undefined : 10;
+    await expect(panel).toBeHidden();
+    await expect.poll(read).toEqual({ width, sql: result });
+    await page.keyboard.press(`${modifier}+z`);
+    await expect.poll(read).toEqual({ width, sql: source });
+    if (dialect === 'postgresql') {
+      await select(1, true);
+      await openOptions();
+      await expect(panel.getByRole('spinbutton', { name: '括号内单行宽度', exact: true })).toHaveValue('10');
+      await once.click();
+      await expect(panel).toBeHidden();
+      const whole = 'select\n  1;\n\nselect\n  *\nfrom\n  t\nwhere\n  id in (\n    100,\n    200,\n    300\n  );\n\nselect\n  2;';
+      await expect.poll(read).toEqual({ width, sql: whole });
+      await page.keyboard.press(`${modifier}+z`);
+      await expect.poll(read).toEqual({ width, sql: source });
+    }
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
 }
 
 for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
@@ -122,12 +205,7 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     expect(before.sql).toBe(original);
     expect(before.selected).toBe(selected ? body : '');
     if (dialect === 'mysql' || dialect === 'postgresql') {
-      await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('compact-sql')?.enabled)).toBe(true);
-      await desktop.evaluate(({ Menu, BrowserWindow }) => {
-        const item = Menu.getApplicationMenu()?.getMenuItemById('compact-sql'), [window] = BrowserWindow.getAllWindows();
-        if (!item?.enabled || !window) throw Error('压缩 SQL 原生命令不可用');
-        item.click(item, window, {} as Electron.KeyboardEvent);
-      });
+      await nativeQueryCommand('compact-sql', selected);
     } else {
       await (await navigationMenuItem(page.locator('.query-tab:visible'), { name: '压缩 SQL', exact: true })).click();
     }

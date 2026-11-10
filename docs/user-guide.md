@@ -814,6 +814,8 @@ PostgreSQL 当前查询结果会显示语句序号、服务器回执、服务端
 
 也可从「工具 → 查询 → SQL 格式化偏好」打开设置。括号内单行宽度可设为 1 至 200，默认 50。调小后，格式化时较长的括号表达式会更早展开到多行。MySQL、MariaDB、PostgreSQL 和 SQLite 共享此宽度，保存后在下一次主动格式化时使用。
 
+如果要边设置边格式化，从「工具 → 查询 → 按选项格式化 SQL」或查询工具栏进入。可选择「仅本次格式化」或「格式化并保存偏好」。修改范围是打开窗口时的选区，未选择文本时为当前脚本。选区、正文或活动标签发生变化时，需关闭窗口重新发起。MySQL 和 MariaDB 可以在此选择关键字大小写。
+
 在 PostgreSQL 查询中，点击「格式化 PostgreSQL SQL」或按 Alt＋Shift＋F（macOS 为 Option＋Shift＋F）。有选区时仅排版该范围，光标未选中文字时排版全文。排版采用当前编辑器缩进，保留关键字原有大小写，可一步撤销或重做。[PostgreSQL 选区格式化](development/postgres-query-format-selection-20261108.md)
 
 #### 压缩 SQL
