@@ -1,3 +1,4 @@
+import { queryBuilderOffsetDraftSchema } from './queryBuilderOffset';
 import { z } from 'zod';
 import { FILTER_LIMITS, filterGroupSchema, tableFilterOperators, validateFilterGroup } from './filtering';
 
@@ -41,6 +42,7 @@ const sorts = z.array(z.object({
 const queryDesignFields = z.object({
   version: z.literal(1),
   distinct: z.boolean(), child: columns, limit: z.string().regex(/^[1-9]\d{0,5}$/),
+  offset: queryBuilderOffsetDraftSchema.optional(),
   filters: z.array(z.object({ id, side, enabled: z.boolean(), draft: filterDraft }).strict()).max(FILTER_LIMITS.conditions),
   filterMode: mode, filterGroup: filterGroupSchema.optional(),
   sort: sorts, summarySort: sorts,

@@ -81,6 +81,16 @@ describe('手动 JOIN 独立预览', () => {
     expect(vi.mocked(structureTaskQuery).mock.calls.filter(call => call[1] === 'ROLLBACK AND NO CHAIN NO RELEASE')).toHaveLength(2);
   });
 
+  it('独立数据预览保留 LIMIT 和 OFFSET 的语义，并拒绝非法偏移', async () => {
+    const request = mysqlJoinPreviewSchema.parse({ ...input, options: { ...input.options as object, limit: 3, offset: 5 } });
+    await previewMysqlJoin(context, request, async () => {});
+    expect(vi.mocked(consumeQueryFrames).mock.calls[0][1]).toMatch(/ORDER BY c\.`id` DESC\nLIMIT 3 OFFSET 5;$/);
+    for (const offset of [-1, 1.5, '1', 1_000_000_001]) {
+      expect(mysqlJoinPreviewSchema.safeParse({ ...input, options: { childColumns: ['id'], offset } }).success).toBe(false);
+    }
+    expect(buildMysqlSingleTableSelect(child, 3, { childColumns: ['id'], offset: 0 }).sql).toMatch(/LIMIT 3;$/);
+  });
+
   it('合同拒绝渲染端提交 SQL、物理目录回包及超额步骤', () => {
     expect(mysqlJoinPreviewSchema.safeParse(input).success).toBe(true);
     for (const extra of [{ sql: 'SELECT SLEEP(5)' }, { mode: 'analyze' }, { options: { additionalJoins: [] } }, { steps: Array(7).fill(input.steps[0]) },

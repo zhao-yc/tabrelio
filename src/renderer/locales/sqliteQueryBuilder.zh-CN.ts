@@ -13,7 +13,7 @@ export const sqliteQueryBuilderZh = {
   whereGroups: '组合 WHERE 条件', havingGroups: '组合 HAVING 条件', groupStructure: '当前条件组合',
   groupHint: '用括号组合此处的条件。应用后更新 SQL 草稿，原值、存储类型和启停状态保持。',
   groupLimits: '最多 32 条条件、16 组（含最外层）、8 层。每条条件恰好出现一次，应用前请为每个子组放入条件。',
-  distinct: '去重完整输出行（DISTINCT）', limit: '结果行数上限', limitHint: '留空时 SQL 不带 LIMIT。填写 1～1000000 的整数。',
+  distinct: '去重完整输出行（DISTINCT）', limit: '结果行数上限', limitHint: '留空不限制结果行数。填写 1～1000000 的整数。',
   invalidLimit: '结果行数上限须为 1～1000000 的整数。', preview: '预览 SQL', open: '打开为独立查询',
   checking: '正在重新核对 SQLite 来源…',
   tabs: '标签数量已达上限，请先关闭部分标签。',

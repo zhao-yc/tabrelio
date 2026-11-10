@@ -1,3 +1,5 @@
+import { readQueryBuilderOffset } from '../../shared/queryBuilderOffset';
+import { queryBuilderPaginationZh as pagination } from '../locales/queryBuilderPagination.zh-CN';
 import { assertSingleQueryDraftColumns, type PostgresSingleQueryDraft, type SingleQueryDraft } from '../../shared/singleQueryDesigns';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FilterGroup, FilterMode, FilterRule, SortRule } from '../../shared/contracts';
@@ -33,13 +35,13 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 interface CatalogueEntry { key: string; schema: string; name: string }
 
 function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBuilderSource, joins: readonly QueryBuilderJoinDraft<PostgresQueryBuilderSource, PostgresBuilderJoin>[] = []) {
-  const { selected, columnAliases, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup } = draft;
+  const { selected, columnAliases, distinct, limit, offset, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup } = draft;
   const outputs = queryBuilderSummaryOutputs(summary);
   if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
   const rowLimit = limit ? Number(limit) : undefined;
   if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > postgresQueryBuilderLimits.rowLimit)) throw Error(text.invalidLimit);
   const design = { ...source.target, fingerprint: source.fingerprint, columns: summaryEnabled ? [] : selected, columnAliases: summaryEnabled ? undefined : columnAliases,
-    distinct: !summaryEnabled && distinct, rowLimit, sort: summaryEnabled ? [] : sort,
+    distinct: !summaryEnabled && distinct, rowLimit, rowOffset: readQueryBuilderOffset(offset), sort: summaryEnabled ? [] : sort,
     summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary), having: havingRules.length ? {
       rules: havingRules.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })),
       mode: havingMode, group: havingGroup,
@@ -68,6 +70,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [source, setSource] = useState<PostgresQueryBuilderSource>();
   const [joins, setJoins] = useState<QueryBuilderJoinDraft<PostgresQueryBuilderSource, PostgresBuilderJoin>[]>([]);
   const singleDraft = useRef<PostgresSingleQueryDraft | undefined>(undefined);
+  const [offset, setOffset] = useState('');
   const [columnAliases, setColumnAliases] = useState<QueryBuilderColumnAlias[]>([]);
   const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
@@ -88,8 +91,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const schemas = useMemo(() => [...new Set(catalogue?.map(item => item.schema))], [catalogue]);
   const choices = catalogue?.filter(item => (!schema || item.schema === schema) &&
     (item.key === table || (item.schema + '.' + item.name).toLowerCase().includes(search.toLowerCase())));
-  const draft = useMemo<PostgresSingleQueryDraft>(() => ({ dialect: 'postgresql', version: 1, selected, columnAliases: columnAliases.length ? columnAliases : undefined, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup }),
-    [selected, columnAliases, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup]);
+  const draft = useMemo<PostgresSingleQueryDraft>(() => ({ dialect: 'postgresql', version: 1, selected, columnAliases: columnAliases.length ? columnAliases : undefined, distinct, limit, offset: offset || undefined, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup }),
+    [selected, columnAliases, distinct, limit, offset, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup]);
   const preview = useMemo<(ReturnType<typeof compileDesign> & { error?: never }) |
     { error: string; design?: never; sql?: never } | undefined>(() => {
     if (!source) return;
@@ -147,7 +150,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       if (result.target.connectionId !== connectionId || result.target.database !== database || result.target.table !== table)
         throw Error(text.stale);
       setSource(result); setSelected(result.columns.map(column => column.name)); setColumnAliases([]);
-      setRules([]); setMode('all'); setGroup(undefined); setSort([]); setDistinct(false); setLimit('');
+      setRules([]); setMode('all'); setGroup(undefined); setSort([]); setDistinct(false); setLimit(''); setOffset('');
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
       setHavingRules([]); setHavingMode('all'); setHavingGroup(undefined);
       setJoins([]); singleDraft.current = undefined;
@@ -177,7 +180,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   }
 
   function applyDraft(value: PostgresSingleQueryDraft) {
-    setSelected(value.selected); setColumnAliases(value.columnAliases ?? []); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
+    setSelected(value.selected); setColumnAliases(value.columnAliases ?? []); setDistinct(value.distinct); setLimit(value.limit); setOffset(value.offset ?? ''); setSort(value.sort);
     setSummaryEnabled(value.summaryEnabled); setSummary(value.summary);
     setRules(value.rules); setMode(value.mode); setGroup(value.group);
     setHavingRules(value.havingRules); setHavingMode(value.havingMode); setHavingGroup(value.havingGroup);
@@ -372,6 +375,9 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         <Field label={text.limit}><input inputMode="numeric" maxLength={7} disabled={disabled || !!editor} value={limit}
           onChange={event => { if (editable()) setLimit(event.target.value); }}/></Field>
         <p>{text.limitHint}</p>
+        <Field label={pagination.offset}><input inputMode="numeric" maxLength={10} disabled={disabled || !!editor} value={offset}
+          onChange={event => { if (editable()) setOffset(event.target.value); }}/></Field>
+        <p className="muted small">{pagination.offsetHint}</p>
         {preview?.design && <ViewQueryInspect owner={preview} labels={text.inspectLabels} hint={text.inspection(postgresQueryBuilderLimits.rows)}
           disabled={disabled || !!editor} current={current} read={inspect => invoke('postgres.queryBuilder.inspect', { ...preview.design, inspect })}/>}
         {preview?.sql && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.sql};</pre></section>}

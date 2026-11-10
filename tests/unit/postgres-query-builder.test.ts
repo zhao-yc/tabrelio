@@ -10,6 +10,15 @@ const source: PostgresQueryBuilderSource = {
 const draft: PostgresQueryBuilderDesign = { ...source.target, fingerprint: source.fingerprint, columns: ['id', '值'], sort: [], distinct: false };
 
 describe('PostgreSQL 单表查询设计', () => {
+  it('行偏移独立于行数上限，并限制数值范围', () => {
+    const sql = buildPostgresQueryBuilderSql(draft, source);
+    expect(buildPostgresQueryBuilderSql({ ...draft, rowOffset: 9 }, source)).toBe(sql + ' OFFSET 9');
+    expect(buildPostgresQueryBuilderSql({ ...draft, rowOffset: 9, rowLimit: 3 }, source)).toBe(sql + ' LIMIT 3 OFFSET 9');
+    expect(buildPostgresQueryBuilderSql({ ...draft, rowOffset: 0 }, source)).toBe(sql);
+    for (const rowOffset of [-1, 1.5, 1_000_000_001, '2']) {
+      expect(postgresQueryBuilderInspectSchema.safeParse({ ...draft, inspect: 'rows', rowOffset }).success).toBe(false);
+    }
+  });
   it('自定义输出名支持引号，且原字段排序不被同名输出遮蔽', () => {
     const design: PostgresQueryBuilderDesign = { ...draft, columns: ['值', 'id'], distinct: true,
       columnAliases: [{ column: '值', alias: 'id' }, { column: 'id', alias: '原"编号' }],

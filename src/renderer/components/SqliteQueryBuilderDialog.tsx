@@ -1,3 +1,5 @@
+import { readQueryBuilderOffset } from '../../shared/queryBuilderOffset';
+import { queryBuilderPaginationZh as pagination } from '../locales/queryBuilderPagination.zh-CN';
 import { assertSingleQueryDraftColumns, type SqliteSingleQueryDraft, type SingleQueryDraft } from '../../shared/singleQueryDesigns';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DatabaseObject } from '../../shared/contracts';
@@ -33,7 +35,7 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 type SqliteJoinDraft = QueryBuilderJoinDraft<SqliteQueryBuilderSource, SqliteBuilderJoin>;
 
 function compileDesign(draft: SqliteSingleQueryDraft, source: SqliteQueryBuilderSource, joins: readonly SqliteJoinDraft[] = []) {
-  const { selected, columnAliases, distinct, limit, sort, filters, mode, filterGroup, summaryEnabled, summary, havingFilters, havingMode, havingGroup } = draft;
+  const { selected, columnAliases, distinct, limit, offset, sort, filters, mode, filterGroup, summaryEnabled, summary, havingFilters, havingMode, havingGroup } = draft;
   const outputs = queryBuilderSummaryOutputs(summary);
   if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
   const rowLimit = limit === '' ? undefined : Number(limit);
@@ -45,7 +47,7 @@ function compileDesign(draft: SqliteSingleQueryDraft, source: SqliteQueryBuilder
   const having = summaryEnabled && havingFilters.length ? sqliteTableDraft({ connectionId, database, table }, 1, havingMode,
     havingFilters.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })), [], schema) : undefined;
   const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: summaryEnabled ? [] : selected, filterGroup, columnAliases: summaryEnabled ? undefined : columnAliases,
-    distinct: !summaryEnabled && distinct, rowLimit, summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary),
+    distinct: !summaryEnabled && distinct, rowLimit, rowOffset: readQueryBuilderOffset(offset), summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary),
       having: having && { mode: having.mode, filters: having.filters, group: havingGroup } } : undefined,
     joins: joins.length ? joins.map(item => item.step) : undefined };
   if (summaryEnabled && columnAliases?.length) {
@@ -88,6 +90,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   const [source, setSource] = useState<SqliteQueryBuilderSource>();
   const [joins, setJoins] = useState<SqliteJoinDraft[]>([]), [editingJoin, setEditingJoin] = useState<number>();
   const singleDraft = useRef<SqliteSingleQueryDraft | undefined>(undefined);
+  const [offset, setOffset] = useState('');
   const [columnAliases, setColumnAliases] = useState<QueryBuilderColumnAlias[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [where, setWhere] = useState(emptySqliteBuilderFilterDraft), [having, setHaving] = useState(emptySqliteBuilderFilterDraft);
@@ -108,10 +111,10 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   const joinEntries = useMemo(() => objects?.filter(item => item.kind === 'table' || item.kind === 'view')
     .map(item => ({ key: item.name })) ?? [], [objects]);
   const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
-  const draft = useMemo<SqliteSingleQueryDraft>(() => ({ dialect: 'sqlite', version: 1, selected, columnAliases: columnAliases.length ? columnAliases : undefined, distinct, limit, sort,
+  const draft = useMemo<SqliteSingleQueryDraft>(() => ({ dialect: 'sqlite', version: 1, selected, columnAliases: columnAliases.length ? columnAliases : undefined, distinct, limit, offset: offset || undefined, sort,
     filters: where.filters, mode: where.mode, filterGroup: where.group, summaryEnabled, summary,
     havingFilters: having.filters, havingMode: having.mode, havingGroup: having.group }),
-    [selected, columnAliases, distinct, limit, sort, where, summaryEnabled, summary, having]);
+    [selected, columnAliases, distinct, limit, offset, sort, where, summaryEnabled, summary, having]);
   const preview = useMemo<(ReturnType<typeof compileDesign> & { error?: never }) |
     { error: string; design?: never; sql?: never } | undefined>(() => {
     if (!source) return;
@@ -158,7 +161,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
       if (!owns()) return;
       if (!sameTarget(result.target, scope)) throw Error(text.stale);
       setSelected(result.columns.map(column => column.name)); setColumnAliases([]);
-      setWhere(emptySqliteBuilderFilterDraft); setSort([]); setDistinct(false); setLimit(''); setSource(result);
+      setWhere(emptySqliteBuilderFilterDraft); setSort([]); setDistinct(false); setLimit(''); setOffset(''); setSource(result);
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
       setHaving(emptySqliteBuilderFilterDraft);
       setJoins([]); singleDraft.current = undefined;
@@ -189,7 +192,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   }
 
   function applyDraft(value: SqliteSingleQueryDraft) {
-    setSelected(value.selected); setColumnAliases(value.columnAliases ?? []); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
+    setSelected(value.selected); setColumnAliases(value.columnAliases ?? []); setDistinct(value.distinct); setLimit(value.limit); setOffset(value.offset ?? ''); setSort(value.sort);
     setSummaryEnabled(value.summaryEnabled); setSummary(value.summary);
     setWhere({ filters: value.filters, mode: value.mode, group: value.filterGroup });
     setHaving({ filters: value.havingFilters, mode: value.havingMode, group: value.havingGroup });
@@ -363,6 +366,9 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
         <Field label={text.limit}><input inputMode="numeric" maxLength={7} disabled={controlsDisabled} value={limit}
           onChange={event => { if (editable()) setLimit(event.target.value); }}/></Field>
         <p>{text.limitHint}</p>
+        <Field label={pagination.offset}><input inputMode="numeric" maxLength={10} disabled={controlsDisabled} value={offset}
+          onChange={event => { if (editable()) setOffset(event.target.value); }}/></Field>
+        <p className="muted small">{pagination.offsetHint}</p>
         {preview?.design && <ViewQueryInspect owner={preview} labels={text.inspectLabels} hint={text.inspection(sqliteQueryBuilderSampleRows)} disabled={controlsDisabled} current={current}
           read={inspect => invoke('sqlite.queryBuilder.inspect', { ...preview.design, inspect })}/>}
         {preview?.sql && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.sql};</pre></section>}

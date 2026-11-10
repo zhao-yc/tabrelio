@@ -7,6 +7,7 @@ import { sqliteTableBrowseLimits, sqliteTableFilterSchema, sqliteFilterSelection
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits } from './tableForeignKeyJoinSummary';
 import { queryBuilderAliasMap, queryBuilderColumnAliasesSchema } from './queryBuilderProjection';
 import { sqliteQueryBuilderGroupSchema, validateSqliteBuilderGroup } from './sqliteQueryBuilderGroups';
+import { queryBuilderOffsetDraftSchema } from './queryBuilderOffset';
 
 const id = z.string().min(1).max(128);
 const field = z.string().min(1).max(530).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value));
@@ -31,6 +32,7 @@ const base = z.object({
   version: z.literal(1), selected: z.array(field).max(1600), distinct: z.boolean(),
   columnAliases: queryBuilderColumnAliasesSchema.optional(),
   limit: z.string().regex(/^(?:[1-9]\d{0,5}|1000000)?$/),
+  offset: queryBuilderOffsetDraftSchema.optional(),
   summaryEnabled: z.boolean(), summary,
 }).strict();
 const sqliteDraft = base.extend({

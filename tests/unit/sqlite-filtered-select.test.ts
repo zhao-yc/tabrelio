@@ -34,6 +34,21 @@ function input(filters: SqliteTableFilter[] = [], patch: Partial<SqliteTablePage
 function bound(value: SqliteValue): SQLInputValue { if (value === null || typeof value === 'string' || typeof value === 'number') return value; if (value.type === 'integer') return BigInt(value.value); if (value.type === 'real') return Number(value.value); return Buffer.from(value.base64, 'base64'); }
 function rows(db: DatabaseSync, sql: string, parameters: SQLInputValue[] = []) { const statement = db.prepare(sql); statement.setReadBigInts(true); return statement.all(...parameters); }
 
+it('SQLite 可只跳过已排序的行，也可叠加 LIMIT 且保留旧查询默认行为', () => {
+  const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table, kind: 'table' },
+    schemaKey: 'a'.repeat(64), columns };
+  const design: SqliteQueryBuilderDesign = { ...source.target, schemaKey: source.schemaKey, columns: ['id'],
+    distinct: false, mode: 'and', filters: [], sort: [{ column: 'id', direction: 'asc' }] };
+  const offsetOnly = buildSqliteQueryBuilderSql({ ...design, rowOffset: 1 }, source);
+  expect(offsetOnly).toMatch(/LIMIT -1 OFFSET 1$/);
+  for (const db of databases) {
+    expect(rows(db, offsetOnly)).toEqual(rows(db, buildSqliteQueryBuilderSql(design, source)).slice(1));
+    expect(rows(db, buildSqliteQueryBuilderSql({ ...design, rowOffset: 1, rowLimit: 2 }, source))).toEqual([{ id: 2n }, { id: 3n }]);
+  }
+  expect(buildSqliteQueryBuilderSql({ ...design, rowOffset: 0 }, source)).toBe(buildSqliteQueryBuilderSql(design, source));
+  expect(sqliteQueryBuilderInspectSchema.safeParse({ ...design, inspect: 'rows', rowOffset: 1_000_000_001 }).success).toBe(false);
+});
+
 it('SQLite 独立编译嵌套 WHERE 与 HAVING，保留精确类型并剪除停用子组', () => {
   const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table: 'grouped_events', kind: 'table' },
     schemaKey: 'a'.repeat(64), columns: [{ name: 'bucket', declaredType: '' }, { name: 'value', declaredType: '' }] };

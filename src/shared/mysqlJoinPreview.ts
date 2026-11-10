@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { completionIdentifier } from './completionLexical';
+import { queryBuilderOffsetSchema } from './queryBuilderOffset';
 import type { ForeignKeyJoinOptions, ForeignKeyJoinRelation, ManualJoinStep } from './tableForeignKeyJoin';
 
 export const mysqlJoinSampleRows = 100;
@@ -16,7 +17,11 @@ const base = z.object({
   mode: z.enum(['rows', 'explain', 'explainText']).optional(),
   source: target,
   limit: z.number().int().min(1).max(100000),
-  options: z.unknown().refine(value => !!value && typeof value === 'object' && !Array.isArray(value) && !('additionalJoins' in value)),
+  options: z.unknown().refine(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || 'additionalJoins' in value) return false;
+    const offset = Object.getOwnPropertyDescriptor(value, 'offset');
+    return offset ? 'value' in offset && (offset.value === undefined || queryBuilderOffsetSchema.safeParse(offset.value).success) : !('offset' in value);
+  }),
 }).strict();
 const joinPreview = base.extend({
   parent: target,

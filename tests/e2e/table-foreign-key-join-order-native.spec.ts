@@ -13,6 +13,7 @@ import { tableForeignKeyJoinHavingZh as havingText } from '../../src/renderer/lo
 import { explainZh as explainText } from '../../src/renderer/locales/explain.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryViewDraftZh } from '../../src/renderer/locales/queryViewDraft.zh-CN';
+import { queryBuilderPaginationZh as pagination } from '../../src/renderer/locales/queryBuilderPagination.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 const enabled = process.env.DBARK_JOIN_ORDER_NATIVE === '1';
@@ -104,12 +105,14 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         const plan = builder.getByRole('region', { name: explainText.title, exact: true });
         await expect(plan.getByRole('treeitem', { name: /· c(?:\s|$)/ })).toBeVisible();
         await builder.getByLabel(text.singleLimit, { exact: true }).fill('5');
+        const offset = builder.getByLabel(pagination.offset, { exact: true });
+        await offset.fill('7');
         await expect(plan).toHaveCount(0);
-        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5;');
+        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5 OFFSET 7;');
         await openView();
         await expect(view.locator('.view-lines')).toContainText(/CREATE\s+VIEW.*合成关联库.*planned_view/);
         await expect(view.locator('.view-lines')).toContainText(/ORDER\s+BY.*parent_id/);
-        await expect(view.locator('.view-lines')).toContainText(/LIMIT\s+5/);
+        await expect(view.locator('.view-lines')).toContainText(/LIMIT\s+5\s+OFFSET\s+7/);
         await page.screenshot({ path: info.outputPath('query-builder-view.png') });
         await view.getByRole('button', { name: zh.common.cancel, exact: true }).click();
         await expect(builder.getByLabel(text.singleLimit, { exact: true })).toHaveValue('5');
@@ -121,6 +124,7 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await builder.getByRole('button', { name: text.designSave, exact: true }).click();
         await expect(builder.getByRole('status').filter({ hasText: text.designSaved })).toBeVisible();
         await builder.getByLabel(text.singleLimit, { exact: true }).fill('6');
+        await offset.clear();
         const approveRestore = () => page.evaluate(expected => {
           const original = window.confirm;
           window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是恢复设计的确认'); return true; };
@@ -128,7 +132,8 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await approveRestore();
         await builder.getByRole('button', { name: text.designLoad, exact: true }).click();
         await expect(builder.getByLabel(text.singleLimit, { exact: true })).toHaveValue('5');
-        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5;');
+        await expect(offset).toHaveValue('7');
+        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5 OFFSET 7;');
         await builder.getByText(text.designRestored, { exact: true }).scrollIntoViewIfNeeded();
         await page.screenshot({ path: info.outputPath('single-table-design-restored.png') });
         await control('addOldDesign');
@@ -138,7 +143,7 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await builder.getByRole('button', { name: text.designLoad, exact: true }).click();
         await expect(builder.getByRole('alert')).toContainText(text.columns);
         await expect(builder.getByLabel(text.singleLimit, { exact: true })).toHaveValue('5');
-        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5;');
+        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5 OFFSET 7;');
         await builder.getByRole('button', { name: text.open, exact: true }).click();
         await expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('c.`id` AS `id`');
         const result = await evidence();
@@ -146,7 +151,7 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'child', 'child', 'child', 'child']);
         const designCalls = result.calls.filter(call => call.command.startsWith('joinDesigns.'));
         expect(designCalls.map(call => [call.command, call.input.single])).toEqual([['joinDesigns.save', true], ['joinDesigns.read', true], ['joinDesigns.list', true], ['joinDesigns.read', true]]);
-        expect(designCalls[0].input.design).toMatchObject({ single: true, child: ['id'], limit: '5' });
+        expect(designCalls[0].input.design).toMatchObject({ single: true, child: ['id'], limit: '5', offset: '7' });
         const inspections = result.calls.filter(call => call.command === 'mysql.join.preview').map(call => call.input);
         expect(inspections.map(input => input.mode)).toEqual(['rows', 'explain']);
         expect(inspections.every(input => input.single === true && !('parent' in input) && !('sql' in input))).toBe(true);

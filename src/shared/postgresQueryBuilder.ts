@@ -8,6 +8,7 @@ import { postgresAdvancedTableFilterSchema, postgresTableTargetSchema } from './
 import { postgresTableCondition } from './postgresTableReadSql';
 import { compileQueryBuilderSummary, queryBuilderSummarySchema } from './queryBuilderSummary';
 import { queryBuilderColumnAliasesSchema, queryBuilderOutputAliases } from './queryBuilderProjection';
+import { queryBuilderOffsetSchema } from './queryBuilderOffset';
 
 export const postgresQueryBuilderCatalogueSchema = postgresTableTargetSchema.pick({ connectionId: true, database: true });
 export const postgresQueryBuilderTargetSchema = postgresQueryBuilderCatalogueSchema.extend({
@@ -50,6 +51,7 @@ const designFields = postgresQueryBuilderTargetSchema.extend({
   distinct: z.boolean(),
   summary: queryBuilderSummarySchema.extend({ having: postgresAdvancedTableFilterSchema.optional() }).optional(),
   rowLimit: z.number().int().min(1).max(postgresQueryBuilderLimits.rowLimit).optional(),
+  rowOffset: queryBuilderOffsetSchema.optional(),
   joins: z.array(joinStep).min(1).max(postgresBuilderJoinLimits.steps).optional(),
 });
 export const postgresQueryBuilderInspectSchema = designFields.extend({ inspect: z.enum(['rows', 'explain', 'validate']) });
@@ -59,7 +61,7 @@ export type PostgresQueryBuilderInspectInput = z.infer<typeof postgresQueryBuild
 /** 只从同一连接、数据库和目录修订编译；值用 E 字符串，跨会话保留反斜杠和换行。 */
 export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign, source: PostgresQueryBuilderSource,
   joinedSources: readonly PostgresQueryBuilderSource[] = []): string {
-  const { connectionId, database, table, fingerprint, columns, columnAliases, filter, sort, distinct, rowLimit, summary, joins = [] } = designFields.parse(design);
+  const { connectionId, database, table, fingerprint, columns, columnAliases, filter, sort, distinct, rowLimit, rowOffset, summary, joins = [] } = designFields.parse(design);
   if (source.target.connectionId !== connectionId || source.target.database !== database || source.target.table !== table ||
       source.fingerprint !== fingerprint) throw Error('PostgreSQL 查询来源已变化，请重新读取结构。');
   if (joins.length !== joinedSources.length) throw Error('PostgreSQL 关联来源不完整。');
@@ -114,7 +116,7 @@ export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign,
     ' FROM ' + qualified(table) + (joins.length ? ' AS t1' : '') + joinSql +
     (where ? ' WHERE ' + where : '') + (grouped?.groupBy ?? '') + (having ? ' HAVING ' + having : '') +
     (order.length ? ' ORDER BY ' + order.join(', ') : '') +
-    (rowLimit === undefined ? '' : ' LIMIT ' + rowLimit);
+    (rowLimit === undefined ? '' : ' LIMIT ' + rowLimit) + (rowOffset ? ' OFFSET ' + rowOffset : '');
   if (sql.length > postgresQueryBuilderLimits.sqlUnits) throw Error('PostgreSQL 查询草稿超过文本预算，请减少字段或条件。');
   return sql;
 }

@@ -1,3 +1,5 @@
+import { readQueryBuilderOffset } from '../../shared/queryBuilderOffset';
+import { queryBuilderPaginationZh as pagination } from '../locales/queryBuilderPagination.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo, FilterGroup, FilterMode, FilterRule, QueryOutcome } from '../../shared/contracts';
 import { queryBuilderDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary, type QueryBuilderDesign } from '../../shared/manualJoinDesigns';
@@ -33,7 +35,7 @@ import type { ForeignKeyJoinSide } from '../tableForeignKeyJoinSources';
 export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget & { taskId: string }): Promise<TableInfo>; cancel(taskId: string): Promise<unknown>; }
 /** 每次正式元数据读取均持有独立任务编号；取消不借普通查询或复用数据库会话。 */
 export const tableForeignKeyJoinServices: TableForeignKeyJoinServices = { read: input => invoke('metadata.table', input), cancel: taskId => invoke('query.cancel', { taskId }) };
-interface Selection { distinct: boolean; unmatchedOnly: boolean; fk: string; manual?: ManualJoinSelection; additional: AdditionalJoinDraft[]; kind: ForeignKeyJoinKind; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; filterGroup?: FilterGroup; summaryEnabled: boolean; summaryGroups: ForeignKeyJoinGroupDraft[]; aggregates: ForeignKeyJoinAggregateDraft[]; summarySort: { id: string; rule: ForeignKeyJoinSort }[]; having: ForeignKeyJoinHavingDraft[]; havingMode: FilterMode; havingGroup?: FilterGroup; }
+interface Selection { distinct: boolean; unmatchedOnly: boolean; fk: string; manual?: ManualJoinSelection; additional: AdditionalJoinDraft[]; kind: ForeignKeyJoinKind; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; offset: string; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; filterGroup?: FilterGroup; summaryEnabled: boolean; summaryGroups: ForeignKeyJoinGroupDraft[]; aggregates: ForeignKeyJoinAggregateDraft[]; summarySort: { id: string; rule: ForeignKeyJoinSort }[]; having: ForeignKeyJoinHavingDraft[]; havingMode: FilterMode; havingGroup?: FilterGroup; }
 interface GroupEditor { selection: Selection; kind: 'where' | 'having' | 'on'; applyOn?(group: FilterGroup): Selection; trigger?: HTMLButtonElement; mode: FilterMode; initial?: FilterGroup; rules: readonly FilterRule[]; presentation: TableFilterGroupPresentation; }
 interface Operation { promise: Promise<void>; cancelled: boolean; read?: { taskId: string; cancel?: () => Promise<unknown>; cancelPromise?: Promise<unknown> }; cancellation?: Promise<unknown>; }
 const pageSize = 50;
@@ -41,9 +43,9 @@ type DesignOperation = 'listDesigns' | 'saveDesign' | 'replaceDesign' | 'loadDes
 
 /** 保存可编辑输入和稳定条目编号。目录缓存与搜索位置留在当前窗口。 */
 function captureDesign(selection: Selection): QueryBuilderDesign {
-  const { distinct, child, limit, filters, filterMode, filterGroup,
+  const { distinct, child, limit, offset, filters, filterMode, filterGroup,
     sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup } = selection;
-  const settings = { version: 1, distinct, child, limit, filters, filterMode, filterGroup,
+  const settings = { version: 1, distinct, child, limit, offset: offset || undefined, filters, filterMode, filterGroup,
     sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup };
   if (!selection.manual) return queryBuilderDesignSchema.parse({ ...settings, single: true });
   const stripIds = ({ pairs }: ManualJoinSelection) => pairs.map(({ id: _id, ...pair }) => pair);
@@ -89,7 +91,7 @@ function joinHavingTargets(selection: Selection, sources: ReadonlyMap<ForeignKey
 
 /** 打开与恢复共用实际 SQL 编译器；恢复失败时原设计及当前草稿均保持。 */
 function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selection, parent: TableInfo | undefined, sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>, havingTargets: readonly ForeignKeyJoinHavingTarget[]): MysqlQueryBuilderPreview {
-  const limit = foreignKeyJoinResultLimit(selection.limit);
+  const limit = foreignKeyJoinResultLimit(selection.limit), offset = readQueryBuilderOffset(selection.offset);
   const filters = foreignKeyJoinFiltersFromDraft(selection.filters, sources);
   const having = selection.summaryEnabled ? foreignKeyJoinHavingFromDraft(selection.having, havingTargets) : [];
   const sorting = selection.summaryEnabled ? selection.summarySort : selection.sort;
@@ -101,6 +103,7 @@ function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selectio
     ...(filters.length ? { filters, filterMode: selection.filterMode, ...(selection.filterGroup ? { filterGroup: selection.filterGroup } : {}) } : {}),
     ...(sorting.length ? { sort: sorting.map(item => item.rule) } : {}),
     ...(limit !== intent.limit ? { limit } : {}),
+    ...(offset ? { offset } : {}),
   };
   if (!parent) return mysqlSingleTablePreview(intent, options);
   const relation = selection.manual ? selection.manual.pairs.map(({ id: _id, ...condition }) => condition) : selection.fk;
@@ -121,7 +124,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed || origin.manual !== manual || origin.single !== single) origin.intent.invalidate();
   const title = origin.single ? text.singleTitle : origin.manual ? text.manualTitle : text.title;
   const choices = useMemo(() => origin.manual || origin.single ? [] : foreignKeyJoinChoices(origin.intent.source).filter(key => !origin.fixed || key.name === origin.fixed.foreignKey), [origin]);
-  const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, additional: [], fk: choices[0]?.name ?? '', manual: origin.manual ? { database: intent.source.database, table: '', pairs: [] } : undefined, kind: origin.fixed?.kind ?? (origin.manual ? 'INNER' : 'LEFT'), child: origin.intent.source.columns.map(column => column.name), parent: origin.fixed?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
+  const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, additional: [], fk: choices[0]?.name ?? '', manual: origin.manual ? { database: intent.source.database, table: '', pairs: [] } : undefined, kind: origin.fixed?.kind ?? (origin.manual ? 'INNER' : 'LEFT'), child: origin.intent.source.columns.map(column => column.name), parent: origin.fixed?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), offset: '', filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
   const selectionRef = useRef(selection), [parent, setParent] = useState<{ fk: string; info: TableInfo } | undefined>(() =>
     origin.fixed && { fk: origin.fixed.foreignKey, info: origin.fixed.parent });
   const initialSelection = useRef(selection).current;
@@ -244,7 +247,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     await load(base.database, base.name);
     if ('single' in design) {
       const { single: _single, version: _version, ...settings } = design;
-      const next: Selection = { ...selected, ...settings, childSearch: '', childPage: 1 };
+      const next: Selection = { ...selected, ...settings, offset: settings.offset ?? '', childSearch: '', childPage: 1 };
       const sources = joinSources(base, undefined, []);
       compileSelection(origin.intent, next, undefined, sources, joinHavingTargets(next, sources));
       if (!owns()) return;
@@ -261,7 +264,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       const info = await load(step.database, step.table);
       extra.push({ ...step, id: uid(), tables: [step.table], pairs: withIds(step.pairs), info });
     }
-    const next: Selection = { ...selected, ...settings, additional: extra, manual: { ...first, pairs: withIds(first.pairs) },
+    const next: Selection = { ...selected, ...settings, offset: settings.offset ?? '', additional: extra, manual: { ...first, pairs: withIds(first.pairs) },
       childSearch: '', parentSearch: '', childPage: 1, parentPage: 1 };
     const sources = joinSources(base, firstInfo, extra);
     compileSelection(origin.intent, next, firstInfo, sources, joinHavingTargets(next, sources));
@@ -607,6 +610,9 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       </fieldset>
     </details>}
     <label>{resultLimitLabel}<input aria-label={resultLimitLabel} inputMode="numeric" maxLength={128} value={selection.limit} disabled={busy || unavailable} onChange={event => revise({ ...selection, limit: event.target.value })}/></label><p>{text.limitHint}</p>
+    <label>{pagination.offset}<input aria-label={pagination.offset} inputMode="numeric" maxLength={10} value={selection.offset}
+      disabled={busy || unavailable} onChange={event => revise({ ...selection, offset: event.target.value })}/></label>
+    <p className="muted small">{pagination.offsetHint}</p>
     {!origin.single && <>{selection.manual ? <ManualJoinTableFields key={selection.manual.database} selection={selection.manual} databases={databases} tables={tables} disabled={busy || unavailable || !!selection.additional.length}
       onDatabases={() => run('databases')} onTables={() => run('tables')} onTarget={changeManualTarget}/>
       : <label>{text.fk}<select aria-label={text.fk} disabled={unavailable || !!origin.fixed} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>}

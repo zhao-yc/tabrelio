@@ -1,3 +1,4 @@
+import { queryBuilderOffsetError, queryBuilderOffsetSchema } from './queryBuilderOffset';
 import { foreignKeyJoinSide, foreignKeyJoinSqlAlias, type ForeignKeyJoinSide } from './tableForeignKeyJoinSources';
 import type { FilterGroup, FilterMode, TableInfo } from './contracts';
 import { buildForeignKeyJoinWhere, type ForeignKeyJoinFilter } from './tableForeignKeyJoinFilters';
@@ -36,7 +37,7 @@ export function manualJoinAlias(index: number): 'c' | 'p' | `t${number}` {
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: ForeignKeyJoinSide | 'aggregate'; column: string; alias: string }
 export interface ForeignKeyJoinSort { side: ForeignKeyJoinSide | 'aggregate'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
-export interface MysqlSingleTableSelectOptions { childColumns: readonly string[]; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
+export interface MysqlSingleTableSelectOptions { childColumns: readonly string[]; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; offset?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
 export interface ForeignKeyJoinOptions extends MysqlSingleTableSelectOptions { parentColumns: readonly string[]; unmatchedOnly?: boolean; manualOn?: ManualJoinOn; additionalJoins?: readonly ManualJoinStep[]; }
 type Budget = { units: number };
 
@@ -253,13 +254,13 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
   const left = snapshot(child), right = join && snapshot(join.parent);
   const conditions = join && right ? joinConditions([left], 0, right, join.input) : [];
   let childColumns: string[], parentColumns: string[] = [], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
-  let extra: ReturnType<typeof additionalJoins> = [];
+  let extra: ReturnType<typeof additionalJoins> = [], resultOffset = 0;
   let firstOn = right ? compileOn(undefined, conditions, 'p') : undefined;
   const sources = new Map<ForeignKeyJoinSide, ReturnType<typeof snapshot>>([['child', left]]);
   if (right) sources.set('parent', right);
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right?.columns.map(column => column.name) ?? []; }
   else {
-    const keys = ['childColumns', 'distinct', 'sort', 'limit', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'];
+    const keys = ['childColumns', 'distinct', 'sort', 'limit', 'offset', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'];
     if (right) keys.push('parentColumns', 'unmatchedOnly', 'manualOn', 'additionalJoins');
     if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !keys.includes(key as string))) throw Error(text.invalid);
     childColumns = selected(own(options, 'childColumns'), left.columns);
@@ -286,6 +287,12 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
     if (filters !== undefined || mode !== undefined || group !== undefined) { if (mode !== undefined && mode !== 'all' && mode !== 'any') throw Error(text.invalid); where = buildForeignKeyJoinWhere(sources, filters === undefined ? [] : filters, mode === undefined ? 'all' : mode, foreignKeyJoinLimits.sqlUnits, group as FilterGroup | undefined); }
     const suppliedLimit = own(options, 'limit', true);
     if (suppliedLimit !== undefined) { if (typeof suppliedLimit !== 'number' || !Number.isSafeInteger(suppliedLimit) || suppliedLimit < 1 || suppliedLimit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); resultLimit = suppliedLimit; }
+    const suppliedOffset = own(options, 'offset', true);
+    if (suppliedOffset !== undefined) {
+      const checked = queryBuilderOffsetSchema.safeParse(suppliedOffset);
+      if (!checked.success) throw Error(queryBuilderOffsetError);
+      resultOffset = checked.data;
+    }
   }
   if (join && firstOn && unmatchedOnly) {
     if (join.kind === 'INNER') throw Error(text.unmatchedInvalid);
@@ -330,6 +337,6 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
   if (summary?.grouping.length) append('GROUP BY '+summary.grouping.join(', ')+'\n');
   if(having)append('HAVING '+having+'\n');
   if (ordering) append('ORDER BY ' + ordering + '\n');
-  append(`LIMIT ${resultLimit};`);
+  append(`LIMIT ${resultLimit}${resultOffset ? ' OFFSET ' + resultOffset : ''};`);
   return { sql, columns };
 }
