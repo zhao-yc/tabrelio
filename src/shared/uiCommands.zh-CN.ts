@@ -32,6 +32,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'editor-word-wrap': '自动换行', 'editor-line-numbers': '显示行号', 'editor-match-brackets': '高亮匹配括号', 'editor-sql-folding': '按 SQL 语句折叠', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
   'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
+  'compact-sql': '压缩 SQL',
   'parameters': '参数执行', 'explain': '执行计划', 'analyze': '实际执行分析', 'transaction-settings': '事务设置',
   'object-definition': '查看对象结构',
   'syntax-check': '检查 SQL 语法',

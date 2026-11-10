@@ -16,7 +16,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { flushSync } from 'react-dom';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
-import { formatSqlEditor } from '../sqlFormatting';
+import { formatSqlEditor, type SqlFormattingMode } from '../sqlFormatting';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import type { DataRow, PostgresResultSource, QueryOutcome, QueryResult, ResultColumn, ResultExportData } from '../../shared/contracts';
 import { queryResultTitle } from '../../shared/queryResultTitle';
@@ -1854,13 +1854,13 @@ export function PostgresQueryTab({
     try { editSqlBlockComment(target.instance, 'postgresql'); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
-  function formatQuery() {
+  function formatQuery(mode: SqlFormattingMode = 'format') {
     const target = commandEditor();
     if (!target) return;
     try {
       const settings = useWorkspace.getState().settings;
       setError('');
-      formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces });
+      formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces }, mode);
     } catch (reason) { setError(errorMessage(reason)); }
   }
   function openSaveQuery() {
@@ -2019,6 +2019,7 @@ export function PostgresQueryTab({
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
     parameters: { enabled: canRun, run: openParameters },
     format: { enabled: editable, run: formatQuery },
+    'compact-sql': { enabled: editable, run: () => formatQuery('compact') },
     'save-query': { enabled: editable, run: openSaveQuery },
     'sql-copy-quoted': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction(sqlQuotedCopyAction) },
     'sql-clipboard-stack': { enabled: editable && !resultsOnly, run: () => editorAction(sqlClipboardStackAction) },
@@ -2155,9 +2156,10 @@ export function PostgresQueryTab({
             <button disabled={!canStop} onClick={stop}>
               {text.stop}
             </button>
-            <button disabled={!editable} title={sqlFormattingZh.hint} onClick={formatQuery}>
+            <button disabled={!editable} title={sqlFormattingZh.hint} onClick={() => formatQuery()}>
               {text.format}
             </button>
+            <button disabled={!editable} title={sqlFormattingZh.compactHint} onClick={() => formatQuery('compact')}>{sqlFormattingZh.compact}</button>
             <button disabled={!editable} onClick={openSaveQuery}>
               {text.save}
             </button>

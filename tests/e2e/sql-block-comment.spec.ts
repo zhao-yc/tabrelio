@@ -6,6 +6,7 @@ import { LocalStore } from '../../src/main/storage';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { sqlBlockCommentZh as messages } from '../../src/renderer/locales/sqlBlockComment.zh-CN';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
+import { navigationMenuItem } from './navigation-menu';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 const label = uiCommandLabels['sql-toggle-block-comment'];
@@ -42,6 +43,57 @@ async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql:
   await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
   await page.reload();
   await expect(activeEditor().getByRole('textbox')).toBeVisible();
+}
+
+for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
+  test(`${dialect} 压缩 SQL 保留注释与原文边界，可一步撤销`, async ({}, info) => {
+    const selected = dialect === 'mysql' || dialect === 'sqlite';
+    const prefix = 'SELECT    0;\n', suffix = '\nSELECT     4;';
+    const body = "SELECT   (  1 + 2  )  ,   '🚢  -- 文本' ; -- 保留\n    SELECT  3;";
+    const compacted = "SELECT (1 + 2), '🚢  -- 文本'; -- 保留\nSELECT 3;";
+    const original = prefix + body + suffix, expected = selected ? prefix + compacted + suffix : 'SELECT 0; ' + compacted + ' SELECT 4;';
+    await seed(dialect, original);
+    function model(select = false) {
+      return activeEditor().evaluate((element, select) => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const editor = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+        const text = editor?.getModel();
+        if (!editor || !text) throw Error('当前 SQL 模型不可读');
+        if (select) {
+          editor.focus();
+          editor.setSelection({ startLineNumber: 2, startColumn: 1, endLineNumber: 3, endColumn: text.getLineMaxColumn(3) });
+        }
+        const range = editor.getSelection();
+        return { id: text.id, sql: text.getValue().replaceAll('\r\n', '\n'), selected: range ? text.getValueInRange(range).replaceAll('\r\n', '\n') : '' };
+      }, select);
+    }
+    const before = await model(selected);
+    expect(before.sql).toBe(original);
+    expect(before.selected).toBe(selected ? body : '');
+    if (dialect === 'mysql' || dialect === 'postgresql') {
+      await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('compact-sql')?.enabled)).toBe(true);
+      await desktop.evaluate(({ Menu, BrowserWindow }) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById('compact-sql'), [window] = BrowserWindow.getAllWindows();
+        if (!item?.enabled || !window) throw Error('压缩 SQL 原生命令不可用');
+        item.click(item, window, {} as Electron.KeyboardEvent);
+      });
+    } else {
+      await (await navigationMenuItem(page.locator('.query-tab:visible'), { name: '压缩 SQL', exact: true })).click();
+    }
+    await expect.poll(() => model()).toEqual({ id: before.id, sql: expected, selected: selected ? compacted : '' });
+    await expect.poll(() => page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
+    })).toBe(expected);
+    if (dialect === 'sqlite') await page.screenshot({ path: info.outputPath('sql-compact-selection.png') });
+    await page.keyboard.press(`${modifier}+z`);
+    await expect.poll(async () => (await model()).sql).toBe(original);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y');
+    await expect.poll(async () => (await model()).sql).toBe(expected);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
 }
 
 for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {

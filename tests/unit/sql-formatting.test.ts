@@ -2,6 +2,36 @@ import { describe, expect, it } from 'vitest';
 import { planSqlFormatting } from '../../src/renderer/sqlFormatting';
 import { completionLimits } from '../../src/shared/sqlCompletion';
 
+describe('压缩 SQL', () => {
+  it('只压缩选区内部空白，保留两端、模式敏感间距和行注释 CRLF', () => {
+    const prefix = 'select   0;\r\n', suffix = '\r\nselect   9;';
+    const body = "  SeLeCt  count  (\r\n *  )   ,   'a  b' ; -- 原注释  \r\n   select    2;  ";
+    const source = prefix + body + suffix, start = prefix.length, end = start + body.length;
+    const text = "  SeLeCt count (*), 'a  b'; -- 原注释  \r\nselect 2;  ";
+    expect(planSqlFormatting(source, start, end, '\r\n', { keywordCase: 'lower' }, 'compact')).toEqual({ start, end, text });
+    expect(planSqlFormatting(text, 0, text.length, '\r\n', {}, 'compact')).toBeNull();
+  });
+  it('PostgreSQL 保留跨行续接字符串、嵌套注释与 dollar-quote 正文', () => {
+    const source = "select  'one'\n  'two'   ,\n  $x$a  b\n c$x$   , array[  1 ] /* 外 /* 内 */ 层 */ ;";
+    expect(planSqlFormatting(source, 0, source.length, '\n', { dialect: 'postgresql' }, 'compact')?.text)
+      .toBe("select 'one'\n  'two', $x$a  b\n c$x$, array[1] /* 外 /* 内 */ 层 */;");
+  });
+  it('SQLite 保留方括号名称、blob 前缀与注释', () => {
+    const source = "select  [a b]  ,  X'00ff'  -- 保留\n   from  t ;";
+    expect(planSqlFormatting(source, 0, source.length, '\n', { dialect: 'sqlite' }, 'compact')?.text)
+      .toBe("select [a b], X'00ff' -- 保留\nfrom t;");
+  });
+  it.each([
+    ['mysql', 'select  1;\n SOURCE script.sql'],
+    ['mysql', 'select  1\n\\G'],
+    ['mysql', 'DELIMITER $$\nselect  1$$'],
+    ['postgresql', 'COPY t FROM STDIN;\n1\n'],
+    ['sqlite', 'select  1;\n.tables'],
+  ] as const)('拒绝 %s 客户端脚本，不把指令移入同一行', (dialect, source) => {
+    expect(() => planSqlFormatting(source, 0, source.length, '\n', { dialect }, 'compact')).toThrow('原文未改动');
+  });
+});
+
 describe('选区格式化的原文与安全边界', () => {
   it.each([[1, true], [8, true], [4, false]] as const)('显式格式化使用宽度%s/空格%s，字面量原文不变且重复格式化不追加编辑', (tabSize, insertSpaces) => {
     const source = "select a,b,'🚢  原文' from 表 where id=1;", indentation = { tabSize, insertSpaces };

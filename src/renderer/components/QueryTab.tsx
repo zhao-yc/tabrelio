@@ -68,7 +68,7 @@ import { QueryCloseDialog } from './QueryCloseDialog';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
 import { queryCloseZh } from '../locales/queryClose.zh-CN';
 import type * as monaco from 'monaco-editor';
-import { formatSqlEditor } from '../sqlFormatting';
+import { formatSqlEditor, type SqlFormattingMode } from '../sqlFormatting';
 import { DeferredUpperSqlFormatting } from '../sqlFormattingDeferred';
 import { readSqlKeywordCase } from '../../shared/sqlKeywordCase';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
@@ -565,7 +565,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 新执行或新来源释放旧定位；旧按钮回调只能持有已失效的租约。 */
   function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; }
   /** 格式化是当前草稿的普通编辑，不建连、投递SQL或改写会话/来源绑定。 */
-  function formatQuery() {
+  function formatQuery(mode: SqlFormattingMode = 'format') {
     if (busyRef.current || document.querySelector(appDialogSelector)) return;
     try {
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), instance = editor.current;
@@ -573,6 +573,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       // 与正文桥的受控同步采用同一模型EOL；只比较，不回写或吞掉其它正文差异。
       if (!alive.current || workspace.activeJobs[tab.id] || workspace.settings.activeTabId !== tab.id || current?.kind !== 'query' || !instance || !model || (eol !== '\n' && eol !== '\r\n') || model.getValue() !== (current.sql ?? '').replace(/\r\n|\r|\n/g, eol)) throw new Error(sqlFormattingZh.unavailable);
       const preferences = { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces, keywordCase: workspace.settings.sqlKeywordCase, dialect: sqlite ? 'sqlite' as const : 'mysql' as const };
+      if (mode === 'compact') {
+        if (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy()) throw Error(sqlFormattingZh.unavailable);
+        setError('');
+        formatSqlEditor(instance, preferences, mode);
+        return;
+      }
       if (preferences.dialect === 'sqlite' || readSqlKeywordCase(preferences.keywordCase) === 'preserve') { formatting.current?.dispose(); formatting.current = null; formatSqlEditor(instance, preferences); return; }
       if (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy()) throw Error(sqlFormattingZh.unavailable);
       const owner = current, profile = workspace.connections.find(item => item.id === owner.connectionId), version = workspace.connectionVersions[owner.connectionId] ?? 0, session = sessionRef.current;
@@ -2584,6 +2590,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const canDuplicateQuery = !busy && !duplicating && !!connection && !!searchEditor && !closeRequest &&
     duplicateOrigin.current.connectionId === tab.connectionId && duplicateOrigin.current.version === connectionVersion;
   const canExecuteSelection = hasSingleSelection && !resultsOnly && !busy && !!connection && !closeRequest && !fileSource.busy;
+  const canCompactSql = !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy;
   const canNavigateFromCursor = !!searchEditor && !!connection && !resultsOnly && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy;
   useUiCommandScope(`tab:${tab.id}`, {
     execute: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute(); } },
@@ -2592,6 +2599,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'execute-all': { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute('all'); } },
     stop: { enabled: queryRunning, run: () => { void cancelCurrentQuery().catch(reason => setError(errorMessage(reason))); } },
     format: { enabled: !busy && !closeRequest && !fileSource.busy, run: async () => { await formatQuery(); } },
+    'compact-sql': { enabled: canCompactSql, run: () => { formatQuery('compact'); } },
     parameters: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => openParameters() },
     explain: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute('explain'); } },
     analyze: { enabled: !sqlite && !busy && !!connection && !closeRequest, run: () => { void openAnalyze(); } },
@@ -2671,11 +2679,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 <button disabled={!canExecuteSelection} title={currentStatementZh.selectionHint} onClick={() => void execute('selection-only')}>{currentStatementZh.selectionOnly}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button>{sqlite && <button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters('current')}>{parameterZh.sqliteCurrentOpen}</button>}
 <button disabled={busy} onClick={() => void execute('all')}>{zh.query.text011}</button></ActionMenuSection>) },
         { key: 'stop', content: (<button disabled={!queryRunning} onClick={() => void cancelCurrentQuery().catch(reason => setError(errorMessage(reason)))}><Square size={13}/>{zh.common.stop}</button>) },
-        { key: 'format', content: (<button disabled={busy} title={sqlFormattingZh.hint} aria-label={sqlFormattingZh.action} onClick={formatQuery}><AlignLeft size={15}/>{sqlFormattingZh.button}</button>) },
+        { key: 'format', content: (<button disabled={busy} title={sqlFormattingZh.hint} aria-label={sqlFormattingZh.action} onClick={() => formatQuery()}><AlignLeft size={15}/>{sqlFormattingZh.button}</button>) },
         { key: 'save', content: (<button disabled={busy} onClick={saveCurrentSource} title={tab.fileSourceBinding ? queryFilesZh.save : zh.query.text015} aria-label={tab.fileSourceBinding ? queryFilesZh.save : zh.query.text015}><Save size={15}/>{zh.common.save}</button>) }
       ]}
       moreLabel={menuText.queryMore}
       more={<>
+        <button disabled={!canCompactSql} title={sqlFormattingZh.compactHint} onClick={() => formatQuery('compact')}>{sqlFormattingZh.compact}</button>
         <ActionMenuSection label={navigationText.group}><button disabled={busy || !connection || !searchEditor || navigationView?.busy} onClick={() => openStatementNavigation()}>{navigationText.entry}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'previous')}>{uiCommandLabels['previous-statement']}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'next')}>{uiCommandLabels['next-statement']}</button></ActionMenuSection><ActionMenuSection label={sqlite ? sqliteSyntaxCheckZh.title : syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection><ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
         <ActionMenuSection label={menuText.execution}>{sqlite && <>
           <button disabled={busy || !connection} title={sqliteQueryExportZh.title} onClick={() => openSqliteFullExport()}><Download size={14}/>{sqliteQueryExportZh.open}</button>

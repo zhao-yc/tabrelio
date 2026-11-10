@@ -1,5 +1,7 @@
 export const sqlFormattingZh = {
   action: '格式化 SQL',
+  compact: '压缩 SQL',
+  compactHint: '压缩选区或全文的多余空白，保留字符串、注释和必要换行。可一次撤销。',
   preferences: 'SQL 格式化偏好', keywordCase: '关键字大小写', preserve: '保持原样（默认）', upper: '关键字大写', lower: '关键字小写',
   save: '保存格式化偏好', saving: '正在保存…', reset: '恢复默认格式化偏好', cancelDraft: '取消更改',
   saved: '格式化偏好已保存。', preferenceFailed: '保存失败，当前窗口已应用该偏好；请重试保存。', invalidPreference: '请选择保持原样、关键字大写或关键字小写。',
