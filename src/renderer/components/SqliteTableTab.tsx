@@ -75,6 +75,7 @@ import { sqliteTableRenameZh } from '../locales/sqliteTableRename.zh-CN';
 import { ActionMenuSection } from './ActionMenu';
 import { AdaptiveToolbar } from './AdaptiveToolbar';
 import { TableReadHistory, useTableReadHistory } from './TableReadHistory';
+import { tableFilterEnabledZh } from '../locales/tableFilterEnabled.zh-CN';
 import { TableColumnChooser, useTableColumnChooser } from './TableColumnChooser';
 import { tableColumnChooserZh } from '../locales/tableColumnChooser.zh-CN';
 import { tableReadHistoryZh } from '../locales/tableReadHistory.zh-CN';
@@ -476,7 +477,12 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   }
   /** 只有明确放弃或无草稿时可替换当前页，运行中写操作从不被读取入口打断。 */
   function dropEditor(continuation?: SqliteRecordPageNavigation, preserveRecordNotice = false, preserveDrafts = false): void { detailPageIntentRef.current?.invalidate(); detailPageIntentRef.current = undefined; if (!preserveRecordNotice) setDetailPageNotice(''); if (!continuation || recordPageRef.current !== continuation) { recordPageRef.current?.invalidate(); recordPageRef.current = undefined; if (!preserveRecordNotice) setRecordPageNotice(''); } checkedReadRef.current = undefined; setCheckedReadRows(undefined); cellFilterRef.current = undefined; setCellFilterOwner(undefined); if (filteredSelectRef.current) closeFilteredSelect(filteredSelectRef.current); if (fillRef.current) closeFill(fillRef.current); checkedRef.current = undefined; setCheckedRows(undefined); if (findRef.current) closeFind(findRef.current); if (rangeRef.current) rangeRef.current.valid = false; rangeRef.current = null; rangeCellRef.current = undefined; setRangeOpen(null); setRangeCell(undefined); if (pasteRef.current) { pasteRef.current.valid = false; pasteRef.current = null; setPasteOpen(null); } if (!preserveDrafts) { drafts.clear(); editorRef.current = null; restoredDraftRef.current = false; setRestoredDraftView(false); } inputRef.current = null; previewRef.current = null; if (!preserveDrafts) setEditView(null); setCellInput(null); setPreviewOpen(null); const now = useWorkspace.getState(); if (now.settings.tabs.find(item => item.id === tab.id) === tab && now.dirtyTabs[tab.id]) now.setDirty(tab.id, drafts.protected || drafts.busy || layoutDirtyRef.current); }
-  function prepareRead(): boolean { const editor = editorRef.current; if (drafts.busy) return false; if (drafts.protected && !window.confirm(workspaceText.confirmDiscard)) return false; dropEditor(); automaticReads.current.blocked = false; return true; }
+  function prepareRead(current?: () => boolean): boolean {
+    if (drafts.busy || current?.() === false) return false;
+    if (drafts.protected && !window.confirm(workspaceText.confirmDiscard)) return false;
+    if (current?.() === false) return false;
+    dropEditor(); automaticReads.current.blocked = false; return true;
+  }
   /** 操作读取同步目标和占用，旧按钮与隐藏标签不得开始新读取。 */
   function available(): boolean { if (related && !related.current()) return false; const workspace = useWorkspace.getState(); return active && !filteredSelectRef.current && !fillRef.current && !invalidTarget && workspace.settings.tabs.find(item => item.id === tab.id) === tab && workspace.settings.activeTabId === tab.id && workspace.connections.find(item => item.id === tab.connectionId) === profile && (workspace.connectionVersions[tab.connectionId] ?? 0) === version && (!workspace.activeJobs[tab.id] || view.busy) && !document.querySelector('[role="dialog"], [role="alertdialog"]'); }
   /** 原页租约与连接身份决定动作是否过期，普通重绘不撤销同一页的菜单。 */
@@ -653,6 +659,17 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     if (restoredDraftRef.current || editRender.current !== editRenderTicket || !page || !available() || view.busy || latest.current.refreshVersion !== refreshVersion || inputRef.current || previewRef.current || pasteRef.current || rangeRef.current || importRef.current || fullExportRef.current || exportData || findRef.current?.preview) return false;
     const editor = editorRef.current;
     return editor ? editor === renderedEditor && editor.page === page && editor.view.rows === editRows && editor.canEdit() : !renderedEditor && controller.pageCurrent(page);
+  }
+  /** 清除只以当前已应用配置为基础，未应用的排序或页长输入不参与这次读取。 */
+  function clearTableFilters(): void {
+    const original = applied.current;
+    const current = () => applied.current === original && (page ? browseNavigationCurrent() :
+      editRender.current === editRenderTicket && latest.current.refreshVersion === refreshVersion && available() &&
+      !browserViewRef.current.busy && !!browserViewRef.current.error && !editorRef.current);
+    if (!original.filters.length || !prepareRead(current)) return;
+    const next = { ...original, filters: [] };
+    applied.current = next; checkedExport.clear(); setValidation(''); setFilters([]); setPresetLayoutDraft(undefined);
+    void controller.load(next, 0);
   }
   /** 翻页与调整页长沿用已应用条件，确认返回时复核原页和记录草稿。 */
   function navigatePage(offset: number | 'last', nextLimit?: number): void {
@@ -1799,6 +1816,9 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       isCurrent={() => !!page && available() && (controller.pageCurrent(page) || editActionCurrent())}
       items={[
         { key: 'refresh', content: (<button data-table-refresh title={navigationZh.tableRefreshShortcut} aria-label={text.refresh} disabled={refreshDisabled} onClick={refreshTable}>{text.refresh}</button>) },
+        { key: 'clear-filter', content: <button type="button" disabled={(!page && !view.error) || !active || invalidTarget || view.busy || externalBusy ||
+          restoredDraftView || drafts.busy || !!cellInput || !applied.current.filters.length}
+          onClick={clearTableFilters}>{tableFilterEnabledZh.clear}</button> },
         { key: 'column-chooser', content: <button type="button" disabled={columnChooserBlocked} {...columnChooser.toggleProps}>{tableColumnChooserZh.title}</button> },
         { key: 'read-history', content: <button type="button" disabled={!active || view.busy || externalBusy} {...readHistory.toggleProps}>{tableReadHistoryZh.title}</button> },
         { key: 'stop', content: (<button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button>) },

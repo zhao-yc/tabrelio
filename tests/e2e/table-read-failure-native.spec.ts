@@ -7,6 +7,7 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 import { postgresTableZh as postgres } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { sqliteTableBrowseZh as sqlite } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { tableReadHistoryZh as historyText } from '../../src/renderer/locales/tableReadHistory.zh-CN';
+import { tableFilterEnabledZh } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -149,9 +150,11 @@ test('隔离数据库保留未完成的末页读取模板并允许恢复', async
     await history.getByRole('button', { name: historyText.close, exact: true }).last().click();
 
     await updateFixture(false);
-    // SQLite 失败后保留条件并清除已交付页，使用正常刷新入口重新加载。
-    if (dialect === 'sqlite') await (await menu('刷新 SQLite 表数据')).click();
-    else await last.click();
+    // SQLite 失败后已没有可用页，仍可清掉原条件并直接从第一页恢复。
+    if (dialect === 'sqlite') {
+      await (await menu(tableFilterEnabledZh.clear)).click();
+      await expect(other).toBeVisible();
+    } else await last.click();
     await expect(error).toBeHidden();
     await expect(row).toBeVisible();
     const preflight = await page.evaluate(async ({ dialect, tabId }) => {

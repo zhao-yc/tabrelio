@@ -17,6 +17,7 @@ import { postgresRecordViewZh as pgForm } from '../../src/renderer/locales/postg
 import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 import { tableReadHistoryZh as readHistory } from '../../src/renderer/locales/tableReadHistory.zh-CN';
 import { tableColumnChooserZh as chooserText } from '../../src/renderer/locales/tableColumnChooser.zh-CN';
+import { tableFilterEnabledZh } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
 import { sqliteTableEditZh as sqliteEdit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteEditWorkspaceZh as sqliteWorkspace } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 
@@ -264,13 +265,35 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await page.screenshot({ path: info.outputPath('SQLite表页底部SQL历史.png') });
     await countedHistoryPane.getByRole('button', { name: readHistory.close, exact: true }).press('Escape');
     await expect(countedHistoryPane).toBeHidden();
-    await tab.getByRole('button', { name: sqlite.removeFilter(1), exact: true }).click();
+    await rowLabels(tab).first().dblclick();
+    const clearDraftEditor = page.getByRole('dialog', { name: sqliteEdit.editCell, exact: true });
+    await clearDraftEditor.getByLabel('SQLite 字段 label 值', { exact: true }).fill('清除筛选前保留的草稿');
+    await clearDraftEditor.getByRole('button', { name: sqliteEdit.saveInput, exact: true }).click();
+    const clearDraft = tab.getByRole('gridcell').filter({ hasText: /清除筛选前保留的草稿$/ });
+    await expect(clearDraft).toBeVisible();
+    const beforeDeclinedClear = await reads();
+    const clear = await navigationMenuItem(tab, { name: tableFilterEnabledZh.clear, exact: true });
+    await answerDialogs([1]);
+    const [clearConfirmation] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }), clear.click()]);
+    expect(clearConfirmation.message()).toBe(sqliteWorkspace.confirmDiscard);
+    await expect(clearDraft).toBeVisible();
+    expect(await reads()).toEqual(beforeDeclinedClear);
+    await (await navigationMenuItem(tab, { name: sqliteEdit.undo, exact: true })).click();
     const direction = tab.getByLabel(sqlite.sortDirection(1), { exact: true });
     await direction.selectOption('desc');
     await expect(rowLabels(tab)).toHaveCount(1);
+    const beforeSort = (await reads()).length;
     await direction.press(applyKey);
+    await expect.poll(async () => (await reads()).length).toBe(beforeSort + 1);
+    const beforeClear = await reads();
+    await direction.selectOption('asc');
+    await (await navigationMenuItem(tab, { name: tableFilterEnabledZh.clear, exact: true })).click();
     await expect(rowLabels(tab)).toHaveCount(2);
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
+    expect(await reads()).toHaveLength(beforeClear.length + 1);
+    expect((await reads()).at(-1)).toEqual({ ...beforeClear.at(-1), filters: [], offset: 0 });
+    await expect(direction).toHaveValue('asc');
+    await direction.selectOption('desc');
     // 未应用的筛选留在编辑区，网格刷新继续用已提交的条件。
     await tab.getByRole('button', { name: sqlite.addFilter, exact: true }).click();
     await tab.getByLabel(sqlite.filterColumn(1), { exact: true }).selectOption('label');
@@ -524,6 +547,14 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     const historyPane = await verifyReadHistory(tab, reads, 'update_subject', 'row C', true);
     await page.screenshot({ path: info.outputPath('表页读取SQL.png') });
     await historyPane.getByRole('button', { name: readHistory.close, exact: true }).click();
+    const beforeClear = await reads();
+    await (await navigationMenuItem(tab, { name: tableFilterEnabledZh.clear, exact: true })).click();
+    await expect(rowLabels(tab)).toHaveCount(3);
+    await expect(rowLabels(tab).first()).toHaveText(/row C$/);
+    expect(await reads()).toHaveLength(beforeClear.length + 1);
+    const previous = beforeClear.at(-1)!;
+    expect((await reads()).at(-1)).toEqual(dialect === 'postgresql' ?
+      { ...previous, filter: undefined, offset: 0 } : { ...previous, filters: [], filterGroup: undefined, page: 1 });
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {

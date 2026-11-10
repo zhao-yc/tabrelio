@@ -1,3 +1,5 @@
+import { tableFilterEnabledZh } from './tableFilterEnabled.zh-CN';
+
 export const postgresTableZh = {
   presets: '命名方案',
   sortHint: '从上到下按优先级在数据库排序。应用后从第一页读取并保留当前筛选。有未提交的记录草稿时，先提交或放弃草稿。',
@@ -6,7 +8,7 @@ export const postgresTableZh = {
   lastPage: '末页', countRows: '精确计数', jumpPage: '跳页', pageNumber: '跳转页码',
   currentPage: (page: number) => `第 ${page} 页`,
   matchingRows: (rows: string) => `匹配 ${rows} 条记录`,
-  pageSize: '每页行数', filterColumn: '筛选列', filterText: '包含文字', filter: '筛选', clearFilter: '清除筛选',
+  pageSize: '每页行数', filterColumn: '筛选列', filterText: '包含文字', filter: '筛选', clearFilter: tableFilterEnabledZh.clear,
   advancedFilter: '高级筛选', applyAdvancedFilter: '应用高级筛选', filterGroups: '编辑条件分组', filterGrouped: '已编排条件分组',
   valueOptions: {
     open: '按不同值筛选', column: '不同值字段', search: '搜索不同值', read: '读取不同值', add: '加入筛选草稿',

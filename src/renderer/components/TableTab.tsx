@@ -105,6 +105,7 @@ import { queryDatabasePatch } from '../../shared/queryContext';
 import { openRowSqlDraft, type RowSqlKind } from '../openRowSqlDraft';
 import { TablePresetPanel } from './TablePresetPanel';
 import { TableReadHistory, useTableReadHistory } from './TableReadHistory';
+import { tableFilterEnabledZh } from '../locales/tableFilterEnabled.zh-CN';
 import { TableColumnChooser, useTableColumnChooser } from './TableColumnChooser';
 import { tableColumnChooserZh } from '../locales/tableColumnChooser.zh-CN';
 import { tableReadHistoryZh } from '../locales/tableReadHistory.zh-CN';
@@ -1572,6 +1573,13 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     if (!canReload()) return false;
     setFilters(next); setFilterGroup(nextGroup); setPageIndex(1); return true;
   }
+  /** 明确删除筛选才丢弃分组和暂停状态；翻页仍用原排序、页长和丢稿确认。 */
+  function clearTableFilters(): void {
+    const current = () => tableTabCurrent() && pageNavigationCurrent() && !externalStale && !filterGroupsRef.current;
+    if (!filters.length || !canReload(undefined, current)) return;
+    tableReadAction.current = null;
+    setFilters([]); setFilterGroup(undefined); setCellFilterSeed(undefined); setShowFilter(false); setPageIndex(1);
+  }
   /** 全部与任一是整组规则的组合方式，切换也必须通过当前页草稿保护。 */
   function changeFilterMode(next: FilterMode): boolean {
     if (!mounted.current || tableReadAction.current !== tableReadRender || externalStale || useWorkspace.getState().settings.activeTabId !== tab.id) return false;
@@ -2448,6 +2456,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     { key: 'insert', content: (<button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button>) },
     { key: 'delete', content: (<button disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button>) },
     { key: 'filter', content: (<button className={showFilter || filters.length ? 'selected' : ''} onClick={() => { setCellFilterSeed(undefined); setShowFilter(!showFilter); }}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button>) },
+    { key: 'clear-filter', content: <button type="button" disabled={!filters.length || blocked || externalStale || restoredDraftView || gridEditing || !!filterGroups}
+      onClick={clearTableFilters}>{tableFilterEnabledZh.clear}</button> },
     { key: 'sort', content: (<button aria-label={sortText.entry} title={sortText.hint} className={sortPanel || sort.length ? 'selected' : ''} disabled={!sortPanelAvailable} onClick={openSortPanel}>{sortText.entry}{sort.length ? ` (${sort.length})` : ''}</button>) },
     { key: 'import', content: (<button onClick={() => onTransfer('import')}><ArrowDownToLine size={14}/>{zh.common.import}</button>) },
     { key: 'export', content: (<button onClick={() => onTransfer('export')}><ArrowUpFromLine size={14}/>{zh.common.export}</button>) }

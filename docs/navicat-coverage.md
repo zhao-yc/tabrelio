@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。四种数据库的表页可从工具栏清除筛选并重新读取第一页，保留已应用的排序和页长，沿用记录草稿保护。D01 已验范围增加。[使用手册](user-guide.md#清除表页筛选)
+
 2026-11-11 源码增量。四种数据库的表格视图提供列显隐侧栏，可搜索字段、逐列勾选或恢复全部列。变更沿用表布局草稿和保存入口，保留行勾选及原数据。D06 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#edit-records)
 
 2026-11-11 源码增量。四种数据库在表页底部提供可开关的 SQL 历史面板，查看时仍可浏览数据。历史记录成功分页及随页计数、未完成读取已经尝试投递的模板，以及集中提交尝试投递的参数化 SQL、事务控制语句和回执状态。历史省略参数值和错误原文并只在当前表页内存保留。D08 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html#view-history)

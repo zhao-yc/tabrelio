@@ -407,7 +407,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   }
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
-  function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
+  function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}, afterRead?: () => void) {
     if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || checkedDeleteRef.current || checkedUpdateRef.current || checkedDuplicateRef.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const sameWindow = next.limit === options.limit && JSON.stringify(next.filter) === JSON.stringify(options.filter) &&
@@ -420,7 +420,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     }
     try {
       const pins = keepDraft ? postgresCheckedPagePins(history.pins(), [...deletePagesRef.current, ...fillPagesRef.current, ...duplicatePagesRef.current]) : {};
-      void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
+      void run(async isCurrent => {
+        if (await read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }) && isCurrent()) afterRead?.();
+      });
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -1304,6 +1306,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     setSelectedFilter(undefined);
     if (columnDialog?.kind === 'values') setColumnDialog(undefined);
   }
+  /** 读回新页前保持原筛选输入；失败、忙碌或草稿阻挡时仍可核对旧条件。 */
+  function clearTableFilters(): void {
+    if (!active || frozenPage || !options.filter) return;
+    navigate({ ...options, offset: 0, filter: undefined }, false, {}, () => {
+      closeAdvancedFilters(); setFilterText('');
+    });
+  }
 
   const valueColumns = page?.columns.filter(column => column.valueOptions) ?? [];
   const canReadStatistics = active && !blocked && !requiresRefresh && !!page?.exportToken && pageConnectionVersion === connectionVersion;
@@ -1764,9 +1773,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       </div>
       <button disabled={frozenPage} aria-expanded={advancedFilters}
         onClick={() => advancedFilters ? closeAdvancedFilters() : setAdvancedFilters(true)}>{text.advancedFilter}</button>
-      <button disabled={frozenPage || !options.filter} onClick={() => {
-        closeAdvancedFilters(); setFilterText(''); navigate({ ...firstPage, filter: undefined });
-      }}>{text.clearFilter}</button>
+      <button disabled={frozenPage || !options.filter} onClick={clearTableFilters}>{text.clearFilter}</button>
       <button disabled={frozenPage || !page?.exportToken || !columnNames.length} onClick={() => setSortPageToken(page?.exportToken)}>{tableSortZh.entry}</button>
       <button disabled={!canFind} aria-expanded={!!findRequest && !findRequest.replace} onClick={() => openFind(false)}>{findText.title}</button>
       <button disabled={!canEditGrid} aria-expanded={findRequest?.replace === true} onClick={() => openFind(true)}>{findText.replaceTitle}</button>
