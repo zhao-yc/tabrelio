@@ -1,3 +1,4 @@
+import { TableWriteTraceCapture } from '../shared/tableWriteTrace';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { parseSqliteTableDraft, sqliteDraftChanges, sqliteDraftGroups, sqliteTableDraftMessages, type SqliteTableDraftDocument, type SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
@@ -37,6 +38,7 @@ interface Statement { sql: string; parameters: SqliteValue[]; row?: number; sour
 export interface SqliteEditClaim { batch?: SqliteEditClaim[]; snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; synchronization?: { columns: string[]; rows: (SqliteValue[] | undefined)[] }; }
 interface Preview extends SqliteEditClaim { id: string; expires: number; bytes: number; }
 export interface SqliteEditApplyRequest extends SqliteTableEditApplyInput {
+  includeWriteTrace?: true;
   operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteWriteFact): void;
 }
 export interface SqliteEditApplyControl extends SqliteTableBrowseControl { beginCommit(): void; }
@@ -368,11 +370,13 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
   const batchTables = claim.batch?.map(group => group.snapshot.target.table);
   let currentTable: string | undefined;
   let appliedRows = 0, begun = false, commitSent = false, committed = false, rollback = false, warning = false, failure: unknown;
+  const trace = input.includeWriteTrace ? new TableWriteTraceCapture() : undefined;
   const fact = (phase: SqliteWriteFact['phase']): SqliteWriteFact => ({ operationId: input.operationId, target: { ...snapshot.target }, ...(batchTables ? { batchTables } : {}), phase, requestedRows, appliedRows, commitMayHaveBeenSent: commitSent || phase === 'commit-pending', commitAcknowledged: committed, rollbackAcknowledged: rollback });
   const record = (phase: SqliteWriteFact['phase']) => { const value: unknown = input.recordWriteFact(fact(phase)); if (value && typeof (value as { then?: unknown }).then === 'function') throw Error('SQLite写入事实必须同步持久化，不能使用异步替身'); };
   try {
     control.check(); if (driver.readOnly || !equal(driver.identity, snapshot.identity)) throw Error('SQLite实际数据库文件身份已变化，原修改未发送');
-    await assertSnapshotFile(snapshot, control); record('not-sent'); await driver.execute('BEGIN IMMEDIATE'); begun = true; control.check();
+    await assertSnapshotFile(snapshot, control); record('not-sent'); trace?.record('BEGIN IMMEDIATE');
+    await driver.execute('BEGIN IMMEDIATE'); begun = true; control.check();
     await assertSnapshotFile(snapshot, control);
     // 先锁住同一个右侧文件并核对所有表，再发送第一条 DML。
     for (const group of groups) {
@@ -407,7 +411,7 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
           const source = (group.sources ?? [snapshot])[statement.source ?? 0]; if (!source) throw Error(text.stale);
           await verifySqliteEditOriginal(driver, source, statement.row, control);
         }
-        control.check(); await driver.execute(statement.sql, { parameters: statement.parameters });
+        control.check(); trace?.record(statement.sql); await driver.execute(statement.sql, { parameters: statement.parameters });
         const changed = await read(driver, 'SELECT changes()', [], control, 1); if (integer(changed[0]?.[0]) !== '1') throw Error('SQLite顶层修改行数不是1，整批必须回滚');
         appliedRows++; record('writing');
       }
@@ -427,7 +431,7 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
     }
     currentTable = undefined;
     await assertSnapshotFile(snapshot, control); control.check(); record('commit-pending'); control.check(); control.beginCommit(); commitSent = true;
-    await driver.execute('COMMIT'); committed = true;
+    trace?.record('COMMIT'); await driver.execute('COMMIT'); committed = true;
     try { record('committed'); } catch { warning = true; }
   } catch (reason) {
     failure = currentTable && reason instanceof Error ? Error('main.' + currentTable + '：' + reason.message, { cause: reason }) : reason;
@@ -438,10 +442,11 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
   }
   if (!committed) {
     control.beginCleanup();
-    if (driver.isUsable && driver.transaction === true) try { await driver.execute('ROLLBACK'); rollback = true; } catch (reason) { control.cleanupFailed(reason); failure = new AggregateError([failure, reason], 'SQLite原修改失败且整批回滚未确认', { cause: failure }); }
+    if (driver.isUsable && driver.transaction === true) try { trace?.record('ROLLBACK'); await driver.execute('ROLLBACK'); rollback = true; } catch (reason) { control.cleanupFailed(reason); failure = new AggregateError([failure, reason], 'SQLite原修改失败且整批回滚未确认', { cause: failure }); }
     else if (begun && !rollback) { const reason = Error('SQLite写事务原回滚事实未知'); control.cleanupFailed(reason); failure ??= reason; }
   }
   const outcome: SqliteTableEditOutcome['outcome'] = committed ? 'committed' : rollback ? 'rolled-back' : begun || commitSent ? 'unknown' : 'not-sent';
   if (!committed) try { record(outcome); } catch { warning = true; }
-  return { operationId: input.operationId, target: { ...snapshot.target }, outcome, counts: { ...claim.counts }, fact: fact(outcome), message: committed ? text.committed : outcome === 'unknown' ? text.unknown : outcome === 'rolled-back' ? text.rolledBack + (failure instanceof Error ? ' ' + failure.message : '') : failure instanceof Error ? failure.message : text.stale, ...(warning ? { cleanupWarning: true } : {}) };
+  const captured = trace?.snapshot();
+  return { operationId: input.operationId, target: { ...snapshot.target }, outcome, counts: { ...claim.counts }, fact: fact(outcome), message: committed ? text.committed : outcome === 'unknown' ? text.unknown : outcome === 'rolled-back' ? text.rolledBack + (failure instanceof Error ? ' ' + failure.message : '') : failure instanceof Error ? failure.message : text.stale, ...(warning ? { cleanupWarning: true } : {}), ...(captured ? { writeTrace: captured } : {}) };
 }

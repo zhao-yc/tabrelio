@@ -150,7 +150,7 @@ export function observeSessionError(managed: ManagedConnection,sql?:string): voi
 }
 
 /** 参数化语句使用预处理以适应任意转义模式；无参数控制语句直接走文本协议，避免 START TRANSACTION 等不支持预处理。 */
-export function execute<T = Record<string, unknown>[]>(managed: ManagedConnection, sql: string, params: (string | number | boolean | null | Buffer)[] = []): Promise<{ rows: T; fields: FieldPacket[] }> {
+export function execute<T = Record<string, unknown>[]>(managed: ManagedConnection, sql: string, params: (string | number | boolean | null | Buffer)[] = [], submitting?: () => void): Promise<{ rows: T; fields: FieldPacket[] }> {
   if (managed.signal?.aborted) return Promise.reject(new Error('任务已取消'));
   if (managed.broken) return Promise.reject(new Error('数据库连接已断开，请重新连接；未自动重放 SQL'));
   return new Promise((resolve, reject) => {
@@ -158,6 +158,7 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
     managed.signal?.addEventListener('abort', abort, { once: true });
     const done = (error: Error | null, rows: unknown, fields: FieldPacket[]) => { managed.signal?.removeEventListener('abort', abort); error ? reject(error) : resolve({ rows: rows as T, fields }); };
     // 在发送之前选择协议，不在失败后重放 SQL，保证写操作最多发送一次。
+    submitting?.();
     if (params.length) managed.connection.execute(sql, params, done);
     else managed.connection.query(sql, done);
   });

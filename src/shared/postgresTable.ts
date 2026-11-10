@@ -148,7 +148,8 @@ export const postgresTablePreviewSchema = target.extend({
 });
 export const postgresFilteredWriteMaxRows = 1000;
 const filteredWriteRows = z.number().int().min(1).max(postgresFilteredWriteMaxRows);
-export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token, confirmedRows: filteredWriteRows.optional() }).strict();
+export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token, confirmedRows: filteredWriteRows.optional(),
+  includeWriteTrace: z.literal(true).optional() }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
 export const postgresFilteredUpdateSchema = postgresTableReleaseSchema.extend({ fields: z.array(field).min(1).max(postgresTableLimits.fields) })
   .strict().superRefine(({ fields }, context) => {
@@ -383,6 +384,7 @@ export interface PostgresTableOutcome {
   message: string;
   draftsRetained?: true;
   conflictCounts?: FileImportConflictCounts;
+  writeTrace?: import('./tableWriteTrace').TableWriteTrace;
 }
 
 /** 标识列可以显式保留原值，计算生成列由恢复目标重新计算。 */

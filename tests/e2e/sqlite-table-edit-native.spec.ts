@@ -12,6 +12,7 @@ import { sqliteTableRangePasteZh as rangeText } from '../../src/renderer/locales
 import { binaryCellFilesZh as binaryFilesText } from '../../src/renderer/locales/binaryCellFiles.zh-CN';
 import { binaryCellZh as binaryText } from '../../src/renderer/locales/binaryCell.zh-CN';
 import { sqliteTableEditZh as editText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
+import { tableReadHistoryZh as sqlHistory } from '../../src/renderer/locales/tableReadHistory.zh-CN';
 
 // 默认和--list只注册单个跳过项；原生App、NodeSQLite和文件观察均在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -59,6 +60,26 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
   const table = () => page.locator('.table-tab:visible');
   const grid = () => table().getByRole('grid', { name: 'SQLite 表格编辑', exact: true });
   const preview = () => page.getByRole('dialog', { name: '预览 SQLite 集中修改', exact: true });
+  const verifyWriteHistory = async (outcome?: 'committed' | 'rolled-back', hidden: string[] = []) => {
+    await (await navigationMenuItem(table(), { name: sqlHistory.title, exact: true })).click();
+    const history = page.getByRole('dialog', { name: sqlHistory.title, exact: true });
+    await expect(history).toBeVisible();
+    const writes = history.locator('details').filter({ hasText: '表格提交 ·' });
+    if (!outcome) await expect(writes).toHaveCount(0);
+    else {
+      const write = writes.filter({ hasText: sqlHistory.outcomes[outcome] });
+      await expect(write).toHaveCount(1);
+      const summary = write.locator('summary');
+      if (await write.getAttribute('open') === null) await summary.click();
+      const sql = write.locator('pre');
+      await expect(sql.first()).toHaveText('BEGIN IMMEDIATE');
+      await expect(sql.nth(1)).toContainText(/UPDATE .+\?/);
+      await expect(sql.last()).toHaveText(outcome === 'committed' ? 'COMMIT' : 'ROLLBACK');
+      for (const value of hidden) await expect(history).not.toContainText(value);
+    }
+    await history.getByRole('button', { name: sqlHistory.close, exact: true }).last().click();
+    await expect(history).toBeHidden();
+  };
   const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
   const tasks = () => step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})));
   const history = () => step(() => page.evaluate(() => window.dbark.invoke('history.list', {})));
@@ -397,10 +418,12 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
       { kind: 'insert', values: [{ column: 'id', value: { kind: 'integer', value: '6' } }, { column: 'note', value: { kind: 'text', value: insertNote } }, { column: 'mixed', value: { kind: 'real', value: '2.5' } }, { column: 'nullable', value: { kind: 'text', value: '' } }, { column: 'payload', value: { kind: 'blob', value: '' } }, { column: 'exact_int', value: { kind: 'integer', value: '9223372036854775807' } }, { column: 'real_num', value: { kind: 'real', value: '1.25' } }] }
     ]);
     expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]); await step(() => preview().getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click()); await step(() => expect(preview()).toBeHidden()); await counts(1, 1, 1); expect(disk()).toEqual(baseline);
+    await step(() => verifyWriteHistory());
     stage = '明确确认独立事务真实提交'; const confirmedPreview = await openPreview({ insert: 1, update: 1, delete: 1 }); expect(confirmedPreview.output.previewId).not.toBe(canceledPreview.output.previewId); const committed = await apply(); expect(committed.output).toMatchObject({ outcome: 'committed', counts: { insert: 1, update: 1, delete: 1 }, fact: { phase: 'committed', requestedRows: 3, appliedRows: 3, commitAcknowledged: true, rollbackAcknowledged: false } });
     const expectedPk = [...sourceRows.filter(row => row.id !== '3').map(row => row.id === '1' ? { ...row, note: newNote, mixed_type: 'text', nullable: null, payload: '00aaff', exact_int: '-9223372036854775808', real_num: '-2.75' } : row), { id: '6', note: insertNote, mixed_type: 'real', mixed: '2.5', nullable: '', payload: '', payload_type: 'blob', exact_int: '9223372036854775807', exact_type: 'integer', real_num: '1.25', real_type: 'real', defaulted: defaultValue }].sort((a, b) => Number(a.id) - Number(b.id)); const afterCommit = { ...baseline, pk: expectedPk }; expect(disk()).toEqual(afterCommit);
     // 成功提交会真实刷新并关闭原预览；等待新网格，不用已返回IPC冒称React已完成。
     await step(() => expect(preview()).toBeHidden()); await step(() => expect(grid()).toBeVisible()); await counts(0, 0, 0);
+    await step(() => verifyWriteHistory('committed', [newNote, insertNote]));
     stage = 'WITHOUT ROWID复合主键冲突整批回滚'; await openObject(rwName, compoundTable); await step(() => expect(grid()).toBeVisible()); await sortPage(['tenant', 'id']); await step(() => expect.poll(async () => await columnValues('tenant')).toEqual(['TEXT · A', 'TEXT · A', 'TEXT · A', 'TEXT · B'])); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 3']));
     const beforeRecordNavigation = await step(audit), compoundPage = operations(beforeRecordNavigation, 'sqlite.tablePage').at(-1);
     expect(result(compoundPage?.reply)).toMatchObject({ edit: { kind: 'editable', locator: { kind: 'primary-key', columns: ['tenant', 'id'] } } });
@@ -427,6 +450,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     check(); const observer = new DatabaseSync(database); try { expect(observer.prepare('UPDATE "编辑复合键" SET note=? WHERE tenant=? AND id=?').run(observerNote, 'A', 3n).changes).toBe(1); } finally { observer.close(); check(); }
     const afterObserver = { ...afterCommit, compound: compoundRows.map(row => row.tenant === 'A' && row.id === '3' ? { ...row, note: observerNote } : row) }; expect(disk()).toEqual(afterObserver);
     const rolledBack = await apply(); expect(rolledBack.output).toMatchObject({ outcome: 'rolled-back', counts: { insert: 0, update: 2, delete: 0 }, fact: { phase: 'rolled-back', requestedRows: 2, appliedRows: 1, commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: true } }); expect(disk()).toEqual(afterObserver); await step(() => expect(preview().getByRole('button', { name: '关闭 SQLite 修改预览', exact: true })).toBeEnabled()); await step(() => preview().getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click()); await counts(0, 2, 0); await step(() => expect(grid().getByText('TEXT · ' + conflictFirst, { exact: true })).toBeVisible()); await step(() => expect(grid().getByText('TEXT · ' + conflictLast, { exact: true })).toBeVisible()); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toHaveLength(2);
+    await step(() => verifyWriteHistory('rolled-back', [conflictFirst, conflictLast]));
     stage = '明确放弃已核保留草稿并核readonly/view禁写'; await confirm(() => table().getByRole('button', { name: '放弃 SQLite 草稿', exact: true }).click(), workspaceText.confirmDiscard); await counts(0, 0, 0); await step(() => expect(grid().getByText('TEXT · ' + observerNote, { exact: true })).toBeVisible()); expect(disk()).toEqual(afterObserver);
     const beforeReadonly = operations(await step(audit), 'sqlite.tableEdit.preview').length; await openObject(rwName, viewName); await step(() => expect(table().getByRole('grid')).toBeVisible()); await step(() => expect(grid()).toHaveCount(0)); await step(() => expect(table().getByRole('button', { name: '新增 SQLite 记录', exact: true })).toHaveCount(0)); await step(() => expect(table().getByRole('button', { name: '预览 SQLite 修改', exact: true })).toHaveCount(0)); const viewPage = operations(await step(audit), 'sqlite.tablePage').at(-1); expect(result(viewPage?.reply)).toMatchObject({ target: { kind: 'view', table: viewName }, edit: { kind: 'readonly' } });
     await openObject(roName, pkTable); await step(() => expect(table().getByRole('grid')).toBeVisible()); await step(() => expect(grid()).toHaveCount(0)); for (const button of ['新增 SQLite 记录', '删除 SQLite 当前行', '编辑 SQLite 当前行', '预览 SQLite 修改']) await step(() => expect(table().getByRole('button', { name: button, exact: true })).toHaveCount(0)); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toHaveLength(beforeReadonly); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toHaveLength(2); expect(disk()).toEqual(afterObserver);

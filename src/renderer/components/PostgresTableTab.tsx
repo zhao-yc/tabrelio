@@ -506,9 +506,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         !layoutScope.current.current() || requiresRefresh || pageConnectionVersion !== connectionVersion)) return;
     const previewToken = preview.previewToken;
     void run(async isCurrent => {
-      const result = await invoke('postgres.table.apply', { ...target, pageToken, previewToken,
+      const result = await invoke('postgres.table.apply', { ...target, pageToken, previewToken, includeWriteTrace: true,
         ...(filteredCount === undefined ? {} : { confirmedRows: filteredCount }) });
       if (!isCurrent()) return;
+      const outcome = result.outcome === 'rolledBack' ? 'rolled-back' : result.outcome === 'notSent' ? 'not-sent' : result.outcome;
+      readHistory.recordWrite(result.writeTrace, outcome);
       setPreview(undefined);
       if (result.outcome === 'rolledBack' && result.draftsRetained && issued.current === pageToken) {
         setMessage(result.message + ' ' + (preview.filteredDelete ? filteredDeleteText.retry :

@@ -318,7 +318,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         available: () => !useWorkspace.getState().activeJobs[captured.tab.id], acquire: () => acquireWorkspaceBusy(captured.tab.id), id: uid, now: Date.now,
         changed: next => { if (editorRef.current === editor) setEditView(next); updateDrafts(value => value + 1); }, dirty: () => syncDraftDirty(),
         batch: () => drafts.batch(editor), settled: outcome => drafts.settled(editor, outcome),
-        preview: input => invoke('sqlite.tableEdit.preview', input), apply: input => invoke('sqlite.tableEdit.apply', input), release: input => invoke('sqlite.tableEdit.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
+        preview: input => invoke('sqlite.tableEdit.preview', input), apply: input => invoke('sqlite.tableEdit.apply', { ...input, includeWriteTrace: true }),
+        observeWrite: result => readHistory.recordWrite(result.writeTrace, result.outcome), release: input => invoke('sqlite.tableEdit.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
         committed: () => { checkedExport.clear(); useWorkspace.getState().notify(editor.view.message); if (editorRef.current === editor) { const offset = editor.page.offset; dropEditor(); if (latest.current.active) void controller.load(applied.current, offset); } },
       }, restored);
     return editor;

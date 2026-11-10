@@ -1,5 +1,6 @@
 import { mysqlJoinPreviewSchema } from '../shared/mysqlJoinPreview';
 import { tableReadStatements } from '../shared/tableReadStatements';
+import { TableWriteTraceCapture } from '../shared/tableWriteTrace';
 import { previewMysqlJoin } from './mysqlJoinPreview';
 import { readMysqlViewDependencies } from './mysqlViewDependencies';
 import { mysqlViewDependenciesSchema } from '../shared/viewDependencies';
@@ -1678,11 +1679,11 @@ export class Engine {
   }
 
   /** 参数化短操作也登记查询代次，以便导入和批量修改在同样的取消边界内运行。 */
-  private async statement<T = ResultSetHeader>(task: RunningTask, sql: string, params: CellValue[] = [], acknowledged?: (result: T) => void): Promise<T> {
+  private async statement<T = ResultSetHeader>(task: RunningTask, sql: string, params: CellValue[] = [], acknowledged?: (result: T) => void, submitting?: () => void): Promise<T> {
     this.checkCancelled(task);
     task.inFlight = true; task.generation++;
     try {
-      const rows = (await execute<T>(task.managed, sql, params.map(deserializeCell))).rows;
+      const rows = (await execute<T>(task.managed, sql, params.map(deserializeCell), submitting)).rows;
       if (rows && typeof rows === 'object' && 'serverStatus' in rows) task.managed.serverStatus = task.serverStatus = Number(rows.serverStatus);
       acknowledged?.(rows);
       return rows;
@@ -2669,6 +2670,7 @@ export class Engine {
   /** 任一更新/删除未精确命中一行即视为冲突，整批回滚；FOUND_ROWS 允许原值回写。 */
   private async applyChanges(task: RunningTask, input: Input): Promise<{ affectedRows: number }> {
     const evidence = task.tableApply = emptyTableApplyEvidence(), binding = input.tableApplyBinding as TableApplyBinding | undefined;
+    const trace = input.includeWriteTrace && binding ? new TableWriteTraceCapture() : undefined;
     let info: import('../shared/contracts').TableInfo;
     const locator = input.searchRecordRef ? { connectionId: input.connectionId, taskId: task.id, recordRef: input.searchRecordRef } : undefined;
     let searchKey: ReturnType<DataSearchRecords['editKey']> | undefined;
@@ -2699,7 +2701,7 @@ export class Engine {
     try { return await applyTableTransaction(info, input.changes, {
       evidence, operationId: binding?.operationId, expectedPlan: binding?.plan, searchKey, ...queryEdit?.options,
       checkCancelled: () => { this.checkCancelled(task); queryEdit?.current(); }, broken: () => task.managed.broken, cancelled: () => task.cancelled,
-      send: (sql, params, ack) => this.statement(task, sql, params, ack),
+      send: (sql, params, ack) => this.statement(task, sql, params, ack, trace && (() => trace.record(sql))),
       lockInfo: async () => {
         const context = {
           managed: task.managed, checkCancelled: () => this.checkCancelled(task), report: () => {},
@@ -2712,9 +2714,19 @@ export class Engine {
           { database: input.database, table: input.table, changes: input.changes }, true);
         return info;
       },
-      rollback: async () => (await execute<ResultSetHeader>(task.managed, 'ROLLBACK')).rows,
+      rollback: async () => (await execute<ResultSetHeader>(task.managed, 'ROLLBACK', [], trace && (() => trace.record('ROLLBACK')))).rows,
       emit: progress => this.emit({ taskId: task.id, status: 'running', progress: 0, message: progress.phase === 'committing' ? '正在确认提交，暂不能取消' : '数据提交结果请查看提交记录', tableApply: progress })
-    }); } finally { consumeQueryEdit(); }
+    }); } finally {
+      consumeQueryEdit();
+      const captured = trace?.snapshot();
+      if (captured && binding) {
+        // 专用内存事件只由 Main 转交原提交请求，不能进入任务记录或全局历史。
+        try {
+          this.emit({ taskId: task.id, status: 'running', progress: 0, message: '',
+            tableWriteTrace: { operationId: binding.operationId, trace: captured } });
+        } catch { /* 辅助历史不能覆盖原提交回执。 */ }
+      }
+    }
   }
 
   /** Excel 在写入前重验完整工作表、指纹与目标映射，再复用文件导入的分批事务和参数绑定。 */

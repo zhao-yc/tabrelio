@@ -61,6 +61,11 @@ export class TableApplyReceipts {
 
   /** 仅已校验且绑定当前任务的ACK可决定成功；保留有界终态供退出竞态核对。 */
   confirmed(taskId: string): TableApplyReceipt | undefined { const r = this.active.get(taskId) ?? this.completed.get(taskId); return r?.evidence.commitAcknowledged ? r : undefined; }
+  /** 历史沿用现有终态证据，缺失 ACK 时不能用错误文字推断回滚。 */
+  outcome(taskId: string): NonNullable<TableApplyReceipt['outcome']> {
+    const receipt = this.active.get(taskId) ?? this.completed.get(taskId);
+    return (receipt && interruptTableApplyReceipt(receipt).outcome) ?? 'unknown';
+  }
   /** 当前内存证据先于辅助写盘；持久化失败不得把COMMIT降回可取消阶段。 */
   cancelState(taskId: string, operationId: string | undefined): TaskCancelState {
     const r = this.active.get(taskId) ?? this.completed.get(taskId);

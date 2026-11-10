@@ -807,7 +807,7 @@ export class SqliteRuntime {
     const input = source as SqliteEditApplyRequest;
     if (!input || typeof input.operationId !== 'string' || !input.operationId || typeof input.assertCurrent !== 'function' || typeof input.recordWriteFact !== 'function') return Promise.reject(Error('SQLite表格写入缺少Main同步提交事实能力'));
     if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
-    const { operationId: _operation, assertCurrent: _assert, recordWriteFact: _record, ...publicInput } = input;
+    const { operationId: _operation, assertCurrent: _assert, recordWriteFact: _record, includeWriteTrace: _trace, ...publicInput } = input;
     const claim = synchronization ?? this.edits.claim(publicInput), connection = this.connections.get(claim.snapshot.target.connectionId);
     if (!connection) {
       const outcome = sqliteEditNotSent(claim, input, 'SQLite原连接已关闭'); if (!synchronization) this.edits.settle(claim, outcome.outcome); this.tasks.set(input.taskId, { kind: 'edit-finished' });

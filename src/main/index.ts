@@ -621,7 +621,16 @@ function persistAuxiliary(action: () => void): void {
 }
 
 /** utility事件在进入原记录器前核INSERT owner；原任务概要仍记终态，敏感样例不交给新文档。 */
-function engineTaskEvent(event:TaskEvent):void{if(event.queryInsert&&!queryInsertExports.has(event.taskId))return;taskEvent(event,queryInsertExports.receive(event.taskId,event.queryInsert));}
+const tableWriteTraces = new Map<string, { operationId: string; trace?: import('../shared/tableWriteTrace').TableWriteTrace }>();
+function engineTaskEvent(event:TaskEvent):void {
+  if (event.tableWriteTrace) {
+    const owner = tableWriteTraces.get(event.taskId);
+    if (owner?.operationId === event.tableWriteTrace.operationId) owner.trace = event.tableWriteTrace.trace;
+    return;
+  }
+  if(event.queryInsert&&!queryInsertExports.has(event.taskId))return;
+  taskEvent(event,queryInsertExports.receive(event.taskId,event.queryInsert));
+}
 
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent, deliverInsert=true): void {
@@ -3301,6 +3310,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let releaseTarget: (() => void) | undefined;
   let filteredExportLease: TableFilteredExportMainLease | undefined;
   let sentToEngine = false;
+  let writeTraceOwner: { operationId: string; trace?: import('../shared/tableWriteTrace').TableWriteTrace } | undefined;
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   const focusedTableEdit = mysqlFocusedEdit ? 'query:' + JSON.stringify(mysqlFocusedEdit) :
     (command === 'table.preview' || command === 'table.apply') ? input.searchRecordRef : undefined;
@@ -3356,6 +3366,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const linked = { ...tasks.get(input.taskId)!, tableApplyReceiptId: binding.operationId };
       store.saveTask(linked); tasks.set(input.taskId, linked);
       input = { ...input, tableApplyBinding: binding };
+      if (input.includeWriteTrace) {
+        writeTraceOwner = { operationId: binding.operationId };
+        tableWriteTraces.set(input.taskId, writeTraceOwner);
+      }
     }
     // 令牌目标只来自可信引擎输出；修订在投递前同步读取，客户端不能注入或覆盖。
     if (structureCommand && command !== structurePrefix + 'release') input = { ...input, connectionRevision: store.connectionRevision() };
@@ -3484,7 +3498,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     else if (taskId && queryFailure && (terminalStatus === 'running' || terminalStatus === 'completed')) taskEvent({ taskId, status: 'failed', progress: 100, message: queryFailure.message });
     else if (taskId && command!=='search.dataStart' && terminalStatus === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: tableValueOptionsRead ? '服务器不同值读取完成' : command === 'query.databaseSwitch' ? '默认数据库已确认' : '执行完成' });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: !queryFailure, ...(queryFailure ? { error: persistedQueryError(command, queryFailure.message) } : {}) }));
-    return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!) } : result;
+    return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!),
+      ...(writeTraceOwner?.trace ? { writeTrace: writeTraceOwner.trace, writeOutcome: 'committed' } : {}) } : result;
   } catch (error) {
     if (command === 'sessions.close' && session?.postgres) session.postgres.closing = false;
     if (sqliteClaim && taskId) {
@@ -3505,15 +3520,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'table.apply' && taskId && tableApplyReceipts.confirmed(taskId)) {
       const confirmed = tableApplyReceipts.confirmed(taskId)!; tableApplyReceipts.cleanupFailed(taskId);
       taskEvent({ taskId, status: 'completed', progress: 100, message: '服务器已确认目标事务提交，后续收尾异常；请查看提交记录' });
-      return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId) };
+      return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId),
+        ...(writeTraceOwner?.trace ? { writeTrace: writeTraceOwner.trace, writeOutcome: 'committed' } : {}) };
     }
     const message = command === 'postgres.table.import' ? 'PostgreSQL 导入未确认提交，请在原窗口核对回执' :
       (command === 'postgres.query.export' || command === 'postgres.table.export') ? (preparing.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件') :
       error instanceof Error ? error.message : '操作失败';
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
+    if (command === 'table.apply' && taskId && writeTraceOwner?.trace) {
+      // 回包内保留原错误，只有显式请求 SQL 历史的调用方接收。任务仍沿原失败路径结算。
+      return { affectedRows: 0, applyError: message, writeTrace: writeTraceOwner.trace, writeOutcome: tableApplyReceipts.outcome(taskId) };
+    }
     throw error;
-  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); if (command === 'postgres.table.import') postgresImportTaskOwners.delete(taskId); if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database' || command === 'mysql.sqlFile.execute' || command === 'mysql.backup.database') || command === 'postgres.table.export' && input.format === 'sql-backup-set') sqlFileTaskOwners.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
+  } finally { if (taskId && writeTraceOwner && tableWriteTraces.get(taskId) === writeTraceOwner) tableWriteTraces.delete(taskId); if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); if (command === 'postgres.table.import') postgresImportTaskOwners.delete(taskId); if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database' || command === 'mysql.sqlFile.execute' || command === 'mysql.backup.database') || command === 'postgres.table.export' && input.format === 'sql-backup-set') sqlFileTaskOwners.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
 }
 
 /** 菜单模板只接纳固定命令，执行资格由当前文档的准确修订决定。 */

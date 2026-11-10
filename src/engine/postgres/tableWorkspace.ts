@@ -10,6 +10,7 @@ import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import { FILTER_LIMITS } from '../../shared/filtering';
 import { tableReadStatements } from '../../shared/tableReadStatements';
+import { TableWriteTraceCapture } from '../../shared/tableWriteTrace';
 import {
   isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredWriteMaxRows,
   postgresFilteredUpdateSchema, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema, postgresTableValueLimits,
@@ -296,10 +297,12 @@ async function referenceSource(connection: PostgresConnection, relation: Relatio
 }
 
 /** 控制表页事务锁及每条语句的数据库端等待上限。 */
-async function begin(connection: PostgresConnection, mode: 'page' | 'export' | 'write' | 'filteredWrite' = 'write'): Promise<void> {
-  await connection.query(mode === 'page' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' :
+async function begin(connection: PostgresConnection, mode: 'page' | 'export' | 'write' | 'filteredWrite' = 'write', trace?: TableWriteTraceCapture): Promise<void> {
+  const sql = mode === 'page' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' :
     mode === 'export' ? 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY' :
-      mode === 'filteredWrite' ? 'BEGIN ISOLATION LEVEL READ COMMITTED' : 'BEGIN', undefined, small());
+      mode === 'filteredWrite' ? 'BEGIN ISOLATION LEVEL READ COMMITTED' : 'BEGIN';
+  trace?.record(sql);
+  await connection.query(sql, undefined, small());
   for (const sql of ["SET LOCAL statement_timeout = '15s'", "SET LOCAL lock_timeout = '5s'", "SET LOCAL idle_in_transaction_session_timeout = '20s'"]) {
     await connection.query(sql, undefined, small());
   }
@@ -1095,12 +1098,13 @@ export class PostgresTableWorkspace {
     snapshot.preview = undefined;
     this.active.add(key);
     let receipt: PostgresTableOutcome | undefined;
+    const trace = input.includeWriteTrace ? new TableWriteTraceCapture() : undefined;
     let draftsRetained = false;
     try {
       try {
         await connect(async connection => {
           receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes,
-            snapshot.related, preview.filtered, undefined, snapshot.recordServerCheck);
+            snapshot.related, preview.filtered, undefined, snapshot.recordServerCheck, trace);
         }, true);
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
@@ -1109,7 +1113,8 @@ export class PostgresTableWorkspace {
           : { outcome: 'notSent', affected: 0, message };
       }
       draftsRetained = receipt?.outcome === 'rolledBack' && this.snapshots.get(key) === group && preview.expires > Date.now();
-      return draftsRetained ? { ...receipt!, draftsRetained: true } : receipt!;
+      const captured = trace?.snapshot();
+      return { ...receipt!, ...(draftsRetained ? { draftsRetained: true as const } : {}), ...(captured ? { writeTrace: captured } : {}) };
     } finally {
       if (!draftsRetained && this.snapshots.get(key) === group) this.snapshots.delete(key);
       this.active.delete(key);
@@ -1192,19 +1197,19 @@ export class PostgresTableWorkspace {
   /** 提交回执以实际命令标签及空闲状态为准，断线时保留未知终态。 */
   private async applyTransaction(connection: PostgresConnection, expected: Relation, table: string, writes: Write[],
     related?: RelatedScope, filtered?: FilteredWriteMatch, synchronize?: (connection: PostgresConnection) => Promise<void>,
-    checkSearchServer?: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
-    return this.applyTransactionGroups(connection, [{ expected, table, writes }], related, filtered, synchronize, checkSearchServer);
+    checkSearchServer?: (connection: PostgresConnection) => Promise<void>, trace?: TableWriteTraceCapture): Promise<PostgresTableOutcome> {
+    return this.applyTransactionGroups(connection, [{ expected, table, writes }], related, filtered, synchronize, checkSearchServer, trace);
   }
 
   private async applyTransactionGroups(connection: PostgresConnection, groups: WriteGroup[],
     related?: RelatedScope, filtered?: FilteredWriteMatch, synchronize?: (connection: PostgresConnection) => Promise<void>,
-    checkSearchServer?: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+    checkSearchServer?: (connection: PostgresConnection) => Promise<void>, trace?: TableWriteTraceCapture): Promise<PostgresTableOutcome> {
     let activeTable: string | undefined;
     let sent = false;
     let commitAttempted = false;
     try {
       // 等锁期间可能有事务提交。显式使用读已提交，锁后的复核才能取得新快照。
-      await begin(connection, filtered || synchronize ? 'filteredWrite' : 'write');
+      await begin(connection, filtered || synchronize ? 'filteredWrite' : 'write', trace);
       if (synchronize) await synchronize(connection);
       if (checkSearchServer) await checkSearchServer(connection);
       // 首条 DML 前核对全部表的写权限、目录、侧效应与原行。
@@ -1250,6 +1255,7 @@ export class PostgresTableWorkspace {
         if (groups.length > 1) activeTable = expected.sql;
         for (const write of writes) {
           sent = true;
+          trace?.record(write.sql);
           const result = await connection.query(write.sql, write.values, write.expected ? { rows: 1, bytes: 8 * 1024 * 1024 } : small());
           if (write.expected && (result.truncated || result.rows.length !== 1 || digest(result.rows[0]) !== digest(write.expected)))
             throw Error('PostgreSQL 写入回读值与左侧快照不一致');
@@ -1263,19 +1269,20 @@ export class PostgresTableWorkspace {
       }
       activeTable = undefined;
       commitAttempted = true;
+      trace?.record('COMMIT');
       const result = await connection.query('COMMIT', undefined, small());
       if (result.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen) {
         throw Error('PostgreSQL未确认提交');
       }
       return { outcome: 'committed', affected: filtered?.count ?? groups.reduce((count, group) => count + group.writes.length, 0), message: 'PostgreSQL已确认整批提交' };
     } catch (reason) {
-      const outcome = await this.rollbackWrite(connection, sent, commitAttempted, reason);
+      const outcome = await this.rollbackWrite(connection, sent, commitAttempted, reason, trace);
       return activeTable ? { ...outcome, message: activeTable + '：' + outcome.message } : outcome;
     }
   }
 
   /** COMMIT 发出后，单凭连接已空闲无法确定这批写入的结果。 */
-  private async rollbackWrite(connection: PostgresConnection, sent: boolean, commitAttempted: boolean, reason: unknown): Promise<PostgresTableOutcome> {
+  private async rollbackWrite(connection: PostgresConnection, sent: boolean, commitAttempted: boolean, reason: unknown, trace?: TableWriteTraceCapture): Promise<PostgresTableOutcome> {
     const message = connection.error(reason).message;
     if (!sent) return { outcome: 'notSent', affected: 0, message };
     const state = connection.state();
@@ -1283,6 +1290,7 @@ export class PostgresTableWorkspace {
       return { outcome: 'unknown', affected: 0, message: '提交状态待核对：' + message };
     try {
       if (state.transactionOpen) {
+        trace?.record('ROLLBACK');
         const rollback = await connection.query('ROLLBACK', undefined, small());
         if (rollback.postgresCommand !== 'ROLLBACK') throw Error('未收到回滚确认');
       }

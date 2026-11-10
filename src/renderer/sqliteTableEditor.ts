@@ -15,7 +15,7 @@ interface SqliteRowsPlan {
 }
 export interface SqliteEditView { page: SqliteTablePage; rows: SqliteDraftRow[]; dirty: boolean; busy: boolean; valid: boolean; unknown: boolean; undo: boolean; redo: boolean; message: string; preview?: SqliteTableEditPreview; taskId?: string; }
 interface Lease { owns(): boolean; release(): boolean; }
-interface Ports { batch?(): SqliteEditBatch | undefined; settled?(outcome: SqliteTableEditOutcome['outcome']): void; current(): boolean; active(): boolean; available(): boolean; acquire(): Lease; id(): string; now(): number; changed(view: SqliteEditView): void; dirty(value: boolean): void; preview(input: { snapshotId: string; taskId: string; changes: SqliteTableChange[] }): Promise<SqliteTableEditPreview>; apply(input: { previewId: string; taskId: string; confirmation: string }): Promise<SqliteTableEditOutcome>; release(input: { snapshotId?: string; previewId?: string }): Promise<unknown>; cancel(taskId: string): Promise<unknown>; committed(): void; }
+interface Ports { observeWrite?(outcome: SqliteTableEditOutcome): void; batch?(): SqliteEditBatch | undefined; settled?(outcome: SqliteTableEditOutcome['outcome']): void; current(): boolean; active(): boolean; available(): boolean; acquire(): Lease; id(): string; now(): number; changed(view: SqliteEditView): void; dirty(value: boolean): void; preview(input: { snapshotId: string; taskId: string; changes: SqliteTableChange[] }): Promise<SqliteTableEditPreview>; apply(input: { previewId: string; taskId: string; confirmation: string }): Promise<SqliteTableEditOutcome>; release(input: { snapshotId?: string; previewId?: string }): Promise<unknown>; cancel(taskId: string): Promise<unknown>; committed(): void; }
 interface Operation { id: string; kind: 'preview' | 'apply'; acquiring: boolean; lease?: Lease; sent: boolean; cancelled: boolean; cancel?: Promise<unknown>; }
 /** 先验完整稠密自有data数组；巨量length先拒绝，不map或读取任何索引getter。 */
 function appendArray(value: unknown, minimum: number, maximum: number): readonly unknown[] {
@@ -412,6 +412,7 @@ export class SqliteTableEditor {
       op = this.begin('apply'); this.previewValue = undefined; this.batchCurrent = undefined; op.sent = true; sent = true; this.emit();
       const result = await this.ports.apply({ previewId: preview.previewId, taskId: op.id, confirmation: preview.confirmation });
       if (result.target.connectionId !== this.page.target.connectionId || result.target.database !== 'main' || result.target.table !== this.page.target.table || !['committed', 'rolled-back', 'not-sent', 'unknown'].includes(result.outcome) || result.outcome === 'committed' && !result.fact.commitAcknowledged) throw Error(text.invalid);
+      this.ports.observeWrite?.(result);
       this.message = result.message; this.ports.settled?.(result.outcome);
       if (result.outcome === 'committed') { this.setDraftRows([]); this.past = []; this.future = []; this.input = false; this.valid = false; this.unknown = false; }
       else if (result.outcome === 'unknown') { this.unknown = true; this.valid = false; this.message = text.unknown; }

@@ -69,7 +69,7 @@ export interface SqliteTableEditPreview { /** 多页预览按请求顺序回显�
 export type SqliteWritePhase = 'not-sent' | 'writing' | 'commit-pending' | 'committed' | 'rolled-back' | 'unknown';
 /** 提交事实只记录目标、数量和ACK，禁止原值、SQL及文件路径进入任务持久记录。 */
 export interface SqliteWriteFact { operationId: string; target: SqliteEditTarget; batchTables?: string[]; phase: SqliteWritePhase; requestedRows: number; appliedRows: number; commitMayHaveBeenSent: boolean; commitAcknowledged: boolean; rollbackAcknowledged: boolean; }
-export interface SqliteTableEditOutcome { operationId: string; target: SqliteEditTarget; outcome: 'committed' | 'rolled-back' | 'not-sent' | 'unknown'; counts: SqliteTableEditCounts; fact: SqliteWriteFact; message: string; cleanupWarning?: boolean; }
+export interface SqliteTableEditOutcome { operationId: string; target: SqliteEditTarget; outcome: 'committed' | 'rolled-back' | 'not-sent' | 'unknown'; counts: SqliteTableEditCounts; fact: SqliteWriteFact; message: string; cleanupWarning?: boolean; writeTrace?: import('./tableWriteTrace').TableWriteTrace; }
 export const sqliteTableEditMessages = {
   stale: 'SQLite原页、连接或预览已失效，请重新读取；不会自动重放修改。',
   readonly: '当前SQLite对象没有可靠定位条件或连接为只读，不能通过表格修改。',

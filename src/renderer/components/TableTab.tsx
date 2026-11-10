@@ -2287,7 +2287,9 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     applyingRef.current = true; blockedRef.current = true; setApplying(true); setError(''); useWorkspace.getState().setBusy(tab.id, true);
     setApplyTaskId(taskId); receiptTaskRef.current = taskId; setLastReceiptId(''); setCommitLocked(false);
     try {
-      const result = await invoke('table.apply', { ...base, changes: fixedChanges, taskId, previewId: preview.view.previewId });
+      const result = await invoke('table.apply', { ...base, changes: fixedChanges, taskId, previewId: preview.view.previewId, includeWriteTrace: true });
+      if (result.writeOutcome) readHistory.recordWrite(result.writeTrace, result.writeOutcome);
+      if (result.applyError !== undefined) throw Error(result.applyError);
       const confirmed = applyRecovery.succeeded(attempt, result); publishApplyRecovery();
       if (!confirmed) { setError(tableApplyRecoveryZh.receiptUnavailable); return; }
       setLastReceiptId(result.receiptId ?? applyRecovery.view.operationId ?? ''); setPreview(null);
