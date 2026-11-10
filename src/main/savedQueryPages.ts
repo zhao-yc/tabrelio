@@ -1,5 +1,5 @@
 import{createHash}from'node:crypto';
-import{savedQueryPageInputSchema,savedQueryDeleteCheckedSchema,type SavedQueryPageInput,type SavedQueryPageEntry,type SavedQueryPagePosition}from'../shared/savedQueryPages';
+import{savedQueryPageInputSchema,savedQueryDeleteCheckedSchema,savedQueryFilteredArchiveLimits,type SavedQueryArchiveFilters,type SavedQueryPageInput,type SavedQueryPageEntry,type SavedQueryPagePosition}from'../shared/savedQueryPages';
 import{LocalSqlPages}from'./localSqlPages';
 
 interface PageStore{queryPageRevision(input:SavedQueryPageInput):string;queryPageNext(after?:SavedQueryPagePosition,input?:SavedQueryPageInput):(SavedQueryPagePosition & {raw:string|null;hasMore:boolean;groupId?:string;favorite?:true})|null;querySearchRaw(id:string):string|undefined;deleteQuery(id:string):void}
@@ -18,6 +18,10 @@ export class SavedQueryPages extends LocalSqlPages<SavedQueryPageInput,SavedQuer
    if(favorite)entry.favorite=favorite;
   }
  },workerPath);}
+ /** 归档沿用浏览条件，读取主进程内的摘要引用，不向渲染进程传全文。 */
+ collectArchiveReferences(filters: SavedQueryArchiveFilters, assertCurrent: () => void) {
+  return this.collectReferences(filters, savedQueryFilteredArchiveLimits, item => ({ id: item.query.id, digest: item.digest }), assertCurrent);
+ }
  /** 删除针对所见原文；陈旧预览不能删除后来覆盖保存的新查询。 */
  deleteChecked(raw:unknown){const input=savedQueryDeleteCheckedSchema.parse(raw),source=this.store.querySearchRaw(input.id);if(source===undefined)throw Error('保存查询已删除，请刷新列表');if(createHash('sha256').update(source).digest('hex')!==input.digest)throw Error('保存查询已修改，未删除新内容，请刷新列表');this.store.deleteQuery(input.id);}
 }

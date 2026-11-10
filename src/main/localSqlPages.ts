@@ -29,6 +29,30 @@ export class LocalSqlPages<Input extends PageInput,Entry,Position>{
  next(raw:unknown){const input=localSqlPageNextSchema.parse(raw);this.prune();const cursor=this.cursors.get(input.cursor);if(!cursor)throw Error(this.source.label+'列表已过期或已翻页，请刷新');this.cursors.delete(input.cursor);return this.run(cursor.state,input.taskId);}
  /** 幂等释放指定来源的句柄，不能释放另一资料源的游标。 */
  release(raw:unknown){this.cursors.delete(localSqlPageReleaseSchema.parse(raw).cursor);}
+ /** 归档复用原分页条件与顺序，只累积编号和摘要，并在失败时回收内部游标。 */
+ protected async collectReferences(filters: Omit<Input, 'taskId' | 'onError'>, budget: { records: number; files: number },
+  reference: (entry: Entry) => { id: string; digest: string }, assertCurrent: () => void) {
+  const items: { id: string; digest: string }[] = [];
+  const deadline = performance.now() + 30_000;
+  let cursor: string | undefined;
+  try {
+   assertCurrent();
+   let page = await this.start({ ...filters, taskId: randomUUID(), onError: 'stop' });
+   do {
+    cursor = page.cursor;
+    assertCurrent();
+    if (page.failed || page.stoppedOnError) throw Error('筛选范围内存在无法读取的' + this.source.label + '，未导出 ZIP');
+    if (page.scanned > budget.records || performance.now() > deadline)
+     throw Error('扫描' + this.source.label + '筛选超出预算，请缩小范围后重试');
+    if (items.length + page.items.length > budget.files) throw Error(`匹配项超过 ${budget.files} 个文件，请缩小范围后重试`);
+    for (const entry of page.items) items.push(reference(entry));
+    if (!cursor) return items;
+    page = await this.next({ cursor, taskId: randomUUID() });
+   } while (true);
+  } finally {
+   if (cursor) this.release({ cursor });
+  }
+ }
  /** 最近请求的迟到取消仍在本地处理，不落入数据库取消通道。 */
  owns(taskId:string){this.prune();return this.jobs.has(taskId)||this.recent.has(taskId);}
  /** 取消等待真实线程终止及整页finally结束。 */

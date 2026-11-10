@@ -3,6 +3,7 @@ import{basename,join}from'node:path';
 import iconv from 'iconv-lite';
 import JSZip from 'jszip';
 import{createRequire}from'node:module';
+import { createHash } from 'node:crypto';
 import type{Database}from'sql.js';
 import type{HistoryEntry}from'../../src/shared/contracts';
 import{LocalStore}from'../../src/main/storage';
@@ -13,7 +14,7 @@ import { historyPagesZh as text } from '../../src/renderer/locales/historyPages.
 import { savedQueryPagesZh as savedText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQueryOrganizationZh as savedOrganizationText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { savedQuerySearchZh as searchText } from '../../src/renderer/locales/savedQuerySearch.zh-CN';
-import { zh } from '../../src/renderer/locales/zh-CN';
+import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({trace:'off',screenshot:'off',video:'off'});
 const runtimeRequire=createRequire(join(process.cwd(),'package.json')),dialog=()=>page.getByRole('dialog',{name:'历史与保存的查询',exact:true});
@@ -738,6 +739,115 @@ test('筛选历史 ZIP 归档超过百条，保存前确认条数并拒绝变化
  expect(await readFile(stale, 'utf8')).toBe('原文件');
  expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __filteredHistoryArchive: unknown }).__filteredHistoryArchive))
   .toEqual({ choice: undefined, requests: 4, pickers: 3 });
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
+test('保存查询整组筛选归档包含子组及百条以上匹配，并保护已有文件', async ({}, info) => {
+ const count = 103;
+ const ordinal = (value: number) => String(value).padStart(3, '0');
+ const ids = Array.from({ length: count }, (_, index) => `query-${ordinal(index)}`);
+ const sql = (index: number) => `SELECT ${index};\r\n-- 子组归档标记😀`;
+ let groupId = '', stale = { id: ids[0], digest: '' };
+ await seed(store => {
+  source(store);
+  const save = (id: string, index: number, database: string) => store.saveQuery({
+   id, name: `查询-${ordinal(index)}`, connectionId: 'source', databaseContext: { state: 'known', database },
+   updatedAt: '2026-10-15T00:00:00Z', sql: sql(index),
+  });
+  ids.forEach((id, index) => save(id, index, 'Sales'));
+  save('other-db', 901, 'sales'); save('unfiled-archive', 902, 'Sales');
+  const initial = store.queryOrganization();
+  const root = store.applyQueryOrganization({ expectedRevision: initial.revision, operation: { kind: 'create', name: '团队脚本', parentId: null } });
+  groupId = root.groups[0].id;
+  const tree = store.applyQueryOrganization({ expectedRevision: root.revision, operation: { kind: 'create', name: '复核', parentId: groupId } });
+  const childId = tree.groups.find(group => group.parentId === groupId)!.id;
+  const reference = (id: string) => ({ id, digest: createHash('sha256').update(store.querySearchRaw(id)!).digest('hex') });
+  stale = reference(ids[0]);
+  const moved = store.applyQueryOrganization({ expectedRevision: tree.revision,
+   operation: { kind: 'moveQueries', groupId, queries: ids.slice(0, 51).map(reference) } });
+  store.applyQueryOrganization({ expectedRevision: moved.revision,
+   operation: { kind: 'moveQueries', groupId: childId, queries: [...ids.slice(51), 'other-db'].map(reference) } });
+ });
+ const directory = dataDir;
+ await desktop.evaluate(({ ipcMain, dialog, BrowserWindow }, { count, groupId, stale }) => {
+  const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args:any[]) => unknown> })._invokeHandlers;
+  const original = handlers.get('dbark:request'); if (!original) throw Error('缺少保存查询 IPC 入口');
+  const state = { choice: undefined as { path: string | null; revise: boolean } | undefined, pickers: 0 };
+  Object.assign(globalThis, { __filteredSavedQueryArchive: state });
+  handlers.set('dbark:request', async (event, payload) => {
+   const command = String(payload.command);
+   if (command === 'connections.open' || /^(query|sessions|metadata|table|schema|sqlite)\./.test(command)) throw Error('离线归档禁止数据库请求');
+   if (command !== 'queries.exportSqlArchive') return original(event, payload);
+   const { filters, encoding } = payload.input;
+   const group = filters?.group;
+   if (Object.keys(payload.input).sort().join() !== 'encoding,filters' || encoding !== 'gb18030' ||
+       filters.search !== '子组归档标记' || filters.sort !== 'name-desc' || filters.database?.database !== 'Sales' ||
+       group?.kind !== 'group' || group.id !== groupId || !group.includeDescendants) throw Error('保存查询筛选条件不准确');
+   const choice = state.choice; state.choice = undefined;
+   const pick = dialog.showSaveDialog;
+   dialog.showSaveDialog = (async (...args: unknown[]) => {
+    const options = args[1] as Electron.SaveDialogOptions;
+    if (!choice || args[0] !== BrowserWindow.getAllWindows()[0] || options.title !== `导出筛选匹配的 ${count} 条保存查询为 ZIP` ||
+        options.defaultPath !== '筛选保存查询.zip' || !options.filters?.[0]?.extensions.includes('zip')) throw Error('保存查询归档范围不准确');
+    state.pickers++;
+    if (choice.revise) {
+     const snapshot = await original(event, { command: 'queries.organizationGet', input: {} }) as { ok: boolean; result?: { revision: string } };
+     if (!snapshot.ok || !snapshot.result) throw Error('夹具未取得保存查询修订');
+     const revised = await original(event, { command: 'queries.favoriteSet', input: { ...stale, favorite: true, expectedRevision: snapshot.result.revision } }) as { ok: boolean };
+     if (!revised.ok) throw Error('夹具未更新查询收藏');
+    }
+    return choice.path ? { canceled: false, filePath: choice.path } : { canceled: true };
+   }) as typeof dialog.showSaveDialog;
+   try { return await original(event, payload); } finally { dialog.showSaveDialog = pick; }
+  });
+ }, { count, groupId, stale });
+ await open();
+ await dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click();
+ await dialog().getByRole('button', { name: savedOrganizationText.selectGroup('团队脚本'), exact: true }).click();
+ await dialog().getByLabel(savedText.sort, { exact: true }).selectOption('name-desc');
+ await dialog().getByLabel(savedText.databaseFilter, { exact: true }).selectOption('known');
+ await dialog().getByLabel(searchText.databaseName, { exact: true }).fill('Sales');
+ await dialog().getByLabel(savedText.search, { exact: true }).fill('子组归档标记');
+ const button = dialog().getByRole('button', { name: savedText.sqlArchiveFiltered, exact: true });
+ await expect(button).toBeDisabled();
+ await dialog().getByRole('button', { name: savedText.searchButton, exact: true }).click();
+ const cards = dialog().locator('.history-card strong');
+ await expect(cards.first()).toHaveText('查询-102');
+ await dialog().getByRole('button', { name: savedText.next, exact: true }).click();
+ await expect(cards.first()).toHaveText('查询-078');
+ await expect(dialog().getByRole('button', { name: savedText.sqlArchive, exact: true })).toBeDisabled();
+ await dialog().getByLabel(savedText.sqlExportEncoding, { exact: true }).selectOption('gb18030');
+ async function exportTo(path: string | null, revise = false) {
+  await desktop.evaluate((_electron, choice) => {
+   const state = (globalThis as typeof globalThis & { __filteredSavedQueryArchive: { choice?: typeof choice } }).__filteredSavedQueryArchive;
+   if (state.choice) throw Error('上一轮归档尚未结束');
+   state.choice = choice;
+  }, { path, revise });
+  await button.click();
+  await expect(button).toBeEnabled();
+ }
+ await exportTo(null);
+ await expect(dialog().getByText(/条查询导出到/)).toHaveCount(0);
+ const target = join(directory, 'filtered-saved-query.zip');
+ await exportTo(target);
+ const notice = dialog().getByText(formatText(savedText.sqlArchiveSaved, count, basename(target)), { exact: true });
+ await expect(notice).toBeVisible();
+ await notice.scrollIntoViewIfNeeded();
+ await dialog().screenshot({ path: info.outputPath('saved-query-filtered-archive.png') });
+ const zip = await JSZip.loadAsync(await readFile(target), { checkCRC32: true });
+ const names = Object.keys(zip.files);
+ expect(names).toEqual(Array.from({ length: count }, (_, index) => `${ordinal(index + 1)}-查询-${ordinal(count - index - 1)}.sql`));
+ expect(await Promise.all(names.map(name => zip.files[name].async('nodebuffer')))).toEqual(
+  Array.from({ length: count }, (_, index) => iconv.encode(sql(count - index - 1), 'gb18030')),
+ );
+ const protectedFile = join(directory, 'protected-saved-query.zip');
+ await writeFile(protectedFile, '原文件');
+ await exportTo(protectedFile, true);
+ await expect(dialog().getByRole('alert')).toContainText('保存查询或连接配置已变化');
+ expect(await readFile(protectedFile, 'utf8')).toBe('原文件');
+ expect(await desktop.evaluate(() => (globalThis as typeof globalThis & { __filteredSavedQueryArchive: unknown }).__filteredSavedQueryArchive))
+  .toEqual({ choice: undefined, pickers: 3 });
  expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
  expect(pageErrors).toEqual([]);
 });

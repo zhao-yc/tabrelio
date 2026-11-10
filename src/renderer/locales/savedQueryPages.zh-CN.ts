@@ -31,6 +31,7 @@ export const savedQueryPagesZh={
  sqlFull:'查看完整 SQL',sqlTitle:'完整保存查询 SQL',sqlStale:'原列表范围已变化，请重新选择要查看的查询。',
  sqlExport:'另存为 SQL 文件',sqlExportEncoding:'保存查询 SQL 导出编码',sqlExportHint:'以所选编码保存原查询正文，保留现有换行。',sqlExported:'已另存 SQL 文件：{0}',
  sqlArchive:'导出所选查询为 ZIP',sqlArchiveHint:'包括跨页勾选的查询。每条为所选编码的独立 SQL 文件，编码后的正文合计最多 32 MiB。',sqlArchiveSaved:'已将 {0} 条查询导出到 {1}。',
+ sqlArchiveFiltered:'导出当前筛选全部查询为 ZIP',sqlArchiveFilteredHint:'按已应用的条件和排序归档所有匹配查询。保存窗口会显示准确条数。',
  sqlImport:'导入 SQL 文件',sqlImportChoose:'选择并导入 SQL 文件',sqlImportGroup:'导入到分组',
  sqlImportConnection:'导入查询的连接',sqlImportDatabase:'导入查询的默认数据库',sqlImportReselectConnection:'连接已变化，请重新选择',
  sqlImportHint:'可多选，最多 25 个文件、合计 32 MiB。每个文件以文件名创建独立查询，默认未绑定、未分组。选定连接后，默认数据库留空表示无默认库。',

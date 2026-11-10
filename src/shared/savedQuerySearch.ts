@@ -43,10 +43,6 @@ export type SavedQueryExportSqlInput = z.infer<typeof savedQueryExportSqlSchema>
 /** 保存结果只返回显示名称，原路径和正文不离开主进程。 */
 export type SavedQueryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
 export const savedQueryArchiveLimits = { files: 100, bytes: 32 * 1024 * 1024 } as const;
-/** 批量导出只接收跨页选中的本地查询身份，不接收路径或 SQL。 */
-export const savedQueryExportSqlArchiveSchema = z.object({ items: z.array(savedQueryReadTextSchema).min(1).max(savedQueryArchiveLimits.files)
-  .refine(items => new Set(items.map(item => item.id)).size === items.length, '选中的查询不能重复'), encoding: querySqlExportEncodingSchema.optional() }).strict();
-export type SavedQueryExportSqlArchiveInput = z.infer<typeof savedQueryExportSqlArchiveSchema>;
 export type SavedQueryExportSqlArchiveResult = { status: 'cancelled' } | { status: 'saved'; name: string; count: number };
 /** 只接受已保存连接的编号和显式默认库，不接受文件路径、SQL 或认证材料。 */
 export const savedQueryImportTargetSchema = z.object({ connectionId: id, database: name.refine(value => !value.includes('\0')).nullable() }).strict();

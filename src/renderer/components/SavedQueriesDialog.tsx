@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Clock3, FileCode2, Search, Star, Trash2 } from 'lucide-react';
-import type { SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
+import type { SavedQueryArchiveFilters, SavedQueryExportSqlArchiveInput, SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryGroupTarget, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
 import { savedQueryDatabaseScopeSchema, savedQueryOpenBatchLimits, type SavedQueryDatabaseScope, type SavedQueryOpenResult, type SavedQueryScope } from '../../shared/savedQuerySearch';
 import type { ConnectionProfile, QueryFileEncoding } from '../../shared/contracts';
@@ -47,6 +47,17 @@ const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding,
 });
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.database, value.sort, value.favoritesOnly]);
+/** 浏览和筛选归档使用同一份条件投影。 */
+function pageFilters(value: Criteria): SavedQueryArchiveFilters {
+  return {
+    search: value.search,
+    ...(value.group.kind === 'all' ? {} : { group: value.group }),
+    ...(value.scope.kind === 'all' ? {} : { scope: value.scope }),
+    ...(value.database.kind === 'all' ? {} : { database: value.database }),
+    ...(value.sort === 'recent' ? {} : { sort: value.sort }),
+    ...(value.favoritesOnly ? { favoritesOnly: true } : {}),
+  };
+}
 interface OrganizationEdit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 interface RebindEdit { connectionSnapshot: ConnectionOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
 interface DuplicateBatchEdit { duplicateSnapshot: SavedQueryOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
@@ -128,12 +139,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     cursor.current = undefined; const taskId = io.id(); active.current = taskId;
     try {
       const page = await (next ? io.request('queries.pageContinue', { taskId, cursor: previous! }) : io.request('queries.page', {
-        taskId, search: value.search, onError: value.policy,
-        ...(value.group.kind === 'all' ? {} : { group: value.group }),
-        ...(value.scope.kind === 'all' ? {} : { scope: value.scope }),
-        ...(value.database.kind === 'all' ? {} : { database: value.database }),
-        ...(value.sort === 'recent' ? {} : { sort: value.sort }),
-        ...(value.favoritesOnly ? { favoritesOnly: true } : {}),
+        taskId, onError: value.policy, ...pageFilters(value),
       }));
       cursor.current = page.cursor; if (!owns(ticket)) { await release(); return; }
       setReply(page); setBatch(count => next ? count + 1 : 1); setApplied(criteriaKey(value)); setTargets(new Map());
@@ -473,12 +479,21 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlExported, result.name));
     });
   }
-  /** 导出包括筛选或翻页后隐藏的勾选项；仅提交本地查询编号和摘要。 */
-  function exportSqlArchive(): void {
-    if (!editable() || !selectedRef.current.size || pageView.current.needsRefresh) return;
-    const items = [...selectedRef.current.values()].map(({ id, digest }) => ({ id, digest }));
+  /** 勾选归档保留隐藏选择；整批归档仅使用当前已应用的筛选。 */
+  function exportSqlArchive(mode: 'selected' | 'filtered'): void {
+    const view = pageView.current;
+    if (!editable() || view.needsRefresh) return;
+    let input: SavedQueryExportSqlArchiveInput;
+    if (mode === 'filtered') {
+      if (databasePending || !view.reply || view.applied !== criteriaKey(criteriaRef.current)) return;
+      input = { filters: pageFilters(criteriaRef.current), encoding: exportEncoding };
+    } else {
+      if (!selectedRef.current.size) return;
+      const items = [...selectedRef.current.values()].map(({ id, digest }) => ({ id, digest }));
+      input = { items, encoding: exportEncoding };
+    }
     void run(async ticket => {
-      const result = await io.request('queries.exportSqlArchive', { items, encoding: exportEncoding });
+      const result = await io.request('queries.exportSqlArchive', input);
       if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlArchiveSaved, result.count, result.name));
     });
   }
@@ -620,7 +635,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         </select></label>
         <label className="saved-query-favorites-filter"><input type="checkbox" checked={favoritesOnly} disabled={blocked} onChange={event => selectFavorites(event.target.checked)}/>{t.favoritesOnly}</label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
-        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={beginDuplicateBatch}>{t.duplicateBatchOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={beginDuplicateBatch}>{t.duplicateBatchOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={() => exportSqlArchive('selected')}>{t.sqlArchive}</button>
+          <button disabled={blocked || changed || !reply || needsRefresh} title={t.sqlArchiveFilteredHint} onClick={() => exportSqlArchive('filtered')}>{t.sqlArchiveFiltered}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         {selected.size > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
         {opening && <QueryBatchOpenPreview rows={[...opening.selection.values()]} targets={opening.targets} connections={connections}
           busy={busy || closing} onTarget={(id, connectionId) => changeOpenBatchTarget(opening, id, connectionId)}

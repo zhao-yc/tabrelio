@@ -265,7 +265,7 @@ export interface CommandMap {
   'queries.externalDiscard': { input: { sessionId: string }; output: void };
   'queries.externalKeep': { input: { sessionId: string }; output: void };
   'queries.exportSql':{input:import('./savedQuerySearch').SavedQueryExportSqlInput;output:import('./savedQuerySearch').SavedQueryExportSqlResult};
-  'queries.exportSqlArchive':{input:import('./savedQuerySearch').SavedQueryExportSqlArchiveInput;output:import('./savedQuerySearch').SavedQueryExportSqlArchiveResult};
+  'queries.exportSqlArchive':{input:import('./savedQueryPages').SavedQueryExportSqlArchiveInput;output:import('./savedQuerySearch').SavedQueryExportSqlArchiveResult};
   'queries.copySql': { input: import('./savedQuerySearch').SavedQueryReadTextInput; output: void };
   'queries.importSql':{input:import('./savedQuerySearch').SavedQueryImportSqlInput;output:import('./savedQuerySearch').SavedQueryImportSqlResult};
   'queries.page':{input:SavedQueryPageInput;output:SavedQueryPage};

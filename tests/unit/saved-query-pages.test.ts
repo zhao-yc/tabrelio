@@ -55,6 +55,24 @@ describe('保存查询概要和协议',()=>{
 });
 
 describe('真实SQLite键分页及工作线程',()=>{
+ it('筛选归档复用分组、收藏、默认库和排序，并拒绝范围内损坏的记录', async () => {
+  const queryValue = query({ id: 'saved', connectionId: 'source', databaseContext: { state: 'known', database: 'Sales' } });
+  store.saveQuery(queryValue);
+  store.saveQuery(query({ id: 'unmarked', connectionId: 'source', databaseContext: { state: 'known', database: 'Sales' } }));
+  const digest = createHash('sha256').update(store.querySearchRaw(queryValue.id)!).digest('hex');
+  const root = store.applyQueryOrganization({ expectedRevision: store.queryOrganization().revision, operation: { kind: 'create', name: '归档', parentId: null } });
+  const group = { kind: 'group', id: root.groups[0].id, includeDescendants: true } as const;
+  const moved = store.applyQueryOrganization({ expectedRevision: root.revision, operation: { kind: 'moveQueries', groupId: group.id, queries: [{ id: queryValue.id, digest }] } });
+  store.setSavedQueryFavorite({ id: queryValue.id, digest, expectedRevision: moved.revision, favorite: true });
+  const filters = { search: '9007199254740993', group, database: { kind: 'known', database: 'Sales' }, sort: 'name-desc', favoritesOnly: true } as const;
+  const input = { filters, encoding: 'gb18030' };
+  expect(validateCommand('queries.exportSqlArchive', input)).toEqual(input);
+  expect(() => validateCommand('queries.exportSqlArchive', { ...input, filters: { ...filters, onError: 'continue' } })).toThrow();
+  expect(() => validateCommand('queries.exportSqlArchive', { ...input, items: [{ id: queryValue.id, digest }] })).toThrow();
+  await expect(service.collectArchiveReferences(filters, () => {})).resolves.toEqual([{ id: queryValue.id, digest }]);
+  (store as unknown as { db: Database }).db.run('INSERT INTO queries VALUES (?,?,?)', ['broken-archive', '{损坏', '2026-11-10']);
+  await expect(service.collectArchiveReferences({ search: '' }, () => {})).rejects.toThrow('存在无法读取的保存查询');
+ });
  it('默认库严格区分大小写、明确空库、未知和遗留，跨页保持来源与全文条件', async () => {
   for (let index = 0; index < 25; index++) {
    const id = String(index).padStart(2, '0');

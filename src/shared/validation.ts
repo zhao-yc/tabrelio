@@ -132,7 +132,7 @@ import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } fro
 import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
 import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
 import { queryCreateSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
-import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema,savedQueryFavoriteSchema,savedQueryRememberOpenSchema}from'./savedQueryPages';
+import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema,savedQueryFavoriteSchema,savedQueryRememberOpenSchema,savedQueryExportSqlArchiveSchema}from'./savedQueryPages';
 import { savedQueryRenameSchema } from './savedQueryRename';
 import { savedQueryDuplicateBatchSchema, savedQueryDuplicateSchema } from './savedQueryDuplicate';
 import { savedQueryDeleteSelectedSchema } from './savedQueryDeleteSelected';
@@ -184,7 +184,7 @@ import {dataSearchCatalogueSchema} from './dataSearchCatalogue';
 import{dataSearchRecordReadSchema,dataSearchRecordsReleaseSchema}from'./dataSearchRecords';
 import { tableCopySourceReadSchema, tableCopySourceReleaseSchema } from './tableCopySource';
 import { copyInsertSqlInputSchema } from './copyInsertSql';
-import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQueryReadBatchSchema,savedQueryReadTextSchema,savedQueryExportSqlSchema,savedQueryExportSqlArchiveSchema,savedQueryImportSqlSchema}from'./savedQuerySearch';
+import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQueryReadBatchSchema,savedQueryReadTextSchema,savedQueryExportSqlSchema,savedQueryImportSqlSchema}from'./savedQuerySearch';
 const queryDatabaseContext=z.discriminatedUnion('state',[z.object({state:z.literal('known'),database:z.string().min(1).max(256).refine(value=>!value.includes('\0')).nullable()}).strict(),z.object({state:z.literal('unknown')}).strict()]);
 const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
 const completionPrefix=z.string().max(completionLimits.prefixUnits).refine(value=>value===''||completionIdentifier(value),'补全前缀含无效字符');
