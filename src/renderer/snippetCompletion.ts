@@ -14,9 +14,11 @@ export const snippetTemplates: SqlSnippet[] = [
 
 // 仅转换受控内置模板的标识符占位符；用户片段跨方言共享，正文绝不重写。
 const postgresTemplates = snippetTemplates.map(item => ({ ...item, sql: item.sql.replaceAll('`', '"') }));
+// SQLite计划使用QUERY PLAN返回可读步骤，避免误用MySQL的EXPLAIN结果语义；用户正文不参与转换。
+const sqliteTemplates = postgresTemplates.map(item => ({ ...item, sql: item.id === 'builtin-explain' ? item.sql.replace(/^EXPLAIN\n/, 'EXPLAIN QUERY PLAN\n') : item.sql }));
 /** 方言模板使用稳定对象，模态重渲染后仍能识别只读的内置记录。 */
 export function snippetTemplatesForDialect(dialect?: ConnectionProfile['dialect']): SqlSnippet[] {
-  return dialect === 'postgresql' ? postgresTemplates : snippetTemplates;
+  return dialect === 'postgresql' ? postgresTemplates : dialect === 'sqlite' ? sqliteTemplates : snippetTemplates;
 }
 
 /** 共享本窗口的单次本地读取；写入后的旧回包不能再次发布。 */
@@ -67,6 +69,6 @@ export function snippetAtStatementStart(source: string, offset: number, prefix: 
 /** 同名片段保留各自分组；最多返回 20 条，避免宽前缀展开整个片段库。 */
 export function matchSnippetPrefix(rows: readonly SqlSnippet[], prefix: string, dialect: ConnectionProfile['dialect']): SqlSnippet[] {
   const needle = prefix.toLowerCase();
-  const matches = [...rows, ...(dialect === 'sqlite' ? [] : snippetTemplatesForDialect(dialect))].filter(item => item.name.toLowerCase().startsWith(needle));
+  const matches = [...rows, ...snippetTemplatesForDialect(dialect)].filter(item => item.name.toLowerCase().startsWith(needle));
   return matches.sort((left, right) => Number(right.name.toLowerCase() === needle) - Number(left.name.toLowerCase() === needle)).slice(0, 20);
 }

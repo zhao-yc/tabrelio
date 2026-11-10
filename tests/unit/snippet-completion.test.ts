@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import type { SqlSnippet } from '../../src/shared/contracts';
 import { createSnippetCatalog, matchSnippetPrefix, snippetAtStatementStart, snippetPrefix, snippetTemplates, snippetTemplatesForDialect } from '../../src/renderer/snippetCompletion';
 
@@ -35,8 +36,30 @@ it('PostgreSQL 内置模板使用双引号且身份稳定，不改旧模板或�
   }
   expect(postgres[0].sql).toContain('SELECT "id", "name"');
   expect(snippetTemplates).toEqual(original);
-  for (const dialect of [undefined, 'mysql', 'mariadb', 'sqlite'] as const) expect(snippetTemplatesForDialect(dialect)).toBe(snippetTemplates);
+  for (const dialect of [undefined, 'mysql', 'mariadb'] as const) expect(snippetTemplatesForDialect(dialect)).toBe(snippetTemplates);
   expect(matchSnippetPrefix([user], user.name, 'mysql')).toEqual([user]);
+});
+
+it('SQLite片段库和名称补全共用稳定模板，真实SQLite能读取、分组并返回可读计划', () => {
+  const templates = snippetTemplatesForDialect('sqlite'), original = structuredClone(snippetTemplates);
+  expect(templates).toBe(snippetTemplatesForDialect('sqlite'));
+  expect(templates.map(item => item.id)).toEqual(snippetTemplates.map(item => item.id));
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('CREATE TABLE your_table(id INTEGER PRIMARY KEY, name TEXT, category TEXT); INSERT INTO your_table VALUES (1,\'样本\',\'分类\'),(2,NULL,\'分类\')');
+    const select = templates.find(item => item.id === 'builtin-select')!, count = templates.find(item => item.id === 'builtin-count')!, plan = templates.find(item => item.id === 'builtin-explain')!;
+    expect(database.prepare(select.sql).all().map(row => ({ ...row }))).toEqual([{ id: 1, name: '样本' }, { id: 2, name: null }]);
+    expect(database.prepare(count.sql).all().map(row => ({ ...row }))).toEqual([{ category: '分类', record_count: 2 }]);
+    expect(plan.sql).toMatch(/^EXPLAIN QUERY PLAN\n/);
+    expect(database.prepare(plan.sql).all()).toEqual([expect.objectContaining({ detail: expect.stringContaining('SEARCH your_table') })]);
+    for (const template of templates) {
+      expect(template.sql).not.toContain('`');
+      expect(matchSnippetPrefix([], template.name, 'sqlite')).toContain(template);
+    }
+    const user = { ...item('按条件用户'), sql: 'SELECT `原文`, ${name}, $1;' };
+    expect(matchSnippetPrefix([user], user.name, 'sqlite')).toEqual([user]);
+    expect(snippetTemplates).toEqual(original);
+  } finally { database.close(); }
 });
 
 it('片段前缀支持 Unicode，仅在独立语句中替换完整名称前缀', () => {
@@ -59,7 +82,7 @@ it('名称按前缀匹配，精确名优先，同名分组和原始正文保持'
   const rows = [item('ReportLong'), item('Report', '甲'), item('Report', '乙'), item('OtherReport')];
   expect(matchSnippetPrefix(rows, 'rePORT', 'mysql')).toEqual([rows[1], rows[2], rows[0]]);
   expect(matchSnippetPrefix(rows, '按条件', 'mysql')).toHaveLength(1);
-  expect(matchSnippetPrefix(rows, '按条件', 'sqlite')).toEqual([]);
+  expect(matchSnippetPrefix(rows, '按条件', 'sqlite')).toEqual([snippetTemplatesForDialect('sqlite')[0]]);
   expect(matchSnippetPrefix(Array.from({ length: 25 }, (_, i) => item('Report' + i)), 're', 'mysql')).toHaveLength(20);
 });
 
