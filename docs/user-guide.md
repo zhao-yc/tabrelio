@@ -1358,7 +1358,7 @@ MySQL、MariaDB、SQLite 和 PostgreSQL 的实体表可「复制为 UPDATE SQL�
 
 ### 在表头显示字段类型和注释
 
-在 MySQL、MariaDB 或 SQLite 表格的「更多 → 显示与导航」中切换字段类型。PostgreSQL 的入口在表格工具栏。MySQL、MariaDB 和 PostgreSQL 还可单独切换字段注释。将鼠标停在表头可查看当前显示的类型和注释。PostgreSQL 的注释摘要最多显示前 160 个字符。
+右键表页或视图的列标题，也可聚焦标题后按 `Shift+F10`，从菜单显示或隐藏当前网格的字段类型。MySQL、MariaDB 和 PostgreSQL 还可单独切换字段注释。菜单与表格工具栏的显示选项同步，切换时保留排序和勾选。将鼠标停在表头可查看当前显示的类型和注释。PostgreSQL 的注释摘要最多显示前 160 个字符。
 
 SQLite 显示数据库声明的类型，无声明的列标为「动态类型」。开关只作用于当前表标签，原列名仍用于筛选、排序、复制和导出。
 

@@ -40,12 +40,13 @@ it('真实父JSX把显示映射及调宽处理器交给编辑网格，原page/ro
   const checkedIds = vi.fn(() => initialCheckedRows);
   const context: any = createContext({ renderedEditor, showFieldType: true, drafts: { checkedIds }, React: { createElement: (_type: unknown, props: unknown) => props }, SqliteTableEditGrid: {}, page, editView: { rows }, projection, headerFreeze: {}, resizeLayout: resize, columnFitSource: vi.fn(), editBlocked: false, layoutView: { ready: true, pending: false, preferences: { version: 1, columns: [], rowHeight: 24 } }, selectedRow: undefined, findHit: undefined, headerSort: [], sortFromHeader: vi.fn(), selectEditRow: vi.fn(), editRow: vi.fn(), openRange: vi.fn(), selectPasteCell: vi.fn(), setQuickValueAt: vi.fn(), menuFilters: vi.fn(), selectEditFilterCell: vi.fn(), selectCheckedRows: vi.fn() });
   // 该夹具只验证布局传递，其余已有选区处理器由外部提供。
-  Object.assign(context, { findColumn: vi.fn(), resizeRowHeight: vi.fn(), matchRowsRef: { current: null }, fillGridRange: vi.fn(), exportGridRange: vi.fn(), appendEditRangeFilter: vi.fn(), visibleFindHighlights: undefined });
+  Object.assign(context, { findColumn: vi.fn(), setShowFieldType: vi.fn(), resizeRowHeight: vi.fn(), matchRowsRef: { current: null }, fillGridRange: vi.fn(), exportGridRange: vi.fn(), appendEditRangeFilter: vi.fn(), visibleFindHighlights: undefined });
   runInContext(ts.transpileModule('globalThis.renderGrid=()=>(' + jsx + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText, context);
   const props = context.renderGrid(); expect(props.page).toBe(page); expect(props.rows).toBe(rows); expect(props.projection).toBe(projection); expect(props.onColumnResize).toBe(resize); expect(props.rowHeight).toBe(24); expect(props.showFieldType).toBe(true); expect(props.disabled).toBe(false);
   expect(checkedIds).toHaveBeenCalledExactlyOnceWith(renderedEditor);
   expect(props.initialCheckedRows).toBe(initialCheckedRows);
   expect(props.onRowHeightChange).toBe(context.resizeRowHeight);
+  expect(props.onShowFieldTypeChange).toBe(context.setShowFieldType);
   expect(props.matchRowsRef).toBe(context.matchRowsRef);
   expect(props.onFilterTableRange.members).toBe(context.appendEditRangeFilter);
   expect(props.onFilterTableRange.bounds).toBeTypeOf('function');

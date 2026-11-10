@@ -2254,6 +2254,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
     selectColumn: index => cellRange.selectColumnAction(index - 1),
     findColumn: page ? key => openPageFind('query', key) : undefined,
+    visibility: page && !blocked ? { showType: showFieldType, showComment: showFieldComment,
+      onShowTypeChange: setShowFieldType, onShowCommentChange: setShowFieldComment } : undefined,
     resizeRows: page && !externalStale && !preferencesLoading && !preferencesLock.current ? { height,
       apply: next => updatePreferences(setTableRowHeight(preferencesRef.current, next)),
     } : undefined,

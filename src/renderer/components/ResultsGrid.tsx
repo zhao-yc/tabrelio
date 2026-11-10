@@ -623,9 +623,11 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
     resizeColumn: fitHeader ? resizeColumn : undefined, ownDialog,
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined,
+    visibility: headerDetails,
     freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,
   });
-  const hasHeaderMenu = onSortChange || freezeColumns || rangeTools || columnNameDialect || filterDialect || onFindColumn || fitHeader || onRowHeightChange;
+  const hasHeaderMenu = onSortChange || freezeColumns || rangeTools || columnNameDialect || filterDialect || onFindColumn || fitHeader || onRowHeightChange ||
+    headerDetails?.onShowTypeChange || headerDetails?.onShowCommentChange;
   const grid = onCellPaste || fitHeader || hasHeaderMenu ? <div style={{ display: 'contents' }}
     {...(hasHeaderMenu ? headerMenu : undefined)} onPasteCapture={onCellPaste ? pasteGrid : undefined} onDoubleClickCapture={fitHeader}>{dataGrid}</div> : dataGrid;
   // 自定义行操作必须接收网格当前勾选集，避免在换页或二进制查看后使用已经清除的选择。

@@ -2,6 +2,8 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent 
 import type { SortColumn } from 'react-data-grid';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { gridHeaderMenuZh as text } from '../locales/gridHeaderMenu.zh-CN';
+import { gridHeaderDetailsZh as detailsText } from '../locales/gridHeaderDetails.zh-CN';
+import type { GridHeaderVisibility } from './GridHeaderDetails';
 import { isGridContextKey, type GridCellAction, type useGridCellActionMenu } from './GridCellActionMenu';
 import { gridColumnName } from '../gridColumnName';
 import { writeTableClipboardEvent } from '../gridClipboard';
@@ -30,6 +32,7 @@ interface HeaderMenuSource {
   findColumn?(key: string): void;
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
+  visibility?: GridHeaderVisibility;
   ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
   frozenThrough?: string;
@@ -180,6 +183,16 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
           if (width !== original) now.resizeColumn(column.key, width);
         } else useWorkspace.getState().notify(text.staleWidth, true);
       } });
+    } });
+    // 表头与工具栏共用本标签的显示状态，旧菜单不能反转后来设置的状态。
+    const visibility = source.visibility;
+    if (visibility?.onShowTypeChange) actions.push({ label: visibility.showType ? detailsText.hideType : detailsText.showType, run: () => {
+      const now = latest.current.visibility;
+      if (current() && now?.showType === visibility.showType) now.onShowTypeChange?.(!now.showType);
+    } });
+    if (visibility?.onShowCommentChange) actions.push({ label: visibility.showComment ? detailsText.hideComment : detailsText.showComment, run: () => {
+      const now = latest.current.visibility;
+      if (current() && now && now.showComment === visibility.showComment) now.onShowCommentChange?.(!now.showComment);
     } });
     const name = gridColumnName(column.name, source.columnNameDialect);
     // 标题复制只写纯文本，与网格单元格的类型化剪贴板格式分开。

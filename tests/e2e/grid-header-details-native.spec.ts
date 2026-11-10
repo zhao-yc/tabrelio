@@ -6,6 +6,7 @@ import { answerDialogs, confirmOwnedDesktopExit, dataDir, desktop, expect, page,
 import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridHeaderDetailsZh as text } from '../../src/renderer/locales/gridHeaderDetails.zh-CN';
+import { gridHeaderMenuZh as headerMenuText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { sqliteTableBrowseZh as sqlite } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { postgresTableZh as postgres } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
@@ -18,6 +19,18 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedE
 const taskIds = () => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id).sort());
 const applyKey = process.platform === 'darwin' ? 'Meta+r' : 'Control+r';
 const rowLabels = (grid: Locator) => grid.getByRole('gridcell').filter({ hasText: /row [ABC]$/ });
+
+async function toggleFromHeader(header: Locator, name: string, keyboard = false): Promise<void> {
+  if (keyboard) await header.press('Shift+F10');
+  else await header.click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: headerMenuText.menu, exact: true });
+  const action = menu.getByRole('menuitem', { name, exact: true });
+  await expect(action).toBeVisible();
+  if (keyboard) await action.press('Enter');
+  else await action.click();
+  await expect(menu).toBeHidden();
+  await expect(header).toBeFocused();
+}
 
 /** 旁观正式分页回包，只记录筛选、排序和分页条件，不替换 Main 或驱动结果。 */
 async function observeReads(command: 'sqlite.tablePage' | 'postgres.table.page' | 'table.page') {
@@ -102,11 +115,13 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     const toggle = async (name: string) => (await navigationMenuItem(tab, { name, exact: true })).click();
     await expect(header('label')).toBeVisible();
     const before = await taskIds();
+    const readsBeforeDisplay = await reads();
     await expect(header('label').locator('.column-type')).toHaveCount(0);
-    await toggle(text.showType);
+    await toggleFromHeader(header('label'), text.showType);
     await expect(header('label').locator('.column-type')).toHaveText('VARCHAR(17)');
     await expect(header('dynamic_value').locator('.column-type')).toHaveText(sqlite.dynamic);
     expect(await taskIds()).toEqual(before);
+    expect(await reads()).toEqual(readsBeforeDisplay);
     await header('label').click();
     await expect(header('label')).toHaveAttribute('aria-sort', 'ascending');
     await expect(header('label').locator('.rdg-header-sort-name + span svg')).toBeVisible();
@@ -164,9 +179,16 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
     await page.locator('[data-workspace-tab-id="subject_view"] .tab-select').click();
     await expect(header('label')).toBeVisible();
-    await toggle(text.showType);
+    const viewReads = await reads();
+    await toggleFromHeader(header('label'), text.showType, true);
     await expect(header('label').locator('.column-type')).toHaveText('VARCHAR(17)');
+    await header('label').press('Shift+F10');
+    const viewMenu = page.getByRole('menu', { name: headerMenuText.menu, exact: true });
+    await expect(viewMenu.getByRole('menuitem', { name: text.hideType, exact: true })).toBeVisible();
+    await expect(viewMenu.getByRole('menuitem', { name: text.showComment, exact: true })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('SQLite表头类型.png') });
+    await page.keyboard.press('Escape');
+    expect(await reads()).toEqual(viewReads);
     if (process.platform === 'darwin') {
       await sortFromGrid(tab, 'row B');
       await page.locator('[data-workspace-tab-id="header-query"] .tab-select').click();
@@ -219,18 +241,28 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     await expect(header.locator('.column-type')).toHaveText('text');
     await expect(header.locator('.grid-header-comment')).toHaveCount(0);
     const before = await taskIds();
-    await toggle(text.showComment);
+    const readsBeforeDisplay = await reads();
+    const checked = tab.getByRole('grid').getByRole('row').nth(1).getByRole('checkbox');
+    await checked.check();
+    await toggleFromHeader(header, text.showComment);
     const expected = dialect === 'postgresql' ? '字段说明' + '注'.repeat(156) + '…' : '字段说明';
     await expect(header.locator('.grid-header-comment')).toHaveText(expected);
     await expect(header.locator('.grid-header-details')).toHaveAttribute('title', new RegExp(expected));
+    await header.press('Shift+F10');
+    const headerMenu = page.getByRole('menu', { name: headerMenuText.menu, exact: true });
+    await expect(headerMenu.getByRole('menuitem', { name: text.hideComment, exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('类型和注释.png') });
-    await toggle(text.hideType);
+    await page.keyboard.press('Escape');
+    await toggleFromHeader(header, text.hideType, true);
     await expect(header.locator('.column-type')).toHaveCount(0);
     await expect(header.locator('.grid-header-comment')).toHaveText(expected);
     await toggle(text.hideComment);
     await expect(header.locator('.grid-header-comment')).toHaveCount(0);
     await expect(header).toHaveText('label');
+    await expect(checked).toBeChecked();
+    await checked.uncheck();
     expect(await taskIds()).toEqual(before);
+    expect(await reads()).toEqual(readsBeforeDisplay);
     if (process.platform === 'darwin') await sortFromGrid(tab, 'row C');
 
     await (await navigationMenuItem(tab, { name: sort.entry, exact: true })).click();

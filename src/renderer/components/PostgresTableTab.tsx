@@ -173,8 +173,6 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [page, setPage] = useState<PostgresTablePage>();
   const [showFieldType, setShowFieldType] = useState(true);
   const [showFieldComment, setShowFieldComment] = useState(false);
-  const headerDetails = useMemo(() => ({ showType: showFieldType, showComment: showFieldComment,
-    fields: new Map(page?.columns.map(column => [column.key, column])) }), [showFieldType, showFieldComment, page?.columns]);
   const [pageConnectionVersion, setPageConnectionVersion] = useState<number>();
   const [deletePages, setDeletePages] = useState<readonly PostgresCheckedDeletePage[]>([]);
   const deletePagesRef = useRef(deletePages);
@@ -533,6 +531,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
   const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!collectedDialog || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!checkedDelete || !!checkedUpdate || !!checkedDuplicate || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
+  const headerDetails = useMemo(() => ({ showType: showFieldType, showComment: showFieldComment,
+    onShowTypeChange: blocked ? undefined : setShowFieldType, onShowCommentChange: blocked ? undefined : setShowFieldComment,
+    fields: new Map(page?.columns.map(column => [column.key, column])) }), [showFieldType, showFieldComment, page?.columns, blocked]);
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;

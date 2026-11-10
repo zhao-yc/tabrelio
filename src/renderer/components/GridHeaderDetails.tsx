@@ -4,9 +4,14 @@ import '../gridHeaderDetails.css';
 
 export interface GridHeaderDetailsValue { type?: string; comment?: string; }
 
-export interface GridHeaderDetailsOptions {
+export interface GridHeaderVisibility {
   showType: boolean;
   showComment?: boolean;
+  onShowTypeChange?(show: boolean): void;
+  onShowCommentChange?(show: boolean): void;
+}
+
+export interface GridHeaderDetailsOptions extends GridHeaderVisibility {
   fields?: ReadonlyMap<string, GridHeaderDetailsValue>;
 }
 
