@@ -10,3 +10,5 @@
 .tab-query-menu { padding: 0 5px; }
 .query-tab-menu { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
 .query-tab-menu > span { color: var(--muted); font-size: 11px; }
+
+.tab-strip .query-tab-pin { color: var(--accent); }

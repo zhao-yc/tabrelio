@@ -40,3 +40,24 @@ it('继承/显式undefined/非query字段由原始schema、Main及直接store一
  const direct=directPort(),main=mainPort(direct.save);for(const tab of bad){const input={...base(),tabs:[tab]};expect(commandSchemas['settings.save'].safeParse(input).success).toBe(false);expect(()=>commandSchemas['settings.save'].parse(input)).toThrow();expect(()=>validateCommand('settings.save',input)).toThrow();await expect(main.save(input)).rejects.toThrow();expect(()=>direct.save(input)).toThrow();}expect(direct.writes).toEqual([]);
 });
 it('原始预检通过后仍由原strict schema拒绝未知顶层与tab字段',()=>{for(const input of [{...base(),extra:'禁止'},{...base(),tabs:[{...base().tabs[0],extra:'禁止'}]}]){expect(commandSchemas['settings.save'].safeParse(input).success).toBe(false);expect(()=>validateCommand('settings.save',input)).toThrow();}});
+
+it('固定状态保留自有布尔值，原 IPC 和直接存储都拒绝非查询及非法字段', () => {
+  const original = base().tabs[0];
+  const direct = directPort();
+  for (const queryPinned of [true, false]) {
+    const input = { ...base(), tabs: [{ ...original, queryPinned }] };
+    expect(validateCommand('settings.save', input)).toEqual(input);
+    direct.save(input);
+  }
+  const invalid = [
+    { ...original, kind: 'table', queryPinned: true }, { ...original, queryPinned: 'true' },
+    { ...original, queryPinned: undefined }, Object.assign(Object.create({ queryPinned: true }), original),
+  ];
+  for (const tab of invalid) {
+    const input = { ...base(), tabs: [tab] };
+    expect(commandSchemas['settings.save'].safeParse(input).success).toBe(false);
+    expect(() => validateCommand('settings.save', input)).toThrow();
+    expect(() => direct.save(input)).toThrow();
+  }
+  expect(direct.writes).toHaveLength(2);
+});

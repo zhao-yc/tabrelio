@@ -40,7 +40,7 @@ export class ApplicationMenu {
     const mac = this.platform === 'darwin';
     const separator: MenuItemConstructorOptions = { type: 'separator' };
     const item = (id: UiCommandId, accelerator?: string): MenuItemConstructorOptions => {
-      const status = statuses.get(id), checkbox = id === 'focus-mode' || id === 'editor-word-wrap' || id === 'editor-sql-folding' || id === 'editor-line-numbers' || id === 'editor-match-brackets';
+      const status = statuses.get(id), checkbox = id === 'focus-mode' || id === 'pin-query-tab' || id === 'editor-word-wrap' || id === 'editor-sql-folding' || id === 'editor-line-numbers' || id === 'editor-match-brackets';
       return {
         id, label: id === 'favorite-toggle' ? status?.checked ? text.removeFavorite : text.addFavorite : labels[id], enabled: status?.enabled === true,
         ...(accelerator ? { accelerator } : {}), ...(checkbox ? { type: 'checkbox' as const, checked: status?.checked === true } : {}),
@@ -81,7 +81,7 @@ export class ApplicationMenu {
         { label: text.snapshots, submenu: [item('explain-snapshot'), item('result-snapshot')] }, separator, item('task-center')
       ] },
       { label: text.window, submenu: [
-        item('tab-search', 'CmdOrCtrl+Shift+A'), item('rename-query-tab'), item('close-tab', 'CmdOrCtrl+W'), item('reopen-query', 'CmdOrCtrl+Shift+T'), item('retained-query-list'), item('close-other-queries'), item('close-left-queries'), item('close-right-queries'), separator,
+        item('tab-search', 'CmdOrCtrl+Shift+A'), item('rename-query-tab'), item('pin-query-tab'), item('close-tab', 'CmdOrCtrl+W'), item('reopen-query', 'CmdOrCtrl+Shift+T'), item('retained-query-list'), item('close-other-queries'), item('close-left-queries'), item('close-right-queries'), separator,
         item('previous-tab', mac ? 'Command+Shift+[' : 'Control+Shift+Tab'),
         item('next-tab', mac ? 'Command+Shift+]' : 'Control+Tab')
       ] },

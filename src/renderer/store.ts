@@ -13,6 +13,7 @@ import { assertSqliteColumnsFactTransition, sqliteColumnsFactSchema } from '../s
 import { sqliteColumnsFactMessage, sqliteColumnsTaskMessage } from '../shared/sqliteColumnsFact';
 import { readSqlKeywordCase } from '../shared/sqlKeywordCase';
 import { readSqlExpressionWidth } from '../shared/sqlExpressionWidth';
+import { assertQueryTabPinWrite } from '../shared/queryTabPin';
 import { assertObjectBrowserTabs } from '../shared/objectBrowser';
 import { editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
@@ -75,6 +76,7 @@ function commitWorkspaceSettings(update: Partial<AppSettings>, openings = useWor
   const state = useWorkspace.getState(), previous = state.settings, settings = { ...previous, ...update }, queryFileDirty = { ...state.queryFileDirty };
   try { tabOrder.observe(previous.tabs); } catch { /* 旧坏状态只撤销重排权限，仍允许原设置入口修复。 */ }
   assertObjectBrowserTabs(settings);
+  assertQueryTabPinWrite(settings);
   assertQueryFileSourceSettings(settings);
   // SQL或修订变化先同步标dirty，再等待摘要确认；关闭/退出不能借用上一次正文的clean缓存。
   for (const tab of settings.tabs) {
@@ -244,7 +246,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const tab = { ...candidate, id: candidate.id ?? uid() };
     get().updateSettings({ tabs: [...current.tabs, tab], activeTabId: tab.id });
   },
-  /** 按标签标识更新查询正文或标题，并把草稿纳入布局恢复状态。 */
+  /** 按标签标识更新查询正文或标签属性，并把草稿纳入布局恢复状态。 */
   updateTab: (id, update) => {
     const current = get().settings.tabs; try { tabOrder.observe(current); } catch { /* 泛设置仍能修复坏状态，但不能继承旧重排权限。 */ }
     const releases: Array<() => void> = [];

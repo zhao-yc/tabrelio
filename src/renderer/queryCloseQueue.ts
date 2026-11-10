@@ -27,7 +27,7 @@ export class QueryCloseQueue {
     const state = this.ports.read(); if (keep.kind !== 'query' || !state.settings.tabs.includes(keep)) return;
     if (!['others', 'left', 'right'].includes(range)) return;
     const anchor = state.settings.tabs.indexOf(keep);
-    this.#keep = keep; this.#targets = state.settings.tabs.filter((tab, index) => tab.kind === 'query' && tab !== keep && (range === 'others' || (range === 'left' ? index < anchor : index > anchor)));
+    this.#keep = keep; this.#targets = state.settings.tabs.filter((tab, index) => tab.kind === 'query' && !tab.queryPinned && tab !== keep && (range === 'others' || (range === 'left' ? index < anchor : index > anchor)));
     // 侧关保留触发时完整顺序；只忽略后来新增的标签与本队列已经明确关闭的原对象。
     if (range !== 'others') this.#order = state.settings.tabs.map(tab => tab.id);
     if (new Set(state.settings.tabs.map(tab => tab.id)).size !== state.settings.tabs.length) { this.dispose(); return; }

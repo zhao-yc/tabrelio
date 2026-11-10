@@ -1,6 +1,6 @@
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type Ref } from 'react';
-import { Database, FileCode2, Plus, Table2, X } from 'lucide-react';
+import { Database, FileCode2, Pin, Plus, Table2, X } from 'lucide-react';
 import { useWorkspace } from '../store';
 import type { TabOrderRef } from '../tabOrder';
 import type { WorkspaceTab } from '../store';
@@ -10,7 +10,7 @@ import { tabOrderZh as text } from '../locales/tabOrder.zh-CN';
 import { queryTabRenameZh } from '../locales/queryTabRename.zh-CN';
 import '../tabOrder.css';
 
-interface Props { onCloseSide?(anchor: TabOrderRef, side: 'left' | 'right'): void; onRename?(anchor: TabOrderRef): void; stripRef: Ref<HTMLDivElement>; onClose(id: string): void; onNew(): void; blocked: boolean; }
+interface Props { onCloseSide?(anchor: TabOrderRef, side: 'left' | 'right'): void; onRename?(anchor: TabOrderRef): void; onTogglePin?(anchor: TabOrderRef): void; stripRef: Ref<HTMLDivElement>; onClose(id: string): void; onNew(): void; blocked: boolean; }
 interface DragOwner { source: TabOrderRef; node: HTMLButtonElement; observer?: MutationObserver; release(): void; }
 interface QueryMenuOwner {
   anchor: TabOrderRef; node: HTMLButtonElement; tabs: WorkspaceTab[]; refs: readonly TabOrderRef[]; scopes: string[];
@@ -19,9 +19,9 @@ interface QueryMenuOwner {
 interface DropMark { owner: DragOwner; target: TabOrderRef; placement: 'before' | 'after'; }
 
 /** 只改原标签数组位置；所有事件都消费渲染时的文档令牌，不从拖动数据读取目标编号。 */
-export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSide, onRename }: Props) {
+export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSide, onRename, onTogglePin }: Props) {
   const state = useWorkspace(), element = useRef<HTMLDivElement | null>(null), alive = useRef(false);
-  const latest = useRef({ blocked, onClose, onNew, onCloseSide, onRename, orderAvailable: false }), dragging = useRef<DragOwner | undefined>(undefined);
+  const latest = useRef({ blocked, onClose, onNew, onCloseSide, onRename, onTogglePin, orderAvailable: false }), dragging = useRef<DragOwner | undefined>(undefined);
   const [mark, setMark] = useState<DropMark>(), [dragSource, setDragSource] = useState<TabOrderRef>(), [status, setStatus] = useState('');
   const focusRequest = useRef<{ ref: TabOrderRef; node: HTMLButtonElement } | undefined>(undefined), composing = useRef(false);
   const menuOwner = useRef<QueryMenuOwner | undefined>(undefined), menuElement = useRef<HTMLDivElement | null>(null);
@@ -51,13 +51,13 @@ export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSi
   function menuCurrent(owner: QueryMenuOwner): boolean {
     // 与拖动同样同步消费尚未投递的模态记录，添加后移除也不能穿透旧菜单权限。
     if (menuOwner.current === owner && menuHasModal(owner.observer.takeRecords())) { retireMenu(owner, false, true); return false; }
-    if (menuOwner.current !== owner || !available() || !latest.current.orderAvailable || !(latest.current.onCloseSide || latest.current.onRename)) return false;
+    if (menuOwner.current !== owner || !available() || !latest.current.orderAvailable || !(latest.current.onCloseSide || latest.current.onRename || latest.current.onTogglePin)) return false;
     const current = useWorkspace.getState(), tabs = current.settings.tabs;
     return tabs.length === owner.tabs.length && owner.tabs.every((tab, index) => tabs[index] === tab && current.resolveTabOrder(owner.refs[index]) === tab && menuScope(tab) === owner.scopes[index])
       && owner.connections.every(item => current.connections.find(profile => profile.id === item.id) === item.profile && (current.connectionVersions[item.id] ?? 0) === item.version);
   }
   /** 保存来源快照不共享可变对象，同对象内来源字段变更也不能绕过菜单代次。 */
-  function menuScope(tab: WorkspaceTab): string { return JSON.stringify([tab.kind, tab.connectionId, tab.database, tab.databaseContext, tab.table, tab.sourceBinding, tab.fileSourceBinding]); }
+  function menuScope(tab: WorkspaceTab): string { return JSON.stringify([tab.kind, tab.connectionId, tab.database, tab.databaseContext, tab.table, tab.sourceBinding, tab.fileSourceBinding, tab.queryPinned]); }
   /** 只释放准确旧菜单，迟到Escape/失焦或动作不能撤销后来的新菜单。 */
   function retireMenu(owner = menuOwner.current, restoreFocus = false, changed = false) {
     if (!owner || menuOwner.current !== owner) return;
@@ -67,7 +67,7 @@ export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSi
   }
   /** 菜单不切活动标签；所有关闭仍交给App既有确认、保存、作业和会话关闭入口。 */
   function openMenu(anchor: TabOrderRef, node: HTMLButtonElement) {
-    if (!available() || !latest.current.orderAvailable || !(latest.current.onCloseSide || latest.current.onRename)) return;
+    if (!available() || !latest.current.orderAvailable || !(latest.current.onCloseSide || latest.current.onRename || latest.current.onTogglePin)) return;
     const current = useWorkspace.getState(), tab = current.resolveTabOrder(anchor); if (tab?.kind !== 'query') return;
     retire(dragging.current); retireMenu();
     const releases: Array<() => void> = [], observer = new MutationObserver(records => {
@@ -86,18 +86,21 @@ export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSi
     // 复用节点切换role再恢复也留下撤销记录，不只监测整块模态的插入。
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['role'], attributeOldValue: true }); setQueryMenu(owner);
   }
+  function hasQueriesOnSide(owner: QueryMenuOwner, side: 'left' | 'right') {
+    const anchor = owner.tabs.findIndex(tab => tab.id === owner.anchor.id);
+    return owner.tabs.some((tab, index) => tab.kind === 'query' && !tab.queryPinned && (side === 'left' ? index < anchor : index > anchor));
+  }
   /** 原菜单必须仍然有效才可消费；关闭菜单后同步交接准确锚点，不从活动标签反查。 */
   function chooseSide(owner: QueryMenuOwner, side: 'left' | 'right') {
     if (!menuCurrent(owner)) { retireMenu(owner, false, true); return; }
-    const anchor = owner.tabs.findIndex(tab => tab.id === owner.anchor.id);
-    if (!owner.tabs.some((tab, index) => tab.kind === 'query' && (side === 'left' ? index < anchor : index > anchor))) return;
+    if (!hasQueriesOnSide(owner, side)) return;
     const action = latest.current.onCloseSide; retireMenu(owner); action?.(owner.anchor, side);
   }
-  /** 重命名使用菜单原锚点，操作后台标签时不切换当前编辑器。 */
-  function chooseRename(owner: QueryMenuOwner) {
+  /** 固定和改名都只作用于菜单原锚点，操作后台标签时不切换当前编辑器。 */
+  function chooseTabAction(owner: QueryMenuOwner, actionName: 'onRename' | 'onTogglePin') {
     if (!menuCurrent(owner)) { retireMenu(owner, false, true); return; }
     if (useWorkspace.getState().activeJobs[owner.anchor.id]) return;
-    const action = latest.current.onRename;
+    const action = latest.current[actionName];
     retireMenu(owner, true); action?.(owner.anchor);
   }
   /** 菜单箭头只在当前可用项目间移动；Tab按原浏览器路径离开并关闭菜单。 */
@@ -190,7 +193,7 @@ export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSi
     alive.current = true; return () => { alive.current = false; focusRequest.current = undefined; retireMenu(); retire(dragging.current); };
   }, []);
   useLayoutEffect(() => {
-    latest.current = { blocked, onClose, onNew, onCloseSide, onRename, orderAvailable };
+    latest.current = { blocked, onClose, onNew, onCloseSide, onRename, onTogglePin, orderAvailable };
     const owner = menuOwner.current;
     if (owner && !menuCurrent(owner)) retireMenu(owner, false, true);
     else if (owner?.focus && menuElement.current) { owner.focus = false; menuElement.current.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus(); }
@@ -198,14 +201,15 @@ export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSi
     const request = focusRequest.current; focusRequest.current = undefined;
     if (request && available() && latest.current.orderAvailable && useWorkspace.getState().resolveTabOrder(request.ref) && element.current?.contains(request.node)) { request.node.focus(); request.node.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }); }
   });
+  const menuTab = queryMenu?.tabs.find(tab => tab.id === queryMenu.anchor.id);
   return <><div ref={attach} className="tab-strip" role="toolbar" aria-label={text.strip}>{state.settings.tabs.length ? state.settings.tabs.map((tab, index) => {
     const ref = references.get(tab.id), disabled = blocked || !orderAvailable || !ref;
     const dirty = Object.hasOwn(state.dirtyTabs, tab.id) && state.dirtyTabs[tab.id] === true || !!tab.fileSourceBinding && (!Object.hasOwn(state.queryFileDirty, tab.id) || state.queryFileDirty[tab.id] !== false);
     const marker = ref && mark?.target.token === ref.token ? ` tab-order-drop-${mark.placement}` : '';
     return <div key={orderAvailable ? tab.id : `invalid-${index}`} data-workspace-tab-id={tab.id} data-active-workspace-tab={tab.id === state.settings.activeTabId ? 'true' : undefined} className={`workspace-tab-button ${tab.id === state.settings.activeTabId ? 'active' : ''}${marker}${ref && dragSource?.token === ref.token ? ' tab-order-dragging' : ''}`} onDragOver={event => { if (ref) over(event, ref); }} onDrop={event => { if (ref) drop(event, ref); }}>
-      <button className="tab-select" disabled={disabled} draggable={!disabled} title={text.shortcut} aria-description={text.shortcut} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onContextMenu={event => { event.preventDefault(); if (ref) openMenu(ref, event.currentTarget); }} onDragStart={event => { if (ref) start(event, ref); else event.preventDefault(); }} onKeyDown={event => { if (ref) move(event, ref); }} onClick={() => { if (available() && latest.current.orderAvailable && ref && useWorkspace.getState().resolveTabOrder(ref)) { retireMenu(); useWorkspace.getState().updateSettings({ activeTabId: ref.id }); } }}>{tab.kind === 'query' ? <FileCode2 size={14}/> : tab.kind === 'objects' ? <Database size={14}/> : <Table2 size={14}/>}<span>{tab.title}</span>{dirty && <span className="dirty-dot"/>}</button>
-      {tab.kind === 'query' && (onCloseSide || onRename) && <button className="tab-query-menu" disabled={disabled} aria-label={closeText.menuButton(tab.title)} aria-haspopup="menu" aria-expanded={queryMenu?.anchor.token === ref?.token} onClick={event => { if (ref) openMenu(ref, event.currentTarget); }}>⋯</button>}
-      <button className="tab-close" disabled={disabled} aria-label={formatText(zh.app.text012, tab.title)} onClick={() => { if (available() && latest.current.orderAvailable && ref && useWorkspace.getState().resolveTabOrder(ref)) latest.current.onClose(ref.id); }}><X size={12}/></button>
+      <button className="tab-select" disabled={disabled} draggable={!disabled} title={text.shortcut} aria-description={tab.queryPinned ? closeText.pinned + '。' + text.shortcut : text.shortcut} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onContextMenu={event => { event.preventDefault(); if (ref) openMenu(ref, event.currentTarget); }} onDragStart={event => { if (ref) start(event, ref); else event.preventDefault(); }} onKeyDown={event => { if (ref) move(event, ref); }} onClick={() => { if (available() && latest.current.orderAvailable && ref && useWorkspace.getState().resolveTabOrder(ref)) { retireMenu(); useWorkspace.getState().updateSettings({ activeTabId: ref.id }); } }}>{tab.kind === 'query' ? (tab.queryPinned ? <Pin size={14} className="query-tab-pin" aria-hidden="true"/> : <FileCode2 size={14}/>) : tab.kind === 'objects' ? <Database size={14}/> : <Table2 size={14}/>}<span>{tab.title}</span>{dirty && <span className="dirty-dot"/>}</button>
+      {tab.kind === 'query' && (onCloseSide || onRename || onTogglePin) && <button className="tab-query-menu" disabled={disabled} aria-label={closeText.menuButton(tab.title)} aria-haspopup="menu" aria-expanded={queryMenu?.anchor.token === ref?.token} onClick={event => { if (ref) openMenu(ref, event.currentTarget); }}>⋯</button>}
+      <button className="tab-close" disabled={disabled || tab.queryPinned} title={tab.queryPinned ? closeText.pinnedClose : undefined} aria-label={formatText(zh.app.text012, tab.title)} onClick={() => { if (available() && latest.current.orderAvailable && ref && useWorkspace.getState().resolveTabOrder(ref)) latest.current.onClose(ref.id); }}><X size={12}/></button>
     </div>;
-  }) : <div className="welcome-tab"><Database size={14}/>{zh.app.text013}</div>}<button className="add-tab" title={zh.common.newQuery} aria-label={zh.app.text014} onClick={() => { if (available()) latest.current.onNew(); }}><Plus size={15}/></button></div>{(status || !orderAvailable) && <div className="tab-order-help" role="status" aria-live="polite">{orderAvailable ? status : text.unavailable}</div>}{queryMenu && <div ref={menuElement} role="menu" className="query-tab-menu" aria-label={closeText.menu(queryMenu.tabs.find(tab => tab.id === queryMenu.anchor.id)!.title)} onKeyDown={event => menuKey(event, queryMenu)}>{onCloseSide && (['left', 'right'] as const).map(side => <button key={side} role="menuitem" disabled={!queryMenu.tabs.some((tab, index) => tab.kind === 'query' && (side === 'left' ? index < queryMenu.tabs.findIndex(tab => tab.id === queryMenu.anchor.id) : index > queryMenu.tabs.findIndex(tab => tab.id === queryMenu.anchor.id)))} onClick={() => chooseSide(queryMenu, side)}>{closeText[side]}</button>)}{onRename && <button role="menuitem" disabled={!!state.activeJobs[queryMenu.anchor.id]} onClick={() => chooseRename(queryMenu)}>{queryTabRenameZh.action}</button>}<button role="menuitem" onClick={() => retireMenu(queryMenu, true)}>{closeText.menuCancel}</button></div>}</>;
+  }) : <div className="welcome-tab"><Database size={14}/>{zh.app.text013}</div>}<button className="add-tab" title={zh.common.newQuery} aria-label={zh.app.text014} onClick={() => { if (available()) latest.current.onNew(); }}><Plus size={15}/></button></div>{(status || !orderAvailable) && <div className="tab-order-help" role="status" aria-live="polite">{orderAvailable ? status : text.unavailable}</div>}{queryMenu && menuTab && <div ref={menuElement} role="menu" className="query-tab-menu" aria-label={closeText.menu(menuTab.title)} onKeyDown={event => menuKey(event, queryMenu)}>{onCloseSide && (['left', 'right'] as const).map(side => <button key={side} role="menuitem" disabled={!hasQueriesOnSide(queryMenu, side)} onClick={() => chooseSide(queryMenu, side)}>{closeText[side]}</button>)}{onRename && <button role="menuitem" disabled={!!state.activeJobs[queryMenu.anchor.id]} onClick={() => chooseTabAction(queryMenu, 'onRename')}>{queryTabRenameZh.action}</button>}{onTogglePin && <button role="menuitem" disabled={!!state.activeJobs[queryMenu.anchor.id]} onClick={() => chooseTabAction(queryMenu, 'onTogglePin')}>{menuTab.queryPinned ? closeText.unpin : closeText.pin}</button>}<button role="menuitem" onClick={() => retireMenu(queryMenu, true)}>{closeText.menuCancel}</button></div>}</>;
 }

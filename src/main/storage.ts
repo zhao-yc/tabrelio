@@ -16,6 +16,7 @@ import { assertSqlExpressionWidthWrite, readSqlExpressionWidth } from '../shared
 import { recoverSqliteImportTask } from '../shared/sqliteTableImportFact';
 import { recoverSqliteWriteTask } from '../shared/sqliteWriteFact';
 import { recoverSqliteTableCreateTask } from '../shared/sqliteTableCreateFact';
+import { assertQueryTabPinWrite } from '../shared/queryTabPin';
 import { assertObjectBrowserTabs, readObjectBrowserTabs } from '../shared/objectBrowser';
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, sameQueryFileSource, type QueryFileSourceRef } from '../shared/queryFileSources';
 import { privateQueryFileSourceSchema, type PrivateQueryFileSource } from './queryFileSourceRecords';
@@ -1524,8 +1525,14 @@ export class LocalStore {
   settings(): AppSettings {
     const stored = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];
     // 布局偏好只属于查询标签，读取时兼容旧记录并局部回退，不写回。
-    const tabs = Array.isArray(stored?.tabs) ? stored.tabs.map(tab => {
-      if (!tab || typeof tab !== 'object') return tab;
+    const tabs = Array.isArray(stored?.tabs) ? stored.tabs.map(storedTab => {
+      if (!storedTab || typeof storedTab !== 'object') return storedTab;
+      let tab = storedTab;
+      // 损坏的固定状态只在读取时视为缺项，保留原标签与草稿。
+      if (Object.hasOwn(tab, 'queryPinned') && (tab.kind !== 'query' || typeof tab.queryPinned !== 'boolean')) {
+        const { queryPinned: _pin, ...unchanged } = tab;
+        tab = unchanged;
+      }
       const hasHeight = Object.hasOwn(tab, 'queryEditorHeight'), hasWidth = Object.hasOwn(tab, 'queryEditorWidth'), hasPlacement = Object.hasOwn(tab, 'queryResultPlacement');
       if (!hasHeight && !hasWidth && !hasPlacement) return tab;
       if (tab.kind === 'query') return { ...tab, ...(hasHeight ? { queryEditorHeight: readQueryEditorHeight(tab.queryEditorHeight) } : {}), ...(hasWidth ? { queryEditorWidth: readQueryEditorWidth(tab.queryEditorWidth) } : {}), ...(hasPlacement ? { queryResultPlacement: readQueryResultPlacement(tab.queryResultPlacement) } : {}) };
@@ -1564,6 +1571,7 @@ export class LocalStore {
     assertQueryLayoutWrite(settings);
     assertQueryFileSourceSettings(settings);
     assertObjectBrowserTabs(settings);
+    assertQueryTabPinWrite(settings);
     // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。
     if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
     // 兼容缺项的旧调用；显式字号不得越界或借字符串/小数绕过IPC。

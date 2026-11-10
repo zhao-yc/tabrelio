@@ -58,6 +58,20 @@ describe('关闭其他查询的对象归属与串行回执', () => {
 });
 
 describe('关闭左右查询的原对象范围与顺序', () => {
+  it.each(['others', 'left', 'right'] as const)('%s 跳过范围内的固定查询，未固定查询仍逐个确认', range => {
+    const f = fixture();
+    const left = { ...tab('fixed-left'), queryPinned: true }, right = { ...tab('fixed-right'), queryPinned: true };
+    f.change([left, f.a, f.keep, right, f.b]);
+    f.queue.start(f.keep, range);
+    const expected = range === 'others' ? [f.a, f.b] : range === 'left' ? [f.a] : [f.b];
+    for (const [index, target] of expected.entries()) {
+      expect(f.requests[index]?.tabId).toBe(target.id);
+      f.close(f.requests[index]);
+    }
+    expect(f.requests).toHaveLength(expected.length);
+    expect(f.state.settings.tabs).toEqual([left, f.a, f.keep, right, f.b].filter(item => !expected.includes(item)));
+    expect(f.queue.running).toBe(false);
+  });
   it('左侧只取原查询，锚点与表标签不关闭', () => {
     const f = fixture(); f.queue.start(f.b, 'left'); expect(f.requests.map(item => item.tabId)).toEqual(['keep']);
     f.close(f.requests[0]); expect(f.requests.map(item => item.tabId)).toEqual(['keep', 'a']); f.close(f.requests[1]);
