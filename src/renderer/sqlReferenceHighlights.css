@@ -1,0 +1,2 @@
+.monaco-editor .sql-local-reference { background: color-mix(in srgb, var(--accent) 23%, transparent); box-shadow: inset 0 -1px var(--accent); }
+.monaco-editor .sql-local-declaration { background: color-mix(in srgb, var(--accent) 36%, transparent); box-shadow: inset 0 -2px var(--accent); }

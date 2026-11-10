@@ -49,6 +49,21 @@ it('SQL 语句折叠的旧工作区保持默认，显式开关原子保存且拒
   }
 });
 
+it('局部引用高亮默认关闭，显式布尔偏好与 SQL 正文独立保存', () => {
+  const original = { ...defaultSettings, tabs: [{ id: 'q', kind: 'query' as const, connectionId: 'c', title: '局部引用', sql: 'SELECT s.id FROM subject s' }] };
+  const store = open(original), corrupt = { ...original, editorLocalReferences: 'true' };
+  expect(store.settings().editorLocalReferences).toBeUndefined();
+  expect(open(corrupt).settings().editorLocalReferences).toBe(false);
+  expect(() => validateCommand('settings.save', corrupt)).toThrow();
+  expect(() => store.saveSettings(corrupt as unknown as AppSettings)).toThrow('布尔');
+  expect(fs.writes).toBe(0);
+  for (const editorLocalReferences of [true, false]) {
+    store.saveSettings(validateCommand('settings.save', { ...original, editorLocalReferences }) as AppSettings);
+    const restored = open(undefined, fs.files.get('ram-wrap-settings')).settings();
+    expect(restored.editorLocalReferences).toBe(editorLocalReferences); expect(restored.tabs).toEqual(original.tabs);
+  }
+});
+
 it('旧缺项读取默认true而不写盘，false/true经原IPC与原子字节保存可重读且其它字段不变', () => {
   const old = { ...defaultSettings, editorFontSize: 20, tabs: [{ id: 'q', kind: 'query' as const, connectionId: 'c', title: '保留', sql: 'select 原SQL' }] }; delete old.editorWordWrap;
   const store = open(old); expect(defaultSettings.editorWordWrap).toBe(true); expect(open().settings().editorWordWrap).toBe(true); expect(store.settings()).toEqual({ ...old, editorWordWrap: true }); expect(fs.writes).toBe(0);

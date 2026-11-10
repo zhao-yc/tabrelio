@@ -67,17 +67,20 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(sent).toEqual([{ id: 'execute', revision: 4 }]);
   });
 
-  it('编辑器行号与匹配括号的原生复选状态各自跟随当前工作区', () => {
+  it('编辑器行号、匹配括号和局部引用的原生复选状态各自跟随当前工作区', () => {
     for (const platform of ['win32', 'darwin']) {
       const { menu, find, sent } = fixture(platform);
       menu.update({ revision: 7, commands: [
         { id: 'editor-line-numbers', enabled: true, checked: false },
         { id: 'editor-match-brackets', enabled: true, checked: true },
+        { id: 'editor-local-references', enabled: true, checked: false },
       ] });
       expect(find('editor-line-numbers')).toMatchObject({ label: '显示行号', checked: false, type: 'checkbox' });
       expect(find('editor-match-brackets')).toMatchObject({ label: '高亮匹配括号', checked: true, type: 'checkbox' });
+      expect(find('editor-local-references')).toMatchObject({ label: '高亮局部 SQL 引用', checked: false, type: 'checkbox' });
       Reflect.apply(find('editor-match-brackets')!.click!, undefined, []);
-      expect(sent).toEqual([{ id: 'editor-match-brackets', revision: 7 }]);
+      Reflect.apply(find('editor-local-references')!.click!, undefined, []);
+      expect(sent).toEqual([{ id: 'editor-match-brackets', revision: 7 }, { id: 'editor-local-references', revision: 7 }]);
     }
   });
 

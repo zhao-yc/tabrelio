@@ -52,6 +52,8 @@ import { LocalReferencesWorkerClient } from '../localReferencesWorkerClient';
 import { createLocalReferencesAnalysis } from '../localReferencesAnalysis';
 import { createSqliteLocalReferencesAnalysis } from '../sqliteLocalReferencesAnalysis';
 import { createSqlReferencesProvider } from '../sqlReferencesProvider';
+import { bindSqlReferenceHighlights } from '../sqlReferenceHighlights';
+import '../sqlReferenceHighlights.css';
 import { SqlReferenceCompletionGuard } from '../sqlReferenceCompletionGuard';
 import { createLocalRenameAnalysis } from '../localRenameAnalysis';
 import { createSqlRenameProvider } from '../sqlRenameProvider';
@@ -93,6 +95,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
   const lineNumbers = useWorkspace<'off' | 'on'>(state => state.settings.editorLineNumbers === false ? 'off' : 'on');
   const matchBrackets = useWorkspace<'never' | 'always'>(state => state.settings.editorMatchBrackets === false ? 'never' : 'always');
+  const highlightReferences = useWorkspace(state => state.settings.editorLocalReferences === true) && !!queryTabId && !readOnly && !!dialect;
+  const occurrencesHighlight = highlightReferences ? 'off' : 'singleFile';
   const sqlFolding = useWorkspace(state => state.settings.editorSqlFolding === true);
   const tabSize = useWorkspace(state => readEditorTabSize(state.settings.editorTabSize));
   const insertSpaces = useWorkspace(state => readEditorInsertSpaces(state.settings.editorInsertSpaces));
@@ -243,11 +247,11 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   }, [wordWrap]);
   /** 只更新原编辑器显示选项，行号和括号状态不进入 SQL 模型。 */
   useLayoutEffect(() => {
-    const options = { lineNumbers, matchBrackets };
+    const options = { lineNumbers, matchBrackets, occurrencesHighlight } as const;
     Object.assign(optionsRef.current, options);
     const widget = widgetRef.current;
     if (aliveRef.current && widget?.alive) widget.editor.updateOptions(options);
-  }, [lineNumbers, matchBrackets]);
+  }, [lineNumbers, matchBrackets, occurrencesHighlight]);
   /** 全局偏好更新原widget和当前model；不替换正文，也不因正文已有Tab而重新猜缩进。 */
   useLayoutEffect(() => {
     Object.assign(optionsRef.current, editorIndentationOptions(tabSize, insertSpaces));
@@ -263,6 +267,31 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
   const referenceCompletionGuard = useRef(new SqlReferenceCompletionGuard());
   const suggestionsBlocked = () => referenceCompletionGuard.current.blocked(editorRef.current?.getDomNode() ?? null);
+  /** 自动高亮只接收活动查询的模型和连接修订；不抢显式引用、重命名或补全的线程。 */
+  useEffect(() => {
+    const instance = editorRef.current;
+    if (!highlightReferences || !instance || !contentReady || !queryTabId || clipboardDisabled || dialect !== 'sqlite' && !completion) return;
+    const initial = useWorkspace.getState(), tab = initial.settings.tabs.find(tab => tab.id === queryTabId);
+    if (!tab) return;
+    const profile = initial.connections.find(profile => profile.id === tab.connectionId), version = initial.connectionVersions[tab.connectionId];
+    if (!profile) return;
+    const current = () => {
+      const state = useWorkspace.getState(), props = propsRef.current;
+      return aliveRef.current && editorRef.current === instance && contentRef.current?.ready === true && props.queryTabId === queryTabId &&
+        state.settings.activeTabId === queryTabId && state.settings.editorLocalReferences === true && !props.readOnly && !props.clipboardDisabled &&
+        state.settings.tabs.some(item => item.id === queryTabId && item.connectionId === tab.connectionId) &&
+        state.connections.includes(profile) && state.connectionVersions[tab.connectionId] === version && !state.activeJobs[queryTabId] &&
+        !state.queryFileOpenings?.[queryTabId] && dialectRef.current === dialect && (!completion || sameCompletionScope(completionRef.current, completion)) &&
+        instance.hasTextFocus() && !suggestionsBlocked() && !document.querySelector(appModalSelector);
+    };
+    const worker = dialect === 'sqlite' ? createSqliteLocalReferencesAnalysis({ current, create: () => new LocalReferencesWorkerClient(() => new SqliteLocalReferencesWorker(), 'sqlite') }) : createLocalReferencesAnalysis({ scope: completion!, current,
+      facts: () => completionServerFacts.get(completion!.connectionId, completion!.connectionVersion),
+      state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => new CompletionWorker()),
+    });
+    const highlights = bindSqlReferenceHighlights(instance, { current, analyze: worker.analyze, sourceLimit: dialect === 'sqlite' ? sqliteCompletionLimits.sourceUnits : completionLimits.sourceUnits });
+    const stop = useWorkspace.subscribe(() => { if (!current()) highlights.invalidate(); });
+    return () => { stop(); highlights.dispose(); void worker.dispose().catch(() => {}); };
+  }, [highlightReferences, contentReady, clipboardDisabled, queryTabId, dialect, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   /** 局部F2重命名独占分析线程；输入框焦点属于本widget，不能借树选择改变目标。 */
   useEffect(() => {
     if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
