@@ -1,16 +1,21 @@
 import type { TableInfo } from '../shared/contracts';
 import type { IncomingReferenceRelation } from '../shared/incomingReferences';
-import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, type ForeignKeyJoinKind, type ForeignKeyJoinOptions, type ForeignKeyJoinRelation } from './tableForeignKeyJoin';
+import { buildForeignKeyJoin, buildMysqlSingleTableSelect, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, type ForeignKeyJoinColumn, type ForeignKeyJoinKind, type ForeignKeyJoinOptions, type ForeignKeyJoinRelation, type MysqlSingleTableSelectOptions } from './tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-CN';
 
 export interface ForeignKeyJoinTarget { connectionId: string; database: string; table: string; }
 export type ForeignKeyJoinRead = (target: ForeignKeyJoinTarget) => Promise<TableInfo>;
 export interface FixedForeignKeyJoinStart { foreignKey: string; parent: TableInfo; kind: 'LEFT' | 'RIGHT' }
-export interface ForeignKeyJoinPreview {
-  readonly parent: TableInfo; readonly parentKey: string; readonly childKey: string; readonly relation: ForeignKeyJoinRelation;
-  readonly additionalKeys?: readonly string[];
-  readonly kind: ForeignKeyJoinKind; readonly options: ForeignKeyJoinOptions; readonly sql: string;
+interface QueryBuilderPreview {
+  readonly childKey: string; readonly sql: string; readonly columns: readonly ForeignKeyJoinColumn[];
 }
+export interface ForeignKeyJoinPreview extends QueryBuilderPreview {
+  readonly parent: TableInfo; readonly parentKey: string; readonly relation: ForeignKeyJoinRelation;
+  readonly additionalKeys?: readonly string[];
+  readonly kind: ForeignKeyJoinKind; readonly options: ForeignKeyJoinOptions;
+}
+interface SingleTablePreview extends QueryBuilderPreview { readonly options: MysqlSingleTableSelectOptions; }
+export type MysqlQueryBuilderPreview = ForeignKeyJoinPreview | SingleTablePreview;
 
 /** 目录只负责定位，生成器仍使用新读到的真实子表外键。按原顺序核对每个映射字段。 */
 export function fixedForeignKeyJoinStart(parent: TableInfo, relation: Pick<IncomingReferenceRelation, 'database' | 'table' | 'foreignKey'>, child: TableInfo, kind: FixedForeignKeyJoinStart['kind']): FixedForeignKeyJoinStart {
@@ -43,9 +48,10 @@ export class TableForeignKeyJoinIntent {
   invalidate(): void { if (this.dead) return; this.dead = true; queueMicrotask(() => { for (const listener of this.listeners) listener(); }); }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   /** 打开只消费一次；确认SQL仍由同一结构和选列生成，不信任旧按钮携带的字符串。 */
-  consume(preview: ForeignKeyJoinPreview): string {
-    if (!this.current() || preview.childKey !== this.metadataKey || foreignKeyJoinMetadataKey(preview.parent) !== preview.parentKey ||
-        !sameAdditionalMetadata(preview) || buildForeignKeyJoin(this.source, preview.parent, preview.relation, preview.kind, this.limit, preview.options).sql !== preview.sql) throw Error(text.stale);
+  consume(preview: MysqlQueryBuilderPreview): string {
+    if (!this.current() || preview.childKey !== this.metadataKey) throw Error(text.stale);
+    const sql = 'parent' in preview ? checkedJoinSql(this, preview) : buildMysqlSingleTableSelect(this.source, this.limit, preview.options).sql;
+    if (sql !== preview.sql) throw Error(text.stale);
     this.consumed = true; return preview.sql;
   }
 }
@@ -58,17 +64,26 @@ export function foreignKeyJoinPreview(intent: TableForeignKeyJoinIntent, parent:
   const target = immutable(structuredClone(parent)), selection = immutable(structuredClone(options));
   const mapping = immutable(structuredClone(relation));
   const result = buildForeignKeyJoin(intent.source, target, mapping, kind, intent.limit, selection);
-  return Object.freeze({ parent: target, parentKey: foreignKeyJoinMetadataKey(target), childKey: intent.metadataKey, relation: mapping, kind, options: selection, sql: result.sql,
+  return Object.freeze({ parent: target, parentKey: foreignKeyJoinMetadataKey(target), childKey: intent.metadataKey, relation: mapping, kind, options: selection, sql: result.sql, columns: immutable(result.columns),
     ...(selection.additionalJoins ? { additionalKeys: Object.freeze(selection.additionalJoins.map(step => foreignKeyJoinMetadataKey(step.target))) } : {}) });
 }
 
-function sameAdditionalMetadata(preview: ForeignKeyJoinPreview): boolean {
+/** 单表与 JOIN 使用相同的不可变回执和单次消费，选列与条件仍在克隆前验证。 */
+export function mysqlSingleTablePreview(intent: TableForeignKeyJoinIntent, options: MysqlSingleTableSelectOptions): SingleTablePreview {
+  if (!intent.current()) throw Error(text.stale);
+  const { sql, columns } = buildMysqlSingleTableSelect(intent.source, intent.limit, options);
+  return Object.freeze({ childKey: intent.metadataKey, options: immutable(structuredClone(options)), sql, columns: immutable(columns) });
+}
+
+function checkedJoinSql(intent: TableForeignKeyJoinIntent, preview: ForeignKeyJoinPreview): string {
   const steps = preview.options.additionalJoins ?? [], keys = preview.additionalKeys ?? [];
-  return steps.length === keys.length && steps.every((step, index) => foreignKeyJoinMetadataKey(step.target) === keys[index]);
+  if (foreignKeyJoinMetadataKey(preview.parent) !== preview.parentKey || steps.length !== keys.length ||
+      steps.some((step, index) => foreignKeyJoinMetadataKey(step.target) !== keys[index])) throw Error(text.stale);
+  return buildForeignKeyJoin(intent.source, preview.parent, preview.relation, preview.kind, intent.limit, preview.options).sql;
 }
 
 /** 按顺序重读各真实目标。同一物理表在一次核验中只读取一次，仍按各别名核对签名。 */
-export async function revalidateForeignKeyJoin(intent: TableForeignKeyJoinIntent, preview: ForeignKeyJoinPreview, read: ForeignKeyJoinRead, current: () => boolean): Promise<void> {
+export async function revalidateForeignKeyJoin(intent: TableForeignKeyJoinIntent, preview: MysqlQueryBuilderPreview, read: ForeignKeyJoinRead, current: () => boolean): Promise<void> {
   const assert = () => { if (!intent.current() || !current()) throw Error(text.stale); };
   const reject = () => { intent.invalidate(); throw Error(text.stale); };
   const checked = new Map<string, TableInfo>();
@@ -82,6 +97,10 @@ export async function revalidateForeignKeyJoin(intent: TableForeignKeyJoinIntent
     return info;
   }
   const child = await check(intent.source, preview.childKey);
+  if (!('parent' in preview)) {
+    if (buildMysqlSingleTableSelect(child, intent.limit, preview.options).sql !== preview.sql) reject();
+    return;
+  }
   const parent = await check(preview.parent, preview.parentKey);
   const options = { ...preview.options };
   if (options.additionalJoins) {

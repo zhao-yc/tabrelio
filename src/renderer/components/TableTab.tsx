@@ -2442,7 +2442,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     {foreignKeyJoinDialog?.mode === 'directory' && <IncomingForeignKeyJoinDialog intent={foreignKeyJoinDialog.intent} onProceed={foreignKeyJoinDialog.proceed}
       onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog.intent)} onActivity={foreignKeyJoinActivity}/>}
     {foreignKeyJoinDialog?.mode === 'build' && <TableForeignKeyJoinDialog intent={foreignKeyJoinDialog.intent} fixed={foreignKeyJoinDialog.fixed} manual={foreignKeyJoinDialog.manual}
-      onOpen={preview => openForeignKeyJoinQuery(foreignKeyJoinDialog.intent, preview)} onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog.intent)}
+      onOpen={preview => 'parent' in preview && openForeignKeyJoinQuery(foreignKeyJoinDialog.intent, preview)} onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog.intent)}
       onActivity={foreignKeyJoinActivity} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {tableStatisticsDialog && <TableStatisticsDialog base={base} intent={tableStatisticsDialog.intent} onCount={tableStatisticsDialog.onCount} onClose={() => closeTableStatistics(tableStatisticsDialog.intent)} onActivity={referenceActivity}/>}
     {relationshipDialog && <RelationshipDiagramDialog connectionId={tab.connectionId} source={relationshipDialog.source} current={relationshipDialog.current} onActivity={referenceActivity}

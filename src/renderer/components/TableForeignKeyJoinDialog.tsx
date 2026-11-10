@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo, FilterGroup, FilterMode, FilterRule, QueryOutcome } from '../../shared/contracts';
 import { manualJoinDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary } from '../../shared/manualJoinDesigns';
-import { mysqlJoinSampleRows, type MysqlJoinPreviewInput, type MysqlJoinPreviewTarget } from '../../shared/mysqlJoinPreview';
+import { mysqlJoinSampleRows, type MysqlJoinedPreviewInput, type MysqlJoinPreviewInput, type MysqlJoinPreviewTarget } from '../../shared/mysqlJoinPreview';
 import { ExplainPlanView } from './ExplainPlanView';
 import { ResultsGrid } from './ResultsGrid';
 import '../viewQueryInspect.css';
@@ -19,7 +19,7 @@ import { tableForeignKeyJoinHavingZh as havingText } from '../locales/tableForei
 import { tableForeignKeyJoinSummaryZh as summaryText } from '../locales/tableForeignKeyJoinSummary.zh-CN';
 import { tableForeignKeyJoinFilterZh as filterText } from '../locales/tableForeignKeyJoinFilter.zh-CN';
 import { buildForeignKeyJoin, foreignKeyJoinColumnAlias, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, foreignKeyJoinLimits, foreignKeyJoinResultLimit, manualJoinAlias, type ForeignKeyJoinKind, type ForeignKeyJoinSort } from '../tableForeignKeyJoin';
-import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPreview, type ForeignKeyJoinTarget, type FixedForeignKeyJoinStart, TableForeignKeyJoinIntent } from '../tableForeignKeyJoinIntent';
+import { foreignKeyJoinPreview, mysqlSingleTablePreview, revalidateForeignKeyJoin, type MysqlQueryBuilderPreview, type ForeignKeyJoinTarget, type FixedForeignKeyJoinStart, TableForeignKeyJoinIntent } from '../tableForeignKeyJoinIntent';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
@@ -68,7 +68,7 @@ function sourceLabel(sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>, side: 
 
 /** 输出ID绑定原分组或指标对象，恢复设计也按同一规则解析 HAVING。 */
 function joinHavingTargets(selection: Selection, sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>): ForeignKeyJoinHavingTarget[] {
-  if (!selection.summaryEnabled || !sources.has('parent')) return [];
+  if (!selection.summaryEnabled) return [];
   try {
     const plan = buildForeignKeyJoinSummary(sources, foreignKeyJoinSummaryFromDraft(selection.summaryGroups, selection.aggregates), foreignKeyJoinColumnAlias);
     return plan.outputs.map((output, index) => {
@@ -82,35 +82,39 @@ function joinHavingTargets(selection: Selection, sources: ReadonlyMap<ForeignKey
 }
 
 /** 打开与恢复共用实际 SQL 编译器；恢复失败时原设计及当前草稿均保持。 */
-function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selection, parent: TableInfo, sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>, havingTargets: readonly ForeignKeyJoinHavingTarget[]): ForeignKeyJoinPreview {
+function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selection, parent: TableInfo | undefined, sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>, havingTargets: readonly ForeignKeyJoinHavingTarget[]): MysqlQueryBuilderPreview {
   const limit = foreignKeyJoinResultLimit(selection.limit);
   const filters = foreignKeyJoinFiltersFromDraft(selection.filters, sources);
   const having = selection.summaryEnabled ? foreignKeyJoinHavingFromDraft(selection.having, havingTargets) : [];
   const sorting = selection.summaryEnabled ? selection.summarySort : selection.sort;
-  const relation = selection.manual ? selection.manual.pairs.map(({ id: _id, ...condition }) => condition) : selection.fk;
-  return foreignKeyJoinPreview(intent, parent, relation, selection.kind, {
-    childColumns: selection.child, parentColumns: selection.parent,
-    ...(selection.manual?.on ? { manualOn: selection.manual.on } : {}),
-    ...(selection.unmatchedOnly ? { unmatchedOnly: true } : {}),
+  const options = {
+    childColumns: selection.child,
     ...(!selection.summaryEnabled && selection.distinct ? { distinct: true } : {}),
     ...(selection.summaryEnabled ? { summary: foreignKeyJoinSummaryFromDraft(selection.summaryGroups, selection.aggregates) } : {}),
     ...(having.length ? { having: { filters: having, mode: selection.havingMode, ...(selection.havingGroup ? { group: selection.havingGroup } : {}) } } : {}),
     ...(filters.length ? { filters, filterMode: selection.filterMode, ...(selection.filterGroup ? { filterGroup: selection.filterGroup } : {}) } : {}),
     ...(sorting.length ? { sort: sorting.map(item => item.rule) } : {}),
     ...(limit !== intent.limit ? { limit } : {}),
+  };
+  if (!parent) return mysqlSingleTablePreview(intent, options);
+  const relation = selection.manual ? selection.manual.pairs.map(({ id: _id, ...condition }) => condition) : selection.fk;
+  return foreignKeyJoinPreview(intent, parent, relation, selection.kind, {
+    ...options, parentColumns: selection.parent,
+    ...(selection.manual?.on ? { manualOn: selection.manual.on } : {}),
+    ...(selection.unmatchedOnly ? { unmatchedOnly: true } : {}),
     ...(selection.additional.length ? { additionalJoins: manualJoinSteps(selection.additional) } : {}),
   });
 }
 
 /** 一次原读取和最新本地选择共用占门；不持有任何父页行数据或执行SQL的能力。 */
-export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
-  intent: TableForeignKeyJoinIntent; onOpen(preview: ForeignKeyJoinPreview): boolean; onClose(): void;
-  fixed?: FixedForeignKeyJoinStart; manual?: boolean; onActivity?(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
+export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, single = false, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
+  intent: TableForeignKeyJoinIntent; onOpen(preview: MysqlQueryBuilderPreview): boolean; onClose(): void;
+  fixed?: FixedForeignKeyJoinStart; manual?: boolean; single?: boolean; onActivity?(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
 }) {
-  const origin = useRef({ intent, fixed, manual, services, onActivity }).current;
-  if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed || origin.manual !== manual) origin.intent.invalidate();
-  const title = origin.manual ? text.manualTitle : text.title;
-  const choices = useMemo(() => origin.manual ? [] : foreignKeyJoinChoices(origin.intent.source).filter(key => !origin.fixed || key.name === origin.fixed.foreignKey), [origin]);
+  const origin = useRef({ intent, fixed, manual, single, services, onActivity }).current;
+  if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed || origin.manual !== manual || origin.single !== single) origin.intent.invalidate();
+  const title = origin.single ? text.singleTitle : origin.manual ? text.manualTitle : text.title;
+  const choices = useMemo(() => origin.manual || origin.single ? [] : foreignKeyJoinChoices(origin.intent.source).filter(key => !origin.fixed || key.name === origin.fixed.foreignKey), [origin]);
   const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, additional: [], fk: choices[0]?.name ?? '', manual: origin.manual ? { database: intent.source.database, table: '', pairs: [] } : undefined, kind: origin.fixed?.kind ?? (origin.manual ? 'INNER' : 'LEFT'), child: origin.intent.source.columns.map(column => column.name), parent: origin.fixed?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
   const selectionRef = useRef(selection), [parent, setParent] = useState<{ fk: string; info: TableInfo } | undefined>(() =>
     origin.fixed && { fk: origin.fixed.foreignKey, info: origin.fixed.parent });
@@ -119,7 +123,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   const [designs, setDesigns] = useState<ManualJoinDesignSummary[]>([]);
   const [designId, setDesignId] = useState(''), [designName, setDesignName] = useState('');
   const [designNotice, setDesignNotice] = useState('');
-  const [inspection, setInspection] = useState<{ owner: ForeignKeyJoinPreview; result: QueryOutcome }>();
+  const [inspection, setInspection] = useState<{ owner: MysqlQueryBuilderPreview; result: QueryOutcome }>();
   const [groupEditor, setGroupEditor] = useState<GroupEditor>(), groupRef = useRef<GroupEditor | undefined>(undefined), groupPanel = useRef<HTMLDivElement>(null), groupTrigger = useRef<HTMLButtonElement>(null), havingGroupTrigger = useRef<HTMLButtonElement>(null), hadGroup = useRef<GroupEditor | undefined>(undefined);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [invalid, setInvalid] = useState(false), [message, setMessage] = useState('');
   const alive = useRef(true), closingRef = useRef(false), operation = useRef<Operation | null>(null), revision = useRef(0), consumed = useRef(false), committed = useRef<object | null>(null), ticket = {};
@@ -147,22 +151,23 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   const target = selection.manual ? tables?.includes(selection.manual.table) && { database: selection.manual.database, table: selection.manual.table }
     : choice && { database: choice.referencedDatabase, table: choice.referencedTable };
   const currentParent = parent?.fk === selection.fk ? parent.info : undefined;
+  const sourceReady = origin.single || !!currentParent;
   const sources = useMemo(() => joinSources(origin.intent.source, currentParent, selection.additional), [origin, currentParent, selection.additional]);
-  const label = (side: ForeignKeyJoinSide | 'aggregate') => sourceLabel(sources, side);
+  const label = (side: ForeignKeyJoinSide | 'aggregate') => origin.single && side === 'child' ? origin.intent.source.name : sourceLabel(sources, side);
   const sorting = selection.summaryEnabled ? selection.summarySort : selection.sort;
   const sortSides: ForeignKeyJoinSort['side'][] = [...sources.keys(), ...(selection.summaryEnabled ? ['aggregate' as const] : [])];
   const havingTargets = useMemo(() => joinHavingTargets(selection, sources), [selection, sources]);
   const preview = useMemo(() => {
-    if (!currentParent) return { value: undefined, error: '' };
+    if (!sourceReady) return { value: undefined, error: '' };
     try { return { value: compileSelection(origin.intent, selection, currentParent, sources, havingTargets), error: '' }; }
     catch (reason) { return { value: undefined, error: errorMessage(reason) }; }
-  }, [origin.intent, currentParent, selection, sources, havingTargets]);
+  }, [origin.intent, sourceReady, currentParent, selection, sources, havingTargets]);
   const outcome = inspection?.owner === preview.value ? inspection?.result : undefined;
   const sampleResult = outcome?.explain ? undefined : outcome?.results[0];
   const aliases = useMemo(() => {
     if (!preview.value) return new Map<string, string>();
-    return new Map(buildForeignKeyJoin(origin.intent.source, preview.value.parent, preview.value.relation, preview.value.kind, origin.intent.limit, preview.value.options).columns.map(column => [JSON.stringify([column.side, column.column]), column.alias]));
-  }, [origin.intent, preview.value]);
+    return new Map(preview.value.columns.filter(column => column.column !== column.alias).map(column => [JSON.stringify([column.side, column.column]), column.alias]));
+  }, [preview.value]);
 
   /** 只取消原当前任务一次；ACK和真实读取都属于原operation，不能ACK先释放占用。 */
   function cancel(active = operation.current): void {
@@ -183,28 +188,30 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     finally { if (active.read === request) active.read = undefined; }
   }
   /** 使用同一份预览的目录摘要，关闭或改配置后原结果不能进入新草稿。 */
-  async function inspect(active: Operation, receipt: ForeignKeyJoinPreview, mode: NonNullable<MysqlJoinPreviewInput['mode']>, owns: () => boolean) {
+  async function inspect(active: Operation, receipt: MysqlQueryBuilderPreview, mode: NonNullable<MysqlJoinPreviewInput['mode']>, owns: () => boolean) {
     async function target(info: TableInfo, key: string): Promise<MysqlJoinPreviewTarget> {
       const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
       return { database: info.database, table: info.name, digest: Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, '0')).join('') };
     }
-    const { additionalJoins, ...options } = receipt.options;
     const source = await target(origin.intent.source, receipt.childKey);
-    const parent = await target(receipt.parent, receipt.parentKey);
-    const steps: MysqlJoinPreviewInput['steps'] = [];
-    for (const [index, step] of (additionalJoins ?? []).entries()) {
-      steps.push({ ...step, pairs: [...step.pairs], columns: [...step.columns], target: await target(step.target, receipt.additionalKeys![index]) });
-    }
+    const request = { taskId: uid(), mode, connectionId: origin.intent.connectionId, source, limit: origin.intent.limit };
+    let input: MysqlJoinPreviewInput;
+    if ('parent' in receipt) {
+      const { additionalJoins, ...options } = receipt.options;
+      const parent = await target(receipt.parent, receipt.parentKey);
+      const steps: MysqlJoinedPreviewInput['steps'] = [];
+      for (const [index, step] of (additionalJoins ?? []).entries()) {
+        steps.push({ ...step, pairs: [...step.pairs], columns: [...step.columns], target: await target(step.target, receipt.additionalKeys![index]) });
+      }
+      input = { ...request, parent, kind: receipt.kind, options, steps, relation: typeof receipt.relation === 'string' ? receipt.relation : [...receipt.relation] };
+    } else input = { ...request, single: true, options: receipt.options };
     if (!owns()) return;
-    const taskId = uid();
-    const request = { taskId, cancel: () => invoke('mysql.join.previewCancel', { taskId }) };
-    active.read = request;
+    const task = { taskId: request.taskId, cancel: () => invoke('mysql.join.previewCancel', { taskId: request.taskId }) };
+    active.read = task;
     try {
-      const result = await invoke('mysql.join.preview', { taskId, mode, connectionId: origin.intent.connectionId, source, parent,
-        relation: typeof receipt.relation === 'string' ? receipt.relation : [...receipt.relation],
-        kind: receipt.kind, limit: origin.intent.limit, options, steps });
+      const result = await invoke('mysql.join.preview', input);
       if (owns()) setInspection({ owner: receipt, result });
-    } finally { if (active.read === request) active.read = undefined; }
+    } finally { if (active.read === task) active.read = undefined; }
   }
 
   /** 恢复只读精确表身份，串行去重，全部核对完成后才发布一份完整草稿。 */
@@ -442,7 +449,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     revise({ ...selection, filters, filterGroup, filterMode: filters.length ? selection.filterMode : 'all' });
   }
   /** 条件只在当前原窗口本地添加，未完成值保持原文并阻止打开，不降级为无筛选查询。 */
-  function addFilter(): void { if (!editable() || !parent || parent.fk !== selection.fk || selection.filters.length >= FILTER_LIMITS.conditions) return; reviseFilters([...selection.filters, { id: uid(), side: 'child', enabled: true, draft: emptyFilterDraft(origin.intent.source.columns[0].name) }]); }
+  function addFilter(): void { if (!editable() || !sourceReady || selection.filters.length >= FILTER_LIMITS.conditions) return; reviseFilters([...selection.filters, { id: uid(), side: 'child', enabled: true, draft: emptyFilterDraft(origin.intent.source.columns[0].name) }]); }
   /** 原条目对象和已提交渲染均须仍有效；移除、换FK或改来源后旧输入不能落到其它条件。 */
   function editFilter(entry: ForeignKeyJoinFilterDraft, patch: { side?: ForeignKeyJoinSide; enabled?: boolean; draft?: Partial<FilterDraft> }): void {
     if (!editable() || !selection.filters.includes(entry)) return;
@@ -490,7 +497,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   }
   /** 只有本地明确添加才生成排序项，最多20项；不请求数据或改变原表页排序。 */
   function addSort(): void {
-    if (!editable() || !parent || parent.fk !== selection.fk || sorting.length >= foreignKeyJoinLimits.sorts) return;
+    if (!editable() || !sourceReady || sorting.length >= foreignKeyJoinLimits.sorts) return;
     const side = sortSides.find(side => availableSort(side).length); if (!side) return;
     const column = availableSort(side)[0];
     reviseSort([...sorting, { id: uid(), rule: { side, column, direction: 'ASC' } }]);
@@ -502,16 +509,16 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   }
   /** 分组字段使用独立草稿；添加只选择尚未使用的真实列，不隐式把全部明细字段分组。 */
   function addSummaryGroup(): void {
-    if(!editable()||!parent||selection.summaryGroups.length>=foreignKeyJoinSummaryLimits.groups)return;
+    if(!editable()||!sourceReady||selection.summaryGroups.length>=foreignKeyJoinSummaryLimits.groups)return;
     for(const [side, info] of sources){const column=info.columns.find(column=>!selection.summaryGroups.some(item=>item.side===side&&item.column===column.name));if(column){revise({...selection,summaryGroups:[...selection.summaryGroups,{id:uid(),side,column:column.name}]});return;}}
   }
   /** 老行及老渲染不能编辑后继；字段必须来自当前目录且不重复，值本身不由SQL表达式提供。 */
   function editSummaryGroup(entry:ForeignKeyJoinGroupDraft,patch:Partial<Pick<ForeignKeyJoinGroupDraft,'side'|'column'>>):void{
-    if(!editable()||!parent||!selection.summaryGroups.includes(entry))return;const next={...entry,...patch};if(!sources.get(next.side)?.columns.some(column=>column.name===next.column)||selection.summaryGroups.some(item=>item!==entry&&item.side===next.side&&item.column===next.column))return;revise({...selection,summaryGroups:selection.summaryGroups.map(item=>item===entry?next:item)});
+    if(!editable()||!sourceReady||!selection.summaryGroups.includes(entry))return;const next={...entry,...patch};if(!sources.get(next.side)?.columns.some(column=>column.name===next.column)||selection.summaryGroups.some(item=>item!==entry&&item.side===next.side&&item.column===next.column))return;revise({...selection,summaryGroups:selection.summaryGroups.map(item=>item===entry?next:item)});
   }
   /** 明确添加COUNT(*)草稿，默认别名避开已用别名；空汇总不会回退明细查询。 */
   function addAggregate():void{
-    if(!editable()||!parent||selection.aggregates.length>=foreignKeyJoinSummaryLimits.aggregates)return;let n=1;while(selection.aggregates.some(item=>item.alias.toLowerCase()===summaryText.defaultAlias(n).toLowerCase()))n++;
+    if(!editable()||!sourceReady||selection.aggregates.length>=foreignKeyJoinSummaryLimits.aggregates)return;let n=1;while(selection.aggregates.some(item=>item.alias.toLowerCase()===summaryText.defaultAlias(n).toLowerCase()))n++;
     revise({...selection,aggregates:[...selection.aggregates,{id:uid(),fn:'COUNT_ALL',side:'child',column:origin.intent.source.columns[0].name,alias:summaryText.defaultAlias(n)}]});
   }
   /** 未完成别名及数值列选择保持原文，由纯编译器阻止旧SQL打开；COUNT(*)隐藏字段草稿不丢。 */
@@ -523,15 +530,18 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     const searchKey = side === 'child' ? 'childSearch' : 'parentSearch', pageKey = side === 'child' ? 'childPage' : 'parentPage';
     const names = info.columns.map(column => column.name).filter(name => name.toLocaleLowerCase().includes(selection[searchKey].toLocaleLowerCase()));
     const pages = Math.max(1, Math.ceil(names.length / pageSize)), page = Math.min(selection[pageKey], pages), selected = selection[side];
-    return <fieldset disabled={busy || unavailable}><legend>{side === 'child' ? text.childFields : text.parentFields}</legend><p>{text.selected(selected.length, info.columns.length)}</p>
+    const title = origin.single ? text.singleFields : side === 'child' ? text.childFields : text.parentFields;
+    return <fieldset disabled={busy || unavailable}><legend>{title}</legend><p>{text.selected(selected.length, info.columns.length)}</p>
       <button disabled={busy || unavailable} onClick={() => revise({ ...selection, [side]: info.columns.map(column => column.name) })}>{text.allFields}</button><button disabled={busy || unavailable || !selected.length} onClick={() => revise({ ...selection, [side]: [] })}>{text.clearFields}</button>
-      <label>{text.search}<input aria-label={side === 'child' ? text.childFields + text.search : text.parentFields + text.search} value={selection[searchKey]} maxLength={512} onChange={event => revise({ ...selection, [searchKey]: event.target.value, [pageKey]: 1 })}/></label>
-      <div>{names.slice((page - 1) * pageSize, page * pageSize).map(name => <label key={name} style={{ display: 'block' }}><input type="checkbox" aria-label={side === 'child' ? text.childSelect(name) : text.parentSelect(name)} checked={selected.includes(name)} onChange={event => revise({ ...selection, [side]: event.target.checked ? [...selected, name] : selected.filter(value => value !== name) })}/>{name}{aliases.get(JSON.stringify([side, name])) && <> → {aliases.get(JSON.stringify([side, name]))}</>}</label>)}</div>
+      <label>{text.search}<input aria-label={title + text.search} value={selection[searchKey]} maxLength={512} onChange={event => revise({ ...selection, [searchKey]: event.target.value, [pageKey]: 1 })}/></label>
+      <div>{names.slice((page - 1) * pageSize, page * pageSize).map(name => <label key={name} style={{ display: 'block' }}><input type="checkbox" aria-label={origin.single ? text.singleSelect(name) : side === 'child' ? text.childSelect(name) : text.parentSelect(name)} checked={selected.includes(name)} onChange={event => revise({ ...selection, [side]: event.target.checked ? [...selected, name] : selected.filter(value => value !== name) })}/>{name}{aliases.get(JSON.stringify([side, name])) && <> → {aliases.get(JSON.stringify([side, name]))}</>}</label>)}</div>
       <button disabled={busy || unavailable || page <= 1} onClick={() => revise({ ...selection, [pageKey]: page - 1 })}>{text.previous}</button><span>{text.page(page, pages)}</span><button disabled={busy || unavailable || page >= pages} onClick={() => revise({ ...selection, [pageKey]: page + 1 })}>{text.next}</button>
     </fieldset>;
   }
+  const resultLimitLabel = origin.single ? text.singleLimit : text.resultLimit;
+  const sortTitle = origin.single ? text.singleSort : text.sortTitle;
   return <Modal title={title} wide onClose={close} onEscape={groupEditor ? event => { if (!event.target || !groupPanel.current?.contains(event.target as Node)) event.stopPropagation(); } : undefined}><div className="modal-content" aria-busy={busy || closing}>
-    <p>{selection.manual ? text.manualScope : text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
+    <p>{origin.single ? text.singleScope : selection.manual ? text.manualScope : text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
     {selection.manual && <details>
       <summary>{text.designTitle}</summary>
       <p>{text.designHint}</p>
@@ -553,8 +563,8 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
         {designNotice && <p role="status">{designNotice}</p>}
       </fieldset>
     </details>}
-    <label>{text.resultLimit}<input aria-label={text.resultLimit} inputMode="numeric" maxLength={128} value={selection.limit} disabled={busy || unavailable} onChange={event => revise({ ...selection, limit: event.target.value })}/></label><p>{text.limitHint}</p>
-    {selection.manual ? <ManualJoinTableFields key={selection.manual.database} selection={selection.manual} databases={databases} tables={tables} disabled={busy || unavailable || !!selection.additional.length}
+    <label>{resultLimitLabel}<input aria-label={resultLimitLabel} inputMode="numeric" maxLength={128} value={selection.limit} disabled={busy || unavailable} onChange={event => revise({ ...selection, limit: event.target.value })}/></label><p>{text.limitHint}</p>
+    {!origin.single && <>{selection.manual ? <ManualJoinTableFields key={selection.manual.database} selection={selection.manual} databases={databases} tables={tables} disabled={busy || unavailable || !!selection.additional.length}
       onDatabases={() => run('databases')} onTables={() => run('tables')} onTarget={changeManualTarget}/>
       : <label>{text.fk}<select aria-label={text.fk} disabled={unavailable || !!origin.fixed} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>}
     <label>{text.joinKind}<select aria-label={text.joinKind} disabled={busy || unavailable} value={selection.kind} onChange={event => {
@@ -585,34 +595,35 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
         onClick={() => revise({ ...selection, additional: [...selection.additional, { id: uid(), source: 1, kind: 'INNER',
           database: selection.manual!.database, table: '', pairs: [], columns: [] }] })}>{text.additionalAdd}</button>
     </>}
-    <label><input type="checkbox" aria-label={summaryText.enabled} checked={selection.summaryEnabled} disabled={busy || unavailable || !parent || parent.fk!==selection.fk} onChange={event=>revise({...selection,summaryEnabled:event.target.checked})}/>{summaryText.enabled}</label>
+    </>}
+    <label><input type="checkbox" aria-label={summaryText.enabled} checked={selection.summaryEnabled} disabled={busy || unavailable || !sourceReady} onChange={event=>revise({...selection,summaryEnabled:event.target.checked})}/>{summaryText.enabled}</label>
     {!selection.summaryEnabled && <><label><input type="checkbox" aria-label={text.distinct} checked={selection.distinct} disabled={busy || unavailable} onChange={event => revise({ ...selection, distinct: event.target.checked })}/>{text.distinct}</label><UsageHelp><p>{text.distinctHint}</p></UsageHelp></>}
-    {selection.summaryEnabled ? parent && parent.fk===selection.fk && <TableForeignKeyJoinSummary sources={sources} sourceLabel={label} groups={selection.summaryGroups} aggregates={selection.aggregates} disabled={busy||unavailable} onAddGroup={addSummaryGroup} onGroup={editSummaryGroup} onRemoveGroup={entry=>{if(selection.summaryGroups.includes(entry))revise({...selection,summaryGroups:selection.summaryGroups.filter(item=>item!==entry)});}} onMoveGroup={(entry,offset)=>moveSummary('summaryGroups',entry,offset)} onClearGroups={()=>revise({...selection,summaryGroups:[]})} onAddAggregate={addAggregate} onAggregate={editAggregate} onRemoveAggregate={entry=>{if(selection.aggregates.includes(entry))revise({...selection,aggregates:selection.aggregates.filter(item=>item!==entry)});}} onMoveAggregate={(entry,offset)=>moveSummary('aggregates',entry,offset)} onClearAggregates={()=>revise({...selection,aggregates:[]})}/> : <>{fieldList('child',origin.intent.source)}{parent && parent.fk===selection.fk && fieldList('parent',parent.info)}</>}
-    {selection.summaryEnabled&&parent&&parent.fk===selection.fk&&<><TableForeignKeyJoinHaving entries={selection.having} targets={havingTargets} mode={selection.havingMode} disabled={busy||unavailable} onAdd={addHaving} onChange={editHaving} onRemove={entry=>{if(selection.having.includes(entry))reviseHaving(selection.having.filter(item=>item!==entry));}} onClear={()=>reviseHaving([])} onMode={havingMode=>revise({...selection,havingMode,havingGroup:tableFilterGroupWithMode(selection.havingGroup,havingMode)})}/>
+    {selection.summaryEnabled ? sourceReady && <TableForeignKeyJoinSummary single={origin.single} sources={sources} sourceLabel={label} groups={selection.summaryGroups} aggregates={selection.aggregates} disabled={busy||unavailable} onAddGroup={addSummaryGroup} onGroup={editSummaryGroup} onRemoveGroup={entry=>{if(selection.summaryGroups.includes(entry))revise({...selection,summaryGroups:selection.summaryGroups.filter(item=>item!==entry)});}} onMoveGroup={(entry,offset)=>moveSummary('summaryGroups',entry,offset)} onClearGroups={()=>revise({...selection,summaryGroups:[]})} onAddAggregate={addAggregate} onAggregate={editAggregate} onRemoveAggregate={entry=>{if(selection.aggregates.includes(entry))revise({...selection,aggregates:selection.aggregates.filter(item=>item!==entry)});}} onMoveAggregate={(entry,offset)=>moveSummary('aggregates',entry,offset)} onClearAggregates={()=>revise({...selection,aggregates:[]})}/> : <>{fieldList('child',origin.intent.source)}{parent && parent.fk===selection.fk && fieldList('parent',parent.info)}</>}
+    {selection.summaryEnabled&&sourceReady&&<><TableForeignKeyJoinHaving entries={selection.having} targets={havingTargets} mode={selection.havingMode} disabled={busy||unavailable} onAdd={addHaving} onChange={editHaving} onRemove={entry=>{if(selection.having.includes(entry))reviseHaving(selection.having.filter(item=>item!==entry));}} onClear={()=>reviseHaving([])} onMode={havingMode=>revise({...selection,havingMode,havingGroup:tableFilterGroupWithMode(selection.havingGroup,havingMode)})}/>
       <button ref={havingGroupTrigger} type="button" disabled={busy||unavailable||!selection.having.length||!preview.value} onClick={()=>openGroups('having')}>{havingText.groups}</button>{selection.havingGroup&&<><p aria-label={havingText.structure}>{tableFilterGroupSummary(selection.havingGroup)}</p><button type="button" disabled={busy||unavailable} onClick={()=>revise({...selection,havingGroup:undefined})}>{havingText.flat}</button></>}</>}
-    {parent && parent.fk === selection.fk && <><TableForeignKeyJoinFilters sources={sources} sourceLabel={label} entries={selection.filters} mode={selection.filterMode} disabled={busy || unavailable} onAdd={addFilter} onChange={editFilter} onMode={filterMode => revise({ ...selection, filterMode, filterGroup: tableFilterGroupWithMode(selection.filterGroup, filterMode) })} onRemove={entry => { if (selection.filters.includes(entry)) reviseFilters(selection.filters.filter(item => item !== entry)); }} onClear={() => reviseFilters([])}/>
-      <button ref={groupTrigger} type="button" disabled={busy || unavailable || !selection.filters.length || !preview.value} onClick={()=>openGroups('where')}>{filterText.groups}</button>{selection.filterGroup && <><p aria-label={filterText.structure}>{tableFilterGroupSummary(selection.filterGroup)}</p><button type="button" disabled={busy || unavailable} onClick={() => revise({ ...selection, filterGroup: undefined })}>{filterText.flat}</button></>}</>}
+    {sourceReady && <><TableForeignKeyJoinFilters single={origin.single} sources={sources} sourceLabel={label} entries={selection.filters} mode={selection.filterMode} disabled={busy || unavailable} onAdd={addFilter} onChange={editFilter} onMode={filterMode => revise({ ...selection, filterMode, filterGroup: tableFilterGroupWithMode(selection.filterGroup, filterMode) })} onRemove={entry => { if (selection.filters.includes(entry)) reviseFilters(selection.filters.filter(item => item !== entry)); }} onClear={() => reviseFilters([])}/>
+      <button ref={groupTrigger} type="button" disabled={busy || unavailable || !selection.filters.length || !preview.value} onClick={()=>openGroups('where')}>{origin.single ? text.singleFilterGroups : filterText.groups}</button>{selection.filterGroup && <><p aria-label={filterText.structure}>{tableFilterGroupSummary(selection.filterGroup)}</p><button type="button" disabled={busy || unavailable} onClick={() => revise({ ...selection, filterGroup: undefined })}>{filterText.flat}</button></>}</>}
     {groupEditor && <div ref={groupPanel}><p role="status">{groupEditor.kind === 'on' ? text.manualOnEditing : groupEditor.kind==='having'?havingText.grouping:filterText.grouping}</p><TableFilterGroupsDialog filters={groupEditor.rules} mode={groupEditor.mode} initial={groupEditor.initial} presentation={groupEditor.presentation} isCurrent={() => groupCurrent(groupEditor)} onApply={group => applyGroups(groupEditor, group)} onClose={() => cancelGroups(groupEditor)}/></div>}
-    {parent && parent.fk === selection.fk && <fieldset disabled={busy || unavailable} aria-label={text.sortTitle}><legend>{text.sortTitle}</legend><UsageHelp><p>{selection.summaryEnabled?summaryText.sort:selection.distinct?text.distinctSortHint:text.sortHint}</p></UsageHelp>{!sorting.length && <p>{text.sortEmpty}</p>}
+    {sourceReady && <fieldset disabled={busy || unavailable} aria-label={sortTitle}><legend>{sortTitle}</legend><UsageHelp><p>{selection.summaryEnabled?summaryText.sort:selection.distinct?text.distinctSortHint:origin.single?text.singleSortHint:text.sortHint}</p></UsageHelp>{!sorting.length && <p>{text.sortEmpty}</p>}
       {sorting.map(({ id, rule }, index) => <div className="filter-inputs" key={id}><span>{index + 1}.</span>
         <label>{text.sortSide(index + 1)}<select aria-label={text.sortSide(index + 1)} disabled={busy || unavailable} value={rule.side} onChange={event => {
           const side = sortSides.find(side => side === event.target.value);
           if (!side) return;
           const columns = availableSort(side, id), column = columns.includes(rule.column) ? rule.column : columns[0];
           if (column) editSort(id, { side, column });
-        }}>{sortSides.map(side => <option key={side} value={side} disabled={!availableSort(side, id).length}>{side === 'child' ? text.sortChild : side === 'parent' ? text.sortParent : label(side)}</option>)}</select></label>
+        }}>{sortSides.map(side => <option key={side} value={side} disabled={!availableSort(side, id).length}>{side === 'child' ? (origin.single ? origin.intent.source.name : text.sortChild) : side === 'parent' ? text.sortParent : label(side)}</option>)}</select></label>
         <label>{text.sortColumn(index + 1)}<select aria-label={text.sortColumn(index + 1)} disabled={busy || unavailable} value={rule.column} onChange={event => editSort(id, { column: event.target.value })}>{!sortColumns(rule.side).includes(rule.column)&&<option value={rule.column} disabled>{summaryText.staleColumn(rule.column)}</option>}{sortColumns(rule.side).map(column => <option key={column} value={column} disabled={!availableSort(rule.side, id).includes(column)}>{column}</option>)}</select></label>
         <label>{text.sortDirection(index + 1)}<select aria-label={text.sortDirection(index + 1)} disabled={busy || unavailable} value={rule.direction} onChange={event => editSort(id, { direction: event.target.value as ForeignKeyJoinSort['direction'] })}><option value="ASC">{text.sortAsc}</option><option value="DESC">{text.sortDesc}</option></select></label>
         <label>{text.sortNulls(index + 1)}<select aria-label={text.sortNulls(index + 1)} disabled={busy || unavailable} value={rule.nulls ?? 'DEFAULT'} onChange={event => editSortNulls(id, event.target.value)}><option value="DEFAULT">{text.nullsDefault}</option><option value="FIRST">{text.nullsFirst}</option><option value="LAST">{text.nullsLast}</option></select></label>
         <button type="button" aria-label={text.sortEarlier(index + 1)} disabled={busy || unavailable || index === 0} onClick={() => moveSort(id, -1)}>↑</button><button type="button" aria-label={text.sortLater(index + 1)} disabled={busy || unavailable || index === sorting.length - 1} onClick={() => moveSort(id, 1)}>↓</button><button type="button" aria-label={text.sortRemove(index + 1)} disabled={busy || unavailable} onClick={() => reviseSort(sorting.filter(item => item.id !== id))}>×</button>
       </div>)}
-      <button type="button" disabled={busy || unavailable || sorting.length >= foreignKeyJoinLimits.sorts || !sortSides.some(side => availableSort(side).length)} onClick={addSort}>{text.sortAdd}</button><button type="button" disabled={busy || unavailable || !sorting.length} onClick={() => reviseSort([])}>{text.sortClear}</button>
+      <button type="button" disabled={busy || unavailable || sorting.length >= foreignKeyJoinLimits.sorts || !sortSides.some(side => availableSort(side).length)} onClick={addSort}>{origin.single ? text.singleSortAdd : text.sortAdd}</button><button type="button" disabled={busy || unavailable || !sorting.length} onClick={() => reviseSort([])}>{origin.single ? text.singleSortClear : text.sortClear}</button>
     </fieldset>}
     <ErrorBox message={sourceUnavailable && !closing ? text.stale : error || preview.error}/>{closing ? <p role="status">{text.closing}</p> : message && <Spinner text={message}/>}
-    {preview.value && !unavailable && <section aria-label={text.sampleTitle} aria-busy={busy}>
-      <p>{text.sampleHint(mysqlJoinSampleRows)}</p>
-      <button type="button" disabled={busy} onClick={() => run('rows')}>{text.sample}</button>{' '}
-      <button type="button" disabled={busy} onClick={() => run('explain')}>{text.explain}</button>
+    {preview.value && !unavailable && <section aria-label={origin.single ? text.singleSampleTitle : text.sampleTitle} aria-busy={busy}>
+      <p>{(origin.single ? text.singleSampleHint : text.sampleHint)(mysqlJoinSampleRows)}</p>
+      <button type="button" disabled={busy} onClick={() => run('rows')}>{origin.single ? text.singleSample : text.sample}</button>{' '}
+      <button type="button" disabled={busy} onClick={() => run('explain')}>{origin.single ? text.singleExplain : text.explain}</button>
       {outcome?.explain && <ExplainPlanView outcome={outcome} busy={busy} onText={outcome.explain.format === 'json' ? () => run('explainText') : undefined}/>}
       {sampleResult && <>
         <p role="status">{text.sampleRows(sampleResult.rows.length, sampleResult.truncated)}</p>
@@ -622,5 +633,5 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
       </>}
     </section>}
     {preview.value && !unavailable && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.value.sql}</pre></section>}
-  </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button><button disabled={busy || unavailable || !target} onClick={() => run('preview')}>{selection.manual ? text.manualRead : text.preview}</button><button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;
+  </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button>{!origin.single && <button disabled={busy || unavailable || !target} onClick={() => run('preview')}>{selection.manual ? text.manualRead : text.preview}</button>}<button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;
 }

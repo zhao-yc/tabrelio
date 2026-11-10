@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TableInfo } from '../../src/shared/contracts';
 import { mysqlJoinPreviewSchema, type MysqlJoinPreviewInput } from '../../src/shared/mysqlJoinPreview';
-import { foreignKeyJoinMetadataKey } from '../../src/shared/tableForeignKeyJoin';
+import { buildMysqlSingleTableSelect, foreignKeyJoinMetadataKey, type MysqlSingleTableSelectOptions } from '../../src/shared/tableForeignKeyJoin';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
 import { previewMysqlJoin } from '../../src/engine/mysqlJoinPreview';
 import { tableInfo } from '../../src/engine/metadata';
@@ -87,5 +87,47 @@ describe('手动 JOIN 独立预览', () => {
       { source: { ...input.source, columns: child.columns } }]) {
       expect(mysqlJoinPreviewSchema.safeParse({ ...input, ...extra }).success).toBe(false);
     }
+  });
+});
+
+describe('单表可视化查询', () => {
+  const single = { connectionId: 'joined', taskId: randomUUID(), source: target(child), limit: 40, single: true } as const;
+  const options: MysqlSingleTableSelectOptions = { childColumns: ['编号/*!`列'], limit: 3,
+    filters: [{ side: 'child', column: 'id', operator: '>=', value: '9007199254740993' }],
+    sort: [{ side: 'child', column: 'id', direction: 'DESC', nulls: 'LAST' }] };
+
+  it('复用精确 WHERE 和未投影排序，保留明细列名并只核一张表', async () => {
+    const request = mysqlJoinPreviewSchema.parse({ ...single, options });
+    const outcome = await previewMysqlJoin(context, request, async () => {});
+    const { sql, columns } = buildMysqlSingleTableSelect(child, single.limit, options);
+    expect(outcome.results[0].statement).toBe(sql);
+    expect(sql).toContain('  c.`编号/*!``列` AS `编号/*!``列`\nFROM `joined`.`source` AS c\nWHERE ');
+    expect(sql).toContain("CAST(CAST(_utf8mb4 X'" + Buffer.from('9007199254740993').toString('hex') + "' AS DECIMAL(20,0)) AS UNSIGNED)");
+    expect(sql).toMatch(/ORDER BY \(c\.`id` IS NULL\) ASC, c\.`id` DESC\nLIMIT 3;$/);
+    expect(columns).toEqual([{ side: 'child', column: '编号/*!`列', alias: '编号/*!`列' }]);
+    expect(tableInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('支持 WHERE、分组、HAVING 和估算计划，结构变化后拒绝发送查询', async () => {
+    const summary: MysqlSingleTableSelectOptions = { ...options,
+      summary: { groups: [{ side: 'child', column: 'id' }], aggregates: [{ fn: 'COUNT_ALL', alias: 'n' }] },
+      having: { mode: 'all', filters: [{ column: 'n', operator: '>=', value: '2' }] },
+      sort: [{ side: 'aggregate', column: 'n', direction: 'DESC' }] };
+    const request = mysqlJoinPreviewSchema.parse({ ...single, mode: 'explain', options: summary });
+    await expect(previewMysqlJoin(context, { ...request, source: { ...single.source, digest: '0'.repeat(64) } }, async () => {})).rejects.toThrow('表结构已变化');
+    expect(consumeQueryFrames).not.toHaveBeenCalled();
+    await previewMysqlJoin(context, request, async () => {});
+    const statement = vi.mocked(consumeQueryFrames).mock.calls[0][1];
+    expect(statement).toMatch(/^EXPLAIN FORMAT=JSON SELECT\n/);
+    expect(statement).toMatch(/COUNT\(\*\) AS `n`[\s\S]*\nWHERE [^\n]+\nGROUP BY c\.`id`\nHAVING [^\n]+\nORDER BY [^\n]+\nLIMIT 3;$/);
+    expect(statement).not.toContain(' JOIN ');
+  });
+
+  it('只对已选列去重，拒绝混用 JOIN 字段、外部表侧和未投影的 DISTINCT 排序', () => {
+    expect(mysqlJoinPreviewSchema.safeParse({ ...single, options, parent: target(parent) }).success).toBe(false);
+    expect(() => buildMysqlSingleTableSelect(child, single.limit, { ...options, parentColumns: [] } as MysqlSingleTableSelectOptions)).toThrow();
+    expect(() => buildMysqlSingleTableSelect(child, single.limit, { ...options, filters: [{ side: 'parent', column: 'id', operator: 'IS NULL' }] })).toThrow();
+    expect(() => buildMysqlSingleTableSelect(child, single.limit, { ...options, distinct: true })).toThrow();
+    expect(buildMysqlSingleTableSelect(child, single.limit, { ...options, sort: [], distinct: true }).sql).toMatch(/^SELECT DISTINCT\n/);
   });
 });

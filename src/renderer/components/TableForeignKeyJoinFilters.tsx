@@ -3,16 +3,19 @@ import { isTableRangeOperator, FILTER_LIMITS } from '../../shared/filtering';
 import { filterOperatorLabels, type FilterDraft } from '../tableFilters';
 import type { ForeignKeyJoinFilterDraft } from '../tableForeignKeyJoinFilters';
 import { tableForeignKeyJoinFilterZh as text } from '../locales/tableForeignKeyJoinFilter.zh-CN';
+import { tableForeignKeyJoinZh as queryText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { foreignKeyJoinSide, type ForeignKeyJoinSide } from '../tableForeignKeyJoinSources';
 import { UsageHelp } from './ui';
 
 /** 所有输入均为父窗口当前草稿；没有第二份暂存状态、执行接口或隐藏的已生效条件。 */
-export function TableForeignKeyJoinFilters({ sources, sourceLabel, entries, mode, disabled, onAdd, onChange, onRemove, onClear, onMode }: {
+export function TableForeignKeyJoinFilters({ sources, sourceLabel, entries, mode, disabled, onAdd, onChange, onRemove, onClear, onMode, single = false }: {
+  single?: boolean;
   sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>; sourceLabel(side: ForeignKeyJoinSide): string; entries: readonly ForeignKeyJoinFilterDraft[]; mode: FilterMode; disabled: boolean;
   onAdd(): void; onChange(entry: ForeignKeyJoinFilterDraft, patch: { side?: ForeignKeyJoinSide; enabled?: boolean; draft?: Partial<FilterDraft> }): void; onRemove(entry: ForeignKeyJoinFilterDraft): void; onClear(): void; onMode(mode: FilterMode): void;
 }) {
-  return <fieldset disabled={disabled} aria-label={text.title}><legend>{text.title}</legend><UsageHelp><p>{text.hint}</p></UsageHelp>
-    <label>{text.mode}<select aria-label={text.mode} value={mode} disabled={disabled} onChange={event => { if (event.target.value === 'all' || event.target.value === 'any') onMode(event.target.value); }}><option value="all">{text.all}</option><option value="any">{text.any}</option></select></label>
+  const title = single ? queryText.singleFilterTitle : text.title, modeLabel = single ? queryText.singleFilterMode : text.mode;
+  return <fieldset disabled={disabled} aria-label={title}><legend>{title}</legend><UsageHelp><p>{single ? queryText.singleFilterHint : text.hint}</p></UsageHelp>
+    <label>{modeLabel}<select aria-label={modeLabel} value={mode} disabled={disabled} onChange={event => { if (event.target.value === 'all' || event.target.value === 'any') onMode(event.target.value); }}><option value="all">{text.all}</option><option value="any">{text.any}</option></select></label>
     {!entries.length && <p>{text.empty}</p>}
     {entries.map((entry, index) => {
       const { draft } = entry, position = index + 1, columns = sources.get(entry.side)?.columns ?? [];
@@ -33,6 +36,6 @@ export function TableForeignKeyJoinFilters({ sources, sourceLabel, entries, mode
         <UsageHelp><p>{range ? text.rangeHint : set ? text.setHint : text.scalarHint}</p></UsageHelp>
       </div>;
     })}
-    <button type="button" disabled={disabled || entries.length >= FILTER_LIMITS.conditions} onClick={onAdd}>{text.add}</button><button type="button" disabled={disabled || !entries.length} onClick={onClear}>{text.removeAll}</button>
+    <button type="button" disabled={disabled || entries.length >= FILTER_LIMITS.conditions} onClick={onAdd}>{single ? queryText.singleFilterAdd : text.add}</button><button type="button" disabled={disabled || !entries.length} onClick={onClear}>{single ? queryText.singleFilterClear : text.removeAll}</button>
   </fieldset>;
 }

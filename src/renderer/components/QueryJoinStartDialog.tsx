@@ -4,7 +4,7 @@ import { errorMessage, invoke, uid } from '../lib';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
-import { TableForeignKeyJoinIntent, type ForeignKeyJoinPreview } from '../tableForeignKeyJoinIntent';
+import { TableForeignKeyJoinIntent, type MysqlQueryBuilderPreview } from '../tableForeignKeyJoinIntent';
 import { ManualJoinTablePicker, manualJoinTableNames } from './ManualJoinFields';
 import { TableForeignKeyJoinDialog, tableForeignKeyJoinServices } from './TableForeignKeyJoinDialog';
 import { ErrorBox, Modal, Spinner } from './ui';
@@ -22,7 +22,7 @@ export function QueryJoinStartDialog({ connectionId, database, onBack, onClose }
       limit: workspace.settings.resultLimit, invalid: false, intent: undefined as TableForeignKeyJoinIntent | undefined };
   });
   const [tables, setTables] = useState<string[]>(), [table, setTable] = useState('');
-  const [intent, setIntent] = useState<TableForeignKeyJoinIntent>();
+  const [builder, setBuilder] = useState<{ intent: TableForeignKeyJoinIntent; single: boolean }>();
   const [invalid, setInvalid] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const alive = useRef(false), closing = useRef(false), pending = useRef<SourceOperation | null>(null);
 
@@ -58,10 +58,10 @@ export function QueryJoinStartDialog({ connectionId, database, onBack, onClose }
     return () => { unsubscribe(); alive.current = false; cancelRead(); };
   }, []);
 
-  function run(action: 'directory' | 'structure') {
-    if (!current() || pending.current || (action === 'structure' && !tables?.includes(table))) return;
+  function run(action: 'directory' | 'single' | 'join') {
+    if (!current() || pending.current || (action !== 'directory' && !tables?.includes(table))) return;
     const operation: SourceOperation = { finished: Promise.resolve() };
-    pending.current = operation; setError(''); setMessage(action === 'directory' ? text.builderCatalog : text.builderRead);
+    pending.current = operation; setError(''); setMessage(action === 'directory' ? text.builderCatalog : text.checking);
     operation.finished = Promise.resolve().then(async () => {
       if (!current()) return;
       if (action === 'directory') {
@@ -73,9 +73,9 @@ export function QueryJoinStartDialog({ connectionId, database, onBack, onClose }
         operation.taskId = uid();
         const source = await tableForeignKeyJoinServices.read({ connectionId, database, table, taskId: operation.taskId });
         if (!current()) return;
-        if (source.database !== database || source.name !== table) throw Error(text.target);
+        if (source.database !== database || source.name !== table) throw Error(text.builderTarget);
         const next = new TableForeignKeyJoinIntent(source, connectionId, owner.limit, [], current);
-        owner.intent = next; setIntent(next);
+        owner.intent = next; setBuilder({ intent: next, single: action === 'single' });
       }
     }).catch(reason => { if (current()) setError(errorMessage(reason)); }).finally(async () => {
       await operation.cancellation;
@@ -94,18 +94,20 @@ export function QueryJoinStartDialog({ connectionId, database, onBack, onClose }
     void operation.finished.then(() => { if (alive.current) next(); });
   }
 
-  function open(preview: ForeignKeyJoinPreview): boolean {
+  function open(preview: MysqlQueryBuilderPreview): boolean {
+    const intent = builder?.intent;
     if (!intent?.current() || !current()) return false;
     const workspace = useWorkspace.getState();
     if (workspace.settings.tabs.length >= 100) throw Error(text.tabs);
     const sql = intent.consume(preview);
-    workspace.openTab({ kind: 'query', title: text.manualQueryTitle(intent.source.name), connectionId,
+    const title = ('parent' in preview ? text.manualQueryTitle : text.singleQueryTitle)(intent.source.name);
+    workspace.openTab({ kind: 'query', title, connectionId,
       ...queryDatabasePatch({ state: 'known', database }), sql });
     onClose();
     return true;
   }
 
-  if (intent) return <TableForeignKeyJoinDialog intent={intent} manual onOpen={open} onClose={onClose}
+  if (builder) return <TableForeignKeyJoinDialog intent={builder.intent} manual={!builder.single} single={builder.single} onOpen={open} onClose={onClose}
     onCleanupError={reason => useWorkspace.getState().notify(reason, true)}/>;
   return <Modal title={text.builderTitle} onClose={() => close(onClose)}>
     <div className="modal-content" aria-busy={!!message}>
@@ -120,7 +122,8 @@ export function QueryJoinStartDialog({ connectionId, database, onBack, onClose }
       <button type="button" disabled={closing.current} onClick={() => close(onBack)}>{text.builderBack}</button>
       <span className="grow"/>
       <button type="button" disabled={closing.current} onClick={() => close(onClose)}>{zh.common.cancel}</button>
-      <button type="button" className="primary" disabled={invalid || !!message || !tables?.includes(table)} onClick={() => run('structure')}>{text.builderRead}</button>
+      <button type="button" disabled={invalid || !!message || !tables?.includes(table)} onClick={() => run('join')}>{text.builderRead}</button>
+      <button type="button" className="primary" disabled={invalid || !!message || !tables?.includes(table)} onClick={() => run('single')}>{text.singleEntry}</button>
     </footer>
   </Modal>;
 }

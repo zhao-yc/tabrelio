@@ -33,6 +33,17 @@ Object.defineProperty(window, '__joinEntryControls', { value: { releaseSource, r
 Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string, input: Record<string, unknown>) => {
   calls.push({ command, input: structuredClone(input) });
   if (queryEntry) {
+    if (command === 'mysql.join.preview') {
+      const request = mysqlJoinPreviewSchema.parse(input);
+      if (!('single' in request) || request.source.table !== child.name) throw Error('单表预览范围不符');
+      if (request.mode === 'explain') {
+        const raw = '{"query_block":{"table":{"table_name":"c","access_type":"ALL","rows_examined_per_scan":2}}}';
+        return { results: [{ columns: [{ key: 'plan', name: 'EXPLAIN', type: 'TEXT' }], rows: [{ plan: raw }], statement: 'EXPLAIN FORMAT=JSON SELECT 1', elapsedMs: 3, truncated: false }],
+          explain: parseExplainPlan(raw, 'mysql', '8.0.46'), elapsedMs: 3 } satisfies QueryOutcome;
+      }
+      return { results: [{ columns: [{ key: 'id', name: 'id', type: 'BIGINT' }], rows: [{ id: '18446744073709551615' }],
+        statement: 'SELECT 1', elapsedMs: 3, truncated: false }], elapsedMs: 3 } satisfies QueryOutcome;
+    }
     if (command === 'connections.open' && input.id === 'offline-join') return { dialect: 'mysql', version: '8.0.46' };
     if (command === 'metadata.databases' && input.connectionId === 'offline-join') return [child.database, other.database];
     if (command === 'metadata.objects' && input.connectionId === 'offline-join') {
@@ -58,7 +69,7 @@ Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string
     }
     if (command === 'mysql.join.preview') {
       const request = mysqlJoinPreviewSchema.parse(input);
-      if (request.source.table !== source.name || request.parent.table !== other.name || request.steps.length !== 2 ||
+      if (!('parent' in request) || request.source.table !== source.name || request.parent.table !== other.name || request.steps.length !== 2 ||
           'sql' in input || request.steps[1].target.table !== other.name) throw Error('JOIN 预览范围不符');
       if (request.mode === 'explain') {
         const raw = JSON.stringify({ query_block: { nested_loop: [

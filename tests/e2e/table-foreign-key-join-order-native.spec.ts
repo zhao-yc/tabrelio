@@ -26,11 +26,11 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); });
 
-for (const scenario of ['open', 'cancel', 'stale'] as const) {
+for (const scenario of ['open', 'single', 'cancel', 'stale'] as const) {
   test('从新建查询进入 JOIN：' + scenario, async ({}, info) => {
     const directory = await mkdtemp(join(tmpdir(), 'dbark-join-order-native-'));
     const app = await electron.launch({ args: ['tests/fixtures/join-order/electron.cjs'], env: { ...process.env,
-      DBARK_JOIN_ORDER_FIXTURE_DATA: directory, DBARK_JOIN_ORDER_FIXTURE_URL: address + '?entry=query&hold=' + (scenario === 'open' ? '0' : '1') }, chromiumSandbox: true });
+      DBARK_JOIN_ORDER_FIXTURE_DATA: directory, DBARK_JOIN_ORDER_FIXTURE_URL: address + '?entry=query&hold=' + (scenario === 'cancel' || scenario === 'stale' ? '1' : '0') }, chromiumSandbox: true });
     const page = await app.firstWindow(), errors: string[] = [];
     page.on('pageerror', reason => errors.push(reason.message));
     const evidence = () => page.evaluate(() => (window as typeof window & { __joinOrderEvidence(): {
@@ -57,8 +57,8 @@ for (const scenario of ['open', 'cancel', 'stale'] as const) {
       await start.getByRole('textbox', { name: text.builderSearch, exact: true }).fill('child');
       await source.selectOption('child');
       if (scenario === 'open') await page.screenshot({ path: info.outputPath('query-join-entry.png') });
-      await start.getByRole('button', { name: text.builderRead, exact: true }).click();
-      const builder = page.getByRole('dialog', { name: text.manualTitle, exact: true });
+      await start.getByRole('button', { name: scenario === 'single' ? text.singleEntry : text.builderRead, exact: true }).click();
+      const builder = page.getByRole('dialog', { name: scenario === 'single' ? text.singleTitle : text.manualTitle, exact: true });
       if (scenario === 'open') {
         await expect(builder).toBeVisible();
         await expect(start).toHaveCount(0);
@@ -78,6 +78,31 @@ for (const scenario of ['open', 'cancel', 'stale'] as const) {
         expect(result.tabs).toHaveLength(2);
         expect(result.tabs[1].databaseContext).toEqual({ state: 'known', database: '合成关联库' });
         expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'payments', 'child', 'payments']);
+      } else if (scenario === 'single') {
+        const sql = builder.getByRole('region', { name: text.preview, exact: true });
+        await expect(sql).toContainText('FROM `合成关联库`.`child` AS c');
+        await expect(builder.getByRole('combobox', { name: text.manualTable, exact: true })).toHaveCount(0);
+        await builder.getByRole('checkbox', { name: text.singleSelect('parent_id'), exact: true }).uncheck();
+        await builder.getByRole('button', { name: text.singleSortAdd, exact: true }).click();
+        await builder.getByRole('combobox', { name: text.sortColumn(1), exact: true }).selectOption('parent_id');
+        await builder.getByRole('button', { name: text.singleSample, exact: true }).click();
+        await expect(builder.getByRole('gridcell', { name: '18446744073709551615', exact: true })).toBeVisible();
+        await builder.getByRole('button', { name: text.singleExplain, exact: true }).click();
+        const plan = builder.getByRole('region', { name: explainText.title, exact: true });
+        await expect(plan.getByRole('treeitem', { name: /· c(?:\s|$)/ })).toBeVisible();
+        await builder.getByLabel(text.singleLimit, { exact: true }).fill('5');
+        await expect(plan).toHaveCount(0);
+        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5;');
+        await sql.evaluate(element => element.scrollIntoView({ block: 'center' }));
+        await page.screenshot({ path: info.outputPath('query-single-table.png') });
+        await builder.getByRole('button', { name: text.open, exact: true }).click();
+        await expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('c.`id` AS `id`');
+        const result = await evidence();
+        expect(result.tabs).toHaveLength(2);
+        expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'child']);
+        const inspections = result.calls.filter(call => call.command === 'mysql.join.preview').map(call => call.input);
+        expect(inspections.map(input => input.mode)).toEqual(['rows', 'explain']);
+        expect(inspections.every(input => input.single === true && !('parent' in input) && !('sql' in input))).toBe(true);
       } else {
         await expect.poll(async () => (await evidence()).calls.find(call => call.command === 'metadata.table')?.input.taskId).toEqual(expect.any(String));
         if (scenario === 'cancel') await start.getByRole('button', { name: zh.common.cancel, exact: true }).click();

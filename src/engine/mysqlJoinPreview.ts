@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { QueryOutcome, TableInfo } from '../shared/contracts';
-import { buildForeignKeyJoin, foreignKeyJoinMetadataKey } from '../shared/tableForeignKeyJoin';
+import { buildForeignKeyJoin, buildMysqlSingleTableSelect, foreignKeyJoinMetadataKey, type MysqlSingleTableSelectOptions } from '../shared/tableForeignKeyJoin';
 import { mysqlJoinPreviewOptions, mysqlJoinPreviewRelation, mysqlJoinSampleRows, type MysqlJoinPreviewInput, type MysqlJoinPreviewTarget } from '../shared/mysqlJoinPreview';
 import { completionQuery } from './completionQuery';
 import { tableInfo } from './metadata';
@@ -30,10 +30,13 @@ export async function previewMysqlJoin(context: StructureTaskContext, input: Mys
         throw Error('JOIN 的表结构已变化，请重新读取结构后预览。');
       return record.info;
     }
-    const child = await read(input.source), parent = await read(input.parent);
-    const additional: TableInfo[] = [];
-    for (const step of input.steps) additional.push(await read(step.target));
-    const query = buildForeignKeyJoin(child, parent, mysqlJoinPreviewRelation(input), input.kind, input.limit, mysqlJoinPreviewOptions(input, additional)).sql;
+    const child = await read(input.source);
+    let query: string;
+    if ('parent' in input) {
+      const parent = await read(input.parent), additional: TableInfo[] = [];
+      for (const step of input.steps) additional.push(await read(step.target));
+      query = buildForeignKeyJoin(child, parent, mysqlJoinPreviewRelation(input), input.kind, input.limit, mysqlJoinPreviewOptions(input, additional)).sql;
+    } else query = buildMysqlSingleTableSelect(child, input.limit, input.options as MysqlSingleTableSelectOptions).sql;
     // 上一步已从实时目录生成唯一 SELECT。保留引号内的列名，即使名字含有版本注释标记。
     if (input.mode === 'explain' || input.mode === 'explainText')
       return await explainMysqlPreviewQuery(context, query, input.mode === 'explainText' ? 'text' : 'auto', stop);

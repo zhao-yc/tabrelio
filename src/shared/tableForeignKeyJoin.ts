@@ -36,7 +36,8 @@ export function manualJoinAlias(index: number): 'c' | 'p' | `t${number}` {
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: ForeignKeyJoinSide | 'aggregate'; column: string; alias: string }
 export interface ForeignKeyJoinSort { side: ForeignKeyJoinSide | 'aggregate'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
-export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; unmatchedOnly?: boolean; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; manualOn?: ManualJoinOn; additionalJoins?: readonly ManualJoinStep[]; }
+export interface MysqlSingleTableSelectOptions { childColumns: readonly string[]; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
+export interface ForeignKeyJoinOptions extends MysqlSingleTableSelectOptions { parentColumns: readonly string[]; unmatchedOnly?: boolean; manualOn?: ManualJoinOn; additionalJoins?: readonly ManualJoinStep[]; }
 type Budget = { units: number };
 
 /** 只读自有数据属性；不会为了生成SELECT访问DDL、默认值、注释或调用访问器。 */
@@ -237,42 +238,60 @@ function additionalJoins(raw: unknown, left: ReturnType<typeof snapshot>, right:
 
 /** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
 export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: ForeignKeyJoinRelation, kind: ForeignKeyJoinKind, limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
-  if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
-  const left = snapshot(child), right = snapshot(parent), conditions = joinConditions([left], 0, right, input);
-  let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
+  if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER') throw Error(text.invalid);
+  return buildSelect(child, limit, options, { parent, input, kind });
+}
+
+/** 单表设计只接收一张表的字段和读取选项，不接受任何 JOIN 配置。 */
+export function buildMysqlSingleTableSelect(source: TableInfo, limit: number, options: MysqlSingleTableSelectOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
+  return buildSelect(source, limit, options);
+}
+
+function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTableSelectOptions,
+  join?: { parent: TableInfo; input: ForeignKeyJoinRelation; kind: ForeignKeyJoinKind }): { sql: string; columns: ForeignKeyJoinColumn[] } {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > foreignKeyJoinLimits.rows) throw Error(text.invalid);
+  const left = snapshot(child), right = join && snapshot(join.parent);
+  const conditions = join && right ? joinConditions([left], 0, right, join.input) : [];
+  let childColumns: string[], parentColumns: string[] = [], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
   let extra: ReturnType<typeof additionalJoins> = [];
-  let firstOn = compileOn(undefined, conditions, 'p');
-  const sources = new Map<ForeignKeyJoinSide, ReturnType<typeof snapshot>>([['child', left], ['parent', right]]);
-  if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right.columns.map(column => column.name); }
+  let firstOn = right ? compileOn(undefined, conditions, 'p') : undefined;
+  const sources = new Map<ForeignKeyJoinSide, ReturnType<typeof snapshot>>([['child', left]]);
+  if (right) sources.set('parent', right);
+  if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right?.columns.map(column => column.name) ?? []; }
   else {
-    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'unmatchedOnly', 'distinct', 'sort', 'limit', 'filters', 'filterMode', 'filterGroup', 'summary', 'having', 'manualOn', 'additionalJoins'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
-    childColumns = selected(own(options, 'childColumns'), left.columns); parentColumns = selected(own(options, 'parentColumns'), right.columns);
-    const manualOn = own(options, 'manualOn', true);
-    if (manualOn !== undefined) {
-      if (typeof input === 'string') throw Error(text.manualOnInvalid);
-      firstOn = compileOn(manualOn, conditions, 'p');
-    }
-    const rawJoins = own(options, 'additionalJoins', true);
-    if (rawJoins !== undefined) {
-      if (typeof input === 'string') throw Error(text.manualInvalid);
-      extra = additionalJoins(rawJoins, left, right);
-      for (const step of extra) sources.set(step.alias, step.metadata);
+    const keys = ['childColumns', 'distinct', 'sort', 'limit', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'];
+    if (right) keys.push('parentColumns', 'unmatchedOnly', 'manualOn', 'additionalJoins');
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !keys.includes(key as string))) throw Error(text.invalid);
+    childColumns = selected(own(options, 'childColumns'), left.columns);
+    if (join && right) {
+      parentColumns = selected(own(options, 'parentColumns'), right.columns);
+      const manualOn = own(options, 'manualOn', true);
+      if (manualOn !== undefined) {
+        if (typeof join.input === 'string') throw Error(text.manualOnInvalid);
+        firstOn = compileOn(manualOn, conditions, 'p');
+      }
+      const rawJoins = own(options, 'additionalJoins', true);
+      if (rawJoins !== undefined) {
+        if (typeof join.input === 'string') throw Error(text.manualInvalid);
+        extra = additionalJoins(rawJoins, left, right);
+        for (const step of extra) sources.set(step.alias, step.metadata);
+      }
+      const suppliedUnmatched = own(options, 'unmatchedOnly', true);
+      if (suppliedUnmatched !== undefined) unmatchedOnly = flag(suppliedUnmatched);
     }
     rawSort = own(options, 'sort', true); rawSummary = own(options, 'summary', true); rawHaving = own(options, 'having', true);
     const suppliedDistinct = own(options, 'distinct', true);
     if (suppliedDistinct !== undefined) distinct = flag(suppliedDistinct);
-    const suppliedUnmatched = own(options, 'unmatchedOnly', true);
-    if (suppliedUnmatched !== undefined) unmatchedOnly = flag(suppliedUnmatched);
     const filters = own(options, 'filters', true), mode = own(options, 'filterMode', true), group = own(options, 'filterGroup', true);
     if (filters !== undefined || mode !== undefined || group !== undefined) { if (mode !== undefined && mode !== 'all' && mode !== 'any') throw Error(text.invalid); where = buildForeignKeyJoinWhere(sources, filters === undefined ? [] : filters, mode === undefined ? 'all' : mode, foreignKeyJoinLimits.sqlUnits, group as FilterGroup | undefined); }
     const suppliedLimit = own(options, 'limit', true);
     if (suppliedLimit !== undefined) { if (typeof suppliedLimit !== 'number' || !Number.isSafeInteger(suppliedLimit) || suppliedLimit < 1 || suppliedLimit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); resultLimit = suppliedLimit; }
   }
-  if (unmatchedOnly) {
-    if (kind === 'INNER') throw Error(text.unmatchedInvalid);
+  if (join && firstOn && unmatchedOnly) {
+    if (join.kind === 'INNER') throw Error(text.unmatchedInvalid);
     // 带 OR 时任一比较都可能单独匹配。只有候选列全部为 NULL 才能认定是外连接补空行。
     const markers = firstOn.needsAllMarkers ? conditions : conditions.slice(0, 1);
-    const missing = [...new Set(markers.map(condition => (kind === 'LEFT' ? 'p.' + quote(condition.parent) : 'c.' + quote(condition.child)) + ' IS NULL'))].join(' AND ');
+    const missing = [...new Set(markers.map(condition => (join.kind === 'LEFT' ? 'p.' + quote(condition.parent) : 'c.' + quote(condition.child)) + ' IS NULL'))].join(' AND ');
     // 用户条件编译器已为整个分组加括号，顶层 OR 也不能绕过未匹配限制。
     where = where ? missing + ' AND ' + where : missing;
   }
@@ -287,8 +306,9 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: 
   if (!summary && count > foreignKeyJoinLimits.outputColumns) throw Error(text.budget);
   const columns: ForeignKeyJoinColumn[] = summary ? summary.columns : [];
   if (!summary) for (const [side, selectedColumns, metadata] of [['child', childColumns, left], ['parent', parentColumns, right]] as const) {
+    if (!metadata) continue;
     const ordinals = new Map(metadata.columns.map((column, index) => [column.name, index + 1]));
-    for (const column of selectedColumns) columns.push({ side, column, alias: foreignKeyJoinColumnAlias(side, ordinals.get(column)!, column) });
+    for (const column of selectedColumns) columns.push({ side, column, alias: join ? foreignKeyJoinColumnAlias(side, ordinals.get(column)!, column) : column });
   }
   if (!summary) for (const step of extra) {
     const ordinals = new Map(step.metadata.columns.map((column, index) => [column.name, index + 1]));
@@ -297,8 +317,11 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, input: 
   let sql = distinct ? 'SELECT DISTINCT\n' : 'SELECT\n';
   const append = (part: string) => { if (sql.length + part.length > foreignKeyJoinLimits.sqlUnits) throw Error(text.budget); sql += part; };
   columns.forEach((column, index) => append(`  ${summary ? summary.expressions[index] : (column.side === 'aggregate' ? column.side : foreignKeyJoinSqlAlias(column.side))+'.'+quote(column.column)+' AS '+quote(column.alias)}${index + 1 === columns.length ? '\n' : ',\n'}`));
-  append(`FROM ${quote(left.database)}.${quote(left.name)} AS c\n${kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\nON\n`);
-  append(firstOn.sql);
+  append(`FROM ${quote(left.database)}.${quote(left.name)} AS c\n`);
+  if (join && right && firstOn) {
+    append(`${join.kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\nON\n`);
+    append(firstOn.sql);
+  }
   for (const step of extra) {
     append(`${step.kind} JOIN ${quote(step.metadata.database)}.${quote(step.metadata.name)} AS ${step.alias}\nON\n`);
     append(step.on.sql);
