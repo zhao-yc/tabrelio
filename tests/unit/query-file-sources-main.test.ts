@@ -59,6 +59,9 @@ it('正式Main状态分发复用真实窗口捕获且不访问broker；子frame�
 it('最近元数据通过真实Main窗口门，不登记文件任务、不弹框、不访问数据库broker', async () => {
   const main = mainPort(); expect(await main.request('queryFileSources.recent', { tabId: 'one' })).toEqual({ ok: true, result: [] });
   expect(await main.request('queryFileSources.forgetRecent', { tabId: 'one', recentId: randomUUID() })).toEqual({ ok: true, result: { removed: false } });
+  expect(await main.request('queryFileSources.recent', { scope: 'workspace' })).toEqual({ ok: true, result: [] });
+  expect(await main.request('queryFileSources.forgetRecent', { scope: 'workspace', recentId: randomUUID() })).toEqual({ ok: true, result: { removed: false } });
+  expect(await main.request('queryFileSources.recent', { scope: 'workspace' }, { ...main.frame })).toMatchObject({ ok: false });
   expect(await main.request('queryFileSources.recent', { tabId: 'one' }, { ...main.frame })).toMatchObject({ ok: false });
   expect(await main.request('queryFileSources.recent', { tabId: '不存在的标签' })).toMatchObject({ ok: false });
   expect(main.records).toEqual([]); expect(main.choices()).toBe(0);

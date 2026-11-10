@@ -7,7 +7,7 @@ import type { QueryFileCheckInput, QueryFileCheckResult, QueryFileReloadInput, Q
 import type { SqliteCompletionInput, SqliteCompletionOutput } from './sqliteCompletion';
 import type { UiCommandInvocation, UiMenuState, ObjectCategory } from './uiCommands';
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
-import type { QueryRecentFileView, QueryFileSourceHandoffInput, QueryFileSourceHandoffResult } from './queryFileSources';
+import type { QueryRecentFilesInput, QueryRecentFileForgetInput, QueryRecentFileView, QueryFileSourceHandoffInput, QueryFileSourceHandoffResult } from './queryFileSources';
 import type { ExternalSqlEditorView } from './externalSqlEditor';
 import type { SavedQueryExternalSession, SavedQueryExternalPreview, SavedQueryExternalReceipt } from './savedQueryExternalEdit';
 import type { SnippetTransferDecision, SnippetTransferPreview, SnippetTransferResult } from './snippetTransfer';
@@ -194,8 +194,8 @@ export interface CommandMap {
   'queryFileSources.reload': { input: QueryFileReloadInput; output: QueryFileReloadResult };
   'queryFileSources.discardReload': { input: QueryFileDiscardInput; output: { discarded: boolean } };
   'queryFileSources.open': { input: QueryFileSourceOpenInput; output: QueryFileSourceOpenResult };
-  'queryFileSources.recent': { input: { tabId: string }; output: QueryRecentFileView[] };
-  'queryFileSources.forgetRecent': { input: { tabId: string; recentId: string }; output: { removed: boolean } };
+  'queryFileSources.recent': { input: QueryRecentFilesInput; output: QueryRecentFileView[] };
+  'queryFileSources.forgetRecent': { input: QueryRecentFileForgetInput; output: { removed: boolean } };
   'queryFileSources.save': { input: QueryFileSourceSaveInput; output: QueryFileSourceSaveResult };
   'queryFileSources.saveAs': { input: QueryFileSourceSaveAsInput; output: QueryFileSourceSaveResult };
   'queryFileSources.status': { input: QueryFileSourceStatusInput; output: QueryFileSourceStatus };

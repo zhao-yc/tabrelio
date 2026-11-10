@@ -9,6 +9,10 @@ describe('SQL文件来源合同', () => {
     expect(validateCommand('queryFileSources.open', { tabId: 'a', taskId, encoding: 'gb18030', recentId: source.id })).toMatchObject({ recentId: source.id });
     expect(() => validateCommand('queryFileSources.open', { tabId: 'a', taskId, encoding: 'utf8', recentId: source.id, source })).toThrow();
     expect(validateCommand('queryFileSources.recent', { tabId: 'a' })).toEqual({ tabId: 'a' });
+    expect(validateCommand('queryFileSources.recent', { scope: 'workspace' })).toEqual({ scope: 'workspace' });
+    expect(() => validateCommand('queryFileSources.recent', { scope: 'workspace', tabId: 'a' })).toThrow();
+    expect(() => validateCommand('queryFileSources.open', { scope: 'workspace', taskId, encoding: 'utf8', recentId: source.id })).toThrow();
+    expect(() => validateCommand('queryFileSources.forgetRecent', { scope: 'workspace', recentId: source.id, path: '任意路径' })).toThrow();
     expect(() => validateCommand('queryFileSources.recent', { tabId: 'a', path: '任意路径' })).toThrow();
     expect(() => validateCommand('queryFileSources.forgetRecent', { tabId: 'a', recentId: source.id, path: '任意路径' })).toThrow();
   });

@@ -34,8 +34,12 @@ const sql = z.string().max(queryFileSourceLimits.sqlUnits).refine(value => { try
 export const queryFileSourceOpenSchema = z.object({ tabId, taskId, encoding, source: queryFileSourceRefSchema.optional(), recentId: id.optional() }).strict().refine(value => !(value.source && value.recentId), '重读来源与最近文件不能同时选择');
 /** 最近条目只返回显示信息和Main生成的ID，打开时不接收展示路径。 */
 export interface QueryRecentFileView { id: string; name: string; displayPath: string; encoding: QueryFileEncoding; }
-export const queryRecentFilesSchema = z.object({ tabId }).strict();
-export const queryRecentFileForgetSchema = z.object({ tabId, recentId: id }).strict();
+/** 工作区范围只用于最近文件元数据，打开正文仍须使用真实查询标签。 */
+const workspaceRecentScope = z.object({ scope: z.literal('workspace') }).strict();
+export const queryRecentFilesSchema = z.union([z.object({ tabId }).strict(), workspaceRecentScope]);
+export const queryRecentFileForgetSchema = z.union([z.object({ tabId, recentId: id }).strict(), workspaceRecentScope.extend({ recentId: id })]);
+export type QueryRecentFilesInput = z.infer<typeof queryRecentFilesSchema>;
+export type QueryRecentFileForgetInput = z.infer<typeof queryRecentFileForgetSchema>;
 export const queryFileSourceSaveSchema = z.object({ tabId, taskId, source: queryFileSourceRefSchema, sql, eol: eol.optional() }).strict();
 /** 另存同样由原生选择授权，不能接收 renderer 路径；source 存在时必须精确匹配当前关联。 */
 export const queryFileSourceSaveAsSchema = z.object({ tabId, taskId, source: queryFileSourceRefSchema.optional(), sql, encoding, bom: z.enum(['none', 'utf8', 'utf16le']), eol }).strict().refine(value => value.bom === 'none' || value.bom === value.encoding, 'BOM与编码不匹配');

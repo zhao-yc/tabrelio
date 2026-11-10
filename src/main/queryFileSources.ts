@@ -6,7 +6,7 @@ import type { QueryFileEncoding, TaskEvent } from '../shared/contracts';
 import type { TaskCancelState } from '../shared/taskCancelState';
 import { queryFileSourceOpenSchema, queryFileSourceSaveSchema, queryFileSourceSaveAsSchema, queryFileSourceStatusSchema, queryFileSourceReleaseSchema, queryFileSourceCancelSchema, sameQueryFileSource, type QueryFileSourceRef, type QueryFileSourceOpenInput, type QueryFileSourceOpenResult, type QueryFileSourceSaveInput, type QueryFileSourceSaveAsInput, type QueryFileSourceSaveResult, type QueryFileSourceStatusInput, type QueryFileSourceStatus, type QueryFileSourceReleaseInput, type QueryFileSourceBlocked, type QueryFileSourceCancelInput, type QueryFileSourceProgress } from '../shared/queryFileSources';
 import { queryFileSourceView, type PrivateQueryFileSource } from './queryFileSourceRecords';
-import { queryRecentFilesSchema, queryRecentFileForgetSchema, type QueryRecentFileView } from '../shared/queryFileSources';
+import { queryRecentFilesSchema, queryRecentFileForgetSchema, type QueryRecentFilesInput, type QueryRecentFileForgetInput, type QueryRecentFileView } from '../shared/queryFileSources';
 import { canOpenBoundSqlFile, queryFileSourceHandoffSchema, type QueryFileSourceHandoffInput, type QueryFileSourceHandoffResult } from '../shared/queryFileSources';
 import { queryRecentFileView } from './queryFileRecents';
 import { QueryFileSourceFailure, assertQueryFileVersion, encodeBoundQueryFile, decodeSourceSnapshot, queryFileSqlDigest, queryFileBom, queryFileEol, queryFileIsMissing, queryFileTargetAbsent, writeBoundQueryFile, type QueryFileSnapshot } from './queryFileSourceFiles';
@@ -130,13 +130,13 @@ export class QueryFileSources {
     });
   }
   /** 用户打开最近列表时只投影Main元数据，不探测文件存在、不读取正文或建立连接。 */
-  recent(raw: { tabId: string }, scope: QueryFileSourceScope): QueryRecentFileView[] {
-    const input = queryRecentFilesSchema.parse(raw); scope.assertCurrent(); this.document(input.tabId);
+  recent(raw: QueryRecentFilesInput, scope: QueryFileSourceScope): QueryRecentFileView[] {
+    const input = queryRecentFilesSchema.parse(raw); scope.assertCurrent(); if ('tabId' in input) this.document(input.tabId);
     const result = this.host.store.queryRecentFiles().map(queryRecentFileView); scope.assertCurrent(); return result;
   }
   /** 明确移除只改变有界历史；当前来源和磁盘文件保持。 */
-  forgetRecent(raw: { tabId: string; recentId: string }, scope: QueryFileSourceScope): { removed: boolean } {
-    const input = queryRecentFileForgetSchema.parse(raw); scope.assertCurrent(); this.document(input.tabId);
+  forgetRecent(raw: QueryRecentFileForgetInput, scope: QueryFileSourceScope): { removed: boolean } {
+    const input = queryRecentFileForgetSchema.parse(raw); scope.assertCurrent(); if ('tabId' in input) this.document(input.tabId);
     const removed = this.host.store.forgetRecentFile(input.recentId); scope.assertCurrent(); return { removed };
   }
   /** 关联保存只持有原授权路径，保存快照与当前编辑正文各自独立。 */
