@@ -91,6 +91,7 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       await nativeQueryCommand('sql-find-selection', true);
     }
     const findQuery = findPanel.getByLabel('查找内容', { exact: true });
+    await expect(findQuery).toBeFocused();
     await findQuery.fill('NEEDLE');
     await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
     if (dialect === 'mysql') {
@@ -99,7 +100,15 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       await findQuery.fill('needle');
     }
     await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
-    await findPanel.getByRole('button', { name: '下一处', exact: true }).click();
+    const preview = findPanel.getByLabel('选区匹配预览');
+    await expect(preview.locator('mark')).toHaveCount(2);
+    await expect(preview.locator('mark').nth(0)).toHaveAttribute('aria-current', 'true');
+    await findQuery.press('Shift+Enter');
+    await expect(findPanel.getByRole('status')).toHaveText('第 2 处，共 2 处');
+    await expect(preview.locator('mark').nth(1)).toHaveAttribute('aria-current', 'true');
+    await findQuery.press('Enter');
+    await expect(findPanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
+    await findQuery.press('Enter');
     await expect(findPanel.getByRole('status')).toHaveText('第 2 处，共 2 处');
     await findPanel.getByRole('button', { name: '定位到当前匹配', exact: true }).click();
     await expect(findPanel).toBeHidden();
@@ -113,9 +122,10 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     await selectRange();
     await nativeQueryCommand('sql-replace-selection', true);
     const query = dialect === 'postgresql' ? "needle (🚢 A)',\\r?\\n  'needle (B)" : 'needle';
-    if (dialect === 'postgresql') await replacePanel.getByLabel('正则表达式').check();
     const replaceQuery = replacePanel.getByLabel('查找内容', { exact: true });
     const replaceAll = replacePanel.getByRole('button', { name: '全部替换', exact: true });
+    await expect(replaceQuery).toBeFocused();
+    if (dialect === 'postgresql') await replacePanel.getByLabel('正则表达式').check();
     await replaceQuery.fill(query);
     await expect(replacePanel.getByRole('status')).toHaveText(dialect === 'postgresql' ? '第 1 处，共 1 处' : '第 1 处，共 2 处');
     if (dialect === 'sqlite') {
@@ -127,7 +137,7 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
       await expect(replacePanel.getByRole('status')).toHaveText('第 1 处，共 2 处');
     }
     await replacePanel.getByLabel('替换为', { exact: true }).fill(dialect === 'postgresql' ? '组合 $1\n$2' : '替换后的值');
-    if (dialect === 'sqlite') await replacePanel.screenshot({ path: info.outputPath('sql-selection-live.png') });
+    if (dialect === 'sqlite') await replacePanel.screenshot({ path: info.outputPath('sql-selection-navigate.png') });
     if (dialect === 'mariadb') {
       await replacePanel.getByRole('button', { name: '下一处', exact: true }).click();
       await replacePanel.getByRole('button', { name: '替换当前匹配', exact: true }).click();
@@ -144,6 +154,25 @@ for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
     await expect.poll(read).toBe(prefix + result + suffix);
     await page.keyboard.press(`${modifier}+z`);
     await expect.poll(read).toBe(source);
+    if (dialect === 'sqlite') {
+      await selectRange();
+      await nativeQueryCommand('sql-replace-selection', true);
+      await replacePanel.getByLabel('正则表达式').check();
+      await replaceQuery.fill('(?=needle)');
+      await expect(replacePanel.getByLabel('选区匹配预览').locator('mark.zero-width')).toHaveCount(2);
+      await editor.evaluate(node => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+        const instance = api?.editor.getEditors().find(candidate => candidate.getContainerDomNode().contains(node));
+        if (!instance) throw Error('原查询编辑器不可读');
+        instance.setPosition({ lineNumber: 1, column: 1 });
+      });
+      await expect(replacePanel.getByRole('alert')).toHaveText('原选区或查询已变化，请关闭并重新发起。');
+      await expect(replacePanel.getByLabel('选区匹配预览')).toHaveCount(0);
+      await expect(replaceAll).toBeDisabled();
+      await page.keyboard.press('Escape');
+      await expect(replacePanel).toBeHidden();
+      await expect.poll(read).toBe(source);
+    }
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);

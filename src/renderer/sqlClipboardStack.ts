@@ -29,15 +29,24 @@ export function captureSqlClipboardSelection(editor: monaco.editor.IStandaloneCo
   if (!model || model.isDisposed() || selections?.length !== 1 || !allowed()) return;
   const range = selections[0], version = model.getVersionId();
   let active = true;
+  const invalidationListeners = new Set<() => void>();
   const matches = () => {
     const current = editor.getSelections();
     return editor.getModel() === model && !model.isDisposed() && model.getVersionId() === version &&
       current?.length === 1 && range.equalsSelection(current[0]) && allowed();
   };
-  const current = () => active && (active = !!matches());
+  const invalidate = () => {
+    if (!active) return;
+    active = false;
+    for (const listener of invalidationListeners) listener();
+  };
+  const current = () => {
+    if (active && !matches()) invalidate();
+    return active;
+  };
   const subscriptions = [
-    editor.onDidChangeModel(() => { active = false; }), editor.onDidDispose(() => { active = false; }),
-    model.onDidChangeContent(() => { active = false; }), editor.onDidChangeCursorSelection(current),
+    editor.onDidChangeModel(invalidate), editor.onDidDispose(invalidate),
+    model.onDidChangeContent(invalidate), editor.onDidChangeCursorSelection(current),
   ];
   /** 统一原选区的一步编辑；调用方分别校验粘贴或替换的输出预算。 */
   function replace(text: string, source: string): boolean {
@@ -51,6 +60,11 @@ export function captureSqlClipboardSelection(editor: monaco.editor.IStandaloneCo
   return {
     current,
     replace,
+    /** 失效时撤销已展示的匹配和进行中的查找，主动提交或关闭无需发出失效通知。 */
+    onInvalidated(listener: () => void) {
+      invalidationListeners.add(listener);
+      return () => { invalidationListeners.delete(listener); };
+    },
     /** 查找结果是选区内的 UTF-16 偏移，定位前复核边界及原模型。 */
     locate(start: number, end: number): boolean {
       if (!current() || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > model.getValueLengthInRange(range)) return false;
@@ -67,7 +81,7 @@ export function captureSqlClipboardSelection(editor: monaco.editor.IStandaloneCo
       if (model.getValueLengthInRange(range) > limit) throw new RangeError('原选区超过读取上限');
       return model.getValueInRange(range);
     },
-    dispose() { active = false; for (const subscription of subscriptions) subscription.dispose(); },
+    dispose() { active = false; invalidationListeners.clear(); for (const subscription of subscriptions) subscription.dispose(); },
     paste(text: string): boolean {
       return !!text.length && text.length <= sqlClipboardLimits.entryUnits && replace(text, sqlClipboardStackAction);
     },

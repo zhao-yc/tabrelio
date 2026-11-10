@@ -1,5 +1,5 @@
 import { zh } from '../locales/zh-CN';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { X, LoaderCircle } from 'lucide-react';
 import '../usageHelp.css';
 
@@ -9,13 +9,13 @@ export function UsageHelp({ children, className = '' }: { children: ReactNode; c
 }
 
 /** 对话框限制键盘焦点并在关闭后还原，关闭回调通过引用保持最新状态。 */
-export function Modal({ title, children, onClose, onEscape, wide = false }: { title: string; children: ReactNode; onClose: () => void; onEscape?: (event: KeyboardEvent) => void; wide?: boolean }) {
+export function Modal({ title, children, onClose, onEscape, initialFocus, wide = false }: { title: string; children: ReactNode; onClose: () => void; onEscape?: (event: KeyboardEvent) => void; initialFocus?: RefObject<HTMLElement | null>; wide?: boolean }) {
   const root = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose); closeRef.current = onClose;
   const escapeRef = useRef(onEscape); escapeRef.current = onEscape;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    root.current?.querySelector<HTMLElement>('input, select, textarea, button, summary')?.focus();
+    (initialFocus?.current ?? root.current?.querySelector<HTMLElement>('input, select, textarea, button, summary'))?.focus();
     /** 拦截 Escape 并循环 Tab 焦点，避免键盘操作穿透到对话框后方。 */
     const listener = (event: KeyboardEvent) => {
       // 输入法组合阶段的 Escape/Tab 属于输入法；捕获层必须先跳过，避免提前关闭弹窗或移动焦点。

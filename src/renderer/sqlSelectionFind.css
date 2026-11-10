@@ -1,0 +1,7 @@
+.sql-selection-find .field { justify-self: stretch; align-items: stretch; }
+.sql-selection-options { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.sql-selection-options label { display: flex; align-items: center; gap: 6px; }
+.sql-selection-preview pre mark { color: var(--text); background: var(--accent-bg); }
+.sql-selection-preview mark[aria-current='true'] { color: #191400; background: #ffe082; }
+.sql-selection-preview mark.zero-width { display: inline-block; width: 2px; height: 1em; vertical-align: -0.13em; background: var(--accent); }
+.sql-selection-preview mark.zero-width[aria-current='true'] { background: #ffe082; }

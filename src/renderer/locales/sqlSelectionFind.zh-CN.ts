@@ -15,6 +15,8 @@ export const sqlSelectionFindZh = {
   noMatches: '选区内无匹配。',
   changed: '原选区或查询已变化，请关闭并重新发起。',
   limit: '选区超过 128 Ki UTF-16 单元，请缩小范围。',
+  preview: '选区匹配预览',
+  keys: '在查找框按 Enter 跳到下一处，按 Shift+Enter 返回上一处。',
   sourceHint: '匹配只读取打开面板时的选区，可使用 $1 等捕获组进行正则替换。',
   position: (index: number, total: number) => `第 ${index} 处，共 ${total} 处`,
 };
