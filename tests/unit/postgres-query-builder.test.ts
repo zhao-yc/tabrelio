@@ -147,4 +147,14 @@ describe('PostgreSQL 单表查询设计', () => {
       ...grouped.summary, aggregates: [{ fn: 'SUM', alias: '未授权 SQL', column: 'id', expression: 'nextval(...)' }],
     } }).success).toBe(false);
   });
+
+  it('不同值平均绑定原表达式供 HAVING 和排序使用', () => {
+    const sql = buildPostgresQueryBuilderSql({ ...draft, columns: [], summary: {
+      groups: ['值'], aggregates: [{ fn: 'AVG_DISTINCT', column: 'id', alias: '不同值平均' }],
+      having: { mode: 'all', rules: [{ column: '不同值平均', operator: '>', value: '1.25' }] },
+      sort: [{ column: '不同值平均', direction: 'DESC' }],
+    } }, source);
+    expect(sql).toContain('pg_catalog.AVG(DISTINCT "id") AS "不同值平均"');
+    expect(sql).toContain("HAVING pg_catalog.AVG(DISTINCT \"id\") > E'1.25' ORDER BY 2 DESC");
+  });
 });

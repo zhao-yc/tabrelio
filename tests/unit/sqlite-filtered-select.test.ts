@@ -34,6 +34,32 @@ function input(filters: SqliteTableFilter[] = [], patch: Partial<SqliteTablePage
 function bound(value: SqliteValue): SQLInputValue { if (value === null || typeof value === 'string' || typeof value === 'number') return value; if (value.type === 'integer') return BigInt(value.value); if (value.type === 'real') return Number(value.value); return Buffer.from(value.base64, 'base64'); }
 function rows(db: DatabaseSync, sql: string, parameters: SQLInputValue[] = []) { const statement = db.prepare(sql); statement.setReadBigInts(true); return statement.all(...parameters); }
 
+it('SQLite 按组计算不同值合计和平均，保留 NULL 与普通合计', () => {
+  const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table: 'events', kind: 'table' },
+    schemaKey: 'a'.repeat(64), columns: [{ name: 'bucket', declaredType: 'TEXT' }, { name: 'amount', declaredType: 'INTEGER' }] };
+  const summary: NonNullable<SqliteQueryBuilderDesign['summary']> = {
+    groups: ['bucket'], sort: [{ column: '不同值平均', direction: 'DESC', nulls: 'LAST' }],
+    aggregates: [{ fn: 'SUM', column: 'amount', alias: '普通合计' }, { fn: 'SUM_DISTINCT', column: 'amount', alias: '不同值合计' },
+      { fn: 'AVG_DISTINCT', column: 'amount', alias: '不同值平均' }],
+  };
+  const design: SqliteQueryBuilderDesign = { ...source.target, schemaKey: source.schemaKey, columns: [], distinct: false,
+    mode: 'and', filters: [], sort: [], summary };
+  const db = new DatabaseSync(join(directory, 'distinct-aggregate.sqlite'));
+  try {
+    db.exec("CREATE TABLE events (bucket TEXT, amount INTEGER); INSERT INTO events VALUES ('a',2),('a',2),('a',8),('a',NULL),('b',NULL);");
+    expect(rows(db, buildSqliteQueryBuilderSql(design, source))).toEqual([
+      { bucket: 'a', 普通合计: 12n, 不同值合计: 10n, 不同值平均: 5 },
+      { bucket: 'b', 普通合计: null, 不同值合计: null, 不同值平均: null },
+    ]);
+    const having: typeof summary.having = { mode: 'and', filters: [
+      { column: '不同值合计', operator: 'eq', value: { kind: 'integer', value: '10' } },
+    ] };
+    const sql = buildSqliteQueryBuilderSql({ ...design, summary: { ...summary, having } }, source);
+    expect(sql).toContain('HAVING (typeof(SUM(DISTINCT "amount"))');
+    expect(rows(db, sql)).toEqual([{ bucket: 'a', 普通合计: 12n, 不同值合计: 10n, 不同值平均: 5 }]);
+  } finally { db.close(); }
+});
+
 it('SQLite 可只跳过已排序的行，也可叠加 LIMIT 且保留旧查询默认行为', () => {
   const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table, kind: 'table' },
     schemaKey: 'a'.repeat(64), columns };

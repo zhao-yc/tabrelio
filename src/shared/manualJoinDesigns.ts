@@ -1,6 +1,7 @@
 import { queryBuilderOffsetDraftSchema } from './queryBuilderOffset';
 import { assertMysqlQueryProjection, mysqlQueryProjectionSchema, mysqlSelectedOutputKeys } from './mysqlQueryProjection';
 import { z } from 'zod';
+import { foreignKeyJoinAggregateFunctions } from './tableForeignKeyJoinSummary';
 import { FILTER_LIMITS, filterGroupSchema, tableFilterOperators, validateFilterGroup } from './filtering';
 
 export const manualJoinDesignLimits = { designs: 200, perTable: 30, bytes: 1024 * 1024, totalBytes: 16 * 1024 * 1024 } as const;
@@ -53,7 +54,7 @@ const queryDesignFields = z.object({
   summaryEnabled: z.boolean(),
   summaryGroups: z.array(z.object({ id, side, column: identifier }).strict()).max(20),
   aggregates: z.array(z.object({
-    id, side, column: identifier, fn: z.enum(['COUNT_ALL', 'COUNT', 'COUNT_DISTINCT', 'SUM', 'AVG', 'MIN', 'MAX']), alias: z.string().max(128),
+    id, side, column: identifier, fn: z.enum(foreignKeyJoinAggregateFunctions), alias: z.string().max(128),
   }).strict()).max(32),
   having: z.array(z.object({ id, enabled: z.boolean(), targetLabel: z.string().max(512), draft: filterDraft }).strict()).max(FILTER_LIMITS.conditions),
   havingMode: mode, havingGroup: filterGroupSchema.optional(),

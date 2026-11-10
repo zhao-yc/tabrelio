@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits } from './tableForeignKeyJoinSummary';
+import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits, queryBuilderAggregateCall } from './tableForeignKeyJoinSummary';
 
 const fieldName = z.string().min(1).max(515).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value), '汇总字段名不能含换行、空字符或无效 Unicode');
 const alias = fieldName.refine(value => value.trim().length > 0 && new TextEncoder().encode(value).length <= 63, '聚合别名须为 1～63 个 UTF-8 字节');
@@ -33,9 +33,7 @@ export function compileQueryBuilderSummary(summary: QueryBuilderSummary, field: 
     return alias === undefined ? expression : expression + ' AS ' + quote(alias);
   });
   const expressions = aggregates.map(item => {
-    const fn = item.fn === 'COUNT_ALL' || item.fn === 'COUNT_DISTINCT' ? 'COUNT' : item.fn;
-    const operand = item.fn === 'COUNT_ALL' ? '*' : (item.fn === 'COUNT_DISTINCT' ? 'DISTINCT ' : '') + field(item.column);
-    const expression = functionPrefix + fn + '(' + operand + ')';
+    const expression = queryBuilderAggregateCall(item.fn, item.fn === 'COUNT_ALL' ? '' : field(item.column), functionPrefix);
     addOutput(item.alias, expression);
     return expression + ' AS ' + quote(item.alias);
   });

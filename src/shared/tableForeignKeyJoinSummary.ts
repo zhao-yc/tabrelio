@@ -3,7 +3,7 @@ import { tableForeignKeyJoinSummaryZh as text } from './tableForeignKeyJoinSumma
 
 import { foreignKeyJoinSide, foreignKeyJoinSqlAlias, type ForeignKeyJoinSide } from './tableForeignKeyJoinSources';
 export interface ForeignKeyJoinGroupKey { side: ForeignKeyJoinSide; column: string; }
-export type ForeignKeyJoinAggregateFunction = 'COUNT_ALL' | 'COUNT' | 'COUNT_DISTINCT' | 'SUM' | 'AVG' | 'MIN' | 'MAX';
+export type ForeignKeyJoinAggregateFunction = typeof foreignKeyJoinAggregateFunctions[number];
 export type ForeignKeyJoinAggregate = { fn: 'COUNT_ALL'; alias: string } | { fn: Exclude<ForeignKeyJoinAggregateFunction, 'COUNT_ALL'>; side: ForeignKeyJoinSide; column: string; alias: string };
 export interface ForeignKeyJoinSummary { groups: readonly ForeignKeyJoinGroupKey[]; aggregates: readonly ForeignKeyJoinAggregate[]; }
 export interface ForeignKeyJoinGroupDraft extends ForeignKeyJoinGroupKey { id: string; }
@@ -11,7 +11,19 @@ export interface ForeignKeyJoinAggregateDraft { id: string; fn: ForeignKeyJoinAg
 export interface ForeignKeyJoinSummaryOutput { alias: string; type: string; expression: string; }
 type Source = { columns: readonly { name: string; type: string }[] };
 export const foreignKeyJoinSummaryLimits = { groups: 20, aggregates: 32 } as const;
-export const foreignKeyJoinAggregateFunctions: readonly ForeignKeyJoinAggregateFunction[] = ['COUNT_ALL','COUNT','COUNT_DISTINCT','SUM','AVG','MIN','MAX'];
+export const foreignKeyJoinAggregateFunctions = ['COUNT_ALL', 'COUNT', 'COUNT_DISTINCT', 'SUM', 'SUM_DISTINCT', 'AVG', 'AVG_DISTINCT', 'MIN', 'MAX'] as const;
+
+/** 三种编译器使用同一函数白名单；DISTINCT 只作用于当前聚合的输入字段。 */
+export function queryBuilderAggregateCall(fn: ForeignKeyJoinAggregateFunction, field: string, prefix = '') {
+  if (fn === 'COUNT_ALL') return prefix + 'COUNT(*)';
+  const distinct = fn.endsWith('_DISTINCT');
+  const name = distinct ? fn.slice(0, -'_DISTINCT'.length) : fn;
+  return prefix + name + '(' + (distinct ? 'DISTINCT ' : '') + field + ')';
+}
+
+function isAggregateFunction(value: unknown): value is ForeignKeyJoinAggregateFunction {
+  return foreignKeyJoinAggregateFunctions.some(fn => fn === value);
+}
 
 /** 聚合协议只读普通自有数据属性，拒绝未知项、访问器、空洞和附加数组属性。 */
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
@@ -54,12 +66,15 @@ export function buildForeignKeyJoinSummary(sources: ReadonlyMap<ForeignKeyJoinSi
     if (!raw || typeof raw !== 'object') throw Error(text.invalid);
     const descriptor=Object.getOwnPropertyDescriptor(raw,'fn');if(!descriptor || !descriptor.enumerable || !('value' in descriptor))throw Error(text.invalid);
     if (descriptor.value === 'COUNT_ALL') { const value=record(raw,['fn','alias']);output('aggregate',typeof value.alias==='string'?value.alias:'',value.alias,'COUNT(*)','BIGINT UNSIGNED');continue; }
-    const value=record(raw,['fn','side','column','alias']);if(!foreignKeyJoinAggregateFunctions.includes(value.fn as ForeignKeyJoinAggregateFunction) || value.fn === 'COUNT_ALL')throw Error(text.invalid);
+    const value = record(raw, ['fn', 'side', 'column', 'alias']);
+    if (!isAggregateFunction(value.fn) || value.fn === 'COUNT_ALL') throw Error(text.invalid);
     const item=source(value.side,value.column);
-    if ((value.fn === 'SUM' || value.fn === 'AVG') && !/^(?:tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real)\b/i.test(item.column.type)) throw Error(text.numeric);
-    const expression = value.fn === 'COUNT_DISTINCT' ? 'COUNT(DISTINCT '+item.reference+')' : value.fn+'('+item.reference+')';
+    const numeric = value.fn === 'SUM' || value.fn === 'SUM_DISTINCT' || value.fn === 'AVG' || value.fn === 'AVG_DISTINCT';
+    if (numeric && !/^(?:tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real)\b/i.test(item.column.type)) throw Error(text.numeric);
+    const expression = queryBuilderAggregateCall(value.fn, item.reference);
     // type仅用于HAVING字面量校验/精确定型，不伪造服务器返回类型；浮点表达式仍按服务器近似规则比较。
-    const type=value.fn==='COUNT'||value.fn==='COUNT_DISTINCT'?'BIGINT UNSIGNED':value.fn==='SUM'||value.fn==='AVG'?(/^(?:DECIMAL|NUMERIC|FIXED)\b/i.test(item.column.type)?item.column.type:'DECIMAL'):item.column.type;
+    const type = value.fn === 'COUNT' || value.fn === 'COUNT_DISTINCT' ? 'BIGINT UNSIGNED' :
+      numeric && !/^(?:DECIMAL|NUMERIC|FIXED)\b/i.test(item.column.type) ? 'DECIMAL' : item.column.type;
     output('aggregate',typeof value.alias==='string'?value.alias:'',value.alias,expression,type);
   }
   if (!columns.length) throw Error(text.empty);

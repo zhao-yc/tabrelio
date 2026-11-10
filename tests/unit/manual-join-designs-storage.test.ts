@@ -33,7 +33,7 @@ const singleDesign = singleTableQueryDesignSchema.parse({ version: 1, single: tr
   filters: [{ ...design.filters[0], side: 'child' }], filterMode: 'all', filterGroup: design.filterGroup,
   sort: [], summarySort: [{ id: 's1', rule: { side: 'aggregate', column: '合计', direction: 'DESC' } }],
   summaryEnabled: true, summaryGroups: [{ id: 'g1', side: 'child', column: 'label' }],
-  aggregates: [{ ...design.aggregates[0], side: 'child' }], having: design.having, havingMode: 'all' });
+  aggregates: [{ ...design.aggregates[0], fn: 'AVG_DISTINCT', side: 'child' }], having: design.having, havingMode: 'all' });
 
 async function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'dbark-manual-join-designs-')); directories.push(directory);
@@ -82,7 +82,7 @@ describe('手动 JOIN 设计本地配置库', () => {
       sqlite: { filePath: '/isolated/sample.sqlite', readOnly: false, busyTimeoutMs: 1000 } };
     const draft: SqliteSingleQueryDraft = { version: 1, dialect: 'sqlite', selected: ['id'], limit: '', distinct: true,
       filters: [], mode: 'and', sort: [{ id: 'sort', column: 'id', direction: 'desc' }], summaryEnabled: true, havingMode: 'and',
-      summary: { groups: [], aggregates: [{ id: 'sum', fn: 'SUM', column: 'id', alias: '合计' }], sort: [] },
+      summary: { groups: [], aggregates: [{ id: 'sum', fn: 'SUM_DISTINCT', column: 'id', alias: '合计' }], sort: [] },
       havingFilters: [{ id: 'filter', column: 'aggregate:sum', operator: 'gte', kind: 'integer', value: '9223372036854775807' }] };
     const joined = { ...sqlite, join: true } as const;
     const joinedDraft: SqliteSingleQueryDraft = { ...draft, selected: ['t1.id'], sort: [], summaryEnabled: false,

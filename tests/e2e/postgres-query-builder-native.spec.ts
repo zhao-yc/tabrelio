@@ -116,8 +116,9 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await builder.getByRole('combobox', { name: aggregate.groupColumn(1), exact: true }).selectOption('label');
     await button(aggregate.addAggregate).click();
     await button(aggregate.addAggregate).click();
-    await builder.getByRole('combobox', { name: aggregate.fn(2), exact: true }).selectOption('SUM');
-    await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('行数');
+    await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('AVG_DISTINCT');
+    await builder.getByRole('combobox', { name: aggregate.fn(2), exact: true }).selectOption('SUM_DISTINCT');
+    await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('去重均值');
     await builder.getByRole('textbox', { name: aggregate.alias(2), exact: true }).fill('合计');
     await button(sort.add).click();
     await builder.getByRole('combobox', { name: sort.field(1), exact: true }).selectOption({ label: '合计' });
@@ -129,16 +130,18 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await having.getByLabel(zh.table.text011).fill(max);
     await having.getByRole('button', { name: zh.table.text013, exact: true }).click();
     await builder.getByRole('textbox', { name: aggregate.alias(2), exact: true }).fill('最终合计');
-    const grouped = `SELECT "label", pg_catalog.COUNT(*) AS "行数", pg_catalog.SUM("id") AS "最终合计" FROM ${view} WHERE "id" >= E'${min}' GROUP BY "label" HAVING pg_catalog.SUM("id") < E'${max}' ORDER BY 3 DESC NULLS LAST LIMIT 2;`;
+    const grouped = `SELECT "label", pg_catalog.AVG(DISTINCT "id") AS "去重均值", pg_catalog.SUM(DISTINCT "id") AS "最终合计" FROM ${view} WHERE "id" >= E'${min}' GROUP BY "label" HAVING pg_catalog.SUM(DISTINCT "id") < E'${max}' ORDER BY 3 DESC NULLS LAST LIMIT 2;`;
+    // 此阈值下重复值若未去重，HAVING 会淘汰本应保留的分组。
+    const duplicate = (await observer.query('INSERT INTO ' + table + ' VALUES ($1, $2, NULL) RETURNING ctid::text', [min, '精确整数'])).rows[0].ctid;
     await expect(sql).toHaveText(grouped);
     await button(text.inspectLabels.explain).click();
     await expect(results.getByRole('tree')).toBeVisible();
     await button(text.inspectLabels.rows).click();
     await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
     await expect(results.getByRole('gridcell', { name: max, exact: true })).toHaveCount(0);
-    await expect(results.getByRole('gridcell', { name: min, exact: true })).toBeVisible();
+    await expect(results.getByRole('gridcell', { name: min, exact: true }).first()).toBeVisible();
     await sql.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath('postgres-query-summary.png') });
+    await page.screenshot({ path: info.outputPath('postgres-builder-distinct-aggregate.png') });
     await summaryMode.uncheck();
     await expect(sql).toHaveText(expected.replace('LIMIT 3', 'LIMIT 2'));
     await summaryMode.check();
@@ -160,9 +163,10 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await page.screenshot({ path: info.outputPath('postgres-builder-view.png') });
     await viewButton(create.apply).click();
     await expect(sql).toHaveText(grouped);
-    expect((await observer.query('SELECT * FROM "odd.schema".builder_summary')).rows).toEqual([
-      { label: '精确整数', 行数: '1', 最终合计: min },
+    expect((await observer.query('SELECT label, "最终合计", "去重均值" = "最终合计" AS "均值正确" FROM "odd.schema".builder_summary')).rows).toEqual([
+      { label: '精确整数', 均值正确: true, 最终合计: min },
     ]);
+    await observer.query('DELETE FROM ' + table + ' WHERE ctid = $1::tid', [duplicate]);
     await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();
     await builder.getByRole('textbox', { name: joinText.designName, exact: true }).fill('条件汇总');
     await button(joinText.designSave).click();

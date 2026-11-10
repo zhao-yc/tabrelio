@@ -130,7 +130,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await button(aggregate.addGroup).click();
     await builder.getByRole('combobox', { name: aggregate.groupColumn(1), exact: true }).selectOption('label');
     await button(aggregate.addAggregate).click();
-    await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('SUM');
+    await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('SUM_DISTINCT');
     await button(sort.add).click();
     await builder.getByRole('combobox', { name: sort.field(1), exact: true }).selectOption({ label: '统计_1' });
     await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('精确合计');
@@ -141,8 +141,8 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await having.getByLabel(browse.filterKind(1)).selectOption('integer');
     await having.getByLabel(browse.filterValue(1)).fill(maxInteger);
     await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('最终合计');
-    const grouped = 'SELECT "label", SUM("value") AS "最终合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
-      maxInteger + ') GROUP BY "label" HAVING (typeof(SUM("value")) = \'integer\' AND SUM("value") = ' + maxInteger + ') ORDER BY 2 DESC LIMIT 2;';
+    const grouped = 'SELECT "label", SUM(DISTINCT "value") AS "最终合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
+      maxInteger + ') GROUP BY "label" HAVING (typeof(SUM(DISTINCT "value")) = \'integer\' AND SUM(DISTINCT "value") = ' + maxInteger + ') ORDER BY 2 DESC LIMIT 2;';
     await expect(sql).toHaveText(grouped);
     await page.evaluate(async () => {
       const snapshot = await window.dbark.invoke('queries.organizationGet', {});
@@ -168,7 +168,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
     await expect(results.getByRole('gridcell', { name: maxInteger, exact: true })).toBeVisible();
     await sql.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath('sqlite-query-summary.png') });
+    await page.screenshot({ path: info.outputPath('sqlite-builder-distinct-aggregate.png') });
     await button(viewDraft.builderEntry).click();
     await expect(editor.locator('.monaco-editor .view-lines')).toContainText('HAVING');
     await viewButton(objects.close).click();

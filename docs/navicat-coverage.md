@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询构建器新增不同值合计与平均（SUM DISTINCT、AVG DISTINCT），可与普通聚合并列使用，支持 HAVING、汇总排序、保存设计及视图。O04 仍为部分覆盖。
+
 2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询构建器可直接复制完整预览 SQL，或保存为绑定原连接及数据库的本地查询并选填分组。保存前复核来源，完成后继续留在原设计。O04 与 Q03 仍为部分覆盖。
 
 2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的手动查询构建器支持在任一步配置 CROSS JOIN，与普通 JOIN 混用。交叉连接无需 ON；切换时确认清除已有条件。保存设计、预览及生成视图沿用同一连接语义。O04 仍为部分覆盖。
@@ -1481,7 +1483,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | R04 | Oracle | 待做 | 服务名/TNS、序列、包、类型、LOB 与精度 |
 | R05 | MongoDB | 待做 | 集合、索引、BSON、树/JSON、查找与聚合 |
 | R06 | Redis/Cluster/Sentinel | 待做 | 键、TTL、扫描、命令、重定向与取消 |
-| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键与手动两表 LEFT／RIGHT／INNER、外连接未匹配筛选、复合映射、选列、多列排序／上限、嵌套WHERE、GROUP BY及七种聚合；前期实库边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续[嵌套HAVING](development/table-foreign-key-join-having-20261102.md)与六端点2130次严格查询另证；准确0d的[三平台十二组件例与arm64显示恢复](development/foreign-key-join-display-lease-20261103.md)已核。MySQL／MariaDB、PostgreSQL 和 SQLite 已有手动多表 JOIN、嵌套 ON 及本地设计，支持明细输出重排、列别名和行偏移。高级聚合、更多视图选项及跨平台安装包验收继续，未公开发行 |
+| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键与手动两表 LEFT／RIGHT／INNER、外连接未匹配筛选、复合映射、选列、多列排序／上限、嵌套WHERE、GROUP BY及九种聚合；前期实库边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续[嵌套HAVING](development/table-foreign-key-join-having-20261102.md)与六端点2130次严格查询另证；准确0d的[三平台十二组件例与arm64显示恢复](development/foreign-key-join-display-lease-20261103.md)已核。MySQL／MariaDB、PostgreSQL 和 SQLite 已有手动多表 JOIN、嵌套 ON 及本地设计，支持明细输出重排、列别名和行偏移。高级聚合、更多视图选项及跨平台安装包验收继续，未公开发行 |
 | O05 | 重构/语义代码辅助 | 部分 | MySQL 已有[字段悬停](../tests/integration/acceptance-sql-field-hover-7f926c4-20261021.md)、[本文声明导航](development/mysql-definition-20261103.md)及[本文关系引用](development/local-references-20261103.md)，SQLite 已有[字段悬停](development/sqlite-field-hover-20261102.md)、[本文声明导航](development/sqlite-definition-20261102.md)及[本文关系引用](development/sqlite-local-references-20261103.md)；双方言另有[本文别名／CTE重命名](development/local-rename-20261103.md)。另有[对象结构读取](development/object-definition-20261103.md)和[本地语法检查](development/sql-syntax-check-20261103.md)，后者首批使用MySQL grammar；完整字段／变量引用、方言诊断、跨作用域／全局重命名和完整平台组合继续，不以单项能力代替完整代码辅助 |
 | E01 | ER 关系查看 | 部分 | 已有[MySQL／MariaDB图](development/relationship-diagram-20261103.md)和[SQLite独立快照图](development/sqlite-relationships-20261103.md)，主外键、复合／自引用及未确认声明分明。准确c1的MySQL合成目录组件各两例、准确3215的SQLite真实Main／worker三平台各一例及原件已核。Windows／MySQL 8.4 已有[真实 Main 与实库原例](development/relationship-diagram-live-20261103.md)，含复合、自引用和跨库未读目标，准确资源核零；其它版本／限权、Mac 实库、完整模型和安装继续，不以单项图代替完整ER |
 | A01 | 编排/本地计划任务 | 待做 | 跨连接依赖、失败策略、进度、重复运行控制 |
