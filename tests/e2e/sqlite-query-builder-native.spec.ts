@@ -10,6 +10,8 @@ import { tableForeignKeyJoinZh as joinText } from '../../src/renderer/locales/ta
 import { tableForeignKeyJoinSummaryZh as aggregate } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
 import { queryBuilderSummaryZh as summary } from '../../src/renderer/locales/queryBuilderSummary.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
+import { queryViewDraftZh as viewDraft } from '../../src/renderer/locales/queryViewDraft.zh-CN';
+import { sqliteObjectsZh as objects } from '../../src/renderer/locales/sqliteObjects.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -30,6 +32,17 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
   const builder = page.getByRole('dialog', { name: text.title, exact: true });
   const results = builder.getByRole('region', { name: text.inspectLabels.region, exact: true });
   const button = (name: string) => builder.getByRole('button', { name, exact: true });
+  const editor = page.getByRole('dialog', { name: objects.title('create', 'view'), exact: true });
+  const viewButton = (name: string) => editor.getByRole('button', { name, exact: true });
+  async function prepareView(name: string) {
+    await editor.getByLabel(objects.name, { exact: true }).fill(name);
+    await viewButton(objects.read).click();
+    await expect(editor.getByText(objects.absent, { exact: true })).toBeVisible();
+    await viewButton(objects.preview).click();
+    await expect(editor.getByLabel(objects.previewTitle)).toContainText(name);
+    for (const item of await editor.getByRole('region', { name: objects.acknowledgements }).getByRole('checkbox').all()) await item.check();
+    await editor.getByLabel(objects.confirmation, { exact: true }).fill('main.' + name);
+  }
   async function selectSource(name: string) {
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true })).click();
     await page.getByRole('dialog', { name: zh.common.newQuery, exact: true }).getByRole('button', { name: joinText.builderEntry, exact: true }).click();
@@ -60,7 +73,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
       const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
       if (!file) throw Error('本例 SQLite 文件未获授权');
       await window.dbark.invoke('connections.save', { id, name: 'SQLite 构建器样本', dialect: 'sqlite', group: '', color: '#51bda5',
-        sqlite: { fileToken: file.token, readOnly: true, busyTimeoutMs: 1000 } });
+        sqlite: { fileToken: file.token, readOnly: false, busyTimeoutMs: 1000 } });
       const previous = await window.dbark.invoke('settings.get', {});
       await window.dbark.invoke('settings.save', { ...previous, activeTabId: 'original', tabs: [
         { id: 'original', kind: 'query', title: '原查询', connectionId: id, database: 'main', databaseContext: { state: 'known', database: 'main' }, sql: 'SELECT 7;' },
@@ -125,6 +138,28 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(results.getByRole('gridcell', { name: maxInteger, exact: true })).toBeVisible();
     await sql.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('sqlite-query-summary.png') });
+    await button(viewDraft.builderEntry).click();
+    await expect(editor.locator('.monaco-editor .view-lines')).toContainText('HAVING');
+    await viewButton(objects.close).click();
+    await expect(sql).toHaveText(grouped);
+    expect(readFileSync(database)).toEqual(originalFile);
+    await button(viewDraft.builderEntry).click();
+    await prepareView('builder_summary');
+    await expect(editor.getByLabel(objects.previewTitle)).toContainText('ORDER BY 2 DESC LIMIT 2');
+    await editor.getByLabel(objects.previewTitle).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('sqlite-builder-view.png') });
+    expect(readFileSync(database)).toEqual(originalFile);
+    await viewButton(objects.apply.create).click();
+    await expect(editor.getByText(objects.committed, { exact: true })).toBeVisible();
+    await viewButton(objects.close).click();
+    await expect(sql).toHaveText(grouped);
+    const reader = new DatabaseSync(database, { readOnly: true });
+    try {
+      const read = reader.prepare('SELECT * FROM builder_summary');
+      read.setReadBigInts(true);
+      expect(read.all()).toEqual([{ label: '精确整数', 最终合计: BigInt(maxInteger) }]);
+    } finally { reader.close(); }
+    const fileAfterView = readFileSync(database);
     await button(aggregate.remove(1)).click();
     await expect(builder.getByRole('alert')).toContainText(summary.havingStale);
     await expect(button(text.open)).toBeDisabled();
@@ -143,12 +178,19 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     expect(await history()).toEqual(originalHistory);
     await page.locator('.query-tab:visible .query-execute-split > button.primary').click();
     await expect(page.locator('.query-tab:visible').getByRole('gridcell', { name: '精确整数', exact: true })).toBeVisible();
-    expect(readFileSync(database)).toEqual(originalFile);
+    expect(readFileSync(database)).toEqual(fileAfterView);
 
     await selectSource(table);
     const beforeChange = await settings();
+    await button(viewDraft.builderEntry).click();
+    await prepareView('stale_builder_view');
     setup('ALTER TABLE "原""表" ADD COLUMN new_column TEXT;');
     const changedFile = readFileSync(database);
+    await viewButton(objects.apply.create).click();
+    await expect(editor.getByRole('alert')).toContainText('SQLite 查询来源已变化');
+    expect(readFileSync(database)).toEqual(changedFile);
+    await viewButton(objects.close).click();
+    await viewButton(objects.discardClose).click();
     await button(text.inspectLabels.rows).click();
     await expect(results.getByRole('alert')).toContainText('SQLite 查询来源已变化');
     await button(text.open).click();

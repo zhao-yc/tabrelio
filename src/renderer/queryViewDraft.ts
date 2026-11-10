@@ -10,7 +10,13 @@ import { queryViewDraftZh as text } from './locales/queryViewDraft.zh-CN';
 export interface QueryViewDraft {
   tabId: string; connectionId: string; version: number; database: string; dialect: ConnectionProfile['dialect']; sql: string;
 }
-export interface ViewQuerySeed { sql: string; version: number }
+export interface ViewQuerySeed {
+  sql: string;
+  version: number;
+  preferredSchema?: string;
+  current?(): boolean;
+  beforeApply?(): Promise<void>;
+}
 
 /** 仅选取原模型中的一条完整查询，使用设计器的词法规则，不借此验证权限或执行 SQL。 */
 export function queryViewDefinition(source: string, dialect: QueryViewDraft['dialect'], offset?: number): string {

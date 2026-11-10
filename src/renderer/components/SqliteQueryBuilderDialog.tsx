@@ -4,21 +4,29 @@ import { queryDatabasePatch } from '../../shared/queryContext';
 import { sqliteTableBrowseLimits } from '../../shared/sqliteTableBrowse';
 import { buildSqliteQueryBuilderSql, sqliteQueryBuilderSampleRows, type SqliteQueryBuilderSource, type SqliteQueryBuilderTarget } from '../../shared/sqliteQueryBuilder';
 import { sqliteReadSqlLimits } from '../../shared/sqliteReadSql';
+import type { SqliteObjectsOutcome, SqliteObjectsTarget } from '../../shared/sqliteObjects';
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteQueryBuilderZh as text } from '../locales/sqliteQueryBuilder.zh-CN';
 import { sqliteTableBrowseZh as browse } from '../locales/sqliteTableBrowse.zh-CN';
 import { queryBuilderSummaryZh as summaryText } from '../locales/queryBuilderSummary.zh-CN';
+import { queryViewDraftZh as viewText } from '../locales/queryViewDraft.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { sqliteTableDraft, type SqliteFilterDraft, type SqliteSortDraft } from '../sqliteTableBrowser';
+import { queryViewDefinition, type ViewQuerySeed } from '../queryViewDraft';
 import { useWorkspace } from '../store';
 import { SqliteTableFilters } from './SqliteTableFilters';
+import { SqliteObjectsDialog } from './SqliteObjectsDialog';
 import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 /** 只从可信目录选取表或视图；旧窗口与跨连接的短读不发布草稿。 */
-export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { connectionId: string; onBack(): void; onClose(): void }) {
+export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onViewDirty, onViewApplied, onViewUncertain }: {
+  connectionId: string; onBack(): void; onClose(): void; onViewDirty(dirty: boolean): void;
+  onViewApplied(result: SqliteObjectsOutcome, version: number): void;
+  onViewUncertain(target: SqliteObjectsTarget, version: number): void;
+}) {
   const [owner] = useState(() => {
     const workspace = useWorkspace.getState();
     return { profile: workspace.connections.find(item => item.id === connectionId), version: workspace.connectionVersions[connectionId] ?? 0,
@@ -32,6 +40,9 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
   const [summaryEnabled, setSummaryEnabled] = useState(false), [summary, setSummary] = useState(emptyQueryBuilderSummary);
   const [havingFilters, setHavingFilters] = useState<SqliteFilterDraft[]>([]), [havingMode, setHavingMode] = useState<'and' | 'or'>('and');
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
+  const [viewSeed, setViewSeed] = useState<ViewQuerySeed>();
+  const viewScope = useMemo(() => ({ connectionId, database: 'main' as const, kind: 'view' as const }), [connectionId]);
+  const canCreateView = owner.profile?.dialect === 'sqlite' && !owner.profile.sqlite.readOnly;
   const mounted = useRef(false), operation = useRef<object | undefined>(undefined);
   const target = objects?.find(item => item.name === name);
   const choices = objects?.filter(item => item.name === name || item.name.toLowerCase().includes(search.toLowerCase()));
@@ -99,13 +110,23 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
     });
   }
 
-  function open() {
-    if (!source || !preview?.design) return;
+  /** 返回构建器时保留原草稿，视图提交前重新核对同一个 SQLite 来源。 */
+  function open(asView = false) {
+    if (!source || !preview?.design || asView && !canCreateView) return;
+    const { design, sql } = preview;
+    const target = source.target;
+    async function verify() {
+      if (!current()) throw Error(text.stale);
+      const fresh = await invoke('sqlite.queryBuilder.describe', target);
+      if (!current() || buildSqliteQueryBuilderSql(design, fresh) !== sql) throw Error(text.stale);
+    }
     void run(text.checking, async owns => {
-      const fresh = await invoke('sqlite.queryBuilder.describe', source.target);
+      await verify();
       if (!owns()) return;
-      const sql = buildSqliteQueryBuilderSql(preview.design, fresh);
-      if (sql !== preview.sql) throw Error(text.stale);
+      if (asView) {
+        setViewSeed({ sql: queryViewDefinition(sql, 'sqlite'), version: owner.version, current, beforeApply: verify });
+        return;
+      }
       const workspace = useWorkspace.getState();
       if (workspace.settings.tabs.length >= 100) throw Error(text.tabs);
       close(onClose);
@@ -120,6 +141,10 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
     [next[index], next[index + offset]] = [next[index + offset], next[index]];
     setSort(next);
   }
+
+  if (viewSeed) return <SqliteObjectsDialog scope={viewScope} targetVersion={viewSeed.version} action="create"
+    viewSeed={viewSeed} onDirtyChange={onViewDirty} onApplied={onViewApplied}
+    onExecutionUncertain={target => onViewUncertain(target, viewSeed.version)} onClose={() => setViewSeed(undefined)}/>;
 
   return <Modal title={text.title} wide={!!source} onClose={() => close(onClose)}>
     <div className="modal-content" aria-busy={!!message}>
@@ -195,7 +220,9 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
       {source ? <button disabled={disabled} onClick={() => { if (editable()) { setSource(undefined); setError(''); } }}>{text.changeSource}</button> :
         <button onClick={() => close(onBack)}>{text.back}</button>}
       <span className="grow"/><button onClick={() => close(onClose)}>{zh.common.cancel}</button>
-      {source ? <button className="primary" disabled={disabled || !preview?.design} onClick={open}>{text.open}</button> :
+      {source && <button disabled={disabled || !preview?.design || !canCreateView} title={canCreateView ? undefined : viewText.builderReadOnly}
+        onClick={() => open(true)}>{viewText.builderEntry}</button>}
+      {source ? <button className="primary" disabled={disabled || !preview?.design} onClick={() => open()}>{text.open}</button> :
         <button className="primary" disabled={disabled || !target} onClick={readSource}>{text.read}</button>}
     </footer>
   </Modal>;

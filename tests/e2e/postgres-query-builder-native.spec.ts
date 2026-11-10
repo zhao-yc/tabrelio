@@ -5,6 +5,8 @@ import { postgresQueryBuilderZh as text } from '../../src/renderer/locales/postg
 import { tableForeignKeyJoinZh as joinText } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 import { tableForeignKeyJoinSummaryZh as aggregate } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
 import { queryBuilderSummaryZh as summary } from '../../src/renderer/locales/queryBuilderSummary.zh-CN';
+import { queryViewDraftZh as viewDraft } from '../../src/renderer/locales/queryViewDraft.zh-CN';
+import { postgresCreateViewZh as create } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -130,6 +132,26 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await expect(sql).toHaveText(expected.replace('LIMIT 3', 'LIMIT 2'));
     await summaryMode.check();
     await expect(sql).toHaveText(grouped);
+    const editor = page.getByRole('dialog', { name: create.title, exact: true });
+    const viewButton = (name: string) => editor.getByRole('button', { name, exact: true });
+    const definition = editor.getByRole('textbox', { name: create.definition, exact: true });
+    await button(viewDraft.builderEntry).click();
+    await expect(definition).toHaveValue(grouped.slice(0, -1) + '\n');
+    await viewButton(zh.common.close).click();
+    await expect(sql).toHaveText(grouped);
+    await button(viewDraft.builderEntry).click();
+    await expect(editor.getByLabel(create.schema, { exact: true })).toHaveValue(schema);
+    await editor.getByRole('textbox', { name: create.name, exact: true }).fill('builder_summary');
+    await viewButton(create.preview).click();
+    await expect(editor.locator('.pg-create-sql')).toContainText('CREATE VIEW "odd.schema"."builder_summary"');
+    await expect(editor.locator('.pg-create-sql')).toContainText(grouped.slice(0, -1));
+    expect((await observer.query("SELECT to_regclass('\"odd.schema\".builder_summary') AS relation")).rows[0].relation).toBeNull();
+    await page.screenshot({ path: info.outputPath('postgres-builder-view.png') });
+    await viewButton(create.apply).click();
+    await expect(sql).toHaveText(grouped);
+    expect((await observer.query('SELECT * FROM "odd.schema".builder_summary')).rows).toEqual([
+      { label: '精确整数', 行数: '1', 最终合计: min },
+    ]);
     expect(await history()).toEqual(originalHistory);
     expect((await settings()).tabs).toEqual(originalTabs);
     await button(text.open).click();

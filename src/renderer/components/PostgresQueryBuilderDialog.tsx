@@ -7,10 +7,13 @@ import { errorMessage, invoke } from '../lib';
 import { postgresQueryBuilderZh as text } from '../locales/postgresQueryBuilder.zh-CN';
 import { postgresTableZh } from '../locales/postgresTable.zh-CN';
 import { queryBuilderSummaryZh as summaryText } from '../locales/queryBuilderSummary.zh-CN';
+import { queryViewDraftZh as viewText } from '../locales/queryViewDraft.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { tableFilterGroupAfterChange } from '../tableFilterGroups';
 import { filterRuleSummary } from '../tableFilters';
+import { queryViewDefinition, type ViewQuerySeed } from '../queryViewDraft';
+import { PostgresCreateViewDialog } from './PostgresCreateViewDialog';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
 import { TableFilterPanel } from './TableFilterPanel';
 import { TableSortPanel } from './TableSortPanel';
@@ -22,8 +25,10 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 interface CatalogueEntry { key: string; schema: string; name: string }
 
 /** 从连接和数据库创建独立草稿。预览结果与待打开的 SQL 只归属当前设计和原活动标签。 */
-export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onClose }: {
+export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onClose, onViewDirty, onViewCreated }: {
   connectionId: string; database: string; onBack(): void; onClose(): void;
+  onViewDirty(dirty: boolean): void;
+  onViewCreated(target: { connectionId: string; database: string }, view: string, version: number, message: string): void;
 }) {
   const [owner] = useState(() => {
     const workspace = useWorkspace.getState();
@@ -40,6 +45,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [havingRules, setHavingRules] = useState<FilterRule[]>([]), [havingMode, setHavingMode] = useState<FilterMode>('all');
   const [havingGroup, setHavingGroup] = useState<FilterGroup>();
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
+  const [viewSeed, setViewSeed] = useState<ViewQuerySeed>();
   const mounted = useRef(false), pending = useRef(false);
   const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
   const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
@@ -119,13 +125,24 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
     });
   }
 
-  function open() {
+  /** 原设计保持在当前组件中；提交视图前再次对照同一份结构和查询。 */
+  function open(asView = false) {
     if (!source || !preview?.design || editor) return;
+    const { design, sql } = preview;
+    const target = source.target;
+    async function verify() {
+      if (!current()) throw Error(text.stale);
+      const fresh = await invoke('postgres.queryBuilder.describe', target);
+      if (!current() || buildPostgresQueryBuilderSql(design, fresh) !== sql) throw Error(text.stale);
+    }
     void run(text.checking, async () => {
-      const fresh = await invoke('postgres.queryBuilder.describe', source.target);
+      await verify();
       if (!current()) return;
-      const sql = buildPostgresQueryBuilderSql(preview.design, fresh);
-      if (sql !== preview.sql) throw Error(text.stale);
+      if (asView) {
+        setViewSeed({ sql: queryViewDefinition(sql, 'postgresql'), version: owner.version,
+          preferredSchema: postgresRelationName(source.target.table).schema, current, beforeApply: verify });
+        return;
+      }
       const workspace = useWorkspace.getState();
       if (workspace.settings.tabs.length >= 100) throw Error(text.tabs);
       close(onClose);
@@ -133,6 +150,10 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         ...queryDatabasePatch({ state: 'known', database }), sql: sql + ';' });
     });
   }
+
+  if (viewSeed) return <PostgresCreateViewDialog target={{ connectionId, database }} kind="ordinary" viewSeed={viewSeed}
+    onDirtyChange={onViewDirty} onCreated={(view, version, message) => onViewCreated({ connectionId, database }, view, version, message)}
+    onClose={() => setViewSeed(undefined)}/>;
 
   return <Modal title={text.title} wide={!!source} onClose={() => close(onClose)}>
     <div className="modal-content" aria-busy={!!message}>
@@ -225,7 +246,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       {source ? <button disabled={disabled || !!editor} onClick={() => { if (editable()) { setSource(undefined); setError(''); } }}>{text.changeSource}</button> :
         <button onClick={() => close(onBack)}>{text.back}</button>}
       <span className="grow"/><button onClick={() => close(onClose)}>{zh.common.cancel}</button>
-      {source ? <button className="primary" disabled={disabled || !!editor || !preview?.design} onClick={open}>{text.open}</button> :
+      {source && <button disabled={disabled || !!editor || !preview?.design} onClick={() => open(true)}>{viewText.builderEntry}</button>}
+      {source ? <button className="primary" disabled={disabled || !!editor || !preview?.design} onClick={() => open()}>{text.open}</button> :
         <button className="primary" disabled={disabled || !table} onClick={loadSource}>{text.read}</button>}
     </footer>
   </Modal>;

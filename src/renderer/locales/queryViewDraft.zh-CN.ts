@@ -1,5 +1,7 @@
 export const queryViewDraftZh = {
   entry: '将当前查询用作视图定义',
+  builderEntry: '用作视图定义',
+  builderReadOnly: 'SQLite 连接为只读，不能创建视图。',
   hint: '使用选区或光标所在的单条查询。打开独立视图设计，保留原查询。',
   invalid: '请选择一条可用作视图定义且没有参数的查询，或将光标放入其中。',
   database: '当前查询没有已确认的数据库，无法确定视图所属的库。',

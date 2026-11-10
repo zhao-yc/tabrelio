@@ -1386,7 +1386,9 @@ function WorkspaceApp({ historyInsertionRegistry }: { historyInsertionRegistry: 
         : ['primaryKey', 'foreignKey', 'uniqueKey', 'check'].includes(hit.kind) ? 'constraints' : 'columns';
       setDdl({connectionId,database:hit.database,object:{name:hit.object,kind:hit.parentKind},readOnly:true,definitionSearch,
         ...(hit.dialect==='postgresql'?{structureSearchFocus:{section,name:hit.name}}:hit.dialect==='sqlite'&&hit.kind==='index'?{sqliteIndex:hit.name}:{})});
-    }}/>} {columnTarget && <ColumnPatchDialog target={columnTarget} targetVersion={state.connectionVersions[columnTarget.connectionId] ?? 0} services={columnPatchServices} onDirtyChange={setColumnEdits} beforeApply={() => assertColumnTargetAvailable(columnTarget, useWorkspace.getState())} onApplied={result => { markStructureTarget(columnTarget, result.definitionVerified); if (!result.definitionVerified) useWorkspace.getState().notify(columnPatchZh.verificationFailed, true); }} onExecutionUncertain={message => { markStructureTarget(columnTarget, false); useWorkspace.getState().notify(message, true); }} onCleanupError={message => useWorkspace.getState().notify(message, true)} onClose={() => { setColumnTarget(null); setColumnEdits(false); }}/>} {connectionOrganization && <ConnectionOrganizationDialog onClose={closeConnectionOrganization} onApplied={snapshot => state.setConnections(snapshot.connections)}/>} {connectionsTransfer && <ConnectionsTransferDialog onClose={closeConnectionsTransfer}/>} {connectionDialog && <ConnectionDialog profile={connectionDialog === 'new' ? undefined : connectionDialog} initialProfile={connectionDialog === 'new' ? connectionCopy ?? undefined : undefined} onClose={() => { setConnectionCopy(null); setConnectionDialog(null); }} onTransportChanged={state.invalidateConnection}/>} {newQuery && <NewQueryDialog onClose={closeNewQueryDialog} onViewApplied={refreshViews}/>} {workspaceFileOpen && <OpenQueryFileDialog mode={workspaceFileOpen} onClose={() => setWorkspaceFileOpen(null)}/>} {queryTarget && <QueryTargetDialog draft={queryTarget} onClose={closeQueryTarget}/>} {history && <HistoryDialog initialSection={history.section} initialConnectionId={history.connectionId} insertion={historyInsertion} onClose={closeHistoryPanel}/>} {tasks && <TasksDialog onClose={() => setTasks(false)}/>} {schema && (schema.createView === 'routine' ? <PostgresCreateRoutineDialog
+    }}/>} {columnTarget && <ColumnPatchDialog target={columnTarget} targetVersion={state.connectionVersions[columnTarget.connectionId] ?? 0} services={columnPatchServices} onDirtyChange={setColumnEdits} beforeApply={() => assertColumnTargetAvailable(columnTarget, useWorkspace.getState())} onApplied={result => { markStructureTarget(columnTarget, result.definitionVerified); if (!result.definitionVerified) useWorkspace.getState().notify(columnPatchZh.verificationFailed, true); }} onExecutionUncertain={message => { markStructureTarget(columnTarget, false); useWorkspace.getState().notify(message, true); }} onCleanupError={message => useWorkspace.getState().notify(message, true)} onClose={() => { setColumnTarget(null); setColumnEdits(false); }}/>} {connectionOrganization && <ConnectionOrganizationDialog onClose={closeConnectionOrganization} onApplied={snapshot => state.setConnections(snapshot.connections)}/>} {connectionsTransfer && <ConnectionsTransferDialog onClose={closeConnectionsTransfer}/>} {connectionDialog && <ConnectionDialog profile={connectionDialog === 'new' ? undefined : connectionDialog} initialProfile={connectionDialog === 'new' ? connectionCopy ?? undefined : undefined} onClose={() => { setConnectionCopy(null); setConnectionDialog(null); }} onTransportChanged={state.invalidateConnection}/>} {newQuery && <NewQueryDialog onClose={closeNewQueryDialog} onViewApplied={refreshViews} onBuilderViewDirty={setTableCreateEdits}
+      onSqliteViewApplied={finishSqliteObjects} onSqliteViewUncertain={(target, version) => invalidateSqliteObjects(target, version, 'create')}
+      onPostgresViewCreated={(target, view, version, message) => finishPostgresTableCreate(target, view, version, message, false)}/>} {workspaceFileOpen && <OpenQueryFileDialog mode={workspaceFileOpen} onClose={() => setWorkspaceFileOpen(null)}/>} {queryTarget && <QueryTargetDialog draft={queryTarget} onClose={closeQueryTarget}/>} {history && <HistoryDialog initialSection={history.section} initialConnectionId={history.connectionId} insertion={historyInsertion} onClose={closeHistoryPanel}/>} {tasks && <TasksDialog onClose={() => setTasks(false)}/>} {schema && (schema.createView === 'routine' ? <PostgresCreateRoutineDialog
       key={JSON.stringify([schema.connectionId, schema.database, 'routine'])} target={schema}
       onDirtyChange={setTableCreateEdits} onClose={() => { setSchema(null); setTableCreateEdits(false); }}
       onCreated={(kind, name, version, message) => {
@@ -1509,7 +1511,14 @@ function Welcome({ onConnect, onQuery, onHistory }: { onConnect: () => void; onQ
 }
 
 /** 新查询明确绑定连接及默认数据库；同名数据库不跨连接混用。 */
-export function NewQueryDialog({ onClose, onViewApplied }: { onClose(): void; onViewApplied?(): void }) {
+export function NewQueryDialog({ onClose, onViewApplied, onBuilderViewDirty, onSqliteViewApplied, onSqliteViewUncertain, onPostgresViewCreated }: {
+  onClose(): void;
+  onViewApplied?(): void;
+  onBuilderViewDirty(dirty: boolean): void;
+  onSqliteViewApplied(outcome: SqliteObjectsOutcome, version: number): void;
+  onSqliteViewUncertain(target: SqliteObjectsTarget, version: number): void;
+  onPostgresViewCreated(target: { connectionId: string; database: string }, view: string, version: number, message: string): void;
+}) {
   const connections = useWorkspace(state => state.connections); const selection = useWorkspace(state => state.selection); const activeTab = useWorkspace(state => state.settings.tabs.find(tab => tab.id === state.settings.activeTabId));
   const initial = newQueryContext(selection, activeTab, connections[0]?.id ?? '');
   const [connectionId, setConnectionId] = useState(initial.connectionId);
@@ -1535,9 +1544,11 @@ export function NewQueryDialog({ onClose, onViewApplied }: { onClose(): void; on
   },[connectionId]);
   if (builderScope) {
     const onBack = () => setBuilderScope(undefined);
-    if (builderScope.dialect === 'sqlite') return <SqliteQueryBuilderDialog connectionId={builderScope.connectionId} onBack={onBack} onClose={onClose}/>;
+    if (builderScope.dialect === 'sqlite') return <SqliteQueryBuilderDialog connectionId={builderScope.connectionId} onBack={onBack} onClose={onClose}
+      onViewDirty={onBuilderViewDirty} onViewApplied={onSqliteViewApplied} onViewUncertain={onSqliteViewUncertain}/>;
     if (builderScope.dialect === 'postgresql') return <PostgresQueryBuilderDialog connectionId={builderScope.connectionId}
-      database={builderScope.database} onBack={onBack} onClose={onClose}/>;
+      database={builderScope.database} onBack={onBack} onClose={onClose}
+      onViewDirty={onBuilderViewDirty} onViewCreated={onPostgresViewCreated}/>;
     return <QueryJoinStartDialog connectionId={builderScope.connectionId} database={builderScope.database}
       onViewApplied={onViewApplied} onBack={onBack} onClose={onClose}/>;
   }

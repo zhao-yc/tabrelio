@@ -40,10 +40,10 @@ export function PostgresCreateViewDialog({ target, kind, copy, viewSeed, onDirty
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
   const seedProfile = useRef(profile).current;
-  const stale = (!!copy && version !== copy.version) || (!!viewSeed && (version !== viewSeed.version || profile !== seedProfile));
+  const stale = (!!copy && version !== copy.version) || (!!viewSeed && (version !== viewSeed.version || profile !== seedProfile || viewSeed.current?.() === false));
   const dialect = profile?.dialect;
   const [schemas, setSchemas] = useState<string[]>([]);
-  const [draft, setDraft] = useState(() => ({ schema: copy?.schema ?? '', view: '', definition: copy?.definition ?? viewSeed?.sql ?? '',
+  const [draft, setDraft] = useState(() => ({ schema: copy?.schema ?? viewSeed?.preferredSchema ?? '', view: '', definition: copy?.definition ?? viewSeed?.sql ?? '',
     comment: copy?.comment ?? '', populate: !copy, columnNames: copy?.columnNames ?? [] }));
   const [previewColumns, setPreviewColumns] = useState<{ owner: object; names: string[] }>();
   const [preview, setPreview] = useState<(PostgresCreateTablePreview & { version: number })>();
@@ -89,7 +89,7 @@ export function PostgresCreateViewDialog({ target, kind, copy, viewSeed, onDirty
   /** 预览只读取目录，确认才消费准确令牌并请求创建。 */
   async function submit(apply: boolean) {
     const owner = lifecycle.current;
-    if (!owner || operation.current || stale || unknown || loading || dialect !== 'postgresql' ||
+    if (!owner || operation.current || stale || viewSeed?.current?.() === false || unknown || loading || dialect !== 'postgresql' ||
         (useWorkspace.getState().connectionVersions[connectionId] ?? 0) !== version ||
         apply && preview?.version !== version) return;
     operation.current = true;
@@ -107,6 +107,11 @@ export function PostgresCreateViewDialog({ target, kind, copy, viewSeed, onDirty
         const result = await invoke('postgres.createView.preview', input);
         if (lifecycle.current === owner) setPreview({ ...result, version });
         return;
+      }
+      if (viewSeed?.beforeApply) {
+        await viewSeed.beforeApply();
+        if (lifecycle.current !== owner || viewSeed.current?.() === false ||
+            (useWorkspace.getState().connectionVersions[connectionId] ?? 0) !== version) throw Error(text.changed);
       }
       sent = true;
       const result = await invoke('postgres.createView.apply', { connectionId, database, token: preview!.token });
@@ -135,7 +140,7 @@ export function PostgresCreateViewDialog({ target, kind, copy, viewSeed, onDirty
 
   function importCurrent(): boolean {
     const state = useWorkspace.getState();
-    return !!lifecycle.current && !operation.current && !stale && !unknown &&
+    return !!lifecycle.current && !operation.current && !stale && !unknown && viewSeed?.current?.() !== false &&
       (state.connectionVersions[connectionId] ?? 0) === version &&
       state.connections.find(item => item.id === connectionId) === profile;
   }

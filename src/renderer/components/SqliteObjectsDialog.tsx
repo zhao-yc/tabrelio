@@ -60,7 +60,7 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, sourceView, 
     if (props.scope !== fixed.inputScope || props.scope.connectionId !== fixed.scope.connectionId || props.scope.database !== fixed.scope.database || props.scope.kind !== fixed.scope.kind || props.scope.name !== fixed.scope.name || props.targetVersion !== fixed.version || props.action !== fixed.action || props.sourceView !== fixed.sourceView || props.viewSeed !== fixed.viewSeed || props.services !== fixed.services || profile !== fixed.profile || version !== fixed.version || fixed.profile?.dialect !== 'sqlite' || fixed.scope.database !== 'main') invalid.current = true;
     const op = operation.current;
     if (op?.lease && !op.acquiring && (!op.lease.owns() || op.tableLeases.some(item => !item.lease.owns()))) invalid.current = true;
-    if (op && (op.nameEpoch !== nameEpoch.current || !sameTarget(op.target, targetOf()))) invalid.current = true;
+    if (fixed.viewSeed?.current?.() === false || op && (op.nameEpoch !== nameEpoch.current || !sameTarget(op.target, targetOf()))) invalid.current = true;
     if (op?.kind === 'apply' && !op.acquiring) { const tabs = tableTabs(); if (tabs.length !== op.tableLeases.length || tabs.some(tab => !op.tableLeases.some(item => item.id === tab.id) || now.dirtyTabs[tab.id] || now.tableLayoutDrafts[tab.id])) invalid.current = true; }
     return !!lifetime.current && !closed.current && !invalid.current;
   }
@@ -157,7 +157,10 @@ export function SqliteObjectsDialog({ scope, targetVersion, action, sourceView, 
     const op = begin('apply'); if (!op) return; consumed.current.add(chosen.previewId);
     op.promise = (async () => {
       try {
-        if (!accepts(op)) return; op.sent = true;
+        if (!accepts(op)) return;
+        if (fixed.viewSeed?.beforeApply) await fixed.viewSeed.beforeApply();
+        if (!accepts(op)) return;
+        op.sent = true;
         const value = sqliteObjectsOutcomeSchema.parse(await fixed.services.apply({ previewId: chosen.previewId, taskId: op.id, confirmation: chosen.confirmation, acknowledgements: [...op.draft.acknowledgements] }));
         if (!sameTarget(value.target) || value.action !== fixed.action || value.fact.requestedStatements !== op.expectedStatements) throw Error(text.response);
         if (op.fact) assertSqliteObjectsFactTransition(op.fact, value.fact);
