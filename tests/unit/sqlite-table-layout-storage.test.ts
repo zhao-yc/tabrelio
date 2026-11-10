@@ -24,7 +24,7 @@ it('PostgreSQL 布局按准确 schema 对象持久化，CAS 与 SQLite 隔离且
   const connection = { id: pg.connectionId, name: '合成 PostgreSQL', group: '', color: '#123456', dialect: 'postgresql' as const,
     host: 'never-open.invalid', port: 5432, user: 'offline', rememberPassword: false };
   store.saveConnection(connection);
-  const layout = { version: 1 as const, columns: [{ name: 'a', hidden: true }, { name: 'A', hidden: false, width: 235 }], frozenThrough: 'A', rowHeight: 56 as const };
+  const layout = { version: 1 as const, columns: [{ name: 'a', hidden: true }, { name: 'A', hidden: false, width: 235 }], frozenThrough: 'A', rowHeight: 73 };
   const empty = store.postgresTableLayout(pg), saved = store.savePostgresTableLayout({ ...packet(empty), preferences: layout });
   expect(saved).toMatchObject({ target: pg, revision: 1, preferences: layout });
   const alias = { ...pg, table: '"public"."项目""清单"' };

@@ -1,7 +1,6 @@
 /* 只影响数据行，表头、复选框、编辑器和原始复制值使用各自行为。 */
-.results-grid.grid-row-height-24 .rdg-row .rdg-cell { line-height: 24px; }
-.results-grid.grid-row-height-56 .rdg-row .rdg-cell { line-height: 56px; }
-.results-grid.grid-row-height-56 .rdg-row .grid-row-preview {
+.results-grid .rdg-row .rdg-cell { line-height: var(--grid-data-row-height, 32px); }
+.results-grid.grid-row-multiline .rdg-row .grid-row-preview {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;

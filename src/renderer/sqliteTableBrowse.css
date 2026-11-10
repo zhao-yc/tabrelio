@@ -30,8 +30,6 @@
   min-height: calc(var(--sqlite-grid-min-height) + var(--sqlite-grid-actions-min-height) + var(--sqlite-grid-find-min-height));
   overflow: hidden;
 }
-.sqlite-browse-result:has(.grid-row-height-24) { --sqlite-data-row-height: 24px; }
-.sqlite-browse-result:has(.grid-row-height-56) { --sqlite-data-row-height: 56px; }
 .sqlite-browse-result:has(.query-result-find-region) { --sqlite-grid-find-min-height: 36px; }
 .sqlite-browse-result > .results-grid { height: 100%; }
 .sqlite-browse-result .query-result-grid { display: flex; flex-direction: column; }

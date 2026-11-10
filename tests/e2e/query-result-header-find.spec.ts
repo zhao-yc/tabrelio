@@ -6,6 +6,7 @@ import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridH
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultSnapshotViewerZh as snapshotText } from '../../src/renderer/locales/queryResultSnapshotViewer.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { gridRowHeightZh as rowHeightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { readGridMenuClipboard } from './grid-cell-range-clipboard';
@@ -119,6 +120,16 @@ test('离线快照列标题查找按原列键定位重名列，重排后仍只�
   await expect.poll(async () => (await headers.nth(0).boundingBox())?.width).toBe(281);
   expect((await headers.nth(1).boundingBox())?.width).toBe(otherWidth);
   await expect(selectedRow).toBeChecked();
+  await (await navigationMenuItem(viewer, { name: columnText.open, exact: true })).click();
+  const exact = layout.getByRole('textbox', { name: rowHeightText.exact, exact: true });
+  await exact.fill('120');
+  await layout.getByRole('button', { name: rowHeightText.apply, exact: true }).click();
+  await layout.getByRole('button', { name: columnText.apply, exact: true }).click();
+  await expect(layout).toBeHidden();
+  await expect(grid).toHaveClass(/grid-row-height-120/);
+  await expect.poll(async () => (await grid.getByRole('row').nth(1).boundingBox())?.height).toBe(120);
+  await expect.poll(async () => (await headers.nth(0).boundingBox())?.width).toBe(281);
+  await viewer.screenshot({ path: info.outputPath('离线自定义行高.png') });
   expect(readFileSync(path, 'utf8')).toBe(bytes);
   expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);

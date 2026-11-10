@@ -7,7 +7,7 @@ import { reconcileSqliteLayout, sqliteLayoutPreferencesSchema } from '../../src/
 import { readGridRowHeight } from '../../src/shared/gridRowHeight';
 
 describe('表列偏好与可见坐标', () => {
-  it('行高预设与旧布局兼容，调和和列宽调整保留独立行高', () => {
+  it('精确行高兼容旧布局和预设，调和和列宽调整保留独立行高', () => {
     const legacy = { version: 1 as const, columns: [{ name: 'id', hidden: false }] };
     expect(readGridRowHeight(tablePreferencesSchema.parse(legacy).rowHeight)).toBe(32);
     const layout = { ...legacy, rowHeight: 56 as const };
@@ -16,7 +16,11 @@ describe('表列偏好与可见坐标', () => {
     expect(reconcileTablePreferences(['id', 'other'], layout).rowHeight).toBe(56);
     expect(reconcileSqliteLayout(['id', 'other'], layout).rowHeight).toBe(56);
     expect(setVisibleTableColumnWidths(layout, 240).rowHeight).toBe(56);
-    for (const rowHeight of ['24', 23, 57]) {
+    for (const rowHeight of [24, 32, 56, 57, 120]) {
+      expect(tablePreferencesSchema.parse({ ...legacy, rowHeight }).rowHeight).toBe(rowHeight);
+      expect(sqliteLayoutPreferencesSchema.parse({ ...legacy, rowHeight }).rowHeight).toBe(rowHeight);
+    }
+    for (const rowHeight of ['24', 23, 56.5, 121, NaN, Infinity]) {
       expect(tablePreferencesSchema.safeParse({ ...legacy, rowHeight }).success).toBe(false);
       expect(sqliteLayoutPreferencesSchema.safeParse({ ...legacy, rowHeight }).success).toBe(false);
     }

@@ -3,7 +3,7 @@ import { useGridHeaderMenu, type GridHeaderFreeze } from './GridHeaderMenu';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
-import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref, type CSSProperties } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { copyGridRangeNames, copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
@@ -447,7 +447,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, page, rows, d
     <GridRowSelectionActions rows={rows} selected={selectedRows} disabled={disabled}
       keyFor={rowSelectionKey}
       isCurrent={rowSelectionCurrent}
-      onChange={changeCheckedRows}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
+      onChange={changeCheckedRows}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}${height >= 56 ? ' grid-row-multiline' : ''}`} style={{ '--grid-data-row-height': `${height}px` } as CSSProperties} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={changeCheckedRows}

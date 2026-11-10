@@ -1,14 +1,19 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, restartOwnedDesktop, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { readGridRangeClipboard } from './grid-cell-range-clipboard';
 import { tableHeaderCopyZh as text } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { gridRangeCopyZh as range } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { gridRowHeightZh as rowHeightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
+import { sqliteTableLayoutZh } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
+import { postgresTableLayoutZh } from '../../src/renderer/locales/postgresTableLayout.zh-CN';
+import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -136,6 +141,18 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await widthField.press('Enter');
     await expect(widthDialog).toBeHidden();
     await expect.poll(() => widthOf(header)).toBe(239);
+    const layoutEntry = local ? sqliteTableLayoutZh.entry : dialect === 'postgresql' ? postgresTableLayoutZh.entry : tableGridZh.preferences;
+    const layoutTitle = local ? sqliteTableLayoutZh.title : dialect === 'postgresql' ? postgresTableLayoutZh.title : tableGridZh.preferences;
+    await (await navigationMenuItem(tableTab, { name: layoutEntry, exact: true })).click();
+    const tableLayout = page.getByRole('dialog', { name: layoutTitle, exact: true });
+    await tableLayout.getByRole('textbox', { name: rowHeightText.exact, exact: true }).fill('67');
+    await tableLayout.getByRole('button', { name: rowHeightText.apply, exact: true }).click();
+    await expect(tableLayout.getByText(tableGridZh.unsaved, { exact: true })).toBeVisible();
+    await tableLayout.getByRole('button', { name: tableGridZh.save, exact: true }).click();
+    await expect(tableLayout.getByText(tableGridZh.saved, { exact: true })).toBeVisible();
+    await tableLayout.getByRole('button', { name: zh.common.close, exact: true }).last().click();
+    await expect(tableLayout).toBeHidden();
+    await expect.poll(async () => (await tableTab.getByRole('grid').getByRole('row').nth(1).boundingBox())?.height).toBe(67);
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -226,8 +243,40 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     expect(await widthOf(names[0])).toBe(otherWidth);
     await expect(checkedRow).toBeChecked();
     expect(await history()).toEqual(historyBeforeWidth);
+    await (await navigationMenuItem(query, { name: columnsText.open, exact: true })).click();
+    const exact = layout.getByRole('textbox', { name: rowHeightText.exact, exact: true });
+    const applyHeight = layout.getByRole('button', { name: rowHeightText.apply, exact: true });
+    for (const invalid of ['23', '121', '73.5']) {
+      await exact.fill(invalid);
+      await expect(applyHeight).toBeDisabled();
+    }
+    await exact.fill('73');
+    await applyHeight.click();
+    await expect(layout.getByRole('combobox', { name: rowHeightText.label, exact: true })).toHaveValue('73');
+    await page.screenshot({ path: info.outputPath('自定义行高设置.png') });
+    await layout.getByRole('button', { name: columnsText.apply, exact: true }).click();
+    await expect(layout).toBeHidden();
+    await expect(grid).toHaveClass(/grid-row-height-73/);
+    await expect.poll(async () => (await grid.getByRole('row').nth(1).boundingBox())?.height).toBe(73);
+    await expect.poll(() => widthOf(names[1])).toBe(287);
+    expect(await history()).toEqual(historyBeforeWidth);
+    await page.screenshot({ path: info.outputPath('自定义行高应用.png') });
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
+    if (local) {
+      await open('header-table');
+      await expect(header).toBeVisible();
+      await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).activeTabId).toBe('header-table');
+      await confirmOwnedDesktopExit(info);
+      const restarted = await restartOwnedDesktop(info);
+      const restored = restarted.page.locator('.sqlite-table-tab:visible').getByRole('grid');
+      await expect(restored).toHaveClass(/grid-row-height-67/);
+      await expect.poll(async () => (await restored.getByRole('row').nth(1).boundingBox())?.height).toBe(67);
+      await expect.poll(async () => (await restored.getByRole('columnheader').filter({ hasText: /^amount/i }).boundingBox())?.width).toBe(239);
+      await restarted.page.screenshot({ path: info.outputPath('SQLite重启恢复行高.png') });
+      expect(await readFile(filePath)).toEqual(baseline);
+      expect(pageErrors).toEqual([]);
+    }
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
     retainOwnedDesktopResources(info);

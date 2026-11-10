@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-10 源码增量。表页、查询结果和离线快照的列布局支持精确设置网格行高，保留三档快捷预设，表页沿用对象布局保存。D06 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
+
 2026-11-10 源码增量。表页、查询结果和离线快照可从列标题菜单为当前列输入精确像素宽度，同名列按各自原列键区分。沿用既有布局和保存流程。D06 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
 
 2026-11-10 源码增量。表页、查询结果和离线快照可在数据格按 Ctrl+A／⌘A 切换全部可见单元格选区，或从数据格菜单选中。当前页虚拟滚动的行纳入选区，保留行勾选与活动格。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)

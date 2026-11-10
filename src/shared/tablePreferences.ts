@@ -9,7 +9,7 @@ export interface TablePreferences { version: 1; columns: TableColumnPreference[]
 export const tablePreferencesLimits = { tables: 500, columns: 4096, entryBytes: 512 * 1024, totalBytes: 8 * 1024 * 1024, minWidth: 64, maxWidth: 2000 } as const;
 export const tablePreferenceTargetSchema = z.object({ connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256), table: z.string().min(1).max(256) }).strict();
 /** 各驱动使用自己的准确名称合同，列布局语义与宽度预算共同维护。 */
-export function tablePreferencesShapeFor(name: z.ZodType<string>, maximum: number = tablePreferencesLimits.columns) { return z.object({ version: z.literal(1), columns: z.array(z.object({ name, hidden: z.boolean(), width: z.number().int().min(tablePreferencesLimits.minWidth).max(tablePreferencesLimits.maxWidth).optional() }).strict()).max(maximum), frozenThrough: name.optional(), rowHeight: z.custom<GridRowHeight>(isGridRowHeight, '数据行高预设无效').optional() }).strict().superRefine((preferences, context) => {
+export function tablePreferencesShapeFor(name: z.ZodType<string>, maximum: number = tablePreferencesLimits.columns) { return z.object({ version: z.literal(1), columns: z.array(z.object({ name, hidden: z.boolean(), width: z.number().int().min(tablePreferencesLimits.minWidth).max(tablePreferencesLimits.maxWidth).optional() }).strict()).max(maximum), frozenThrough: name.optional(), rowHeight: z.custom<GridRowHeight>(isGridRowHeight, '数据行高必须是 24 到 120 的整数').optional() }).strict().superRefine((preferences, context) => {
   const names = new Set<string>();
   for (const column of preferences.columns) {
     if (names.has(column.name)) context.addIssue({ code: 'custom', message: '表偏好不能重复列名' });

@@ -43,12 +43,10 @@
 .pg-table-grid:has(> .pg-record-grid-host:not([hidden])) { min-height: 240px; }
 .pg-table-grid .results-grid {
   /* 高度由剩余空间分配，至少容纳表头与两行，避免原有 100% 高度计入相邻工具条。 */
-  flex: 1 0 calc(var(--rdg-header-row-height, 40px) + 2 * var(--pg-data-row-height, 32px));
+  flex: 1 0 calc(var(--rdg-header-row-height, 40px) + 2 * min(var(--grid-data-row-height, 32px), 56px));
   height: 0;
   min-height: 0;
 }
-.pg-table-grid .grid-row-height-24 { --pg-data-row-height: 24px; }
-.pg-table-grid .grid-row-height-56 { --pg-data-row-height: 56px; }
 .pg-view-switch { display: inline-flex; gap: 4px; }
 .pg-view-switch button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); }
 .pg-record-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
