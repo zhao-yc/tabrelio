@@ -5,6 +5,7 @@ import { sqliteBuilderJoinDraftSchema, sqliteQueryBuilderTargetSchema } from './
 import { postgresBuilderJoinDraftSchema, postgresQueryBuilderTargetSchema } from './postgresQueryBuilder';
 import { sqliteTableBrowseLimits, sqliteTableFilterSchema, sqliteFilterSelectionSchema } from './sqliteTableBrowse';
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits } from './tableForeignKeyJoinSummary';
+import { queryBuilderAliasMap, queryBuilderColumnAliasesSchema } from './queryBuilderProjection';
 
 const id = z.string().min(1).max(128);
 const field = z.string().min(1).max(530).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value));
@@ -27,6 +28,7 @@ const sqliteFilter = z.object({
 }).strict();
 const base = z.object({
   version: z.literal(1), selected: z.array(field).max(1600), distinct: z.boolean(),
+  columnAliases: queryBuilderColumnAliasesSchema.optional(),
   limit: z.string().regex(/^(?:[1-9]\d{0,5}|1000000)?$/),
   summaryEnabled: z.boolean(), summary,
 }).strict();
@@ -49,6 +51,8 @@ const postgresDraft = base.extend({
 export const singleQueryDraftSchema = z.discriminatedUnion('dialect', [sqliteDraft, postgresDraft]).superRefine((draft, ctx) => {
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
   const unique = (values: string[]) => new Set(values).size === values.length;
+  try { queryBuilderAliasMap(draft.selected, draft.columnAliases); }
+  catch (reason) { issue(reason instanceof Error ? reason.message : '查询设计的输出别名无效。'); }
   if (!unique(draft.selected) || !unique(draft.summary.groups) || !unique(draft.summary.aggregates.map(item => item.id)) ||
       !unique(draft.summary.sort.map(item => item.column)) || !unique(draft.sort.map(item => item.column))) issue('查询设计包含重复编辑项。');
   if (draft.dialect === 'sqlite') {

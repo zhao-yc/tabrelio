@@ -7,6 +7,7 @@ import { parsePostgresCatalogName, postgresIdentifier } from './postgresSql';
 import { postgresAdvancedTableFilterSchema, postgresTableTargetSchema } from './postgresTable';
 import { postgresTableCondition } from './postgresTableReadSql';
 import { compileQueryBuilderSummary, queryBuilderSummarySchema } from './queryBuilderSummary';
+import { queryBuilderColumnAliasesSchema, queryBuilderOutputAliases } from './queryBuilderProjection';
 
 export const postgresQueryBuilderCatalogueSchema = postgresTableTargetSchema.pick({ connectionId: true, database: true });
 export const postgresQueryBuilderTargetSchema = postgresQueryBuilderCatalogueSchema.extend({
@@ -43,6 +44,7 @@ export type PostgresBuilderJoin = z.infer<typeof joinStep>;
 const designFields = postgresQueryBuilderTargetSchema.extend({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   columns: z.array(z.string().min(1).max(256)).max(postgresQueryBuilderLimits.columns),
+  columnAliases: queryBuilderColumnAliasesSchema.optional(),
   filter: postgresAdvancedTableFilterSchema.optional(),
   sort: sortRulesSchema.refine(rules => new Set(rules.map(rule => rule.column)).size === rules.length, '排序字段不能重复'),
   distinct: z.boolean(),
@@ -57,7 +59,7 @@ export type PostgresQueryBuilderInspectInput = z.infer<typeof postgresQueryBuild
 /** 只从同一连接、数据库和目录修订编译；值用 E 字符串，跨会话保留反斜杠和换行。 */
 export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign, source: PostgresQueryBuilderSource,
   joinedSources: readonly PostgresQueryBuilderSource[] = []): string {
-  const { connectionId, database, table, fingerprint, columns, filter, sort, distinct, rowLimit, summary, joins = [] } = designFields.parse(design);
+  const { connectionId, database, table, fingerprint, columns, columnAliases, filter, sort, distinct, rowLimit, summary, joins = [] } = designFields.parse(design);
   if (source.target.connectionId !== connectionId || source.target.database !== database || source.target.table !== table ||
       source.fingerprint !== fingerprint) throw Error('PostgreSQL 查询来源已变化，请重新读取结构。');
   if (joins.length !== joinedSources.length) throw Error('PostgreSQL 关联来源不完整。');
@@ -78,7 +80,9 @@ export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign,
     const target = parsePostgresCatalogName(name)!;
     return postgresIdentifier(target.schema) + '.' + postgresIdentifier(target.name);
   };
-  const alias = joins.length ? (name: string) => references.get(name)!.alias : undefined;
+  const defaultOutput = (name: string) => references.get(name)?.alias ?? name;
+  const aliases = queryBuilderOutputAliases(columns, columnAliases, defaultOutput);
+  const alias = joins.length ? defaultOutput : undefined;
   const joinSql = joins.map((step, index) => {
     const right = joinedSources[index], position = index + 1;
     if (right.target.connectionId !== connectionId || right.target.database !== database || right.target.table !== step.table ||
@@ -99,9 +103,14 @@ export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign,
   const grouped = summary && compileQueryBuilderSummary(summary, field, postgresIdentifier, 'pg_catalog.', alias);
   if (grouped) for (const rule of summary?.having?.rules ?? []) grouped.havingField(rule.column);
   const having = grouped ? postgresTableCondition(summary?.having, grouped.havingField, literal) : '';
-  const order = grouped?.order ?? sort.map(rule => field(rule.column) + ' ' + rule.direction + (rule.nulls ? ' NULLS ' + rule.nulls : ''));
+  // 单表显式别名可能遮住另一原字段，排序使用限定名保持绑定。
+  const order = grouped?.order ?? sort.map(rule => (aliases.size && !joins.length ? qualified(table) + '.' : '') +
+    field(rule.column) + ' ' + rule.direction + (rule.nulls ? ' NULLS ' + rule.nulls : ''));
   const sql = (distinct ? 'SELECT DISTINCT ' : 'SELECT ') + (grouped?.projection ??
-      columns.map(name => field(name) + (alias ? ' AS ' + postgresIdentifier(alias(name)) : '')).join(', ')) +
+      columns.map(name => {
+        const output = aliases.get(name) ?? alias?.(name);
+        return field(name) + (output === undefined ? '' : ' AS ' + postgresIdentifier(output));
+      }).join(', ')) +
     ' FROM ' + qualified(table) + (joins.length ? ' AS t1' : '') + joinSql +
     (where ? ' WHERE ' + where : '') + (grouped?.groupBy ?? '') + (having ? ' HAVING ' + having : '') +
     (order.length ? ' ORDER BY ' + order.join(', ') : '') +

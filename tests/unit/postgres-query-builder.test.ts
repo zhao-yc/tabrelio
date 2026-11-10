@@ -10,6 +10,20 @@ const source: PostgresQueryBuilderSource = {
 const draft: PostgresQueryBuilderDesign = { ...source.target, fingerprint: source.fingerprint, columns: ['id', '值'], sort: [], distinct: false };
 
 describe('PostgreSQL 单表查询设计', () => {
+  it('自定义输出名支持引号，且原字段排序不被同名输出遮蔽', () => {
+    const design: PostgresQueryBuilderDesign = { ...draft, columns: ['值', 'id'], distinct: true,
+      columnAliases: [{ column: '值', alias: 'id' }, { column: 'id', alias: '原"编号' }],
+      sort: [{ column: 'id', direction: 'DESC' }] };
+    expect(buildPostgresQueryBuilderSql(design, source)).toBe(
+      'SELECT DISTINCT "值" AS "id", "id" AS "原""编号" FROM "项目.数据"."表""1" ORDER BY "项目.数据"."表""1"."id" DESC');
+    expect(() => buildPostgresQueryBuilderSql({ ...design, columnAliases: [{ column: '值', alias: 'id' }] }, source))
+      .toThrow('输出别名不能与其他输出列同名');
+    expect(() => buildPostgresQueryBuilderSql({ ...design, columns: ['id'] }, source)).toThrow('必须对应一个已选字段');
+    for (const alias of ['字'.repeat(22), '含\n换行', ' ']) {
+      expect(postgresQueryBuilderInspectSchema.safeParse({ ...design, inspect: 'rows',
+        columnAliases: [{ column: 'id', alias }] }).success).toBe(false);
+    }
+  });
   it('跨 schema 多表与自关联使用有序别名，ON 只能引用本步及先前来源', () => {
     const right = { ...source, target: { ...source.target, table: '"public"."other"' },
       columns: [{ name: 'id', type: 'bigint' }, { name: 'x'.repeat(63), type: 'text' }] };

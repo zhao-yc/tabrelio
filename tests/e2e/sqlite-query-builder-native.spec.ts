@@ -11,6 +11,7 @@ import { tableForeignKeyJoinSummaryZh as aggregate } from '../../src/renderer/lo
 import { queryBuilderSummaryZh as summary } from '../../src/renderer/locales/queryBuilderSummary.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
 import { tableFilterGroupsZh as groups } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
+import { queryBuilderProjectionZh as projection } from '../../src/renderer/locales/queryBuilderProjection.zh-CN';
 import { queryViewDraftZh as viewDraft } from '../../src/renderer/locales/queryViewDraft.zh-CN';
 import { sqliteObjectsZh as objects } from '../../src/renderer/locales/sqliteObjects.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -235,8 +236,14 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     const joinFrom = ' FROM "main"."JOIN起点" AS t1 LEFT JOIN "main"."关联视图" AS t2 ON (t1."id" = t2."id")' +
       ' LEFT JOIN "main"."关联视图" AS t3 ON (t1."id" <= t3."id" AND (t2."id" = t3."id" OR t1."id" = t3."alternate_id"))' +
       ' WHERE (typeof(t1."id") = \'integer\' AND t1."id" >= 1)';
-    const joined = 'SELECT t1."id" AS "t1.id", t3."note" AS "t3.note"' + joinFrom + ' ORDER BY t1."id" ASC;';
+    await builder.getByText(projection.order, { exact: true }).click();
+    await button(projection.earlier('t3.note')).click();
+    await builder.getByRole('textbox', { name: projection.alias('t1.id'), exact: true }).fill('原值');
+    await builder.getByRole('textbox', { name: projection.alias('t3.note'), exact: true }).fill('命中"说明');
+    const joined = 'SELECT t3."note" AS "命中""说明", t1."id" AS "原值"' + joinFrom + ' ORDER BY t1."id" ASC;';
     await expect(sql).toHaveText(joined);
+    await builder.getByRole('textbox', { name: projection.alias('t3.note'), exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('sqlite-builder-projection.png') });
     await button(text.inspectLabels.explain).click();
     await expect(results.getByRole('tree')).toBeVisible();
     await button(text.inspectLabels.rows).click();
@@ -256,7 +263,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     const joinReader = new DatabaseSync(database, { readOnly: true });
     try {
       expect(joinReader.prepare('SELECT * FROM builder_join').all()).toEqual([
-        { 't1.id': 1, 't3.note': '关联命中' }, { 't1.id': 2, 't3.note': null }, { 't1.id': 3, 't3.note': null },
+        { '命中"说明': '关联命中', 原值: 1 }, { '命中"说明': null, 原值: 2 }, { '命中"说明': null, 原值: 3 },
       ]);
     } finally { joinReader.close(); }
     async function approve(label: string) {
@@ -277,6 +284,8 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await approve(joinText.designRestoreConfirm);
     await designs.getByRole('button', { name: joinText.designLoad, exact: true }).click();
     await expect(sql).toHaveText(joined);
+    await builder.getByText(projection.order, { exact: true }).click();
+    await expect(builder.getByRole('textbox', { name: projection.alias('t3.note'), exact: true })).toHaveValue('命中"说明');
     const joinedFile = readFileSync(database);
     await button(text.open).click();
     await expect(builder).toBeHidden();

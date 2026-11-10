@@ -9,6 +9,7 @@ import { queryViewDraftZh as viewDraft } from '../../src/renderer/locales/queryV
 import { postgresCreateViewZh as create } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
 import { tableFilterGroupsZh as groups } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
+import { queryBuilderProjectionZh as projection } from '../../src/renderer/locales/queryBuilderProjection.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
@@ -342,6 +343,29 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
 
     await selectSource(table);
     const beforeChange = await settings();
+    await button(text.none).click();
+    await builder.getByRole('checkbox', { name: text.choose('id'), exact: true }).check();
+    await builder.getByRole('checkbox', { name: text.choose('label'), exact: true }).check();
+    await builder.getByText(projection.order, { exact: true }).click();
+    await button(projection.earlier('label')).click();
+    const idAlias = builder.getByRole('textbox', { name: projection.alias('id'), exact: true });
+    const labelAlias = builder.getByRole('textbox', { name: projection.alias('label'), exact: true });
+    await labelAlias.fill('id');
+    await expect(builder.getByRole('alert')).toContainText('输出别名不能与其他输出列同名');
+    await idAlias.fill('原编号');
+    await builder.getByRole('checkbox', { name: text.distinct }).check();
+    await button(text.sort).click();
+    await button(sort.add).click();
+    await builder.getByRole('combobox', { name: sort.field(1), exact: true }).selectOption('id');
+    await button(sort.apply).click();
+    await builder.getByLabel(text.limit, { exact: true }).fill('1');
+    await expect(sql).toHaveText('SELECT DISTINCT "label" AS "id", "id" AS "原编号" FROM ' + table + ' ORDER BY ' + table + '."id" ASC LIMIT 1;');
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
+    await expect(results.getByRole('columnheader', { name: '原编号 BIGINT', exact: true })).toBeVisible();
+    await expect(results.getByRole('gridcell', { name: '1', exact: true })).toBeVisible();
+    await labelAlias.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('postgres-builder-projection.png') });
     await observer.query('ALTER TABLE ' + table + ' ADD COLUMN new_column text');
     await button(text.inspectLabels.rows).click();
     await expect(results.getByRole('alert')).toContainText('PostgreSQL 查询来源已变化');

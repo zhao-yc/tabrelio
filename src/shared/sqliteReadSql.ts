@@ -65,7 +65,7 @@ function sqliteFilterCondition(input: SqliteFilterSet, field: (name: string) => 
 }
 
 /** 绑定分页与字面查询共用同一构造器；由render决定占位/字面，不在SQL文本中猜问号。 */
-function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[] | undefined, complete: boolean, render: (parameter: SqliteReadParameter) => string, project?: (qualifiedColumn: string) => string, explicitLimit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection): string {
+function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[] | undefined, complete: boolean, render: (parameter: SqliteReadParameter) => string, project?: (qualifiedColumn: string) => string, explicitLimit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection, outputAliases?: ReadonlyMap<string, string>): string {
   const schema = join ? sqliteQueryBuilderPageSchema : sqliteTablePageSchema;
   const input = schema.parse(source), names = new Set(columns.map(column => column.name));
   if (input.searchRecordRef) throw Error('SQLite 搜索命中不能转换为普通表筛选');
@@ -86,12 +86,16 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
   const having = grouped && summary?.having
     ? sqliteFilterCondition(schema.parse({ ...input, ...summary.having }), grouped.havingField, render)
     : '';
-  const order = grouped?.order ?? input.sort.map(sort => field(sort.column) + (sort.direction === 'asc' ? ' ASC' : ' DESC'));
+  const table = '"main".' + quoteSqliteIdentifier(input.table);
+  // 带输出别名时，显式限定原表的排序字段以避开同名结果列。
+  const order = grouped?.order ?? input.sort.map(sort => (outputAliases?.size && !join ? table + '.' : '') +
+    field(sort.column) + (sort.direction === 'asc' ? ' ASC' : ' DESC'));
   const pagination = complete ? explicitLimit === undefined ? '' : ' LIMIT ' + render({ kind: 'count', value: explicitLimit }) : ' LIMIT ' + render({ kind: 'count', value: input.limit + 1 }) + ' OFFSET ' + render({ kind: 'count', value: input.offset });
-  const from = join?.from ?? ('"main".' + quoteSqliteIdentifier(input.table) + (alias ? ' AS ' + alias : ''));
+  const from = join?.from ?? (table + (alias ? ' AS ' + alias : ''));
   const projection = grouped?.projection ?? output.map(name => {
     const column = field(name);
-    return project || join ? (project ? project(column) : column) + ' AS ' + quoteSqliteIdentifier(name) : column;
+    const outputName = outputAliases?.get(name) ?? (project || join ? name : undefined);
+    return (project ? project(column) : column) + (outputName === undefined ? '' : ' AS ' + quoteSqliteIdentifier(outputName));
   }).join(', ');
   return (distinct ? 'SELECT DISTINCT ' : 'SELECT ') + projection + ' FROM ' + from
     + (association ? ' WHERE ' + (where ? '(' + where + ') AND ' : '') + '(' + association + ')' : where ? ' WHERE ' + where : '') + (grouped?.groupBy ?? '') + (having ? ' HAVING ' + having : '') + (order.length ? ' ORDER BY ' + order.join(', ') : '') + pagination;
@@ -123,9 +127,9 @@ function literal(parameter: SqliteReadParameter): string {
   const number = Number(value.value); if (Object.is(number, -0)) return '-0.0'; const canonical = String(number); return /[.eE]/.test(canonical) ? canonical : canonical + '.0';
 }
 /** 生成完整匹配SELECT，默认不带页长/offset；只能选择目录字段与显式受限LIMIT。 */
-export function buildSqliteFilteredSelect(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[], limit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection): string {
+export function buildSqliteFilteredSelect(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[], limit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection, outputAliases?: ReadonlyMap<string, string>): string {
   if (!Array.isArray(selected)) throw Error('SQLite查询必须明确选择字段');
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > sqliteReadSqlLimits.limit)) throw Error('SQLite查询行数上限必须为1至1000000的整数');
-  const sql = build(source, columns, selected, true, literal, undefined, limit, distinct, summary, join);
+  const sql = build(source, columns, selected, true, literal, undefined, limit, distinct, summary, join, outputAliases);
   if (sql.length * 2 > sqliteReadSqlLimits.utf16Bytes || new TextEncoder().encode(sql).byteLength > sqliteReadSqlLimits.utf8Bytes) throw Error('SQLite生成查询超过文本预算，请减少字段或筛选条件'); return sql;
 }

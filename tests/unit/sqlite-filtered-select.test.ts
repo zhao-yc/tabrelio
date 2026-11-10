@@ -34,6 +34,24 @@ function input(filters: SqliteTableFilter[] = [], patch: Partial<SqliteTablePage
 function bound(value: SqliteValue): SQLInputValue { if (value === null || typeof value === 'string' || typeof value === 'number') return value; if (value.type === 'integer') return BigInt(value.value); if (value.type === 'real') return Number(value.value); return Buffer.from(value.base64, 'base64'); }
 function rows(db: DatabaseSync, sql: string, parameters: SQLInputValue[] = []) { const statement = db.prepare(sql); statement.setReadBigInts(true); return statement.all(...parameters); }
 
+it('SQLite 明细别名不接管同名原字段排序，并按 SQLite 标识符规则检查重名', () => {
+  const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table: 'ranked', kind: 'table' },
+    schemaKey: 'a'.repeat(64), columns: [{ name: 'id', declaredType: 'INTEGER' }, { name: 'rank', declaredType: 'INTEGER' }] };
+  const design: SqliteQueryBuilderDesign = { ...source.target, schemaKey: source.schemaKey, columns: ['id'], distinct: false,
+    columnAliases: [{ column: 'id', alias: 'rank' }], filters: [], mode: 'and', sort: [{ column: 'rank', direction: 'asc' }] };
+  const file = new DatabaseSync(join(directory, 'sqlite-builder-projection.sqlite'));
+  try {
+    file.exec('CREATE TABLE ranked (id, rank); INSERT INTO ranked VALUES (1,2),(2,1);');
+    expect(rows(file, buildSqliteQueryBuilderSql(design, source))).toEqual([{ rank: 2n }, { rank: 1n }]);
+    const both = { ...design, columns: ['rank', 'id'], columnAliases: [{ column: 'rank', alias: '原"排序' }, { column: 'id', alias: 'rank' }] };
+    expect(rows(file, buildSqliteQueryBuilderSql(both, source))).toEqual([
+      { '原"排序': 1n, rank: 2n }, { '原"排序': 2n, rank: 1n },
+    ]);
+    expect(() => buildSqliteQueryBuilderSql({ ...both, columnAliases: [{ column: 'id', alias: 'RANK' }] }, source))
+      .toThrow('输出别名不能与其他输出列同名');
+  } finally { file.close(); }
+});
+
 it('SQLite RIGHT／FULL JOIN 保留对应未匹配行，合格字段保持原名与存储类型', () => {
   const long = '字'.repeat(512), longKey = queryBuilderColumnKey(1, long);
   const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table: 'lhs', kind: 'table' },

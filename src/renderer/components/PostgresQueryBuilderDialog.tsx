@@ -22,6 +22,8 @@ import { TableSortPanel } from './TableSortPanel';
 import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
 import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
+import { QueryBuilderProjectionPanel } from './QueryBuilderProjectionPanel';
+import type { QueryBuilderColumnAlias } from '../../shared/queryBuilderProjection';
 import { QueryBuilderJoinPanel, type QueryBuilderJoinDraft } from './QueryBuilderJoinPanel';
 import { queryBuilderForeignKeyPairs, type QueryBuilderForeignKeyChoice } from '../../shared/queryBuilderJoin';
 import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
@@ -31,12 +33,12 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 interface CatalogueEntry { key: string; schema: string; name: string }
 
 function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBuilderSource, joins: readonly QueryBuilderJoinDraft<PostgresQueryBuilderSource, PostgresBuilderJoin>[] = []) {
-  const { selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup } = draft;
+  const { selected, columnAliases, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup } = draft;
   const outputs = queryBuilderSummaryOutputs(summary);
   if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
   const rowLimit = limit ? Number(limit) : undefined;
   if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > postgresQueryBuilderLimits.rowLimit)) throw Error(text.invalidLimit);
-  const design = { ...source.target, fingerprint: source.fingerprint, columns: summaryEnabled ? [] : selected,
+  const design = { ...source.target, fingerprint: source.fingerprint, columns: summaryEnabled ? [] : selected, columnAliases: summaryEnabled ? undefined : columnAliases,
     distinct: !summaryEnabled && distinct, rowLimit, sort: summaryEnabled ? [] : sort,
     summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary), having: havingRules.length ? {
       rules: havingRules.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })),
@@ -44,6 +46,9 @@ function compileDesign(draft: PostgresSingleQueryDraft, source: PostgresQueryBui
     } : undefined } : undefined,
     filter: rules.length ? { rules, mode, group } : undefined,
     joins: joins.length ? joins.map(item => item.step) : undefined };
+  if (summaryEnabled && columnAliases?.length) {
+    buildPostgresQueryBuilderSql({ ...design, columns: selected, columnAliases, filter: undefined, summary: undefined }, source, joins.map(item => item.source));
+  }
   return { design, sql: buildPostgresQueryBuilderSql(design, source, joins.map(item => item.source)) };
 }
 
@@ -63,6 +68,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [source, setSource] = useState<PostgresQueryBuilderSource>();
   const [joins, setJoins] = useState<QueryBuilderJoinDraft<PostgresQueryBuilderSource, PostgresBuilderJoin>[]>([]);
   const singleDraft = useRef<PostgresSingleQueryDraft | undefined>(undefined);
+  const [columnAliases, setColumnAliases] = useState<QueryBuilderColumnAlias[]>([]);
   const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
   const [sort, setSort] = useState<SortRule[]>([]);
@@ -82,8 +88,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const schemas = useMemo(() => [...new Set(catalogue?.map(item => item.schema))], [catalogue]);
   const choices = catalogue?.filter(item => (!schema || item.schema === schema) &&
     (item.key === table || (item.schema + '.' + item.name).toLowerCase().includes(search.toLowerCase())));
-  const draft = useMemo<PostgresSingleQueryDraft>(() => ({ dialect: 'postgresql', version: 1, selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup }),
-    [selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup]);
+  const draft = useMemo<PostgresSingleQueryDraft>(() => ({ dialect: 'postgresql', version: 1, selected, columnAliases: columnAliases.length ? columnAliases : undefined, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup }),
+    [selected, columnAliases, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, havingRules, havingMode, havingGroup]);
   const preview = useMemo<(ReturnType<typeof compileDesign> & { error?: never }) |
     { error: string; design?: never; sql?: never } | undefined>(() => {
     if (!source) return;
@@ -140,7 +146,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       if (!current()) return;
       if (result.target.connectionId !== connectionId || result.target.database !== database || result.target.table !== table)
         throw Error(text.stale);
-      setSource(result); setSelected(result.columns.map(column => column.name));
+      setSource(result); setSelected(result.columns.map(column => column.name)); setColumnAliases([]);
       setRules([]); setMode('all'); setGroup(undefined); setSort([]); setDistinct(false); setLimit('');
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
       setHavingRules([]); setHavingMode('all'); setHavingGroup(undefined);
@@ -171,7 +177,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   }
 
   function applyDraft(value: PostgresSingleQueryDraft) {
-    setSelected(value.selected); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
+    setSelected(value.selected); setColumnAliases(value.columnAliases ?? []); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
     setSummaryEnabled(value.summaryEnabled); setSummary(value.summary);
     setRules(value.rules); setMode(value.mode); setGroup(value.group);
     setHavingRules(value.havingRules); setHavingMode(value.havingMode); setHavingGroup(value.havingGroup);
@@ -207,8 +213,9 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       const next = right.columns.map(column => postgresBuilderColumnKey(joins.length + 1, column.name));
       if (!joins.length) {
         singleDraft.current = draft;
-        const root = source.columns.map(column => postgresBuilderColumnKey(0, column.name));
+        const root = draft.selected.map(name => postgresBuilderColumnKey(0, name));
         applyDraft({ ...draft, selected: [...root, ...next].slice(0, postgresQueryBuilderLimits.columns),
+          columnAliases: draft.columnAliases?.map(item => ({ ...item, column: postgresBuilderColumnKey(0, item.column) })),
           distinct: false, rules: [], mode: 'all', group: undefined, sort: [], summaryEnabled: false, summary: emptyQueryBuilderSummary,
           havingRules: [], havingMode: 'all', havingGroup: undefined });
       } else {
@@ -228,6 +235,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
     }
     setError('');
     setSelected(previous => previous.filter(name => !name.startsWith(prefix)));
+    setColumnAliases(previous => previous.filter(item => !item.column.startsWith(prefix)));
     setJoins(previous => previous.slice(0, -1));
     setRestoreEpoch(epoch => epoch + 1);
   }
@@ -314,20 +322,10 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         </details>
         <label className="check"><input type="checkbox" checked={summaryEnabled} disabled={disabled || !!editor}
           onChange={event => { if (editable()) setSummaryEnabled(event.target.checked); }}/>{summaryText.enabled}</label>
-        {!summaryEnabled && <fieldset disabled={disabled || !!editor}><legend>{text.columns}</legend>
-          <div className="child-reference-tools">
-            <button onClick={() => { if (editable()) setSelected(names); }}>{text.all}</button>
-            <button onClick={() => { if (editable()) setSelected([]); }}>{text.none}</button>
-          </div>
-          <div style={{ maxHeight: 180, overflow: 'auto' }}>{fields.map(({ name, type }) => <label key={name} className="check">
-            <input type="checkbox" aria-label={text.choose(name)} checked={selected.includes(name)} onChange={event => {
-              if (!editable()) return;
-              const checked = event.target.checked;
-              setSelected(previous => names.filter(column => column === name ? checked : previous.includes(column)));
-            }}/>{name} <small className="muted">{type}</small>
-          </label>)}</div>
-          <label className="check"><input type="checkbox" checked={distinct} onChange={event => { if (editable()) setDistinct(event.target.checked); }}/>{text.distinct}</label>
-        </fieldset>}
+        {!summaryEnabled && <QueryBuilderProjectionPanel fields={fields} selected={selected} aliases={columnAliases} distinct={distinct}
+          limit={postgresQueryBuilderLimits.columns} disabled={disabled || !!editor} labels={text}
+          onChange={(columns, aliases) => { if (editable() && !editor) { setSelected(columns); setColumnAliases(aliases); } }}
+          onDistinct={value => { if (editable() && !editor) setDistinct(value); }}/>}
         <fieldset><legend>{text.filter}</legend>
           <TableFilterPanel key={restoreEpoch} columns={names} filters={rules} mode={mode} disabled={disabled || !!editor} multilineScalar applyShortcut
             onFiltersChange={next => {

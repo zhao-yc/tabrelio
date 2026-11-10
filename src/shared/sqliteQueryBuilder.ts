@@ -3,6 +3,8 @@ import { sqliteSchemaScriptSchema } from './sqliteSchemaScript';
 import { sqliteQueryBuilderColumnSchema, sqliteQueryBuilderPageSchema, sqliteTableBrowseLimits, type SqliteTableColumn } from './sqliteTableBrowse';
 import { buildSqliteFilteredSelect, quoteSqliteIdentifier, sqliteReadSqlLimits } from './sqliteReadSql';
 import { queryBuilderSummarySchema } from './queryBuilderSummary';
+import { queryBuilderColumnAliasesSchema, queryBuilderOutputAliases } from './queryBuilderProjection';
+import { sqliteRelationshipName } from './sqliteRelationships';
 import { compileQueryBuilderOn, queryBuilderAlias, queryBuilderColumnKey, queryBuilderForeignKeyRevisions, queryBuilderJoinLimits,
   queryBuilderJoinSchema, validateQueryBuilderJoin } from './queryBuilderJoin';
 
@@ -31,6 +33,7 @@ const { mode, filters, sort } = sqliteQueryBuilderPageSchema.shape;
 const designFields = sqliteQueryBuilderTargetSchema.extend({
   schemaKey: schemaKeyField,
   columns: z.array(sqliteQueryBuilderColumnSchema).max(sqliteTableBrowseLimits.columns),
+  columnAliases: queryBuilderColumnAliasesSchema.optional(),
   mode, filters, sort,
   distinct: z.boolean(), rowLimit: z.number().int().min(1).max(sqliteReadSqlLimits.limit).optional(),
   summary: queryBuilderSummarySchema.extend({
@@ -45,7 +48,7 @@ export type SqliteQueryBuilderInspectInput = z.infer<typeof sqliteQueryBuilderIn
 /** 同一编译器用于草稿与独立只读预览，数据类型与表页筛选保持一致。 */
 export function buildSqliteQueryBuilderSql(design: SqliteQueryBuilderDesign, source: SqliteQueryBuilderSource,
   related: readonly SqliteQueryBuilderSource[] = []): string {
-  const { connectionId, database, table, kind, schemaKey, columns, mode, filters, sort, distinct, rowLimit, summary, joins = [] } = designFields.parse(design);
+  const { connectionId, database, table, kind, schemaKey, columns, columnAliases, mode, filters, sort, distinct, rowLimit, summary, joins = [] } = designFields.parse(design);
   if (source.target.connectionId !== connectionId || source.target.database !== database || source.target.table !== table ||
       source.target.kind !== kind || source.schemaKey !== schemaKey) throw Error('SQLite 查询来源已变化，请重新读取结构。');
   if ([table, ...columns, ...filters.map(filter => filter.column), ...sort.map(item => item.column)].some(name => /[\r\n]/.test(name)))
@@ -54,8 +57,9 @@ export function buildSqliteQueryBuilderSql(design: SqliteQueryBuilderDesign, sou
   if (distinct && sort.some(item => !columns.includes(item.column))) throw Error('去重查询只能按已选的输出字段排序。');
   if (joins.length !== related.length) throw Error('SQLite 关联来源不完整。');
   const projection = joins.length ? compileSources(source, joins, related) : undefined;
+  const aliases = queryBuilderOutputAliases(columns, columnAliases, name => name, sqliteRelationshipName);
   return buildSqliteFilteredSelect({ connectionId, database, table, taskId: 'sqlite-query-builder', offset: 0, limit: 1, mode, filters, sort },
-    source.columns, columns, rowLimit, distinct, summary, projection);
+    source.columns, columns, rowLimit, distinct, summary, projection, aliases);
 }
 
 /** 来源、别名和字段只能从同一快照的目录生成，ON 左侧不能引用本步或未来来源。 */
