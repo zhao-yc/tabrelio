@@ -572,7 +572,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       const model = instance?.getModel(), eol = model?.getEOL();
       // 与正文桥的受控同步采用同一模型EOL；只比较，不回写或吞掉其它正文差异。
       if (!alive.current || workspace.activeJobs[tab.id] || workspace.settings.activeTabId !== tab.id || current?.kind !== 'query' || !instance || !model || (eol !== '\n' && eol !== '\r\n') || model.getValue() !== (current.sql ?? '').replace(/\r\n|\r|\n/g, eol)) throw new Error(sqlFormattingZh.unavailable);
-      const preferences = { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces, keywordCase: workspace.settings.sqlKeywordCase, dialect: sqlite ? 'sqlite' as const : 'mysql' as const };
+      const preferences = { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces, keywordCase: workspace.settings.sqlKeywordCase, expressionWidth: workspace.settings.sqlExpressionWidth, dialect: sqlite ? 'sqlite' as const : 'mysql' as const };
       if (mode === 'compact') {
         if (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy()) throw Error(sqlFormattingZh.unavailable);
         setError('');
@@ -590,7 +590,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         assertCurrent() {
           if (observer) inspectModals(observer.takeRecords());
           const latest = useWorkspace.getState(), target = latest.settings.tabs.find(item => item.id === tab.id);
-          if (!alive.current || operation && formatting.current !== operation || target !== owner || latest.connections.find(item => item.id === owner.connectionId) !== profile || (latest.connectionVersions[owner.connectionId] ?? 0) !== version || sessionRef.current !== session || latest.settings.activeTabId !== tab.id || latest.activeJobs[tab.id] || busyRef.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy() || modalSeen || document.querySelector(appDialogSelector) || latest.settings.sqlKeywordCase !== preferences.keywordCase || latest.settings.editorTabSize !== preferences.tabSize || latest.settings.editorInsertSpaces !== preferences.insertSpaces) throw Error(sqlFormattingZh.unavailable);
+          if (!alive.current || operation && formatting.current !== operation || target !== owner || latest.connections.find(item => item.id === owner.connectionId) !== profile || (latest.connectionVersions[owner.connectionId] ?? 0) !== version || sessionRef.current !== session || latest.settings.activeTabId !== tab.id || latest.activeJobs[tab.id] || busyRef.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy() || modalSeen || document.querySelector(appDialogSelector) || latest.settings.sqlKeywordCase !== preferences.keywordCase || latest.settings.editorTabSize !== preferences.tabSize || latest.settings.editorInsertSpaces !== preferences.insertSpaces || latest.settings.sqlExpressionWidth !== preferences.expressionWidth) throw Error(sqlFormattingZh.unavailable);
         },
         subscribe(changed) {
           const unsubscribe = useWorkspace.subscribe(changed);

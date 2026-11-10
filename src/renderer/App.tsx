@@ -78,6 +78,7 @@ import { DatabaseDropDialog } from './components/DatabaseDropDialog';
 import { databaseDropServices, assertDatabaseDropTargetAvailable } from './databaseDropServices';
 import { databaseDropZh } from './locales/databaseDrop.zh-CN';
 import { SqlKeywordCasePreferences } from './components/SqlKeywordCasePreferences';
+import { sqlFormattingZh } from './locales/sqlFormatting.zh-CN';
 import { EditorIndentPreferencesDialog } from './components/EditorIndentPreferences';
 import { readEditorWordWrap } from '../shared/editorWordWrap';
 import { EditorFontPreferencesDialog } from './components/EditorFontPreferencesDialog';
@@ -227,6 +228,7 @@ function WorkspaceApp() {
   const [workbenchDialog, setWorkbenchDialog] = useState(false), [objectLinkDialog, setObjectLinkDialog] = useState(false);
   const [editorFontPreferences, setEditorFontPreferences] = useState(false);
   const [externalEditorPreferences, setExternalEditorPreferences] = useState(false);
+  const [sqlFormatPreferences, setSqlFormatPreferences] = useState(false);
   const [explainSnapshot, setExplainSnapshot] = useState(false);
   const [resultSnapshot, setResultSnapshot] = useState(false);
   const [mysqlDatabaseBackup, setMysqlDatabaseBackup] = useState(false);
@@ -424,6 +426,7 @@ function WorkspaceApp() {
   /** 命令栏偏好入口先撤销旧导航，模态期间不叠加第二份编辑草稿。 */
   function openEditorFontPreferences() { if (document.querySelector(appDialogSelector)) return; workbenchNavigation.invalidate(); setEditorFontPreferences(true); }
   function openExternalEditorPreferences() { if (document.querySelector(appDialogSelector)) return; workbenchNavigation.invalidate(); setExternalEditorPreferences(true); }
+  function openSqlFormatPreferences() { if (document.querySelector(appDialogSelector)) return; workbenchNavigation.invalidate(); setSqlFormatPreferences(true); }
   /** 关闭仅结束本次设置弹窗，不回写任何工作区快照。 */
   function closeEditorFontPreferences() { workbenchNavigation.invalidate(); setEditorFontPreferences(false); }
   /** 离线计划入口无需连接，仍遵守当前模态和导航归属。 */
@@ -1114,6 +1117,7 @@ function WorkspaceApp() {
     'focus-mode': handler(() => { void workbench.save({ ...useWorkbench.getState().snapshot.document, focusMode: !useWorkbench.getState().snapshot.document.focusMode }); }, workbench.ready && !workbench.busy, workbench.snapshot.document.focusMode),
     'editor-font': handler(openEditorFontPreferences), 'editor-indent': handler(() => { workbenchNavigation.invalidate(); setEditorIndentPreferences(true); }),
     'external-sql-editor-preferences': handler(openExternalEditorPreferences),
+    'sql-format-preferences': handler(openSqlFormatPreferences),
     'editor-word-wrap': handler(() => { const now = useWorkspace.getState(); now.updateSettings({ editorWordWrap: !readEditorWordWrap(now.settings.editorWordWrap) }); void flushSettings().catch(reason => now.notify(errorMessage(reason), true)); }, true, readEditorWordWrap(settings.editorWordWrap)),
     'editor-line-numbers': handler(() => { const now = useWorkspace.getState(); now.updateSettings({ editorLineNumbers: now.settings.editorLineNumbers === false }); void flushSettings().catch(reason => now.notify(errorMessage(reason), true)); }, true, settings.editorLineNumbers !== false),
     'editor-match-brackets': handler(() => { const now = useWorkspace.getState(); now.updateSettings({ editorMatchBrackets: now.settings.editorMatchBrackets === false }); void flushSettings().catch(reason => now.notify(errorMessage(reason), true)); }, true, settings.editorMatchBrackets !== false),
@@ -1365,6 +1369,7 @@ function WorkspaceApp() {
     {tabSearch && <OpenTabSearchDialog key={tabSearch.id} registry={tabSearch.registry} onClose={() => closeTabSearch(tabSearch)} onActivate={entry => activateSearchedTab(tabSearch, entry)}/>}
     {editorFontPreferences && <EditorFontPreferencesDialog onClose={closeEditorFontPreferences}/>}
     {externalEditorPreferences && <ExternalSqlEditorDialog onClose={() => { workbenchNavigation.invalidate(); setExternalEditorPreferences(false); }}/>}
+    {sqlFormatPreferences && <Modal title={sqlFormattingZh.preferences} onClose={() => { workbenchNavigation.invalidate(); setSqlFormatPreferences(false); }}><div className="modal-content"><SqlKeywordCasePreferences standalone/></div></Modal>}
     {preferences && <Modal title={zh.app.text009} onClose={() => setPreferences(false)}><div className="modal-content form-grid"><Field label={zh.app.text019}><select value={settings.theme} onChange={event => state.updateSettings({ theme: event.target.value as 'dark' | 'light' })}><option value="dark">{zh.common.dark}</option><option value="light">{zh.common.light}</option></select></Field><Field label={zh.app.text020}><input type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => state.updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/></Field><Field label={zh.app.text021}><select value={settings.pageSize} onChange={event => state.updateSettings({ pageSize: Number(event.target.value) })}>{[50, 100, 200, 500, 1000].map(size => <option key={size}>{size}</option>)}</select></Field><Field label={zh.app.text022}><input type="number" min="180" max="600" value={settings.sidebarWidth} onChange={event => state.updateSettings({ sidebarWidth: Math.max(180, Math.min(600, Number(event.target.value))) })}/></Field><SqlKeywordCasePreferences/><DataTypeColorPreferences enabled={settings.dataTypeColors === true} onChange={enabled => state.updateSettings({ dataTypeColors: enabled })}/><EncryptionStatus available={encryptionAvailable} busy={checkingEncryption} error={encryptionError} onCheck={checkEncryption}/><ErrorBox message={runtimeError}/></div><footer className="modal-footer"><span className="grow"/><button className="primary" onClick={() => setPreferences(false)}>{zh.common.done}</button></footer></Modal>}
     {about && <Modal title={zh.app.text010} onClose={() => setAbout(false)}><div className="modal-content about-content"><Brand/><span className="tag">{zh.app.text027}{version}</span><p className="muted">{zh.app.text028}</p><p className="muted small">{zh.app.text029}</p></div></Modal>}
   </div>;

@@ -60,3 +60,28 @@ it('原子落盘失败回退内存，后续保存不会夹带失败的大写偏�
   rmdirSync(f.path + '.tmp'); f.store.saveSettings({ ...f.store.settings(), sidebarWidth: 345 }); close(f.store);
   const next = await open(f.path); expect(next.store.settings()).toEqual({ ...before, sidebarWidth: 345 });
 });
+
+it('括号内单行宽度兼容旧配置并可经 IPC 保存，坏值只在读取时回退', async () => {
+  const f = await open();
+  const settings = { ...legacy(), sqlExpressionWidth: 12 };
+  f.store.saveSettings(validateCommand('settings.save', settings) as AppSettings);
+  const bytes = readFileSync(f.path);
+  for (const value of [undefined, null, '12', 0, 201, 1.5, Infinity]) {
+    const input = { ...settings, sqlExpressionWidth: value };
+    expect(() => validateCommand('settings.save', input)).toThrow();
+    expect(() => f.store.saveSettings(input as AppSettings)).toThrow('单行宽度');
+  }
+  expect(readFileSync(f.path)).toEqual(bytes);
+  close(f.store);
+  const reopened = await open(f.path);
+  expect(reopened.store.settings()).toEqual(settings);
+  close(reopened.store);
+  seed(f.path, { ...legacy(), sqlExpressionWidth: '非法旧值' });
+  const repaired = await open(f.path);
+  const malformed = readFileSync(f.path);
+  expect(repaired.store.settings()).toEqual({ ...legacy(), sqlExpressionWidth: 50 });
+  expect(readFileSync(f.path)).toEqual(malformed);
+  const db = new SQL.Database(malformed);
+  try { expect(JSON.parse(String(db.exec('SELECT data FROM settings')[0].values[0][0])).sqlExpressionWidth).toBe('非法旧值'); }
+  finally { db.close(); }
+});

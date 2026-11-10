@@ -46,6 +46,57 @@ async function seed(dialect: 'mysql' | 'mariadb' | 'sqlite' | 'postgresql', sql:
 }
 
 for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
+  test(`${dialect} 括号内单行宽度只在显式格式化时生效`, async ({}, info) => {
+    const source = 'select * from t where id in (100,200,300);';
+    const expanded = 'select\n  *\nfrom\n  t\nwhere\n  id in (\n    100,\n    200,\n    300\n  );';
+    await seed(dialect, source);
+    async function invokeMenu(id: string) {
+      await expect.poll(() => desktop.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled, id)).toBe(true);
+      await desktop.evaluate(({ Menu, BrowserWindow }, id) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById(id), [window] = BrowserWindow.getAllWindows();
+        if (!item?.enabled || !window) throw Error('格式化菜单命令不可用');
+        item.click(item, window, {} as Electron.KeyboardEvent);
+      }, id);
+    }
+    const read = () => page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      return { width: settings.sqlExpressionWidth, sql: settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n') };
+    });
+    const panel = page.getByRole('dialog', { name: 'SQL 格式化偏好', exact: true });
+    const width = panel.getByRole('spinbutton', { name: '括号内单行宽度', exact: true });
+    const save = panel.getByRole('button', { name: '保存格式化偏好', exact: true });
+    await invokeMenu('sql-format-preferences');
+    await expect(width).toHaveValue('50');
+    if (dialect === 'mysql') {
+      await width.fill('0');
+      await save.click();
+      await expect(panel.getByRole('alert')).toContainText('请输入 1 至 200');
+      expect(await read()).toEqual({ width: undefined, sql: source });
+    }
+    await width.fill('10');
+    await save.click();
+    await expect(panel.getByRole('status')).toHaveText('格式化偏好已保存。');
+    expect(await read()).toEqual({ width: 10, sql: source });
+    if (dialect === 'sqlite') await panel.screenshot({ path: info.outputPath('sql-expression-width.png') });
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+    if (dialect === 'postgresql') {
+      await quitDesktop();
+      await launchDesktop();
+      await expect(activeEditor().getByRole('textbox')).toBeVisible();
+      expect(await read()).toEqual({ width: 10, sql: source });
+    }
+    await invokeMenu('format');
+    await expect.poll(read).toEqual({ width: 10, sql: expanded });
+    await page.keyboard.press(`${modifier}+z`);
+    await expect.poll(read).toEqual({ width: 10, sql: source });
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}
+
+for (const dialect of ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const) {
   test(`${dialect} 压缩 SQL 保留注释与原文边界，可一步撤销`, async ({}, info) => {
     const selected = dialect === 'mysql' || dialect === 'sqlite';
     const prefix = 'SELECT    0;\n', suffix = '\nSELECT     4;';

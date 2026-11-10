@@ -12,6 +12,7 @@ import { recoverSqliteIndexesTask } from '../shared/sqliteIndexesFact';
 import { recoverSqliteTableRebuildTask } from '../shared/sqliteTableRebuildFact';
 import { recoverSqliteColumnsTask } from '../shared/sqliteColumnsFact';
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
+import { assertSqlExpressionWidthWrite, readSqlExpressionWidth } from '../shared/sqlExpressionWidth';
 import { recoverSqliteImportTask } from '../shared/sqliteTableImportFact';
 import { recoverSqliteWriteTask } from '../shared/sqliteWriteFact';
 import { recoverSqliteTableCreateTask } from '../shared/sqliteTableCreateFact';
@@ -1427,7 +1428,7 @@ export class LocalStore {
     const repairedActive = restoredTabs.length !== tabs.length && !restoredTabs.some(tab => tab.id === stored?.activeTabId)
       ? { activeTabId: restoredTabs[0]?.id } : {};
     // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
-    return { ...defaultSettings, ...stored, tabs: restoredTabs, ...repairedActive, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), ...(stored && Object.hasOwn(stored, 'editorSqlFolding') ? { editorSqlFolding: stored.editorSqlFolding === true } : {}), ...(stored && Object.hasOwn(stored, 'editorLineNumbers') ? { editorLineNumbers: stored.editorLineNumbers !== false } : {}), ...(stored && Object.hasOwn(stored, 'editorMatchBrackets') ? { editorMatchBrackets: stored.editorMatchBrackets !== false } : {}), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces), ...(stored && Object.hasOwn(stored, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(stored.sqlKeywordCase) } : {}) };
+    return { ...defaultSettings, ...stored, tabs: restoredTabs, ...repairedActive, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), ...(stored && Object.hasOwn(stored, 'editorSqlFolding') ? { editorSqlFolding: stored.editorSqlFolding === true } : {}), ...(stored && Object.hasOwn(stored, 'editorLineNumbers') ? { editorLineNumbers: stored.editorLineNumbers !== false } : {}), ...(stored && Object.hasOwn(stored, 'editorMatchBrackets') ? { editorMatchBrackets: stored.editorMatchBrackets !== false } : {}), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces), ...(stored && Object.hasOwn(stored, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(stored.sqlKeywordCase) } : {}), ...(stored && Object.hasOwn(stored, 'sqlExpressionWidth') ? { sqlExpressionWidth: readSqlExpressionWidth(stored.sqlExpressionWidth) } : {}) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -1451,6 +1452,7 @@ export class LocalStore {
     // 新缩进字段缺项兼容旧调用；显式坏值先拒绝，不能进入事务或写盘。
     assertEditorIndentationWrite(settings);
     assertSqlKeywordCaseWrite(settings);
+    assertSqlExpressionWidthWrite(settings);
     assertQueryLayoutWrite(settings);
     assertQueryFileSourceSettings(settings);
     assertObjectBrowserTabs(settings);

@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { planSqlFormatting } from '../../src/renderer/sqlFormatting';
+import { planSqlFormatting, prepareSqlFormattingRoles } from '../../src/renderer/sqlFormatting';
 import { completionLimits } from '../../src/shared/sqlCompletion';
+
+describe('括号内单行宽度', () => {
+  const source = 'select * from t where id in (100,200,300);';
+  it.each(['mysql', 'sqlite', 'postgresql'] as const)('%s 只在格式化时使用宽度，压缩结果与偏好无关', dialect => {
+    const plan = (expressionWidth: number | undefined, mode: 'format' | 'compact' = 'format') => planSqlFormatting(source, 0, source.length, '\n', { dialect, expressionWidth }, mode)?.text;
+    expect(plan(10)).toContain('id in (\n    100,\n    200,\n    300\n  )');
+    expect(plan(200)).toContain('id in (100, 200, 300)');
+    expect(plan(undefined)).toBe(plan(50));
+    expect(plan(0)).toBe(plan(50));
+    expect(plan(10, 'compact')).toBe(plan(200, 'compact'));
+  });
+  it('MySQL 关键字大写的格式化仍采用所选宽度', async () => {
+    await prepareSqlFormattingRoles();
+    const plan = planSqlFormatting(source, 0, source.length, '\n', { keywordCase: 'upper', expressionWidth: 10 });
+    expect(plan?.text).toContain('WHERE\n  id IN (\n    100,');
+  });
+});
 
 describe('压缩 SQL', () => {
   it('只压缩选区内部空白，保留两端、模式敏感间距和行注释 CRLF', () => {

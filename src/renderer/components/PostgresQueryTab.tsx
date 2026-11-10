@@ -1860,7 +1860,7 @@ export function PostgresQueryTab({
     try {
       const settings = useWorkspace.getState().settings;
       setError('');
-      formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces }, mode);
+      formatSqlEditor(target.instance, { dialect: 'postgresql', tabSize: settings.editorTabSize, insertSpaces: settings.editorInsertSpaces, expressionWidth: settings.sqlExpressionWidth }, mode);
     } catch (reason) { setError(errorMessage(reason)); }
   }
   function openSaveQuery() {

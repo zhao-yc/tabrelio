@@ -6,13 +6,14 @@ import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 import { editorIndentationOptions } from '../shared/editorIndentation';
 import { readSqlKeywordCase, sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
 import { scanPostgresFormattingTokens } from '../shared/postgresSql';
+import { readSqlExpressionWidth } from '../shared/sqlExpressionWidth';
 
 type RoleModule = typeof import('./sqlFormattingRoles');
 let preparedRoles: RoleModule | undefined;
 /** 仅显式大写/小写入口调用；模块加载成功前上层必须保留原模型/选区/owner，默认入口不调用。 */
 export async function prepareSqlFormattingRoles(): Promise<void> { preparedRoles = await import('./sqlFormattingRoles'); }
 
-export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; dialect?: 'mysql' | 'sqlite' | 'postgresql'; }
+export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; expressionWidth?: unknown; dialect?: 'mysql' | 'sqlite' | 'postgresql'; }
 export type SqlFormattingMode = 'format' | 'compact';
 type FormatterToken = Parameters<NonNullable<typeof mysql.tokenizerOptions.postProcess>>[0][number];
 // 只列正式词法类型，不维护关键字单词表；函数/数据类型/变量/参数/标识符均不在其中。
@@ -67,12 +68,12 @@ function atoms(source: string, ansiQuotes: boolean, noBackslashEscapes: boolean,
 }
 
 /** 通过公开方言postProcess取得原位置/正式类型，先执行依赖原后处理，不导入私有lexer。 */
-function keywordCaseFormatting(source: string, start: number, end: number, original: string, options: { tabSize: number; insertSpaces: boolean }, keywordCase: 'upper' | 'lower', names: { start: number; end: number }[]) {
+function keywordCaseFormatting(source: string, start: number, end: number, original: string, layout: { tabWidth: number; useTabs: boolean; expressionWidth: number }, keywordCase: 'upper' | 'lower', names: { start: number; end: number }[]) {
   let captured: FormatterToken[] | undefined;
   const dialect = { ...mysql, tokenizerOptions: { ...mysql.tokenizerOptions, postProcess(tokens: FormatterToken[]) {
     captured = mysql.tokenizerOptions.postProcess?.(tokens) ?? tokens; return captured;
   } } };
-  const config = { tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase, identifierCase: 'preserve' as const, functionCase: 'preserve' as const, dataTypeCase: 'preserve' as const };
+  const config = { ...layout, keywordCase, identifierCase: 'preserve' as const, functionCase: 'preserve' as const, dataTypeCase: 'preserve' as const };
   // 全上下文取词法类型，避免把选中的t.order后半段或函数名当作孤立关键字。
   const trimmed = source.trim(), offset = source.length - source.trimStart().length;
   const whole = formatDialect(trimmed, { ...config, dialect });
@@ -170,6 +171,7 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
   let formatted: string, eligible: { start: number; end: number }[] = [];
   // 仅显式格式化时使用当前缩进；更改偏好本身从不改写SQL。
   const options = editorIndentationOptions(indentation.tabSize, indentation.insertSpaces);
+  const layout = { tabWidth: options.tabSize, useTabs: !options.insertSpaces, expressionWidth: readSqlExpressionWidth(indentation.expressionWidth) };
   // PostgreSQL 沿用关键字原样。MySQL 的角色解析器不能证明 PostgreSQL 的名称位置。
   const keywordCase = postgres || mode === 'compact' ? 'preserve' : readSqlKeywordCase(indentation.keywordCase);
   // SQLite 尚无名称角色证明，显式大小写转换必须拒绝，不能借用 MySQL 解析器猜名称。
@@ -180,9 +182,9 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
   } else try {
     if (keywordCase !== 'preserve') {
       const roles = preparedRoles; if (!roles) throw Error(text.unavailable);
-      ({ formatted, eligible } = keywordCaseFormatting(source, start, end, original, options, keywordCase, roles.sqlFormattingNameRanges(source)));
+      ({ formatted, eligible } = keywordCaseFormatting(source, start, end, original, layout, keywordCase, roles.sqlFormattingNameRanges(source)));
     }
-    else formatted = format(original.trim(), { language: indentation.dialect ?? 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
+    else formatted = format(original.trim(), { language: indentation.dialect ?? 'mysql', ...layout, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
     formatted = formatted.trim().replace(/\r?\n/g, eol);
   }
   catch { throw new Error(text.failed); }

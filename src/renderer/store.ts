@@ -12,6 +12,7 @@ import { sqliteTableRenameFactMessage, sqliteTableRenameTaskMessage } from '../s
 import { assertSqliteColumnsFactTransition, sqliteColumnsFactSchema } from '../shared/sqliteColumns';
 import { sqliteColumnsFactMessage, sqliteColumnsTaskMessage } from '../shared/sqliteColumnsFact';
 import { readSqlKeywordCase } from '../shared/sqlKeywordCase';
+import { readSqlExpressionWidth } from '../shared/sqlExpressionWidth';
 import { assertObjectBrowserTabs } from '../shared/objectBrowser';
 import { editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
@@ -208,7 +209,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       const [settings, connections, tasks] = await Promise.all([invoke('settings.get', {}), invoke('connections.list', {}), invoke('tasks.list', {})]);
       tabOrder.reset();
-      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces), ...(Object.hasOwn(settings, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(settings.sqlKeywordCase) } : {}) }, connections, tasks, ready: true });
+      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces), ...(Object.hasOwn(settings, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(settings.sqlKeywordCase) } : {}), ...(Object.hasOwn(settings, 'sqlExpressionWidth') ? { sqlExpressionWidth: readSqlExpressionWidth(settings.sqlExpressionWidth) } : {}) }, connections, tasks, ready: true });
     } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
   },
   /** 连接编辑成功后整体替换概要列表，不缓存表单中的明文秘密。 */

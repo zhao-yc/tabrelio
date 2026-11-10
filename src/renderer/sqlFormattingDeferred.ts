@@ -34,7 +34,7 @@ export class DeferredUpperSqlFormatting {
     if (!editor || !model || model.isDisposed() || editor.getRawOptions().readOnly) throw Error(text.unavailable);
     if (model.getValueLength() > sqlKeywordRoleLimits.sourceUnits) throw Error(text.limited);
     this.#editor = editor; this.#model = model; this.#version = model.getVersionId(); this.#sql = model.getValue(); this.#selection = selectionKey(editor);
-    this.#preferences = { tabSize: preferences.tabSize, insertSpaces: preferences.insertSpaces, keywordCase, dialect: preferences.dialect };
+    this.#preferences = { tabSize: preferences.tabSize, insertSpaces: preferences.insertSpaces, keywordCase, expressionWidth: preferences.expressionWidth, dialect: preferences.dialect };
     const revoke = () => { this.#valid = false; };
     try {
       this.#subscriptions.push(editor.onDidChangeModel(revoke));
