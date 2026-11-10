@@ -1,18 +1,18 @@
 import type { FilterGroup, FilterMode, FilterRule } from '../shared/contracts';
-import { filterGroupSchema, validateFilterGroup, validateFilterRules } from '../shared/filtering';
+import { FILTER_LIMITS, parseFilterGroup, validateFilterGroup, validateFilterGroupCoverage, validateFilterRules } from '../shared/filtering';
 import { tableFilterGroupsZh as text } from './locales/tableFilterGroups.zh-CN';
 
 /** 只改变已有根的组合方式，保留完整子组；旧平铺规则不隐式增加分组协议。 */
-export function tableFilterGroupWithMode(group: FilterGroup | undefined, mode: FilterMode): FilterGroup | undefined {
+export function tableFilterGroupWithMode(group: FilterGroup | undefined, mode: FilterMode, maximum?: number): FilterGroup | undefined {
   if (mode !== 'all' && mode !== 'any') throw Error(text.mapping);
   if (group === undefined) return undefined;
-  const checked = filterGroupSchema.parse(group);
-  return filterGroupSchema.parse({ mode, children: checked.children });
+  const checked = parseFilterGroup(group, maximum);
+  return parseFilterGroup({ mode, children: checked.children }, maximum);
 }
 
 /** 先校验有界树，再仅展示编号及括号，不把条件原值、列名或SQL写进组合摘要。 */
-export function tableFilterGroupSummary(group: FilterGroup): string {
-  const checked = filterGroupSchema.parse(group);
+export function tableFilterGroupSummary(group: FilterGroup, maximum?: number): string {
+  const checked = parseFilterGroup(group, maximum);
   /** 每个组保留显式括号，避免嵌套OR被平铺芯片误读为统一AND。 */
   function summary(node: FilterGroup): string {
     return `(${node.children.map(child => typeof child === 'number' ? text.ruleNumber(child + 1) : summary(child)).join(node.mode === 'all' ? text.joinAll : text.joinAny) || text.emptyStructure})`;
@@ -49,7 +49,26 @@ export function tableFilterGroupAfterChange(previousFilters: readonly FilterRule
   validateFilterRules(previousFilters, mode); validateFilterRules(nextFilters, mode);
   if (!nextFilters.length || group === undefined) return undefined;
   const original = validateFilterGroup(previousFilters, mode, group)!;
-  const positions = changedPositions(previousFilters, nextFilters), assigned = new Set(positions.values());
+  return remapFilterGroup(original, changedPositions(previousFilters, nextFilters), nextFilters.length, FILTER_LIMITS.conditions);
+}
+
+/** SQLite 条件可改变类型和值，以表单 ID 映射分组叶，避免删除或移位改变其它条件的身份。 */
+export function tableFilterGroupAfterKeyChange(previous: readonly string[], next: readonly string[],
+  group: FilterGroup | undefined, mode: FilterMode, maximum: number): FilterGroup | undefined {
+  if (!next.length || group === undefined) return undefined;
+  const original = validateFilterGroupCoverage(previous.length, mode, group, maximum)!;
+  const indexed = new Map(next.map((key, index) => [key, index]));
+  if (indexed.size !== next.length || new Set(previous).size !== previous.length) throw Error(text.mapping);
+  const positions = new Map<number, number>();
+  previous.forEach((key, index) => {
+    const position = indexed.get(key);
+    if (position !== undefined) positions.set(index, position);
+  });
+  return remapFilterGroup(original, positions, next.length, maximum);
+}
+
+function remapFilterGroup(original: FilterGroup, positions: ReadonlyMap<number, number>, count: number, maximum: number) {
+  const assigned = new Set(positions.values());
   /** 仅空子组被剔除，单叶子组仍保留其原括号与组合方式。 */
   function remap(node: FilterGroup): FilterGroup {
     const children: (number | FilterGroup)[] = [];
@@ -60,6 +79,6 @@ export function tableFilterGroupAfterChange(previousFilters: readonly FilterRule
     return { mode: node.mode, children };
   }
   const remapped = remap(original);
-  const additions = nextFilters.map((_, index) => index).filter(index => !assigned.has(index));
-  return validateFilterGroup(nextFilters, mode, { mode, children: [...remapped.children, ...additions] });
+  const additions = Array.from({ length: count }, (_, index) => index).filter(index => !assigned.has(index));
+  return validateFilterGroupCoverage(count, remapped.mode, { ...remapped, children: [...remapped.children, ...additions] }, maximum);
 }

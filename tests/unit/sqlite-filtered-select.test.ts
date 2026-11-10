@@ -34,6 +34,40 @@ function input(filters: SqliteTableFilter[] = [], patch: Partial<SqliteTablePage
 function bound(value: SqliteValue): SQLInputValue { if (value === null || typeof value === 'string' || typeof value === 'number') return value; if (value.type === 'integer') return BigInt(value.value); if (value.type === 'real') return Number(value.value); return Buffer.from(value.base64, 'base64'); }
 function rows(db: DatabaseSync, sql: string, parameters: SQLInputValue[] = []) { const statement = db.prepare(sql); statement.setReadBigInts(true); return statement.all(...parameters); }
 
+it('SQLite 独立编译嵌套 WHERE 与 HAVING，保留精确类型并剪除停用子组', () => {
+  const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table: 'grouped_events', kind: 'table' },
+    schemaKey: 'a'.repeat(64), columns: [{ name: 'bucket', declaredType: '' }, { name: 'value', declaredType: '' }] };
+  const int = (column: string, value: string): SqliteTableFilter => ({ column, operator: 'eq', value: { kind: 'integer', value } });
+  const max = '9223372036854775807';
+  const design: SqliteQueryBuilderDesign = { ...source.target, schemaKey: source.schemaKey, columns: [], distinct: false, sort: [], mode: 'and',
+    filters: [{ column: 'bucket', operator: 'ne', value: { kind: 'text', value: 'skip' } }, int('value', max), int('value', '2'),
+      { ...int('value', '3'), enabled: false }],
+    filterGroup: { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }, { mode: 'any', children: [3] }] },
+    summary: { groups: ['bucket'], aggregates: [{ fn: 'COUNT_ALL', alias: '计数' }], sort: [{ column: 'bucket', direction: 'ASC' }],
+      having: { mode: 'and', filters: [{ column: '计数', operator: 'notNull' }, int('计数', '1'), int('计数', '2')],
+        group: { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] } } } };
+  const file = new DatabaseSync(join(directory, 'sqlite-builder-filter-groups.sqlite'));
+  try {
+    file.exec("CREATE TABLE grouped_events (bucket,value); INSERT INTO grouped_events VALUES " +
+      "('a'," + max + "),('a','" + max + "'),('b',2),('b',2),('skip',2),('c',3);");
+    const sql = buildSqliteQueryBuilderSql(design, source);
+    expect(sql).toContain('OR (typeof("value") = \'integer\' AND "value" = 2)');
+    expect(sql).toContain('HAVING (COUNT(*) IS NOT NULL AND ((typeof(COUNT(*))');
+    expect(sql).not.toContain('"value" = 3');
+    expect(rows(file, sql)).toEqual([{ bucket: 'a', 计数: 1n }, { bucket: 'b', 计数: 2n }]);
+    for (const filterGroup of [{ mode: 'any', children: [0, 1, 2, 3] }, { mode: 'all', children: [0, 1, 2] },
+      { mode: 'all', children: [0, 1, 2, 2] }, { mode: 'all', children: [0, 1, 2, { mode: 'any', children: [] }] }]) {
+      expect(sqliteQueryBuilderInspectSchema.safeParse({ ...design, inspect: 'rows', filterGroup }).success).toBe(false);
+    }
+    const filters = Array.from({ length: 32 }, (_, i) => ({ ...int('value', String(i)), enabled: i === 2 }));
+    const full: SqliteQueryBuilderDesign = { ...design, columns: ['bucket'], summary: undefined, filters,
+      filterGroup: { mode: 'all', children: [{ mode: 'any', children: filters.map((_, index) => index) }] } };
+    expect(rows(file, buildSqliteQueryBuilderSql(full, source))).toHaveLength(3);
+    const allDisabled = { ...full, filters: filters.map(filter => ({ ...filter, enabled: false })) };
+    expect(buildSqliteQueryBuilderSql(allDisabled, source)).toBe('SELECT "bucket" FROM "main"."grouped_events"');
+  } finally { file.close(); }
+});
+
 it('SQLite 明细别名不接管同名原字段排序，并按 SQLite 标识符规则检查重名', () => {
   const source: SqliteQueryBuilderSource = { target: { connectionId: 'owned', database: 'main', table: 'ranked', kind: 'table' },
     schemaKey: 'a'.repeat(64), columns: [{ name: 'id', declaredType: 'INTEGER' }, { name: 'rank', declaredType: 'INTEGER' }] };

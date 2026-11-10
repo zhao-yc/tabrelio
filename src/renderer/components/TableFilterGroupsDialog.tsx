@@ -13,7 +13,7 @@ type EventSignal = { defaultPrevented?: boolean; nativeEvent?: { defaultPrevente
 /** 只改变本地说明和条件来源摘要；调用方不能替换分组校验、编辑身份或应用协议。 */
 export interface TableFilterGroupPresentation { title?: string; hint: string; limits?: string; stale: string; declined: string; summary(index: number, rule: FilterRule): string; }
 interface Props {
-  filters: readonly FilterRule[]; mode: FilterMode; initial?: FilterGroup;
+  filters: readonly FilterRule[]; mode: FilterMode; initial?: FilterGroup; maximum?: number;
   presentation?: TableFilterGroupPresentation;
   isCurrent(): boolean; onApply(group: FilterGroup): boolean; onClose(): void;
 }
@@ -38,20 +38,20 @@ function sameFilters(current: readonly FilterRule[], expected: readonly FilterRu
 }
 
 /** 内联分组审核只组合现有叶，父页确认并重新核原环境后才可能读取服务器。 */
-export function TableFilterGroupsDialog({ filters, mode, initial, presentation, isCurrent, onApply, onClose }: Props) {
-  const sequence = useRef(0), origin = useRef({ filters, mode, initial }).current;
+export function TableFilterGroupsDialog({ filters, mode, initial, maximum = FILTER_LIMITS.conditions, presentation, isCurrent, onApply, onClose }: Props) {
+  const sequence = useRef(0), origin = useRef({ filters, mode, initial, maximum }).current;
   const [prepared] = useState(() => {
     try {
-      const group = validateFilterGroup(filters, mode, initial) ?? { mode, children: filters.map((_, index) => index) };
+      const group = validateFilterGroup(filters, mode, initial, maximum) ?? { mode, children: filters.map((_, index) => index) };
       /** 初始协议树已完整校验，UI只增添稳定身份，不共享可变children容器。 */
       function copy(value: FilterGroup): Group {
         return { kind: 'group', id: sequence.current++, mode: value.mode, children: value.children.map(child => typeof child === 'number' ? { kind: 'rule', id: sequence.current++, index: child } : copy(child)) };
       }
-      return { root: copy(group), filters: copyFilterRules(filters), initialGroup: initial === undefined ? undefined : JSON.stringify(group), error: '' };
+      return { root: copy(group), filters: copyFilterRules(filters, maximum), initialGroup: initial === undefined ? undefined : JSON.stringify(group), error: '' };
     } catch (reason) { return { root: undefined, filters: [] as FilterRule[], initialGroup: undefined, error: errorMessage(reason) }; }
   });
   const [draft, setDraft] = useState(prepared.root), [error, setError] = useState(prepared.error), [composing, setComposing] = useState(false);
-  const live = useRef(draft), props = useRef({ filters, mode, initial }); live.current = draft; props.current = { filters, mode, initial };
+  const live = useRef(draft), props = useRef({ filters, mode, initial, maximum }); live.current = draft; props.current = { filters, mode, initial, maximum };
   const mounted = useRef(true), invalid = useRef(false), consumed = useRef(false), composition = useRef(false), committed = useRef<object | undefined>(undefined);
   const ticket = {};
   useLayoutEffect(() => { mounted.current = true; committed.current = ticket; return () => { if (committed.current === ticket) committed.current = undefined; }; });
@@ -61,7 +61,7 @@ export function TableFilterGroupsDialog({ filters, mode, initial, presentation, 
   function environment(): boolean {
     if (invalid.current || consumed.current || !mounted.current || !prepared.root) return false;
     try {
-      if (origin.filters !== props.current.filters || origin.mode !== props.current.mode || origin.initial !== props.current.initial || !sameFilters(copyFilterRules(filters), prepared.filters) || initial !== undefined && JSON.stringify(validateFilterGroup(filters, mode, initial)) !== prepared.initialGroup || !isCurrent()) throw Error(text.stale);
+      if (origin.filters !== props.current.filters || origin.mode !== props.current.mode || origin.initial !== props.current.initial || origin.maximum !== props.current.maximum || !sameFilters(copyFilterRules(filters, maximum), prepared.filters) || initial !== undefined && JSON.stringify(validateFilterGroup(filters, mode, initial, maximum)) !== prepared.initialGroup || !isCurrent()) throw Error(text.stale);
       return true;
     } catch { invalid.current = true; return false; }
   }
@@ -82,7 +82,7 @@ export function TableFilterGroupsDialog({ filters, mode, initial, presentation, 
   function apply(event?: EventSignal): void {
     if (event?.defaultPrevented || event?.nativeEvent?.defaultPrevented || !current() || composition.current || !filters.length) return;
     try {
-      const group = validateFilterGroup(prepared.filters, draft!.mode, output(draft!))!;
+      const group = validateFilterGroup(prepared.filters, draft!.mode, output(draft!), maximum)!;
       if (!current()) return;
       consumed.current = true;
       if (!onApply(group)) { consumed.current = false; setError(presentation?.declined ?? text.declined); }

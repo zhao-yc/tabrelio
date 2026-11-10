@@ -342,6 +342,74 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(sql).toHaveText('SELECT "ref_region", "ref_id" FROM "main"."fk_child";');
     await button(zh.common.cancel).click();
 
+    await selectSource('JOIN起点');
+    const where = builder.getByRole('group', { name: browse.filters, exact: true });
+    async function addIntFilter(section: typeof where, index: number, name: string, operator: string, value: string) {
+      await section.getByRole('button', { name: browse.addFilter, exact: true }).click();
+      await section.getByLabel(browse.filterColumn(index)).selectOption({ label: name });
+      await section.getByLabel(browse.filterOperator(index)).selectOption(operator);
+      await section.getByLabel(browse.filterKind(index)).selectOption('integer');
+      await section.getByLabel(browse.filterValue(index)).fill(value);
+    }
+    async function groupFilters(title: string) {
+      await button(title).click();
+      const panel = builder.getByRole('region', { name: title, exact: true });
+      await panel.getByRole('button', { name: groups.addGroup(), exact: true }).click();
+      for (const index of [2, 3]) await panel.getByLabel(groups.destination(index), { exact: true }).selectOption({ label: groups.group('1') });
+      return panel;
+    }
+    await addIntFilter(where, 1, 'id', 'gte', '1');
+    await addIntFilter(where, 2, 'id', 'eq', '1');
+    await addIntFilter(where, 3, 'id', 'eq', '3');
+    const flat = await sql.textContent();
+    let filterEditor = await groupFilters(text.whereGroups);
+    await expect(button(text.open)).toBeDisabled();
+    await filterEditor.getByRole('button', { name: groups.cancel, exact: true }).click();
+    await expect(sql).toHaveText(flat!);
+    filterEditor = await groupFilters(text.whereGroups);
+    await filterEditor.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('sqlite-builder-filter-groups.png') });
+    await filterEditor.getByRole('button', { name: groups.apply, exact: true }).click();
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(2), { exact: true })).toBeVisible();
+    await expect(results.getByRole('gridcell', { name: '同形文本', exact: true })).toHaveCount(0);
+    await where.getByRole('checkbox', { name: browse.filterEnabled(3), exact: true }).uncheck();
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
+    await where.getByRole('checkbox', { name: browse.filterEnabled(3), exact: true }).check();
+    await where.getByRole('button', { name: browse.removeFilter(1), exact: true }).click();
+    await addIntFilter(where, 3, 'id', 'gte', '1');
+    await expect(sql).toContainText('AND "id" = 1) OR (typeof("id") = \'integer\' AND "id" = 3)) AND (typeof("id") = \'integer\' AND "id" >= 1)');
+
+    await summaryMode.check();
+    await button(aggregate.addGroup).click();
+    await button(aggregate.addAggregate).click();
+    await addIntFilter(having, 1, '统计_1', 'gte', '1');
+    await addIntFilter(having, 2, 'id', 'eq', '1');
+    await addIntFilter(having, 3, 'id', 'eq', '9');
+    filterEditor = await groupFilters(text.havingGroups);
+    await filterEditor.getByRole('button', { name: groups.apply, exact: true }).click();
+    await expect(sql).toContainText('HAVING ((typeof(COUNT(*))');
+    await expect(sql).toContainText(' OR (typeof("id") = \'integer\' AND "id" = 9)');
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
+    const nested = await sql.textContent();
+    const designPanel = builder.getByRole('group', { name: joinText.singleDesignTitle, exact: true });
+    await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();
+    await designPanel.getByRole('textbox', { name: joinText.designName, exact: true }).fill('两段括号');
+    await designPanel.getByRole('button', { name: joinText.designSave, exact: true }).click();
+    await expect(designPanel.getByText(joinText.designSaved, { exact: true })).toBeVisible();
+    await button(zh.common.cancel).click();
+    await selectSource('JOIN起点');
+    await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();
+    await designPanel.getByRole('button', { name: joinText.designRefresh, exact: true }).click();
+    await designPanel.getByRole('combobox', { name: joinText.singleDesignTitle, exact: true }).selectOption({ label: '两段括号' });
+    await approve(joinText.designRestoreConfirm);
+    await designPanel.getByRole('button', { name: joinText.designLoad, exact: true }).click();
+    await expect(sql).toHaveText(nested!);
+    await expect(builder.getByLabel(text.groupStructure, { exact: true })).toHaveCount(2);
+    await button(zh.common.cancel).click();
+
     await selectSource(table);
     const beforeChange = await settings();
     await button(viewDraft.builderEntry).click();

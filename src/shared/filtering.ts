@@ -79,34 +79,37 @@ function copyRule(input: unknown): FilterRule {
   return output as unknown as FilterRule;
 }
 /** 引擎不直接消费未知数组及条件对象，校验和构造共用描述符读取副本。 */
-export function copyFilterRules(filters: readonly FilterRule[]): FilterRule[] {
-  return ownArray(filters, FILTER_LIMITS.conditions, `筛选条件不能超过 ${FILTER_LIMITS.conditions} 条`).map(copyRule);
+export function copyFilterRules(filters: readonly FilterRule[], maximum: number = FILTER_LIMITS.conditions): FilterRule[] {
+  return ownArray(filters, maximum, `筛选条件不能超过 ${maximum} 条`).map(copyRule);
 }
 
 /** 分组先限制深度/组数/叶数，再复制；不使用可对未知对象无限递归的z.lazy。 */
-function parseFilterGroup(input: unknown): FilterGroup {
+export function parseFilterGroup(input: unknown, maximum: number = FILTER_LIMITS.conditions): FilterGroup {
   let groups = 0, leaves = 0; const ancestors = new Set<object>(), indices = new Set<number>();
   function parse(value: unknown, depth: number): FilterGroup {
     if (depth > FILTER_LIMITS.depth || ++groups > FILTER_LIMITS.groups) throw Error('筛选分组最多16组、8层');
     if (!value || typeof value !== 'object' || ancestors.has(value)) throw Error('筛选分组不能循环引用');
     const node = ownRecord(value, ['mode', 'children'], ['mode', 'children']);
     if (node.mode !== 'all' && node.mode !== 'any') throw Error('筛选分组模式必须为全部满足或任一满足');
-    const children = ownArray(node.children, FILTER_LIMITS.conditions + FILTER_LIMITS.groups, '筛选分组节点超过预算');
+    const children = ownArray(node.children, maximum + FILTER_LIMITS.groups, '筛选分组节点超过预算');
     if (depth > 1 && !children.length) throw Error('筛选子组不能为空');
     ancestors.add(value);
     const copy = children.map(child => {
       if (typeof child !== 'number') return parse(child, depth + 1);
-      if (++leaves > FILTER_LIMITS.conditions || !Number.isSafeInteger(child) || child < 0 || child >= FILTER_LIMITS.conditions || indices.has(child)) throw Error('筛选条件索引必须为不重复的0～29安全整数');
+      if (++leaves > maximum || !Number.isSafeInteger(child) || child < 0 || child >= maximum || indices.has(child)) throw Error(`筛选条件索引必须为不重复的0～${maximum - 1}安全整数`);
       indices.add(child); return child;
     });
     ancestors.delete(value); return Object.freeze({ mode: node.mode, children: Object.freeze(copy) });
   }
   return parse(input, 1);
 }
-export const filterGroupSchema = z.unknown().transform((input, context): FilterGroup => {
-  try { return parseFilterGroup(input); }
-  catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选分组无效' }); return z.NEVER; }
-});
+export function filterGroupSchemaFor(maximum: number) {
+  return z.unknown().transform((input, context): FilterGroup => {
+    try { return parseFilterGroup(input, maximum); }
+    catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选分组无效' }); return z.NEVER; }
+  });
+}
+export const filterGroupSchema = filterGroupSchemaFor(FILTER_LIMITS.conditions);
 
 /** IPC对象schema读字段之前先检查原始分组和条件，继承字段或getter不能变成缺省平铺。 */
 export function assertFilterGroupInput(input: unknown): void {
@@ -121,21 +124,28 @@ export function assertFilterGroupInput(input: unknown): void {
 }
 
 /** 与原条件预算共用；停用条件也必须在树中恰好出现一次，缺省不补造分组。 */
-export function validateFilterGroup(filters: readonly FilterRule[], mode: FilterMode = 'all', group?: FilterGroup): FilterGroup | undefined {
-  validateFilterRules(filters, mode);
+export function validateFilterGroup(filters: readonly FilterRule[], mode: FilterMode = 'all', group?: FilterGroup,
+  maximum: number = FILTER_LIMITS.conditions): FilterGroup | undefined {
+  validateFilterRules(filters, mode, maximum);
+  return validateFilterGroupCoverage(filters.length, mode, group, maximum);
+}
+
+/** 分组只引用编号，各方言仍按自己的值合同校验每个原条件。 */
+export function validateFilterGroupCoverage(count: number, mode: FilterMode, group?: FilterGroup,
+  maximum: number = FILTER_LIMITS.conditions): FilterGroup | undefined {
   if (group === undefined) return undefined;
-  const result = parseFilterGroup(group), indices = new Set<number>();
+  const result = parseFilterGroup(group, maximum), indices = new Set<number>();
   if (result.mode !== mode) throw Error('最外层筛选分组模式必须与filterMode一致');
   function visit(node: FilterGroup): void { for (const child of node.children) if (typeof child === 'number') indices.add(child); else visit(child); }
   visit(result);
-  if (indices.size !== filters.length || [...indices].some(index => index >= filters.length)) throw Error('每条筛选条件（包括停用条件）必须在分组中恰好出现一次');
+  if (indices.size !== count || [...indices].some(index => index >= count)) throw Error('每条筛选条件（包括停用条件）必须在分组中恰好出现一次');
   return result;
 }
 
 /** 只校验结构与体积，不改写空白/空字符串；列名是否存在由数据库元数据另行验证。 */
-export function validateFilterRules(filters: readonly FilterRule[], filterMode: FilterMode = 'all'): void {
+export function validateFilterRules(filters: readonly FilterRule[], filterMode: FilterMode = 'all', maximum: number = FILTER_LIMITS.conditions): void {
   if (filterMode !== 'all' && filterMode !== 'any') throw new Error('筛选组合模式必须为全部满足或任一满足');
-  const admitted = copyFilterRules(filters);
+  const admitted = copyFilterRules(filters, maximum);
   let valueCount = 0, characterCount = 0;
   for (const filter of admitted) {
     if (!filter || typeof filter.column !== 'string' || !filter.column.length) throw new Error('筛选字段不能为空');

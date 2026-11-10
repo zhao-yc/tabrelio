@@ -15,10 +15,10 @@ import { sqliteTableBrowseZh as browse } from '../locales/sqliteTableBrowse.zh-C
 import { queryBuilderSummaryZh as summaryText } from '../locales/queryBuilderSummary.zh-CN';
 import { queryViewDraftZh as viewText } from '../locales/queryViewDraft.zh-CN';
 import { zh } from '../locales/zh-CN';
-import { sqliteTableDraft, type SqliteFilterDraft, type SqliteSortDraft } from '../sqliteTableBrowser';
+import { sqliteTableDraft, type SqliteSortDraft } from '../sqliteTableBrowser';
 import { queryViewDefinition, type ViewQuerySeed } from '../queryViewDraft';
 import { useWorkspace } from '../store';
-import { SqliteTableFilters } from './SqliteTableFilters';
+import { emptySqliteBuilderFilterDraft, SqliteBuilderFilters } from './SqliteBuilderFilters';
 import { SqliteObjectsDialog } from './SqliteObjectsDialog';
 import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
@@ -33,7 +33,7 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 type SqliteJoinDraft = QueryBuilderJoinDraft<SqliteQueryBuilderSource, SqliteBuilderJoin>;
 
 function compileDesign(draft: SqliteSingleQueryDraft, source: SqliteQueryBuilderSource, joins: readonly SqliteJoinDraft[] = []) {
-  const { selected, columnAliases, distinct, limit, sort, filters, mode, summaryEnabled, summary, havingFilters, havingMode } = draft;
+  const { selected, columnAliases, distinct, limit, sort, filters, mode, filterGroup, summaryEnabled, summary, havingFilters, havingMode, havingGroup } = draft;
   const outputs = queryBuilderSummaryOutputs(summary);
   if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
   const rowLimit = limit === '' ? undefined : Number(limit);
@@ -44,12 +44,12 @@ function compileDesign(draft: SqliteSingleQueryDraft, source: SqliteQueryBuilder
   const { limit: _limit, ...query } = sqliteTableDraft(scope, 1, mode, filters, summaryEnabled ? [] : sort, schema);
   const having = summaryEnabled && havingFilters.length ? sqliteTableDraft({ connectionId, database, table }, 1, havingMode,
     havingFilters.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })), [], schema) : undefined;
-  const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: summaryEnabled ? [] : selected, columnAliases: summaryEnabled ? undefined : columnAliases,
+  const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: summaryEnabled ? [] : selected, filterGroup, columnAliases: summaryEnabled ? undefined : columnAliases,
     distinct: !summaryEnabled && distinct, rowLimit, summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary),
-      having: having && { mode: having.mode, filters: having.filters } } : undefined,
+      having: having && { mode: having.mode, filters: having.filters, group: havingGroup } } : undefined,
     joins: joins.length ? joins.map(item => item.step) : undefined };
   if (summaryEnabled && columnAliases?.length) {
-    buildSqliteQueryBuilderSql({ ...design, columns: selected, columnAliases, filters: [], summary: undefined }, source, joins.map(item => item.source));
+    buildSqliteQueryBuilderSql({ ...design, columns: selected, columnAliases, filters: [], filterGroup: undefined, summary: undefined }, source, joins.map(item => item.source));
   }
   return { design, sql: buildSqliteQueryBuilderSql(design, source, joins.map(item => item.source)) };
 }
@@ -89,11 +89,12 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   const [joins, setJoins] = useState<SqliteJoinDraft[]>([]), [editingJoin, setEditingJoin] = useState<number>();
   const singleDraft = useRef<SqliteSingleQueryDraft | undefined>(undefined);
   const [columnAliases, setColumnAliases] = useState<QueryBuilderColumnAlias[]>([]);
-  const [selected, setSelected] = useState<string[]>([]), [filters, setFilters] = useState<SqliteFilterDraft[]>([]);
-  const [sort, setSort] = useState<SqliteSortDraft[]>([]), [mode, setMode] = useState<'and' | 'or'>('and');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [where, setWhere] = useState(emptySqliteBuilderFilterDraft), [having, setHaving] = useState(emptySqliteBuilderFilterDraft);
+  const [filterEditor, setFilterEditor] = useState<'where' | 'having'>();
+  const [sort, setSort] = useState<SqliteSortDraft[]>([]);
   const [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [summaryEnabled, setSummaryEnabled] = useState(false), [summary, setSummary] = useState(emptyQueryBuilderSummary);
-  const [havingFilters, setHavingFilters] = useState<SqliteFilterDraft[]>([]), [havingMode, setHavingMode] = useState<'and' | 'or'>('and');
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
   const [viewSeed, setViewSeed] = useState<ViewQuerySeed>();
   const viewScope = useMemo(() => ({ connectionId, database: 'main' as const, kind: 'view' as const }), [connectionId]);
@@ -107,8 +108,10 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   const joinEntries = useMemo(() => objects?.filter(item => item.kind === 'table' || item.kind === 'view')
     .map(item => ({ key: item.name })) ?? [], [objects]);
   const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
-  const draft = useMemo<SqliteSingleQueryDraft>(() => ({ dialect: 'sqlite', version: 1, selected, columnAliases: columnAliases.length ? columnAliases : undefined, distinct, limit, sort, filters, mode, summaryEnabled, summary, havingFilters, havingMode }),
-    [selected, columnAliases, distinct, limit, sort, filters, mode, summaryEnabled, summary, havingFilters, havingMode]);
+  const draft = useMemo<SqliteSingleQueryDraft>(() => ({ dialect: 'sqlite', version: 1, selected, columnAliases: columnAliases.length ? columnAliases : undefined, distinct, limit, sort,
+    filters: where.filters, mode: where.mode, filterGroup: where.group, summaryEnabled, summary,
+    havingFilters: having.filters, havingMode: having.mode, havingGroup: having.group }),
+    [selected, columnAliases, distinct, limit, sort, where, summaryEnabled, summary, having]);
   const preview = useMemo<(ReturnType<typeof compileDesign> & { error?: never }) |
     { error: string; design?: never; sql?: never } | undefined>(() => {
     if (!source) return;
@@ -133,7 +136,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
 
   const editable = () => current() && !operation.current;
   const disabled = stale || !!message;
-  const controlsDisabled = disabled || editingJoin !== undefined;
+  const controlsDisabled = disabled || editingJoin !== undefined || !!filterEditor;
   function close(callback: () => void) { if (mounted.current) { mounted.current = false; callback(); } }
 
   /** 同步占门，目录与草稿的迟到回包仅交还原窗口。 */
@@ -155,9 +158,9 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
       if (!owns()) return;
       if (!sameTarget(result.target, scope)) throw Error(text.stale);
       setSelected(result.columns.map(column => column.name)); setColumnAliases([]);
-      setFilters([]); setSort([]); setMode('and'); setDistinct(false); setLimit(''); setSource(result);
+      setWhere(emptySqliteBuilderFilterDraft); setSort([]); setDistinct(false); setLimit(''); setSource(result);
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
-      setHavingFilters([]); setHavingMode('and');
+      setHaving(emptySqliteBuilderFilterDraft);
       setJoins([]); singleDraft.current = undefined;
     });
   }
@@ -188,13 +191,13 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   function applyDraft(value: SqliteSingleQueryDraft) {
     setSelected(value.selected); setColumnAliases(value.columnAliases ?? []); setDistinct(value.distinct); setLimit(value.limit); setSort(value.sort);
     setSummaryEnabled(value.summaryEnabled); setSummary(value.summary);
-    setFilters(value.filters); setMode(value.mode);
-    setHavingFilters(value.havingFilters); setHavingMode(value.havingMode);
+    setWhere({ filters: value.filters, mode: value.mode, group: value.filterGroup });
+    setHaving({ filters: value.havingFilters, mode: value.havingMode, group: value.havingGroup });
   }
 
   function joinKeyInput(table: string) {
     const object = objects?.find(item => item.name === table);
-    if (!source || editingJoin !== undefined || joins.length >= queryBuilderJoinLimits.steps ||
+    if (!source || editingJoin !== undefined || filterEditor || joins.length >= queryBuilderJoinLimits.steps ||
         !object || (object.kind !== 'table' && object.kind !== 'view')) return;
     return { ...source.target, nextTarget: { table, kind: object.kind }, priorTargets: joins.map(item => item.step.target),
       priorRevisions: [source.schemaKey, ...joins.map(item => item.source.schemaKey)] };
@@ -232,9 +235,9 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   }
 
   function removeLastJoin() {
-    if (!editable() || editingJoin !== undefined || joins.length < 2) return;
+    if (!editable() || editingJoin !== undefined || filterEditor || joins.length < 2) return;
     const prefix = queryBuilderAlias(joins.length) + '.';
-    if ([...filters.map(item => item.column), ...sort.map(item => item.column), ...summary.groups,
+    if ([...where.filters.map(item => item.column), ...sort.map(item => item.column), ...summary.groups,
       ...summary.aggregates.filter(item => item.fn !== 'COUNT_ALL').map(item => item.column)].some(name => name.startsWith(prefix))) {
       setError(text.joinReferenced);
       return;
@@ -245,13 +248,13 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   }
 
   function backToSingle() {
-    if (!editable() || editingJoin !== undefined || !singleDraft.current || !window.confirm(text.joinBackConfirm)) return;
+    if (!editable() || editingJoin !== undefined || filterEditor || !singleDraft.current || !window.confirm(text.joinBackConfirm)) return;
     applyDraft(singleDraft.current); singleDraft.current = undefined; setJoins([]); setError('');
   }
 
   /** 返回构建器时保留原草稿，视图提交前重新核对同一个 SQLite 来源。 */
   function open(asView = false) {
-    if (!source || editingJoin !== undefined || !preview?.design || asView && !canCreateView) return;
+    if (!source || editingJoin !== undefined || filterEditor || !preview?.design || asView && !canCreateView) return;
     const { design, sql } = preview;
     const target = source.target;
     async function verify() {
@@ -314,7 +317,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
               joins: joins.map(({ step: { schemaKey: _schemaKey, ...step } }) => step) } : undefined}
             disabled={controlsDisabled} current={current} run={action => void run(designText.designWorking, () => action())} restore={restore}/>
           <QueryBuilderJoinPanel stale={text.stale} source={source} entries={joinEntries} joins={joins}
-            disabled={disabled} editing={editingJoin} current={editable}
+            disabled={disabled || !!filterEditor} editing={editingJoin} current={editable}
             edit={index => {
               if (index === undefined || (editable() && editingJoin === undefined)) setEditingJoin(index);
             }}
@@ -329,13 +332,15 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
           limit={sqliteTableBrowseLimits.columns} disabled={controlsDisabled} labels={text}
           onChange={(columns, aliases) => { if (editable() && editingJoin === undefined) { setSelected(columns); setColumnAliases(aliases); } }}
           onDistinct={value => { if (editable() && editingJoin === undefined) setDistinct(value); }}/>}
-        <SqliteTableFilters names={names} filters={filters} mode={mode} disabled={controlsDisabled} current={() => editable() && editingJoin === undefined} id={uid}
-          enabledHint={text.filterHint} onFilters={setFilters} onMode={setMode}/>
+        <SqliteBuilderFilters draft={where} names={names} hint={text.filterHint} groupTitle={text.whereGroups}
+          disabled={controlsDisabled && filterEditor !== 'where'} editing={filterEditor === 'where'} current={editable}
+          open={() => { if (editable() && !controlsDisabled) setFilterEditor('where'); }} close={() => setFilterEditor(undefined)} change={setWhere}/>
         {summaryEnabled ? <>
           <QueryBuilderSummaryPanel names={names} draft={summary} disabled={controlsDisabled} onChange={next => { if (editable()) setSummary(next); }}/>
-          <SqliteTableFilters names={outputs.map(item => item.key)} filters={havingFilters} mode={havingMode} disabled={controlsDisabled}
-            current={() => editable() && editingJoin === undefined} id={uid} title={summaryText.having} enabledHint={summaryText.havingHint}
-            columnLabel={key => summaryConditionLabel(outputs, key)} onFilters={setHavingFilters} onMode={setHavingMode}/>
+          <SqliteBuilderFilters draft={having} names={outputs.map(item => item.key)} title={summaryText.having} hint={summaryText.havingHint}
+            label={key => summaryConditionLabel(outputs, key)} groupTitle={text.havingGroups}
+            disabled={controlsDisabled && filterEditor !== 'having'} editing={filterEditor === 'having'} current={editable}
+            open={() => { if (editable() && !controlsDisabled) setFilterEditor('having'); }} close={() => setFilterEditor(undefined)} change={setHaving}/>
         </> : <fieldset disabled={controlsDisabled}><legend>{browse.sorts}</legend>
           {sort.map((item, index) => <div key={item.id} className="filter-inputs">
             <select aria-label={browse.sortColumn(index + 1)} value={item.column} onChange={event => {

@@ -1,6 +1,8 @@
 import { sqliteTableBrowseLimits as limits, sqliteTablePageSchema, sqliteQueryBuilderPageSchema, isSqliteTextFilter,
   type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePageInput } from './sqliteTableBrowse';
 import { compileQueryBuilderSummary, type QueryBuilderSummary } from './queryBuilderSummary';
+import type { FilterGroup } from './contracts';
+import { validateSqliteBuilderGroup } from './sqliteQueryBuilderGroups';
 
 export type SqliteReadParameter = { kind: 'storage-type'; value: 'text' | 'integer' | 'real' | 'blob' } | { kind: 'operand'; value: NonNullable<SqliteTableFilter['value']> } | { kind: 'count'; value: number };
 export const sqliteReadSqlLimits = { utf8Bytes: 4 * 1024 * 1024, utf16Bytes: 2 * 1024 * 1024, limit: 1000000 } as const;
@@ -22,31 +24,31 @@ export function buildSqliteRelationPredicate(relation: NonNullable<SqliteTablePa
 }
 
 type SqliteFilterSet = Pick<SqliteTablePageInput, 'mode' | 'filters'>;
-type SqliteQuerySummary = QueryBuilderSummary & { having?: SqliteFilterSet };
+type SqliteQuerySummary = QueryBuilderSummary & { having?: SqliteFilterSet & { group?: FilterGroup } };
 interface SqliteJoinProjection { from: string; field(name: string): string }
 
 /** WHERE 和 HAVING 复用存储类型、NULL 与字面量语义；列或聚合表达式由调用方核对。 */
 function sqliteFilterCondition(input: SqliteFilterSet, field: (name: string) => string,
-  render: (parameter: SqliteReadParameter) => string): string {
+  render: (parameter: SqliteReadParameter) => string, group?: FilterGroup): string {
   const operators = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' } as const;
-  return input.filters.flatMap(filter => {
+  function compile(filter: SqliteTableFilter): string {
     const column = field(filter.column);
     // 停用仍经过完整合同和字段白名单，不可借停用绕过名称、值格式或全组预算。
-    if (filter.enabled === false) return [];
-    if (filter.operator === 'isNull' || filter.operator === 'notNull') return [column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL')];
+    if (filter.enabled === false) return '';
+    if (filter.operator === 'isNull' || filter.operator === 'notNull') return column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL');
     // 混合类型集合是一条完整条件；NOT取整个集合补集，保留未选择的NULL及其它类型。
     if (filter.operator === 'oneOf' || filter.operator === 'notOneOf') {
       const choices = filter.selectedValues!.map(value => value.kind === 'null' ? column + ' IS NULL' : '(typeof(' + column + ') = ' + render({ kind: 'storage-type', value: value.kind }) + ' AND ' + column + ' IS ' + render({ kind: 'operand', value }) + ')');
-      return [(filter.operator === 'notOneOf' ? 'NOT ' : '') + '(' + choices.join(' OR ') + ')'];
+      return (filter.operator === 'notOneOf' ? 'NOT ' : '') + '(' + choices.join(' OR ') + ')';
     }
     // 同型列表仍限制真实存储类型，NOT IN不把NULL或另一类型当成普通不等值。
     if (filter.operator === 'in' || filter.operator === 'notIn') {
       const values = filter.values!, kind = values[0].kind, type = render({ kind: 'storage-type', value: kind === 'blob' ? 'blob' : kind });
-      return ['(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'in' ? ' IN (' : ' NOT IN (') + values.map(value => render({ kind: 'operand', value })).join(', ') + '))'];
+      return '(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'in' ? ' IN (' : ' NOT IN (') + values.map(value => render({ kind: 'operand', value })).join(', ') + '))';
     }
     const value = filter.value!, type = render({ kind: 'storage-type', value: value.kind === 'blob' ? 'blob' : value.kind }), operand = render({ kind: 'operand', value });
     // 原生BETWEEN包含两端，不重排边界；NOT BETWEEN仍保留原动态存储类型限制。
-    if (filter.operator === 'between' || filter.operator === 'notBetween') return ['(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'between' ? ' BETWEEN ' : ' NOT BETWEEN ') + operand + ' AND ' + render({ kind: 'operand', value: filter.secondValue! }) + ')'];
+    if (filter.operator === 'between' || filter.operator === 'notBetween') return '(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'between' ? ' BETWEEN ' : ' NOT BETWEEN ') + operand + ' AND ' + render({ kind: 'operand', value: filter.secondValue! }) + ')';
     let comparison: string;
     if (isSqliteTextFilter(filter.operator)) {
       if (filter.operator === 'textEquals') {
@@ -60,12 +62,20 @@ function sqliteFilterCondition(input: SqliteFilterSet, field: (name: string) => 
         comparison = match + ({ contains: ' > 0', notContains: ' = 0', startsWith: ' = 1', notStartsWith: ' <> 1' } as const)[filter.operator];
       }
     } else comparison = column + ' ' + operators[filter.operator] + ' ' + operand;
-    return ['(typeof(' + column + ') = ' + type + ' AND ' + comparison + ')'];
-  }).join(input.mode === 'and' ? ' AND ' : ' OR ');
+    return '(typeof(' + column + ') = ' + type + ' AND ' + comparison + ')';
+  }
+  const tree = validateSqliteBuilderGroup(input.filters.length, input.mode, group);
+  if (!tree) return input.filters.map(compile).filter(Boolean).join(input.mode === 'and' ? ' AND ' : ' OR ');
+  // 停用叶和因此没有启用叶的子组不生成 SQL，避免 OR/AND 空组改变结果。
+  function visit(node: FilterGroup): string {
+    const parts = node.children.map(child => typeof child === 'number' ? compile(input.filters[child]) : visit(child)).filter(Boolean);
+    return parts.length ? '(' + parts.join(node.mode === 'all' ? ' AND ' : ' OR ') + ')' : '';
+  }
+  return visit(tree);
 }
 
 /** 绑定分页与字面查询共用同一构造器；由render决定占位/字面，不在SQL文本中猜问号。 */
-function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[] | undefined, complete: boolean, render: (parameter: SqliteReadParameter) => string, project?: (qualifiedColumn: string) => string, explicitLimit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection, outputAliases?: ReadonlyMap<string, string>): string {
+function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[] | undefined, complete: boolean, render: (parameter: SqliteReadParameter) => string, project?: (qualifiedColumn: string) => string, explicitLimit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection, outputAliases?: ReadonlyMap<string, string>, filterGroup?: FilterGroup): string {
   const schema = join ? sqliteQueryBuilderPageSchema : sqliteTablePageSchema;
   const input = schema.parse(source), names = new Set(columns.map(column => column.name));
   if (input.searchRecordRef) throw Error('SQLite 搜索命中不能转换为普通表筛选');
@@ -79,12 +89,13 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
   if (!summary && (!output.length || output.length > limits.columns || new Set(output).size !== output.length)) throw Error('SQLite导出列为空、重复或超过预算');
   const grouped = summary && compileQueryBuilderSummary(summary, field, quoteSqliteIdentifier, '', join ? name => name : undefined);
   // 关联条件始终与整组普通筛选AND；父列在左，+子列去掉子亲和性，保留父collation。
-  const where = sqliteFilterCondition(input, field, render);
+  const where = sqliteFilterCondition(input, field, render, filterGroup);
   const relation = input.relation;
   const association = relation ? buildSqliteRelationPredicate(relation, field, render) : '';
   // 汇总条件复用表页的累计值和参数预算，原始行筛选不受聚合条件影响。
-  const having = grouped && summary?.having
-    ? sqliteFilterCondition(schema.parse({ ...input, ...summary.having }), grouped.havingField, render)
+  const havingInput = summary?.having;
+  const having = grouped && havingInput
+    ? sqliteFilterCondition(schema.parse({ ...input, mode: havingInput.mode, filters: havingInput.filters }), grouped.havingField, render, havingInput.group)
     : '';
   const table = '"main".' + quoteSqliteIdentifier(input.table);
   // 带输出别名时，显式限定原表的排序字段以避开同名结果列。
@@ -127,9 +138,9 @@ function literal(parameter: SqliteReadParameter): string {
   const number = Number(value.value); if (Object.is(number, -0)) return '-0.0'; const canonical = String(number); return /[.eE]/.test(canonical) ? canonical : canonical + '.0';
 }
 /** 生成完整匹配SELECT，默认不带页长/offset；只能选择目录字段与显式受限LIMIT。 */
-export function buildSqliteFilteredSelect(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[], limit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection, outputAliases?: ReadonlyMap<string, string>): string {
+export function buildSqliteFilteredSelect(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[], limit?: number, distinct = false, summary?: SqliteQuerySummary, join?: SqliteJoinProjection, outputAliases?: ReadonlyMap<string, string>, filterGroup?: FilterGroup): string {
   if (!Array.isArray(selected)) throw Error('SQLite查询必须明确选择字段');
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > sqliteReadSqlLimits.limit)) throw Error('SQLite查询行数上限必须为1至1000000的整数');
-  const sql = build(source, columns, selected, true, literal, undefined, limit, distinct, summary, join, outputAliases);
+  const sql = build(source, columns, selected, true, literal, undefined, limit, distinct, summary, join, outputAliases, filterGroup);
   if (sql.length * 2 > sqliteReadSqlLimits.utf16Bytes || new TextEncoder().encode(sql).byteLength > sqliteReadSqlLimits.utf8Bytes) throw Error('SQLite生成查询超过文本预算，请减少字段或筛选条件'); return sql;
 }

@@ -4,6 +4,7 @@ import { sqliteQueryBuilderColumnSchema, sqliteQueryBuilderPageSchema, sqliteTab
 import { buildSqliteFilteredSelect, quoteSqliteIdentifier, sqliteReadSqlLimits } from './sqliteReadSql';
 import { queryBuilderSummarySchema } from './queryBuilderSummary';
 import { queryBuilderColumnAliasesSchema, queryBuilderOutputAliases } from './queryBuilderProjection';
+import { sqliteQueryBuilderGroupSchema, validateSqliteBuilderGroup } from './sqliteQueryBuilderGroups';
 import { sqliteRelationshipName } from './sqliteRelationships';
 import { compileQueryBuilderOn, queryBuilderAlias, queryBuilderColumnKey, queryBuilderForeignKeyRevisions, queryBuilderJoinLimits,
   queryBuilderJoinSchema, validateQueryBuilderJoin } from './queryBuilderJoin';
@@ -35,20 +36,29 @@ const designFields = sqliteQueryBuilderTargetSchema.extend({
   columns: z.array(sqliteQueryBuilderColumnSchema).max(sqliteTableBrowseLimits.columns),
   columnAliases: queryBuilderColumnAliasesSchema.optional(),
   mode, filters, sort,
+  filterGroup: sqliteQueryBuilderGroupSchema.optional(),
   distinct: z.boolean(), rowLimit: z.number().int().min(1).max(sqliteReadSqlLimits.limit).optional(),
   summary: queryBuilderSummarySchema.extend({
-    having: z.object({ mode, filters }).strict().optional(),
+    having: z.object({ mode, filters, group: sqliteQueryBuilderGroupSchema.optional() }).strict().optional(),
   }).optional(),
   joins: z.array(joinStep).min(1).max(queryBuilderJoinLimits.steps).optional(),
+}).superRefine((design, context) => {
+  try {
+    validateSqliteBuilderGroup(design.filters.length, design.mode, design.filterGroup);
+    const having = design.summary?.having;
+    if (having) validateSqliteBuilderGroup(having.filters.length, having.mode, having.group);
+  } catch (reason) {
+    context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : 'SQLite 查询条件分组无效。' });
+  }
 });
-export const sqliteQueryBuilderInspectSchema = designFields.extend({ inspect: z.enum(['rows', 'explain']) });
+export const sqliteQueryBuilderInspectSchema = designFields.safeExtend({ inspect: z.enum(['rows', 'explain']) });
 export type SqliteQueryBuilderDesign = z.infer<typeof designFields>;
 export type SqliteQueryBuilderInspectInput = z.infer<typeof sqliteQueryBuilderInspectSchema>;
 
 /** 同一编译器用于草稿与独立只读预览，数据类型与表页筛选保持一致。 */
 export function buildSqliteQueryBuilderSql(design: SqliteQueryBuilderDesign, source: SqliteQueryBuilderSource,
   related: readonly SqliteQueryBuilderSource[] = []): string {
-  const { connectionId, database, table, kind, schemaKey, columns, columnAliases, mode, filters, sort, distinct, rowLimit, summary, joins = [] } = designFields.parse(design);
+  const { connectionId, database, table, kind, schemaKey, columns, columnAliases, mode, filters, filterGroup, sort, distinct, rowLimit, summary, joins = [] } = designFields.parse(design);
   if (source.target.connectionId !== connectionId || source.target.database !== database || source.target.table !== table ||
       source.target.kind !== kind || source.schemaKey !== schemaKey) throw Error('SQLite 查询来源已变化，请重新读取结构。');
   if ([table, ...columns, ...filters.map(filter => filter.column), ...sort.map(item => item.column)].some(name => /[\r\n]/.test(name)))
@@ -59,7 +69,7 @@ export function buildSqliteQueryBuilderSql(design: SqliteQueryBuilderDesign, sou
   const projection = joins.length ? compileSources(source, joins, related) : undefined;
   const aliases = queryBuilderOutputAliases(columns, columnAliases, name => name, sqliteRelationshipName);
   return buildSqliteFilteredSelect({ connectionId, database, table, taskId: 'sqlite-query-builder', offset: 0, limit: 1, mode, filters, sort },
-    source.columns, columns, rowLimit, distinct, summary, projection, aliases);
+    source.columns, columns, rowLimit, distinct, summary, projection, aliases, filterGroup);
 }
 
 /** 来源、别名和字段只能从同一快照的目录生成，ON 左侧不能引用本步或未来来源。 */

@@ -6,6 +6,7 @@ import { postgresBuilderJoinDraftSchema, postgresQueryBuilderTargetSchema } from
 import { sqliteTableBrowseLimits, sqliteTableFilterSchema, sqliteFilterSelectionSchema } from './sqliteTableBrowse';
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits } from './tableForeignKeyJoinSummary';
 import { queryBuilderAliasMap, queryBuilderColumnAliasesSchema } from './queryBuilderProjection';
+import { sqliteQueryBuilderGroupSchema, validateSqliteBuilderGroup } from './sqliteQueryBuilderGroups';
 
 const id = z.string().min(1).max(128);
 const field = z.string().min(1).max(530).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value));
@@ -36,6 +37,7 @@ const sqliteDraft = base.extend({
   dialect: z.literal('sqlite'), mode: sqliteMode, havingMode: sqliteMode,
   filters: z.array(sqliteFilter).max(sqliteTableBrowseLimits.filters),
   havingFilters: z.array(sqliteFilter).max(sqliteTableBrowseLimits.filters),
+  filterGroup: sqliteQueryBuilderGroupSchema.optional(), havingGroup: sqliteQueryBuilderGroupSchema.optional(),
   sort: z.array(z.object({ id, column: field, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
   joins: sqliteBuilderJoinDraftSchema.optional(),
 });
@@ -57,6 +59,10 @@ export const singleQueryDraftSchema = z.discriminatedUnion('dialect', [sqliteDra
       !unique(draft.summary.sort.map(item => item.column)) || !unique(draft.sort.map(item => item.column))) issue('查询设计包含重复编辑项。');
   if (draft.dialect === 'sqlite') {
     if ([draft.filters, draft.havingFilters, draft.sort].some(items => !unique(items.map(item => item.id)))) issue('查询设计包含重复编辑项。');
+    try {
+      validateSqliteBuilderGroup(draft.filters.length, draft.mode, draft.filterGroup);
+      validateSqliteBuilderGroup(draft.havingFilters.length, draft.havingMode, draft.havingGroup);
+    } catch (reason) { issue(reason instanceof Error ? reason.message : '查询设计条件分组无效。'); }
   } else {
     try {
       validateFilterGroup(draft.rules, draft.mode, draft.group);
