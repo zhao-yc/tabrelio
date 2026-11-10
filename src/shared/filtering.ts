@@ -16,16 +16,16 @@ export const tableTextFilterMatch = {
 export function isTableTextFilterOperator(operator: FilterRule['operator']): operator is keyof typeof tableTextFilterMatch {
   return Object.hasOwn(tableTextFilterMatch, operator);
 }
-const operatorNames = ['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'CONTAINS', 'NOT CONTAINS',
+export const tableFilterOperators = ['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'CONTAINS', 'NOT CONTAINS',
   'STARTS WITH', 'NOT STARTS WITH', 'ENDS WITH', 'NOT ENDS WITH', 'TEXT EQUALS', 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN', 'IS NULL', 'IS NOT NULL'] as const;
-const operators = new Set<FilterRule['operator']>(operatorNames);
+const operators = new Set<FilterRule['operator']>(tableFilterOperators);
 const field = z.string().min(1).max(256), value = z.string().max(FILTER_LIMITS.valueLength,`每个筛选值不能超过 ${FILTER_LIMITS.valueLength} 个字符`);
 /** 表页与命名方案共用严格形状，拒绝SQL、认证路径及未知扩展字段。 */
 /** 两种区间运算共用两个有序参数及同一预算。 */
 export function isTableRangeOperator(operator: FilterRule['operator']): operator is 'BETWEEN' | 'NOT BETWEEN' {
   return operator === 'BETWEEN' || operator === 'NOT BETWEEN';
 }
-const filterRuleShape = z.object({ column: field, operator: z.enum(operatorNames), value: value.optional(), values: z.array(value).max(FILTER_LIMITS.setValues,`筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional(), enabled: z.boolean().optional() }).strict();
+const filterRuleShape = z.object({ column: field, operator: z.enum(tableFilterOperators), value: value.optional(), values: z.array(value).max(FILTER_LIMITS.setValues,`筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional(), enabled: z.boolean().optional() }).strict();
 export const filterRuleSchema = z.unknown().transform((input, context): FilterRule => {
   try { return filterRuleShape.parse(copyRule(input)); }
   catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选条件无效' }); return z.NEVER; }

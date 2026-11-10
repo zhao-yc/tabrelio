@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { TableTab } from '../../../src/renderer/components/TableTab';
 import { useWorkspace, type WorkspaceTab } from '../../../src/renderer/store';
+import { manualJoinDesignSchema, type ManualJoinDesign } from '../../../src/shared/manualJoinDesigns';
 import type { TableInfo, TablePage } from '../../../src/shared/contracts';
 import type { IncomingReferencesOutput } from '../../../src/shared/incomingReferences';
 import 'react-data-grid/lib/styles.css';
@@ -15,11 +16,21 @@ if (incoming) child.foreignKeys.push({ ...child.foreignKeys[0], name: 'fk_other_
 const source = incoming || manual ? parent : child;
 const other = { ...table('payments', ['order_id', 'total']), database: '另一库' };
 const another = { ...other, name: 'other_payments' };
+const designs = new Map<string, { id: string; name: string; design: ManualJoinDesign }>();
 const calls: { command: string; input: unknown }[] = [], denied: string[] = [];
 /** 只替代数据库输入；真实TableTab、菜单、JOIN窗口、来源租约及工作区打开行为均参与。 */
 Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string, input: Record<string, unknown>) => {
   calls.push({ command, input: structuredClone(input) });
   if (manual && input.connectionId === 'offline-join') {
+    if (input.database === source.database && input.table === source.name) {
+      if (command === 'joinDesigns.list') return Array.from(designs.values(), ({ id, name }) => ({ id, name }));
+      if (command === 'joinDesigns.save') {
+        const id = 'fixture-design-' + (designs.size + 1), name = String(input.name);
+        designs.set(id, { id, name, design: manualJoinDesignSchema.parse(input.design) });
+        return { id, name };
+      }
+      if (command === 'joinDesigns.read' && designs.has(String(input.id))) return structuredClone(designs.get(String(input.id))!.design);
+    }
     if (command === 'metadata.databases') return [source.database, other.database];
     if (command === 'metadata.objects' && input.database === other.database) return [{ name: other.name, kind: 'table' }, { name: another.name, kind: 'table' }, { name: 'view_only', kind: 'view' }];
     if (command === 'metadata.table' && input.database === other.database) {

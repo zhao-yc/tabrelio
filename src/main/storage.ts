@@ -1,3 +1,4 @@
+import { manualJoinDesignLimits, manualJoinDesignSchema, type ManualJoinDesign, type ManualJoinDesignScope, type ManualJoinDesignSelect, type ManualJoinDesignSave, type ManualJoinDesignSummary } from '../shared/manualJoinDesigns';
 import { sameConnectionFamily } from '../shared/connectionDialect';
 import { savedQueryExternalZh } from '../shared/savedQueryExternalEdit';
 import { savedQueryExternalRecordSchema, type SavedQueryExternalRecord } from './savedQueryExternalEdit';
@@ -175,6 +176,15 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS query_file_recents (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         -- 查询结果整理方案是可选schema9元数据，不改变旧客户端的原生版本门槛。
         CREATE TABLE IF NOT EXISTS query_result_presets (connection_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+        -- 手动 JOIN 设计是独立的可选元数据。连接删除时清理精确所属行。
+        CREATE TABLE IF NOT EXISTS manual_join_designs (
+          id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL,
+          name TEXT NOT NULL, source_digest TEXT NOT NULL, data TEXT NOT NULL,
+          UNIQUE(connection_id, database_name, table_name, name)
+        );
+        CREATE TRIGGER IF NOT EXISTS manual_join_designs_cleanup AFTER DELETE ON connections
+          BEGIN DELETE FROM manual_join_designs WHERE connection_id=OLD.id; END;
+        DELETE FROM manual_join_designs WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=manual_join_designs.connection_id);
         -- 文件解释及人工映射为可选schema9元数据，不保存路径、行值或连接身份。
         CREATE TABLE IF NOT EXISTS import_presets (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         -- 分组元数据与查询原文分离；旧schema9客户端可忽略，不改变来源摘要。
@@ -734,6 +744,63 @@ export class LocalStore {
       result = this.writeImportPresets({ version: 1, revision: current.revision + 1, entries: current.entries.filter(entry => entry.id !== input.id) });
     }, assertCurrent);
     return result;
+  }
+
+  private manualJoinScope(input: ManualJoinDesignScope): [string, string, string] {
+    const profile = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [input.connectionId])[0];
+    if (profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') throw Error('JOIN 设计仅适用于已保存的 MySQL 或 MariaDB 连接。');
+    return [input.connectionId, input.database, input.table];
+  }
+
+  /** 列表只返回当前表的名称和编号。正文留在本地，直到用户明确选择恢复。 */
+  listManualJoinDesigns(input: ManualJoinDesignScope): ManualJoinDesignSummary[] {
+    const args = this.manualJoinScope(input);
+    const statement = this.db.prepare('SELECT id,name FROM manual_join_designs WHERE connection_id=? AND database_name=? AND table_name=? ORDER BY name COLLATE BINARY LIMIT ?');
+    try {
+      statement.bind([...args, manualJoinDesignLimits.perTable]);
+      const results: ManualJoinDesignSummary[] = [];
+      while (statement.step()) {
+        const [id, name] = statement.get();
+        results.push({ id: String(id), name: String(name) });
+      }
+      return results;
+    } finally { statement.free(); }
+  }
+
+  readManualJoinDesign(input: ManualJoinDesignSelect): ManualJoinDesign {
+    const args = this.manualJoinScope(input), source = this.queryResultPresetSource(input.connectionId);
+    const [raw] = this.records<unknown>(`SELECT data FROM manual_join_designs
+      WHERE connection_id=? AND database_name=? AND table_name=? AND id=? AND source_digest=? AND length(CAST(data AS BLOB))<=?`,
+      [...args, input.id, source.connectionDigest, manualJoinDesignLimits.bytes]);
+    if (raw === undefined) throw Error('JOIN 设计已变化，或连接目标已更改。请刷新设计列表。');
+    return manualJoinDesignSchema.parse(raw);
+  }
+
+  /** 覆盖消耗旧编号并生成新编号，旧窗口无法再次覆盖或删除已替换的设计。 */
+  saveManualJoinDesign(input: ManualJoinDesignSave): ManualJoinDesignSummary {
+    const entry = { id: randomUUID(), name: input.name };
+    this.mutate(() => {
+      const args = this.manualJoinScope(input), current = this.listManualJoinDesigns(input);
+      if (input.replaceId && !current.some(item => item.id === input.replaceId)) throw Error('JOIN 设计已变化，请刷新列表。');
+      if (current.some(item => item.name === input.name && item.id !== input.replaceId)) throw Error('同名 JOIN 设计已存在，请改名或明确覆盖。');
+      if (!input.replaceId && current.length >= manualJoinDesignLimits.perTable) throw Error('当前表的 JOIN 设计数量已达上限。');
+      if (input.replaceId) this.db.run('DELETE FROM manual_join_designs WHERE connection_id=? AND database_name=? AND table_name=? AND id=?', [...args, input.replaceId]);
+      const [[count, bytes]] = this.db.exec('SELECT COUNT(*), COALESCE(SUM(length(CAST(data AS BLOB))),0) FROM manual_join_designs')[0].values;
+      const data = JSON.stringify(manualJoinDesignSchema.parse(input.design));
+      if (Number(count) >= manualJoinDesignLimits.designs || Number(bytes) + Buffer.byteLength(data, 'utf8') > manualJoinDesignLimits.totalBytes)
+        throw Error('本地 JOIN 设计已达存储上限，请先移除不再使用的设计。');
+      const digest = this.queryResultPresetSource(input.connectionId).connectionDigest;
+      this.db.run('INSERT INTO manual_join_designs VALUES (?,?,?,?,?,?,?)', [entry.id, ...args, entry.name, digest, data]);
+    });
+    return entry;
+  }
+
+  deleteManualJoinDesign(input: ManualJoinDesignSelect): void {
+    this.mutate(() => {
+      const args = this.manualJoinScope(input);
+      this.db.run('DELETE FROM manual_join_designs WHERE connection_id=? AND database_name=? AND table_name=? AND id=?', [...args, input.id]);
+      if (!this.db.getRowsModified()) throw Error('JOIN 设计已变化，请刷新列表。');
+    });
   }
 
   /** 来源从真实已保存连接计算；不读取凭据，也不信任界面传入的摘要。 */

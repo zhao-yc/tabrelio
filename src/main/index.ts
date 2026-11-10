@@ -2314,6 +2314,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let assertRolesPublication: (() => void) | undefined;
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
+    case 'joinDesigns.list':
+    case 'joinDesigns.read':
+    case 'joinDesigns.save':
+    case 'joinDesigns.delete':
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown) throw Error('客户端正在退出，不能操作 JOIN 设计。');
+      connectionConfig.assertAvailable(input.connectionId);
+      if (command === 'joinDesigns.list') return store.listManualJoinDesigns(input);
+      if (command === 'joinDesigns.read') return store.readManualJoinDesign(input);
+      if (command === 'joinDesigns.save') return store.saveManualJoinDesign(input);
+      return store.deleteManualJoinDesign(input);
     case 'result.presets.list':
     case 'result.presets.save':
     case 'result.presets.rename':
@@ -3800,6 +3811,7 @@ else {
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
         if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command === 'sqlite.view.inspectQuery'||payload.command === 'sqlite.view.dependencies'||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('record.templates.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('joinDesigns.')) columns = columnsMain.capture(event);
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
@@ -3852,6 +3864,7 @@ else {
           // 本地快照也不能迟到发布给已经导航或退出的旧文档；已提交配置不自动重放或撤回。
           if (payload.command.startsWith('files.importPresets.')) { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，导入配置回执未发布，请重新读取'); }
           if (databaseEncodingCommand) { databaseEncodingResult = result; await databaseEncodingOwners.after(databaseEncodingCommand, input, result, columns!); }
+          if (payload.command.startsWith('joinDesigns.')) columnsMain.assertCapturedOwner(columns);
           if(payload.command.startsWith('result.presets.')){columnsMain.assertCapturedOwner(columns);columns?.resultPresetPublication?.();}
           if(payload.command.startsWith('table.presets.')){
             // dispatch成功到IPC发布之间仍允许取消；新取消必须结算，最后检查之后不能再await。

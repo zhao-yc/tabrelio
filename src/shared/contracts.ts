@@ -1,3 +1,4 @@
+import type { ManualJoinDesign, ManualJoinDesignScope, ManualJoinDesignSelect, ManualJoinDesignSave, ManualJoinDesignSummary } from './manualJoinDesigns';
 import type { ImportRecordRange } from './importRecordRange';
 import type { ObjectDefinitionInput, ObjectDefinitionOutput } from './objectDefinition';
 import type { PostgresTransactionApplyInput, PostgresTransactionSnapshot } from './postgresTransactionSettings';
@@ -173,6 +174,10 @@ export interface CommandMap {
   'result.insertPreview': { input: import('./resultInsert').ResultInsertPreviewInput; output: import('./resultInsert').ResultInsertPreviewOutput };
   'result.insertApply': { input: import('./resultInsert').ResultInsertApplyInput; output: import('./resultInsert').ResultInsertApplyOutput };
   'result.insertRelease': { input: import('./resultInsert').ResultInsertReleaseInput; output: void };
+  'joinDesigns.list': { input: ManualJoinDesignScope; output: ManualJoinDesignSummary[] };
+  'joinDesigns.read': { input: ManualJoinDesignSelect; output: ManualJoinDesign };
+  'joinDesigns.save': { input: ManualJoinDesignSave; output: ManualJoinDesignSummary };
+  'joinDesigns.delete': { input: ManualJoinDesignSelect; output: void };
   'result.presets.list': { input: QueryResultPresetTarget; output: QueryResultPresetSnapshot };
   'result.presets.save': { input: QueryResultPresetSave; output: QueryResultPresetSnapshot };
   'result.presets.rename': { input: QueryResultPresetRename; output: QueryResultPresetSnapshot };

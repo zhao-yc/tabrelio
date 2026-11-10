@@ -163,6 +163,7 @@ export const publicCommands: Record<Command, true> = {
   'resultSnapshotFiles.open': true, 'resultSnapshotFiles.save': true,
   'schema.databaseDefaultEncoding.get': true, 'schema.databaseDefaultEncoding.preview': true, 'schema.databaseDefaultEncoding.apply': true, 'schema.databaseDefaultEncoding.release': true,
   'connections.organizationGet': true, 'connections.organizationApply': true,
+  'joinDesigns.list': true, 'joinDesigns.read': true, 'joinDesigns.save': true, 'joinDesigns.delete': true,
   'result.presets.list': true, 'result.presets.save': true, 'result.presets.rename': true, 'result.presets.delete': true, 'result.presets.read': true,
   'queryFileSources.recent': true, 'queryFileSources.forgetRecent': true,
   'queryFileSources.checkExternal': true, 'queryFileSources.reload': true, 'queryFileSources.discardReload': true,

@@ -82,7 +82,7 @@ export function mainColumnsHarness() {
 
     Date, Map, Error, Boolean, applicationMenu: applicationMenuRamPort().menu, TableChecksMainCapabilities, tableChecksFailureProgress, TableFilteredDeleteOwners, ExternalObjectUris, resolveWorkbenchTarget, externalObjectUrisZh, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), postgresImportChecks: new Map(), exportProgress: new Map(), sessions: new Map(),
-    savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
+    savedQuerySearches: { has: () => false }, savedQueryExternal: { orphan() {}, hasSession: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),
     app: { isPackaged: false, quit() {} }, productName, files: new Map(),
     BrowserWindow: function () { const window = fakeWindow(); windows.push(window); return window; },

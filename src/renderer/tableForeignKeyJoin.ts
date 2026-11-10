@@ -9,7 +9,8 @@ import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-
 
 export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, manualPairs: 64, additionalJoins: 6, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
 export type ForeignKeyJoinKind = 'LEFT' | 'RIGHT' | 'INNER';
-export const manualJoinOperators = ['=', '<>', '<', '<=', '>', '>='] as const;
+export { manualJoinOperators } from '../shared/manualJoinDesigns';
+import { manualJoinOperators } from '../shared/manualJoinDesigns';
 export type ManualJoinOperator = typeof manualJoinOperators[number];
 export interface ManualJoinPair { child: string; parent: string; operator?: ManualJoinOperator }
 
