@@ -42,7 +42,7 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     try {
       fixture.exec("CREATE TABLE header_subject (id INTEGER PRIMARY KEY, amount INTEGER, label TEXT, payload BLOB, nullable TEXT);" +
         "INSERT INTO header_subject VALUES (1,9007199254740993,'row A',X'00ff',NULL),(2,9007199254740994,'row B',X'','');" +
-        'CREATE VIEW header_view AS SELECT * FROM header_subject;');
+        'CREATE VIEW header_view AS SELECT * FROM header_subject WHERE 1 = 0;');
     } finally { fixture.close(); }
   }
   const baseline = local ? await readFile(filePath) : undefined;
@@ -325,6 +325,48 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(nextMatch).toBeDisabled();
     await incremental.check();
     await expect(nextMatch).toBeEnabled();
+    const fieldRegion = tableTab.getByRole('region', { name: findText.modes.field, exact: true });
+    const fieldInput = fieldRegion.getByRole('textbox', { name: findText.modes.field, exact: true });
+    const fieldStatus = fieldRegion.getByRole('status');
+    const fieldNext = fieldRegion.getByRole('button', { name: findText.next, exact: true });
+    const fieldKind = local ? sqliteTableFindZh.kind : tableGridZh.kind;
+    if (dialect !== 'postgresql') {
+      await findPanel.getByRole('combobox', { name: fieldKind, exact: true }).selectOption('field');
+      await expect(fieldInput).toBeFocused();
+      await fieldInput.fill('L');
+      await expect(fieldStatus).toHaveText(findText.fieldCount(3, -1));
+      await fieldRegion.getByRole('checkbox', { name: findText.sensitive, exact: true }).check();
+      await expect(fieldStatus).toHaveText(findText.fieldNone);
+      await fieldRegion.getByRole('checkbox', { name: findText.sensitive, exact: true }).uncheck();
+      await fieldRegion.getByRole('checkbox', { name: findText.highlightAll, exact: true }).check();
+      await fieldInput.press('Enter');
+      await expect(labelHeader).toHaveClass(/query-result-find-hit/);
+      await expect(fieldInput).toBeFocused();
+      await expect(tableTab.locator('[role="columnheader"].query-result-find-match')).toHaveCount(2);
+      await expect(tableTab.locator('[role="gridcell"].query-result-find-hit, [role="gridcell"].query-result-find-match')).toHaveCount(0);
+      await tableActive.press('F3');
+      const payloadHeader = tableGrid.getByRole('columnheader').filter({ hasText: /^payload/i });
+      await expect(payloadHeader).toHaveClass(/query-result-find-hit/);
+      await expect(payloadHeader).toBeFocused();
+      await payloadHeader.press('Shift+F3');
+      await expect(labelHeader).toBeFocused();
+      await fieldRegion.getByRole('checkbox', { name: findText.incremental, exact: true }).uncheck();
+      await fieldInput.fill('amount');
+      await expect(fieldStatus).toHaveText(findText.awaitingSearch);
+      await expect(fieldNext).toBeDisabled();
+      await fieldRegion.getByRole('button', { name: findText.search, exact: true }).click();
+      await expect(fieldStatus).toHaveText(findText.fieldCount(1, -1));
+      await fieldNext.click();
+      await expect(header).toHaveClass(/query-result-find-hit/);
+      await page.screenshot({ path: info.outputPath('表数据查找字段名.png') });
+      // 从标题明确查找该列的值时回到原查找栏，并保留原数据关键字。
+      await labelHeader.click({ button: 'right' });
+      await columnMenu.getByRole('menuitem', { name: headerText.findColumn, exact: true }).click();
+      await expect(fieldRegion).toBeHidden();
+      await expect(findBox).toHaveValue('row B');
+      await expect(findBox).toBeFocused();
+      await expect(nextMatch).toBeEnabled();
+    }
     if (local || dialect === 'postgresql') await findPanel.getByRole('button', { name: local ? sqliteTableFindZh.close : postgresTableFindZh.close, exact: true }).click();
     else await (await navigationMenuItem(tableTab, { name: tableGridZh.find, exact: true })).click();
     await expect(findPanel).toBeHidden();
@@ -332,6 +374,17 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
       await open('header-view');
       await expect(header).toBeVisible();
       expect(await copy(tableTab, ++count)).toBe(tableNames);
+      await expect(tableTab.getByRole('gridcell')).toHaveCount(0);
+      await header.click({ button: 'right' });
+      await columnMenu.getByRole('menuitem', { name: headerText.findColumn, exact: true }).click();
+      await findPanel.getByRole('combobox', { name: fieldKind, exact: true }).selectOption('field');
+      await fieldInput.fill('amount');
+      await fieldInput.press('Enter');
+      await expect(header).toHaveClass(/query-result-find-hit/);
+      await expect(fieldInput).toBeFocused();
+      await page.screenshot({ path: info.outputPath('空只读视图查找字段名.png') });
+      await fieldRegion.getByRole('button', { name: findText.closeFields, exact: true }).click();
+      await expect(header).not.toHaveClass(/query-result-find-hit/);
     }
     await open('header-query');
     const query = page.locator('.query-tab:visible');

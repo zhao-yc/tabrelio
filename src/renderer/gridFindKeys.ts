@@ -20,10 +20,10 @@ export function gridFindDirection(event: KeyboardEvent, scope: HTMLElement, pane
 }
 
 /** 查找栏和网格是同一表页下的兄弟节点，只在打开的面板所属表页监听。 */
-export function useTableFindKeys(panel: RefObject<HTMLElement | null>, navigate: (direction: -1 | 1, focusGrid: boolean) => void) {
+export function useTableFindKeys(panel: RefObject<HTMLElement | null>, navigate: (direction: -1 | 1, focusGrid: boolean) => void, enabled = true) {
   useLayoutEffect(() => {
     const element = panel.current, scope = element?.closest?.<HTMLElement>('[data-table-find-scope]');
-    if (!element || !scope) return;
+    if (!enabled || !element || !scope) return;
     const keyDown = (event: KeyboardEvent) => {
       const direction = gridFindDirection(event, scope, element);
       if (!direction) return;
@@ -33,5 +33,5 @@ export function useTableFindKeys(panel: RefObject<HTMLElement | null>, navigate:
     };
     scope.addEventListener('keydown', keyDown);
     return () => scope.removeEventListener('keydown', keyDown);
-  }, [panel, navigate]);
+  }, [panel, navigate, enabled]);
 }

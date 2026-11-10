@@ -30,7 +30,7 @@ export const queryResultFindZh = {
   limited: '已达到 5000 个匹配单元格上限，仅在这些命中中跳转；其余未继续检索。',
   scope: (rows: number, columns: number) => `范围：已返回 ${rows} 行、${columns} 个可见列。`,
   location: (row: number, column: number) => `命中：第 ${row + 1} 行，第 ${column + 1} 个可见列`,
-  fieldEmpty: '输入要查找的字段名', fieldNone: '无匹配字段',
+  closeFields: '关闭查找', fieldEmpty: '输入要查找的字段名', fieldNone: '无匹配字段',
   fieldSearching: (count: number, scanned: number, total: number) => `正在查找：${count} 个匹配字段，已检查 ${scanned}/${total} 列`,
   fieldCount: (count: number, index: number) => `${count} 个匹配字段${index >= 0 ? `，当前第 ${index + 1} 个` : ''}`,
   fieldScope: (columns: number) => `范围：${columns} 个可见列标题。`,

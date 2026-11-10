@@ -14,6 +14,7 @@ import { UsageHelp, ErrorBox, Field, Modal  } from './ui';
 import { GridFindMatchActions, type GridMatchRowsAction } from './GridRowSelectionActions';
 import { tableFindFilterRule } from '../tableFindFilter';
 import { tableFindFilterZh as filterText } from '../locales/tableFindFilter.zh-CN';
+import { TableFieldFind, type TableFieldFindDisplay } from './TableFieldFind';
 import { TableFindEdgeSelect } from './TableFindEdgeSelect';
 import '../queryResultFind.css';
 import { postgresTableFindZh as checkedText } from '../locales/postgresTableFind.zh-CN';
@@ -25,9 +26,10 @@ export interface PageFindDisplay {
 }
 
 /** 当前页查找和预览全部在线程内执行；正则模式需要明确点击，编辑模式不会自动重跑恶意表达式。 */
-export function PageFindPanel({ rows, keys, info, generation, disabled, replaceDisabled = false, focusRequest, onJump, onApply, onFilter, onStageFilter, getSelectionToken, onDisplay, onMatchRows, checkedRows }: { rows: DraftRow[]; keys: string[]; info: TableInfo | null; generation: number; disabled: boolean; replaceDisabled?: boolean; focusRequest: { target: 'query' | 'replacement'; generation: number; column?: string }; onJump(rowId: string, key: string, focusGrid?: boolean): void; onApply(plan: PageReplacement, only?: PageOccurrence, selectionToken?: unknown): DraftRow[] | void; onFilter(): void; onStageFilter?(rule: FilterRule, generation: number): void; getSelectionToken?(): unknown; onDisplay?(display: PageFindDisplay | undefined): void; onMatchRows?: GridMatchRowsAction<string>; checkedRows?: { ids: ReadonlySet<string>; isCurrent(): boolean } }) {
+export function PageFindPanel({ rows, keys, info, generation, disabled, replaceDisabled = false, focusRequest, onJump, onApply, onFilter, onStageFilter, getSelectionToken, onDisplay, onMatchRows, checkedRows, fieldColumns, onFieldDisplay }: { rows: DraftRow[]; keys: string[]; info: TableInfo | null; generation: number; disabled: boolean; replaceDisabled?: boolean; focusRequest: { target: 'query' | 'replacement'; generation: number; column?: string }; onJump(rowId: string, key: string, focusGrid?: boolean): void; onApply(plan: PageReplacement, only?: PageOccurrence, selectionToken?: unknown): DraftRow[] | void; onFilter(): void; onStageFilter?(rule: FilterRule, generation: number): void; getSelectionToken?(): unknown; onDisplay?(display: PageFindDisplay | undefined): void; fieldColumns?: readonly { key: string; name: string }[]; onFieldDisplay?(display: TableFieldFindDisplay | undefined): void; onMatchRows?: GridMatchRowsAction<string>; checkedRows?: { ids: ReadonlySet<string>; isCurrent(): boolean } }) {
   const [options, setOptions] = useState<PageFindOptions>(() => ({ kind: 'text', query: '', caseSensitive: false, wholeCell: false,
     column: focusRequest.column !== undefined && keys.includes(focusRequest.column) ? focusRequest.column : undefined }));
+  const [field, setField] = useState(false), fieldMode = useRef(false);
   const [checkedOnly, setCheckedOnly] = useState(false);
   const checked = checkedOnly ? checkedRows : undefined;
   const searchRows = useMemo(() => checkedOnly ? rows.filter(row => !row.deleted && checked?.ids.has(row.id)) : rows, [checkedOnly, checked, rows]);
@@ -53,19 +55,22 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   /** 列标题带入字段而保留查找词，沿原选项修改入口撤销旧命中和预览。 */
   useLayoutEffect(() => {
     const column = focusRequest.column;
+    if (focusRequest.target === 'replacement' || column !== undefined) {
+      fieldMode.current = false; setField(false);
+    }
     if (!disabled && column !== undefined && keys.includes(column) && activeOptions.current.column !== column) {
       changeOptions({ ...activeOptions.current, column });
     }
   }, [focusRequest]);
   /** 每次明确打开或重复快捷键都接管输入焦点，不能让查找文字进入活动网格草稿。 */
-  useEffect(() => { const target = focusRequest.target === 'replacement' ? replacementInput.current : queryInput.current; (target && !target.disabled ? target : kindSelect.current)?.focus(); }, [focusRequest]);
+  useEffect(() => { if (field) return; const target = focusRequest.target === 'replacement' ? replacementInput.current : queryInput.current; (target && !target.disabled ? target : kindSelect.current)?.focus(); }, [focusRequest, field]);
   const occurrences = useMemo(() => pageOccurrences(found), [foundState, snapshot]);
   const current = occurrences[position];
   const highlights = useMemo(() => highlightAll && foundState.snapshot === snapshot && foundState.matches.length
     ? tableFindHighlights(foundState.matches, match => match.key) : undefined, [highlightAll, foundState, snapshot]);
   useLayoutEffect(() => {
-    onDisplay?.(!disabled && !composing && (highlights || current) ? { generation, highlights, current } : undefined);
-  }, [onDisplay, disabled, composing, generation, highlights, current]);
+    onDisplay?.(!field && !disabled && !composing && (highlights || current) ? { generation, highlights, current } : undefined);
+  }, [onDisplay, field, disabled, composing, generation, highlights, current]);
   const currentRow = current ? rows.findIndex(row => row.id === current.rowId) : -1;
   const currentValue = currentRow >= 0 ? ownCell(rows[currentRow].data, current.key) : undefined;
   const findFilter = tableFindFilterRule(options, keys.includes(options.column ?? '')
@@ -107,10 +112,10 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     intentRevision.current++;
     acceptedFind.current = undefined; setFound({ matches: [], snapshot: null }); selectPosition(-1); setPreview(null); setError('');
     void client.current?.cancel().then(() => { if (serial === requestSerial.current) { workingRef.current = false; setWorking(false); } });
-    if (!incremental || disabled || emptyChecked || (options.kind === 'text' && (!options.query || (options.regex && !ownUpdate)))) return;
+    if (field || !incremental || disabled || emptyChecked || (options.kind === 'text' && (!options.query || (options.regex && !ownUpdate)))) return;
     autoTimer.current = setTimeout(() => { void run('find', undefined, ownUpdate ? resume : undefined); }, 120);
     return () => { clearTimeout(autoTimer.current); requestSerial.current++; void client.current?.cancel(); };
-  }, [snapshot, incremental]);
+  }, [snapshot, incremental, field]);
   useEffect(() => { setPreview(null); }, [replacement]);
   useEffect(() => () => { acceptedFind.current = undefined; requestSerial.current++; void client.current?.dispose(); client.current = null; }, []);
   useEffect(() => { setOptions(current => current.column && !keys.includes(current.column) ? { ...current, column: undefined } : current); }, [keys]);
@@ -118,7 +123,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   function jump(delta: number, focusGrid = true) { if (!occurrences.length || disabled || !checkedCurrent() || composingRef.current || activeOptions.current !== snapshot.options) return; invalidateIntent(); const active = positionRef.current, next = active < 0 ? delta > 0 ? 0 : occurrences.length - 1 : (active + delta + occurrences.length) % occurrences.length; const match = occurrences[next]; selectPosition(next); onJump(match.rowId, match.key, focusGrid); }
   useTableFindKeys(panel, (direction, focusGrid) => {
     if (latest.current === snapshot && !workingRef.current) jump(direction, focusGrid);
-  });
+  }, !field);
   /** 单处命令只接受当前快照中的精确出现位置；不能回退成整格或整页替换。 */
   function replaceCurrent() { const match = occurrences[positionRef.current], row = match && rows.find(row => row.id === match.rowId); if (disabled || composingRef.current || workingRef.current || singleLock.current || replaceDisabled || !replaceableKind || !info || !match?.range || !row || typeof ownCell(row.data, match.key) !== 'string' || !pageReplaceWritable(info, match.key)) return; void run('preview', match); }
   /** Enter仅处理本面板输入；组合标志或229保留原生输入，不产生导航或草稿。 */
@@ -133,7 +138,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   }
   /** 完成消息必须仍属于当前快照和请求；单处替换与整批预览共用原值、资格和预算政策。 */
   async function run(operation: 'find' | 'preview', only?: PageOccurrence, resume?: NonNullable<typeof advance.current>) {
-    if (disabled || !checkedCurrent() || composingRef.current || latest.current !== snapshot || activeOptions.current !== snapshot.options || (operation === 'preview' && (!replaceableKind || !info || replaceDisabled || workingRef.current || singleLock.current || (only && !sameCurrent(only))))) return;
+    if (fieldMode.current || disabled || !checkedCurrent() || composingRef.current || latest.current !== snapshot || activeOptions.current !== snapshot.options || (operation === 'preview' && (!replaceableKind || !info || replaceDisabled || workingRef.current || singleLock.current || (only && !sameCurrent(only))))) return;
     clearTimeout(autoTimer.current); autoTimer.current = undefined;
     const serial = ++requestSerial.current, intent = ++intentRevision.current, source = snapshot, value = latestReplacement.current, selectionToken = getSelectionToken?.();
     client.current ??= new PageFindWorkerClient(() => new Worker(new URL('../pageFind.worker.ts', import.meta.url), { type: 'module' }));
@@ -166,8 +171,16 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
         activeOptions.current !== snapshot.options || acceptedFind.current !== found || !found.length) return;
     onMatchRows?.(new Set(found.map(match => match.rowId)), checked);
   }
+  const kind = <Field label={text.kind}><select ref={kindSelect} disabled={disabled} value={field ? 'field' : options.kind} onChange={event => {
+    const value = event.target.value;
+    fieldMode.current = value === 'field'; setField(fieldMode.current);
+    if (fieldMode.current) invalidateIntent();
+    else changeOptions({ ...options, kind: value as PageFindOptions['kind'], edge: undefined });
+  }}><option value="text">{text.text}</option>{fieldColumns && <option value="field">{findText.modes.field}</option>}<option value="empty">{findText.modes.empty}</option><option value="null">{text.null}</option><option value="default">{text.default}</option></select></Field>;
+  if (field && fieldColumns) return <TableFieldFind columns={fieldColumns} kind={kind} disabled={disabled} focusRequest={focusRequest}
+    initialQuery={options.query} initialSensitive={options.caseSensitive} initialHighlight={highlightAll} initialIncremental={incremental} onDisplay={onFieldDisplay}/>;
   return <section ref={panel} className="page-find-panel" aria-label={text.find} onCompositionStart={compositionStarted} onCompositionEnd={event => compositionEnded(event.target)}><UsageHelp><p>{text.scope}</p><p>{text.binaryHint}</p><p>{text.replaceOneHint}</p>{options.kind === 'text' && options.regex && <p>{text.regexHint}</p>}{options.captureReplacement && <p>{text.captureHint}</p>}</UsageHelp><div className="page-find-fields">
-    <Field label={text.kind}><select ref={kindSelect} disabled={disabled} value={options.kind} onChange={event => changeOptions({ ...options, kind: event.target.value as PageFindOptions['kind'], edge: undefined })}><option value="text">{text.text}</option><option value="empty">{findText.modes.empty}</option><option value="null">{text.null}</option><option value="default">{text.default}</option></select></Field>
+    {kind}
     <Field label={text.query}><input ref={queryInput} disabled={disabled || options.kind !== 'text'} maxLength={512} value={options.query} onKeyDown={event => inputKey(event, 'query')} onChange={event => changeOptions({ ...options, query: event.target.value })}/></Field>
     <Field label={text.column}><select disabled={disabled} value={options.column ?? ''} onChange={event => changeOptions({ ...options, column: event.target.value || undefined })}><option value="">{text.all}</option>{keys.map(key => <option key={key}>{key}</option>)}</select></Field>
     <label><input type="checkbox" disabled={disabled || options.kind !== 'text'} checked={options.caseSensitive} onChange={event => changeOptions({ ...options, caseSensitive: event.target.checked })}/>{text.case}</label><label><input type="checkbox" disabled={disabled || options.kind !== 'text'} checked={options.wholeCell} onChange={event => changeOptions({ ...options, wholeCell: event.target.checked, edge: event.target.checked ? undefined : options.edge })}/>{text.whole}</label><label><input type="checkbox" disabled={disabled || options.kind !== 'text'} checked={!!options.regex} onChange={event => changeOptions({ ...options, regex: event.target.checked })}/>{text.regex}</label>
