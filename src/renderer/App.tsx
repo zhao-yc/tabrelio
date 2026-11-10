@@ -178,7 +178,8 @@ import { columnPatchZh } from './locales/columnPatches.zh-CN';
 import { QueryTab } from './components/QueryTab';
 import { QueryCloseRequests, type QueryCloseRequest } from './queryCloseIntent';
 import { QueryCloseQueue } from './queryCloseQueue';
-import { captureRetainedQuery, RecentClosedQueries } from './recentClosedQueries';
+import { captureRetainedQuery, RecentClosedQueries, type RetainedQuery } from './recentClosedQueries';
+import { RetainedQueriesDialog } from './components/RetainedQueriesDialog';
 import { queryCloseZh } from './locales/queryClose.zh-CN';
 import { TableTab } from './components/TableTab';
 import { usePostgresRecordTransfer, type PostgresRecordTransfer } from './postgresRecordTransfer';
@@ -216,6 +217,8 @@ function WorkspaceApp() {
   const state = useWorkspace(); const { settings, ready, connections, notice } = state;
   const closeRequests = useMemo(() => new QueryCloseRequests(), []);
   const retainedQueries = useMemo(() => new RecentClosedQueries(), []);
+  const retainedListRef = useRef<string | undefined>(undefined);
+  const [retainedList, setRetainedList] = useState<string>();
   useEffect(() => useWorkspace.subscribe((next, previous) => {
     if (next.connections !== previous.connections || next.connectionVersions !== previous.connectionVersions) retainedQueries.prune(next);
   }), [retainedQueries]);
@@ -522,13 +525,41 @@ function WorkspaceApp() {
       if (retained && !useWorkspace.getState().settings.tabs.some(item => item.id === tab.id)) retainedQueries.remember(retained);
     }
   }
-  /** 用新标签身份打开独立草稿，只在确认打开后消费内存记录。 */
-  function reopenRetainedQuery(): void {
-    const current = useWorkspace.getState(), entry = retainedQueries.peek(current);
-    if (!entry || current.settings.tabs.length >= 100 || closeRequests.pending || otherQueryClose.current?.running || otherQueryClose.current?.pending || document.querySelector(appModalSelector)) return;
+  function retainedRestoreBlocked(): boolean {
+    return !!(closeRequests.pending || otherQueryClose.current?.running || otherQueryClose.current?.pending);
+  }
+  /** 用新标签身份打开独立草稿，只在确认打开后消费准确条目。 */
+  function restoreRetainedQuery(entry: RetainedQuery): boolean {
+    const current = useWorkspace.getState();
+    if (current.settings.tabs.length >= 100 || retainedRestoreBlocked() || !retainedQueries.contains(entry, current)) return false;
     const id = uid();
     workbenchNavigation.invalidate(); current.openTab({ ...entry.draft, id });
-    if (useWorkspace.getState().settings.tabs.some(tab => tab.id === id)) retainedQueries.consume(entry);
+    if (!useWorkspace.getState().settings.tabs.some(tab => tab.id === id)) return false;
+    retainedQueries.consume(entry);
+    return true;
+  }
+  function reopenRetainedQuery(): void {
+    if (retainedListRef.current || document.querySelector(appModalSelector)) return;
+    const entry = retainedQueries.peek(useWorkspace.getState());
+    if (entry) restoreRetainedQuery(entry);
+  }
+  function openRetainedList(): void {
+    if (retainedListRef.current || retainedRestoreBlocked() || document.querySelector(appModalSelector)) return;
+    if (!retainedQueries.peek(useWorkspace.getState())) return;
+    const owner = uid();
+    workbenchNavigation.invalidate(); retainedListRef.current = owner; setRetainedList(owner);
+  }
+  function closeRetainedList(owner: string): void {
+    if (retainedListRef.current !== owner) return;
+    retainedListRef.current = undefined; setRetainedList(undefined); workbenchNavigation.invalidate();
+  }
+  function restoreFromRetainedList(owner: string, entry: RetainedQuery): boolean {
+    if (retainedListRef.current !== owner) return false;
+    const dialogs = document.querySelectorAll(appModalSelector);
+    if (dialogs.length !== 1 || dialogs[0].querySelector('[data-retained-query-list]')?.getAttribute('data-retained-query-list') !== owner) return false;
+    if (!restoreRetainedQuery(entry)) return false;
+    closeRetainedList(owner);
+    return true;
   }
   /** 原请求已从本次渲染清空且portal已移除后交付提交回执；新的外部模态仍由全局门拒绝。 */
   function commitQueryClose(commit: { queue: QueryCloseQueue; request: QueryCloseRequest }, pending?: QueryCloseRequest) {
@@ -1176,6 +1207,7 @@ function WorkspaceApp() {
     'task-center': handler(() => setTasks(true)), 'tab-search': handler(openTabSearch),
     'close-tab': handler(() => { if (activeTab) closeTab(activeTab.id); }, !!activeTab && !state.activeJobs[activeTab.id]),
     'reopen-query': handler(reopenRetainedQuery, settings.tabs.length < 100 && !!retainedQueries.peek(state)),
+    'retained-query-list': handler(openRetainedList, !!retainedQueries.peek(state)),
     'close-other-queries': handler(() => closeOtherQueries(), activeTab?.kind === 'query' && settings.tabs.some(tab => tab.kind === 'query' && tab.id !== activeTab.id)),
     'close-left-queries': handler(() => closeSide('left'), activeTab?.kind === 'query' && settings.tabs.some((tab, index) => tab.kind === 'query' && index < activeIndex)),
     'close-right-queries': handler(() => closeSide('right'), activeTab?.kind === 'query' && settings.tabs.some((tab, index) => tab.kind === 'query' && index > activeIndex)),
@@ -1371,6 +1403,8 @@ function WorkspaceApp() {
     {resultSnapshot && <QueryResultSnapshotDialog onClose={closeResultSnapshot}/>}
     {routineInvocationTarget && <RoutineInvocationDialog target={routineInvocationTarget} onClose={() => closeRoutineInvocation(routineInvocationTarget)} onOpenGeneratedQuery={sql => finishRoutineInvocation(routineInvocationTarget, sql)}/>}
     {tabSearch && <OpenTabSearchDialog key={tabSearch.id} registry={tabSearch.registry} onClose={() => closeTabSearch(tabSearch)} onActivate={entry => activateSearchedTab(tabSearch, entry)}/>}
+    {retainedList && <RetainedQueriesDialog key={retainedList} ownerId={retainedList} entries={retainedQueries.list(state)} connections={connections}
+      atCapacity={settings.tabs.length >= 100} onClose={() => closeRetainedList(retainedList)} onOpen={entry => restoreFromRetainedList(retainedList, entry)}/>}
     {editorFontPreferences && <EditorFontPreferencesDialog onClose={closeEditorFontPreferences}/>}
     {externalEditorPreferences && <ExternalSqlEditorDialog onClose={() => { workbenchNavigation.invalidate(); setExternalEditorPreferences(false); }}/>}
     {sqlFormatPreferences && <Modal title={sqlFormattingZh.preferences} onClose={() => { workbenchNavigation.invalidate(); setSqlFormatPreferences(false); }}><div className="modal-content"><SqlKeywordCasePreferences standalone/></div></Modal>}

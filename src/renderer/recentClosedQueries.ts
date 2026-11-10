@@ -3,7 +3,7 @@ import type { WorkspaceTab } from './store';
 const maxEntries = 10;
 const maxText = 20_000_000;
 type ConnectionScope = { connections: { id: string }[]; connectionVersions: Record<string, number> };
-export type RetainedQuery = { draft: Omit<WorkspaceTab, 'id'> & { kind: 'query'; sql: string }; connection: object; version: number };
+export type RetainedQuery = { tabId: string; draft: Omit<WorkspaceTab, 'id'> & { kind: 'query'; sql: string }; connection: object; version: number };
 
 /** 只保留可重开的草稿字段，源文件、保存查询绑定和运行状态不进入记录。 */
 export function captureRetainedQuery(tab: WorkspaceTab, scope: ConnectionScope): RetainedQuery | undefined {
@@ -14,7 +14,7 @@ export function captureRetainedQuery(tab: WorkspaceTab, scope: ConnectionScope):
     ...(database === undefined ? {} : { database }), ...(databaseContext ? { databaseContext: { ...databaseContext } } : {}),
     ...(queryEditorHeight === undefined ? {} : { queryEditorHeight }), ...(queryEditorWidth === undefined ? {} : { queryEditorWidth }),
     ...(queryResultPlacement === undefined ? {} : { queryResultPlacement }) };
-  return { draft, connection, version: scope.connectionVersions[connectionId] ?? 0 };
+  return { tabId: tab.id, draft, connection, version: scope.connectionVersions[connectionId] ?? 0 };
 }
 
 /** 仅当前窗口内存保留，按关闭顺序取最近一个仍属于原连接的草稿。 */
@@ -30,6 +30,15 @@ export class RecentClosedQueries {
 
   peek(scope: ConnectionScope): RetainedQuery | undefined {
     return this.entries.find(entry => this.matches(entry, scope));
+  }
+
+  list(scope: ConnectionScope): RetainedQuery[] {
+    return this.entries.filter(entry => this.matches(entry, scope));
+  }
+
+  /** 必须是仍被保留的同一个草稿对象，同名草稿或失效连接不能作为替代。 */
+  contains(entry: RetainedQuery, scope: ConnectionScope): boolean {
+    return this.entries.includes(entry) && this.matches(entry, scope);
   }
 
   consume(entry: RetainedQuery): void {

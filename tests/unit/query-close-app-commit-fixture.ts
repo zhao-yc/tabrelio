@@ -1,3 +1,4 @@
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 import { workspaceCommandSource } from '../helpers/workspaceCommandSource';
 import React, { useLayoutEffect } from 'react';
 import { readFileSync } from 'node:fs';
@@ -17,7 +18,7 @@ export function appFunctions(environment: Record<string, unknown>) {
     if (ts.isCallExpression(node) && node.expression.getText(tree) === 'useLayoutEffect' && node.arguments[0]?.getText(tree).includes('commitQueryClose(queryCloseCommit, queryCloseRequest)')) layout = node.getText(tree);
     ts.forEachChild(node, visit);
   }; visit(tree); if (methods.length !== 4 || !layout) throw Error('真实App队列提交接线缺失');
-  const context = createContext({ React, useLayoutEffect, QueryCloseQueue, QueryCloseRequests, queryCloseZh, zh, ...environment });
+  const context = createContext({ appDialogSelector, React, useLayoutEffect, QueryCloseQueue, QueryCloseRequests, queryCloseZh, zh, ...environment });
   const code = methods.join('\n') + '\nglobalThis.closeSides=closeOtherQueries;globalThis.finish=finishQueryClose;globalThis.entry=(settings,activeTab,closingOtherQueries)=>{const state=useWorkspace.getState(),ready=true,queryCloseRequest=undefined;const ' + registration.available + ';const ' + registration.handler + ';const command=(' + registration.command + ');return React.createElement("button",{"data-ram-command":"close-other-queries",disabled:!command.enabled,onClick:command.run},queryCloseZh.others);};globalThis.layout=(queryCloseCommit,queryCloseRequest,settings)=>{' + layout + ';};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText, context);
   return context as any;

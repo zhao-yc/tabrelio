@@ -1,3 +1,4 @@
+import { appModalSelector } from '../../src/renderer/modalSelectors';
 import { workspaceCommandSource } from '../helpers/workspaceCommandSource';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import React, { act, useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
@@ -58,7 +59,7 @@ function appEntry() {
   const update = vi.fn((patch: Partial<AppSettings>) => store.setState({ settings: { ...store.getState().settings, ...patch } }));
   const workspace = { getState: () => ({ ...store.getState(), updateSettings: update, openTab }), subscribe: store.subscribe };
   function DialogPort(props: DialogProps) { views.push(props); return <Dialog {...props}/>; }
-  const context = createContext({ exports: {}, useState, useRef, useEffect, useLayoutEffect, document, window: keyboard, OpenTabSearchRegistry, OpenTabSearchDialog: DialogPort, openTabSearchZh: text, uiCommandLabels, useWorkspace: workspace, uid, workbenchNavigation: { invalidate }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  const context = createContext({ appModalSelector, exports: {}, useState, useRef, useEffect, useLayoutEffect, document, window: keyboard, OpenTabSearchRegistry, OpenTabSearchDialog: DialogPort, openTabSearchZh: text, uiCommandLabels, useWorkspace: workspace, uid, workbenchNavigation: { invalidate }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
   runInContext(ts.transpileModule(`function Entry(){${declarations.join('\n')}\n${methods.join('\n')}\n${observe}\n${shortcut}\nconst state=useWorkspace.getState(),settings=state.settings,ready=true,closingOtherQueries=false,queryCloseRequest=undefined;const ${registration.available};const ${registration.handler};const registered=${registration.command};const commands={enabled:id=>id==='tab-search'&&registered.enabled,run:id=>{if(id==='tab-search'&&registered.enabled)registered.run();}};const ${button};return <>{command('tab-search')}{${modal}}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
   return { Entry: (context as any).Entry as React.ComponentType, keyboard, invalidate, uid, update, openTab };
 }

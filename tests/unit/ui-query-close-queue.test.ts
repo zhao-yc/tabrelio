@@ -1,3 +1,4 @@
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 import { workspaceCommandSource } from '../helpers/workspaceCommandSource';
 import React from 'react';
 import { readFileSync } from 'node:fs';
@@ -23,7 +24,7 @@ function fixture(sql = 'SELECT 原SQL;') {
   const state = { settings: { tabs: [keep, a, table, b], activeTabId: 'keep' }, connections: [{ id: 'c' }], connectionVersions: {} as Record<string, number>, activeJobs: {} as Record<string, boolean>, dirtyTabs: {} as Record<string, boolean>, notify: vi.fn(), closeTab: vi.fn((id: string) => { state.settings.tabs = state.settings.tabs.filter(tab => tab.id !== id); notify(); }) };
   const otherQueryClose = { current: null as QueryCloseQueue | null }, confirm = vi.fn(() => false), setClosing = vi.fn(), setRequest = vi.fn((request?: QueryCloseRequest) => { if (request) requests.push(request); });
   let commit: {queue:QueryCloseQueue;request:QueryCloseRequest}|undefined;
-  const context = createContext({ React, QueryCloseQueue, otherQueryClose, closeRequests: new QueryCloseRequests(), useWorkspace: { getState: () => state, subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; } }, window: { confirm }, document: { querySelector: () => null }, zh, queryCloseZh, setQueryCloseRequest: setRequest, setClosingOtherQueries: setClosing,setQueryCloseCommit:(next:typeof commit)=>{commit=next} });
+  const context = createContext({ appDialogSelector, React, QueryCloseQueue, otherQueryClose, closeRequests: new QueryCloseRequests(), useWorkspace: { getState: () => state, subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; } }, window: { confirm }, document: { querySelector: () => null }, zh, queryCloseZh, setQueryCloseRequest: setRequest, setClosingOtherQueries: setClosing,setQueryCloseCommit:(next:typeof commit)=>{commit=next} });
   const code = methods.join('\n') + '\nglobalThis.finish=finishQueryClose;globalThis.commit=commitQueryClose;globalThis.close=closeTab;globalThis.command=(settings,activeTab,closingOtherQueries)=>{const state=useWorkspace.getState(),ready=true,queryCloseRequest=undefined;const ' + registration.available + ';const ' + registration.handler + ';return (' + registration.command + ');};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText, context);
   const command = () => (context.command as Function)(state.settings, state.settings.tabs.find(tab => tab.id === state.settings.activeTabId), otherQueryClose.current?.running ?? false) as { enabled: boolean; run(): unknown };

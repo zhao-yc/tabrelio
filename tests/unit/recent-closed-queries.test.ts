@@ -30,3 +30,21 @@ it('按最新关闭顺序消费且只保留十项，连接变更后旧记录不�
   recent.prune({ ...scope, connectionVersions: { connection: 5 } });
   expect(recent.peek(scope)).toBeUndefined();
 });
+
+it('选择较早同名草稿只消费准确条目，副本和失效连接不能被选中', () => {
+  const recent = new RecentClosedQueries();
+  const older = captureRetainedQuery(tab, scope)!;
+  const newer = captureRetainedQuery({ ...tab, id: 'newer', sql: 'SELECT 2;' }, scope)!;
+  recent.remember(older); recent.remember(newer);
+  expect(recent.list(scope)).toEqual([newer, older]);
+  expect(recent.contains({ ...older }, scope)).toBe(false);
+  expect(recent.contains(older, scope)).toBe(true);
+  recent.consume(older);
+  expect(recent.contains(older, scope)).toBe(false);
+  expect(recent.peek(scope)).toBe(newer);
+  const changed = { ...scope, connectionVersions: { connection: 5 } };
+  expect(recent.list(changed)).toEqual([]);
+  expect(recent.contains(newer, changed)).toBe(false);
+  recent.prune(changed);
+  expect(recent.list(scope)).toEqual([]);
+});
