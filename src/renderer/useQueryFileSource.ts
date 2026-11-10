@@ -3,7 +3,8 @@ import type { QueryFileEncoding } from '../shared/contracts';
 import type { QueryFileBom, QueryFileEolPolicy, QueryFileSourceBlocked, QueryFileSourceHandoffInput, QueryFileSourceView } from '../shared/queryFileSources';
 import { externalSqlEditorZh } from '../shared/externalSqlEditor';
 import { queryFileSourceHasChanges, sameQueryFileSource } from '../shared/queryFileSources';
-import { QueryFileTaskOperation, type QueryFileTaskState } from './queryFileTasks';
+import type { QueryFileTaskOperation, QueryFileTaskState } from './queryFileTasks';
+import { beginWorkspaceQueryFileTask } from './workspaceQueryFileTask';
 import { acquireWorkspaceBusy, beginQueryFileOpen, flushSettings, useWorkspace, type WorkspaceTab, type QueryFileOpenLease } from './store';
 import { invoke, uid } from './lib';
 import { QuerySourceLease, querySourceTab } from './querySourceLease';
@@ -39,12 +40,7 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
   useEffect(() => { if (reloadIntent.current && reloadPort?.current?.() === false && !reloadIntent.current.applying) void cancelReload(); });
   /** 每次调用新建UUID并先订阅，再向Main发送任务；任务中心只看到无路径/SQL的结构化进度。 */
   function beginTask(snapshot: Readonly<WorkspaceTab>, operation: QueryFileTaskState['operation'], ownsDocument = ownsView) {
-    const taskId = uid(), owner = new QueryFileTaskOperation(snapshot, taskId, operation, {
-      read: () => useWorkspace.getState().settings.tabs.find(item => item.id === snapshot.id), ownsView: ownsDocument,
-      subscribeDocument: changed => useWorkspace.subscribe(changed), subscribeTask: changed => window.dbark?.onTask(changed) ?? (() => {}),
-      cancel: input => invoke('queryFileSources.cancel', input),
-      publish: value => { useWorkspace.getState().setQueryFileTask(value); if (ownsView()) setTask(value); }
-    });
+    const { taskId, owner } = beginWorkspaceQueryFileTask(snapshot, operation, ownsDocument, value => { if (ownsView()) setTask(value); });
     operations.current.add(owner);
     return { taskId, owner, finish(result: Parameters<QueryFileTaskOperation['finish']>[0]) { const wrote = owner.finish(result); operations.current.delete(owner); return wrote; } };
   }

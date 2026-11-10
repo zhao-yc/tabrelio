@@ -31,6 +31,26 @@ it('取消或首轮flush失败仅可移除本owner仍未修改的占位，不动
   const before = store.useWorkspace.getState().settings.tabs[0], lease = begin(); lease.dispose(true); lease.dispose(true);
   expect(store.useWorkspace.getState().settings.tabs).toEqual([before]); expect(store.useWorkspace.getState().settings.activeTabId).toBe('原标签'); expect(store.useWorkspace.getState().queryFileOpenings).toEqual({});
 });
+it('空工作区可登记并一次交付文件，取消只移除本次空占位', () => {
+  store.useWorkspace.getState().updateSettings({ tabs: [], activeTabId: undefined });
+  const cancelled = store.beginQueryFileOpen(undefined, target(), () => true);
+  expect(cancelled.current()).toBe(true);
+  cancelled.dispose(true);
+  expect(store.useWorkspace.getState().settings.tabs).toEqual([]);
+  const opened = store.beginQueryFileOpen(undefined, target(), () => true);
+  expect(opened.apply('文件原文', binding)).toBe(true);
+  opened.dispose(true);
+  expect(store.useWorkspace.getState().settings).toMatchObject({ activeTabId: '占位', tabs: [{ sql: '文件原文', fileSourceBinding: source }] });
+});
+it('没有原查询时活动页变化永久撤销打开权限', () => {
+  const lease = store.beginQueryFileOpen(undefined, target(), () => true);
+  const state = store.useWorkspace.getState();
+  state.updateSettings({ activeTabId: undefined });
+  state.updateSettings({ activeTabId: '原标签' });
+  expect(lease.apply('迟到文件', binding)).toBe(false);
+  lease.dispose(true);
+  expect(store.useWorkspace.getState().settings.tabs).toEqual([origin()]);
+});
 it.each(['目标正文', '目标标题', '目标来源ABA', '原来源ABA', '原连接修订ABA', '原数据库ABA', '关闭重建', '连接概要替换', '目标事务dirty'] as const)('%s永久撤销旧租约，dispose不能删后来文稿', kind => {
   const lease = begin(), before = store.useWorkspace.getState().settings.tabs.find(tab => tab.id === '占位')!;
   const state = store.useWorkspace.getState();

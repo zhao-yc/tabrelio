@@ -63,7 +63,7 @@ interface WorkspaceState {
 }
 
 /** 仅本次打开持有的内存身份；不会进入settings、SQLite或文件来源合同。 */
-interface QueryFileOpening { readonly target: WorkspaceTab; readonly origin: WorkspaceTab; readonly connection: ConnectionProfile; readonly version: number; }
+interface QueryFileOpening { readonly target: WorkspaceTab; readonly origin?: WorkspaceTab; readonly connection: ConnectionProfile; readonly version: number; }
 export interface QueryFileOpenLease { current(): boolean; apply(sql: string, binding: QueryFileSourceView): boolean; dispose(removeUnchanged?: boolean): void; }
 
 /** 精确识别曾由文件操作登记的原占位对象；弱引用不持有文档，也不凭标题或空正文推断。 */
@@ -92,19 +92,22 @@ function commitWorkspaceSettings(update: Partial<AppSettings>, openings = useWor
 }
 
 /** 新文件占位尚未创建编辑器；完整原文与来源就位后才一次解除，旧回包不能接管新文档。 */
-export function beginQueryFileOpen(origin: WorkspaceTab, target: WorkspaceTab, ownsView: () => boolean): QueryFileOpenLease {
-  const initial = useWorkspace.getState(), connection = initial.connections.find(item => item.id === origin.connectionId);
-  if (!ownsView() || !connection || initial.settings.tabs.find(item => item.id === origin.id) !== origin || initial.settings.tabs.some(item => item.id === target.id) || initial.queryFileOpenings[target.id] || target.kind !== 'query' || target.sql !== '' || target.connectionId !== origin.connectionId || target.sourceBinding || target.fileSourceBinding) throw Error(queryFilesZh.changed);
-  const opening: QueryFileOpening = Object.freeze({ target, origin, connection, version: initial.connectionVersions[origin.connectionId] ?? 0 });
+export function beginQueryFileOpen(origin: WorkspaceTab | undefined, target: WorkspaceTab, ownsView: () => boolean): QueryFileOpenLease {
+  const initial = useWorkspace.getState(), connection = initial.connections.find(item => item.id === target.connectionId);
+  if (!ownsView() || !connection || origin && (initial.settings.tabs.find(item => item.id === origin.id) !== origin || target.connectionId !== origin.connectionId) || initial.settings.tabs.some(item => item.id === target.id) || initial.queryFileOpenings[target.id] || target.kind !== 'query' || target.sql !== '' || target.sourceBinding || target.fileSourceBinding) throw Error(queryFilesZh.changed);
+  const opening: QueryFileOpening = Object.freeze({ target, origin, connection, version: initial.connectionVersions[target.connectionId] ?? 0 });
+  const activeTabId = initial.settings.activeTabId;
   // 完成后仍可识别迟到的原占位props；完整新标签是另一个对象，不继承此标记。
   queryFileOpenTargets.add(target);
   let valid = true, pristine = true, settled = false;
   const context = (tab: WorkspaceTab) => JSON.stringify([tab.database ?? null, tab.databaseContext ?? null]);
   /** 观察每次实际通知，正文/标题可继续变化；来源、连接或目标离开后永久失效，防止ABA。 */
   const inspect = (state: WorkspaceState): boolean => {
-    const current = state.settings.tabs.find(item => item.id === origin.id);
     if (state.queryFileOpenings[target.id] !== opening || state.settings.tabs.find(item => item.id === target.id) !== target || state.dirtyTabs[target.id]) pristine = false;
-    if (!pristine || !ownsView() || !current || current.kind !== 'query' || current.connectionId !== origin.connectionId || current.sourceBinding !== origin.sourceBinding || !sameQueryFileSource(current.fileSourceBinding, origin.fileSourceBinding) || context(current) !== context(origin) || state.connections.find(item => item.id === connection.id) !== connection || (state.connectionVersions[connection.id] ?? 0) !== opening.version) valid = false;
+    const current = origin && state.settings.tabs.find(item => item.id === origin.id);
+    const originCurrent = origin ? !!current && current.kind === 'query' && current.connectionId === origin.connectionId && current.sourceBinding === origin.sourceBinding && sameQueryFileSource(current.fileSourceBinding, origin.fileSourceBinding) && context(current) === context(origin)
+      : state.settings.activeTabId === activeTabId;
+    if (!pristine || !ownsView() || !originCurrent || state.connections.find(item => item.id === connection.id) !== connection || (state.connectionVersions[connection.id] ?? 0) !== opening.version) valid = false;
     return valid && !settled;
   };
   const off = useWorkspace.subscribe(state => { inspect(state); });

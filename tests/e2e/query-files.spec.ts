@@ -139,6 +139,50 @@ async function fileError(operation: 'read' | 'write', fileToken: string, sql = s
 }
 
 test.describe('离线 SQL 文件打开与另存', () => {
+  test('空工作区可从文件菜单选择连接后打开 SQL，取消不留下空标签', async ({}, info) => {
+    await page.evaluate(async () => {
+      for (const [id, name] of [['workspace-open-a', '离线连接甲'], ['workspace-open-b', '离线连接乙']]) {
+        await window.dbark.invoke('connections.save', { id, name, dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline', group: '', color: '#446688' });
+      }
+    });
+    await page.reload();
+    expect(await storedTabs(0)).toEqual([]);
+    await clickFileMenu('open-sql-file');
+    const modal = page.getByRole('dialog', { name: '打开 SQL 文件', exact: true });
+    await expect(modal).toBeVisible();
+    const choose = modal.getByRole('button', { name: '选择并打开 SQL 文件', exact: true });
+    await modal.getByLabel('数据库连接', { exact: true }).selectOption('workspace-open-b');
+    await modal.getByLabel('默认数据库（可选）', { exact: true }).fill('目标库');
+    await modal.getByLabel('文件编码', { exact: true }).selectOption('gb18030');
+    await chooseNativeFile('open');
+    await choose.click();
+    await expect(choose).toBeEnabled();
+    expect(await storedTabs(0)).toEqual([]);
+    await expect(modal.getByLabel('数据库连接', { exact: true })).toHaveValue('workspace-open-b');
+    await expect(modal.getByLabel('默认数据库（可选）', { exact: true })).toHaveValue('目标库');
+    const file = join(dataDir, '直接打开.sql');
+    const bytes = Buffer.from('\uFEFF' + source, 'utf16le');
+    await writeFile(file, bytes);
+    await chooseNativeFile('open', file);
+    await modal.screenshot({ path: info.outputPath('workspace-open-sql.png') });
+    await choose.click();
+    try { await expect(modal).toBeHidden(); }
+    catch (reason) {
+      const workspace = await page.evaluate(async () => {
+        const settings = await window.dbark.invoke('settings.get', {}), tasks = await window.dbark.invoke('tasks.list', {});
+        return { active: settings.activeTabId, tabs: settings.tabs.map(({ id, kind, connectionId }) => ({ id, kind, connectionId })),
+          tasks: tasks.map(({ kind, status }) => ({ kind, status })), alerts: [...document.querySelectorAll('[role=alert]')].map(node => node.textContent) };
+      });
+      await info.attach('工作区打开 SQL 状态', { body: JSON.stringify({ ...workspace, calls: await desktop.evaluate(() => globalThis.__dbarkQueryFileCalls), pageErrors }), contentType: 'application/json' });
+      throw reason;
+    }
+    const [opened] = await storedTabs(1);
+    expect(opened).toMatchObject({ kind: 'query', connectionId: 'workspace-open-b', database: '目标库', title: '直接打开.sql', sql: source });
+    expect(queryFileSourceRefSchema.parse(opened.fileSourceBinding)).toMatchObject({ revision: 1 });
+    await expect(page.locator('.query-tab:visible .monaco-editor .view-lines')).toContainText('中文文件往返');
+    expect(await readFile(file)).toEqual(bytes);
+    await expectNoSqlExecution([{ kind: 'queryFileSources.open', status: 'cancelled' }, { kind: 'queryFileSources.open', status: 'completed' }]);
+  });
   test('打开与定位关联 SQL 文件使用磁盘版本并拒绝同名替换', async ({}, testInfo) => {
     await openOfflineQuery();
     const menuState = (id: string) => desktop.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled, id);
