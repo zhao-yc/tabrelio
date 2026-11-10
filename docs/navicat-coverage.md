@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-10 源码增量。四种数据库的表页、查询结果和离线快照可从矩形菜单仅复制选区列名，按可见列顺序保留重复及空名称。对应 Navicat 数据编辑器的选中单元格仅复制字段名操作。D02 仍为部分覆盖。[Navicat 数据编辑器手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/data_rdbms.html)
+
 2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询构建器可为分组字段单独设置输出别名。原字段继续用于 GROUP BY、HAVING 和排序。别名随设计保存，并进入查询及视图输出。O04 仍为部分覆盖。
 
 2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询构建器新增不同值合计与平均（SUM DISTINCT、AVG DISTINCT），可与普通聚合并列使用，支持 HAVING、汇总排序、保存设计及视图。O04 仍为部分覆盖。

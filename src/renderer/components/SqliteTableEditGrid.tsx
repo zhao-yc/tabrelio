@@ -5,7 +5,7 @@ import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
-import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
@@ -304,6 +304,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, page, rows, d
       ...(selectRow ? [selectRow] : []),
       ...(rectangle ? gridRangeCopyActions(format => {
         try {
+          if (format === 'names') return copyGridRangeNames(cellRange.captureColumns(rectangle), page.result.columns, current);
           const selected = cellRange.copyRectangle(rectangle, (item, key) => item.values[Number(key.slice(1))], item => item.deleted);
           if (!selected?.values.length) return;
           const names = selected.columns.map(key => page.columns[Number(key.slice(1))].name);

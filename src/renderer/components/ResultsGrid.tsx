@@ -33,7 +33,7 @@ import type { QueryResultRowViewKind } from './QueryResultMatchView';
 import { queryResultFindZh as rowViewText } from '../locales/queryResultFind.zh-CN';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { encodeSqliteResultClipboard, sqliteCellClipboardType } from '../sqliteTableClipboard';
-import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill } from './GridRangeFill';
@@ -392,6 +392,7 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       } });
       if (rectangle) actions.unshift(...gridRangeCopyActions(format => {
         try {
+          if (format === 'names') return copyGridRangeNames(cellRange.captureColumns(rectangle), columns, current);
           if (format === 'csv' || format === 'json') {
             const labels = format === 'csv' ? csvCopyText : jsonCopyText;
             const content = cellRange.copyRectangle(rectangle, (row, key) => readTabularCopyValue(row, key, labels.invalid), skipRowInInversion);

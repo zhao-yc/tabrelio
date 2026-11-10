@@ -7,12 +7,16 @@ import { queryResultFindZh as findText } from '../../src/renderer/locales/queryR
 import { queryResultSnapshotViewerZh as snapshotText } from '../../src/renderer/locales/queryResultSnapshotViewer.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
+import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
+import { readGridMenuClipboard } from './grid-cell-range-clipboard';
 
 test('离线快照列标题查找按原列键定位重名列，重排后仍只查命中的列', async ({}, info) => {
   const name = '同名列离线样本.dbark-result.json', path = join(realpathSync(dataDir), name);
   const bytes = encodeQueryResultSnapshot(createQueryResultSnapshot({
-    columns: [{ key: 'left', name: '重复列', type: 'TEXT' }, { key: 'right', name: '重复列', type: 'TEXT' }],
-    rows: [{ left: '左侧内容', right: '目标记录' }, { left: '其它左值', right: '其它右值' }],
+    columns: [{ key: 'left', name: '重复列', type: 'TEXT' }, { key: 'right', name: '重复列', type: 'TEXT' },
+      { key: 'empty', name: '', type: 'TEXT' }, { key: 'tab', name: '列\t名', type: 'TEXT' }],
+    rows: [{ left: '左侧内容', right: '目标记录', empty: '首行空列名', tab: '首行末格' },
+      { left: '其它左值', right: '其它右值', empty: '末行空列名', tab: '末行末格' }],
     truncated: false, elapsedMs: 0, statement: 'SELECT 1;',
   }));
   writeFileSync(path, bytes);
@@ -75,6 +79,19 @@ test('离线快照列标题查找按原列键定位重名列，重排后仍只�
   await search.fill('目标记录');
   await expect(status).toHaveText(findText.count(1, -1));
   await viewer.screenshot({ path: info.outputPath('query-result-header-find.png') });
+  await selectedRow.check();
+  const start = grid.getByRole('gridcell', { name: '末行末格', exact: true });
+  const end = grid.getByRole('gridcell', { name: '目标记录', exact: true });
+  await start.click();
+  await end.click({ modifiers: ['Shift'] });
+  await expect(selectedRow).toBeChecked();
+  await start.click({ button: 'right' });
+  const onlyNames = viewer.getByRole('menuitem', { name: rangeCopy.namesOnly, exact: true });
+  await expect(onlyNames).toBeVisible();
+  await viewer.screenshot({ path: info.outputPath('离线选区列名.png') });
+  expect(await readGridMenuClipboard(page, onlyNames)).toEqual({ text: '重复列\t重复列\t\t"列\t名"', typed: '', sqlite: '' });
+  await expect(end).toBeFocused();
+  await expect(selectedRow).toBeChecked();
   expect(readFileSync(path, 'utf8')).toBe(bytes);
   expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);

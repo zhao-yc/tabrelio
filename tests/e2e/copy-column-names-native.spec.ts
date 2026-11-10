@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { tableHeaderCopyZh as text } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
+import { gridRangeCopyZh as range } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
@@ -36,7 +37,9 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     id: '', dialect: dialect as (NetworkConnectionProfile | PostgresConnectionProfile)['dialect'], name: dialect!, group: '', color: '#123456',
     host: '127.0.0.1', port, database, user: database, password, rememberPassword: false,
   };
-  const sql = 'SELECT id AS duplicate, label AS duplicate, amount AS third, nullable AS hidden FROM header_subject WHERE 1 = 0';
+  const projection = 'SELECT id AS duplicate, label AS duplicate, amount AS third, nullable AS hidden FROM header_subject';
+  const sql = projection + ' WHERE 1 = 0';
+  const populatedSql = projection + ' ORDER BY id';
   try {
     if (local) await desktop.evaluate(({ dialog, BrowserWindow }, filePath) => {
       const open = dialog.showOpenDialog;
@@ -47,7 +50,7 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
         return { canceled: false, filePaths: [filePath] };
       }) as typeof open;
     }, filePath);
-    await page.evaluate(async ({ profile, table, sql, database }) => {
+    await page.evaluate(async ({ profile, table, sql, populatedSql, database }) => {
       const id = 'header-sqlite';
       const picked = profile ? undefined : await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
       if (!profile && !picked) throw Error('本例 SQLite 文件未授权');
@@ -59,8 +62,9 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
           table: profile?.dialect === 'postgresql' ? '"public"."' + table + '"' : table },
         ...(profile ? [] : [{ id: 'header-view', kind: 'table' as const, title: 'header_view', connectionId: connection.id, database, table: 'header_view' }]),
         { id: 'header-query', kind: 'query', title: '查询结果列名', connectionId: connection.id, database, sql },
+        { id: 'range-query', kind: 'query', title: '查询选区列名', connectionId: connection.id, database, sql: populatedSql },
       ] });
-    }, { profile, table, sql, database });
+    }, { profile, table, sql, populatedSql, database });
     await page.reload();
     await page.evaluate(() => {
       const packets: { text: string; formats: string[] }[] = [];
@@ -91,6 +95,24 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(header).toBeVisible();
     expect(await copy(tableTab, 1)).toBe(tableNames);
     let count = 1;
+    const indexedCell = (scope: ReturnType<typeof page.locator>, row: number, column: number) =>
+      scope.locator(`[role="row"][aria-rowindex="${row}"] [role="gridcell"][aria-colindex="${column}"]`);
+    const copyRange = async (start: ReturnType<typeof page.locator>, end: ReturnType<typeof page.locator>, expected: string, keyboard: boolean) => {
+      await start.click();
+      await end.click({ modifiers: ['Shift'] });
+      if (keyboard) await page.keyboard.press('Shift+F10');
+      else await start.click({ button: 'right' });
+      const action = page.getByRole('menuitem', { name: range.namesOnly, exact: true });
+      await expect(action).toBeVisible();
+      if (keyboard) await action.press('Enter');
+      else await action.click();
+      expect(await packets()).toHaveLength(++count);
+      expect((await packets()).at(-1)).toEqual({ text: expected, formats: ['text/plain'] });
+      await expect(end).toBeFocused();
+    };
+    const amountIndex = Number(await header.getAttribute('aria-colindex'));
+    expect(amountIndex).toBeGreaterThan(1);
+    await copyRange(indexedCell(tableTab, 3, amountIndex + 1), indexedCell(tableTab, 2, amountIndex), 'amount\tlabel', false);
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -99,8 +121,10 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await open('header-query');
     const query = page.locator('.query-tab:visible');
     await expect(query.locator('.monaco-editor').getByRole('textbox')).toBeVisible();
-    if (dialect === 'postgresql') await query.getByRole('button', { name: postgresZh.execute, exact: true }).click();
-    else await query.locator('.query-execute-split button.primary').click();
+    const execute = () => dialect === 'postgresql'
+      ? query.getByRole('button', { name: postgresZh.execute, exact: true }).click()
+      : query.locator('.query-execute-split button.primary').click();
+    await execute();
     const grid = query.locator('.query-result-grid').getByRole('grid');
     const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
     await expect(grid.getByRole('columnheader').filter({ hasText: /^duplicate/i })).toHaveCount(2);
@@ -108,16 +132,31 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect.poll(async () => (await history()).map(entry => entry.success)).toEqual([true]);
     const historyBefore = await history();
     expect(await copy(query, ++count)).toBe('duplicate\tduplicate\tthird\thidden');
-    await (await navigationMenuItem(query, { name: columnsText.open, exact: true })).click();
     const layout = page.getByRole('dialog', { name: columnsText.title, exact: true });
-    await layout.getByRole('checkbox', { name: columnsText.visible(4), exact: true }).uncheck();
-    for (let index = 0; index < 2; index++)
-      await layout.getByRole('button', { name: columnsText.up(3), exact: true }).click();
-    await layout.getByRole('button', { name: columnsText.apply, exact: true }).click();
-    await expect(layout).toBeHidden();
+    const arrange = async () => {
+      await (await navigationMenuItem(query, { name: columnsText.open, exact: true })).click();
+      await layout.getByRole('checkbox', { name: columnsText.visible(4), exact: true }).uncheck();
+      for (let index = 0; index < 2; index++)
+        await layout.getByRole('button', { name: columnsText.up(3), exact: true }).click();
+      await layout.getByRole('button', { name: columnsText.apply, exact: true }).click();
+      await expect(layout).toBeHidden();
+    };
+    await arrange();
     expect(await copy(query, ++count)).toBe('third\tduplicate\tduplicate');
     await page.screenshot({ path: info.outputPath('仅复制列名.png') });
     expect(await history()).toEqual(historyBefore);
+    await open('range-query');
+    await execute();
+    await expect(grid.getByRole('columnheader').filter({ hasText: /^duplicate/i })).toHaveCount(2);
+    await arrange();
+    const names = await grid.getByRole('columnheader').filter({ hasText: /^duplicate/i }).all();
+    const first = Number(await names[0].getAttribute('aria-colindex'));
+    const last = Number(await names[1].getAttribute('aria-colindex'));
+    await copyRange(indexedCell(grid, 3, last), indexedCell(grid, 2, first), 'duplicate\tduplicate', true);
+    await page.keyboard.press('Shift+F10');
+    await expect(page.getByRole('menuitem', { name: range.namesOnly, exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('选区列名.png') });
+    await page.keyboard.press('Escape');
     if (baseline) expect(await readFile(filePath)).toEqual(baseline);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);

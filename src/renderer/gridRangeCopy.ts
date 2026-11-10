@@ -1,13 +1,28 @@
-import { encodeGridCsv, encodeGridJson, writeTableClipboardEvent, type ClipboardCell } from './gridClipboard';
+import { copyGridColumnNames, encodeGridCsv, encodeGridJson, writeTableClipboardEvent, type ClipboardCell } from './gridClipboard';
 import { gridRangeCopyZh as text } from './locales/gridRangeCopy.zh-CN';
 
-export function gridRangeCopyActions(copy: (format: 'plain' | 'headers' | 'csv' | 'json') => void) {
+export function gridRangeCopyActions(copy: (format: 'plain' | 'headers' | 'names' | 'csv' | 'json') => void) {
   return [
     { label: text.copy, run: () => copy('plain') },
     { label: text.withHeaders, run: () => copy('headers') },
+    { label: text.namesOnly, run: () => copy('names') },
     { label: text.csv, run: () => copy('csv') },
     { label: text.json, run: () => copy('json') },
   ];
+}
+
+/** 按原列键取显示名称，保留重复或空名称；本入口不读取选区的行值。 */
+export function copyGridRangeNames(keys: readonly string[] | undefined, columns: readonly { key: string; name: string }[],
+  current: () => boolean): void {
+  if (!keys || !current()) return;
+  const namesByKey = new Map(columns.map(column => [column.key, column.name]));
+  const names: string[] = [];
+  for (const key of keys) {
+    const name = namesByKey.get(key);
+    if (name === undefined) return;
+    names.push(name);
+  }
+  copyGridColumnNames(names, current);
 }
 
 /** 按选区列序使用现有编码器。仅写纯文本，以免应用内粘贴把 CSV 或 JSON 当作普通选区。 */

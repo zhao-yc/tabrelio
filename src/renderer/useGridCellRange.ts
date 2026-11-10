@@ -207,6 +207,11 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
       keys: keys.slice(selected.left, selected.right + 1) };
   }
 
+  /** 仅复制列名时，不切片选区行，也不受单元格总数限制。 */
+  function captureColumns(selected: GridCellRectangle): readonly string[] | undefined {
+    if (rectangleCurrent(selected)) return keys.slice(selected.left, selected.right + 1);
+  }
+
   /** 有选区时拒绝失效端点，不能把原本的选区粘贴降级为普通单格起点粘贴。 */
   function pasteTarget(row: Row, key: string): GridRangeTarget<Row> | undefined {
     const { scope: owned, rectangle: selected, focus } = live.current;
@@ -236,7 +241,7 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
     return grid.current?.element?.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? undefined;
   }
 
-  return { rectangle, mouse, key, fillValueKey, move, copy, copyTarget, capture, pasteTarget, at, copyRectangle, rectangleCurrent,
+  return { rectangle, mouse, key, fillValueKey, move, copy, copyTarget, capture, captureColumns, pasteTarget, at, copyRectangle, rectangleCurrent,
     focusTarget, selectColumnAction, selectRowAction };
 }
 

@@ -17,7 +17,7 @@ import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, mergeGridMatchSelection, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
-import { copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill } from './GridRangeFill';
@@ -2131,6 +2131,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       ...(selectRow ? [selectRow] : []),
       ...(rectangle ? gridRangeCopyActions(format => {
         try {
+          if (format === 'names') return copyGridRangeNames(cellRange.captureColumns(rectangle), visibleColumns, current);
           const selected = cellRange.copyRectangle(rectangle, (item, key) => ownCell(item.data, key), item => item.deleted);
           if (!selected?.values.length) return;
           const names = selected.columns.map(key => visibleColumns.find(column => column.key === key)!.name);
