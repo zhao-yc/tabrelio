@@ -33,9 +33,14 @@ function formatUnsupported(error: unknown): boolean {
   // 语法或功能不支持也可能来自用户SQL本身，不能据此自动重发另一条计划语句。
   return code === 'ER_UNKNOWN_EXPLAIN_FORMAT';
 }
-/** JSON 与文本都在调用方持有的同一会话任务内执行；禁止使用任何 ANALYZE 变体。 */
+/** 编辑器输入必须先验证语句边界和类型。 */
 export async function explainQuery(sql: string, format: 'auto' | 'text', context: ExplainContext): Promise<QueryOutcome> {
-  const statement = explainStatement(sql, context.mode), started = performance.now();
+  return executeExplainStatement(explainStatement(sql, context.mode), format, context);
+}
+
+/** 只接收已验证的单条语句或引擎从结构化设计生成的 SELECT。始终使用同一会话且不发送 ANALYZE。 */
+export async function executeExplainStatement(statement: string, format: 'auto' | 'text', context: Omit<ExplainContext, 'mode'>): Promise<QueryOutcome> {
+  const started = performance.now();
   const capable = explainCapability(context.status), warnings: string[] = [];
   let results: QueryResult[];
   if (format === 'auto' && capable) {

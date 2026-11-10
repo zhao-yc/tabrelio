@@ -10,6 +10,7 @@ import { tableForeignKeyJoinFilterZh as filterText } from '../../src/renderer/lo
 import { tableFilterGroupsZh as groupText } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
 import { tableForeignKeyJoinSummaryZh as summaryText } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
 import { tableForeignKeyJoinHavingZh as havingText } from '../../src/renderer/locales/tableForeignKeyJoinHaving.zh-CN';
+import { explainZh as explainText } from '../../src/renderer/locales/explain.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 const enabled = process.env.DBARK_JOIN_ORDER_NATIVE === '1';
@@ -305,8 +306,22 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       await step(() => expect(sample.getByText('18446744073709551615', { exact: true })).toBeVisible());
       await step(() => sample.scrollIntoViewIfNeeded());
       await step(() => page.screenshot({ path: info.outputPath('join-sample-preview.png') }));
+      await step(() => button(text.explain).click());
+      const plan = sample.getByRole('region', { name: explainText.title, exact: true });
+      const indexed = plan.getByRole('treeitem', { name: /· p(?:\s|$)/ });
+      await step(() => expect(indexed).toBeVisible());
+      await step(() => expect(sample.getByText('18446744073709551615', { exact: true })).toHaveCount(0));
+      await step(() => indexed.click());
+      await step(() => expect(plan.getByLabel(explainText.details).getByText('idx_order_id', { exact: false }).first()).toBeVisible());
+      await step(() => sample.evaluate(element => element.scrollIntoView({ block: 'start' })));
+      await step(() => page.screenshot({ path: info.outputPath('join-estimated-plan.png') }));
+      await step(() => plan.getByRole('button', { name: explainText.raw, exact: true }).click());
+      await step(() => expect(plan.getByLabel(explainText.raw, { exact: true })).toContainText('"key": "idx_order_id"'));
+      await step(() => plan.getByRole('button', { name: explainText.text, exact: true }).click());
+      await step(() => expect(plan.getByRole('gridcell', { name: 'idx_order_id' })).toBeVisible());
       await step(() => manual.getByLabel(text.resultLimit, { exact: true }).fill('42'));
       await step(() => expect(sample.getByText(text.sampleRows(1, true), { exact: true })).toHaveCount(0));
+      await step(() => expect(plan).toHaveCount(0));
       await step(() => open.click());
       const draft = page.getByLabel('本例独立查询SQL', { exact: true });
       await step(() => expect(draft).toContainText(sql));
@@ -314,7 +329,7 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       const result = await evidence();
       expect(result.tabs).toHaveLength(2);
       expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['parent', 'other_payments', 'payments', 'other_payments', 'payments', 'parent', 'payments', 'other_payments', 'parent', 'payments', 'other_payments']);
-      expect(result.calls.filter(call => call.command === 'mysql.join.preview')).toHaveLength(1);
+      expect(result.calls.filter(call => call.command === 'mysql.join.preview').map(call => call.input.mode)).toEqual(['rows', 'explain', 'explainText']);
       expect(result.calls.filter(call => call.command.startsWith('joinDesigns.')).map(call => call.command)).toEqual(['joinDesigns.save', 'joinDesigns.list', 'joinDesigns.read']);
       expect(result.calls.filter(call => call.command === 'table.page').map(call => call.input.table)).toEqual(['parent']);
       expect(result.calls.some(call => /query\./.test(call.command))).toBe(false);

@@ -4,7 +4,7 @@ import { buildForeignKeyJoin, foreignKeyJoinMetadataKey } from '../shared/tableF
 import { mysqlJoinPreviewOptions, mysqlJoinPreviewRelation, mysqlJoinSampleRows, type MysqlJoinPreviewInput, type MysqlJoinPreviewTarget } from '../shared/mysqlJoinPreview';
 import { completionQuery } from './completionQuery';
 import { tableInfo } from './metadata';
-import { readMysqlPreviewRows } from './mysqlViewQueryInspect';
+import { explainMysqlPreviewQuery, readMysqlPreviewRows } from './mysqlViewQueryInspect';
 import { identifier } from './sql';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 
@@ -34,6 +34,9 @@ export async function previewMysqlJoin(context: StructureTaskContext, input: Mys
     const additional: TableInfo[] = [];
     for (const step of input.steps) additional.push(await read(step.target));
     const query = buildForeignKeyJoin(child, parent, mysqlJoinPreviewRelation(input), input.kind, input.limit, mysqlJoinPreviewOptions(input, additional)).sql;
+    // 上一步已从实时目录生成唯一 SELECT。保留引号内的列名，即使名字含有版本注释标记。
+    if (input.mode === 'explain' || input.mode === 'explainText')
+      return await explainMysqlPreviewQuery(context, query, input.mode === 'explainText' ? 'text' : 'auto', stop);
     const result = await readMysqlPreviewRows(context, query, mysqlJoinSampleRows, 512 * 1024, stop);
     return { results: [result], elapsedMs: result.elapsedMs };
   } finally {

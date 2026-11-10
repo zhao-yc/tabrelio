@@ -1,7 +1,7 @@
 import type { QueryOutcome, QueryResult } from '../shared/contracts';
 import { explainLimits } from '../shared/explain';
 import { mysqlViewDraftQuery, mysqlViewSampleRows, type MysqlViewQueryInspectInput } from '../shared/mysqlViewFile';
-import { explainQuery } from './queryExplain';
+import { executeExplainStatement, explainStatement } from './queryExplain';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { identifier } from './sql';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
@@ -42,9 +42,19 @@ export async function readMysqlPreviewRows(context: ReadContext, sql: string, ma
   return result;
 }
 
+/** 在检查任务的只读事务内读取估算计划，沿用相同的字节上限和取消终态。 */
+export function explainMysqlPreviewQuery(context: ReadContext, statement: string, format: 'auto' | 'text', stop: () => Promise<void>): Promise<QueryOutcome> {
+  const { managed } = context;
+  return executeExplainStatement(statement, format, {
+    status: managed.status, check: context.checkCancelled,
+    reusable: () => !managed.broken && !managed.signal?.aborted,
+    run: async sql => [await readMysqlPreviewRows(context, sql, explainLimits.textRows, 512 * 1024, stop)],
+  });
+}
+
 /** 在独立连接的原库中执行只读检查。使用当前连接身份，不执行 DDL 或切换到草稿 DEFINER。 */
 export async function inspectMysqlViewQuery(context: StructureTaskContext, input: MysqlViewQueryInspectInput, stop: () => Promise<void>): Promise<QueryOutcome> {
-  const { managed, checkCancelled } = context;
+  const { managed } = context;
   if (managed.sqlMode === undefined) throw Error('无法确认视图预览连接的 SQL 模式。');
   const modes = managed.sqlMode.split(',');
   const mode = { ansiQuotes: modes.includes('ANSI_QUOTES'), noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES') };
@@ -54,10 +64,7 @@ export async function inspectMysqlViewQuery(context: StructureTaskContext, input
   await control('SET SESSION lock_wait_timeout = 5');
   await control('START TRANSACTION READ ONLY');
   try {
-    if (input.mode === 'explain') return await explainQuery(query, 'auto', {
-      mode, status: managed.status, check: checkCancelled, reusable: () => !managed.broken,
-      run: async sql => [await readMysqlPreviewRows(context, sql, explainLimits.textRows, 512 * 1024, stop)],
-    });
+    if (input.mode === 'explain') return await explainMysqlPreviewQuery(context, explainStatement(query, mode), 'auto', stop);
     const result = await readMysqlPreviewRows(context, query, mysqlViewSampleRows, 512 * 1024, stop, aliases);
     return { results: [result], elapsedMs: result.elapsedMs };
   } finally {

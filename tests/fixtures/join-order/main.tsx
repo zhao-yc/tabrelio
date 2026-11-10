@@ -3,7 +3,8 @@ import { TableTab } from '../../../src/renderer/components/TableTab';
 import { useWorkspace, type WorkspaceTab } from '../../../src/renderer/store';
 import { mysqlJoinPreviewSchema } from '../../../src/shared/mysqlJoinPreview';
 import { manualJoinDesignSchema, type ManualJoinDesign } from '../../../src/shared/manualJoinDesigns';
-import type { TableInfo, TablePage } from '../../../src/shared/contracts';
+import type { QueryOutcome, TableInfo, TablePage } from '../../../src/shared/contracts';
+import { parseExplainPlan } from '../../../src/shared/explain';
 import type { IncomingReferencesOutput } from '../../../src/shared/incomingReferences';
 import 'react-data-grid/lib/styles.css';
 import '../../../src/renderer/styles.css';
@@ -36,6 +37,17 @@ Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string
       const request = mysqlJoinPreviewSchema.parse(input);
       if (request.source.table !== source.name || request.parent.table !== other.name || request.steps.length !== 2 ||
           'sql' in input || request.steps[1].target.table !== other.name) throw Error('JOIN 预览范围不符');
+      if (request.mode === 'explain') {
+        const raw = JSON.stringify({ query_block: { nested_loop: [
+          { table: { table_name: 'c', access_type: 'ALL', rows_examined_per_scan: 125 } },
+          { table: { table_name: 'p', access_type: 'ref', key: 'idx_order_id', rows_examined_per_scan: 1 } },
+        ] } }, null, 2);
+        return { results: [{ columns: [{ key: 'plan', name: 'EXPLAIN', type: 'TEXT' }], rows: [{ plan: raw }], statement: 'EXPLAIN FORMAT=JSON SELECT 1', elapsedMs: 3, truncated: false }],
+          explain: parseExplainPlan(raw, 'mysql', '8.0.46'), elapsedMs: 3 } satisfies QueryOutcome;
+      }
+      if (request.mode === 'explainText') return { results: [{ columns: [{ key: 'key', name: 'key', type: 'TEXT' }],
+        rows: [{ key: 'idx_order_id' }], statement: 'EXPLAIN FORMAT=TRADITIONAL SELECT 1', elapsedMs: 3, truncated: false }], elapsedMs: 3,
+        explain: { dialect: 'mysql', version: '8.0.46', format: 'text', nodes: [], raw: '', rawTruncated: false, warnings: [] } } satisfies QueryOutcome;
       return { results: [{ columns: [{ key: 'c_1_id', name: 'c_1_id', type: 'BIGINT' }],
         rows: [{ c_1_id: '18446744073709551615' }], elapsedMs: 3, truncated: true }], elapsedMs: 3 };
     }

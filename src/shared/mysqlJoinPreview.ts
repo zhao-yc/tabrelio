@@ -14,6 +14,7 @@ const step = z.object({ target, source: z.number().int().min(0).max(6), kind: z.
 export const mysqlJoinPreviewSchema = z.object({
   connectionId: z.string().min(1).max(128),
   taskId: z.string().uuid(),
+  mode: z.enum(['rows', 'explain', 'explainText']).optional(),
   source: target,
   parent: target,
   relation: z.union([name, z.array(z.unknown()).min(1).max(64)]),

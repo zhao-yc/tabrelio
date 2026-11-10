@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import type { TableInfo, FilterGroup, FilterMode, FilterRule, QueryOutcome } from '../../shared/contracts';
 import { manualJoinDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary } from '../../shared/manualJoinDesigns';
 import { mysqlJoinSampleRows, type MysqlJoinPreviewInput, type MysqlJoinPreviewTarget } from '../../shared/mysqlJoinPreview';
+import { ExplainPlanView } from './ExplainPlanView';
 import { ResultsGrid } from './ResultsGrid';
 import '../viewQueryInspect.css';
 import { completionIdentifier } from '../../shared/completionLexical';
@@ -126,7 +127,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   const [designs, setDesigns] = useState<ManualJoinDesignSummary[]>([]);
   const [designId, setDesignId] = useState(''), [designName, setDesignName] = useState('');
   const [designNotice, setDesignNotice] = useState('');
-  const [sample, setSample] = useState<{ owner: ForeignKeyJoinPreview; result: QueryOutcome }>();
+  const [inspection, setInspection] = useState<{ owner: ForeignKeyJoinPreview; result: QueryOutcome }>();
   const [groupEditor, setGroupEditor] = useState<GroupEditor>(), groupRef = useRef<GroupEditor | undefined>(undefined), groupPanel = useRef<HTMLDivElement>(null), groupTrigger = useRef<HTMLButtonElement>(null), havingGroupTrigger = useRef<HTMLButtonElement>(null), hadGroup = useRef<GroupEditor | undefined>(undefined);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [invalid, setInvalid] = useState(false), [message, setMessage] = useState('');
   const alive = useRef(true), closingRef = useRef(false), operation = useRef<Operation | null>(null), revision = useRef(0), consumed = useRef(false), committed = useRef<object | null>(null), ticket = {};
@@ -164,7 +165,8 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     try { return { value: compileSelection(origin.intent, selection, currentParent, sources, havingTargets), error: '' }; }
     catch (reason) { return { value: undefined, error: errorMessage(reason) }; }
   }, [origin.intent, currentParent, selection, sources, havingTargets]);
-  const sampleResult = sample?.owner === preview.value ? sample?.result.results[0] : undefined;
+  const outcome = inspection?.owner === preview.value ? inspection?.result : undefined;
+  const sampleResult = outcome?.explain ? undefined : outcome?.results[0];
   const aliases = useMemo(() => {
     if (!preview.value) return new Map<string, string>();
     return new Map(buildForeignKeyJoin(origin.intent.source, preview.value.parent, preview.value.relation, preview.value.kind, origin.intent.limit, preview.value.options).columns.map(column => [JSON.stringify([column.side, column.column]), column.alias]));
@@ -189,7 +191,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     finally { if (active.read === request) active.read = undefined; }
   }
   /** 使用同一份预览的目录摘要，关闭或改配置后原结果不能进入新草稿。 */
-  async function readSample(active: Operation, receipt: ForeignKeyJoinPreview, owns: () => boolean) {
+  async function inspect(active: Operation, receipt: ForeignKeyJoinPreview, mode: NonNullable<MysqlJoinPreviewInput['mode']>, owns: () => boolean) {
     async function target(info: TableInfo, key: string): Promise<MysqlJoinPreviewTarget> {
       const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
       return { database: info.database, table: info.name, digest: Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, '0')).join('') };
@@ -206,10 +208,10 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     const request = { taskId, cancel: () => invoke('mysql.join.previewCancel', { taskId }) };
     active.read = request;
     try {
-      const result = await invoke('mysql.join.preview', { taskId, connectionId: origin.intent.connectionId, source, parent,
+      const result = await invoke('mysql.join.preview', { taskId, mode, connectionId: origin.intent.connectionId, source, parent,
         relation: typeof receipt.relation === 'string' ? receipt.relation : [...receipt.relation],
         kind: receipt.kind, limit: origin.intent.limit, options, steps });
-      if (owns()) setSample({ owner: receipt, result });
+      if (owns()) setInspection({ owner: receipt, result });
     } finally { if (active.read === request) active.read = undefined; }
   }
 
@@ -254,11 +256,12 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
   }
 
   /** 同步占门后才排原异步链，按钮连点和旧DOM均不能建立第二个在途操作。 */
-  function run(kind: 'preview' | 'open' | 'sample' | 'databases' | 'tables' | DesignOperation, index?: number): void {
+  function run(kind: 'preview' | 'open' | NonNullable<MysqlJoinPreviewInput['mode']> | 'databases' | 'tables' | DesignOperation, index?: number): void {
     const step = index === undefined ? undefined : selection.additional[index];
     if (index !== undefined && !step) return;
     const chosenTarget = step ? step.tables?.includes(step.table) && { database: step.database, table: step.table } : target;
-    if (!editable() || (kind === 'preview' && !chosenTarget) || ((kind === 'open' || kind === 'sample') && !preview.value) ||
+    const inspectionMode = kind === 'rows' || kind === 'explain' || kind === 'explainText' ? kind : undefined;
+    if (!editable() || (kind === 'preview' && !chosenTarget) || ((kind === 'open' || inspectionMode) && !preview.value) ||
         ((kind === 'databases' || kind === 'tables') && !selection.manual)) return;
     const designOperation = kind.endsWith('Design') || kind === 'listDesigns';
     const designTarget = designs.find(item => item.id === designId);
@@ -280,8 +283,9 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     active = { promise: Promise.resolve(), cancelled: false }; operation.current = active;
     try { origin.onActivity(1); } catch (reason) { operation.current = null; setError(errorMessage(reason)); return; }
     if (designOperation) setDesignNotice('');
-    if (kind === 'sample') setSample(undefined);
-    setBusy(true); setError(''); setMessage(designOperation ? text.designWorking : kind === 'sample' ? text.sampleLoading : kind === 'open' ? text.checking : kind === 'databases' ? text.manualDatabases : kind === 'tables' ? text.manualTables : text.parentLoading);
+    if (inspectionMode) setInspection(undefined);
+    const inspectionMessage = inspectionMode === 'rows' ? text.sampleLoading : text.explainLoading;
+    setBusy(true); setError(''); setMessage(designOperation ? text.designWorking : inspectionMode ? inspectionMessage : kind === 'open' ? text.checking : kind === 'databases' ? text.manualDatabases : kind === 'tables' ? text.manualTables : text.parentLoading);
     active.promise = Promise.resolve().then(async () => {
       if (!owns()) return;
       if (designOperation) {
@@ -337,8 +341,8 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
         const manual = selected.manual && !previous ? { ...selected.manual, pairs: [newManualJoinPair()] } : selected.manual;
         const next = { ...selected, manual, parent: previous ? selected.parent : metadata.columns.map(column => column.name), parentSearch: previous ? selected.parentSearch : '', parentPage: previous ? selected.parentPage : 1 };
         selectionRef.current = next; setSelection(next); setParent({ fk: selected.fk, info: structuredClone(metadata) });
-      } else if (kind === 'sample' && receipt) {
-        await readSample(active, receipt, owns);
+      } else if (inspectionMode && receipt) {
+        await inspect(active, receipt, inspectionMode, owns);
       } else if (kind === 'open' && receipt) {
         await revalidateForeignKeyJoin(origin.intent, receipt!, target => read(active, target, owns), owns);
         if (!owns()) return;
@@ -616,7 +620,9 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, onOpe
     <ErrorBox message={sourceUnavailable && !closing ? text.stale : error || preview.error}/>{closing ? <p role="status">{text.closing}</p> : message && <Spinner text={message}/>}
     {preview.value && !unavailable && <section aria-label={text.sampleTitle} aria-busy={busy}>
       <p>{text.sampleHint(mysqlJoinSampleRows)}</p>
-      <button type="button" disabled={busy} onClick={() => run('sample')}>{text.sample}</button>
+      <button type="button" disabled={busy} onClick={() => run('rows')}>{text.sample}</button>{' '}
+      <button type="button" disabled={busy} onClick={() => run('explain')}>{text.explain}</button>
+      {outcome?.explain && <ExplainPlanView outcome={outcome} busy={busy} onText={outcome.explain.format === 'json' ? () => run('explainText') : undefined}/>}
       {sampleResult && <>
         <p role="status">{text.sampleRows(sampleResult.rows.length, sampleResult.truncated)}</p>
         <div className="view-query-sample-grid">
