@@ -105,7 +105,7 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       const state = { pending: 0, calls: [] as { command: string; ok: boolean }[], reads: [] as { id: string; digest: string; sql: string; ok: boolean }[], savedSql: [] as string[], searchTaskIds: [] as string[], denied: [] as string[], engineStarts: 0, gateNext: false, held: false, release: undefined as (() => void) | undefined, check() {}, restore() {} };
       const originalSave = dialog.showSaveDialog, originalOpen = dialog.showOpenDialog;
       let exporting = false, choices = 0, importing = false, imports = 0, archiving = false, archiveChoices = 0;
-      let rebindRevision: number | undefined;
+      let rebindRevision: number | undefined, queryOrganizationRevision: string | undefined;
       const check = () => { if (root.__savedQueryInsertionOffline !== state || handlers.get('dbark:request') !== wrapped || utilityProcess.fork !== blocked || dialog.showSaveDialog !== picker || dialog.showOpenDialog !== importPicker || window.isDestroyed() || window.webContents.mainFrame !== frame || BrowserWindow.getAllWindows().length !== 1 || state.denied.length) throw Error('保存查询插入Main原窗口或旁观归属变化'); };
       const deny = (command: string): never => { state.denied.push(command); throw Error('离线保存查询插入拒绝数据库/剪贴板或未知操作：' + command); };
       const blocked = ((..._args: unknown[]) => { state.engineStarts++; return deny('utilityProcess.fork'); }) as typeof utilityProcess.fork;
@@ -124,7 +124,7 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
         if (!importing || args[0] !== window || options?.properties?.join() !== 'openFile,multiSelections' || options.filters?.[0]?.extensions[0] !== 'sql' || imports >= 2) return deny('非本例 SQL 导入选择');
         return ++imports === 1 ? { canceled: true, filePaths: [] } : { canceled: false, filePaths: input.importedPaths };
       }) as typeof dialog.showOpenDialog;
-      const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'connections.organizationGet', 'queries.rebindSelectedChecked', 'tasks.list', 'history.list', 'history.page', 'history.pageContinue', 'history.pageRelease', 'queries.list', 'queries.page', 'queries.pageContinue', 'queries.pageRelease', 'queries.organizationGet', 'queries.readText', 'queries.exportSql', 'queries.exportSqlArchive', 'queries.importSql', 'search.savedQueries', 'search.savedQueriesContinue', 'search.savedQueriesRelease', 'query.cancel', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish']);
+      const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'connections.organizationGet', 'queries.rebindSelectedChecked', 'queries.duplicateSelectedChecked', 'tasks.list', 'history.list', 'history.page', 'history.pageContinue', 'history.pageRelease', 'queries.list', 'queries.page', 'queries.pageContinue', 'queries.pageRelease', 'queries.organizationGet', 'queries.readText', 'queries.exportSql', 'queries.exportSqlArchive', 'queries.importSql', 'search.savedQueries', 'search.savedQueriesContinue', 'search.savedQueriesRelease', 'query.cancel', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish']);
       const wrapped = async (event: any, payload: any) => {
         check(); if (event.sender !== window.webContents || event.senderFrame !== frame) return deny('外来IPC'); const command = String(payload?.command), value = payload?.input; if (!allowed.has(command)) return deny(command);
         if (command === 'settings.save' && (stable(withoutSql(value)) !== stable(withoutSql(input.baseline)) || value.tabs.length !== 1 || !allowedSql.has(value.tabs[0].sql))) return deny(command);
@@ -137,6 +137,10 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
           stable(value.target) !== stable(input.rebindTarget) || !Array.isArray(value.queries) || value.queries.length !== 2 ||
           value.queries.some((item: any) => !item || Object.keys(item).sort().join() !== 'digest,id' || !/^[a-f0-9]{64}$/.test(item.digest)))) return deny(command);
         if (command === 'search.savedQueries') { if (state.searchTaskIds.length || typeof value?.taskId !== 'string') return deny(command); state.searchTaskIds.push(value.taskId); }
+        if (command === 'queries.duplicateSelectedChecked' && (!value || !queryOrganizationRevision || value.expectedRevision !== queryOrganizationRevision ||
+          stable(value.destination) !== stable({ groupId: null }) || !Array.isArray(value.items) || value.items.length !== 2 ||
+          value.items.some((item: any, index: number) => !item || Object.keys(item).sort().join() !== 'digest,id,name' ||
+            !/^[a-f0-9]{64}$/.test(item.digest) || item.name !== ['批量副本一', '批量副本二'][index]))) return deny(command);
         const fact = { command, ok: false }; state.calls.push(fact); state.pending++;
         if (command === 'queries.exportSql') exporting = true;
         if (command === 'queries.exportSqlArchive') archiving = true;
@@ -144,6 +148,7 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
         try {
           const response = await previous(event, payload); check(); fact.ok = response?.ok === true;
           if (command === 'connections.organizationGet' && fact.ok) rebindRevision = response.result.revision;
+          if (command === 'queries.organizationGet' && fact.ok) queryOrganizationRevision = response.result.revision;
           if (command === 'settings.save' && fact.ok) state.savedSql.push(value.tabs[0].sql);
           if (command === 'queries.readText') {
             if (response?.ok !== true || response.result?.query?.id !== value.id || response.result.query.sql !== sources.get(value.id) || Object.keys(response.result).join() !== 'query') return deny('queries.readText原文回包');
@@ -285,6 +290,26 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       expect(changed?.database).toBeUndefined();
     }
     expect({ ...rebound, queries: rebound.queries.filter(record => record.id !== imported?.id && record.id !== secondImport?.id) }).toEqual(before);
+
+    await step(() => history().getByLabel(organizationText.selectPage, { exact: true }).check());
+    await step(() => history().getByRole('button', { name: pagesText.duplicateBatchOpen, exact: true }).click());
+    const duplicate = history().getByRole('group', { name: pagesText.duplicateBatchTitle, exact: true });
+    await step(() => expect(duplicate.locator('li')).toHaveCount(2));
+    await step(() => duplicate.getByLabel(pagesText.duplicateBatchName(1), { exact: true }).fill('批量副本一'));
+    await step(() => duplicate.getByLabel(pagesText.duplicateBatchName(2), { exact: true }).fill('批量副本二'));
+    await step(() => duplicate.getByLabel(pagesText.duplicateBatchDestination, { exact: true }).selectOption('unfiled'));
+    await step(() => duplicate.screenshot({ path: info.outputPath('saved-query-duplicate-batch.png') }));
+    await step(() => duplicate.getByRole('button', { name: pagesText.duplicateBatchConfirm(2), exact: true }).click());
+    await step(() => expect(history().getByText(pagesText.duplicateBatchSaved(2), { exact: true })).toBeVisible());
+    await step(() => expect(history().getByText(organizationText.selected(2, 2), { exact: true })).toBeVisible());
+    await step(() => expect(history().locator('.history-card')).toHaveCount(2));
+    const duplicated = await effects();
+    const originalIds = new Set(rebound.queries.map(record => record.id));
+    const copies = duplicated.queries.filter(record => !originalIds.has(record.id));
+    expect(copies.map(record => record.name).sort()).toEqual(['批量副本一', '批量副本二']);
+    expect(new Set(copies.map(record => record.sql))).toEqual(new Set([importedSql, secondImportSql]));
+    for (const copy of copies) expect(copy).toMatchObject({ connectionId: prepared.profiles[0].id, databaseContext: { state: 'known', database: null } });
+    expect({ ...duplicated, queries: duplicated.queries.filter(record => originalIds.has(record.id)) }).toEqual(rebound);
 
     expect(await readFile(importedPath)).toEqual(Buffer.from('\uFEFF' + importedSql, 'utf16le'));
     expect(await readFile(secondImportPath, 'utf8')).toBe(secondImportSql);

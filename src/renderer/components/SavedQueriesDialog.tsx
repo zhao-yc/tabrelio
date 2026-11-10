@@ -15,11 +15,12 @@ import { openQueryTabBatch, useWorkspace, watchQueryBatchConnections, type Works
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { SavedQueryRebindEditor } from './SavedQueryRebindEditor';
+import { SavedQueryDuplicateBatchEditor } from './SavedQueryDuplicateBatchEditor';
 import { savedQueryRebindSchema, type SavedQueryRebindInput } from '../../shared/savedQueryRebind';
 import type { ConnectionOrganizationSnapshot } from '../../shared/connectionOrganization';
 import { SavedQueryRenameEditor, type SavedQueryRenameOrigin } from './SavedQueryRenameEditor';
 import { savedQueryRenameSchema, savedQueryRenameZh as renameText } from '../../shared/savedQueryRename';
-import { savedQueryDuplicateSchema, savedQueryDuplicateZh as duplicateText } from '../../shared/savedQueryDuplicate';
+import { savedQueryDuplicateBatchResultSchema, savedQueryDuplicateBatchSchema, savedQueryDuplicateSchema, savedQueryDuplicateZh as duplicateText, type SavedQueryDuplicateBatchInput } from '../../shared/savedQueryDuplicate';
 import { SavedQueryDeleteSelectedPreview } from './SavedQueryDeleteSelectedPreview';
 import { savedQueryDeleteSelectedSchema, readSavedQueryDeleteSelectedResult, savedQueryDeleteSelectedZh as deleteText } from '../../shared/savedQueryDeleteSelected';
 import { Empty, ErrorBox, Modal, Spinner, UsageHelp } from './ui';
@@ -46,7 +47,8 @@ const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.sort]);
 interface OrganizationEdit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 interface RebindEdit { connectionSnapshot: ConnectionOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
-type Edit = OrganizationEdit | RebindEdit;
+interface DuplicateBatchEdit { duplicateSnapshot: SavedQueryOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
+type Edit = OrganizationEdit | RebindEdit | DuplicateBatchEdit;
 
 /** 原Promise锁覆盖分组和列表；跨页选择只存编号、摘要和名称，不累计SQL正文。 */
 export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConnectionId, services: io = services }: { onClose(): void; onHistory(): void; insertion?: HistoryInsertionTarget | null; initialConnectionId?: string; services?: Services }) {
@@ -183,6 +185,41 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       const origin = { connectionSnapshot, selection, selected: Object.freeze([...selection.values()]), epoch: ticket };
       editRef.current = origin; setEditing(origin);
     });
+  }
+  function beginDuplicateBatch() {
+    const duplicateSnapshot = organizationRef.current, selection = selectedRef.current;
+    if (!editable() || needsRefresh || !duplicateSnapshot || !selection.size) return;
+    const origin = { duplicateSnapshot, selection, selected: Object.freeze([...selection.values()]), epoch: ++epoch.current };
+    editRef.current = origin; setEditing(origin); setError(''); setNotice('');
+  }
+  /** 成功后只勾选回执中的新副本，原勾选或过期摘要不能带入后续改绑。 */
+  function applyDuplicateBatch(origin: DuplicateBatchEdit, items: SavedQueryDuplicateBatchInput['items'], destination?: SavedQueryDuplicateBatchInput['destination']) {
+    if (locked.current || editRef.current !== origin || !owns(origin.epoch) || organizationRef.current !== origin.duplicateSnapshot || selectedRef.current !== origin.selection) return;
+    const input = savedQueryDuplicateBatchSchema.safeParse({ items, expectedRevision: origin.duplicateSnapshot.revision, ...(destination ? { destination } : {}) });
+    if (!input.success || items.length !== origin.selected.length || items.some((item, index) => item.id !== origin.selected[index].id || item.digest !== origin.selected[index].digest)) {
+      setError(duplicateText.invalidName); return;
+    }
+    void run(async ticket => {
+      let committed = false;
+      try {
+        const raw = await io.request('queries.duplicateSelectedChecked', input.data);
+        const { copies } = savedQueryDuplicateBatchResultSchema.parse(raw);
+        if (copies.length !== input.data.items.length || copies.some((copy, index) => origin.selection.has(copy.id) || copy.name !== input.data.items[index].name)) throw Error(t.duplicateBatchReceipt);
+        committed = true;
+        if (!owns(ticket)) return;
+        editRef.current = undefined; setEditing(undefined); setNeedsRefresh(true);
+        selectedRef.current = new Map(copies.map(copy => [copy.id, copy])); setSelected(selectedRef.current);
+        const groups = await io.request('queries.organizationGet', {});
+        if (!owns(ticket)) return;
+        const group = publish(groups, criteriaRef.current.group);
+        await readPage(ticket, { ...criteriaRef.current, group });
+        if (owns(ticket)) { setNeedsRefresh(false); setNotice(t.duplicateBatchSaved(copies.length)); }
+      } catch (reason) {
+        if (!owns(ticket)) return;
+        editRef.current = undefined; setEditing(undefined); setNeedsRefresh(true); setError(errorMessage(reason));
+        if (committed) setNotice(duplicateText.refreshRequired);
+      }
+    }, origin.epoch);
   }
   /** 不重放修改。写入回执与后续列表刷新分别处理，防止刷新失败被当作未保存。 */
   function applyRebind(origin: RebindEdit, target: SavedQueryRebindInput['target']) {
@@ -466,7 +503,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const importGroupStale = !!importGroup && (needsRefresh || importGroup.expectedRevision !== organization?.revision || !tree.some(item => item.id === importGroup.id));
   const importConnectionStale = !!importConnection && !connections.includes(importConnection);
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
-  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else if (editRef.current && 'connectionSnapshot' in editRef.current) cancelEdit(); else void close(); }}
+  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else if (editRef.current && !('value' in editRef.current)) cancelEdit(); else void close(); }}
     onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
     <div className="dialog-tabs"><button disabled={closing || !!external} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><UsageHelp><p>{text.metadataOnly}</p><p>{insertionText.hint}</p><p>{t.hint}</p><p>{t.openHint}</p></UsageHelp><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
@@ -518,7 +555,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           <option value="name-asc">{t.sortNameAsc}</option><option value="name-desc">{t.sortNameDesc}</option>
         </select></label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
-        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={beginDuplicateBatch}>{t.duplicateBatchOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         {selected.size > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
         {opening && <QueryBatchOpenPreview rows={[...opening.selection.values()]} targets={opening.targets} connections={connections}
           busy={busy || closing} onTarget={(id, connectionId) => changeOpenBatchTarget(opening, id, connectionId)}
@@ -535,6 +572,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       </div>
     </div>{deleting && <SavedQueryDeleteSelectedPreview key={deleting.epoch} items={deleting.items} busy={busy || closing} onCancel={() => cancelDeleteSelected(deleting)} onConfirm={() => applyDeleteSelected(deleting)}/>}{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} mode={renaming.duplicateRevision ? 'duplicate' : 'rename'} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && ('connectionSnapshot' in editing
       ? <SavedQueryRebindEditor key={editing.epoch} rows={editing.selected} connections={editing.connectionSnapshot.connections} busy={busy || closing} onCancel={cancelEdit} onConfirm={target => applyRebind(editing, target)}/>
+      : 'duplicateSnapshot' in editing ? <SavedQueryDuplicateBatchEditor key={editing.epoch} rows={editing.selected} snapshot={editing.duplicateSnapshot} busy={busy || closing} onCancel={cancelEdit} onConfirm={(items, destination) => applyDuplicateBatch(editing, items, destination)}/>
       : <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>)}</div>
     <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing || !!external} onClick={() => void close()}>{zh.common.close}</button></footer>
   </Modal>;

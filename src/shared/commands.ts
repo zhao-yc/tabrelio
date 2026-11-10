@@ -208,6 +208,7 @@ export const publicCommands: Record<Command, true> = {
   'queries.page':true,'queries.pageContinue':true,'queries.pageRelease':true,'queries.deleteChecked':true,
   'queries.renameChecked': true,
   'queries.duplicateChecked': true,
+  'queries.duplicateSelectedChecked': true,
   'queries.deleteSelectedChecked': true,
   'queries.rebindSelectedChecked': true,
   'history.page':true,'history.pageContinue':true,'history.pageRelease':true,'history.read':true,'history.readBatch':true,'history.readError':true,'history.readSql':true,

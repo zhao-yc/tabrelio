@@ -79,3 +79,45 @@ it('发布失败恢复正文、成员和版本；后续保存及重启不夹带�
   const reopened = await LocalStore.open(path, wasm, protector); stores.add(reopened); expect(reopened.queries()).toEqual(copied); expect(reopened.settings().editorWordWrap).toBe(false);
   expect(() => reopened.duplicateQueryChecked(original)).toThrow(text.stale);
 });
+
+it('批量复制核对全部来源并原子落盘，支持统一分组及沿用各自原分组', async () => {
+  const { store, path, source } = await fixture({ databaseContext: { state: 'known', database: null } });
+  const second = { ...source, id: 'second', name: '未分组原查询', sql: 'SELECT 2;\r\n' };
+  store.saveQuery(second);
+  const firstGroup = store.applyQueryOrganization({ expectedRevision: store.queryOrganization().revision, operation: { kind: 'create', name: '原组', parentId: null } });
+  const originalGroup = firstGroup.groups[0].id;
+  const moved = store.applyQueryOrganization({ expectedRevision: firstGroup.revision, operation: {
+    kind: 'moveQueries', groupId: originalGroup, queries: [{ id: source.id, digest: input(store).digest }],
+  } });
+  const organization = store.applyQueryOrganization({ expectedRevision: moved.revision, operation: { kind: 'create', name: '目标组', parentId: null } });
+  const target = organization.groups.find(group => group.id !== originalGroup)!.id;
+  const digest = (id: string) => createHash('sha256').update(store.querySearchRaw(id)!).digest('hex');
+  const items = [source, second].map((query, index) => ({ id: query.id, digest: digest(query.id), name: `副本 ${index + 1}` }));
+  const request = { expectedRevision: organization.revision, items, destination: { groupId: target } };
+  const bytes = readFileSync(path), searchRevision = store.querySearchRevision();
+  expect(() => store.duplicateQueriesChecked({ ...request, expectedRevision: moved.revision })).toThrow(text.stale);
+  expect(() => store.duplicateQueriesChecked({ ...request, items: [items[0], { ...items[1], digest: '0'.repeat(64) }] })).toThrow(text.stale);
+  expect(() => store.duplicateQueriesChecked({ ...request, items: [items[0], items[0]] })).toThrow();
+  fault.path = path;
+  expect(() => store.duplicateQueriesChecked(request)).toThrow('修改未保存');
+  fault.path = '';
+  expect(readFileSync(path)).toEqual(bytes);
+  expect(store.queryOrganization()).toEqual(organization);
+  expect(store.querySearchRevision()).toBe(searchRevision);
+  expect(store.queries()).toHaveLength(2);
+
+  const { copies } = store.duplicateQueriesChecked(request);
+  for (const [index, original] of [source, second].entries()) {
+    const copy = copies[index], query = store.queries().find(record => record.id === copy.id)!;
+    expect(query).toEqual({ ...original, id: copy.id, name: items[index].name, updatedAt: query.updatedAt });
+    expect(copy).toEqual({ id: query.id, name: query.name, digest: digest(query.id), connectionId: query.connectionId });
+    expect(digest(original.id)).toBe(items[index].digest);
+  }
+  expect(store.queryOrganization().groups.find(group => group.id === target)?.count).toBe(2);
+  expect(() => store.duplicateQueriesChecked(request)).toThrow(text.stale);
+  store.duplicateQueriesChecked({ expectedRevision: store.queryOrganization().revision, items });
+  expect(store.queryOrganization().unfiledCount).toBe(2);
+  expect(disk(path, 'SELECT group_id,COUNT(*) FROM saved_query_memberships GROUP BY group_id')[0].values)
+    .toEqual(expect.arrayContaining([[originalGroup, 2], [target, 2]]));
+  expect(disk(path, 'SELECT COUNT(*) FROM queries')[0].values).toEqual([[6]]);
+});

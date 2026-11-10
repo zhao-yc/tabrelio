@@ -2,11 +2,21 @@ import { z } from 'zod';
 import { savedQueryRenameNameSchema } from './savedQueryRename';
 
 /** 复制仅接收本地资料引用和名称，不借用活动查询或连接凭据。 */
-export const savedQueryDuplicateSchema = z.object({
-  id: z.string().min(1).max(200), digest: z.string().regex(/^[a-f0-9]{64}$/),
-  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/), name: savedQueryRenameNameSchema,
-}).strict();
+const id = z.string().min(1).max(200), digest = z.string().regex(/^[a-f0-9]{64}$/);
+const copyItem = z.object({ id, digest, name: savedQueryRenameNameSchema }).strict();
+export const savedQueryDuplicateSchema = copyItem.extend({ expectedRevision: digest }).strict();
 export type SavedQueryDuplicateInput = z.infer<typeof savedQueryDuplicateSchema>;
+export const savedQueryDuplicateBatchLimits = { items: 100, bytes: 128 * 1024 * 1024 } as const;
+export const savedQueryDuplicateBatchSchema = z.object({
+  expectedRevision: digest,
+  items: z.array(copyItem).min(1).max(savedQueryDuplicateBatchLimits.items)
+    .refine(items => new Set(items.map(item => item.id)).size === items.length, '所选查询不能重复'),
+  destination: z.object({ groupId: id.nullable() }).strict().optional(),
+}).strict();
+export type SavedQueryDuplicateBatchInput = z.infer<typeof savedQueryDuplicateBatchSchema>;
+export const savedQueryDuplicateBatchResultSchema = z.object({ copies: z.array(copyItem.extend({ connectionId: id.optional() }).strict())
+  .min(1).max(savedQueryDuplicateBatchLimits.items).refine(items => new Set(items.map(item => item.id)).size === items.length) }).strict();
+export type SavedQueryDuplicateBatchResult = z.infer<typeof savedQueryDuplicateBatchResultSchema>;
 
 export const savedQueryDuplicateZh = {
   rename: '复制查询', newName: '副本名称', confirm: '创建副本', cancel: '取消复制',

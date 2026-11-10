@@ -56,7 +56,7 @@ import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteS
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 import { savedQueryRebindLimits, savedQueryRebindSchema } from '../shared/savedQueryRebind';
 import { savedQueryRenameSchema, savedQueryRenameZh } from '../shared/savedQueryRename';
-import { savedQueryDuplicateSchema, savedQueryDuplicateZh } from '../shared/savedQueryDuplicate';
+import { savedQueryDuplicateBatchLimits, savedQueryDuplicateBatchSchema, savedQueryDuplicateSchema, savedQueryDuplicateZh, type SavedQueryDuplicateBatchResult } from '../shared/savedQueryDuplicate';
 import { savedQueryDeleteSelectedLimits, savedQueryDeleteSelectedSchema, savedQueryDeleteSelectedZh } from '../shared/savedQueryDeleteSelected';
 import { parseHistoryRecord } from './historyPageMatch';
 import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
@@ -1025,19 +1025,48 @@ export class LocalStore {
   }
   /** 原记录及组织版本在一次本地事务复核；新编号只INSERT，副本不绑定任何打开的编辑器。 */
   duplicateQueryChecked(raw: unknown): void {
-    const input = savedQueryDuplicateSchema.parse(raw), id = randomUUID();
+    const input = savedQueryDuplicateSchema.parse(raw);
     this.mutate(() => {
       if (input.expectedRevision !== this.queryOrganizationRevision()) throw Error(savedQueryDuplicateZh.stale);
-      const previous = this.querySearchRaw(input.id);
-      if (previous === undefined) throw Error(savedQueryDuplicateZh.missing);
-      if (createHash('sha256').update(previous).digest('hex') !== input.digest) throw Error(savedQueryDuplicateZh.stale);
-      const current = parseSavedQueryRecord(input.id, previous);
-      const query = parseSavedQueryRecord(id, JSON.stringify({ ...current, id, name: input.name, updatedAt: new Date().toISOString() }));
-      this.db.run('INSERT INTO queries VALUES (?,?,?)', [id, JSON.stringify(query), query.updatedAt]);
-      // 成员关系和正文同事务发布，不产生半完成副本或覆盖原分组。
-      this.db.run('INSERT INTO saved_query_memberships (query_id,group_id) SELECT ?,group_id FROM saved_query_memberships WHERE query_id=?', [id, input.id]);
+      this.insertSavedQueryCopy(input.id, this.readCopySource(input), input.name, new Date().toISOString());
     });
     this.queryRevisionValue++;
+  }
+  private readCopySource(item: { id: string; digest: string }): string {
+    const previous = this.querySearchRaw(item.id);
+    if (previous === undefined) throw Error(savedQueryDuplicateZh.missing);
+    if (createHash('sha256').update(previous).digest('hex') !== item.digest) throw Error(savedQueryDuplicateZh.stale);
+    return previous;
+  }
+  /** 未指定分组时沿用原成员关系，显式 null 则创建未分组副本。 */
+  private insertSavedQueryCopy(sourceId: string, previous: string, name: string, updatedAt: string, groupId?: string | null) {
+    const id = randomUUID(), source = parseSavedQueryRecord(sourceId, previous);
+    const query = parseSavedQueryRecord(id, JSON.stringify({ ...source, id, name, updatedAt }));
+    const record = JSON.stringify(query);
+    this.db.run('INSERT INTO queries VALUES (?,?,?)', [id, record, updatedAt]);
+    if (groupId === undefined) this.db.run('INSERT INTO saved_query_memberships (query_id,group_id) SELECT ?,group_id FROM saved_query_memberships WHERE query_id=?', [id, sourceId]);
+    else if (groupId !== null) this.db.run('INSERT INTO saved_query_memberships (query_id,group_id) VALUES (?,?)', [id, groupId]);
+    return { query, record };
+  }
+  /** 一批副本与分组同事务发布，回执只带独立编号及摘要，方便继续整理副本。 */
+  duplicateQueriesChecked(raw: unknown): SavedQueryDuplicateBatchResult {
+    const input = savedQueryDuplicateBatchSchema.parse(raw), copies: SavedQueryDuplicateBatchResult['copies'] = [];
+    this.mutate(() => {
+      if (input.expectedRevision !== this.queryOrganizationRevision()) throw Error(savedQueryDuplicateZh.stale);
+      const groupId = input.destination?.groupId;
+      if (groupId) this.assertQuerySaveGroup({ id: groupId, expectedRevision: input.expectedRevision });
+      const updatedAt = new Date().toISOString(); let bytes = 0;
+      for (const item of input.items) {
+        const previous = this.readCopySource(item);
+        bytes += Buffer.byteLength(previous);
+        if (bytes > savedQueryDuplicateBatchLimits.bytes) throw Error('所选查询原文合计超过 128 MiB，请减少所选条数');
+        const { query, record } = this.insertSavedQueryCopy(item.id, previous, item.name, updatedAt, groupId);
+        copies.push({ id: query.id, name: query.name, digest: createHash('sha256').update(record).digest('hex'),
+          ...(query.connectionId ? { connectionId: query.connectionId } : {}) });
+      }
+    });
+    this.queryRevisionValue++;
+    return { copies };
   }
   /** 来源身份只读取当前连接的公开路由字段，不通过 resolveConnection 解密凭据。 */
   private querySourceProfile(id?: string): ConnectionProfile | undefined {
