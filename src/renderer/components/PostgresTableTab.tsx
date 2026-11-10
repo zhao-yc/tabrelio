@@ -64,7 +64,7 @@ import { tablePresetsZh } from '../locales/tablePresets.zh-CN';
 import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { postgresTableLayoutZh as layoutText } from '../locales/postgresTableLayout.zh-CN';
 import { TableLayoutController, type SqliteLayoutView, type TableLayoutScope } from '../sqliteTableLayout';
-import { setTableColumnWidths, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
+import { setTableColumnWidths, setTableHeaderColumnVisibility, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { postgresTablePresetConfiguration, postgresTablePresetOptions, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
@@ -1328,6 +1328,17 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     },
   };
 
+  const columnVisibility = {
+    current: headerFreeze.current,
+    canHide: gridLayout.columns.length > 1, hasHidden: layoutView.preferences.columns.some(column => column.hidden),
+    apply(key?: string) {
+      const column = gridLayout.columns.find(column => column.key === key);
+      if (key !== undefined && !column) return;
+      try { changeLayout(setTableHeaderColumnVisibility(layout.view.preferences, column?.name)); }
+      catch (reason) { setLayoutError(errorMessage(reason)); }
+    },
+  };
+
   function resizeRowHeight(height: number): void {
     if (headerFreeze.current()) changeLayout(setTableRowHeight(layout.view.preferences, height));
   }
@@ -1845,7 +1856,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell, undefined, range); }
           catch (reason) { setError(errorMessage(reason)); }
         }}
-        frozenKeys={gridLayout.frozenKeys} freezeColumns={headerFreeze} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onRowHeightChange={layoutView.ready && !layoutView.pending ? resizeRowHeight : undefined} onColumnWidthsChange={resizeLayout}
+        frozenKeys={gridLayout.frozenKeys} freezeColumns={headerFreeze} columnVisibility={columnVisibility} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onRowHeightChange={layoutView.ready && !layoutView.pending ? resizeRowHeight : undefined} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {
             const rules = sort.map(({ column, direction, nulls }) => ({

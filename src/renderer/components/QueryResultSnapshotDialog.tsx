@@ -8,7 +8,7 @@ import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { appModalSelector } from '../modalSelectors';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
-import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultHeaderColumnVisibility, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
 import type { GridRangeExportData } from '../gridRangeExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView, type SortDialect } from '../queryResultSort';
 import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterRule, type QueryResultFilterView } from '../queryResultFilter';
@@ -263,6 +263,20 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
     if (!loaded || !displayed || !visibleColumns || !gridCurrent(loaded, interaction, false)) return;
     setColumnLayout({ columns: visibleColumns, layout: setQueryResultRowHeight(displayed.columns, columnLayout?.layout, height) });
   }
+  const columnVisibility = {
+    current: () => !!loaded && gridCurrent(loaded, interaction, false),
+    canHide: (visibleColumns?.length ?? 0) > 1, hasHidden: !!visibleColumns && visibleColumns.length < (displayed?.columns.length ?? 0),
+    apply(key?: string) {
+      if (!displayed || !columnVisibility.current()) return;
+      try {
+        const keys = queryResultColumnKeys(displayed.columns);
+        const layout = setQueryResultHeaderColumnVisibility(columnLayout?.layout ?? { order: keys, visible: keys }, key);
+        const columns = queryResultVisibleColumns(displayed.columns, layout);
+        exportSelection.invalidate();
+        setColumnLayout({ layout, columns });
+      } catch (reason) { setError(errorMessage(reason)); }
+    },
+  };
   function sortDraftCurrent(draft: SnapshotSort): boolean {
     return alive.current && overlayRef.current === draft && sorter.view(draft.binding) === draft.initial;
   }
@@ -472,7 +486,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
       {matches.active && <QueryResultMatchView active={matches.active} disabled={!!busy} onClear={() => changeMatchView()}/>}
       <div className="query-result-snapshot-viewer-grid">
         <ResultsGrid rowJump columns={visibleColumns} rows={displayed.rows} selectionScope={binding ?? loaded.scope}
-          frozenKeys={frozenKeys} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
+          frozenKeys={frozenKeys} columnVisibility={columnVisibility} columnWidths={columnLayout?.layout.widths} rowHeight={columnLayout?.layout.rowHeight}
           onColumnWidthsChange={binding ? resizeColumns : undefined} onRowHeightChange={binding ? resizeRowHeight : undefined}
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}

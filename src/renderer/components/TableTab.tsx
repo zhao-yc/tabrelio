@@ -120,7 +120,7 @@ import { patchReferenceRow, referenceWritable, referencesForColumn, type Referen
 import { referenceZh } from '../locales/references.zh-CN';
 import type { CellValue, ForeignKeyInfo } from '../../shared/contracts';
 import type { TablePreferences } from '../../shared/tablePreferences';
-import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
+import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys, setTableHeaderColumnVisibility, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { applyPageReplacement, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { PageFindPanel, type PageFindDisplay } from './PageFindPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
@@ -2310,6 +2310,14 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       try { updatePreferences(changeTablePreference(preferencesRef.current, key, { width })); }
       catch (reason) { setPreferencesError(errorMessage(reason)); }
     } : undefined,
+    columnVisibility: {
+      current: () => !!page && !externalStale && !preferencesLoading && !preferencesLock.current && !record.hasInput(),
+      canHide: visibleColumns.length > 1, hasHidden: preferences.columns.some(column => column.hidden),
+      apply: key => {
+        try { updatePreferences(setTableHeaderColumnVisibility(preferencesRef.current, key)); }
+        catch (reason) { setPreferencesError(errorMessage(reason)); }
+      },
+    },
     frozenThrough: frozenKeys.at(-1), freeze: {
       current: () => !!page && !externalStale && !preferencesLoading && !preferencesLock.current,
       // 和布局窗口共享同一草稿，保存仍由用户从布局入口触发。

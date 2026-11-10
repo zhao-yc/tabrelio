@@ -25,4 +25,6 @@ export const gridHeaderMenuZh = {
   copyRowData: '复制行数据',
   copyRowDataWithNames: '复制行数据（含列名）',
   findColumn: '在此列查找',
+  hideColumn: '隐藏此列',
+  showAllColumns: '显示所有列',
 };

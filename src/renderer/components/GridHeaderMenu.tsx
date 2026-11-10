@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import type { SortColumn } from 'react-data-grid';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { gridHeaderMenuZh as text } from '../locales/gridHeaderMenu.zh-CN';
@@ -19,6 +19,13 @@ export interface GridHeaderFreeze {
   apply(key?: string): void;
 }
 
+export interface GridHeaderColumnVisibility {
+  current(): boolean;
+  canHide: boolean;
+  hasHidden: boolean;
+  apply(key?: string): void;
+}
+
 interface HeaderMenuSource {
   owner: object | null | undefined;
   grid(): HTMLElement | null | undefined;
@@ -36,6 +43,7 @@ interface HeaderMenuSource {
   rowHeaderColumns?: number;
   rowActions?(rowIndex: number, current: () => boolean): readonly GridCellAction[];
   visibility?: GridHeaderVisibility;
+  columnVisibility?: GridHeaderColumnVisibility;
   ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
   frozenThrough?: string;
@@ -88,6 +96,16 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   latest.current = source;
   const [sizeRequest, setSizeRequest] = useState<SizeRequest>();
   const pendingSize = useRef<{ request: SizeRequest; size: number }>(undefined);
+  const hiddenFocus = useRef<{ grid: HTMLElement; index: number; key: string }>(undefined);
+  // 键盘隐藏原标题后，将焦点交给同一网格中的下一列；末列使用上一列。
+  useEffect(() => {
+    const pending = hiddenFocus.current;
+    if (!pending) return;
+    hiddenFocus.current = undefined;
+    if (source.grid() !== pending.grid || !source.current() || source.column(pending.index)?.key === pending.key) return;
+    const index = source.column(pending.index) ? pending.index : pending.index - 1;
+    if (source.column(index)) pending.grid.querySelector<HTMLElement>(`[role="columnheader"][aria-colindex="${index + 1}"]`)?.focus({ preventScroll: true });
+  });
   // 布局接纳门会拒绝模态后的网格操作。关闭并提交 DOM 后，重新验证原网格再写入。
   useLayoutEffect(() => {
     if (sizeRequest || !pendingSize.current) return;
@@ -177,6 +195,19 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       };
       actions.push({ label: text.freeze, disabled: source.frozenThrough === column.key, run: () => apply(column.key) },
         { label: text.unfreeze, disabled: source.frozenThrough === undefined, run: () => apply() });
+    }
+    const visibilityControl = source.columnVisibility;
+    if (visibilityControl?.current()) {
+      actions.push({ label: text.hideColumn, disabled: !visibilityControl.canHide, run: () => {
+        const now = latest.current.columnVisibility;
+        if (!current() || !now?.current() || !now.canHide) return;
+        hiddenFocus.current = { grid, index, key: column.key };
+        now.apply(column.key);
+      } });
+      if (visibilityControl.hasHidden) actions.push({ label: text.showAllColumns, run: () => {
+        const now = latest.current.columnVisibility;
+        if (current() && now?.current() && now.hasHidden) now.apply();
+      } });
     }
     if (source.resizeColumn) actions.push({ label: text.setWidth, run: () => {
       if (!current() || !gridDialogCurrent(cell, source.ownDialog)) return;

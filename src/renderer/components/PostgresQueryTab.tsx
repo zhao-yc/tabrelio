@@ -55,7 +55,7 @@ import { postgresRecordTransferZh as transferText } from '../locales/postgresRec
 import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
-import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, setQueryResultHeaderColumnVisibility, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
 import { captureQueryResultMemory, queryResultMemoryMatches } from '../queryResultMemory';
 import { queryResultPresetsZh as presetsText } from '../locales/queryResultPresets.zh-CN';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
@@ -1724,7 +1724,13 @@ export function PostgresQueryTab({
 
   /** 在新列投影上验证原筛选和排序，全部通过才切换视图。 */
   function applyResultColumns(draft: ColumnDraft, nextLayout: QueryResultColumnLayout) {
-    if (!resultSource || !visibleColumns || !filterView || !sortView || !columnCurrent(draft)) return;
+    if (!columnCurrent(draft)) return;
+    publishResultColumns(nextLayout);
+    closeResultColumns(draft);
+  }
+
+  function publishResultColumns(nextLayout: QueryResultColumnLayout): void {
+    if (!resultSource || !visibleColumns || !filterView || !sortView) return;
     const projected = queryResultVisibleColumns(resultSource.columns, nextLayout);
     const changed = projected.length !== visibleColumns.length || projected.some((column, index) => column !== visibleColumns[index]);
     if (changed) {
@@ -1739,7 +1745,6 @@ export function PostgresQueryTab({
       organization.sorter = next.sorter;
     }
     setColumnLayout({ source: resultSource, layout: nextLayout, columns: changed ? projected : visibleColumns });
-    closeResultColumns(draft);
   }
 
   /** 网格拖动只更新当前可见列的宽度，沿用行、列投影及其它显示配置。 */
@@ -1774,6 +1779,19 @@ export function PostgresQueryTab({
         const keys = queryResultColumnKeys(resultSource.columns);
         const next = setQueryResultFrozenThrough(layout ?? { order: keys, visible: keys }, key);
         setColumnLayout({ source: resultSource, layout: next, columns: visibleColumns });
+      } catch (reason) { setError(errorMessage(reason)); }
+    },
+  };
+
+  const columnVisibility = {
+    current: () => !!filterView && !!sortView && resultCurrent(),
+    canHide: (visibleColumns?.length ?? 0) > 1, hasHidden: !!visibleColumns && visibleColumns.length < (resultSource?.columns.length ?? 0),
+    apply(key?: string) {
+      if (!resultSource || !columnVisibility.current()) return;
+      try {
+        const keys = queryResultColumnKeys(resultSource.columns);
+        publishResultColumns(setQueryResultHeaderColumnVisibility(layout ?? { order: keys, visible: keys }, key));
+        resultSelection.invalidate(); setError('');
       } catch (reason) { setError(errorMessage(reason)); }
     },
   };
@@ -2120,7 +2138,7 @@ export function PostgresQueryTab({
         if (resultCurrent() && !document.querySelector(appModalSelector))
           openRowSqlDraft({ connectionId: tab.connectionId, database: scope.database, table: rowSql.table }, kind, sql);
       } : undefined}
-      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onRowHeightChange={resizeResultRowHeight} onColumnWidthsChange={resizeResultColumns}
+      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnVisibility={columnVisibility} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onRowHeightChange={resizeResultRowHeight} onColumnWidthsChange={resizeResultColumns}
       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
       onShowRows={binding ? changeMatchView : undefined}
       onExportRange={binding ? result => {

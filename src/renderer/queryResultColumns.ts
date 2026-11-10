@@ -45,6 +45,14 @@ export function setQueryResultFrozenThrough(layout: QueryResultColumnLayout, key
   if (typeof key !== 'string' || !key.length || key.length > 4096 || output.order.length > resultExportLimits.columns || output.order.some(value => typeof value !== 'string' || !value.length) || available.size !== output.order.length || new Set(output.visible).size !== output.visible.length || output.visible.some(value => !available.has(value)) || !available.has(key) || !output.visible.includes(key)) throw Error('结果冻结边界必须是当前可见的精确唯一内部列键');
   return { ...output, frozenThrough: key };
 }
+
+/** 隐藏当前列沿用结果的原列键。边界列隐藏时解除冻结，恢复显示时不重建布局。 */
+export function setQueryResultHeaderColumnVisibility(layout: QueryResultColumnLayout, key?: string): QueryResultColumnLayout {
+  if (key === undefined) return { ...layout, visible: [...layout.order] };
+  if (!layout.visible.includes(key) || layout.visible.length < 2) throw Error(tableGridZh.oneVisible);
+  const base = layout.frozenThrough === key ? setQueryResultFrozenThrough(layout) : layout;
+  return { ...base, visible: layout.visible.filter(value => value !== key) };
+}
 /** 只从已验证的当前可见顺序取前缀；元数据或边界失效时安全解除，不猜测其他列。 */
 export function frozenQueryResultKeys(columns: ResultColumn[], layout: QueryResultColumnLayout): string[] {
   const frozen = Object.getOwnPropertyDescriptor(layout, 'frozenThrough');

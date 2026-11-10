@@ -80,6 +80,13 @@ export function changeTablePreference(preferences: TablePreferences, name: strin
   return preserveTableFrozenThrough(preferences, columns);
 }
 
+/** 快捷显隐沿用布局校验。显示全部只修改隐藏标记，保留列顺序和尺寸。 */
+export function setTableHeaderColumnVisibility(preferences: TablePreferences, name?: string): TablePreferences {
+  return name === undefined ? preserveTableFrozenThrough(preferences,
+    preferences.columns.map(column => column.hidden ? { ...column, hidden: false } : column))
+    : changeTablePreference(preferences, name, { hidden: true });
+}
+
 /** 一次更新全部可见列，保留隐藏列、顺序和冻结边界。 */
 export function setVisibleTableColumnWidths(preferences: TablePreferences, width: number): TablePreferences {
   return setTableColumnWidths(preferences, new Map(visibleTableKeys(preferences).map(name => [name, width])));

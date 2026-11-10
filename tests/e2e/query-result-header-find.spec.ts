@@ -153,6 +153,21 @@ test('离线快照列标题查找按原列键定位重名列，重排后仍只�
   await expect.poll(async () => (await grid.getByRole('row').nth(1).boundingBox())?.height).toBe(88);
   await expect(firstRowHeader).toBeChecked();
   await expect.poll(async () => (await headers.nth(0).boundingBox())?.width).toBe(281);
+  const firstDataHeader = grid.locator('[role="columnheader"][aria-colindex="2"]');
+  const hide = viewer.getByRole('menuitem', { name: headerText.hideColumn, exact: true });
+  for (let count = 4; count > 1; count--) {
+    await firstDataHeader.click({ button: 'right' });
+    await hide.click();
+    await expect(grid.getByRole('columnheader')).toHaveCount(count);
+  }
+  await firstDataHeader.press('Shift+F10');
+  await expect(hide).toBeDisabled();
+  await viewer.screenshot({ path: info.outputPath('离线恢复所有列.png') });
+  await viewer.getByRole('menuitem', { name: headerText.showAllColumns, exact: true }).click();
+  await expect(grid.getByRole('columnheader')).toHaveCount(5);
+  await expect.poll(async () => (await headers.nth(0).boundingBox())?.width).toBe(281);
+  expect(await firstDataHeader.getAttribute('aria-colindex')).toBe('2');
+  await expect(grid.getByRole('row').nth(1).getByRole('gridcell').nth(1)).toHaveText('目标记录');
   expect(readFileSync(path, 'utf8')).toBe(bytes);
   expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);

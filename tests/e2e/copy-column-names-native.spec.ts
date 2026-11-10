@@ -281,6 +281,18 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     const allColumnCopy = await readGridMenuClipboard(page, columnMenu.getByRole('menuitem', { name: headerText.copyColumnData, exact: true }));
     expect(allColumnCopy.text).toBe('9007199254740993\n9007199254740994');
     await expect(header).toBeFocused();
+    const labelHeader = tableGrid.getByRole('columnheader').filter({ hasText: /^label/i });
+    await header.press('Shift+F10');
+    const hideHeader = columnMenu.getByRole('menuitem', { name: headerText.hideColumn, exact: true });
+    await expect(hideHeader).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('标题隐藏恢复列.png') });
+    await hideHeader.press('Enter');
+    await expect(header).toHaveCount(0);
+    await expect(labelHeader).toBeFocused();
+    await labelHeader.click({ button: 'right' });
+    await columnMenu.getByRole('menuitem', { name: headerText.showAllColumns, exact: true }).click();
+    await expect(header).toBeVisible();
+    await expect.poll(() => widthOf(header)).toBe(239);
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -403,6 +415,24 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(checkedRow).toBeFocused();
     expect(await history()).toEqual(historyBeforeWidth);
     await page.screenshot({ path: info.outputPath('自定义行高应用.png') });
+    const thirdHeader = grid.getByRole('columnheader').filter({ hasText: /^third/i });
+    await thirdHeader.click({ button: 'right' });
+    await columnMenu.getByRole('menuitem', { name: headerText.desc, exact: true }).click();
+    const firstAmount = () => grid.getByRole('row').nth(1).getByText('9007199254740994', { exact: true });
+    await expect(firstAmount()).toBeVisible();
+    await names[1].click({ button: 'right' });
+    await hideHeader.click();
+    await expect(grid.getByRole('columnheader').filter({ hasText: /^duplicate/i })).toHaveCount(1);
+    await expect(firstAmount()).toBeVisible();
+    await thirdHeader.click({ button: 'right' });
+    await hideHeader.click();
+    await expect(query.getByRole('alert').filter({ hasText: columnsText.activeRule })).toBeVisible();
+    await expect(thirdHeader).toBeVisible();
+    await thirdHeader.click({ button: 'right' });
+    await columnMenu.getByRole('menuitem', { name: headerText.showAllColumns, exact: true }).click();
+    await expect(grid.getByRole('columnheader').filter({ hasText: /^duplicate/i })).toHaveCount(2);
+    await expect(firstAmount()).toBeVisible();
+    expect(await history()).toEqual(historyBeforeWidth);
     if (dialect === 'postgresql') {
       await open('row-sql-query');
       await execute();

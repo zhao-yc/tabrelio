@@ -1,11 +1,20 @@
 import { describe,expect,it,vi } from 'vitest';
 import type { QueryResult } from '../../src/shared/contracts';
-import { queryResultVisibleColumns, moveQueryResultColumn, projectQueryResultRows, snapshotQueryResultColumns } from '../../src/renderer/queryResultColumns';
+import { queryResultVisibleColumns, moveQueryResultColumn, projectQueryResultRows, setQueryResultHeaderColumnVisibility, snapshotQueryResultColumns } from '../../src/renderer/queryResultColumns';
 import { ResultExportSelection, resultExportData } from '../../src/renderer/resultExport';
 import { validateResultExportData } from '../../src/shared/resultExport';
 /** 原型同名key、重复别名、精确原值都来自只读RAM夹具。 */
 function source():QueryResult{return {columns:[{key:'__proto__',name:'重复',type:'BIGINT'},{key:'b',name:'重复',type:'BLOB'},{key:'n',name:'',type:'DECIMAL'},{key:'secret',name:'隐藏',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","b":{"type":"binary","base64":"AP8="},"n":"0.12345678901234567890","secret":"不应出现"}'),JSON.parse('{"__proto__":"","b":{"type":"binary","base64":""},"n":null,"secret":"不应出现"}')],truncated:true,elapsedMs:1,statement:'私有SQL'};}
 describe('SQL结果可见列与有界投影',()=>{
+ it('标题显隐按唯一键处理重名列，隐藏冻结边界后恢复全部仍保留原序和宽度', () => {
+   const result = source();
+   const initial = { order: ['b', '__proto__', 'n', 'secret'], visible: ['b', '__proto__'], frozenThrough: 'b', widths: new Map([['b', 239]]) };
+   const hidden = setQueryResultHeaderColumnVisibility(initial, 'b');
+   expect(queryResultVisibleColumns(result.columns, hidden).map(column => column.key)).toEqual(['__proto__']);
+   expect(hidden.frozenThrough).toBeUndefined();
+   expect(() => setQueryResultHeaderColumnVisibility(hidden, '__proto__')).toThrow();
+   expect(setQueryResultHeaderColumnVisibility(hidden)).toEqual({ order: initial.order, visible: initial.order, widths: initial.widths });
+ });
  it('唯一key排序显隐不改源对象，重复别名仍独立；恢复顺序可保留显隐',()=>{const r=source(),saved=structuredClone(r),layout={order:['b','__proto__','n','secret'],visible:['n','b','__proto__']};expect(queryResultVisibleColumns(r.columns,layout).map(c=>c.key)).toEqual(['b','__proto__','n']);expect(moveQueryResultColumn(layout,'b',-1)).toBe(layout);expect(moveQueryResultColumn(layout,'n',-1).order).toEqual(['b','n','__proto__','secret']);expect(r).toEqual(saved);});
  it.each([{order:['__proto__','b','n','secret'],visible:[]},{order:['b','b','n','secret'],visible:['b']},{order:['b','__proto__','n','secret'],visible:['unknown']},{order:['b','__proto__','n','secret'],visible:['b','b']}])('未知或空布局%j拒绝',layout=>expect(()=>queryResultVisibleColumns(source().columns,layout)).toThrow());
  it('投影行恰含可见键，原型键是自有数据；NULL空串BLOB数值字符串不转换',()=>{const r=source(),columns=[r.columns[1],r.columns[0],r.columns[2]],data=projectQueryResultRows(r,columns);expect(data.columns.map(c=>c.key)).toEqual(['b','__proto__','n']);expect(Object.keys(data.rows[0])).toEqual(['b','__proto__','n']);expect(Object.hasOwn(data.rows[0],'__proto__')).toBe(true);expect(data.rows[0].__proto__).toBe('18446744073709551615');expect(data.rows[0].n).toBe('0.12345678901234567890');expect(data.rows[1]).toEqual({b:{type:'binary',base64:''},['__proto__']:'',n:null});expect(()=>validateResultExportData(data)).not.toThrow();expect(JSON.stringify(data)).not.toContain('不应出现');});
