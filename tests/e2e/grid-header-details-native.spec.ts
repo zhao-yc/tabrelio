@@ -65,6 +65,17 @@ async function toggleFromHeader(header: Locator, name: string, keyboard = false)
   await expect(header).toBeFocused();
 }
 
+/** 筛选动作的焦点交给条件输入，核对它不同于显示设置的返回表头行为。 */
+async function filterFromHeader(header: Locator, keyboard = false): Promise<void> {
+  if (keyboard) await header.press('Shift+F10');
+  else await header.click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: headerMenuText.menu, exact: true });
+  const action = menu.getByRole('menuitem', { name: headerMenuText.filterColumn, exact: true });
+  if (keyboard) await action.press('Enter');
+  else await action.click();
+  await expect(menu).toBeHidden();
+}
+
 /** 同时核对虚拟网格的实际行高、字号及原列宽。 */
 async function verifyGridZoom(scope: Locator, header: Locator): Promise<void> {
   const grid = scope.getByRole('grid');
@@ -243,11 +254,18 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(header('label').locator('.column-type')).toHaveCount(0);
     await expect(header('label')).toHaveAttribute('aria-sort', 'ascending');
     if (process.platform === 'darwin') await sortFromGrid(tab, 'row B');
-    await (await navigationMenuItem(tab, { name: sqlite.conditions, exact: true })).click();
-    await tab.getByRole('button', { name: sqlite.addFilter, exact: true }).click();
-    await tab.getByLabel(sqlite.filterColumn(1), { exact: true }).selectOption('label');
+    const beforeHeaderFilter = await reads();
+    await filterFromHeader(header('label'), true);
+    await expect(tab.getByLabel(sqlite.filterColumn(1), { exact: true })).toHaveValue('label');
     const filter = tab.getByLabel(sqlite.filterValue(1), { exact: true });
+    await expect(filter).toBeFocused();
     await filter.fill('row B');
+    await filterFromHeader(header('id'));
+    await expect(tab.getByLabel(sqlite.filterColumn(2), { exact: true })).toHaveValue('id');
+    await expect(tab.getByLabel(sqlite.filterValue(2), { exact: true })).toBeFocused();
+    await expect(filter).toHaveValue('row B');
+    await tab.getByRole('button', { name: sqlite.removeFilter(2), exact: true }).click();
+    expect(await reads()).toEqual(beforeHeaderFilter);
     await expect(rowLabels(tab)).toHaveCount(2);
     await filter.dispatchEvent('keydown', {
       key: 'r', isComposing: true, ctrlKey: process.platform !== 'darwin', metaKey: process.platform === 'darwin',
@@ -368,6 +386,12 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await expect(page.getByRole('menuitem', { name: sqlite.showRowId, exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await verifyColumnChooser(tab, reads);
+    const beforeViewFilter = await reads();
+    await filterFromHeader(header('label'));
+    await expect(tab.getByLabel(sqlite.filterColumn(1), { exact: true })).toHaveValue('label');
+    await expect(tab.getByLabel(sqlite.filterValue(1), { exact: true })).toBeFocused();
+    expect(await reads()).toEqual(beforeViewFilter);
+    await (await navigationMenuItem(tab, { name: sqlite.conditions, exact: true })).click();
     await (await navigationMenuItem(tab, { name: readHistory.title, exact: true })).click();
     await expect(visibleHistory.locator('pre')).toContainText('"subject_view"');
     await page.locator('[data-workspace-tab-id="subject"] .tab-select').click();
@@ -538,19 +562,30 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
       await applyFilterWithEnter(quick, reads);
       await expect(rowLabels(tab)).toHaveCount(3);
       await expect(tab.getByRole('button', { name: postgres.clearFilter, exact: true })).toBeDisabled();
-      await tab.getByRole('button', { name: postgres.advancedFilter, exact: true }).click();
-    } else {
-      await (await navigationMenuItem(tab, { name: zh.table.text006, exact: true })).click();
     }
     const form = tab.locator('.filter-rule-form'), field = form.getByLabel(zh.table.text009, { exact: true });
     const value = form.getByLabel(zh.table.text011, { exact: true });
+    // PostgreSQL 的已排序列会在字段名后显示优先级和方向。
+    const headerFor = (name: string) => tab.getByRole('columnheader').filter({
+      has: page.locator('.grid-header-detail-name').filter({ hasText: new RegExp('^' + name + '(?:\\s*\\d+\\s*[↑↓])?$') }),
+    });
+    const beforeHeaderFilter = await reads();
     if (dialect === 'postgresql') {
-      await field.selectOption('scope');
+      await filterFromHeader(headerFor('scope'));
+      await expect(field).toHaveValue('scope');
+      await expect(value).toBeFocused();
       await value.fill('B');
       await form.getByRole('button', { name: zh.table.text013, exact: true }).click();
     }
-    await field.selectOption('label');
+    await filterFromHeader(headerFor('label'), true);
+    await expect(field).toHaveValue('label');
+    await expect(value).toBeFocused();
     await value.fill('row C');
+    await filterFromHeader(headerFor('id'));
+    await expect(field).toHaveValue('label');
+    await expect(value).toHaveValue('row C');
+    await expect(tab.getByText(headerMenuText.filterDraftPending, { exact: true })).toBeVisible();
+    expect(await reads()).toEqual(beforeHeaderFilter);
     await expect(rowLabels(tab)).toHaveCount(3);
     if (dialect === 'postgresql') {
       const beforeDraft = await reads();

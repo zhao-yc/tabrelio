@@ -39,6 +39,7 @@ interface HeaderMenuSource {
   selectColumn?(index: number): GridCellAction | undefined;
   columnActions?(column: { key: string; name: string }, current: () => boolean): readonly GridCellAction[];
   findColumn?(key: string): void;
+  filterColumn?(key: string): void;
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
   zoom?: ReturnType<typeof useGridZoom>;
@@ -274,6 +275,9 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     actions.push(...(source.columnActions?.(column, current) ?? []));
     if (source.findColumn) actions.push({ label: text.findColumn, run: () => {
       if (current()) latest.current.findColumn?.(column.key);
+    } });
+    if (source.filterColumn) actions.push({ label: text.filterColumn, run: () => {
+      if (current()) latest.current.filterColumn?.(column.key);
     } });
     return openMenu(target, grid, { title: column.name, label: text.menu, targetRole: 'columnheader', current, actions }, point);
   }

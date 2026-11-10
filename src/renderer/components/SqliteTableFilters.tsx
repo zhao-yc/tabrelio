@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { sqliteTableBrowseLimits, isSqliteTextFilter } from '../../shared/sqliteTableBrowse';
 import type { SqliteFilterDraft } from '../sqliteTableBrowser';
 import { sqliteTableBrowseZh as text } from '../locales/sqliteTableBrowse.zh-CN';
@@ -17,14 +17,22 @@ interface Props {
   onFilters(update: (values: SqliteFilterDraft[]) => SqliteFilterDraft[]): void;
   onMode(mode: 'and' | 'or'): void;
   onApplyInput?(): void;
+  focusId?: string;
+  onFocusHandled?(id: string): void;
 }
 
 /** 筛选只编辑父级表单；停用保留类型、原值和位置，由原“应用”入口校验并读取。 */
 export function SqliteTableFilters(props: Props) {
   const { names, filters, mode, disabled } = props, ticket = {}, live = useRef<object | null>(null);
+  const requestedValue = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => { live.current = ticket; return () => { if (live.current === ticket) live.current = null; }; }, [ticket]);
   /** 已卸载、旧渲染、忙态及目标变化后的控件不能改写后继表单。 */
   function current(): boolean { try { return live.current === ticket && !disabled && props.current(); } catch { return false; } }
+  useEffect(() => {
+    if (!props.focusId) return;
+    if (current()) requestedValue.current?.focus();
+    props.onFocusHandled?.(props.focusId);
+  }, [props.focusId]);
   /** 使用函数式更新合并同一帧内的输入；编辑停用条件不会隐式重新启用。 */
   function update(id: string, patch: Partial<SqliteFilterDraft>): void {
     if (current()) props.onFilters(values => values.map(value => value.id === id ? { ...value, ...patch } : value));
@@ -82,7 +90,7 @@ export function SqliteTableFilters(props: Props) {
         {['in', 'notIn'].includes(filter.operator) ? <div className="sqlite-browse-list"><p className="muted small">{text.listHint}</p>{(filter.values ?? [filter.value]).map((value, position, values) => <div className="sqlite-browse-list-value" key={position}>
           <span>{position + 1}</span><input aria-label={position === 0 ? text.filterValue(index + 1) : text.listValue(index + 1, position + 1)} value={value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => { const next = event.target.value; updateList(filter.id, values => values.map((before, at) => at === position ? next : before)); }}/>
           <button aria-label={text.removeListValue(index + 1, position + 1)} disabled={values.length <= 1} onClick={() => updateList(filter.id, values => values.filter((_, at) => at !== position))}>×</button>
-        </div>)}<button disabled={(filter.values?.length ?? 1) >= sqliteTableBrowseLimits.listValues} onClick={() => updateList(filter.id, values => [...values, ''])}>{text.addListValue(index + 1)}</button></div> : <input aria-label={text.filterValue(index + 1)} placeholder={['between', 'notBetween'].includes(filter.operator) ? text.rangeStart : undefined} value={filter.value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => update(filter.id, { value: event.target.value })}/>}
+        </div>)}<button disabled={(filter.values?.length ?? 1) >= sqliteTableBrowseLimits.listValues} onClick={() => updateList(filter.id, values => [...values, ''])}>{text.addListValue(index + 1)}</button></div> : <input ref={filter.id === props.focusId ? requestedValue : undefined} aria-label={text.filterValue(index + 1)} placeholder={['between', 'notBetween'].includes(filter.operator) ? text.rangeStart : undefined} value={filter.value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => update(filter.id, { value: event.target.value })}/>}
         {['between', 'notBetween'].includes(filter.operator) && <input aria-label={text.filterSecondValue(index + 1)} placeholder={text.rangeEnd} value={filter.secondValue ?? ''} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => update(filter.id, { secondValue: event.target.value })}/>}
       </>}
       <button aria-label={text.removeFilter(index + 1)} onClick={() => { if (current()) props.onFilters(values => values.filter(value => value.id !== filter.id)); }}>×</button>

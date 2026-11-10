@@ -28,6 +28,8 @@ export const gridHeaderMenuZh = {
   copyRowData: '复制行数据',
   copyRowDataWithNames: '复制行数据（含列名）',
   findColumn: '在此列查找',
+  filterColumn: '为此列添加筛选',
+  filterDraftPending: '请先添加或取消正在编辑的条件，当前输入已保留。',
   hideColumn: '隐藏此列',
   showAllColumns: '显示所有列',
   moveLeft: '将此列左移',

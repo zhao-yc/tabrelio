@@ -9,10 +9,15 @@ import { emptyFilterDraft, filterDraftFromRule, filterOperatorLabels, filterRule
 import { ErrorBox, UsageHelp } from './ui';
 import { tableCellFilterZh as cellText } from '../locales/tableCellFilter.zh-CN';
 import { tableFilterEnabledZh as enabledText } from '../locales/tableFilterEnabled.zh-CN';
+import { gridHeaderMenuZh as headerText } from '../locales/gridHeaderMenu.zh-CN';
+
+export interface ColumnFilterRequest { name: string; }
 
 interface Props {
   children?:ReactNode;
   seed?: FilterDraft;
+  columnRequest?: ColumnFilterRequest;
+  onColumnRequestHandled?(request: ColumnFilterRequest): void;
   seedNotice?: string;
   multilineScalar?: boolean;
   columnLabel?(key: string): string;
@@ -25,10 +30,12 @@ interface Props {
 }
 
 /** 编辑区只维护待应用条件；父组件确认草稿处理后，才替换已应用规则并重新读取服务器。 */
-export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, seedNotice, multilineScalar, pause, applyShortcut, applyOnInputEnter, columnLabel }: Props) {
+export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, columnRequest, onColumnRequestHandled, seedNotice, multilineScalar, pause, applyShortcut, applyOnInputEnter, columnLabel }: Props) {
   const [draft, setDraft] = useState(() => seed ? { ...seed } : emptyFilterDraft(columns[0] ?? ''));
   const [draftChanged, setDraftChanged] = useState(!!seed);
   const [editing, setEditing] = useState<number | null>(null); const [error, setError] = useState('');
+  const scalar = useRef<HTMLInputElement>(null);
+  const handledColumn = useRef<typeof columnRequest>(undefined);
   const live = useRef<object | null>(null), ticket = {};
   useLayoutEffect(() => { live.current = ticket; return () => { if (live.current === ticket) live.current = null; }; });
   const enabledCount = filters.filter(filter => filter.enabled !== false).length;
@@ -36,6 +43,20 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
   function current(): boolean { return live.current === ticket && !disabled; }
   /** 每次显式带入独立草稿；不调用父层应用、不改变现有规则或数据页。 */
   useEffect(() => { if (seed) { setDraftChanged(true); setDraft({ ...seed }); setEditing(null); setError(''); } }, [seed]);
+  /** 新标题请求只预选空闲编辑器，避免把正在输入的值套用到另一列。 */
+  useEffect(() => {
+    if (!columnRequest || handledColumn.current === columnRequest) return;
+    handledColumn.current = columnRequest;
+    onColumnRequestHandled?.(columnRequest);
+    if (!current() || !columns.includes(columnRequest.name)) return;
+    if (draftChanged || editing !== null) {
+      setError(headerText.filterDraftPending);
+      return;
+    }
+    setDraft(emptyFilterDraft(columnRequest.name));
+    setError('');
+    scalar.current?.focus();
+  }, [columnRequest]);
   useEffect(() => {
     if ((!columnLabel || editing === null) && !columns.includes(draft.column)) setDraft(current => ({ ...current, column: columns[0] ?? '' }));
   }, [columns, draft.column, columnLabel, editing]);
@@ -95,7 +116,7 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
         {columns.map(column => <option key={column} value={column}>{columnLabel?.(column) ?? column}</option>)}</select><select aria-label={zh.table.filterOperatorLabel} value={draft.operator} disabled={disabled} onChange={event => changeDraft({ operator: event.target.value as FilterRule['operator'] })}>{Object.entries(filterOperatorLabels).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
         {!isSet && !isRange && !isNull && ((multilineScalar || isTableTextFilterOperator(draft.operator)) && /[\r\n]/.test(draft.value)
           ? <textarea rows={2} aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })}/>
-          : <input aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.text012}/>)}
+          : <input ref={scalar} aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.text012}/>)}
         {isRange && <><input aria-label={zh.table.filterRangeStart} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.filterRangeStart}/><input aria-label={zh.table.filterRangeEnd} value={draft.upperValue} disabled={disabled} onChange={event => changeDraft({ upperValue: event.target.value })} placeholder={zh.table.filterRangeEnd}/></>}
         <button type="submit" disabled={disabled || !columns.length}>{editing === null ? zh.table.text013 : zh.table.filterSaveCondition}</button>{editing !== null && <button type="button" disabled={disabled} onClick={cancelEdit}>{zh.table.filterCancelEdit}</button>}
       </div>

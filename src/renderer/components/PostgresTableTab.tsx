@@ -28,6 +28,7 @@ import { PostgresTableExportDialog } from './PostgresTableExportDialog';
 import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
+import type { ColumnFilterRequest } from './TableFilterPanel';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
 import { PostgresRecordTransferDialog } from './PostgresRecordTransferDialog';
@@ -257,6 +258,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const [advancedFilters, setAdvancedFilters] = useState(false);
   const [columnDialog, setColumnDialog] = useState<{ kind: 'values' | 'statistics'; source: PostgresColumnReadSource }>();
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
+  const [columnFilterRequest, setColumnFilterRequest] = useState<ColumnFilterRequest>();
   const [selectedFilter, setSelectedFilter] = useState<{
     scope: object; column: string; rowCount: number; values: readonly (string | null)[]; exclude?: boolean; current(): boolean;
   }>();
@@ -716,6 +718,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   function canFilterCell(): boolean {
     return cellMenuEnabled && !inlineOwner.current && !!lifetime.current && issued.current === page?.exportToken && layoutScope.current.current() &&
       !lease.current && !recordDirty.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+
+  function stageColumnFilter(key: string) {
+    const column = gridLayout.columns.find(item => item.key === key);
+    if (!column || !canFilterCell() || selectedFilter || columnDialog) return;
+    setColumnFilterRequest({ name: column.name });
+    setAdvancedFilters(true);
   }
 
   function cellMenuFilters(cell: QueryResultCopyCell) {
@@ -1793,6 +1802,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
+      columnRequest={columnFilterRequest} onColumnRequestHandled={request => setColumnFilterRequest(current => current === request ? undefined : current)}
       selected={selectedFilter?.scope === cellScope ? selectedFilter : undefined} onCloseSelected={() => setSelectedFilter(undefined)}
       values={columnDialog?.kind === 'values' ? columnDialog.source : undefined} canReadValues={canReadValues}
       onOpenValues={() => openColumnReader('values')} onCloseValues={() => setColumnDialog(undefined)}
@@ -1840,7 +1850,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid zoomable preserveCheckedRowsOnColumnLayout showGridImages={showGridImages} key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
-        rowJump={canFind} rowJumpCurrent={findIsCurrent} onFindColumn={canFind ? key => openFind(false, key) : undefined}
+        rowJump={canFind} rowJumpCurrent={findIsCurrent} onFindColumn={canFind ? key => openFind(false, key) : undefined} onFilterColumn={cellMenuEnabled && !selectedFilter && !columnDialog ? stageColumnFilter : undefined}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}
         insertSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind)

@@ -12,13 +12,14 @@ import type { FilterDraft } from '../tableFilters';
 import type { PostgresColumnReadSource } from '../postgresColumnRead';
 import { PostgresTableValueOptions } from './PostgresTableValueOptions';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
-import { TableFilterPanel } from './TableFilterPanel';
+import { TableFilterPanel, type ColumnFilterRequest } from './TableFilterPanel';
 import { ErrorBox } from './ui';
 
 /** 条件与分组先在本地编辑，只有应用时才替换表页实际查询范围。 */
-export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onSeedAdded, selected, onCloseSelected, replacesQuick, onApply, values, canReadValues, onOpenValues, onCloseValues }: {
+export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onSeedAdded, columnRequest, onColumnRequestHandled, selected, onCloseSelected, replacesQuick, onApply, values, canReadValues, onOpenValues, onCloseValues }: {
   initial?: PostgresAdvancedTableFilter; columns: string[]; disabled: boolean;
   seed?: FilterDraft; onSeedAdded?(): void; replacesQuick?: boolean;
+  columnRequest?: ColumnFilterRequest; onColumnRequestHandled?(request: ColumnFilterRequest): void;
   selected?: { column: string; rowCount: number; values: readonly (string | null)[]; exclude?: boolean; current(): boolean };
   onCloseSelected?(): void;
   onApply(filter?: PostgresAdvancedTableFilter): void;
@@ -83,7 +84,7 @@ export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onS
       if (!disabled && !grouping && !values && !selected && tableApplyShortcut(event)) apply();
     }}>
       <TableFilterPanel columns={columns} filters={rules} mode={mode} disabled={disabled || grouping || !!values} applyShortcut={apply}
-        seed={seed} seedNotice={tableCellFilterZh.postgresStaged} multilineScalar
+        seed={seed} columnRequest={columnRequest} onColumnRequestHandled={onColumnRequestHandled} seedNotice={tableCellFilterZh.postgresStaged} multilineScalar
         onFiltersChange={next => {
           setGroup(tableFilterGroupAfterChange(rules, next, group, mode));
           if (next.length > rules.length && seed) onSeedAdded?.();
