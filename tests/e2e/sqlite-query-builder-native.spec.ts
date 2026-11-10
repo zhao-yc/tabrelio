@@ -109,8 +109,14 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await builder.getByRole('combobox', { name: sort.field(1), exact: true }).selectOption({ label: '统计_1' });
     await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('精确合计');
     await builder.getByRole('combobox', { name: sort.direction(1), exact: true }).selectOption('DESC');
-    const grouped = 'SELECT "label", SUM("value") AS "精确合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
-      maxInteger + ') GROUP BY "label" ORDER BY 2 DESC LIMIT 2;';
+    const having = builder.getByRole('group', { name: summary.having, exact: true });
+    await having.getByRole('button', { name: browse.addFilter, exact: true }).click();
+    await having.getByLabel(browse.filterColumn(1)).selectOption({ label: '精确合计' });
+    await having.getByLabel(browse.filterKind(1)).selectOption('integer');
+    await having.getByLabel(browse.filterValue(1)).fill(maxInteger);
+    await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('最终合计');
+    const grouped = 'SELECT "label", SUM("value") AS "最终合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
+      maxInteger + ') GROUP BY "label" HAVING (typeof(SUM("value")) = \'integer\' AND SUM("value") = ' + maxInteger + ') ORDER BY 2 DESC LIMIT 2;';
     await expect(sql).toHaveText(grouped);
     await button(text.inspectLabels.explain).click();
     await expect(results.getByRole('tree')).toBeVisible();
@@ -119,6 +125,9 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(results.getByRole('gridcell', { name: maxInteger, exact: true })).toBeVisible();
     await sql.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('sqlite-query-summary.png') });
+    await button(aggregate.remove(1)).click();
+    await expect(builder.getByRole('alert')).toContainText(summary.havingStale);
+    await expect(button(text.open)).toBeDisabled();
     await summaryMode.uncheck();
     await expect(sql).toHaveText(expected.replace('LIMIT 3', 'LIMIT 2'));
     expect(await history()).toEqual(originalHistory);

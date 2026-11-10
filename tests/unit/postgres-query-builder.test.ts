@@ -43,13 +43,20 @@ describe('PostgreSQL 单表查询设计', () => {
       filter: { mode: 'all', rules: [{ column: 'id', operator: 'IS NOT NULL' }] },
       summary: { groups: ['值'], aggregates: [{ fn: 'COUNT_DISTINCT', column: 'id', alias: 'id' },
         { fn: 'SUM', column: 'id', alias: '合计"值' }],
-      sort: [{ column: 'id', direction: 'DESC', nulls: 'LAST' }] },
+      sort: [{ column: 'id', direction: 'DESC', nulls: 'LAST' }],
+      having: { mode: 'all', rules: [
+        { column: 'id', operator: '>', value: '2' }, { column: '合计"值', operator: 'IS NOT NULL' },
+        { column: '值', operator: 'IS NULL' },
+      ], group: { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] } } },
     };
     expect(buildPostgresQueryBuilderSql(grouped, source)).toBe(
-      'SELECT "值", pg_catalog.COUNT(DISTINCT "id") AS "id", pg_catalog.SUM("id") AS "合计""值" FROM "项目.数据"."表""1" WHERE "id" IS NOT NULL GROUP BY "值" ORDER BY 2 DESC NULLS LAST LIMIT 4');
+      'SELECT "值", pg_catalog.COUNT(DISTINCT "id") AS "id", pg_catalog.SUM("id") AS "合计""值" FROM "项目.数据"."表""1" WHERE "id" IS NOT NULL GROUP BY "值" HAVING (pg_catalog.COUNT(DISTINCT "id") > E\'2\' AND (pg_catalog.SUM("id") IS NOT NULL OR "值" IS NULL)) ORDER BY 2 DESC NULLS LAST LIMIT 4');
     expect(() => buildPostgresQueryBuilderSql({ ...grouped, columns: ['id'] }, source)).toThrow('汇总或明细');
     expect(() => buildPostgresQueryBuilderSql({ ...grouped, summary: { ...grouped.summary!, groups: ['id'] } }, source)).toThrow('必须唯一');
     expect(() => buildPostgresQueryBuilderSql({ ...grouped, summary: { ...grouped.summary!, sort: [{ column: '已移除', direction: 'ASC' }] } }, source)).toThrow('当前输出');
+    expect(() => buildPostgresQueryBuilderSql({ ...grouped, summary: { ...grouped.summary!, having: { mode: 'all', rules: [
+      { column: '已移除', operator: 'IS NULL', enabled: false },
+    ] } } }, source)).toThrow('汇总输出已移除');
     expect(postgresQueryBuilderInspectSchema.safeParse({ ...grouped, inspect: 'rows', summary: {
       ...grouped.summary, aggregates: [{ fn: 'COUNT_ALL', alias: '统'.repeat(22) }],
     } }).success).toBe(false);

@@ -10,10 +10,12 @@ import { queryBuilderSummaryZh as summaryText } from '../locales/queryBuilderSum
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { tableFilterGroupAfterChange } from '../tableFilterGroups';
+import { filterRuleSummary } from '../tableFilters';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
 import { TableFilterPanel } from './TableFilterPanel';
 import { TableSortPanel } from './TableSortPanel';
-import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft } from './QueryBuilderSummaryPanel';
+import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
+  resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
@@ -33,11 +35,14 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [source, setSource] = useState<PostgresQueryBuilderSource>();
   const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
-  const [sort, setSort] = useState<SortRule[]>([]), [editor, setEditor] = useState<'group' | 'sort'>();
+  const [sort, setSort] = useState<SortRule[]>([]), [editor, setEditor] = useState<'group' | 'sort' | 'having'>();
   const [summaryEnabled, setSummaryEnabled] = useState(false), [summary, setSummary] = useState(emptyQueryBuilderSummary);
+  const [havingRules, setHavingRules] = useState<FilterRule[]>([]), [havingMode, setHavingMode] = useState<FilterMode>('all');
+  const [havingGroup, setHavingGroup] = useState<FilterGroup>();
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
   const mounted = useRef(false), pending = useRef(false);
   const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
+  const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
   const schemas = useMemo(() => [...new Set(catalogue?.map(item => item.schema))], [catalogue]);
   const choices = catalogue?.filter(item => (!schema || item.schema === schema) &&
     (item.key === table || (item.schema + '.' + item.name).toLowerCase().includes(search.toLowerCase())));
@@ -49,11 +54,14 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > postgresQueryBuilderLimits.rowLimit)) throw Error(text.invalidLimit);
       const design = { ...source.target, fingerprint: source.fingerprint, columns: summaryEnabled ? [] : selected,
         distinct: !summaryEnabled && distinct, rowLimit, sort: summaryEnabled ? [] : sort,
-        summary: summaryEnabled ? queryBuilderSummaryFromDraft(summary) : undefined,
+        summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary), having: havingRules.length ? {
+          rules: havingRules.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })),
+          mode: havingMode, group: havingGroup,
+        } : undefined } : undefined,
         filter: rules.length ? { rules, mode, group } : undefined };
       return { design, sql: buildPostgresQueryBuilderSql(design, source) };
     } catch (reason) { return { error: errorMessage(reason) }; }
-  }, [source, selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary]);
+  }, [source, selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary, outputs, havingRules, havingMode, havingGroup]);
 
   function current(): boolean {
     if (!mounted.current || owner.stale) return false;
@@ -107,6 +115,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       setSource(result); setSelected(result.columns.map(column => column.name));
       setRules([]); setMode('all'); setGroup(undefined); setSort([]); setDistinct(false); setLimit('');
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
+      setHavingRules([]); setHavingMode('all'); setHavingGroup(undefined);
     });
   }
 
@@ -174,8 +183,30 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
             onApply={next => { if (!editable()) return false; setMode(next.mode); setGroup(next); setEditor(undefined); return true; }}
             onClose={() => setEditor(undefined)}/>}
         </fieldset>
-        {summaryEnabled ? <QueryBuilderSummaryPanel names={names} draft={summary} disabled={disabled || !!editor}
-          onChange={next => { if (editable()) setSummary(next); }}/> : <>
+        {summaryEnabled ? <>
+          <QueryBuilderSummaryPanel names={names} draft={summary} disabled={disabled || !!editor}
+            onChange={next => { if (editable()) setSummary(next); }}/>
+          <fieldset aria-label={summaryText.having}><legend>{summaryText.having}</legend>
+            <p className="muted small">{summaryText.havingHint}</p>
+            <TableFilterPanel columns={outputs.map(item => item.key)} columnLabel={key => summaryConditionLabel(outputs, key)}
+              filters={havingRules} mode={havingMode} disabled={disabled || !!editor} multilineScalar applyShortcut
+              onFiltersChange={next => {
+                if (!editable()) return false;
+                setHavingGroup(tableFilterGroupAfterChange(havingRules, next, havingGroup, havingMode)); setHavingRules(next); return true;
+              }} onModeChange={next => {
+                if (!editable()) return false;
+                setHavingMode(next); setHavingGroup(previous => previous && { ...previous, mode: next }); return true;
+              }}/>
+            <button disabled={disabled || !!editor || !havingRules.length} onClick={() => { if (editable()) setEditor('having'); }}>{summaryText.havingGroups}</button>
+            {editor === 'having' && <TableFilterGroupsDialog filters={havingRules} mode={havingMode} initial={havingGroup}
+              presentation={{ hint: summaryText.havingHint, stale: summaryText.havingStale, declined: summaryText.havingStale,
+                summary: (_index, rule) => filterRuleSummary({ ...rule, column: summaryConditionLabel(outputs, rule.column) }) }}
+              isCurrent={editable} onApply={next => {
+                if (!editable()) return false;
+                setHavingMode(next.mode); setHavingGroup(next); setEditor(undefined); return true;
+              }} onClose={() => setEditor(undefined)}/>}
+          </fieldset>
+        </> : <>
           <div className="child-reference-tools"><button disabled={disabled || !!editor} onClick={() => { if (editable()) setEditor('sort'); }}>{text.sort}</button>
             <span className="muted small">{text.sorted(sort.length)}</span></div>
           {editor === 'sort' && <TableSortPanel columns={names} initial={sort} hint={text.sortHint} ties={text.sortTies} isCurrent={editable}

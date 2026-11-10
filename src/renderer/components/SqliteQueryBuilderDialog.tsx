@@ -12,7 +12,8 @@ import { zh } from '../locales/zh-CN';
 import { sqliteTableDraft, type SqliteFilterDraft, type SqliteSortDraft } from '../sqliteTableBrowser';
 import { useWorkspace } from '../store';
 import { SqliteTableFilters } from './SqliteTableFilters';
-import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft } from './QueryBuilderSummaryPanel';
+import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft, queryBuilderSummaryOutputs,
+  resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
@@ -29,11 +30,13 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
   const [sort, setSort] = useState<SqliteSortDraft[]>([]), [mode, setMode] = useState<'and' | 'or'>('and');
   const [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [summaryEnabled, setSummaryEnabled] = useState(false), [summary, setSummary] = useState(emptyQueryBuilderSummary);
+  const [havingFilters, setHavingFilters] = useState<SqliteFilterDraft[]>([]), [havingMode, setHavingMode] = useState<'and' | 'or'>('and');
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
   const mounted = useRef(false), operation = useRef<object | undefined>(undefined);
   const target = objects?.find(item => item.name === name);
   const choices = objects?.filter(item => item.name === name || item.name.toLowerCase().includes(search.toLowerCase()));
   const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
+  const outputs = useMemo(() => queryBuilderSummaryOutputs(summary), [summary]);
   const preview = useMemo(() => {
     if (!source) return undefined;
     try {
@@ -42,11 +45,14 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
       if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > sqliteReadSqlLimits.limit)) throw Error(text.invalidLimit);
       const { connectionId, database, table } = source.target;
       const { limit: _limit, ...query } = sqliteTableDraft({ connectionId, database, table }, 1, mode, filters, summaryEnabled ? [] : sort);
+      const having = summaryEnabled && havingFilters.length ? sqliteTableDraft({ connectionId, database, table }, 1, havingMode,
+        havingFilters.map(rule => ({ ...rule, column: resolveSummaryConditionColumn(outputs, rule.column) })), []) : undefined;
       const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: summaryEnabled ? [] : selected,
-        distinct: !summaryEnabled && distinct, rowLimit, summary: summaryEnabled ? queryBuilderSummaryFromDraft(summary) : undefined };
+        distinct: !summaryEnabled && distinct, rowLimit, summary: summaryEnabled ? { ...queryBuilderSummaryFromDraft(summary),
+          having: having && { mode: having.mode, filters: having.filters } } : undefined };
       return { design, sql: buildSqliteQueryBuilderSql(design, source) };
     } catch (reason) { return { error: errorMessage(reason) }; }
-  }, [source, selected, filters, sort, mode, distinct, limit, summaryEnabled, summary]);
+  }, [source, selected, filters, sort, mode, distinct, limit, summaryEnabled, summary, outputs, havingFilters, havingMode]);
 
   function current(): boolean {
     if (!mounted.current || owner.stale) return false;
@@ -89,6 +95,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
       setSelected(result.columns.map(column => column.name));
       setFilters([]); setSort([]); setMode('and'); setDistinct(false); setLimit(''); setSource(result);
       setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
+      setHavingFilters([]); setHavingMode('and');
     });
   }
 
@@ -151,8 +158,12 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
         </fieldset>}
         <SqliteTableFilters names={names} filters={filters} mode={mode} disabled={disabled} current={editable} id={uid}
           enabledHint={text.filterHint} onFilters={setFilters} onMode={setMode}/>
-        {summaryEnabled ? <QueryBuilderSummaryPanel names={names} draft={summary} disabled={disabled}
-          onChange={next => { if (editable()) setSummary(next); }}/> : <fieldset disabled={disabled}><legend>{browse.sorts}</legend>
+        {summaryEnabled ? <>
+          <QueryBuilderSummaryPanel names={names} draft={summary} disabled={disabled} onChange={next => { if (editable()) setSummary(next); }}/>
+          <SqliteTableFilters names={outputs.map(item => item.key)} filters={havingFilters} mode={havingMode} disabled={disabled}
+            current={editable} id={uid} title={summaryText.having} enabledHint={summaryText.havingHint}
+            columnLabel={key => summaryConditionLabel(outputs, key)} onFilters={setHavingFilters} onMode={setHavingMode}/>
+        </> : <fieldset disabled={disabled}><legend>{browse.sorts}</legend>
           {sort.map((item, index) => <div key={item.id} className="filter-inputs">
             <select aria-label={browse.sortColumn(index + 1)} value={item.column} onChange={event => {
               const column = event.target.value;

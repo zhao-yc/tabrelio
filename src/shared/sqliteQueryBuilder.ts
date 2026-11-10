@@ -13,7 +13,10 @@ const designFields = sqliteQueryBuilderTargetSchema.extend({
   schemaKey: z.string().regex(/^[a-f0-9]{64}$/),
   columns: z.array(sqliteTablePageSchema.shape.table).max(sqliteTableBrowseLimits.columns),
   mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters, sort: sqliteTablePageSchema.shape.sort,
-  distinct: z.boolean(), rowLimit: z.number().int().min(1).max(sqliteReadSqlLimits.limit).optional(), summary: queryBuilderSummarySchema.optional(),
+  distinct: z.boolean(), rowLimit: z.number().int().min(1).max(sqliteReadSqlLimits.limit).optional(),
+  summary: queryBuilderSummarySchema.extend({
+    having: z.object({ mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters }).strict().optional(),
+  }).optional(),
 });
 export const sqliteQueryBuilderInspectSchema = designFields.extend({ inspect: z.enum(['rows', 'explain']) });
 export type SqliteQueryBuilderDesign = z.infer<typeof designFields>;

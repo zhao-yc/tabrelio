@@ -10,14 +10,25 @@ interface AggregateDraft { id: string; fn: ForeignKeyJoinAggregateFunction; colu
 export interface QueryBuilderSummaryDraft { groups: string[]; aggregates: AggregateDraft[]; sort: SortRule[] }
 export const emptyQueryBuilderSummary: QueryBuilderSummaryDraft = { groups: [], aggregates: [], sort: [] };
 
-function outputs(draft: QueryBuilderSummaryDraft) {
+export function queryBuilderSummaryOutputs(draft: QueryBuilderSummaryDraft) {
   return [...draft.groups.map(name => ({ key: 'field:' + name, name })),
     ...draft.aggregates.map(item => ({ key: 'aggregate:' + item.id, name: item.alias }))];
 }
 
+/** 输出删除后保留原条件，直到用户明确删除或重新绑定。 */
+export function resolveSummaryConditionColumn(outputs: ReturnType<typeof queryBuilderSummaryOutputs>, key: string) {
+  const output = outputs.find(item => item.key === key);
+  if (!output) throw Error(text.havingStale);
+  return output.name;
+}
+
+export function summaryConditionLabel(outputs: ReturnType<typeof queryBuilderSummaryOutputs>, key: string) {
+  return (outputs.find(item => item.key === key)?.name ?? text.missingOutput) || text.unnamed;
+}
+
 /** 排序草稿用稳定身份。改别名跟随原指标，删除后新同名指标不会接管。 */
 export function queryBuilderSummaryFromDraft(draft: QueryBuilderSummaryDraft): QueryBuilderSummary {
-  const byId = new Map(outputs(draft).map(item => [item.key, item.name]));
+  const byId = new Map(queryBuilderSummaryOutputs(draft).map(item => [item.key, item.name]));
   return { groups: draft.groups,
     aggregates: draft.aggregates.map(({ fn, column, alias }) => fn === 'COUNT_ALL' ? { fn, alias } : { fn, column, alias }),
     sort: draft.sort.map(rule => ({ ...rule, column: byId.get(rule.column) ?? '' })) };
@@ -36,11 +47,11 @@ export function QueryBuilderSummaryPanel({ names, draft, disabled, onChange }: {
 }) {
   const { groups, aggregates, sort } = draft;
   const availableGroup = names.find(name => !groups.includes(name));
-  const availableOutputs = outputs(draft);
+  const availableOutputs = queryBuilderSummaryOutputs(draft);
   const availableSort = availableOutputs.find(item => !sort.some(rule => rule.column === item.key));
   const change = (patch: Partial<QueryBuilderSummaryDraft>) => {
     if (disabled) return;
-    const next = { ...draft, ...patch }, keys = new Set(outputs(next).map(item => item.key));
+    const next = { ...draft, ...patch }, keys = new Set(queryBuilderSummaryOutputs(next).map(item => item.key));
     onChange({ ...next, sort: next.sort.filter(rule => keys.has(rule.column)) });
   };
   const changeAggregate = (index: number, patch: Partial<AggregateDraft>) =>

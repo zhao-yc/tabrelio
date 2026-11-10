@@ -71,8 +71,10 @@ it('SQLite 构建器把来源、类型和投影绑定到可独立执行的 SQL',
   expect(() => buildSqliteQueryBuilderSql({ ...design, columns: ['id'] }, source)).toThrow('已选的输出字段');
   expect(sqliteQueryBuilderInspectSchema.safeParse({ ...design, inspect: 'rows', sql: 'DELETE FROM unrelated' }).success).toBe(false);
   const total = buildSqliteQueryBuilderSql({ ...design, columns: [], sort: [], distinct: false, rowLimit: undefined,
-    summary: { groups: [], aggregates: [{ fn: 'COUNT_ALL', alias: '行数' }, { fn: 'SUM', column: field, alias: '合计' }], sort: [] } }, source);
+    summary: { groups: [], aggregates: [{ fn: 'COUNT_ALL', alias: '行数' }, { fn: 'SUM', column: field, alias: '合计' }], sort: [],
+      having: { mode: 'and', filters: [{ column: '合计', operator: 'eq', value: { kind: 'integer', value: '9223372036854775807' } }] } } }, source);
   expect(total).not.toContain('GROUP BY');
+  expect(total).toContain(' HAVING (typeof(SUM(');
   for (const db of databases) expect(rows(db, total)).toEqual([{ 行数: 1n, 合计: 9223372036854775807n }]);
 });
 it.each([{ selected: [] }, { selected: ['missing'] }, { selected: ['id', 'id'] }])('空／丢失／重复投影$selected整体拒绝', ({ selected }) => { expect(() => buildSqliteFilteredSelect(input(), columns, selected)).toThrow(); });

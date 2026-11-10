@@ -27,7 +27,7 @@ const designFields = postgresQueryBuilderTargetSchema.extend({
   filter: postgresAdvancedTableFilterSchema.optional(),
   sort: sortRulesSchema.refine(rules => new Set(rules.map(rule => rule.column)).size === rules.length, '排序字段不能重复'),
   distinct: z.boolean(),
-  summary: queryBuilderSummarySchema.optional(),
+  summary: queryBuilderSummarySchema.extend({ having: postgresAdvancedTableFilterSchema.optional() }).optional(),
   rowLimit: z.number().int().min(1).max(postgresQueryBuilderLimits.rowLimit).optional(),
 });
 export const postgresQueryBuilderInspectSchema = designFields.extend({ inspect: z.enum(['rows', 'explain']) });
@@ -49,13 +49,17 @@ export function buildPostgresQueryBuilderSql(design: PostgresQueryBuilderDesign,
   if (summary ? columns.length || sort.length || distinct : !columns.length) throw Error('请明确配置汇总或明细输出。');
   if (distinct && sort.some(rule => !selected.has(rule.column))) throw Error('去重查询只能按已选的输出字段排序。');
   for (const rule of filter?.rules ?? []) field(rule.column);
-  const where = postgresTableCondition(filter, field, value => postgresDdlLiteral(value).replaceAll('\r', '\\r').replaceAll('\n', '\\n'));
+  const literal = (value: string) => postgresDdlLiteral(value).replaceAll('\r', '\\r').replaceAll('\n', '\\n');
+  const where = postgresTableCondition(filter, field, literal);
   const grouped = summary && compileQueryBuilderSummary(summary, field, postgresIdentifier, 'pg_catalog.');
+  if (grouped) for (const rule of summary?.having?.rules ?? []) grouped.havingField(rule.column);
+  const having = grouped ? postgresTableCondition(summary?.having, grouped.havingField, literal) : '';
   const order = grouped?.order ?? sort.map(rule => field(rule.column) + ' ' + rule.direction + (rule.nulls ? ' NULLS ' + rule.nulls : ''));
   const { schema, name } = parsePostgresCatalogName(table)!;
   const sql = (distinct ? 'SELECT DISTINCT ' : 'SELECT ') + (grouped?.projection ?? columns.map(field).join(', ')) +
     ' FROM ' + postgresIdentifier(schema) + '.' + postgresIdentifier(name) +
-    (where ? ' WHERE ' + where : '') + (grouped?.groupBy ?? '') + (order.length ? ' ORDER BY ' + order.join(', ') : '') +
+    (where ? ' WHERE ' + where : '') + (grouped?.groupBy ?? '') + (having ? ' HAVING ' + having : '') +
+    (order.length ? ' ORDER BY ' + order.join(', ') : '') +
     (rowLimit === undefined ? '' : ' LIMIT ' + rowLimit);
   if (sql.length > postgresQueryBuilderLimits.sqlUnits) throw Error('PostgreSQL 查询草稿超过文本预算，请减少字段或条件。');
   return sql;

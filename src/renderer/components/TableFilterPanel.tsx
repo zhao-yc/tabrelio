@@ -15,6 +15,7 @@ interface Props {
   seed?: FilterDraft;
   seedNotice?: string;
   multilineScalar?: boolean;
+  columnLabel?(key: string): string;
   applyShortcut?: true | ((rules: FilterRule[]) => boolean);
   pause?: { active: boolean; available: boolean; onToggle(): boolean };
   columns: string[]; filters: FilterRule[]; mode: FilterMode; disabled: boolean;
@@ -23,7 +24,7 @@ interface Props {
 }
 
 /** 编辑区只维护待应用条件；父组件确认草稿处理后，才替换已应用规则并重新读取服务器。 */
-export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, seedNotice, multilineScalar, pause, applyShortcut }: Props) {
+export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, seedNotice, multilineScalar, pause, applyShortcut, columnLabel }: Props) {
   const [draft, setDraft] = useState(() => seed ? { ...seed } : emptyFilterDraft(columns[0] ?? ''));
   const [draftChanged, setDraftChanged] = useState(!!seed);
   const [editing, setEditing] = useState<number | null>(null); const [error, setError] = useState('');
@@ -34,7 +35,10 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
   function current(): boolean { return live.current === ticket && !disabled; }
   /** 每次显式带入独立草稿；不调用父层应用、不改变现有规则或数据页。 */
   useEffect(() => { if (seed) { setDraftChanged(true); setDraft({ ...seed }); setEditing(null); setError(''); } }, [seed]);
-  useEffect(() => { if (!columns.includes(draft.column)) setDraft(current => ({ ...current, column: columns[0] ?? '' })); }, [columns, draft.column]);
+  useEffect(() => {
+    if ((!columnLabel || editing === null) && !columns.includes(draft.column)) setDraft(current => ({ ...current, column: columns[0] ?? '' }));
+  }, [columns, draft.column, columnLabel, editing]);
+  const summarize = (rule: FilterRule) => filterRuleSummary(columnLabel ? { ...rule, column: columnLabel(rule.column) } : rule);
   const isSet = draft.operator === 'IN' || draft.operator === 'NOT IN';
   const isRange = isTableRangeOperator(draft.operator); const isNull = draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL';
 
@@ -80,7 +84,9 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
       } else if (draftChanged || editing !== null) applyCondition(applyShortcut);
       else applyShortcut(filters);
     } : undefined} onSubmit={event => { event.preventDefault(); applyCondition(); }}>
-      <div className="filter-inputs"><select aria-label={zh.table.text009} value={draft.column} disabled={disabled} onChange={event => changeDraft({ column: event.target.value })}>{columns.map(column => <option key={column}>{column}</option>)}</select><select aria-label={zh.table.filterOperatorLabel} value={draft.operator} disabled={disabled} onChange={event => changeDraft({ operator: event.target.value as FilterRule['operator'] })}>{Object.entries(filterOperatorLabels).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
+      <div className="filter-inputs"><select aria-label={zh.table.text009} value={draft.column} disabled={disabled} onChange={event => changeDraft({ column: event.target.value })}>{columnLabel && editing !== null && !columns.includes(draft.column) &&
+          <option value={draft.column} disabled>{columnLabel(draft.column)}</option>}
+        {columns.map(column => <option key={column} value={column}>{columnLabel?.(column) ?? column}</option>)}</select><select aria-label={zh.table.filterOperatorLabel} value={draft.operator} disabled={disabled} onChange={event => changeDraft({ operator: event.target.value as FilterRule['operator'] })}>{Object.entries(filterOperatorLabels).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
         {!isSet && !isRange && !isNull && ((multilineScalar || isTableTextFilterOperator(draft.operator)) && /[\r\n]/.test(draft.value)
           ? <textarea rows={2} aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })}/>
           : <input aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.text012}/>)}
@@ -91,6 +97,6 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
       <UsageHelp><p>{isNull ? zh.table.filterNullHint : isRange ? (draft.operator === 'NOT BETWEEN' ? zh.table.filterOutsideRangeHint : zh.table.filterRangeHint) : isSet ? draft.valuesJson ? zh.table.filterSetJson : zh.table.filterSetHint : zh.table.filterScalarHint}</p></UsageHelp>
     </form>
     <ErrorBox message={error}/>
-    {filters.length > 0 && <div className="filter-chips editable-filter-chips">{filters.map((filter, index) => <div className={`filter-chip ${editing === index ? 'editing' : ''} ${filter.enabled === false ? 'condition-disabled' : ''}`} key={index}><label className="filter-chip-enabled" title={enabledText.hint}><input type="checkbox" aria-label={enabledText.enabled(index + 1)} checked={filter.enabled !== false} disabled={disabled} onChange={event => changeEnabled(index, event.target.checked)}/><span>{filter.enabled === false ? enabledText.disabledLabel : enabledText.enabledLabel}</span></label><button type="button" className="filter-chip-edit" aria-label={formatText(zh.table.filterEditCondition, index + 1)} title={filterRuleSummary(filter)} disabled={disabled} onClick={() => editCondition(index)}><Pencil size={10}/><span>{filterRuleSummary(filter)}</span></button><button type="button" className="filter-chip-remove" aria-label={formatText(zh.table.filterRemoveCondition, index + 1)} disabled={disabled} onClick={() => removeCondition(index)}><X size={11}/></button></div>)}</div>}
+    {filters.length > 0 && <div className="filter-chips editable-filter-chips">{filters.map((filter, index) => <div className={`filter-chip ${editing === index ? 'editing' : ''} ${filter.enabled === false ? 'condition-disabled' : ''}`} key={index}><label className="filter-chip-enabled" title={enabledText.hint}><input type="checkbox" aria-label={enabledText.enabled(index + 1)} checked={filter.enabled !== false} disabled={disabled} onChange={event => changeEnabled(index, event.target.checked)}/><span>{filter.enabled === false ? enabledText.disabledLabel : enabledText.enabledLabel}</span></label><button type="button" className="filter-chip-edit" aria-label={formatText(zh.table.filterEditCondition, index + 1)} title={summarize(filter)} disabled={disabled} onClick={() => editCondition(index)}><Pencil size={10}/><span>{summarize(filter)}</span></button><button type="button" className="filter-chip-remove" aria-label={formatText(zh.table.filterRemoveCondition, index + 1)} disabled={disabled} onClick={() => removeCondition(index)}><X size={11}/></button></div>)}</div>}
   </div>;
 }

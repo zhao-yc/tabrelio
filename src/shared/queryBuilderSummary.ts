@@ -19,29 +19,36 @@ export type QueryBuilderSummary = z.infer<typeof queryBuilderSummarySchema>;
 export function compileQueryBuilderSummary(summary: QueryBuilderSummary, field: (name: string) => string,
   quote: (name: string) => string, functionPrefix = '') {
   const { groups, aggregates, sort } = summary;
-  const outputs = new Map<string, number>(), folded = new Set<string>();
-  function addOutput(name: string) {
+  const outputs = new Map<string, { position: number; expression: string }>(), folded = new Set<string>();
+  function addOutput(name: string, expression: string) {
     const key = name.toLowerCase();
     if (folded.has(key)) throw Error('分组字段和聚合别名必须唯一。');
     folded.add(key);
-    outputs.set(name, outputs.size + 1);
+    outputs.set(name, { position: outputs.size + 1, expression });
   }
-  const grouping = groups.map(name => { addOutput(name); return field(name); });
+  const grouping = groups.map(name => { const expression = field(name); addOutput(name, expression); return expression; });
   const expressions = aggregates.map(item => {
-    addOutput(item.alias);
     const fn = item.fn === 'COUNT_ALL' || item.fn === 'COUNT_DISTINCT' ? 'COUNT' : item.fn;
     const operand = item.fn === 'COUNT_ALL' ? '*' : (item.fn === 'COUNT_DISTINCT' ? 'DISTINCT ' : '') + field(item.column);
-    return functionPrefix + fn + '(' + operand + ') AS ' + quote(item.alias);
+    const expression = functionPrefix + fn + '(' + operand + ')';
+    addOutput(item.alias, expression);
+    return expression + ' AS ' + quote(item.alias);
   });
   if (!outputs.size) throw Error('请添加分组字段或聚合项。');
   const used = new Set<string>();
   const order = sort.map(rule => {
-    const position = outputs.get(rule.column);
-    if (!position || used.has(rule.column)) throw Error('汇总排序必须引用不重复的当前输出。');
+    const output = outputs.get(rule.column);
+    if (!output || used.has(rule.column)) throw Error('汇总排序必须引用不重复的当前输出。');
     used.add(rule.column);
     // 位置由当前输出推导，避免别名与未投影的来源列同名时产生歧义。
-    return position + ' ' + rule.direction + (rule.nulls ? ' NULLS ' + rule.nulls : '');
+    return output.position + ' ' + rule.direction + (rule.nulls ? ' NULLS ' + rule.nulls : '');
   });
+  // HAVING 使用原表达式，避免 PostgreSQL 拒绝输出别名或 SQLite 优先匹配同名原列。
+  function havingField(name: string) {
+    const output = outputs.get(name);
+    if (!output) throw Error('HAVING 条件引用的汇总输出已移除，请重选或删除该条件。');
+    return output.expression;
+  }
   return { projection: [...grouping, ...expressions].join(', '),
-    groupBy: grouping.length ? ' GROUP BY ' + grouping.join(', ') : '', order };
+    groupBy: grouping.length ? ' GROUP BY ' + grouping.join(', ') : '', order, havingField };
 }

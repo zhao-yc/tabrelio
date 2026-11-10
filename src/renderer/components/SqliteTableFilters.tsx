@@ -9,6 +9,8 @@ interface Props {
   mode: 'and' | 'or';
   disabled: boolean;
   enabledHint?: string;
+  title?: string;
+  columnLabel?(key: string): string;
   current(): boolean;
   id(): string;
   onFilters(update: (values: SqliteFilterDraft[]) => SqliteFilterDraft[]): void;
@@ -49,8 +51,10 @@ export function SqliteTableFilters(props: Props) {
     props.onFilters(values => values.length >= sqliteTableBrowseLimits.filters ? values : [...values, { id: props.id(), column: names[0], operator: 'eq', kind: 'text', value: '' }]);
   }
   const enabled = filters.filter(filter => filter.enabled !== false).length;
-  return <fieldset aria-label={text.filters} disabled={disabled}>
-    <legend>{text.filters}</legend>
+  const title = props.title ?? text.filters;
+  const label = props.columnLabel ?? ((name: string) => name);
+  return <fieldset aria-label={title} disabled={disabled}>
+    <legend>{title}</legend>
     <select aria-label={text.mode} value={mode} onChange={event => { if (current()) props.onMode(event.target.value as 'and' | 'or'); }}><option value="and">AND</option><option value="or">OR</option></select>
     <button disabled={!names.length || filters.length >= sqliteTableBrowseLimits.filters} onClick={add}>{text.addFilter}</button>
     <button disabled={enabled === filters.length} onClick={() => toggleAll(true)}>{text.enableFilters}</button>
@@ -61,7 +65,9 @@ export function SqliteTableFilters(props: Props) {
     {!!filters.length && !enabled && <p className="muted small">{text.noEnabledFilters}</p>}
     {filters.map((filter, index) => <div className="sqlite-browse-rule" key={filter.id}>
       <label><input type="checkbox" aria-label={text.filterEnabled(index + 1)} checked={filter.enabled !== false} onChange={event => update(filter.id, { enabled: event.target.checked })}/>{filter.enabled === false ? text.filterDisabledState : text.filterEnabledState}</label>
-      <select aria-label={text.filterColumn(index + 1)} value={filter.column} onChange={event => update(filter.id, { column: event.target.value })}>{names.map(name => <option key={name} value={name}>{name}</option>)}</select>
+      <select aria-label={text.filterColumn(index + 1)} value={filter.column} onChange={event => update(filter.id, { column: event.target.value })}>
+        {props.columnLabel && !names.includes(filter.column) && <option value={filter.column} disabled>{label(filter.column)}</option>}
+        {names.map(name => <option key={name} value={name}>{label(name)}</option>)}</select>
       <select aria-label={text.filterOperator(index + 1)} value={filter.operator} onChange={event => { const operator = event.target.value as SqliteFilterDraft['operator']; update(filter.id, { operator, ...(['in', 'notIn'].includes(operator) && !filter.values ? { values: [filter.value] } : {}), ...(['oneOf', 'notOneOf'].includes(operator) && !filter.selectedValues ? { selectedValues: [{ kind: filter.kind, value: filter.value }] } : {}), ...(isSqliteTextFilter(operator) ? { kind: 'text' as const } : {}) }); }}>{Object.entries(text.operators).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
       {['oneOf', 'notOneOf'].includes(filter.operator) && <div className="sqlite-browse-list"><p className="muted small">{text.selectedHint}</p>{(filter.selectedValues ?? []).map((value, position, values) => <div className="sqlite-browse-list-value" key={position}>
         <select aria-label={text.selectedKind(index + 1, position + 1)} value={value.kind} onChange={event => { const kind = event.target.value as typeof value.kind; updateSelected(filter.id, values => values.map((value, at) => at !== position ? value : kind === 'null' ? { kind } : { kind, value: value.kind === 'null' ? '' : value.value })); }}>{Object.entries({ ...text.kinds, null: 'NULL' }).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select>
