@@ -27,4 +27,6 @@ export const gridHeaderMenuZh = {
   findColumn: '在此列查找',
   hideColumn: '隐藏此列',
   showAllColumns: '显示所有列',
+  moveLeft: '将此列左移',
+  moveRight: '将此列右移',
 };

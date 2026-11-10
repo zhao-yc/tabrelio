@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import type { SortColumn } from 'react-data-grid';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { gridHeaderMenuZh as text } from '../locales/gridHeaderMenu.zh-CN';
@@ -44,6 +44,7 @@ interface HeaderMenuSource {
   rowActions?(rowIndex: number, current: () => boolean): readonly GridCellAction[];
   visibility?: GridHeaderVisibility;
   columnVisibility?: GridHeaderColumnVisibility;
+  reorderColumns?(source: string, target: string): void;
   ownDialog?(): Element | undefined;
   freeze?: GridHeaderFreeze;
   frozenThrough?: string;
@@ -96,13 +97,14 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   latest.current = source;
   const [sizeRequest, setSizeRequest] = useState<SizeRequest>();
   const pendingSize = useRef<{ request: SizeRequest; size: number }>(undefined);
-  const hiddenFocus = useRef<{ grid: HTMLElement; index: number; key: string }>(undefined);
-  // 键盘隐藏原标题后，将焦点交给同一网格中的下一列；末列使用上一列。
+  const columnFocus = useRef<{ grid: HTMLElement; index: number; key: string; moved?: boolean }>(undefined);
+  const dragged = useRef<ReturnType<typeof captureColumn>>(undefined);
+  // 键盘重排跟随原列，隐藏原标题则聚焦同一网格的邻列。
   useEffect(() => {
-    const pending = hiddenFocus.current;
+    const pending = columnFocus.current;
     if (!pending) return;
-    hiddenFocus.current = undefined;
-    if (source.grid() !== pending.grid || !source.current() || source.column(pending.index)?.key === pending.key) return;
+    columnFocus.current = undefined;
+    if (source.grid() !== pending.grid || !source.current() || (source.column(pending.index)?.key === pending.key) !== !!pending.moved) return;
     const index = source.column(pending.index) ? pending.index : pending.index - 1;
     if (source.column(index)) pending.grid.querySelector<HTMLElement>(`[role="columnheader"][aria-colindex="${index + 1}"]`)?.focus({ preventScroll: true });
   });
@@ -201,13 +203,24 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       actions.push({ label: text.hideColumn, disabled: !visibilityControl.canHide, run: () => {
         const now = latest.current.columnVisibility;
         if (!current() || !now?.current() || !now.canHide) return;
-        hiddenFocus.current = { grid, index, key: column.key };
+        columnFocus.current = { grid, index, key: column.key };
         now.apply(column.key);
       } });
       if (visibilityControl.hasHidden) actions.push({ label: text.showAllColumns, run: () => {
         const now = latest.current.columnVisibility;
         if (current() && now?.current() && now.hasHidden) now.apply();
       } });
+    }
+    if (source.reorderColumns) {
+      for (const [offset, label] of [[-1, text.moveLeft], [1, text.moveRight]] as const) {
+        const destination = index + offset, neighbour = source.column(destination);
+        actions.push({ label, disabled: !neighbour, run: () => {
+          const now = latest.current;
+          if (!neighbour || !current() || !now.reorderColumns || now.column(destination)?.key !== neighbour.key) return;
+          columnFocus.current = { grid, index: destination, key: column.key, moved: true };
+          now.reorderColumns(column.key, neighbour.key);
+        } });
+      }
     }
     if (source.resizeColumn) actions.push({ label: text.setWidth, run: () => {
       if (!current() || !gridDialogCurrent(cell, source.ownDialog)) return;
@@ -266,6 +279,16 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
   }
 
   return {
+    /** RDG 的落点回调必须对应同一列标题和来源的实际拖动。 */
+    reorderColumns(from: string, to: string) {
+      const capture = dragged.current;
+      dragged.current = undefined;
+      if (capture?.column.key === from && from !== to && capture.current()) latest.current.reorderColumns?.(from, to);
+    },
+    onDragStartCapture(event: DragEvent) {
+      dragged.current = source.reorderColumns ? captureColumn(event.target, '[role="columnheader"]') : undefined;
+    },
+    onDragEndCapture() { dragged.current = undefined; },
     sizeDialog: sizeRequest && <GridSizeDialog request={sizeRequest} onClose={() => setSizeRequest(undefined)} onApply={size => {
       pendingSize.current = { request: sizeRequest, size };
       setSizeRequest(undefined);

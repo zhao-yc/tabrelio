@@ -168,6 +168,14 @@ test('离线快照列标题查找按原列键定位重名列，重排后仍只�
   await expect.poll(async () => (await headers.nth(0).boundingBox())?.width).toBe(281);
   expect(await firstDataHeader.getAttribute('aria-colindex')).toBe('2');
   await expect(grid.getByRole('row').nth(1).getByRole('gridcell').nth(1)).toHaveText('目标记录');
+  await headers.nth(0).dragTo(headers.nth(1));
+  await expect(grid.getByRole('row').nth(1).getByRole('gridcell').nth(1)).toHaveText('左侧内容');
+  await expect.poll(async () => (await headers.nth(1).boundingBox())?.width).toBe(281);
+  await headers.nth(1).press('Shift+F10');
+  await viewer.screenshot({ path: info.outputPath('离线标题重排.png') });
+  await viewer.getByRole('menuitem', { name: headerText.moveLeft, exact: true }).press('Enter');
+  await expect(grid.getByRole('row').nth(1).getByRole('gridcell').nth(1)).toHaveText('目标记录');
+  await expect(headers.nth(0)).toBeFocused();
   expect(readFileSync(path, 'utf8')).toBe(bytes);
   expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);

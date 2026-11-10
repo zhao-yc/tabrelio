@@ -293,6 +293,17 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await columnMenu.getByRole('menuitem', { name: headerText.showAllColumns, exact: true }).click();
     await expect(header).toBeVisible();
     await expect.poll(() => widthOf(header)).toBe(239);
+    await header.dragTo(labelHeader);
+    await expect(header).toHaveAttribute('aria-colindex', String(amountIndex + 1));
+    await expect(labelHeader).toHaveAttribute('aria-colindex', String(amountIndex));
+    await expect.poll(() => widthOf(header)).toBe(239);
+    await header.press('Shift+F10');
+    const left = columnMenu.getByRole('menuitem', { name: headerText.moveLeft, exact: true });
+    await expect(left).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('标题拖动重排列.png') });
+    await left.press('Enter');
+    await expect(header).toHaveAttribute('aria-colindex', String(amountIndex));
+    await expect(header).toBeFocused();
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -420,6 +431,11 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await columnMenu.getByRole('menuitem', { name: headerText.desc, exact: true }).click();
     const firstAmount = () => grid.getByRole('row').nth(1).getByText('9007199254740994', { exact: true });
     await expect(firstAmount()).toBeVisible();
+    await names[1].dragTo(thirdHeader);
+    await expect(grid.getByRole('row').nth(1).getByRole('gridcell').nth(1)).toHaveText('row B');
+    await expect(firstAmount()).toBeVisible();
+    await names[0].dragTo(names[1]);
+    await expect(grid.getByRole('row').nth(1).getByRole('gridcell').nth(1)).toHaveText('9007199254740994');
     await names[1].click({ button: 'right' });
     await hideHeader.click();
     await expect(grid.getByRole('columnheader').filter({ hasText: /^duplicate/i })).toHaveCount(1);

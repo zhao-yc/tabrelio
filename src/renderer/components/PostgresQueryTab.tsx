@@ -55,7 +55,7 @@ import { postgresRecordTransferZh as transferText } from '../locales/postgresRec
 import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
-import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, setQueryResultHeaderColumnVisibility, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
+import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, setQueryResultHeaderColumnVisibility, reorderQueryResultColumn, setQueryResultRowHeight, type QueryResultColumnLayout } from '../queryResultColumns';
 import { captureQueryResultMemory, queryResultMemoryMatches } from '../queryResultMemory';
 import { queryResultPresetsZh as presetsText } from '../locales/queryResultPresets.zh-CN';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
@@ -1786,15 +1786,22 @@ export function PostgresQueryTab({
   const columnVisibility = {
     current: () => !!filterView && !!sortView && resultCurrent(),
     canHide: (visibleColumns?.length ?? 0) > 1, hasHidden: !!visibleColumns && visibleColumns.length < (resultSource?.columns.length ?? 0),
-    apply(key?: string) {
-      if (!resultSource || !columnVisibility.current()) return;
-      try {
-        const keys = queryResultColumnKeys(resultSource.columns);
-        publishResultColumns(setQueryResultHeaderColumnVisibility(layout ?? { order: keys, visible: keys }, key));
-        resultSelection.invalidate(); setError('');
-      } catch (reason) { setError(errorMessage(reason)); }
-    },
+    apply: (key?: string) => changeHeaderColumnLayout(layout => setQueryResultHeaderColumnVisibility(layout, key)),
   };
+  /** 显隐和拖动通过同一布局接纳门，保留原结果及有效整理规则。 */
+  function changeHeaderColumnLayout(update: (layout: QueryResultColumnLayout) => QueryResultColumnLayout): void {
+    if (!resultSource || !columnVisibility.current()) return;
+    try {
+      const keys = queryResultColumnKeys(resultSource.columns);
+      const base = layout ?? { order: keys, visible: keys }, next = update(base);
+      if (next === base) return;
+      publishResultColumns(next);
+      resultSelection.invalidate(); setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  function reorderResultColumns(from: string, to: string): void {
+    changeHeaderColumnLayout(layout => reorderQueryResultColumn(layout, from, to));
+  }
 
   /** 仅接收当前网格送出的行位置；校验失败后旧勾选失效。 */
   function acceptResultSelection(selection: ResultGridSelection) {
@@ -2138,7 +2145,7 @@ export function PostgresQueryTab({
         if (resultCurrent() && !document.querySelector(appModalSelector))
           openRowSqlDraft({ connectionId: tab.connectionId, database: scope.database, table: rowSql.table }, kind, sql);
       } : undefined}
-      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnVisibility={columnVisibility} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onRowHeightChange={resizeResultRowHeight} onColumnWidthsChange={resizeResultColumns}
+      frozenKeys={frozenKeys} freezeColumns={headerFreeze} columnVisibility={columnVisibility} onColumnReorder={reorderResultColumns} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onRowHeightChange={resizeResultRowHeight} onColumnWidthsChange={resizeResultColumns}
       isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
       onShowRows={binding ? changeMatchView : undefined}
       onExportRange={binding ? result => {

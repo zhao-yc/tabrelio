@@ -71,6 +71,15 @@ export function moveQueryResultColumn(layout: QueryResultColumnLayout, key: stri
   const frozenThrough = frozen && 'value' in frozen && frozen.enumerable && typeof frozen.value === 'string' && order.filter(value => value === frozen.value).length === 1 && layout.visible.includes(frozen.value) ? frozen.value : undefined;
   return {order,visible:layout.visible,...(frozenThrough === undefined ? {} : {frozenThrough}),...(layout.widths ? {widths:layout.widths} : {}),...(layout.rowHeight === undefined ? {} : {rowHeight:layout.rowHeight})};
 }
+/** 拖动按两个可见原列键定位，隐藏列之间的相对顺序保持。 */
+export function reorderQueryResultColumn(layout: QueryResultColumnLayout, source: string, target: string): QueryResultColumnLayout {
+  if (source === target || !layout.visible.includes(source) || !layout.visible.includes(target)) return layout;
+  const from = layout.order.indexOf(source), to = layout.order.indexOf(target);
+  if (from < 0 || to < 0) return layout;
+  const order = [...layout.order];
+  order.splice(to, 0, order.splice(from, 1)[0]);
+  return { ...layout, order };
+}
 /** 在打开导出或接纳行选择时才投影；逐行计量，超预算即停，绝不复制隐藏单元格。 */
 export function projectQueryResultRows(result: Pick<QueryResult, 'columns' | 'rows' | 'truncated'>, columns: ResultColumn[], indices?: readonly number[]): ResultExportData {
   queryResultColumnKeys(result.columns);

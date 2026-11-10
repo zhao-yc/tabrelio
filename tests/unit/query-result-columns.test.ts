@@ -1,11 +1,18 @@
 import { describe,expect,it,vi } from 'vitest';
 import type { QueryResult } from '../../src/shared/contracts';
-import { queryResultVisibleColumns, moveQueryResultColumn, projectQueryResultRows, setQueryResultHeaderColumnVisibility, snapshotQueryResultColumns } from '../../src/renderer/queryResultColumns';
+import { queryResultVisibleColumns, moveQueryResultColumn, projectQueryResultRows, reorderQueryResultColumn, setQueryResultHeaderColumnVisibility, snapshotQueryResultColumns } from '../../src/renderer/queryResultColumns';
 import { ResultExportSelection, resultExportData } from '../../src/renderer/resultExport';
 import { validateResultExportData } from '../../src/shared/resultExport';
 /** 原型同名key、重复别名、精确原值都来自只读RAM夹具。 */
 function source():QueryResult{return {columns:[{key:'__proto__',name:'重复',type:'BIGINT'},{key:'b',name:'重复',type:'BLOB'},{key:'n',name:'',type:'DECIMAL'},{key:'secret',name:'隐藏',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","b":{"type":"binary","base64":"AP8="},"n":"0.12345678901234567890","secret":"不应出现"}'),JSON.parse('{"__proto__":"","b":{"type":"binary","base64":""},"n":null,"secret":"不应出现"}')],truncated:true,elapsedMs:1,statement:'私有SQL'};}
 describe('SQL结果可见列与有界投影',()=>{
+ it('拖动按可见原列键移动重名列，保留宽度和冻结边界，隐藏列不能充当落点', () => {
+   const initial = { order: ['b', 'secret', '__proto__', 'n'], visible: ['b', '__proto__', 'n'], frozenThrough: 'b', widths: new Map([['b', 239]]) };
+   expect(reorderQueryResultColumn(initial, 'b', 'secret')).toBe(initial);
+   const next = reorderQueryResultColumn(initial, 'b', '__proto__');
+   expect(next).toEqual({ ...initial, order: ['secret', '__proto__', 'b', 'n'] });
+   expect(queryResultVisibleColumns(source().columns, next).map(column => column.key)).toEqual(['__proto__', 'b', 'n']);
+ });
  it('标题显隐按唯一键处理重名列，隐藏冻结边界后恢复全部仍保留原序和宽度', () => {
    const result = source();
    const initial = { order: ['b', '__proto__', 'n', 'secret'], visible: ['b', '__proto__'], frozenThrough: 'b', widths: new Map([['b', 239]]) };
