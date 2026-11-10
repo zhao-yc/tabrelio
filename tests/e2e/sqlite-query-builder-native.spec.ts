@@ -297,6 +297,42 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(sql).toHaveText('SELECT "id", "note" FROM "main"."JOIN起点";');
     await button(zh.common.cancel).click();
 
+    setup('CREATE TABLE fk_parent (id, region, PRIMARY KEY (region,id));' +
+      'CREATE TABLE fk_child (ref_region, ref_id, FOREIGN KEY (ref_region,ref_id) REFERENCES FK_PARENT);' +
+      'INSERT INTO fk_parent VALUES (7,2),(7,4); INSERT INTO fk_child VALUES (2,7),(4,NULL);');
+    await selectSource('fk_parent');
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    const nextTable = joinPanel.getByLabel(text.joinTarget, { exact: true });
+    const chooseKey = joinPanel.getByLabel(text.joinKeys, { exact: true });
+    await nextTable.selectOption('fk_child');
+    await button(text.joinReadKeys).click();
+    await expect(chooseKey.locator('option:checked')).toContainText('t1 · 被目标引用 · #0 · region = ref_region，id = ref_id');
+    await chooseKey.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('sqlite-builder-join-keys.png') });
+    await button(text.joinAddKey).click();
+    const mapped = ' FROM "main"."fk_parent" AS t1 INNER JOIN "main"."fk_child" AS t2 ON (t1."region" = t2."ref_region" AND t1."id" = t2."ref_id")';
+    await expect(sql).toContainText(mapped);
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
+    await nextTable.selectOption('fk_parent');
+    await expect(chooseKey).toHaveCount(0);
+    await button(text.joinReadKeys).click();
+    await expect(chooseKey.locator('option:checked')).toContainText('t2 · 引用目标 · #0 · ref_region = region，ref_id = id');
+    await button(text.joinAddKey).click();
+    await expect(sql).toContainText(mapped + ' INNER JOIN "main"."fk_parent" AS t3 ON (t2."ref_region" = t3."region" AND t2."ref_id" = t3."id")');
+    await button(zh.common.cancel).click();
+
+    await selectSource('fk_child');
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    await nextTable.selectOption('fk_parent');
+    await button(text.joinReadKeys).click();
+    await expect(chooseKey.locator('option:checked')).toContainText('t1 · 引用目标');
+    setup('ALTER TABLE fk_parent ADD COLUMN changed TEXT;');
+    await button(text.joinAddKey).click();
+    await expect(builder.locator('.modal-content > [role=alert]')).toContainText('外键或字段映射已变化');
+    await expect(sql).toHaveText('SELECT "ref_region", "ref_id" FROM "main"."fk_child";');
+    await button(zh.common.cancel).click();
+
     await selectSource(table);
     const beforeChange = await settings();
     await button(viewDraft.builderEntry).click();

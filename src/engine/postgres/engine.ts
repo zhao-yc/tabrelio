@@ -36,8 +36,8 @@ import { PostgresConnection } from './connection';
 import { readRelation, PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
 import { parsePostgresColumnStatements, PostgresCreateTableWorkspace, postgresCreateSchemas, validatePostgresDefaultPresets } from './createTable';
 import { inspectPostgresViewQuery } from './viewQueryInspect';
-import { describePostgresQueryBuilder, describePostgresQueryBuilderJoin, inspectPostgresQueryBuilder, postgresQueryBuilderCatalogue } from './queryBuilder';
-import { postgresQueryBuilderCatalogueSchema, postgresQueryBuilderDescribeJoinSchema, postgresQueryBuilderInspectSchema, postgresQueryBuilderTargetSchema } from '../../shared/postgresQueryBuilder';
+import { describePostgresQueryBuilder, describePostgresQueryBuilderJoin, inspectPostgresQueryBuilder, postgresQueryBuilderCatalogue, readPostgresQueryBuilderJoinKeys } from './queryBuilder';
+import { postgresQueryBuilderCatalogueSchema, postgresQueryBuilderDescribeJoinSchema, postgresQueryBuilderInspectSchema, postgresQueryBuilderJoinKeysSchema, postgresQueryBuilderTargetSchema } from '../../shared/postgresQueryBuilder';
 import { postgresSchemaCatalog } from './schemaManage';
 import { readPostgresStorage, readPostgresStorageDetail } from './storage';
 import { postgresStorageDetailSchema, postgresStorageReadSchema } from '../../shared/postgresStorage';
@@ -1481,6 +1481,7 @@ export class PostgresEngine {
       case 'postgres.queryBuilder.catalogue':
       case 'postgres.queryBuilder.describe':
       case 'postgres.queryBuilder.describeJoin':
+      case 'postgres.queryBuilder.joinKeys':
       case 'postgres.queryBuilder.inspect': {
         const { profile, ...request } = input;
         if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId) throw Error('缺少可信的 PostgreSQL 查询构建连接');
@@ -1495,6 +1496,10 @@ export class PostgresEngine {
         if (command === 'postgres.queryBuilder.describeJoin') {
           const target = postgresQueryBuilderDescribeJoinSchema.parse(request);
           return this.use(profile, target.database, connection => describePostgresQueryBuilderJoin(connection, target));
+        }
+        if (command === 'postgres.queryBuilder.joinKeys') {
+          const target = postgresQueryBuilderJoinKeysSchema.parse(request);
+          return this.use(profile, target.database, connection => readPostgresQueryBuilderJoinKeys(connection, target));
         }
         const design = postgresQueryBuilderInspectSchema.parse(request);
         return this.use(profile, design.database, connection => inspectPostgresQueryBuilder(connection, design));

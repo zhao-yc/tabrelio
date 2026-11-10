@@ -23,6 +23,7 @@ import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummary
   resolveSummaryConditionColumn, summaryConditionLabel } from './QueryBuilderSummaryPanel';
 import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
 import { QueryBuilderJoinPanel, type QueryBuilderJoinDraft } from './QueryBuilderJoinPanel';
+import { queryBuilderForeignKeyPairs, type QueryBuilderForeignKeyChoice } from '../../shared/queryBuilderJoin';
 import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
@@ -110,10 +111,10 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   function close(next: () => void) { if (mounted.current) { mounted.current = false; next(); } }
 
   /** 目录读取和草稿交接串行，同一点击只消费一次。晚回包在原窗口关闭后丢弃。 */
-  async function run(label: string, read: () => Promise<void>) {
+  async function run<T>(label: string, read: () => Promise<T>): Promise<T | undefined> {
     if (!editable()) return;
     pending.current = true; setError(''); setMessage(label);
-    try { await read(); }
+    try { return await read(); }
     catch (reason) { if (current()) setError(errorMessage(reason)); }
     finally { pending.current = false; if (mounted.current) setMessage(''); }
   }
@@ -178,13 +179,31 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
     setRestoreEpoch(epoch => epoch + 1);
   }
 
-  /** 首次进入关联模式时冻结原单表设计，追加来源时已有别名和条件保持。 */
-  function addJoin(table: string) {
+  function joinKeyInput(table: string) {
     if (!source || editor || joins.length >= postgresBuilderJoinLimits.steps || !catalogue?.some(item => item.key === table)) return;
+    return { ...source.target, nextTable: table, priorTables: joins.map(item => item.step.table),
+      priorRevisions: [source.fingerprint, ...joins.map(item => item.source.fingerprint)] };
+  }
+
+  function readJoinKeys(table: string) {
+    const input = joinKeyInput(table);
+    return run(text.loading, async () => {
+      if (!input) return;
+      const result = await invoke('postgres.queryBuilder.joinKeys', input);
+      if (current()) return result.choices;
+    });
+  }
+
+  /** 首次进入关联模式时冻结原单表设计；选定外键后复读完整映射，再一次加入来源。 */
+  function addJoin(table: string, key?: QueryBuilderForeignKeyChoice) {
+    const input = joinKeyInput(table);
+    if (!source || !input) return;
     void run(text.loading, async () => {
-      const right = await invoke('postgres.queryBuilder.describe', { connectionId, database, table });
+      const matching = key && await invoke('postgres.queryBuilder.joinKeys', input);
+      const right = matching ? matching.source : await invoke('postgres.queryBuilder.describe', { connectionId, database, table });
       if (!current()) return;
       if (right.target.connectionId !== connectionId || right.target.database !== database || right.target.table !== table) throw Error(text.stale);
+      const pairs = key && matching ? queryBuilderForeignKeyPairs(key, matching.choices) : [{ left: '', right: '', operator: '=' as const }];
       const next = right.columns.map(column => postgresBuilderColumnKey(joins.length + 1, column.name));
       if (!joins.length) {
         singleDraft.current = draft;
@@ -195,8 +214,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       } else {
         setSelected(previous => [...previous, ...next].slice(0, postgresQueryBuilderLimits.columns));
       }
-      setJoins([...joins, { source: right, step: { table, fingerprint: right.fingerprint, kind: 'INNER', mode: 'all',
-        pairs: [{ left: '', right: '', operator: '=' }] } }]);
+      setJoins([...joins, { source: right, step: { table, fingerprint: right.fingerprint, kind: 'INNER', mode: 'all', pairs } }]);
     });
   }
 
@@ -289,7 +307,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
             edit={index => {
               if (index === undefined || (editable() && !editor)) setEditor(index === undefined ? undefined : { join: index });
             }}
-            add={addJoin} change={(index, step) => {
+            add={addJoin} readKeys={readJoinKeys} change={(index, step) => {
               if (!editable() || (editor && editingJoin !== index)) return;
               setError(''); setJoins(previous => previous.map((item, i) => i === index ? { ...item, step } : item));
             }} remove={removeLastJoin} back={backToSingle}/>

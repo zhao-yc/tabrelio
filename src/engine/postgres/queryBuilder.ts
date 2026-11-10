@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto';
 import type { DatabaseObject, QueryOutcome } from '../../shared/contracts';
-import { buildPostgresQueryBuilderSql, postgresQueryBuilderLimits, type PostgresQueryBuilderDescribeJoinInput, type PostgresQueryBuilderInspectInput,
+import { buildPostgresQueryBuilderSql, postgresQueryBuilderLimits, type PostgresQueryBuilderDescribeJoinInput, type PostgresQueryBuilderInspectInput, type PostgresQueryBuilderJoinKeysInput,
   type PostgresQueryBuilderSource, type PostgresQueryBuilderTarget } from '../../shared/postgresQueryBuilder';
+import { queryBuilderForeignKeyChoiceSchema, queryBuilderForeignKeyLimit, queryBuilderJoinLimits,
+  type QueryBuilderForeignKeys } from '../../shared/queryBuilderJoin';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 import { startPostgresDdl } from './createTable';
@@ -67,6 +70,53 @@ async function readSources(connection: PostgresConnection, target: PostgresQuery
 export function describePostgresQueryBuilderJoin(connection: PostgresConnection, input: PostgresQueryBuilderDescribeJoinInput) {
   const { joinTables, ...target } = input;
   return readOnly(connection, target.database, () => readSources(connection, target, joinTables));
+}
+
+/** 精确匹配选定对象及所有既有别名。只读目录按约束原序展开字段，跳过不可读或超限的复合键。 */
+export function readPostgresQueryBuilderJoinKeys(connection: PostgresConnection, input: PostgresQueryBuilderJoinKeysInput): Promise<QueryBuilderForeignKeys<PostgresQueryBuilderSource>> {
+  const { priorTables, priorRevisions, nextTable, ...target } = input;
+  return readOnly(connection, target.database, async () => {
+    const tables = [target.table, ...priorTables];
+    const sources = await readSources(connection, target, [...priorTables, nextTable]);
+    const source = sources.pop()!;
+    if (sources.some((item, index) => item.fingerprint !== priorRevisions[index]))
+      throw Error('已加入的 PostgreSQL 来源结构已变化，请重新读取。');
+    const result = await connection.query(`
+      WITH selected AS (SELECT pg_catalog.to_regclass($2)::oid AS oid),
+      earlier AS (SELECT (u.position - 1)::integer AS position, pg_catalog.to_regclass(u.name)::oid AS oid
+        FROM pg_catalog.unnest($1::text[]) WITH ORDINALITY AS u(name, position))
+      SELECT e.position, f.oid::text, f.conname, side.outgoing, mapped.pairs::text
+      FROM earlier e CROSS JOIN selected r
+      JOIN pg_catalog.pg_constraint f ON (f.conrelid = e.oid AND f.confrelid = r.oid)
+        OR (f.conrelid = r.oid AND f.confrelid = e.oid)
+      CROSS JOIN LATERAL (VALUES (true, f.conrelid, f.confrelid), (false, f.confrelid, f.conrelid)) side(outgoing, lhs, rhs)
+      CROSS JOIN LATERAL (
+        SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+          'left', CASE WHEN side.outgoing THEN child.attname ELSE parent.attname END,
+          'right', CASE WHEN side.outgoing THEN parent.attname ELSE child.attname END) ORDER BY k.position) AS pairs,
+          pg_catalog.bool_and(pg_catalog.has_column_privilege(child.attrelid, child.attnum, 'SELECT')
+            AND pg_catalog.has_column_privilege(parent.attrelid, parent.attnum, 'SELECT')) AS readable,
+          count(*) AS size
+        FROM pg_catalog.unnest(f.conkey) WITH ORDINALITY AS k(attnum, position)
+        JOIN pg_catalog.pg_attribute child ON child.attrelid = f.conrelid AND child.attnum = k.attnum AND NOT child.attisdropped
+        JOIN pg_catalog.pg_attribute parent ON parent.attrelid = f.confrelid AND parent.attnum = f.confkey[k.position::integer] AND NOT parent.attisdropped
+      ) mapped
+      WHERE f.contype = 'f' AND side.lhs = e.oid AND side.rhs = r.oid
+        AND COALESCE((pg_catalog.to_jsonb(f)->>'conperiod')::boolean, false) = false
+        AND mapped.readable AND mapped.size = pg_catalog.cardinality(f.conkey) AND mapped.size BETWEEN 1 AND $3
+      ORDER BY e.position, f.conname, f.oid, side.outgoing DESC LIMIT $4
+    `, [tables, nextTable, queryBuilderJoinLimits.pairs, queryBuilderForeignKeyLimit + 1],
+    { rows: queryBuilderForeignKeyLimit + 1, bytes: 2 * 1024 * 1024 });
+    if (result.truncated || result.rows.length > queryBuilderForeignKeyLimit) throw Error('匹配的 PostgreSQL 外键超过读取预算。');
+    const choices = result.rows.flatMap(row => {
+      const position = Number(row.c0), direction = row.c3 === 't' ? 'outgoing' : 'incoming';
+      const pairs: unknown = JSON.parse(String(row.c4));
+      const key = createHash('sha256').update(JSON.stringify([source.fingerprint, position, row.c1, direction, pairs])).digest('hex');
+      const choice = queryBuilderForeignKeyChoiceSchema.safeParse({ source: position, key, label: row.c2, direction, pairs });
+      return choice.success ? [choice.data] : [];
+    });
+    return { source, choices };
+  });
 }
 
 /** 结构化输入复核后在原只读事务内生成 SQL；估算计划不会执行查询。 */

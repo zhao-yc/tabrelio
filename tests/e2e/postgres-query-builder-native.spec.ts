@@ -36,14 +36,14 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     const original = window.confirm;
     window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是预期的设计确认'); return true; };
   }, label);
-  async function selectSource(name: string) {
+  async function selectSource(name: string, search = name === table ? 'Raw' : 'Exact') {
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true })).click();
     const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
     await query.getByLabel(zh.app.text050, { exact: true }).fill(database);
     await query.getByRole('button', { name: joinText.builderEntry, exact: true }).click();
     await button(text.catalogue).click();
     await builder.getByRole('combobox', { name: text.schema, exact: true }).selectOption(schema);
-    await builder.getByRole('searchbox', { name: text.search, exact: true }).fill(name === table ? 'Raw' : 'Exact');
+    await builder.getByRole('searchbox', { name: text.search, exact: true }).fill(search);
     const choices = builder.getByRole('combobox', { name: text.source, exact: true });
     await expect(choices.locator('option')).toHaveText([text.chooseSource, name]);
     await choices.selectOption(name);
@@ -303,6 +303,41 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await savedJoins.getByRole('button', { name: joinText.designLoad, exact: true }).click();
     await expect(builder.getByRole('alert')).toContainText('查询字段已变化');
     await expect(sql).toHaveText('SELECT "id", "label", "ignored", "read_mode" FROM ' + view + ';');
+    await button(zh.common.cancel).click();
+
+    const parent = '"odd.schema"."FK Parent"';
+    await observer.query('CREATE TABLE ' + parent + ' (id bigint, region bigint, PRIMARY KEY (region,id));' +
+      'CREATE TABLE public.fk_child (ref_region bigint, ref_id bigint, alternate_id bigint, ' +
+      'CONSTRAINT main_link FOREIGN KEY (ref_region,ref_id) REFERENCES ' + parent + ', ' +
+      'CONSTRAINT alt_link FOREIGN KEY (ref_region,alternate_id) REFERENCES ' + parent + ');' +
+      'INSERT INTO ' + parent + ' VALUES (7,2),(8,4); INSERT INTO public.fk_child VALUES (2,7,7);');
+    await selectSource(parent, 'FK Parent');
+    await builder.locator('summary').filter({ hasText: text.joins }).click();
+    const nextTable = joinPanel.getByLabel(text.joinTarget, { exact: true });
+    const chooseKey = joinPanel.getByLabel(text.joinKeys, { exact: true });
+    await nextTable.selectOption('"public"."fk_child"');
+    await button(text.joinReadKeys).click();
+    await expect(chooseKey.locator('option')).toHaveCount(3);
+    await expect(button(text.joinAddKey)).toBeDisabled();
+    await chooseKey.selectOption({ label: 't1 · 被目标引用 · main_link · region = ref_region，id = ref_id' });
+    await chooseKey.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('postgres-builder-join-keys.png') });
+    await button(text.joinAddKey).click();
+    const mapped = ' FROM ' + parent + ' AS t1 INNER JOIN "public"."fk_child" AS t2 ON (t1."region" = t2."ref_region" AND t1."id" = t2."ref_id")';
+    await expect(sql).toContainText(mapped);
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
+    await nextTable.selectOption(parent);
+    await button(text.joinReadKeys).click();
+    await chooseKey.selectOption({ label: 't2 · 引用目标 · main_link · ref_region = region，ref_id = id' });
+    await observer.query('ALTER TABLE public.fk_child DROP CONSTRAINT main_link');
+    await button(text.joinAddKey).click();
+    await expect(builder.locator('.modal-content > [role=alert]')).toContainText('外键或字段映射已变化');
+    await expect(sql).toContainText(mapped + ';');
+    await button(text.joinReadKeys).click();
+    await expect(chooseKey.locator('option:checked')).toContainText('t2 · 引用目标 · alt_link');
+    await button(text.joinAddKey).click();
+    await expect(sql).toContainText(mapped + ' INNER JOIN ' + parent + ' AS t3 ON (t2."ref_region" = t3."region" AND t2."alternate_id" = t3."id")');
     await button(zh.common.cancel).click();
 
     await selectSource(table);

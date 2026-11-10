@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { sortRulesSchema } from './filtering';
-import { compileQueryBuilderOn, queryBuilderAlias as postgresBuilderAlias, queryBuilderColumnKey as postgresBuilderColumnKey,
+import { compileQueryBuilderOn, queryBuilderForeignKeyRevisions, queryBuilderAlias as postgresBuilderAlias, queryBuilderColumnKey as postgresBuilderColumnKey,
   queryBuilderJoinLimits as postgresBuilderJoinLimits, queryBuilderJoinSchema, validateQueryBuilderJoin } from './queryBuilderJoin';
 import { postgresDdlLiteral } from './postgresCreateTable';
 import { parsePostgresCatalogName, postgresIdentifier } from './postgresSql';
@@ -34,6 +34,11 @@ export const postgresQueryBuilderDescribeJoinSchema = postgresQueryBuilderTarget
   joinTables: z.array(joinTable).min(1).max(postgresBuilderJoinLimits.steps),
 });
 export type PostgresQueryBuilderDescribeJoinInput = z.infer<typeof postgresQueryBuilderDescribeJoinSchema>;
+export const postgresQueryBuilderJoinKeysSchema = postgresQueryBuilderTargetSchema.extend({
+  priorTables: z.array(joinTable).max(postgresBuilderJoinLimits.steps - 1),
+  priorRevisions: queryBuilderForeignKeyRevisions, nextTable: joinTable,
+}).strict().refine(value => value.priorRevisions.length === value.priorTables.length + 1, '已加入的 PostgreSQL 来源修订不完整');
+export type PostgresQueryBuilderJoinKeysInput = z.infer<typeof postgresQueryBuilderJoinKeysSchema>;
 export type PostgresBuilderJoin = z.infer<typeof joinStep>;
 const designFields = postgresQueryBuilderTargetSchema.extend({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),

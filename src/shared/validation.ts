@@ -2,7 +2,7 @@ import { mysqlJoinPreviewSchema } from './mysqlJoinPreview';
 import { manualJoinDesignScopeSchema, manualJoinDesignSelectSchema, manualJoinDesignSaveSchema } from './manualJoinDesigns';
 import { singleQueryDesignScopeSchema, singleQueryDesignSelectSchema, singleQueryDesignSaveSchema } from './singleQueryDesigns';
 import { postgresQueryRecordPageSchema } from './postgresQueryRecord';
-import { postgresQueryBuilderCatalogueSchema, postgresQueryBuilderDescribeJoinSchema, postgresQueryBuilderInspectSchema, postgresQueryBuilderTargetSchema } from './postgresQueryBuilder';
+import { postgresQueryBuilderCatalogueSchema, postgresQueryBuilderDescribeJoinSchema, postgresQueryBuilderInspectSchema, postgresQueryBuilderJoinKeysSchema, postgresQueryBuilderTargetSchema } from './postgresQueryBuilder';
 import { postgresResultOriginsSchema } from './postgresResultOrigins';
 import { mysqlViewDependenciesSchema, sqliteViewDependenciesSchema } from './viewDependencies';
 import { mysqlViewRenameApplySchema, mysqlViewRenamePreviewSchema } from './mysqlViewRename';
@@ -24,7 +24,7 @@ import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport
 import { txtImportOptionsSchema, txtImportZh, validTxtImport } from './txtImport';
 import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, xmlImportZh } from './xmlImport';
 import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
-import { sqliteQueryBuilderDescribeJoinSchema, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderTargetSchema } from './sqliteQueryBuilder';
+import { sqliteQueryBuilderDescribeJoinSchema, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderJoinKeysSchema, sqliteQueryBuilderTargetSchema } from './sqliteQueryBuilder';
 import { mysqlWorkbookExportSchema } from './mysqlWorkbookExport';
 import { postgresWorkbookExportSchema } from './postgresWorkbookExport';
 import { postgresMembershipApplySchema, postgresMembershipPreviewSchema, postgresRoleCreateApplySchema, postgresRoleCreateDraftSchema, postgresRoleAttributesDraftSchema, postgresRoleRenameDraftSchema, postgresRolePasswordDraftSchema, postgresRolePasswordResetDraftSchema, postgresRolePasswordApplySchema, postgresRolesSchema, postgresColumnPrivilegeDraftSchema, postgresScopedPrivilegeDraftSchema, postgresTablePrivilegeDraftSchema } from './postgresRoles';
@@ -353,6 +353,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.queryBuilder.catalogue': postgresQueryBuilderCatalogueSchema,
   'postgres.queryBuilder.describe': postgresQueryBuilderTargetSchema,
   'postgres.queryBuilder.describeJoin': postgresQueryBuilderDescribeJoinSchema,
+  'postgres.queryBuilder.joinKeys': postgresQueryBuilderJoinKeysSchema,
   'postgres.queryBuilder.inspect': postgresQueryBuilderInspectSchema,
   'postgres.editView.preview': postgresEditViewPreviewSchema,
   'postgres.editView.apply': postgresCreateTableApplySchema,
@@ -505,6 +506,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.view.inspectQuery': sqliteViewQueryInspectSchema,
   'sqlite.queryBuilder.describe': sqliteQueryBuilderTargetSchema,
   'sqlite.queryBuilder.describeJoin': sqliteQueryBuilderDescribeJoinSchema,
+  'sqlite.queryBuilder.joinKeys': sqliteQueryBuilderJoinKeysSchema,
   'sqlite.queryBuilder.inspect': sqliteQueryBuilderInspectSchema,
   'sqlite.tableMaintenance.preview': sqliteTableMaintenancePreviewSchema,
   'sqlite.tableRename.preview': sqliteTableRenamePreviewSchema,

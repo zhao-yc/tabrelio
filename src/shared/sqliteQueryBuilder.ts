@@ -3,7 +3,7 @@ import { sqliteSchemaScriptSchema } from './sqliteSchemaScript';
 import { sqliteQueryBuilderColumnSchema, sqliteQueryBuilderPageSchema, sqliteTableBrowseLimits, type SqliteTableColumn } from './sqliteTableBrowse';
 import { buildSqliteFilteredSelect, quoteSqliteIdentifier, sqliteReadSqlLimits } from './sqliteReadSql';
 import { queryBuilderSummarySchema } from './queryBuilderSummary';
-import { compileQueryBuilderOn, queryBuilderAlias, queryBuilderColumnKey, queryBuilderJoinLimits,
+import { compileQueryBuilderOn, queryBuilderAlias, queryBuilderColumnKey, queryBuilderForeignKeyRevisions, queryBuilderJoinLimits,
   queryBuilderJoinSchema, validateQueryBuilderJoin } from './queryBuilderJoin';
 
 export const sqliteQueryBuilderTargetSchema = sqliteSchemaScriptSchema;
@@ -21,6 +21,11 @@ export const sqliteQueryBuilderDescribeJoinSchema = sqliteQueryBuilderTargetSche
   joinTargets: z.array(joinTarget).min(1).max(queryBuilderJoinLimits.steps),
 });
 export type SqliteQueryBuilderDescribeJoinInput = z.infer<typeof sqliteQueryBuilderDescribeJoinSchema>;
+export const sqliteQueryBuilderJoinKeysSchema = sqliteQueryBuilderTargetSchema.extend({
+  priorTargets: z.array(joinTarget).max(queryBuilderJoinLimits.steps - 1),
+  priorRevisions: queryBuilderForeignKeyRevisions, nextTarget: joinTarget,
+}).refine(value => value.priorRevisions.length === value.priorTargets.length + 1, '已加入的 SQLite 来源修订不完整');
+export type SqliteQueryBuilderJoinKeysInput = z.infer<typeof sqliteQueryBuilderJoinKeysSchema>;
 
 const { mode, filters, sort } = sqliteQueryBuilderPageSchema.shape;
 const designFields = sqliteQueryBuilderTargetSchema.extend({

@@ -22,6 +22,28 @@ export type QueryBuilderJoinConditions = z.infer<ReturnType<typeof queryBuilderJ
 export const queryBuilderAlias = (index: number) => 't' + (index + 1);
 export const queryBuilderColumnKey = (index: number, name: string) => queryBuilderAlias(index) + '.' + name;
 
+const revision = z.string().regex(/^[a-f0-9]{64}$/);
+export const queryBuilderForeignKeyRevisions = z.array(revision).min(1).max(queryBuilderJoinLimits.steps);
+export const queryBuilderForeignKeyLimit = 128;
+const keyField = z.string().min(1).max(512).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value));
+export const queryBuilderForeignKeyChoiceSchema = z.object({
+  source: z.number().int().min(0).max(queryBuilderJoinLimits.steps - 1),
+  direction: z.enum(['outgoing', 'incoming']),
+  key: z.string().min(1).max(128),
+  label: z.string().min(1).max(512),
+  pairs: z.array(z.object({ left: keyField, right: keyField }).strict()).min(1).max(queryBuilderJoinLimits.pairs),
+}).strict().refine(value => new Set(value.pairs.map(pair => JSON.stringify([pair.left, pair.right]))).size === value.pairs.length,
+  '外键包含重复字段比较。');
+export type QueryBuilderForeignKeyChoice = z.infer<typeof queryBuilderForeignKeyChoiceSchema>;
+export interface QueryBuilderForeignKeys<Source> { source: Source; choices: QueryBuilderForeignKeyChoice[] }
+
+/** 复读目录后必须仍有同一目标修订、约束和完整字段映射，再生成可编辑的等号条件。 */
+export function queryBuilderForeignKeyPairs(selected: QueryBuilderForeignKeyChoice, fresh: readonly QueryBuilderForeignKeyChoice[]) {
+  const choice = fresh.find(item => item.key === selected.key);
+  if (!choice || JSON.stringify(choice) !== JSON.stringify(selected)) throw Error('外键或字段映射已变化，请重新读取匹配外键。');
+  return choice.pairs.map(({ left, right }) => ({ left: queryBuilderColumnKey(choice.source, left), right, operator: '=' as const }));
+}
+
 /** 每条比较必须在括号树中恰好出现一次。 */
 export function validateQueryBuilderJoin({ mode, group, pairs }: QueryBuilderJoinConditions, context: z.RefinementCtx) {
   try { manualJoinOnGroup({ mode, group }, pairs.length); }

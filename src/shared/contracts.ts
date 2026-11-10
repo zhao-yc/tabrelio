@@ -395,6 +395,7 @@ export interface CommandMap {
   'postgres.queryBuilder.catalogue': { input: Pick<import('./postgresQueryBuilder').PostgresQueryBuilderTarget, 'connectionId' | 'database'>; output: DatabaseObject[] };
   'postgres.queryBuilder.describe': { input: import('./postgresQueryBuilder').PostgresQueryBuilderTarget; output: import('./postgresQueryBuilder').PostgresQueryBuilderSource };
   'postgres.queryBuilder.describeJoin': { input: import('./postgresQueryBuilder').PostgresQueryBuilderDescribeJoinInput; output: import('./postgresQueryBuilder').PostgresQueryBuilderSource[] };
+  'postgres.queryBuilder.joinKeys': { input: import('./postgresQueryBuilder').PostgresQueryBuilderJoinKeysInput; output: import('./queryBuilderJoin').QueryBuilderForeignKeys<import('./postgresQueryBuilder').PostgresQueryBuilderSource> };
   'postgres.queryBuilder.inspect': { input: import('./postgresQueryBuilder').PostgresQueryBuilderInspectInput; output: QueryOutcome };
   'postgres.editView.preview': { input: import('./postgresCreateView').PostgresEditViewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.editView.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
@@ -561,6 +562,7 @@ export interface CommandMap {
   'sqlite.view.inspectQuery': { input: import('./sqliteObjects').SqliteViewQueryInspectInput; output: QueryOutcome };
   'sqlite.queryBuilder.describe': { input: import('./sqliteQueryBuilder').SqliteQueryBuilderTarget; output: import('./sqliteQueryBuilder').SqliteQueryBuilderSource };
   'sqlite.queryBuilder.describeJoin': { input: import('./sqliteQueryBuilder').SqliteQueryBuilderDescribeJoinInput; output: import('./sqliteQueryBuilder').SqliteQueryBuilderSource[] };
+  'sqlite.queryBuilder.joinKeys': { input: import('./sqliteQueryBuilder').SqliteQueryBuilderJoinKeysInput; output: import('./queryBuilderJoin').QueryBuilderForeignKeys<import('./sqliteQueryBuilder').SqliteQueryBuilderSource> };
   'sqlite.queryBuilder.inspect': { input: import('./sqliteQueryBuilder').SqliteQueryBuilderInspectInput; output: QueryOutcome };
   'sqlite.tableMaintenance.preview': { input: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewInput; output: import('./sqliteTableMaintenance').SqliteTableMaintenancePreviewOutput };
   'sqlite.tableRename.preview': { input: import('./sqliteTableRename').SqliteTableRenamePreviewInput; output: import('./sqliteTableRename').SqliteTableRenamePreviewOutput };

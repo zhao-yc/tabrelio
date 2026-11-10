@@ -5,7 +5,8 @@ import { queryDatabasePatch } from '../../shared/queryContext';
 import { sqliteQueryBuilderPageSchema, sqliteTableBrowseLimits } from '../../shared/sqliteTableBrowse';
 import { buildSqliteQueryBuilderSql, sqliteQueryBuilderSampleRows, type SqliteBuilderJoin, type SqliteQueryBuilderSource,
   type SqliteQueryBuilderTarget } from '../../shared/sqliteQueryBuilder';
-import { queryBuilderAlias, queryBuilderColumnKey, queryBuilderJoinLimits } from '../../shared/queryBuilderJoin';
+import { queryBuilderAlias, queryBuilderColumnKey, queryBuilderForeignKeyPairs, queryBuilderJoinLimits,
+  type QueryBuilderForeignKeyChoice } from '../../shared/queryBuilderJoin';
 import { sqliteReadSqlLimits } from '../../shared/sqliteReadSql';
 import type { SqliteObjectsOutcome, SqliteObjectsTarget } from '../../shared/sqliteObjects';
 import { errorMessage, invoke, uid } from '../lib';
@@ -128,12 +129,12 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
   function close(callback: () => void) { if (mounted.current) { mounted.current = false; callback(); } }
 
   /** 同步占门，目录与草稿的迟到回包仅交还原窗口。 */
-  async function run(label: string, action: (owns: () => boolean) => Promise<void>) {
+  async function run<T>(label: string, action: (owns: () => boolean) => Promise<T>): Promise<T | undefined> {
     if (!editable()) return;
     const ticket = {}; operation.current = ticket;
     setError(''); setMessage(label);
     const owns = () => current() && operation.current === ticket;
-    try { await action(owns); }
+    try { return await action(owns); }
     catch (reason) { if (owns()) setError(errorMessage(reason)); }
     finally { operation.current = undefined; if (mounted.current) setMessage(''); }
   }
@@ -183,24 +184,42 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
     setHavingFilters(value.havingFilters); setHavingMode(value.havingMode);
   }
 
-  function addJoin(table: string) {
+  function joinKeyInput(table: string) {
     const object = objects?.find(item => item.name === table);
     if (!source || editingJoin !== undefined || joins.length >= queryBuilderJoinLimits.steps ||
         !object || (object.kind !== 'table' && object.kind !== 'view')) return;
-    const target = { table, kind: object.kind };
+    return { ...source.target, nextTarget: { table, kind: object.kind }, priorTargets: joins.map(item => item.step.target),
+      priorRevisions: [source.schemaKey, ...joins.map(item => item.source.schemaKey)] };
+  }
+
+  function readJoinKeys(table: string) {
+    const input = joinKeyInput(table);
+    return run(text.loading, async owns => {
+      if (!input) return;
+      const result = await invoke('sqlite.queryBuilder.joinKeys', input);
+      if (owns()) return result.choices;
+    });
+  }
+
+  /** 所选外键必须在同一快照重新出现，确认后才会替换本地草稿。 */
+  function addJoin(table: string, key?: QueryBuilderForeignKeyChoice) {
+    const input = joinKeyInput(table);
+    if (!source || !input) return;
+    const target = input.nextTarget;
     const scope = { ...source.target, ...target };
     void run(text.loading, async owns => {
-      const right = await invoke('sqlite.queryBuilder.describe', scope);
+      const matching = key && await invoke('sqlite.queryBuilder.joinKeys', input);
+      const right = matching ? matching.source : await invoke('sqlite.queryBuilder.describe', scope);
       if (!owns()) return;
       if (!sameTarget(right.target, scope)) throw Error(text.stale);
+      const pairs = key && matching ? queryBuilderForeignKeyPairs(key, matching.choices) : [{ left: '', right: '', operator: '=' as const }];
       const next = right.columns.map(({ name }) => queryBuilderColumnKey(joins.length + 1, name));
       if (!joins.length) {
         singleDraft.current = draft;
         const qualified = qualifySingleDraft(draft);
         applyDraft({ ...qualified, selected: [...qualified.selected, ...next].slice(0, sqliteTableBrowseLimits.columns) });
       } else setSelected(previous => [...previous, ...next].slice(0, sqliteTableBrowseLimits.columns));
-      setJoins([...joins, { source: right, step: { target, schemaKey: right.schemaKey, kind: 'INNER', mode: 'all',
-        pairs: [{ left: '', right: '', operator: '=' }] } }]);
+      setJoins([...joins, { source: right, step: { target, schemaKey: right.schemaKey, kind: 'INNER', mode: 'all', pairs } }]);
     });
   }
 
@@ -290,7 +309,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
             edit={index => {
               if (index === undefined || (editable() && editingJoin === undefined)) setEditingJoin(index);
             }}
-            add={addJoin} change={(index, step) => {
+            add={addJoin} readKeys={readJoinKeys} change={(index, step) => {
               if (!editable() || (editingJoin !== undefined && editingJoin !== index)) return;
               setError(''); setJoins(previous => previous.map((item, i) => i === index ? { ...item, step } : item));
             }} remove={removeLastJoin} back={backToSingle}/>

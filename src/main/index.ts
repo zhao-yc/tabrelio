@@ -2717,6 +2717,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'sqlite.view.inspectQuery':
     case 'sqlite.queryBuilder.describe':
     case 'sqlite.queryBuilder.describeJoin':
+    case 'sqlite.queryBuilder.joinKeys':
     case 'sqlite.queryBuilder.inspect':
     case 'sqlite.countRows':
     case 'sqlite.statistics':

@@ -34,13 +34,14 @@ import { readSqliteTableCatalogue, readSqliteTablePage, SqliteTableBrowseCancell
 import { readSqliteValueOptions } from './sqliteValueOptions';
 import { readSqliteRowCount, readSqliteStatistics } from './sqliteStatistics';
 import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema, sqliteStatisticsLimits, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../shared/sqliteStatistics';
+import { readSqliteQueryBuilderJoinKeys } from './sqliteQueryBuilderJoinKeys';
 import { readSqliteRelationships } from './sqliteRelationships';
 import { readSqliteReference } from './sqliteReference';
 import { sqliteReferenceInputSchema, sqliteReferenceLimits, type SqliteReferenceInput, type SqliteReferenceOutput } from '../shared/sqliteReference';
 import { readSqliteSchemaScript } from './sqliteSchemaExport';
 import { sqliteSchemaScriptSchema } from '../shared/sqliteSchemaScript';
 import { inspectSqliteViewQuery, readSqliteQueryPreview } from './sqliteViewQueryInspect';
-import { buildSqliteQueryBuilderSql, sqliteQueryBuilderDescribeJoinSchema, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderSampleRows, sqliteQueryBuilderTargetSchema } from '../shared/sqliteQueryBuilder';
+import { buildSqliteQueryBuilderSql, sqliteQueryBuilderDescribeJoinSchema, sqliteQueryBuilderInspectSchema, sqliteQueryBuilderJoinKeysSchema, sqliteQueryBuilderSampleRows, sqliteQueryBuilderTargetSchema } from '../shared/sqliteQueryBuilder';
 import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type SqliteRelationshipsOutput } from '../shared/sqliteRelationships';
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import { sqliteQueryExportSchema } from '../shared/sqliteQueryExport';
@@ -1443,12 +1444,14 @@ export class SqliteRuntime {
       }
       case 'sqlite.queryBuilder.describe':
       case 'sqlite.queryBuilder.describeJoin':
+      case 'sqlite.queryBuilder.joinKeys':
       case 'sqlite.queryBuilder.inspect': {
         const request = command === 'sqlite.queryBuilder.inspect' ? sqliteQueryBuilderInspectSchema.parse(input) : undefined;
         const description = command === 'sqlite.queryBuilder.describeJoin' ? sqliteQueryBuilderDescribeJoinSchema.parse(input) : undefined;
-        const raw = request ?? description ?? sqliteQueryBuilderTargetSchema.parse(input);
+        const keys = command === 'sqlite.queryBuilder.joinKeys' ? sqliteQueryBuilderJoinKeysSchema.parse(input) : undefined;
+        const raw = request ?? description ?? keys ?? sqliteQueryBuilderTargetSchema.parse(input);
         const target = { connectionId: raw.connectionId, database: raw.database, table: raw.table, kind: raw.kind };
-        const related = description?.joinTargets ?? request?.joins?.map(step => step.target) ?? [];
+        const related = keys ? [...keys.priorTargets, keys.nextTarget] : description?.joinTargets ?? request?.joins?.map(step => step.target) ?? [];
         return this.metadata(target, (driver, check) => {
           const control = { check, beginCleanup: () => {}, cleanupFailed: () => {} };
           // 目录与预览使用同一只读快照，跨连接结构变化不能让旧字段落到新对象。
@@ -1464,6 +1467,12 @@ export class SqliteRuntime {
               if (catalogue.kind !== object.kind) throw Error('SQLite 查询来源已变化，请重新读取结构。');
               sources.push({ target: { ...target, table: object.table, kind: object.kind },
                 schemaKey: catalogue.schemaKey, columns: catalogue.columns });
+            }
+            if (keys) {
+              const source = sources.pop()!;
+              if (sources.some((item, index) => item.schemaKey !== keys.priorRevisions[index]))
+                throw Error('已加入的 SQLite 来源结构已变化，请重新读取。');
+              return { source, choices: await readSqliteQueryBuilderJoinKeys(driver, control, sources, source) };
             }
             if (description) return sources;
             const [source, ...joined] = sources;
