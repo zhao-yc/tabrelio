@@ -79,6 +79,7 @@ export const tableForeignKeyJoinZh = {
   sampleHint: (limit: number) => `使用独立只读连接，最多返回 ${limit} 行。保留当前 JOIN 及排序，查询仍可能需要扫描、排序或汇总完整匹配数据。`,
   sampleRows: (rows: number, truncated: boolean) => truncated ? `已返回前 ${rows} 行，更多结果已截断。` : `已返回 ${rows} 行。`,
   preview: '预览 SQL', open: '打开为独立查询', close: '关闭', limit: '工作区结果上限',
+  openView: '用作视图定义',
   resultLimit: 'JOIN 结果行数上限', limitHint: '填写 1～100000 的整数；只限制此查询草稿，不修改全局偏好。实际执行仍受工作区结果上限约束；没有排序时，数据库不保证返回顺序。',
   limitInvalid: 'JOIN 行数上限必须是 1～100000 的完整十进制整数。',
   sortTitle: 'JOIN 多列排序', sortHint: '按列表优先级排序；可使用未输出字段。不同表别名下的同名字段分开选择。相同排序值之间的顺序仍由数据库决定；切换外键清空本批排序。',

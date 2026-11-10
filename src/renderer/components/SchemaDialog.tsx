@@ -294,7 +294,7 @@ function template(kind: string, database: string, name: string) {
 }
 
 /** 统一入口分流：新建库与既有对象编辑分别维护确认生命周期，无默认库也能创建。 */
-interface DdlDialogProps { viewSeed?: ViewQuerySeed; onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; onViewRenamed?(before: string, after: string, verified: boolean): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; sqliteIndex?: string; }
+interface DdlDialogProps { viewSeed?: ViewQuerySeed; viewSeedCurrent?(): boolean; onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; onViewRenamed?(before: string, after: string, verified: boolean): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; sqliteIndex?: string; }
 /** 只读定义使用独立组件生命周期，切换编辑/查看模式不会改变同一组件的Hook顺序。 */
 export function DdlDialog(props: DdlDialogProps) {
   // 新建库走独立编码目录与一次性预览，原对象DDL编辑器保持原生命周期。
@@ -302,7 +302,7 @@ export function DdlDialog(props: DdlDialogProps) {
   return props.readOnly && props.object && props.database ? <DefinitionViewer connectionId={props.connectionId} database={props.database} object={props.object} search={props.definitionSearch} sqliteIndex={props.sqliteIndex} onClose={props.onClose}/> : <DdlEditorDialog {...props}/>;
 }
 /** 原有显式DDL编辑、预览与确认执行路径保持独立。 */
-function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, onViewRenamed, readOnly=false, viewSeed }: DdlDialogProps) {
+function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, onViewRenamed, readOnly=false, viewSeed, viewSeedCurrent }: DdlDialogProps) {
   const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(() => database ? (viewSeed ? mysqlNewViewHeader(database, zh.schema.text050) + viewSeed.sql + ';' : template('view', database, '')) : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   const [viewLoaded, setViewLoaded] = useState(false);
@@ -314,7 +314,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
   const profile = useWorkspace(state => state.connections.find(item => item.id === connectionId));
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const seedProfile = useRef(profile).current;
-  const seedStale = !!viewSeed && (version !== viewSeed.version || profile !== seedProfile);
+  const seedStale = !!viewSeed && (version !== viewSeed.version || profile !== seedProfile || viewSeedCurrent?.() === false);
   const fileOwner = useMemo(() => ({}), [connectionId, database, object, profile, version, kind, name, sql]);
   const dependenciesOwner = useMemo(() => ({}), [connectionId, database, object, profile, version]);
   useEffect(() => {
@@ -359,7 +359,7 @@ function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, o
 
   function fileCurrent(): boolean {
     const state = useWorkspace.getState();
-    return !seedStale && state.connections.find(item => item.id === connectionId) === profile &&
+    return !seedStale && viewSeedCurrent?.() !== false && state.connections.find(item => item.id === connectionId) === profile &&
       (state.connectionVersions[connectionId] ?? 0) === version;
   }
   function closeCopy() {

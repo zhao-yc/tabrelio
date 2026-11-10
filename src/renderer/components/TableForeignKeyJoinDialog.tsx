@@ -2,8 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import type { TableInfo, FilterGroup, FilterMode, FilterRule, QueryOutcome } from '../../shared/contracts';
 import { queryBuilderDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary, type QueryBuilderDesign } from '../../shared/manualJoinDesigns';
 import { mysqlJoinSampleRows, type MysqlJoinedPreviewInput, type MysqlJoinPreviewInput, type MysqlJoinPreviewTarget } from '../../shared/mysqlJoinPreview';
+import { mysqlViewFileQuery } from '../../shared/mysqlViewFile';
 import { ExplainPlanView } from './ExplainPlanView';
 import { ResultsGrid } from './ResultsGrid';
+import { DdlDialog } from './SchemaDialog';
+import { useWorkspace } from '../store';
+import type { ViewQuerySeed } from '../queryViewDraft';
 import '../viewQueryInspect.css';
 import { FILTER_LIMITS, validateFilterGroup } from '../../shared/filtering';
 import { emptyFilterDraft, filterRuleSummary, type FilterDraft } from '../tableFilters';
@@ -109,9 +113,9 @@ function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selectio
 }
 
 /** 一次原读取和最新本地选择共用占门；不持有任何父页行数据或执行SQL的能力。 */
-export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, single = false, onOpen, onClose, onActivity, onCleanupError, services = tableForeignKeyJoinServices }: {
+export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, single = false, onOpen, onClose, onActivity, onViewApplied, onCleanupError, services = tableForeignKeyJoinServices }: {
   intent: TableForeignKeyJoinIntent; onOpen(preview: MysqlQueryBuilderPreview): boolean; onClose(): void;
-  fixed?: FixedForeignKeyJoinStart; manual?: boolean; single?: boolean; onActivity?(delta: 1 | -1): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
+  fixed?: FixedForeignKeyJoinStart; manual?: boolean; single?: boolean; onActivity?(delta: 1 | -1): void; onViewApplied?(): void; onCleanupError(message: string): void; services?: TableForeignKeyJoinServices;
 }) {
   const origin = useRef({ intent, fixed, manual, single, services, onActivity }).current;
   if (origin.intent !== intent || origin.services !== services || origin.fixed !== fixed || origin.manual !== manual || origin.single !== single) origin.intent.invalidate();
@@ -127,6 +131,8 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   const [designId, setDesignId] = useState(''), [designName, setDesignName] = useState('');
   const [designNotice, setDesignNotice] = useState('');
   const [inspection, setInspection] = useState<{ owner: MysqlQueryBuilderPreview; result: QueryOutcome }>();
+  const [viewSeed, setViewSeed] = useState<ViewQuerySeed>();
+  const activeView = useRef<ViewQuerySeed | undefined>(undefined);
   const [groupEditor, setGroupEditor] = useState<GroupEditor>(), groupRef = useRef<GroupEditor | undefined>(undefined), groupPanel = useRef<HTMLDivElement>(null), groupTrigger = useRef<HTMLButtonElement>(null), havingGroupTrigger = useRef<HTMLButtonElement>(null), hadGroup = useRef<GroupEditor | undefined>(undefined);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [invalid, setInvalid] = useState(false), [message, setMessage] = useState('');
   const alive = useRef(true), closingRef = useRef(false), operation = useRef<Operation | null>(null), revision = useRef(0), consumed = useRef(false), committed = useRef<object | null>(null), ticket = {};
@@ -143,7 +149,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   }, [groupEditor]);
   /** 当前渲染和原来源同时有效；本组件自己的占用由父页精确owner租约认可。 */
   function current(): boolean {
-    if (!alive.current || closingRef.current || consumed.current || origin.intent !== intent || origin.services !== services || !origin.intent.current()) return false;
+    if (!alive.current || closingRef.current || consumed.current || activeView.current || origin.intent !== intent || origin.services !== services || !origin.intent.current()) return false;
     const dialogs = document.querySelectorAll('[role="dialog"]');
     if (dialogs.length !== 1 || dialogs[0].getAttribute('aria-label') !== title || document.querySelector('[role="alertdialog"]')) { origin.intent.invalidate(); return false; }
     return true;
@@ -270,12 +276,13 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   }
 
   /** 同步占门后才排原异步链，按钮连点和旧DOM均不能建立第二个在途操作。 */
-  function run(kind: 'preview' | 'open' | NonNullable<MysqlJoinPreviewInput['mode']> | 'databases' | 'tables' | DesignOperation, index?: number): void {
+  function run(kind: 'preview' | 'open' | 'view' | NonNullable<MysqlJoinPreviewInput['mode']> | 'databases' | 'tables' | DesignOperation, index?: number): void {
     const step = index === undefined ? undefined : selection.additional[index];
     if (index !== undefined && !step) return;
     const chosenTarget = step ? step.tables?.includes(step.table) && { database: step.database, table: step.table } : target;
     const inspectionMode = kind === 'rows' || kind === 'explain' || kind === 'explainText' ? kind : undefined;
-    if (!editable() || (kind === 'preview' && !chosenTarget) || ((kind === 'open' || inspectionMode) && !preview.value) ||
+    if (!editable() || (kind === 'preview' && !chosenTarget) || (kind === 'view' && !onViewApplied) ||
+        ((kind === 'open' || kind === 'view' || inspectionMode) && !preview.value) ||
         ((kind === 'databases' || kind === 'tables') && !selection.manual)) return;
     const designOperation = kind.endsWith('Design') || kind === 'listDesigns';
     const designTarget = designs.find(item => item.id === designId);
@@ -299,7 +306,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     if (designOperation) setDesignNotice('');
     if (inspectionMode) setInspection(undefined);
     const inspectionMessage = inspectionMode === 'rows' ? text.sampleLoading : text.explainLoading;
-    setBusy(true); setError(''); setMessage(designOperation ? text.designWorking : inspectionMode ? inspectionMessage : kind === 'open' ? text.checking : kind === 'databases' ? text.manualDatabases : kind === 'tables' ? text.manualTables : text.parentLoading);
+    setBusy(true); setError(''); setMessage(designOperation ? text.designWorking : inspectionMode ? inspectionMessage : kind === 'open' || kind === 'view' ? text.checking : kind === 'databases' ? text.manualDatabases : kind === 'tables' ? text.manualTables : text.parentLoading);
     active.promise = Promise.resolve().then(async () => {
       if (!owns()) return;
       if (designOperation) {
@@ -357,11 +364,19 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
         selectionRef.current = next; setSelection(next); setParent({ fk: selected.fk, info: structuredClone(metadata) });
       } else if (inspectionMode && receipt) {
         await inspect(active, receipt, inspectionMode, owns);
-      } else if (kind === 'open' && receipt) {
-        await revalidateForeignKeyJoin(origin.intent, receipt!, target => read(active, target, owns), owns);
+      } else if ((kind === 'open' || kind === 'view') && receipt) {
+        // 视图与独立查询都先复核同一份设计，视图草稿仅通过现有视图定义词法门槛。
+        const viewSql = kind === 'view' ? mysqlViewFileQuery(receipt.sql) + '\n' : undefined;
+        await revalidateForeignKeyJoin(origin.intent, receipt, target => read(active, target, owns), owns);
         if (!owns()) return;
-        if (!onOpen(receipt!)) throw Error(text.stale);
-        consumed.current = true;
+        if (viewSql) {
+          const version = useWorkspace.getState().connectionVersions[origin.intent.connectionId] ?? 0;
+          const seed = { sql: viewSql, version };
+          activeView.current = seed; setViewSeed(seed);
+        } else {
+          if (!onOpen(receipt)) throw Error(text.stale);
+          consumed.current = true;
+        }
       }
     }).catch(reason => { if (alive.current && !closingRef.current && operation.current === active && generation === revision.current) setError(errorMessage(reason)); }).finally(async () => {
       try { if (active.cancellation) await active.cancellation; }
@@ -557,6 +572,13 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   const resultLimitLabel = origin.single ? text.singleLimit : text.resultLimit;
   const sortTitle = origin.single ? text.singleSort : text.sortTitle;
   const designTitle = origin.single ? text.singleDesignTitle : text.designTitle;
+  // 在同一个组件中切换唯一模态窗口，返回后继续使用原有选列、条件和结果。
+  if (viewSeed && onViewApplied) return <DdlDialog connectionId={origin.intent.connectionId} database={origin.intent.source.database}
+    viewSeed={viewSeed} viewSeedCurrent={() => alive.current && activeView.current === viewSeed && origin.intent.current()}
+    onApplied={onViewApplied} onClose={() => {
+      if (activeView.current !== viewSeed) return;
+      activeView.current = undefined; setViewSeed(undefined);
+    }}/>;
   return <Modal title={title} wide onClose={close} onEscape={groupEditor ? event => { if (!event.target || !groupPanel.current?.contains(event.target as Node)) event.stopPropagation(); } : undefined}><div className="modal-content" aria-busy={busy || closing}>
     <p>{origin.single ? text.singleScope : selection.manual ? text.manualScope : text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
     {(selection.manual || origin.single) && <details>
@@ -654,5 +676,5 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       </>}
     </section>}
     {preview.value && !unavailable && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.value.sql}</pre></section>}
-  </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button>{!origin.single && <button disabled={busy || unavailable || !target} onClick={() => run('preview')}>{selection.manual ? text.manualRead : text.preview}</button>}<button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;
+  </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button>{!origin.single && <button disabled={busy || unavailable || !target} onClick={() => run('preview')}>{selection.manual ? text.manualRead : text.preview}</button>}{onViewApplied && <button disabled={busy || unavailable || !preview.value} onClick={() => run('view')}>{text.openView}</button>}<button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;
 }

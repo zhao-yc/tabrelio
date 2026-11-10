@@ -137,7 +137,7 @@ function Fixture() {
   const query = useWorkspace(state => state.settings.tabs.find(tab => tab.kind === 'query' && tab.id !== seed.id));
   const [newQuery, setNewQuery] = useState(queryEntry);
   if (query) return <pre aria-label="本例独立查询SQL">{query.sql}</pre>;
-  if (NewQueryDialog) return newQuery ? <NewQueryDialog onClose={() => setNewQuery(false)}/> : <p>返回原查询</p>;
-  return <div style={{ height: '100vh' }}><TableTab tab={tab} refreshVersion={0} refreshAutomatically={false} onOpenGeneratedQuery={candidate => useWorkspace.getState().openTab(candidate)} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/></div>;
+  if (NewQueryDialog) return newQuery ? <NewQueryDialog onClose={() => setNewQuery(false)} onViewApplied={() => {}}/> : <p>返回原查询</p>;
+  return <div style={{ height: '100vh' }}><TableTab tab={tab} refreshVersion={0} refreshAutomatically={false} onOpenGeneratedQuery={candidate => useWorkspace.getState().openTab(candidate)} onViewApplied={() => {}} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/></div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture/>);

@@ -12,8 +12,8 @@ import { ErrorBox, Modal, Spinner } from './ui';
 interface SourceOperation { finished: Promise<void>; taskId?: string; cancellation?: Promise<unknown>; }
 
 /** 新建查询的起始表选择只读目录和结构，原标签不会被登记为本次 JOIN 的作业来源。 */
-export function QueryJoinStartDialog({ connectionId, database, onBack, onClose }: {
-  connectionId: string; database: string; onBack(): void; onClose(): void;
+export function QueryJoinStartDialog({ connectionId, database, onBack, onClose, onViewApplied }: {
+  connectionId: string; database: string; onBack(): void; onClose(): void; onViewApplied?(): void;
 }) {
   const [owner] = useState(() => {
     const workspace = useWorkspace.getState();
@@ -107,7 +107,7 @@ export function QueryJoinStartDialog({ connectionId, database, onBack, onClose }
     return true;
   }
 
-  if (builder) return <TableForeignKeyJoinDialog intent={builder.intent} manual={!builder.single} single={builder.single} onOpen={open} onClose={onClose}
+  if (builder) return <TableForeignKeyJoinDialog intent={builder.intent} manual={!builder.single} single={builder.single} onOpen={open} onClose={onClose} onViewApplied={onViewApplied}
     onCleanupError={reason => useWorkspace.getState().notify(reason, true)}/>;
   return <Modal title={text.builderTitle} onClose={() => close(onClose)}>
     <div className="modal-content" aria-busy={!!message}>
