@@ -254,15 +254,16 @@ export function isPostgresInlineCopy(source: string, standardStrings: boolean): 
   }
 }
 
-/** 目录复合名逐段还原；每段的成对双引号仅解码一次。 */
-function parseQualifiedRelation(value: string): { schema: string; name: string } | undefined {
-  const parts = /^"((?:""|[^"])*)"\."((?:""|[^"])*)"$/.exec(value);
-  if (parts) return { schema: parts[1].replaceAll('""', '"'), name: parts[2].replaceAll('""', '"') };
+/** 目录复合名逐段还原；例程目录的输入类型向量不属于标识符。 */
+export function parsePostgresCatalogName(value: string, routine = false): { schema: string; name: string } | undefined {
+  const parts = /^"((?:""|[^"])*)"\."((?:""|[^"])*)"([\s\S]*)$/.exec(value);
+  if (!parts || (routine ? !parts[3].startsWith('(') || !parts[3].endsWith(')') : parts[3] !== '')) return;
+  return { schema: parts[1].replaceAll('""', '"'), name: parts[2].replaceAll('""', '"') };
 }
 
 /** 表工作台将旧式未限定关系名明确解释为 public 下的单个标识符。 */
 export function postgresRelationName(value: string): { schema: string; name: string } {
-  return parseQualifiedRelation(value) ?? { schema: 'public', name: value };
+  return parsePostgresCatalogName(value) ?? { schema: 'public', name: value };
 }
 
 /** 草稿使用与数据页相同的 schema，避免同名关系受新会话 search_path 影响。 */

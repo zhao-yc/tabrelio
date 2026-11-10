@@ -1,0 +1,104 @@
+import { readFileSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { test, expect, page, desktop, dataDir, pageErrors } from './desktop-fixture';
+import { sidebarContextMenuZh as text } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
+
+test('对象树与中央列表按原行复制名称及 SQL 限定名', async ({}, info) => {
+  const path = join(realpathSync(dataDir), '复制对象名称样本.sqlite');
+  const sample = new DatabaseSync(path);
+  try { sample.exec('CREATE TABLE "表.含""引号"(id INTEGER); CREATE TABLE "另一张表"(id INTEGER);'); }
+  finally { sample.close(); }
+  const original = readFileSync(path);
+
+  // 仅替换一次文件选择，连接和对象读取走生产 IPC。
+  await desktop.evaluate(({ dialog, BrowserWindow }, file) => {
+    const open = dialog.showOpenDialog;
+    dialog.showOpenDialog = (async (...args: unknown[]) => {
+      dialog.showOpenDialog = open;
+      const windows = BrowserWindow.getAllWindows(), options = args.at(-1) as Electron.OpenDialogOptions;
+      if (windows.length !== 1 || args[0] !== windows[0] || !options.filters?.[0]?.extensions.includes('sqlite')) {
+        throw Error('只允许测试窗口选取本例的 SQLite 文件');
+      }
+      return { canceled: false, filePaths: [file] };
+    }) as typeof open;
+  }, path);
+  await page.evaluate(async () => {
+    const id = 'identifier-copy-sqlite';
+    const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
+    if (!file) throw Error('未选中本例文件');
+    await window.dbark.invoke('connections.save', {
+      id, name: '对象复制样本', dialect: 'sqlite', group: '', color: '#51bda5',
+      sqlite: { fileToken: file.token, readOnly: true, busyTimeoutMs: 1000 },
+    });
+    const settings = await window.dbark.invoke('settings.get', {});
+    const base = { connectionId: id, database: 'main' };
+    await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'objects', tabs: [
+      { ...base, id: 'draft', kind: 'query', title: '保留的草稿', sql: 'SELECT 1;' },
+      { ...base, id: 'objects', kind: 'objects', title: '对象浏览', objectCategory: 'table' },
+    ] });
+  });
+  await page.reload();
+  const name = '表.含"引号';
+  const browser = page.locator('.object-browser:visible');
+  const browserRow = (target: string) => browser.locator('.object-list-row .tree-label')
+    .filter({ has: page.getByText(target, { exact: true }) });
+  const center = browserRow(name);
+  await expect(center).toBeVisible();
+  const sidebar = page.locator('.sidebar');
+  await sidebar.locator('.connection-row .tree-label').filter({ hasText: '对象复制样本' }).click();
+  await sidebar.locator('.database-row .tree-label').filter({ hasText: /^main$/ }).click();
+  const tree = sidebar.locator('.object-row .tree-label').filter({ hasText: name });
+  await expect(tree).toBeVisible();
+  await expect(center).toBeVisible();
+
+  // 保留生产复制事件与 DataTransfer，只把系统剪贴板替换为本窗口的内存记录。
+  await page.evaluate(() => {
+    const original = document.execCommand;
+    document.execCommand = function(command, ...args) {
+      if (command !== 'copy') return original.call(this, command, ...args);
+      const data = new DataTransfer();
+      document.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }));
+      document.body.dataset.testClipboard = JSON.stringify(Object.fromEntries(data.types.map(type => [type, data.getData(type)])));
+      return true;
+    };
+  });
+  const menu = (target: string) => page.getByRole('menu', { name: text.title(target), exact: true });
+  const clipboard = (value: string) => expect(page.locator('body')).toHaveAttribute('data-test-clipboard', JSON.stringify({ 'text/plain': value }));
+  const state = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  const before = await state();
+
+  await tree.click({ button: 'right' });
+  await expect(menu(name).getByRole('menuitem', { name: text.copyQualifiedName, exact: true })).toBeVisible();
+  await menu(name).screenshot({ path: info.outputPath('object-identifier-copy.png') });
+  await menu(name).getByRole('menuitem', { name: text.copyName, exact: true }).click();
+  await clipboard(name);
+  await expect(menu(name)).toBeHidden();
+  await expect(tree).toBeFocused();
+
+  const other = browserRow('另一张表');
+  await other.focus();
+  await page.keyboard.press('Shift+F10');
+  await menu('另一张表').getByRole('menuitem', { name: text.copyQualifiedName, exact: true }).press('Enter');
+  await clipboard('"main"."另一张表"');
+  await center.click({ button: 'right' });
+  await menu(name).getByRole('menuitem', { name: text.copyQualifiedName, exact: true }).click();
+  await clipboard('"main"."表.含""引号"');
+  await expect(center).toBeFocused();
+
+  // 通过列表过滤移除原行，旧菜单不能将复制转交给仍可见的另一张表。
+  await center.click({ button: 'right' });
+  await expect(menu(name)).toBeVisible();
+  await browser.locator('.object-browser-filter input').fill('另一张表');
+  await expect(center).toHaveCount(0);
+  await expect(menu(name)).toBeHidden();
+  await expect(other).toBeVisible();
+  await clipboard('"main"."表.含""引号"');
+
+  const after = await state();
+  expect(after.tabs).toEqual(before.tabs);
+  expect(after.activeTabId).toBe(before.activeTabId);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(readFileSync(path)).toEqual(original);
+  expect(pageErrors).toEqual([]);
+});

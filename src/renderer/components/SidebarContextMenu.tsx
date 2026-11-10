@@ -1,10 +1,13 @@
 import { Children, Fragment, cloneElement, createContext, isValidElement, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Copy } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import type { WorkbenchTarget } from '../../shared/workbench';
 import { useWorkspace } from '../store';
 import { sidebarContextMenuZh as text } from '../locales/sidebarContextMenu.zh-CN';
 import { objectQueryKeyShortcuts, objectQueryShortcut, openObjectQuery } from '../objectQueryNavigation';
+import { objectIdentifierCopy } from '../objectIdentifierCopy';
+import { writeTableClipboardEvent } from '../gridClipboard';
+import { errorMessage } from '../lib';
 import '../sidebarContextMenu.css';
 
 export type SidebarNodeTarget = { kind: 'connection'; connectionId: string } | WorkbenchTarget;
@@ -72,6 +75,11 @@ export function SidebarTreeProvider({ children }: { children: ReactNode }) {
   function current(owner: MenuOwner): boolean {
     if (ownerRef.current !== owner) return false;
     if (modalChanged(owner.observer.takeRecords())) { retire(owner); return false; }
+    return targetCurrent(owner);
+  }
+
+  /** 菜单关闭并恢复焦点后，同步剪贴板事件仍须使用原行与连接修订。 */
+  function targetCurrent(owner: MenuOwner): boolean {
     const state = useWorkspace.getState();
     return owner.node.isConnected && owner.lease.current() && sameScope(owner.target)
       && !document.querySelector('[role="dialog"], [role="alertdialog"]')
@@ -126,6 +134,20 @@ export function SidebarTreeProvider({ children }: { children: ReactNode }) {
     const owner: MenuOwner = { target: { ...target }, name, node, lease, actions, x: point?.x ?? bounds.left, y: point?.y ?? bounds.bottom,
       profile, revision: state.connectionVersions[target.connectionId] ?? 0, observer,
       release() { observer.disconnect(); for (const release of releases.splice(0)) release(); } };
+    const names = 'name' in target ? objectIdentifierCopy(profile.dialect, target.database, target) : undefined;
+    if (names) {
+      const { plain, qualified } = names;
+      const copy = (value: string) => {
+        try {
+          writeTableClipboardEvent(() => !ownerRef.current && targetCurrent(owner), data => data.setData('text/plain', value));
+          useWorkspace.getState().notify(text.copied);
+        } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+      };
+      owner.actions = <>{actions}
+        <button data-menu-group="copy" aria-label={text.copyName} onClick={() => copy(plain)}><Copy size={12}/></button>
+        {qualified && <button data-menu-group="copy" aria-label={text.copyQualifiedName} onClick={() => copy(qualified)}><Copy size={12}/></button>}
+      </>;
+    }
     ownerRef.current = owner;
     const pointer = (event: PointerEvent) => { if (!menuRef.current?.contains(event.target as Node)) retire(owner); };
     const escape = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape' && !(event.target instanceof Element && event.target.closest('[data-sidebar-submenu]'))) { event.preventDefault(); event.stopPropagation(); retire(owner, true); } };
@@ -204,7 +226,7 @@ function SidebarMenuActions({ actions, execute }: { actions: ReactNode; execute(
     if (child.type === Fragment) visit(child.props.children); else items.push(child);
   }); visit(actions);
   const groupFor = (item: ReactElement<ActionProps>) => item.props['data-menu-group'] ?? (item.props.menu ? 'favorite' : 'open');
-  const groups = (['open', 'create', 'structure', 'transfer', 'favorite', 'refresh', 'danger'] as const)
+  const groups = (['open', 'copy', 'create', 'structure', 'transfer', 'favorite', 'refresh', 'danger'] as const)
     .map(group => ({ group, items: items.filter(item => groupFor(item) === group || group === 'open' && groupFor(item) === 'general')
       .sort((a, b) => (a.props['data-menu-order'] ?? 10) - (b.props['data-menu-order'] ?? 10)) })).filter(group => group.items.length);
   return <>{groups.map(({ group, items: groupItems }, index) => <Fragment key={group}>
