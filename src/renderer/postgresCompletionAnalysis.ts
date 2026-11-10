@@ -249,15 +249,26 @@ function traceQualifier(parts: Part[], i: number, visible: ScopedRelation[][], t
 function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][],
   relations: ReadonlyMap<number, RelationSpan>, trace: ReferenceTrace): void {
   const levels = [refs, ...outer];
+  const update = keyword(parts[0]) === 'UPDATE';
   let joinStart = 0, lastRelation = -1;
+  let inAssignments = false, assignmentTarget = false;
   for (let i = 0; i < parts.length && !trace.unsupported; i++) {
     const part = parts[i], word = keyword(part), span = relations.get(i);
     if (span) {
       lastRelation = span.relation;
-      if (word === 'FROM' || punct(part, ',')) joinStart = span.relation;
+      if (word === 'FROM' || word === 'USING' || punct(part, ',')) joinStart = span.relation;
       levels[0] = refs;
+      inAssignments = false;
       i = span.end - 1;
       continue;
+    }
+    // SET 左侧的点号可表示复合字段路径。只分析赋值表达式中的关系限定符。
+    if (update && word === 'SET') { inAssignments = true; assignmentTarget = true; }
+    if (word === 'WHERE') inAssignments = false;
+    if (inAssignments) {
+      if (punct(part, ',')) assignmentTarget = true;
+      if (punct(part, '=')) assignmentTarget = false;
+      if (assignmentTarget) continue;
     }
     if (endsFrom.has(word)) { levels[0] = refs; lastRelation = -1; }
     // ON 只可见本 JOIN 链已加入的关系，逗号分隔的前序表仍属于另外的 FROM 项。
@@ -269,6 +280,39 @@ function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], o
       else traceExpressions(part.parts, scope, levels[0], outer, new Map(), trace);
     } else traceQualifier(parts, i, levels, trace);
   }
+}
+
+/** RETURNING 的 OLD/NEW 别名只在输出表达式内可见，默认名称让位给已有关系。 */
+function traceReturning(parts: Part[], scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][], trace: ReferenceTrace): void {
+  const names = new Set([refs, ...outer].flat().map(ref => ref.alias ?? ref.name));
+  const visible = [...refs], specified = new Set<string>();
+  let start = 0;
+  if (keyword(parts[0]) === 'WITH') {
+    const options = parts[1];
+    if (options?.kind !== 'group' || options.closing !== ')' || options.parts.length % 4 !== 3) {
+      trace.unsupported = true;
+      return;
+    }
+    for (let i = 0; i < options.parts.length; i += 4) {
+      const role = keyword(options.parts[i]), declaration = options.parts[i + 2], alias = identifier(declaration);
+      if (!['OLD', 'NEW'].includes(role) || specified.has(role) || keyword(options.parts[i + 1]) !== 'AS' ||
+          !alias || stop.has(keyword(declaration)) || names.has(alias) ||
+          i + 3 < options.parts.length && !punct(options.parts[i + 3], ',')) {
+        trace.unsupported = true;
+        return;
+      }
+      specified.add(role);
+      names.add(alias);
+      trace.declarations.set(declaration.start, 'alias');
+      visible.push({ name: alias, declaration });
+    }
+    start = 2;
+  }
+  for (const role of ['OLD', 'NEW']) {
+    const name = role.toLowerCase();
+    if (!specified.has(role) && !names.has(name)) visible.push({ name });
+  }
+  traceExpressions(parts.slice(start), scope, visible, outer, new Map(), trace);
 }
 
 /** 推导当前查询输出。引用模式只收集同一作用域树中的局部绑定，跳过投影计算。 */
@@ -344,27 +388,37 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     return { projection: output, query, routine };
   }
 
-  if (trace && !['SELECT', 'VALUES'].includes(keyword(main[0]))) return unsupported();
+  const command = keyword(main[0]);
+  const write = !!trace && (command === 'UPDATE' || command === 'DELETE');
+  if (trace && !write && !['SELECT', 'VALUES'].includes(command)) return unsupported();
+  if (write && command === 'DELETE' && keyword(main[1]) !== 'FROM') return unsupported();
+  const returning = write ? main.findIndex(part => keyword(part) === 'RETURNING') : -1;
+  const where = write ? main.findIndex(part => keyword(part) === 'WHERE') : -1;
   const refs: ScopedRelation[] = [];
   const spans = trace ? new Map<number, RelationSpan>() : undefined;
   const commas = new Set<number>();
-  let from = false;
-  for (let i = 0; i < main.length; i++) {
+  let from = false, deleteUsing = false;
+  for (let i = 0; i < (returning < 0 ? main.length : returning); i++) {
     const word = keyword(main[i]);
     if (endsFrom.has(word)) from = false;
+    const usingSource = write && command === 'DELETE' && word === 'USING' && !deleteUsing && !from && (where < 0 || i < where);
+    if (usingSource) deleteUsing = true;
     if (from && punct(main[i], ',')) commas.add(i);
-    if (!relationEntry(main, i) && !commas.has(i)) continue;
-    if (word === 'FROM' || word === 'JOIN') from = true;
+    if (!usingSource && !relationEntry(main, i) && !commas.has(i)) continue;
+    const target = write && writeTarget(main, i);
+    if (!target && (word === 'FROM' || word === 'JOIN' || usingSource)) from = true;
     let next = i + 1;
     const modifier = keyword(main[next]);
     if (modifier === 'ONLY' || modifier === 'LATERAL') next++;
+    // PostgreSQL 的 FROM/USING 来源子查询及表函数不能引用本语句的写入目标。
+    const preceding = write ? refs.slice(1) : refs;
     let part = main[next];
     let name = '', schema: string | undefined, projection: Projection | undefined;
     let cte: LocalReferenceRange | undefined;
     if (part?.kind === 'group') {
-      if (trace && part.closing !== ')') return unsupported();
+      if (trace && (target || part.closing !== ')')) return unsupported();
       const active = context && contains(part, context.offset) ? context : undefined;
-      const parsed = parseQuery(part.parts, scope, modifier === 'LATERAL' ? [refs, ...outer] : outer, active, trace);
+      const parsed = parseQuery(part.parts, scope, modifier === 'LATERAL' ? [preceding, ...outer] : outer, active, trace);
       if (active) return parsed;
       projection = parsed.projection;
       next++;
@@ -379,10 +433,11 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       }
       if (!name || punct(main[next], '.')) { if (trace) return unsupported(); continue; }
       if (main[next]?.kind === 'group' && word !== 'INTO') {
+        if (target) return unsupported();
         // 表函数的别名仍会遮蔽外层关系，未声明字段时不查询同名物理表。
         projection = unknown;
         const args = main[next];
-        if (trace && args.kind === 'group') traceExpressions(args.parts, scope, refs, outer, new Map(), trace);
+        if (trace && args.kind === 'group') traceExpressions(args.parts, scope, preceding, outer, new Map(), trace);
         next++;
       } else if (!schema && !writeTarget(main, i)) {
         projection = scope.get(name);
@@ -404,9 +459,11 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
       if (explicitAlias && !alias) return unsupported();
       let end = next + (alias ? 1 : 0);
       if (alias && main[end]?.kind === 'group') {
-        if (!nameList(main[end]).length) return unsupported();
+        if (target || !nameList(main[end]).length) return unsupported();
         end++;
       }
+      if (target && command === 'UPDATE' && keyword(main[end]) !== 'SET') return unsupported();
+      if (target && command === 'DELETE' && main[end] && !['USING', 'WHERE', 'RETURNING'].includes(keyword(main[end]))) return unsupported();
       spans!.set(i, { end, relation: refs.length });
       if (alias) trace.declarations.set(part.start, 'alias');
       refs.push({ name, alias, schema, declaration: alias ? part : cte });
@@ -416,7 +473,8 @@ function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], 
     refs.push({ name, ...(schema ? { schema } : {}), ...(alias ? { alias } : {}), ...(projection ? { projection } : {}) });
   }
   if (trace) {
-    traceExpressions(main, scope, refs, outer, spans!, trace);
+    traceExpressions(returning < 0 ? main : main.slice(0, returning), scope, refs, outer, spans!, trace);
+    if (returning >= 0 && !trace.unsupported) traceReturning(main.slice(returning + 1), scope, refs, outer, trace);
     return { projection: unknown };
   }
   const projection = project(main, refs);

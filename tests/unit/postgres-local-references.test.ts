@@ -70,3 +70,13 @@ it('离线拒绝依赖字符串模式的绑定，并拒绝尚未支持的关系�
     expect(at(sql), sql).toMatchObject({ status: 'blocked' });
   }
 });
+
+it('写入目标仅在赋值、条件及输出表达式可见，SET 左侧不绑定关系', () => {
+  expect(at('UPDATE parent s SET ¦s.field=1 WHERE s.id=2')).toMatchObject({ status: 'blocked' });
+  expect(at('UPDATE parent s SET n=1 FROM LATERAL (SELECT ¦s.id) x WHERE s.id=x.id')).toMatchObject({ status: 'blocked' });
+  expect(at('DELETE FROM parent s USING incoming i JOIN other o ON ¦s.id=o.id WHERE s.id=i.id')).toMatchObject({ status: 'blocked' });
+  expect(at('UPDATE parent s SET n=(SELECT ¦s.id) FROM child c WHERE s.id=c.id RETURNING s.id'))
+    .toMatchObject({ status: 'ready', references: Array.from({ length: 3 }, () => expect.any(Object)) });
+  expect(at('DELETE FROM parent s USING incoming i WHERE s.id=i.id RETURNING WITH (OLD AS before) ¦before.id'))
+    .toMatchObject({ status: 'ready', declaration: { start: 'DELETE FROM parent s USING incoming i WHERE s.id=i.id RETURNING WITH (OLD AS '.length } });
+});

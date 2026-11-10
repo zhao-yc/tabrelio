@@ -57,3 +57,38 @@ it('限制为 63 个 UTF-8 字节，拒绝孤立代理、控制字符和空名�
     expect(rename(source, name)).toEqual({ status: 'blocked', reason: 'name' });
   }
 });
+
+it('UPDATE 和 DELETE 分别绑定写入目标及 FROM/USING 来源', () => {
+  expect(edited('UPDATE ONLY public.orders AS ¦dst SET total=src.total FROM incoming src WHERE dst.id=src.id RETURNING dst.total', 'target'))
+    .toBe('UPDATE ONLY public.orders AS "target" SET total=src.total FROM incoming src WHERE "target".id=src.id RETURNING "target".total');
+  expect(edited('WITH q AS (SELECT 1 id) DELETE FROM orders d USING ¦q WHERE d.id=q.id RETURNING d.id', '待删'))
+    .toBe('WITH "待删" AS (SELECT 1 id) DELETE FROM orders d USING "待删" WHERE d.id="待删".id RETURNING d.id');
+  expect(edited('DELETE FROM orders d USING incoming ¦i, facts f JOIN owner o ON f.owner_id=o.id WHERE d.id=i.id RETURNING i.*', 'source'))
+    .toBe('DELETE FROM orders d USING incoming "source", facts f JOIN owner o ON f.owner_id=o.id WHERE d.id="source".id RETURNING "source".*');
+});
+
+it('写入 CTE 的 RETURNING 与外层查询保持各自绑定', () => {
+  expect(edited('WITH removed AS (DELETE FROM orders ¦d WHERE d.closed RETURNING d.id) SELECT d.id FROM removed d', 'gone'))
+    .toBe('WITH removed AS (DELETE FROM orders "gone" WHERE "gone".closed RETURNING "gone".id) SELECT d.id FROM removed d');
+  expect(edited('WITH ¦removed AS (DELETE FROM orders d RETURNING d.id) SELECT removed.id FROM removed', 'archived'))
+    .toBe('WITH "archived" AS (DELETE FROM orders d RETURNING d.id) SELECT "archived".id FROM "archived"');
+});
+
+it('拒绝把 SET 复合字段或 FROM/USING 中不可见的写入目标当成已确认引用', () => {
+  expect(rename('UPDATE parent s SET s.field=1 WHERE ¦s.id=2', 'target')).toEqual({ status: 'blocked', reason: 'unresolved' });
+  expect(rename('UPDATE parent s SET n=1 FROM LATERAL (SELECT s.id) x WHERE ¦s.id=x.id', 'target'))
+    .toEqual({ status: 'blocked', reason: 'unresolved' });
+  expect(rename('DELETE FROM parent s USING generate_series(1, s.id) x WHERE ¦s.id=x.x', 'target'))
+    .toEqual({ status: 'blocked', reason: 'unresolved' });
+  expect(edited('UPDATE parent s SET n=(SELECT ¦s.id) FROM incoming i, LATERAL (SELECT i.id) x WHERE s.id=x.id', 'target'))
+    .toBe('UPDATE parent "target" SET n=(SELECT "target".id) FROM incoming i, LATERAL (SELECT i.id) x WHERE "target".id=x.id');
+});
+
+it('RETURNING 显式 OLD/NEW 别名可重命名，保留其他输出绑定和默认名称', () => {
+  expect(edited('UPDATE orders d SET n=d.n+1 RETURNING WITH (OLD AS ¦before, NEW AS after) before.n, after.n, d.id', 'previous'))
+    .toBe('UPDATE orders d SET n=d.n+1 RETURNING WITH (OLD AS "previous", NEW AS after) "previous".n, after.n, d.id');
+  expect(rename('DELETE FROM orders d RETURNING ¦old.id', 'before')).toMatchObject({ status: 'blocked' });
+  expect(rename('UPDATE orders ¦d SET n=1 RETURNING WITH (OLD AS d) d.n', 'target')).toMatchObject({ status: 'blocked' });
+  expect(edited('UPDATE orders old SET n=1 RETURNING ¦old.id, new.n', 'target'))
+    .toBe('UPDATE orders "target" SET n=1 RETURNING "target".id, new.n');
+});

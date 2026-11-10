@@ -11,6 +11,20 @@ test.skip(process.env.DBARK_SQL_REFERENCE_HIGHLIGHTS_TEST !== '1', '仅在隔离
 
 const sql = ['SELECT s.id,', '(SELECT s.id FROM child s)', 'FROM parent s', 'WHERE s.id=1;'].join('\n');
 const cteSql = 'WITH local_cte AS (SELECT 1 AS id) SELECT local_cte.id FROM local_cte;';
+const dmlDrafts = [
+  {
+    id: 'update-draft', title: 'UPDATE 导航草稿',
+    sql: 'UPDATE orders d SET n=d.n+1 WHERE d.id=1 RETURNING WITH (OLD AS previous) previous.n, d.n;',
+    referenceAfter: 'WHERE ', declarationAfter: 'orders ', original: 'd', name: '目标',
+    renamed: 'UPDATE orders "目标" SET n="目标".n+1 WHERE "目标".id=1 RETURNING WITH (OLD AS previous) previous.n, "目标".n;',
+  },
+  {
+    id: 'delete-draft', title: 'DELETE 导航草稿',
+    sql: 'WITH q AS (SELECT 1 id) DELETE FROM orders d USING q WHERE d.id=q.id RETURNING d.id;',
+    referenceAfter: 'USING ', declarationAfter: 'WITH ', original: 'q', name: '待删',
+    renamed: 'WITH "待删" AS (SELECT 1 id) DELETE FROM orders d USING "待删" WHERE d.id="待删".id RETURNING d.id;',
+  },
+];
 const command = 'editor-local-references';
 
 for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
@@ -33,7 +47,7 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
       }
       await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
       // 真实持久化接口准备草稿，网络方言使用不可连接的回环配置，无需实库或凭据。
-      await page.evaluate(async ({ dialect, sql, cteSql }) => {
+      await page.evaluate(async ({ dialect, sql, cteSql, dmlDrafts }) => {
         const id = 'sql-reference-highlights', base = { id, name: '引用高亮样本', group: '', color: '#51bda5' };
         if (dialect === 'sqlite') {
           const file = await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
@@ -46,9 +60,12 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
         await window.dbark.invoke('settings.save', { ...settings, activeTabId: id, tabs: [
           { id, kind: 'query', title: '引用高亮草稿', connectionId: id, ...(dialect === 'sqlite' ? { database: 'main' } : {}), sql },
           { id: 'other', kind: 'query', title: '另一个查询', connectionId: id, sql: 'SELECT 1;' },
-          ...(dialect === 'postgresql' ? [{ id: 'cte', kind: 'query' as const, title: 'CTE 导航草稿', connectionId: id, sql: cteSql }] : []),
+          ...(dialect === 'postgresql' ? [
+            { id: 'cte', kind: 'query' as const, title: 'CTE 导航草稿', connectionId: id, sql: cteSql },
+            ...dmlDrafts.map(({ id: tabId, title, sql }) => ({ id: tabId, kind: 'query' as const, title, sql, connectionId: id })),
+          ] : []),
         ] });
-      }, { dialect, sql, cteSql });
+      }, { dialect, sql, cteSql, dmlDrafts });
       await page.reload();
       const tab = page.locator('.query-tab:visible'), input = tab.locator('.monaco-editor').getByRole('textbox');
       const lines = tab.locator('.view-lines .view-line');
@@ -152,6 +169,21 @@ for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
         await expect.poll(async () => (await snapshot()).source).toBe(cteSql.replaceAll('local_cte', '"明细🚢"'));
         await page.keyboard.press(undo);
         await expect.poll(async () => (await snapshot()).source).toBe(cteSql);
+
+        for (const draft of dmlDrafts) {
+          await page.locator('.tab-strip').getByRole('button', { name: draft.title, exact: true }).click();
+          const reference = draft.sql.indexOf(draft.referenceAfter) + draft.referenceAfter.length + 1;
+          const declaration = draft.sql.indexOf(draft.declarationAfter) + draft.declarationAfter.length;
+          await move(0, reference);
+          await expect.poll(cursorOffset).toBe(reference);
+          await page.keyboard.press('F12');
+          await expect.poll(cursorOffset).toBe(declaration);
+          await enterRename(draft.original, draft.name);
+          await expect.poll(async () => (await snapshot()).source).toBe(draft.renamed);
+          await tab.screenshot({ path: info.outputPath(`postgresql-${draft.id}.png`) });
+          await page.keyboard.press(undo);
+          await expect.poll(async () => (await snapshot()).source).toBe(draft.sql);
+        }
       }
       expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }))).toEqual({ tasks: [], history: [] });
       expect(pageErrors).toEqual([]);
