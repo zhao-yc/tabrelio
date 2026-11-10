@@ -45,19 +45,25 @@ describe('保存查询来源绑定和真实原子 CAS', () => {
     expect(commandSchemas['queries.updateSource'].safeParse({ source: result.source, content: { ...content(), group } }).success).toBe(false);
     restored.close();
   });
-  it('多文件导入一次提交，同名保留独立编号，磁盘失败恢复整批及修订', async () => {
+  it.each([false, true])('多文件导入一次提交，同名保留独立编号，写盘失败整批恢复（有分组=%s）', async grouped => {
     const { store, path, wasm } = await open();
     const first = store.createBoundQuery(content());
     const batch = [{ name: '同名', sql: 'SELECT 1;\r\n' }, { name: '同名', sql: 'SELECT 2;\n' }];
+    const initial = store.queryOrganization();
+    if (grouped) store.applyQueryOrganization({ expectedRevision: initial.revision, operation: { kind: 'create', name: '批量导入', parentId: null } });
+    const organization = store.queryOrganization();
+    const group = grouped ? { id: organization.groups[0].id, expectedRevision: organization.revision } : undefined;
     const before = readFileSync(path), revision = store.querySearchRevision(), existing = store.queries();
+    if (group) expect(() => store.createImportedQueries(batch, () => {}, { ...group, expectedRevision: initial.revision })).toThrow('分组已变化');
     const temporary = path + '.tmp';
     mkdirSync(temporary);
-    try { expect(() => store.createImportedQueries(batch, () => {})).toThrow('修改未保存'); }
+    try { expect(() => store.createImportedQueries(batch, () => {}, group)).toThrow('修改未保存'); }
     finally { rmdirSync(temporary); }
     expect(store.queries()).toEqual(existing);
     expect(store.querySearchRevision()).toBe(revision);
+    expect(store.queryOrganization()).toEqual(organization);
     expect(readFileSync(path)).toEqual(before);
-    store.createImportedQueries(batch, () => {});
+    store.createImportedQueries(batch, () => {}, group);
     store.close();
     const restored = await LocalStore.open(path, wasm, protector);
     const queries = restored.queries(), imported = queries.filter(item => item.id !== first.source.id);
@@ -65,6 +71,7 @@ describe('保存查询来源绑定和真实原子 CAS', () => {
     expect(new Set(imported.map(item => item.id)).size).toBe(2);
     expect(imported.map(item => item.sql).sort()).toEqual(batch.map(item => item.sql));
     expect(imported.every(item => item.name === '同名' && !item.connectionId && item.databaseContext?.state === 'known' && item.databaseContext.database === null)).toBe(true);
+    expect(restored.queryOrganization()).toMatchObject({ unfiledCount: group ? 1 : 3, totalCount: 3, groups: group ? [{ id: group.id, count: 2 }] : [] });
     restored.close();
   });
   it('新建独立编号、原文摘要和正文精度，另存绝不改源记录', async () => {

@@ -56,9 +56,14 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       const list = await window.dbark.invoke('queries.create', { name: '跨连接保存脚本', connectionId: profiles[1].id, context: { state: 'known', database: '保存来源库' }, sql: input.listSql });
       const search = await window.dbark.invoke('queries.create', { name: '未绑定保存脚本', context: { state: 'known', database: null }, sql: input.searchSql });
       const preview = await window.dbark.invoke('queries.create', { name: '未绑定预览脚本', context: { state: 'known', database: null }, sql: input.previewSql });
+      const initial = await window.dbark.invoke('queries.organizationGet', {});
+      const root = await window.dbark.invoke('queries.organizationApply', { expectedRevision: initial.revision, operation: { kind: 'create', name: '批量导入', parentId: null } });
+      const parentId = root.groups[0].id;
+      const organized = await window.dbark.invoke('queries.organizationApply', { expectedRevision: root.revision, operation: { kind: 'create', name: '例行检查', parentId } });
+      const importGroup = { id: organized.groups.find(group => group.parentId === parentId)!.id, expectedRevision: organized.revision };
       const settings = await window.dbark.invoke('settings.get', {});
       await window.dbark.invoke('settings.save', { ...settings, tabs: [{ id: 'saved-insert-original-tab', kind: 'query', title: '保持原查询', connectionId: profiles[0].id, database: '原查询库', databaseContext: { state: 'known', database: '原查询库' }, sql: input.originalSql, sourceBinding: original.source }], activeTabId: 'saved-insert-original-tab' });
-      return { original, list, search, preview, profiles };
+      return { original, list, search, preview, profiles, importGroup };
     }, { originalSql, listSql, searchSql, previewSql }));
     expect(prepared.profiles.every(profile => profile.password === undefined && profile.rememberPassword === false)).toBe(true);
     // 只启用Monaco官方全局只读观察API，模型/选区及正文均由真实UI或原Main创建。
@@ -125,7 +130,8 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
         if (command === 'queries.readText' && (!value || Object.keys(value).sort().join() !== 'digest,id' || !sources.has(value.id) || !/^[a-f0-9]{64}$/.test(value.digest))) return deny(command);
         if (command === 'queries.exportSql' && (exporting || !value || Object.keys(value).sort().join() !== 'digest,encoding,id' || value.encoding !== input.exports[Math.max(0, choices - 1)]?.encoding || value.id !== input.exportedId || !/^[a-f0-9]{64}$/.test(value.digest))) return deny(command);
         if (command === 'queries.exportSqlArchive' && (archiving || !value || Object.keys(value).sort().join() !== 'encoding,items' || value.encoding !== input.exports[Math.max(0, archiveChoices - 1)]?.encoding || !Array.isArray(value.items) || value.items.length !== input.archiveIds.length || value.items.some((item: any, index: number) => !item || Object.keys(item).sort().join() !== 'digest,id' || item.id !== input.archiveIds[index] || !/^[a-f0-9]{64}$/.test(item.digest)))) return deny(command);
-        if (command === 'queries.importSql' && (importing || !value || Object.keys(value).join() !== 'encoding' || value.encoding !== 'utf8')) return deny(command);
+        if (command === 'queries.importSql' && (importing || !value || stable(value) !== stable(imports === 0
+          ? { encoding: 'utf8' } : { encoding: 'utf8', group: input.importGroup }))) return deny(command);
         if (command === 'search.savedQueries') { if (state.searchTaskIds.length || typeof value?.taskId !== 'string') return deny(command); state.searchTaskIds.push(value.taskId); }
         const fact = { command, ok: false }; state.calls.push(fact); state.pending++;
         if (command === 'queries.exportSql') exporting = true;
@@ -144,7 +150,7 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       };
       state.check = check; state.restore = () => { check(); if (state.pending || state.held || state.gateNext || state.calls.some(call => !call.ok) || choices !== input.exports.length + 1 || imports !== 2 || archiveChoices !== input.exports.length + 1) throw Error('原保存查询读取或本地任务未收尾'); handlers.set('dbark:request', previous); utilityProcess.fork = originalFork; dialog.showSaveDialog = originalSave; dialog.showOpenDialog = originalOpen; delete root.__savedQueryInsertionOffline; };
       root.__savedQueryInsertionOffline = state; handlers.set('dbark:request', wrapped); utilityProcess.fork = blocked; dialog.showSaveDialog = picker; dialog.showOpenDialog = importPicker; check();
-    }, { baseline, sql: [original, listInserted, searchInserted], exports, archiveIds: [prepared.preview.source.id, prepared.list.source.id], importedPaths: [importedPath, secondImportPath], exportedId: prepared.preview.source.id, sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }, { id: prepared.preview.source.id, sql: previewSql }] })); armed = true;
+    }, { baseline, sql: [original, listInserted, searchInserted], exports, archiveIds: [prepared.preview.source.id, prepared.list.source.id], importedPaths: [importedPath, secondImportPath], importGroup: prepared.importGroup, exportedId: prepared.preview.source.id, sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }, { id: prepared.preview.source.id, sql: previewSql }] })); armed = true;
     const history = () => page.getByRole('dialog', { name: zh.activity.text003, exact: true });
     /** 真实工作台入口先打开历史，再切保存页，沿同一捕获选区而不重新领当前编辑器。 */
     const openList = async () => { await step(async () => { const action = await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '执行历史', exact: true }, check); check(); await action.click(); check(); }); await step(() => history().getByRole('button', { name: zh.activity.text005, exact: true }).click()); await step(() => expect(history().getByRole('button', { name: pagesText.refresh, exact: true })).toBeEnabled()); };
@@ -233,10 +239,18 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
     await step(() => importSql.click());
     await step(() => expect(importSql).toBeEnabled());
     expect(await effects()).toEqual(before);
+    const targetPath = '批量导入 / 例行检查';
+    const importTarget = history().getByLabel(pagesText.sqlImportGroup, { exact: true });
+    await step(() => importTarget.selectOption({ label: targetPath }));
+    await step(() => history().locator('details').filter({ has: page.getByRole('button', { name: pagesText.sqlImportChoose, exact: true }) })
+      .screenshot({ path: info.outputPath('saved-query-import-group.png') }));
     await step(() => importSql.click());
     await step(() => expect(history().getByText('未绑定导入', { exact: true })).toBeVisible());
     await step(() => expect(history().getByText('第二份导入', { exact: true })).toBeVisible());
-    await step(() => expect(history().getByText('已导入 2 条未分组查询。当前筛选可能隐藏这些记录。', { exact: true })).toBeVisible());
+    await step(() => expect(history().getByText(`已导入 2 条查询到分组「${targetPath}」。当前筛选可能隐藏这些记录。`, { exact: true })).toBeVisible());
+    await step(() => expect(importSql).toBeDisabled());
+    await step(() => history().getByRole('button', { name: organizationText.selectGroup(targetPath), exact: true }).click());
+    await step(() => expect(history().locator('.history-card')).toHaveCount(2));
     const afterImport = await effects();
     const imported = afterImport.queries.find(record => record.name === '未绑定导入');
     const secondImport = afterImport.queries.find(record => record.name === '第二份导入');

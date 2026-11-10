@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
 import type { SavedQueryPage, SavedQueryPageEntry, SavedQueryPageSort } from '../../shared/savedQueryPages';
-import type { SavedQueryGroupScope, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
+import type { SavedQueryGroupScope, SavedQueryGroupTarget, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
 import { savedQueryOpenBatchLimits, type SavedQueryOpenResult, type SavedQueryScope } from '../../shared/savedQuerySearch';
 import type { QueryFileEncoding } from '../../shared/contracts';
 import { zh, formatText } from '../locales/zh-CN';
@@ -48,6 +48,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const connections = useWorkspace(state => state.connections);
   const [scope, setScope] = useState<SavedQueryScope>(() => initialConnectionId ? { kind: 'connection', connectionId: initialConnectionId } : { kind: 'all' });
   const [importEncoding, setImportEncoding] = useState<QueryFileEncoding>('utf8');
+  const [importGroup, setImportGroup] = useState<SavedQueryGroupTarget>();
   const [exportEncoding, setExportEncoding] = useState<QueryFileEncoding>('utf8');
   const [sort, setSort] = useState<SavedQueryPageSort>('recent');
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
@@ -372,12 +373,14 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   }
   /** 写入完成后刷新原筛选。若刷新失败，保留导入成功提示并由用户重新读取列表。 */
   function importSql(): void {
-    if (!editable()) return;
+    if (!editable() || importGroupStale) return;
+    const path = importGroup ? tree.find(item => item.id === importGroup.id)?.path : undefined;
     const canRefresh = !reply || criteriaKey(criteriaRef.current) === applied;
     void run(async ticket => {
-      const result = await io.request('queries.importSql', { encoding: importEncoding });
+      const result = await io.request('queries.importSql', { encoding: importEncoding, ...(importGroup ? { group: importGroup } : {}) });
       if (!owns(ticket) || result.status !== 'imported') return;
-      setNotice(result.names.length === 1 ? formatText(t.sqlImported, result.names[0]) : formatText(t.sqlBatchImported, result.names.length));
+      setNotice(path !== undefined ? formatText(t.sqlGroupImported, result.names.length, path) : result.names.length === 1
+        ? formatText(t.sqlImported, result.names[0]) : formatText(t.sqlBatchImported, result.names.length));
       setNeedsRefresh(true);
       if (!canRefresh) return;
       const raw = await io.request('queries.organizationGet', {});
@@ -415,6 +418,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
   const blocked = busy || closing || !!editing || !!renaming || !!deleting || !!opening || !!external, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
+  const importGroupStale = !!importGroup && (needsRefresh || importGroup.expectedRevision !== organization?.revision || !tree.some(item => item.id === importGroup.id));
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
   return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else void close(); }}
     onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
@@ -430,7 +434,16 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       <div className="saved-query-organization-list"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={blocked} onChange={event => draft(() => setSearch(event.target.value))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(); } }}/><button disabled={blocked} onClick={() => void load()}>{t.searchButton}</button></div>
         <details><summary>{t.sqlImport}</summary><p className="muted small">{t.sqlImportHint}</p><div className="inline-field">
           <label>{fileText.encoding} <select disabled={blocked} value={importEncoding} onChange={event => draft(() => setImportEncoding(event.target.value as QueryFileEncoding))}><option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option></select></label>
-          <button disabled={blocked} onClick={importSql}>{t.sqlImportChoose}</button>
+          <label>{t.sqlImportGroup} <select aria-label={t.sqlImportGroup} disabled={blocked || needsRefresh || !organization}
+            value={importGroupStale ? '-' : importGroup ? 'group:' + importGroup.id : ''} onChange={event => {
+              const target = tree.find(item => 'group:' + item.id === event.target.value);
+              draft(() => setImportGroup(target && organization ? { id: target.id, expectedRevision: organization.revision } : undefined));
+            }}>
+            {importGroupStale && <option value="-" disabled>{text.reselectSaveGroup}</option>}
+            <option value="">{text.unfiled}</option>
+            {tree.map(item => <option key={item.id} value={'group:' + item.id}>{item.path}</option>)}
+          </select></label>
+          <button disabled={blocked || importGroupStale} onClick={importSql}>{t.sqlImportChoose}</button>
         </div></details>
         <label className="inline-field">{t.sqlExportEncoding}<select aria-label={t.sqlExportEncoding} value={exportEncoding} disabled={blocked}
           onChange={event => setExportEncoding(event.target.value as QueryFileEncoding)}>

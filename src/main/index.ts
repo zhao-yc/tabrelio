@@ -2037,7 +2037,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         }
       }
       assertCurrent();
-      store.createImportedQueries(files, assertCurrent);
+      store.createImportedQueries(files, assertCurrent, input.group);
       return { status: 'imported', names: files.map(file => file.name) };
     });
   }

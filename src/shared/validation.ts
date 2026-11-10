@@ -141,7 +141,7 @@ import { historyDeletePreviewInputSchema, historyDeleteApplyInputSchema, history
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import { connectionOrganizationGetSchema, connectionOrganizationApplySchema } from './connectionOrganization';
-import { savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
+import { savedQueryGroupTargetSchema, savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
 import type { Command, ResultExportData } from './contracts';
 import { resultArchiveMaxSets, validateResultExportData } from './resultExport';
 import { assertResultExcelData, validateResultArchiveOptions } from './resultExcel';
@@ -545,7 +545,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,'queries.readBatch':savedQueryReadBatchSchema,'queries.readText':savedQueryReadTextSchema,'queries.exportSql':savedQueryExportSqlSchema,
   'queries.exportSqlArchive':savedQueryExportSqlArchiveSchema,
   'queries.copySql': savedQueryReadTextSchema,
-  'queries.importSql': z.object({ encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
+  'queries.importSql': z.object({ encoding: z.enum(['utf8','utf16le','gb18030']), group: savedQueryGroupTargetSchema.optional() }).strict(),
   'queries.page':savedQueryPageInputSchema,'queries.pageContinue':savedQueryPageNextSchema,'queries.pageRelease':savedQueryPageReleaseSchema,'queries.deleteChecked':savedQueryDeleteCheckedSchema,
   'queries.renameChecked': savedQueryRenameSchema,
   'queries.duplicateChecked': savedQueryDuplicateSchema,

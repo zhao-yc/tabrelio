@@ -1098,13 +1098,14 @@ export class LocalStore {
     this.queryRevisionValue++;
     return records.length;
   }
-  /** 导入文件都生成独立编号。全部记录通过校验后才进入同一事务，写盘失败时一起恢复。 */
-  createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void): void {
+  /** 文件正文和目标分组成员同事务写入，分组变化或写盘失败时整批恢复。 */
+  createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void, group?: SavedQueryGroupTarget): void {
     if (!files.length || files.length > savedQueryImportLimits.files) throw Error('导入文件数量超出限制');
     const records = files.map(({ name, sql }) => this.boundQueryRecord(randomUUID(), { name, sql, context: { state: 'known', database: null } }));
     assertCurrent();
     this.mutate(() => {
-      for (const record of records) this.db.run('INSERT INTO queries VALUES (?,?,?)', [record.id, JSON.stringify(record), record.updatedAt]);
+      this.assertQuerySaveGroup(group);
+      for (const record of records) this.insertNewBoundQuery(record, group);
     }, assertCurrent);
     this.queryRevisionValue++;
   }

@@ -180,7 +180,7 @@ describe('queries.exportSql 原生选址及原摘要写入', () => {
 });
 
 describe('queries.importSql 真实 Main 分支', () => {
-  it('只接受编码，取消不读取，带 BOM 的原文写成独立未绑定查询', async () => {
+  it('拒绝自带路径，取消不读取，保留 BOM 文件原文和明确分组', async () => {
     const f = mainFixture(), input = { encoding: 'utf8' }, path = 'C:/isolated/中文😀.SQL';
     const sql = "-- 原文\r\nSELECT '😀';\n";
     expect(await f.importSql({ ...input, path })).toMatchObject({ ok: false });
@@ -189,8 +189,9 @@ describe('queries.importSql 真实 Main 分支', () => {
     expect(f.snapshot).not.toHaveBeenCalled();
     f.chooseImport.mockResolvedValueOnce({ canceled: false, filePaths: [path] });
     f.snapshot.mockResolvedValueOnce({ bytes: Buffer.from('\uFEFF' + sql, 'utf16le') });
-    expect(await f.importSql(input)).toEqual({ ok: true, result: { status: 'imported', names: ['中文😀'] } });
-    expect(f.create).toHaveBeenCalledExactlyOnceWith([{ name: '中文😀', sql }], expect.any(Function));
+    const group = { id: 'target', expectedRevision: 'a'.repeat(64) };
+    expect(await f.importSql({ ...input, group })).toEqual({ ok: true, result: { status: 'imported', names: ['中文😀'] } });
+    expect(f.create).toHaveBeenCalledExactlyOnceWith([{ name: '中文😀', sql }], expect.any(Function), group);
     expect(f.unexpected).not.toHaveBeenCalled();
   });
 
