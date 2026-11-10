@@ -95,7 +95,7 @@ import { queryAnalyzeZh } from '../locales/queryAnalyze.zh-CN';
 import { ErrorBox, Spinner, Empty, Modal } from './ui';
 import { QueryCloseDialog } from './QueryCloseDialog';
 import { QueryBindingDialog } from './QueryBindingDialog';
-import { QueryDuplicateIntent, type QueryDuplicateMode, type QueryTargetDraft } from '../queryDuplicateIntent';
+import { QueryDuplicateIntent, resultStatementTargetDraft, type QueryDuplicateMode, type QueryTargetDraft } from '../queryDuplicateIntent';
 import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { QueryTransactionSettingsIntent } from '../queryTransactionSettingsIntent';
@@ -1273,6 +1273,16 @@ export function PostgresQueryTab({
     locateFailure();
   }
 
+  /** 参数结果沿已验证的编辑器范围提取模板，独立草稿不接收执行参数或会话。 */
+  function openResultStatement() {
+    if (!receiptSource || selectedResultRef.current !== result || !pinNavigationCurrent() ||
+        !resultRanges.current.has(receiptSource)) return;
+    const sql = failureSource.current?.readRange(receiptSource.sourceRange);
+    if (sql === undefined) return;
+    try { onChooseQueryTarget?.(resultStatementTargetDraft(tab, sql, 'postgresql')); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+
   /** 对比只使用当前标签的固定快照，即使本次查询没有行结果也可打开。 */
   function openResultComparison() {
     if (!pinNavigationCurrent() || pinState.items.length < 2) return;
@@ -2411,6 +2421,9 @@ export function PostgresQueryTab({
             <button disabled={locked || !result.statement.trim()} onClick={openResultSql}>{zh.query.resultSql}</button>
             <button disabled={locked || !resultLocationAvailable}
               title={resultLocationAvailable ? text.locateResult : text.locateResultUnavailable} onClick={locateResultSource}>{text.locateResult}</button>
+            {onChooseQueryTarget && <button disabled={locked || !resultLocationAvailable}
+              title={resultLocationAvailable ? queryDuplicateZh.resultStatementHint : queryDuplicateZh.resultStatementUnavailable}
+              onClick={openResultStatement}>{queryDuplicateZh.resultStatement}</button>}
           </div>}
           {filterBinding && organizedResult && keywordFilter.result && <QueryResultKeyword key={keywordFilter.generation}
             keyword={keywordFilter.keyword} total={organizedResult.rows.length} matched={keywordFilter.result.rows.length}

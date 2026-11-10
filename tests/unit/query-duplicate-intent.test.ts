@@ -1,9 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ContentEditorPort, ContentModelPort } from './editor-content-test-ports';
 import { editorContentBridge, flushEditorContent } from '../../src/renderer/editorContentBridge';
-import { QueryDuplicateIntent, type QueryDuplicateScope } from '../../src/renderer/queryDuplicateIntent';
+import { QueryDuplicateIntent, resultStatementTargetDraft, type QueryDuplicateScope } from '../../src/renderer/queryDuplicateIntent';
 import { analyzeStatementNavigation } from '../../src/shared/statementNavigation';
 import { SqlScriptScanner } from '../../src/shared/sqlScriptScanner';
+
+it('按结果范围生成独立草稿，MySQL 系例程保留语句边界', () => {
+  const tab = { id: 'query', title: '多结果查询' };
+  const procedure = 'CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END';
+  for (const dialect of ['mysql', 'mariadb'] as const) {
+    const draft = resultStatementTargetDraft(tab, procedure, dialect);
+    expect(draft).toMatchObject({ sourceTabId: tab.id, title: '多结果查询（结果语句）' });
+    expect(new SqlScriptScanner(false, false).push(draft.sql, true)).toEqual([procedure]);
+  }
+  expect(resultStatementTargetDraft(tab, 'SELECT $1;', 'postgresql').sql).toBe('SELECT $1;');
+  expect(resultStatementTargetDraft(tab, 'SELECT :value;', 'sqlite').sql).toBe('SELECT :value;');
+});
 
 /** 真实正文桥与复制控制器，Monaco只用RAM公开端口；无store、IPC或系统剪贴板。 */
 function fixture() {

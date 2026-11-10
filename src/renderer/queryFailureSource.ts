@@ -104,6 +104,15 @@ export class QueryFailureSourceLease {
     try { return this.active() && this.select(this.checkedRange(value)); } catch { return false; }
   }
 
+  /** 读取与定位共用同一原模型租约，取完整正文且不移动光标。 */
+  readRange(value: unknown): string | undefined {
+    try {
+      if (!this.active()) return;
+      const { start, end } = this.checkedRange(value);
+      return this.full.slice(start, end);
+    } catch { return; }
+  }
+
   /** 点击只选择、滚动及聚焦原模型；每个同步端口前重核，不投递IPC或再次执行。 */
   locate(): boolean {
     return !!this.range && this.select(this.range);

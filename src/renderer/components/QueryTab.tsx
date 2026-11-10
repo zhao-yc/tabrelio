@@ -194,7 +194,7 @@ import { CurrentStatementIntent, type CurrentStatementScope } from '../currentSt
 import { currentStatementZh } from '../locales/currentStatement.zh-CN';
 import { sqliteExplainZh } from '../locales/sqliteExplain.zh-CN';
 import { historyPagesZh } from '../locales/historyPages.zh-CN';
-import { QueryDuplicateIntent, type QueryDuplicateMode, type QueryTargetDraft } from '../queryDuplicateIntent';
+import { QueryDuplicateIntent, resultStatementTargetDraft, type QueryDuplicateMode, type QueryTargetDraft } from '../queryDuplicateIntent';
 import { flushEditorContent } from '../editorContentBridge';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
 import { useQueryFileSource } from '../useQueryFileSource';
@@ -2642,6 +2642,17 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     ? outcome?.mysqlResultSourceRanges?.[resultIndex] : undefined;
   const sourceRange = sqliteReceipt?.sourceRange ?? sqlitePlanRange ?? mysqlSourceRange;
   const resultLocation = !busy && !resultModal && !!sourceRange && !!failureLocator?.canLocateRange(sourceRange);
+  const canOpenResultStatement = !!onChooseQueryTarget && !queryRunning && !!sourceResult && !pin &&
+    !!(sqliteReceipt?.sourceRange ?? mysqlSourceRange) && resultLocation && !fileSource.busy;
+  /** 只消费当前结果的原范围，避免拿截断预览或同文的另一条语句创建草稿。 */
+  function openResultStatement() {
+    if (!canOpenResultStatement || !connection || failureSource.current !== failureLocator ||
+        menuResult.current !== resultSqlTarget || !queryMenuCurrent() || fileSource.isBusy()) return;
+    const sql = failureLocator?.readRange(sourceRange);
+    if (sql === undefined) return;
+    try { onChooseQueryTarget?.(resultStatementTargetDraft(tab, sql, connection.dialect)); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
   /** 跳转只消费当前结果或计划的原范围，恢复编辑器但不改写正文或布局偏好。 */
   function locateResultSource(): void {
     if (!resultLocation || !sourceRange || !failureLocator || failureSource.current !== failureLocator ||
@@ -2829,6 +2840,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {(pin || sourceResult) && <button disabled={!canShowResultSql} onClick={openResultSql}>{pin ? zh.query.pinnedStatement : zh.query.resultSql}</button>}
 {mysqlSourceRange && <button disabled={!resultLocation} title={resultLocation ? undefined : sourceLocationText.resultUnavailable}
   onClick={locateResultSource}>{sourceLocationText.locateResult}</button>}
+{mysqlSourceRange && onChooseQueryTarget && <button disabled={!canOpenResultStatement}
+  title={canOpenResultStatement ? queryDuplicateZh.resultStatementHint : queryDuplicateZh.resultStatementUnavailable}
+  onClick={openResultStatement}>{queryDuplicateZh.resultStatement}</button>}
 <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)} title={rowDetailsText.choose} onClick={openRowDetail}>{rowDetailsText.open}</button>{recordEditTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
   onClick={openQueryRecord}>{outcome?.sqliteQueryJoined ? originsText.editJoin : originsText.editRecord}</button>}
 {recordTable && <button disabled={!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailAllowed(detailBinding)}
@@ -2883,6 +2897,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         {' · '}<span title={sqliteZh.receiptChangeHint}>{sqliteZh.receiptChanges(sqliteReceipt.changedRows)}</span>
         {' '}<button disabled={!resultLocation} title={resultLocation ? undefined : sqliteZh.resultLocateUnavailable}
           onClick={locateResultSource}>{sqliteZh.resultLocate}</button>
+        {onChooseQueryTarget && <button disabled={!canOpenResultStatement}
+          title={canOpenResultStatement ? queryDuplicateZh.resultStatementHint : queryDuplicateZh.resultStatementUnavailable}
+          onClick={openResultStatement}>{queryDuplicateZh.resultStatement}</button>}
       </div>}
       {sqlitePlanRange && <div className="info-strip">
         <button disabled={!resultLocation} title={resultLocation ? undefined : sqliteZh.resultLocateUnavailable}

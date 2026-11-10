@@ -1,6 +1,7 @@
 import type * as monaco from 'monaco-editor';
 import type { ConnectionProfile } from '../shared/contracts';
 import { SqlScriptScanner } from '../shared/sqlScriptScanner';
+import { queryParameterLimits } from '../shared/queryParameters';
 import type { NavigableStatement } from '../shared/statementNavigation';
 import { queryDatabasePatch, type QueryDatabaseContext } from '../shared/queryContext';
 import type { WorkspaceTab } from './store';
@@ -76,6 +77,14 @@ function statementDraftParts(source: string, ranges: readonly NavigableStatement
 }
 export function statementDraftSql(source: string, ranges: readonly NavigableStatement[], dialect: ConnectionProfile['dialect']): string {
   return statementDraftParts(source, ranges, dialect).join(source.includes('\r\n') ? '\r\n' : '\n');
+}
+
+/** 结果来源只提供语句范围。用原目录的打包方式保留例程体所需的客户端分隔符。 */
+export function resultStatementTargetDraft(tab: Pick<WorkspaceTab, 'id' | 'title'>, source: string, dialect: ConnectionProfile['dialect']): QueryTargetDraft {
+  if (!source.trim()) throw Error(text.changed);
+  const sql = statementDraftSql(source, [{ start: 0, end: source.length, delimiterStart: source.length, delimiterEnd: source.length }], dialect);
+  if (sql.length > 20_000_000 || new TextEncoder().encode(sql).byteLength > queryParameterLimits.sqlBytes) throw Error(text.tooLarge);
+  return { sourceTabId: tab.id, title: copyTitle(tab.title, text.resultStatementSuffix), sql };
 }
 
 /** 一次复制只借用原模型读取权；任何失效永久撤销，创建目标时严格挑选草稿字段。 */

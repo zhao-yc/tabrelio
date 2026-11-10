@@ -47,3 +47,14 @@ it('成功回执临时定位保留已绑定的失败范围，错误回执范围�
   expect(f.editor.setSelection.mock.calls.map(([selection]) => selection.startLineNumber)).toEqual([1, 1, 3]);
   lease.dispose();
 });
+it('读取原结果范围保留完整选区正文，旧模型换代后停止读取', () => {
+  const f = fixture("SELECT 1;\r\nSELECT '🧭', :value;"), start = f.source.lastIndexOf('SELECT');
+  const statement = f.source.slice(start), range = { start: 0, end: statement.length };
+  f.select(start, f.source.length);
+  const lease = f.create(statement)!;
+  expect(lease.readRange(range)).toBe(statement);
+  expect(lease.readRange({ start: statement.indexOf('🧭') + 1, end: statement.length })).toBeUndefined();
+  expect(f.editor.setSelection).not.toHaveBeenCalled();
+  f.emit('content');
+  expect(lease.readRange(range)).toBeUndefined();
+});

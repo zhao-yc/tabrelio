@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { queryResultNavigatorZh as text } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
+import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -89,9 +90,32 @@ test('多结果查询按名称、字段及序号切换，保持原执行和编�
     await expect(grid.getByRole('gridcell', { name: '2', exact: true })).toBeVisible();
     expect(await history()).toEqual(originalHistory);
     expect(await tasks()).toEqual(originalTasks);
-    const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
-    expect(settings.tabs).toHaveLength(1);
-    expect(settings.tabs[0].sql).toBe(sql);
+    const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    expect((await settings()).tabs.map(tab => tab.sql)).toEqual([sql]);
+
+    const openStatement = tab.getByRole('button', { name: duplicateText.resultStatement, exact: true });
+    const target = page.getByRole('dialog', { name: duplicateText.targetAction, exact: true });
+    await openStatement.click();
+    await expect(target.getByRole('button', { name: duplicateText.targetOpen, exact: true })).toBeDisabled();
+    await target.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+    expect((await settings()).tabs).toHaveLength(1);
+    await expect(grid.getByRole('gridcell', { name: '2', exact: true })).toBeVisible();
+    await openStatement.click();
+    await target.getByLabel(duplicateText.targetConnection, { exact: true }).selectOption('result-navigator');
+    await expect(target.getByLabel(duplicateText.targetDatabase, { exact: true })).toHaveValue('main');
+    await target.screenshot({ path: info.outputPath('结果语句选择目标.png') });
+    await target.getByRole('button', { name: duplicateText.targetOpen, exact: true }).click();
+    await expect(target).toHaveCount(0);
+    await expect.poll(async () => (await settings()).tabs.map(tab => tab.sql)).toEqual([sql, 'SELECT 2 AS sample;']);
+    await expect(tab.getByRole('grid')).toHaveCount(0);
+    await page.locator('.tab-strip').getByRole('button', { name: '多结果查询', exact: true }).click();
+    await expect(grid.getByRole('gridcell', { name: '2', exact: true })).toBeVisible();
+    await expect(openStatement).toBeEnabled();
+    await tab.locator('.monaco-editor').getByRole('textbox').focus();
+    await page.keyboard.insertText(' ');
+    await expect(openStatement).toBeDisabled();
+    expect(await history()).toEqual(originalHistory);
+    expect(await tasks()).toEqual(originalTasks);
     expect(pageErrors).toEqual([]);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
