@@ -22,11 +22,15 @@ function fixture(editable = true) {
   const tab = { id: 't', connectionId: 'c' }, profile = { id: 'c' }, state = { settings: { activeTabId: 't', tabs: [tab] }, connections: [profile], connectionVersions: { c: 0 }, activeJobs: {} as Record<string, unknown> };
   const forbidden = vi.fn(async (_value: unknown): Promise<any> => { throw Error('父关联入口不能预览或提交'); }), editor = editable ? new SqliteTableEditor(page, { current: () => true, active: () => true, available: () => !state.activeJobs.t, acquire: () => { throw Error('原编辑器不得取得写事务'); }, id: () => 'id', now: () => 0, changed: () => {}, dirty: () => {}, preview: forbidden, apply: forbidden, release: async () => {}, cancel: async () => {}, committed: () => {} }) : undefined;
   if (editor) editor.save(editor.view.rows[0].id, [{ kind: 'text', value: '002' }]);
-  let modal: boolean | string = false; const context: any = createContext({ page, tab, profile, version: 0, refreshVersion: 0, view: { busy: false }, available: () => !modal && !state.activeJobs.t, editorRef: { current: editor ?? null }, inputRef: { current: null }, previewRef: { current: null }, selectedRow: editor?.view.rows[0].id, detailSelectionRef: { current: { binding: {}, index: 0 } }, rowDetailsCurrent: () => true, controller: { pageCurrent: (candidate: unknown) => candidate === page }, captureSqliteReferenceSource, sqliteReferenceDraft, referenceText, incomingText, relationText, relatedText, sqliteRelatedTabPrefix, sqliteRelatedTableRelation, registerSqliteRelatedTable, sqliteRelatedTargetGuard, watchSqliteRelatedScope, latest: { current: { active: true, tab, refreshVersion: 0 } }, referenceRef: { current: undefined }, useWorkspace: { getState: () => state }, uid: () => 'reference-owner', errorMessage: (error: Error) => error.message, setValidation: vi.fn(), document: { querySelectorAll: () => modal ? [{ getAttribute: () => modal === 'relations' ? relationText.title : modal === 'incoming' ? incomingText.title : modal === 'choose' ? referenceText.choiceTitle : referenceText.title }] : [] } });
+  let modal: boolean | string = false; const context: any = createContext({ page, tab, profile, version: 0, refreshVersion: 0, view: { busy: false }, available: () => !modal && !state.activeJobs.t, editorRef: { current: editor ?? null }, inputRef: { current: null }, previewRef: { current: null }, selectedRow: editor?.view.rows[0].id, detailSelectionRef: { current: { binding: {}, index: 0 } }, rowDetailsCurrent: () => true, controller: { pageCurrent: (candidate: unknown) => candidate === page }, captureSqliteReferenceSource, sqliteReferenceDraft, referenceText, incomingText, relationText, text: relatedText, sqliteRelatedTabPrefix, sqliteRelatedTableRelation, registerSqliteRelatedTable, sqliteRelatedTargetGuard, watchSqliteRelatedScope, latest: { current: { active: true, tab, refreshVersion: 0 } }, referenceRef: { current: undefined }, useWorkspace: { getState: () => state }, uid: () => 'reference-owner', errorMessage: (error: Error) => error.message, setValidation: vi.fn(), document: { querySelectorAll: () => modal ? [{ getAttribute: () => modal === 'relations' ? relationText.title : modal === 'incoming' ? incomingText.title : modal === 'choose' ? referenceText.choiceTitle : referenceText.title }] : [] } });
   context.setReferenceOpen = vi.fn((value: any) => { modal = value ? value.navigation ? 'relations' : value.incoming ? 'incoming' : value.stage ? 'choose' : true : false; });
   const publish = () => context.referenceRef.current?.current();
   context.acquireWorkspaceBusy = () => { const token = {}; state.activeJobs.t = token; publish(); return { owns: () => state.activeJobs.t === token, release: () => { if (state.activeJobs.t !== token) return false; delete state.activeJobs.t; publish(); return true; } }; };
-  runInContext(ts.transpileModule(method + '\nglobalThis.open=openReference;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  const transferFile = ts.createSourceFile('transfer.ts', readFileSync(new URL('../../src/renderer/openSqliteRelatedTable.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  const transfer = transferFile.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'openSqliteRelatedTable');
+  expect(transfer).toBeDefined();
+  const helper = transfer!.getText(transferFile).replace(/^export /, '');
+  runInContext(ts.transpileModule(helper + '\n' + method + '\nglobalThis.open=openReference;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, state, page, editor, forbidden, publish, open: (mode: 'browse' | 'choose' | 'incoming' | 'relations' = 'browse') => { context.open(mode); return context.referenceRef.current; }, dispose: () => editor?.dispose() };
 }
 it.each([true, false])('父入口editable=%s捕获准确当前值，打开零读取／提交，源草稿和撤销栈保持', editable => {
@@ -52,6 +56,25 @@ it('父键确认只能在读取租约释放后暂存，原草稿可再撤销且�
   owner.activity(1); expect(owner.stage(choice)).toBe(false); expect(f.editor!.view.rows[0].values).toEqual([{ kind: 'text', value: '002' }]);
   owner.activity(-1); expect(owner.stage(choice)).toBe(true); expect(f.context.referenceRef.current).toBeUndefined(); expect(f.editor!.view.rows[0].values).toEqual(choice.values);
   f.editor!.undo(); expect(f.editor!.view.rows[0].values).toEqual([{ kind: 'text', value: '002' }]); expect(f.forbidden).not.toHaveBeenCalled(); f.dispose();
+});
+it('单元格入口绑定命中行、可见列及本次投影，布局切换后不能恢复旧选择权', () => {
+  const f = fixture(), original = f.editor!.view.rows[0];
+  f.page.referenceColumns = [0];
+  Object.assign(f.context, { selectedRow: undefined, editActionCurrent: () => true,
+    projection: [{ index: 0 }], pasteProjectionRef: { current: '0' } });
+  expect(f.context.open('choose', { row: { ...original }, column: 0 })).toBe(false);
+  expect(f.context.open('choose', { row: original, column: 1 })).toBe(false);
+  expect(f.context.open('choose', { row: original, column: 0 })).toBe(true);
+  const owner = f.context.referenceRef.current;
+  expect(owner.column).toBe('p');
+  expect(owner.values).toEqual(original.values);
+  expect(owner.current()).toBe(true);
+  f.context.pasteProjectionRef.current = '1';
+  expect(owner.current()).toBe(false);
+  f.context.pasteProjectionRef.current = '0';
+  expect(owner.current()).toBe(false);
+  expect(f.forbidden).not.toHaveBeenCalled();
+  f.dispose();
 });
 it('undo/redo恢复同一rows引用仍撤销选择权，不能利用未观察到的来源ABA暂存', () => {
   const f = fixture(), owner = f.open('choose'), rows = f.editor!.view.rows;

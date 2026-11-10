@@ -13,10 +13,10 @@ import { ResultsGrid } from './ResultsGrid';
 
 export const sqliteReferenceServices: SqliteReferenceServices = { read: input => invoke('sqlite.referencePage', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid };
 /** 父记录与候选均显式只读，选择仅交回草稿；关闭等待准确原读和取消链收尾。 */
-export function SqliteReferenceDialog({ source, values, current, onActivity, onClose, onStage, services = sqliteReferenceServices }: {
-  source: SqliteTablePage; values: readonly (SqliteOriginalValue | undefined)[]; current(): boolean; onActivity(delta: 1 | -1): void; onClose(): void; onStage?(choice: SqliteReferenceChoice): boolean; services?: SqliteReferenceServices;
+export function SqliteReferenceDialog({ source, column, values, current, onActivity, onClose, onStage, services = sqliteReferenceServices }: {
+  source: SqliteTablePage; column?: string; values: readonly (SqliteOriginalValue | undefined)[]; current(): boolean; onActivity(delta: 1 | -1): void; onClose(): void; onStage?(choice: SqliteReferenceChoice): boolean; services?: SqliteReferenceServices;
 }) {
-  const origin = useRef({ source, values, current, onActivity, onClose, onStage, services }).current, alive = useRef(true), dead = useRef(false), closing = useRef(false), reading = useRef(false), work = useRef<Promise<void> | undefined>(undefined);
+  const origin = useRef({ source, column, values, current, onActivity, onClose, onStage, services }).current, alive = useRef(true), dead = useRef(false), closing = useRef(false), reading = useRef(false), work = useRef<Promise<void> | undefined>(undefined);
   const [invalid, setInvalid] = useState(false), [busy, setBusy] = useState(false), [closeBusy, setCloseBusy] = useState(false), [error, setError] = useState('');
   const [catalog, setCatalog] = useState<SqliteReferenceOutput>(), [selected, setSelected] = useState<number>(), [data, setData] = useState<SqliteReferenceOutput>();
   const [chosen, setChosen] = useState<number>(), selection = useRef<{ data: SqliteReferenceOutput; index: number; values: SqliteOriginalValue[] } | undefined>(undefined);
@@ -25,7 +25,7 @@ export function SqliteReferenceDialog({ source, values, current, onActivity, onC
   const [clearConfirmed, setClearConfirmed] = useState(false);
   const choosing = !!origin.onStage;
   const resetSelection = () => { selection.current = undefined; setChosen(undefined); setClearConfirmed(false); };
-  if (source !== origin.source || values !== origin.values || services !== origin.services) dead.current = true;
+  if (source !== origin.source || column !== origin.column || values !== origin.values || services !== origin.services) dead.current = true;
   const environment = () => { if (!alive.current || dead.current) return false; try { if (!origin.current()) dead.current = true; } catch { dead.current = true; } return !dead.current; };
   const [reader] = useState(() => new SqliteReferenceReader(source, values, environment, services));
   useLayoutEffect(() => { if (!environment()) { reader.invalidate(); setInvalid(true); } });
@@ -47,7 +47,7 @@ export function SqliteReferenceDialog({ source, values, current, onActivity, onC
   }
   /** 换页保留已应用搜索；编辑搜索草稿不发送任务，并撤销上一条父候选选择。 */
   function read(offset: number, restart = false): void {
-    if (!actionCurrent()) return; const key = catalog?.source.foreignKeys.find(key => key.ordinal === selected); if (!key) return;
+    if (!actionCurrent()) return; const key = keys.find(key => key.ordinal === selected); if (!key) return;
     if (choosing && restart) appliedSearch.current = searchText ? { column: searchColumn, text: searchText } : undefined;
     resetSelection(); setData(undefined);
     run(async () => { const value = choosing ? await reader.candidates(key, offset, appliedSearch.current) : await reader.page(key, offset); if (environment()) { setData(value); if (choosing) setSearchColumns(value.page!.columns.map(column => column.name)); if (choosing && !searchColumn) setSearchColumn(value.referencedColumns![0]); } });
@@ -66,12 +66,38 @@ export function SqliteReferenceDialog({ source, values, current, onActivity, onC
     resetSelection(); run(async () => { const proof = await reader.catalog(); return () => { if (!origin.onStage!({ foreignKey: ordinal, proof, values: null })) throw Error(text.stale); }; });
   }
   async function close(): Promise<void> { if (!renderCurrent() || closing.current) return; closing.current = true; setCloseBusy(true); try { await reader.stop(); await work.current; if (alive.current) origin.onClose(); } catch (failure) { closing.current = false; if (alive.current) { setError(errorMessage(failure)); setCloseBusy(false); } } }
-  const key = catalog?.source.foreignKeys.find(key => key.ordinal === selected), disabled = invalid || busy || closeBusy;
-  const editableKey = key && source.edit?.kind === 'editable' && key.columns.every(name => source.edit?.kind === 'editable' && source.edit.columns.some(column => fold(column.name) === fold(name) && !column.generated));
-  const clearable = editableKey && key!.columns.every(name => source.edit?.kind === 'editable' && source.edit.columns.some(column => fold(column.name) === fold(name) && column.nullable));
+  const writableKey = (key: SqliteReferenceOutput['source']['foreignKeys'][number]) => {
+    const edit = source.edit;
+    return edit?.kind === 'editable' && key.columns.every(name => edit.columns.some(field => fold(field.name) === fold(name) && !field.generated));
+  };
+  /** 目录仍由独立读事务返回，入口列只筛选显示范围，不作为权威约束映射。 */
+  const scopedKeys = (value: SqliteReferenceOutput) => column === undefined ? value.source.foreignKeys
+    : value.source.foreignKeys.filter(key => key.columns.some(name => fold(name) === fold(column)) && writableKey(key));
+  const keys = catalog ? scopedKeys(catalog) : [];
+  const key = keys.find(key => key.ordinal === selected), disabled = invalid || busy || closeBusy;
+  const editableKey = !!key && writableKey(key);
+  const clearable = editableKey && key.columns.every(name => source.edit?.kind === 'editable' && source.edit.columns.some(field => fold(field.name) === fold(name) && field.nullable));
+  function resetDirectorySelection() {
+    resetSelection(); setData(undefined); setSearchColumns([]); setSearchColumn(''); setSearchText(''); appliedSearch.current = undefined;
+  }
+  function loadCatalog() {
+    if (!actionCurrent()) return;
+    resetDirectorySelection(); setCatalog(undefined); setSelected(undefined);
+    run(async () => {
+      const next = await reader.catalog();
+      if (environment()) { setCatalog(next); setSelected(scopedKeys(next)[0]?.ordinal); }
+    });
+  }
   return <Modal title={choosing ? text.choiceTitle : text.title} wide onClose={() => { void close(); }}><div className="modal-content reference-content">
-    <p>{choosing ? text.choiceHint : text.hint}</p><p>{text.scope}</p><button disabled={disabled} onClick={() => { if (!actionCurrent()) return; resetSelection(); setData(undefined); setSearchColumns([]); setSearchColumn(''); setSearchText(''); appliedSearch.current = undefined; run(async () => { const next = await reader.catalog(); if (environment()) { setCatalog(next); setSelected(next.source.foreignKeys[0]?.ordinal); } }); }}>{text.catalog}</button>
-    {catalog && <><label>{text.constraint}<select aria-label={text.constraint} disabled={disabled} value={selected ?? ''} onChange={event => { if (!actionCurrent()) return; resetSelection(); setSelected(Number(event.target.value)); setData(undefined); setSearchColumns([]); setSearchColumn(''); setSearchText(''); appliedSearch.current = undefined; }}>{catalog.source.foreignKeys.map(key => <option key={key.ordinal} value={key.ordinal}>{text.key(key.ordinal)} · {key.columns.join(', ')} → {key.referencedTable}</option>)}</select></label>{!catalog.source.foreignKeys.length && <p>{text.emptyKeys}</p>}</>}
+    <p>{choosing ? text.choiceHint : text.hint}</p><p>{text.scope}</p>
+    {column !== undefined && <p>{text.columnScope(column)}</p>}
+    <button disabled={disabled} onClick={loadCatalog}>{text.catalog}</button>
+    {catalog && (keys.length ? <label>{text.constraint}<select aria-label={text.constraint} disabled={disabled} value={selected ?? ''} onChange={event => {
+      const next = Number(event.target.value);
+      if (!actionCurrent() || !keys.some(item => item.ordinal === next)) return;
+      resetDirectorySelection(); setSelected(next);
+    }}>{keys.map(key => <option key={key.ordinal} value={key.ordinal}>{text.key(key.ordinal)} · {key.columns.join(', ')} → {key.referencedTable}</option>)}</select></label>
+    : <p>{column === undefined ? text.emptyKeys : text.emptyColumn}</p>)}
     {key && <p>{key.columns.join(', ')} → {key.referencedTable} ({key.referencedColumns?.join(', ') ?? text.implicit})</p>}
     {choosing && searchColumns.length > 0 && <div><label>{text.searchColumn}<select aria-label={text.searchColumn} disabled={disabled} value={searchColumn} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchColumn(event.target.value); } }}>{searchColumns.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label>{text.search}<input aria-label={text.search} maxLength={256} disabled={disabled} value={searchText} onChange={event => { if (actionCurrent()) { resetSelection(); setSearchText(event.target.value); } }}/></label><p>{text.searchHint}</p></div>}
     <p>{text.unloaded}</p><div className="reference-pagination"><button disabled={disabled || !key} onClick={() => read(0, true)}>{choosing ? text.candidates : text.read}</button><button disabled={disabled || !data?.page || data.page.offset === 0} onClick={() => read(Math.max(0, data!.page!.offset - data!.page!.limit))}>{text.previous}</button><button disabled={disabled || !data?.page?.hasMore} onClick={() => read(data!.page!.offset + data!.page!.limit)}>{text.next}</button>{busy && <button disabled={closeBusy} onClick={() => { if (renderCurrent() && !closing.current) void reader.stop().catch(failure => { if (alive.current) setError(errorMessage(failure)); }); }}>{text.stop}</button>}</div>

@@ -10,6 +10,7 @@ import type { SqliteTableRelation, SqliteTablePageInput } from '../shared/sqlite
 import { sqliteExportTextFunction, type SqliteFileIdentity, type SqliteValue } from '../engine/sqlite/protocol';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
 import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, withSqliteReadSnapshot, verifySqliteTableScope, buildSqliteTableRelationWhere, type SqliteEditReadPlan, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
+import { sqliteRelationshipName } from '../shared/sqliteRelationships';
 import { sqliteInsertLiteral } from '../shared/sqliteInsertLiteral';
 
 
@@ -66,6 +67,23 @@ async function read(driver: SqliteDriverSession, sql: string, parameters: Sqlite
   const result = await driver.execute(sql, { parameters, maxRows: maximum, maxBytes: 16 * 1024 * 1024, onBatch: batch => { control.check(); rows.push(...batch.rows); } });
   control.check(); if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== rows.length) throw Error('SQLite编辑目录或原行超过预算，未签发修改能力'); return rows;
 }
+/** 仅导出可写整组外键的字段索引，不把本次读到的提示当作候选或暂存授权。 */
+async function readSqliteReferenceColumns(driver: SqliteDriverSession, table: string, columns: readonly SqliteEditColumn[],
+  control: SqliteTableBrowseControl): Promise<readonly number[]> {
+  const maximum = 1024;
+  const facts = await read(driver, "SELECT id, \"from\" FROM pragma_foreign_key_list(?, 'main') LIMIT ?", [table, { type: 'integer', value: String(maximum + 1) }], control, maximum + 1);
+  if (facts.length > maximum) return [];
+  const names = new Map(columns.map((column, index) => [sqliteRelationshipName(column.name), column.generated ? -1 : index]));
+  const keys = new Map<string, number[]>();
+  for (const [id, name] of facts) {
+    if (typeof name !== 'string') return [];
+    const ordinal = integer(id), indices = keys.get(ordinal) ?? [];
+    indices.push(names.get(sqliteRelationshipName(name)) ?? -1);
+    keys.set(ordinal, indices);
+  }
+  return [...new Set([...keys.values()].filter(indices => indices.every(index => index >= 0) && new Set(indices).size === indices.length).flat())].sort((a, b) => a - b);
+}
+
 /** 公共typed页值仅供显示，apply完全使用Main私有原行，绝不信任客户端旧值。 */
 function original(value: SqliteValue): SqliteOriginalValue {
   if (value === null) return { kind: 'null' };
@@ -170,11 +188,12 @@ export class SqliteTableEdits {
     const fields = catalogue.xinfo.filter(row => integer(row[6]) !== '1');
     const columns = fields.map(row => ({ name: row[1] as string, declaredType: row[2] as string, generated: ['2', '3'].includes(integer(row[6])), nullable: integer(row[3]) === '0', hasDefault: row[4] !== null }));
     if (inserting ? !ordinary : !locator) return readonly();
+    const referenceColumns = input.queryRecord || input.searchRecordRef ? undefined : await readSqliteReferenceColumns(driver, input.table, columns, control);
     const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1), schemaVersion = integer(schema[0]?.[0]);
     const identity = driver.identity, chosen = locator;
     if (chosen) inspectLocator?.(structuredClone(chosen));
     return {
-      project: projection, ...(chosen?.rowid ? { extraColumn: '"__dbark_source".' + quote(chosen.rowid) } : {}),
+      project: projection, referenceColumns, ...(chosen?.rowid ? { extraColumn: '"__dbark_source".' + quote(chosen.rowid) } : {}),
       capture: values => {
         this.prune();
         if (!chosen && values.length) return { kind: 'readonly', reason: text.readonly };
@@ -259,6 +278,7 @@ export class SqliteTableEdits {
         const page: SqliteTablePage = { target: { ...document.target, kind: 'table' }, schemaKey: document.schemaKey, columns: catalogue!.columns, offset: group.offset, limit: group.limit, hasMore: false, ...(document.relation ? { relation: document.relation } : {}), edit,
           storageTypes: rows.map(row => row.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join('')),
           result: { columns: catalogue!.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })), rows: rows.map(row => Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)]))), elapsedMs: performance.now() - started, truncated: false, statement: '' } };
+        if (plans[index].referenceColumns?.length) page.referenceColumns = plans[index].referenceColumns;
         restored.push({ page, changes: sqliteDraftChanges({ ...document, changes: group.changes }) });
         const snapshot = this.snapshots.get(edit.snapshotId)!;
         if (!equal(snapshot.columns, document.columns)) throw Error(sqliteTableDraftMessages.changed);

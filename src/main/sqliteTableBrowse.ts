@@ -15,7 +15,7 @@ export function sqliteExactTextProjection(column: string): string {
 }
 
 export interface SqliteEditReadPlan {
-  project?: (column: string) => string; extraColumn?: string;
+  project?: (column: string) => string; extraColumn?: string; referenceColumns?: readonly number[];
   capture(rows: SqliteValue[][]): SqliteTableEditPage;
 }
 
@@ -231,7 +231,10 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
   if (failed) throw failure;
   control.check(); page!.result.elapsedMs = performance.now() - started;
   if (Buffer.byteLength(JSON.stringify({ result: page!.result, storageTypes: page!.storageTypes })) > limits.resultBytes) throw Error('SQLite表浏览结果对象超过16MiB预算，请减少每页行数或缩小范围');
-  if (editPlan) page!.edit = editPlan.capture(browseRowIdColumn ? originalRows.map(row => row.slice(1)) : originalRows);
+  if (editPlan) {
+    page!.edit = editPlan.capture(browseRowIdColumn ? originalRows.map(row => row.slice(1)) : originalRows);
+    if (page!.edit.kind === 'editable' && editPlan.referenceColumns?.length) page!.referenceColumns = editPlan.referenceColumns;
+  }
   return page!;
 }
 

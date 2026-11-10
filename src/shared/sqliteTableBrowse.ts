@@ -130,6 +130,8 @@ export const sqliteQueryBuilderPageSchema = sqliteTablePageSchema.safeExtend({
 export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
 export interface SqliteTablePrimaryKey { name: string; collation: 'BINARY' | 'NOCASE' | 'RTRIM'; }
 export interface SqliteTablePage {
+  /** 当前可编辑快照中的外键字段索引，只供网格显示入口。 */
+  referenceColumns?: readonly number[];
   /** 已核验的固定关联范围，派生读取不能丢失，也不能由普通OR筛选扩大。 */
   relation?: SqliteTableRelation;
   /** 与原页行列一一对应：n=NULL、t=TEXT、i=INTEGER、r=REAL、b=BLOB；不由声明亲和性猜类型。 */

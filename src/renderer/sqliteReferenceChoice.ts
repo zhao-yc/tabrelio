@@ -27,11 +27,11 @@ export function assertSqliteReferenceChoice(proof: SqliteReferenceOutput, values
 }
 
 /** 生成单次Editor.save的完整行，保留其它草稿列；清空只允许所有子键列可空且可编辑。 */
-export function sqliteReferenceDraft(page: SqliteTablePage, row: SqliteDraftRow, choice: SqliteReferenceChoice): (SqliteOriginalValue | undefined)[] {
+export function sqliteReferenceDraft(page: SqliteTablePage, row: SqliteDraftRow, choice: SqliteReferenceChoice, column?: string): (SqliteOriginalValue | undefined)[] {
   const { proof, values } = choice, request = proof.request, edit = page.edit;
   if (edit?.kind !== 'editable' || row.deleted || request.connectionId !== page.target.connectionId || request.database !== 'main' || request.table !== page.target.table || request.schemaKey !== page.schemaKey || proof.source.name !== page.target.table) throw Error('原SQLite外键来源已变化');
   const key = proof.source.foreignKeys.find(key => key.ordinal === choice.foreignKey);
-  if (!key || !key.columns.length || values && (request.reference !== 'page' || request.foreignKey !== key.ordinal || values.length !== key.columns.length) || !values && request.reference !== 'catalog') throw Error('SQLite外键暂存映射无效');
+  if (!key || !key.columns.length || column !== undefined && !key.columns.some(name => fold(name) === fold(column)) || values && (request.reference !== 'page' || request.foreignKey !== key.ordinal || values.length !== key.columns.length) || !values && request.reference !== 'catalog') throw Error('SQLite外键暂存映射无效');
   if (values) assertSqliteReferenceChoice(proof, values);
   const next = [...row.values], seen = new Set<number>();
   key.columns.forEach((name, i) => {
