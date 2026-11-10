@@ -13,19 +13,19 @@ import { draftHistoryKey } from '../../src/renderer/draftHistory';
 
 /** 固定当前生产处理函数源码，只替换DOM/状态端口，不能复制一套守卫实现使断言自证。 */
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let handler = '', editable = '';
-function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleGridKeyDown') handler = node.getText(tree); if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'editable') editable = node.initializer.getText(tree); node.forEachChild(visit); }
+let handler = '', choose = '', editable = '';
+function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleGridKeyDown') handler = node.getText(tree); if (ts.isFunctionDeclaration(node) && node.name?.text === 'canChooseEnumeration') choose = node.getText(tree); if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'editable') editable = node.initializer.getText(tree); node.forEachChild(visit); }
 visit(tree);
-const code = ts.transpileModule(handler + '\nglobalThis.handler=handleGridKeyDown;globalThis.canEdit=(' + editable + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const code = ts.transpileModule(choose + '\n' + handler + '\nglobalThis.handler=handleGridKeyDown;globalThis.canEdit=(' + editable + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function column(name: string, patch: Partial<ColumnInfo> = {}): ColumnInfo { return { name, type: 'varchar(100)', nullable: true, defaultValue: null, extra: '', generated: false, comment: '', ...patch }; }
 /** 与表页相同的UUID、独立original及精度字符串；所有副作用都由生产处理函数决定。 */
 function fixture() {
-  const info: TableInfo = { database: 'd', name: 't', engine: 'InnoDB', objectKind: 'table', primaryKey: ['id'], editableKey: ['id'], indexes: [], foreignKeys: [], ddl: '', columns: [column('id', { nullable: false, type: 'bigint unsigned' }), column('bytes', { type: 'varbinary(32)', nullable: false }), column('nullable_bytes', { type: 'blob' }), column('text', { type: 'text', nullable: false }), column('generated', { type: 'blob', generated: true })] };
+  const info: TableInfo = { database: 'd', name: 't', engine: 'InnoDB', objectKind: 'table', primaryKey: ['id'], editableKey: ['id'], indexes: [], foreignKeys: [], ddl: '', columns: [column('id', { nullable: false, type: 'bigint unsigned' }), column('bytes', { type: 'varbinary(32)', nullable: false }), column('nullable_bytes', { type: 'blob' }), column('text', { type: 'text', nullable: false }), column('generated', { type: 'blob', generated: true }), column('status', { type: "enum('new','done')", enumeration: { kind: 'ENUM', values: ['new', 'done'] } })] };
   const state: RecordContext = { target: { connectionId: 'c', database: 'd', table: 't' }, connectionVersion: 2, generation: 3, info, loaded: true, busy: false, stale: false };
   const data = { id: '18446744073709551615', bytes: { type: 'binary' as const, base64: 'AAH/' }, nullable_bytes: { type: 'binary' as const, base64: 'qg==' }, text: '普通文本', amount: '12345678901234567890.123456', generated: { type: 'binary' as const, base64: 'AA==' } };
   const row: DraftRow = { id: 'uuid-1', data: structuredClone(data), original: structuredClone(data), inserted: false, deleted: false }, other: DraftRow = { ...row, id: 'uuid-2', data: { ...row.data, id: '9007199254740993' }, original: { ...row.original, id: '9007199254740993' } };
   const rows = [row, other], setRows = vi.fn<(update: DraftRow[] | ((current: DraftRow[]) => DraftRow[])) => void>(), preview = vi.fn(), open = vi.fn(), find = vi.fn(); let dirtyInput = false, modal = false;
-  const context = createContext({ draftHistoryKey, moveHistory: vi.fn(), blocked: false, editable: true, document: { querySelector: () => modal ? {} : null }, HTMLElement: class {}, record: { dirty: false, hasInput: () => dirtyInput, openCell: open }, info, page: { columns: [{ key: 'bytes', type: 'VAR_STRING' }, { key: 'nullable_bytes', type: 'BLOB' }, { key: 'text', type: 'BLOB' }, { key: 'generated', type: 'BLOB' }] }, rowsRef: { current: rows }, getRecordContext: () => state, ownCell, isBinaryCell, recordReadonlyReason, blocksBinaryTextInput, tableCellKeyIsComposing, changes: [{ kind: 'update' }], column: { key: 'bytes' }, setRows, makePreview: preview, openPageFind: find });
+  const context = createContext({ visibleKeys: ['status'], cellRange: { rectangle: undefined }, cellActionCurrent: (candidate: DraftRow) => rows.includes(candidate) && !dirtyInput, draftHistoryKey, moveHistory: vi.fn(), blocked: false, editable: true, document: { querySelector: () => modal ? {} : null }, HTMLElement: class {}, record: { dirty: false, hasInput: () => dirtyInput, openCell: open }, info, page: { columns: [{ key: 'bytes', type: 'VAR_STRING' }, { key: 'nullable_bytes', type: 'BLOB' }, { key: 'text', type: 'BLOB' }, { key: 'generated', type: 'BLOB' }] }, rowsRef: { current: rows }, getRecordContext: () => state, ownCell, isBinaryCell, recordReadonlyReason, blocksBinaryTextInput, tableCellKeyIsComposing, changes: [{ kind: 'update' }], column: { key: 'bytes' }, setRows, makePreview: preview, openPageFind: find });
   setRows.mockImplementation(update => { context.rowsRef.current = typeof update === 'function' ? update(context.rowsRef.current) : update; });
   runInContext(code, context);
   /** React事件端口只记录两种prevent语义，浏览器原生输入与网格命令不能混为一个开关。 */
@@ -55,6 +55,18 @@ describe('表格键盘组合输入命令守卫', () => {
     const f = fixture(); f.press('Enter'); expect(f.open).toHaveBeenCalledExactlyOnceWith(f.row.id, 'bytes');
     for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) { f.press('Enter', modifier); f.press('f', modifier); f.press('h', modifier); }
     expect(f.preview).toHaveBeenCalledTimes(2); expect(f.find.mock.calls.map(call => call[0])).toEqual(['query', 'replacement', 'query', 'replacement']); expect(f.setRows).not.toHaveBeenCalled();
+  });
+  it('非组合 Enter 仅在当前可编辑枚举格打开成员弹窗', () => {
+    const f = fixture();
+    f.press('Enter', { column: 'status' });
+    expect(f.open).toHaveBeenCalledExactlyOnceWith(f.row.id, 'status');
+    f.state.stale = true;
+    f.press('Enter', { column: 'status' });
+    f.state.stale = false;
+    f.context.visibleKeys = [];
+    f.press('Enter', { column: 'status' });
+    expect(f.open).toHaveBeenCalledOnce();
+    expect(f.setRows).not.toHaveBeenCalled();
   });
   it('原生Ctrl/Meta+C/V与方向导航继续交给网格，普通TEXT不按wire BLOB误判', () => {
     const f = fixture(); for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) for (const key of ['c', 'v']) { const event = f.press(key, modifier); expect(event.preventDefault).not.toHaveBeenCalled(); expect(event.preventGridDefault).not.toHaveBeenCalled(); }

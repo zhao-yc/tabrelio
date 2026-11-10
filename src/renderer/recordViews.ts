@@ -74,7 +74,7 @@ export function recordValueSummary(value: ReturnType<typeof ownCell>): string {
 export function initialRecordInput(draft: RecordDraft, column: ColumnInfo): RecordInput {
   const value = ownCell(draft.data, column.name);
   if (recordFieldTooLarge(value)) throw new Error(text.fieldTooLarge);
-  return { mode: value === undefined ? 'default' : value === null ? 'null' : typeof value === 'object' ? 'binary' : /json/i.test(column.type) ? 'json' : 'text', text: value === null || value === undefined ? '' : cellText(value) };
+  return { mode: value === undefined ? 'default' : value === null ? 'null' : typeof value === 'object' ? 'binary' : /^json\b/i.test(column.type) ? 'json' : 'text', text: value === null || value === undefined ? '' : cellText(value) };
 }
 /** 稀疏缓冲按精确列名使用 Map，原型同名列不会覆盖内部成员。 */
 export function editRecordInput(draft: RecordDraft, column: ColumnInfo, input?: RecordInput): RecordDraft {

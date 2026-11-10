@@ -93,7 +93,8 @@ export type ConnectionStatus = NetworkConnectionStatus | { version: string; dial
 /** 内部配置检查仅由主进程调用，不加入渲染进程可访问的 CommandMap/参数白名单。 */
 export type EngineCommand = Command | '__connections.prepareSave' | 'postgres.table.draft.capture' | 'postgres.table.draft.restoreVerified' | 'postgres.table.importKeys';
 export interface DatabaseObject { name: string; kind: ObjectKind; }
-export interface ColumnInfo { name: string; type: string; nullable: boolean; defaultValue: string | null; extra: string; comment: string; generated: boolean; /** 来自该列目录，文本容量不能套用整表默认字符集。 */ characterSet?: string | null; }
+export interface ColumnEnumeration { kind: 'ENUM' | 'SET'; values: readonly string[]; }
+export interface ColumnInfo { enumeration?: ColumnEnumeration; name: string; type: string; nullable: boolean; defaultValue: string | null; extra: string; comment: string; generated: boolean; /** 来自该列目录，文本容量不能套用整表默认字符集。 */ characterSet?: string | null; }
 export interface IndexInfo { name: string; unique: boolean; columns: string[]; }
 export interface ForeignKeyInfo { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[]; onUpdate: string; onDelete: string; }
 export interface TableInfo { database: string; name: string; columns: ColumnInfo[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; primaryKey: string[]; editableKey: string[]; engine: string; ddl: string; charset?: string; collation?: string; comment?: string; /** 来自可信 information_schema.TABLES；未知类型不通过空 engine 推测。 */ objectKind?: 'table' | 'view'; }

@@ -2,7 +2,7 @@ import type { DatabaseObject, ForeignKeyInfo, IndexInfo, ObjectKind, TableInfo }
 import { execute, type ManagedConnection } from './connection';
 import { foreignKeyActions } from './references';
 import { mariaDefault, qualified, temporalDefault } from './sql';
-import { parseTableColumnDefinition } from './tableColumnDefinition';
+import { catalogColumnEnumeration, parseTableColumnDefinition } from './tableColumnDefinition';
 import { hasUnprovenBinaryDefault } from '../shared/tableColumnPatches';
 import type { FieldPacket } from 'mysql2';
 
@@ -98,7 +98,12 @@ export async function tableInfo(connection: ManagedConnection, database: string,
     if (!key) { key = { name: row.name, columns: [], referencedDatabase: row.referencedDatabase, referencedTable: row.referencedTable, referencedColumns: [], onUpdate, onDelete }; keyMap.set(row.name, key); }
     key.columns.push(row.columnName); key.referencedColumns.push(row.referencedColumn);
   }
-  const mappedColumns = columns.rows.map(column => ({ ...column, defaultValue: maria ? mariaDefault(column.defaultValue, modes.includes('NO_BACKSLASH_ESCAPES')) : column.defaultValue, nullable: column.nullable === 'YES', generated: /(?:VIRTUAL|STORED|PERSISTENT) GENERATED/i.test(column.extra) }));
+  const mappedColumns = columns.rows.map(column => {
+    const enumeration = catalogColumnEnumeration(column.type, connection.status.dialect);
+    return { ...column, defaultValue: maria ? mariaDefault(column.defaultValue, modes.includes('NO_BACKSLASH_ESCAPES')) : column.defaultValue,
+      nullable: column.nullable === 'YES', generated: /(?:VIRTUAL|STORED|PERSISTENT) GENERATED/i.test(column.extra),
+      ...(enumeration ? { enumeration } : {}) };
+  });
   const indexes = [...indexMap.values()];
   const candidate = indexes.find(index => index.name === 'PRIMARY') ?? indexes.find(index => index.unique && !unusableIndexes.has(index.name) && index.columns.length && index.columns.every(name => mappedColumns.some(column => column.name === name && !column.nullable)));
   // 对象种类只取服务器目录；空引擎不等于视图，未确认种类保持 undefined。

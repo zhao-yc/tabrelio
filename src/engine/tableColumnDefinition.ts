@@ -1,3 +1,4 @@
+import type { ColumnEnumeration } from '../shared/contracts';
 import { SqlScriptScanner } from './sql';
 import { columnTypePatchSchema, type ColumnTypePatch } from '../shared/tableColumnPatches';
 import { tableColumnPatchLimits as limits, type ColumnDefinitionAttribute, type ColumnEditableAttribute, type DefinitionFragment, type DefinitionRange, type ReadColumnDefault, type TableColumnDefinition, type TableColumnDefinitionDocument, type TableConstraintDefinition, type TableDefinitionContext } from '../shared/tableColumnPatches';
@@ -244,6 +245,33 @@ function mariaJsonAlias(column: TableColumnDefinition, context: TableDefinitionC
   return tokens.length === 7 && tokens[0].kind === 'word' && tokens[0].value.toUpperCase() === 'CHECK' && tokens[1].value === '(' && tokens[2].kind === 'word' && tokens[2].value.toUpperCase() === 'JSON_VALID' && tokens[3].value === '(' && ['word', 'identifier'].includes(tokens[4].kind) && tokens[4].value === column.name && tokens[5].value === ')' && tokens[6].value === ')';
 }
 
+/** 引号中的逗号和空字符串均属于成员值，只有引号外的逗号是分隔符。 */
+function enumerationTokens(tokens: Token[]): ColumnEnumeration | undefined {
+  const kind = word(tokens[0]);
+  if ((kind !== 'ENUM' && kind !== 'SET') || tokens.length < 4 || tokens.length % 2 !== 0 ||
+      !isSymbol(tokens[1], '(') || !isSymbol(tokens.at(-1), ')')) return;
+  const values: string[] = [];
+  for (let index = 2; index < tokens.length - 1; index += 2) {
+    const token = tokens[index];
+    if (token.kind !== 'string' || index + 1 < tokens.length - 1 && !isSymbol(tokens[index + 1], ',')) return;
+    values.push(token.value);
+  }
+  if (values.length > (kind === 'SET' ? 64 : 65535)) return;
+  return { kind, values };
+}
+
+/** COLUMN_TYPE 由两库的目录格式化器转义，反斜杠规则不取用户会话的 SQL mode。 */
+export function catalogColumnEnumeration(source: string, dialect: TableDefinitionContext['dialect']): ColumnEnumeration | undefined {
+  if (!/^(?:ENUM|SET)\(/i.test(source)) return;
+  try {
+    const result = enumerationTokens(tableDefinitionTokens(source, { dialect, mode: { ansiQuotes: false, noBackslashEscapes: false } }));
+    if (!result || new Set(result.values).size !== result.values.length) return;
+    // SET 通过逗号分隔的文本收发。空成员与空集合、逗号成员与多个成员无法保真区分。
+    if (result.kind === 'SET' && result.values.some(value => !value || value.includes(','))) return;
+    return result;
+  } catch { return; }
+}
+
 /** 只投影能由受控编辑模型完整表示的常用类型，不把未知修饰符或枚举值大小写抹掉。 */
 export function editableColumnType(column: TableColumnDefinition, context: TableDefinitionContext, encoding?: { charset: string | null; collation: string | null }): ColumnTypePatch | undefined {
   const tokens = tableDefinitionTokens(column.type.raw, context), type = tokens[0]?.value.toUpperCase();
@@ -259,14 +287,9 @@ export function editableColumnType(column: TableColumnDefinition, context: Table
   else if (/^(?:TINY|MEDIUM|LONG)?(?:TEXT|BLOB)$/.test(text)) value = { kind: 'large', type };
   else if (/^(?:DATE|YEAR(?:\(4\))?)$/.test(text)) value = { kind: 'temporal', type };
   else if ((match = /^(TIME|DATETIME|TIMESTAMP)(?:\(([0-6])\))?$/.exec(text))) value = { kind: 'temporal', type: match[1], ...(match[2] !== undefined ? { precision: Number(match[2]) } : {}) };
-  else if (['ENUM', 'SET'].includes(type) && tokens[1]?.value === '(' && tokens.at(-1)?.value === ')') {
-    const values: string[] = []; let valid = true;
-    for (let index = 2; index < tokens.length - 1; index++) {
-      const token = tokens[index];
-      if (index % 2 === 0 ? token.kind !== 'string' : token.kind !== 'symbol' || token.value !== ',') { valid = false; break; }
-      if (index % 2 === 0) values.push(token.value);
-    }
-    if (valid && tokens.length % 2 === 0) value = { kind: 'enumeration', type, values };
+  else if (type === 'ENUM' || type === 'SET') {
+    const enumeration = enumerationTokens(tokens);
+    if (enumeration) value = { kind: 'enumeration', type: enumeration.kind, values: enumeration.values };
   }
   const result = columnTypePatchSchema.safeParse(value); return result.success ? result.data : undefined;
 }
