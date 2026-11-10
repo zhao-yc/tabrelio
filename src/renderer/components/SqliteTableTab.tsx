@@ -179,6 +179,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const version = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const readHistory = useTableReadHistory(JSON.stringify([tab.connectionId, version, tab.database, tab.table]));
   const recordRead = useRef(readHistory.record); recordRead.current = readHistory.record;
+  const recordReadFailure = useRef(readHistory.recordReadFailure); recordReadFailure.current = readHistory.recordReadFailure;
   const externalBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const latest = useRef({ tab, active, refreshVersion }); latest.current = { tab, active, refreshVersion };
   // 未知结构回执在原标签内持续阻止自动读取；切换标签或后续回执不能替代用户明确刷新。
@@ -273,11 +274,12 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   }, []);
   const [controller] = useState(() => new SqliteTableBrowser({
     received: page => recordRead.current(page.readStatements, page.offset + 1, page.result.rows.length),
+    receiveFailure: statements => recordReadFailure.current(statements),
     scope: () => {
       const current = latest.current, workspace = useWorkspace.getState(), present = workspace.settings.tabs.find(item => item.id === current.tab.id), connection = workspace.connections.find(item => item.id === current.tab.connectionId);
       return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, schemaRevision: current.refreshVersion, present: present === current.tab && present?.kind === 'table' && (!related || related.current()), ...(related ? { relation: related.relation } : {}), active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite', ...(connection?.dialect === 'sqlite' && !connection.sqlite.readOnly ? { editing: true } : {}) };
     },
-    acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: input => invoke('sqlite.tablePage', input), release: snapshotId => invoke('sqlite.tableEdit.release', { snapshotId }), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: next => { browserViewRef.current = next; const continuation = recordPageRef.current; continuation?.observe(next); if (continuation && !continuation.current() && !next.busy) { recordPageRef.current = undefined; setRecordPageNotice(continuation.message); } const detailIntent = detailPageIntentRef.current; detailIntent?.observe(next); if (detailIntent && !detailIntent.current() && !next.busy) { detailPageIntentRef.current = undefined; setDetailPageNotice(detailIntent.message); } fullExportRef.current?.intent.current(); importRef.current?.source.observePage(next.page); setView(next); }, subscribe: changed => useWorkspace.subscribe(changed),
+    acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: (input, receiveFailure) => invoke('sqlite.tablePage', input, receiveFailure), release: snapshotId => invoke('sqlite.tableEdit.release', { snapshotId }), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: next => { browserViewRef.current = next; const continuation = recordPageRef.current; continuation?.observe(next); if (continuation && !continuation.current() && !next.busy) { recordPageRef.current = undefined; setRecordPageNotice(continuation.message); } const detailIntent = detailPageIntentRef.current; detailIntent?.observe(next); if (detailIntent && !detailIntent.current() && !next.busy) { detailPageIntentRef.current = undefined; setDetailPageNotice(detailIntent.message); } fullExportRef.current?.intent.current(); importRef.current?.source.observePage(next.page); setView(next); }, subscribe: changed => useWorkspace.subscribe(changed),
   }));
   useEffect(() => { controller.activate(); return () => controller.dispose(); }, [controller]);
   const target = useRef({ profile, version, connectionId: tab.connectionId, database: tab.database, table: tab.table });

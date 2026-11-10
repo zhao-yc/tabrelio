@@ -1,4 +1,5 @@
 import { readSqliteViewDependencies } from './sqliteViewDependencies';
+import { withTableReadTrace, type RecordTableRead } from '../shared/tableReadStatements';
 import { sqliteViewDependenciesSchema } from '../shared/viewDependencies';
 import { importBatchFormats, importBatchLimit } from '../shared/fileImportBatch';
 import type { SqliteSyncEvidence } from './sqliteDataSync';
@@ -526,7 +527,8 @@ export class SqliteRuntime {
     if (input.queryRecord && input.editing && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑查询原记录');
     if (input.searchRecordRef && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑搜索命中');
     const task: BrowseTask = { kind: 'browse', connection, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
-    const work = this.track(connection, () => this.browse(task, input, profile)); task.active = work;
+    const work = withTableReadTrace(input.includeReadStatements, record =>
+      this.track(connection, () => this.browse(task, input, profile, record))); task.active = work;
     const retire = () => { task.active = undefined; this.retireBrowse(input.taskId, task); };
     void work.then(retire, retire); return work;
   }
@@ -602,7 +604,7 @@ export class SqliteRuntime {
     if (task.connection.blocked) throw Error('SQLite连接仍有退出未确认资源，表浏览未继续', { cause: task.connection.failure });
   }
   /** 只读任务在原driver回滚并关闭、准确进程exit确认后才交付最终Page。 */
-  private browse(task: BrowseTask, input: SqliteTablePageInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage>;
+  private browse(task: BrowseTask, input: SqliteTablePageInput, profile: SqliteConnectionProfile, recordReadAttempt?: RecordTableRead): Promise<SqliteTablePage>;
   private browse(task: BrowseTask, input: SqliteValueOptionsInput, profile: SqliteConnectionProfile): Promise<SqliteValueOptionsOutput>;
   private browse(task: BrowseTask, input: SqliteRelationshipsInput, profile: SqliteConnectionProfile): Promise<SqliteRelationshipsOutput>;
   private browse(task: BrowseTask, input: SqliteStatisticsInput | SqliteRowCountInput, profile: SqliteConnectionProfile): Promise<SqliteStatisticsOutput | SqliteRowCountOutput>;
@@ -610,7 +612,7 @@ export class SqliteRuntime {
   private browse(task: BrowseTask, input: SqliteIncomingInput, profile: SqliteConnectionProfile): Promise<SqliteIncomingOutput>;
   private browse(task: BrowseTask, input: DraftRestoreInput, profile: SqliteConnectionProfile): Promise<SqliteDraftRestored>;
   private browse(task: BrowseTask, input: QueryRowSqlInput, profile: SqliteConnectionProfile): Promise<QueryRowSqlOutput>;
-  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput | SqliteRowCountInput | SqliteReferenceInput | SqliteIncomingInput | DraftRestoreInput | QueryRowSqlInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput> {
+  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput | SqliteRowCountInput | SqliteReferenceInput | SqliteIncomingInput | DraftRestoreInput | QueryRowSqlInput, profile: SqliteConnectionProfile, recordReadAttempt?: RecordTableRead): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput> {
     let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | QueryRowSqlOutput | undefined, failed = false, failure: unknown;
     const searchPage = 'searchRecordRef' in input ? input : undefined;
     const recordRef = searchPage?.searchRecordRef;
@@ -653,7 +655,7 @@ export class SqliteRuntime {
       else if ('search' in input) value = await readSqliteValueOptions(task.driver, input, control);
       else if ('column' in input) value = await readSqliteStatistics(task.driver, input, control);
       else if ('limit' in input) value = await readSqliteTablePage(task.driver, input, {
-        ...control, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }),
+        ...control, recordReadAttempt, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }),
         ...(querySource && queryInput ? { queryRecord: (key, columns) =>
           sqliteQueryRecordPredicates(task.driver!, querySource!, sqliteQueryRecordIndices(queryInput), key, columns) } : {}),
         ...(searchEntry ? { searchRecord: catalogue => verifySqliteSearchRecord(task.driver!, searchEntry!, control, catalogue) } : {}),

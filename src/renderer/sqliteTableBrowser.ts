@@ -2,6 +2,7 @@ import { assertSqliteStorageTypes, sqliteLastPagePosition, sqliteTableBrowseLimi
 import { validateResultExportData } from '../shared/resultExport';
 import { resultExportData } from './resultExport';
 import { sqliteTableBrowseZh as text } from './locales/sqliteTableBrowse.zh-CN';
+import type { ReceiveTableReadFailure } from '../shared/tableReadStatements';
 
 export type SqliteTableQuery = Pick<SqliteTablePageInput, 'limit' | 'mode' | 'filters' | 'sort'>;
 export interface SqliteFilterDraft { id: string; column: string; operator: SqliteTableFilter['operator']; kind: NonNullable<SqliteTableFilter['value']>['kind']; value: string; secondValue?: string; values?: string[]; selectedValues?: import('../shared/sqliteTableBrowse').SqliteFilterSelection[]; enabled?: boolean; }
@@ -9,7 +10,7 @@ export interface SqliteSortDraft { id: string; column: string; direction: 'asc' 
 export interface SqliteTableScope { tab: unknown; profile: unknown; connectionId: string; database?: string; table?: string; version: number; schemaRevision?: number; present: boolean; active: boolean; sqlite: boolean; editing?: boolean; relation?: import('../shared/sqliteTableBrowse').SqliteTableRelation; }
 interface BusyLease { owns(): boolean; release(): boolean; }
 export interface SqliteTableView { busy: boolean; stopping: boolean; error: string; page?: SqliteTablePage; columns: SqliteTableColumn[]; }
-interface Ports { scope(): SqliteTableScope; acquire(): BusyLease; read(input: SqliteTablePageInput): Promise<SqliteTablePage>; received?(page: SqliteTablePage): void; release?(snapshotId: string): Promise<unknown>; cancel(taskId: string): Promise<unknown>; id(): string; changed(view: SqliteTableView): void; subscribe(changed: () => void): () => void; }
+interface Ports { scope(): SqliteTableScope; acquire(): BusyLease; read(input: SqliteTablePageInput, receiveFailure?: ReceiveTableReadFailure): Promise<SqliteTablePage>; received?(page: SqliteTablePage): void; receiveFailure?: ReceiveTableReadFailure; release?(snapshotId: string): Promise<unknown>; cancel(taskId: string): Promise<unknown>; id(): string; changed(view: SqliteTableView): void; subscribe(changed: () => void): () => void; }
 interface Operation { generation: number; scope: SqliteTableScope; input: SqliteTablePageInput; done: Promise<void>; finish(): void; cancelled: boolean; sent: boolean; terminal: boolean; acquiring: boolean; lease?: BusyLease; cancel?: Promise<void>; }
 /** 条件编辑只生成严格合同，NULL 不带值；不猜测列亲和性，也不执行 SQL。 */
 export function sqliteTableDraft(scope: Pick<SqliteTableScope, 'connectionId' | 'database' | 'table'>, limit: number, mode: 'and' | 'or', filters: readonly SqliteFilterDraft[], sort: readonly SqliteSortDraft[], schema = sqliteTablePageSchema): SqliteTableQuery {
@@ -144,7 +145,7 @@ export class SqliteTableBrowser {
     const scope = { ...this.ports.scope() };
     if (this.disposed || !scope.present || !scope.active || !scope.sqlite) return;
     let input: SqliteTablePageInput;
-    try { input = sqliteTablePageSchema.parse({ connectionId: scope.connectionId, database: scope.database, table: scope.table, taskId: this.ports.id(), ...(offset === 'last' ? { offset: 0, lastPage: true } : { offset }), ...query, ...(this.ports.received ? { includeReadStatements: true } : {}), ...(scope.relation ? { relation: scope.relation } : {}), ...(scope.editing ? { editing: true } : {}) }); }
+    try { input = sqliteTablePageSchema.parse({ connectionId: scope.connectionId, database: scope.database, table: scope.table, taskId: this.ports.id(), ...(offset === 'last' ? { offset: 0, lastPage: true } : { offset }), ...query, ...(this.ports.received || this.ports.receiveFailure ? { includeReadStatements: true } : {}), ...(scope.relation ? { relation: scope.relation } : {}), ...(scope.editing ? { editing: true } : {}) }); }
     catch (reason) { this.emit({ error: scope.database !== 'main' ? text.unsupported : String(reason instanceof Error ? reason.message : reason) }); return; }
     const generation = ++this.generation; this.wanted = generation; this.releaseUnadopted(); this.pageScope = undefined; this.emit({ page: undefined, error: '' });
     const previous = this.operation;
@@ -156,8 +157,12 @@ export class SqliteTableBrowser {
       operation.lease = this.ports.acquire(); operation.acquiring = false;
       if (operation.cancelled || generation !== this.generation || !this.same(scope) || !operation.lease.owns()) return;
       this.emit({ stopping: false }); operation.sent = true;
-      const page = await this.ports.read(input); operation.terminal = true;
-      if (!operation.cancelled && generation === this.generation && this.same(scope) && operation.lease.owns()) {
+      const readCurrent = () => !operation.cancelled && generation === this.generation && this.same(scope) && operation.lease!.owns();
+      const page = await (this.ports.receiveFailure ? this.ports.read(input, statements => {
+        if (readCurrent()) this.ports.receiveFailure?.(statements);
+      }) : this.ports.read(input));
+      operation.terminal = true;
+      if (readCurrent()) {
         try { assertSqliteTablePage(page, input); acceptPage?.(page); } catch (reason) { this.releaseSnapshot(page); throw reason; }
         this.pageScope = scope; if (page.edit?.kind === 'editable') this.unadopted = page;
         this.ports.received?.(page);

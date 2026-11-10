@@ -7,12 +7,12 @@ import { completionQuery } from './completionQuery';
 import { tableInfo } from './metadata';
 import { prepareDataSearchRecord, type RecordPreparation } from './dataSearchRecords';
 import { buildPageSql, buildTableFilterSql, deserializeCell, identifier, inlineParameters, qualified, serializeCell, typedCellPlaceholder } from './sql';
-import { tableReadStatements } from '../shared/tableReadStatements';
+import { tableReadStatements, type RecordTableRead } from '../shared/tableReadStatements';
 import { tableLastPageBounds } from '../shared/tableLastPage';
 
 type Context = Pick<StructureTaskContext, 'managed' | 'checkCancelled' | 'commandStarted'>;
 type PageInput = CommandMap['table.page']['input'];
-type ReadPage = (managed: ManagedConnection, sql: string, page: number, pageSize: number, binary: boolean) => Promise<TablePage>;
+type ReadPage = (managed: ManagedConnection, sql: string, page: number, pageSize: number, binary: boolean, submitting?: () => void) => Promise<TablePage>;
 type Identity = Extract<RecordPreparation, { identity: unknown }>['identity'];
 type Parameter = ReturnType<typeof deserializeCell>;
 interface RowLease { ref: string; key: DataRow; epochs: Record<string, string>; loaded: string[]; fingerprint: string }
@@ -21,7 +21,7 @@ interface Ports {
   now(): number; id(): string;
   info(context: Context, database: string, table: string): Promise<TableInfo>;
   identity(context: Context, info: TableInfo): Promise<RecordPreparation>;
-  query<T>(context: Context, sql: string, values?: Parameter[]): Promise<{ rows: T }>;
+  query<T>(context: Context, sql: string, values?: Parameter[], submitting?: () => void): Promise<{ rows: T }>;
 }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const own = (row: DataRow, key: string) => Object.hasOwn(row, key) ? row[key] : undefined;
@@ -49,7 +49,8 @@ export class TableCopySources {
   constructor(ports: Partial<Ports> = {}) {
     this.ports = {
       now: Date.now, id: randomUUID,
-      query: (context, sql, values = []) => completionQuery(context.managed, context, sql, values),
+      query: (context, sql, values = [], submitting) => submitting ? completionQuery(context.managed, context, sql, values, submitting) :
+        completionQuery(context.managed, context, sql, values),
       info: (context, database, table) => tableInfo(context.managed, database, table, (sql, values = []) => completionQuery(context.managed, context, sql, values)),
       identity: (context, info) => prepareDataSearchRecord(context, { database: info.database, table: info.name, kind: 'table', columns: [] }), ...ports,
     };
@@ -77,7 +78,7 @@ export class TableCopySources {
   stats() { this.prune(); return { pages: this.pages.size, references: this.refs, bytes: this.bytes, active: this.active.size }; }
 
   /** 明确opt-in的表页才进入本路径；没有缺列时仍调用原分页读取，不签发来源。 */
-  async page(context: Context, input: PageInput, readPage: ReadPage): Promise<TablePage> {
+  async page(context: Context, input: PageInput, readPage: ReadPage, record?: RecordTableRead): Promise<TablePage> {
     const epoch = this.epochs.get(input.connectionId) ?? 0, info = await this.ports.info(context, input.database, input.table);
     let last: ReturnType<typeof tableLastPageBounds> | undefined, countSql: string | undefined;
     const statement = (metadata: TableInfo) => buildPageSql(metadata, last?.page ?? input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
@@ -85,7 +86,9 @@ export class TableCopySources {
       const wireSql = inlineParameters(sql, params);
       context.checkCancelled(); const terminal = context.commandStarted();
       try {
-        const page = await readPage(context.managed, wireSql, last?.page ?? input.page, input.pageSize, metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+        const args = [context.managed, wireSql, last?.page ?? input.page, input.pageSize,
+          metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type))] as const;
+        const page = await (record ? readPage(...args, () => record(sql)) : readPage(...args));
         context.checkCancelled();
         const trace = input.includeReadStatements ? { readStatements: tableReadStatements(...(countSql ? [countSql, sql] : [sql])) } : undefined;
         if (!last) return trace ? { ...page, ...trace } : page;
@@ -105,7 +108,11 @@ export class TableCopySources {
         if (fresh.objectKind !== 'table' || fresh.engine.toUpperCase() !== 'INNODB') throw Error('末页导航需要 InnoDB 物理表');
         const { where, params } = buildTableFilterSql(fresh, input.filters, input.filterMode, input.filterGroup);
         countSql = `SELECT CAST(COUNT(*) AS CHAR) AS matchingRows FROM ${qualified(fresh.database, fresh.name)}${where ? ' WHERE ' + where : ''}`;
-        const { rows } = await this.ports.query<{ matchingRows: string }[]>(context, inlineParameters(countSql, params));
+        const template = countSql;
+        const wireSql = inlineParameters(template, params);
+        const { rows } = await (record ?
+          this.ports.query<{ matchingRows: string }[]>(context, wireSql, undefined, () => record(template)) :
+          this.ports.query<{ matchingRows: string }[]>(context, wireSql));
         last = tableLastPageBounds(rows.length === 1 ? rows[0].matchingRows : undefined, input.pageSize);
       }
       // 即使没有 INVISIBLE，也在同一 MDL 内复核并读页。只有可能补取的页才读取物理租约身份。

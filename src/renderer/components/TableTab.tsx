@@ -739,7 +739,9 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       if (generation !== loadGeneration.current || !mounted.current) return;
       if (lastRead?.stopped) throw Error(zh.table.lastPageCancelled);
       if (lastRead) lastRead.sent = true;
-      const settled = await Promise.allSettled([invoke('metadata.table', base), invoke('table.page', { ...base, page: requestedIndex, pageSize, filters, filterMode, filterGroup, sort, copySource: true, includeReadStatements: true, taskId: sourceTaskId, ...(last ? { lastPage: true } : {}) })]);
+      const settled = await Promise.allSettled([invoke('metadata.table', base), invoke('table.page', { ...base, page: requestedIndex, pageSize, filters, filterMode, filterGroup, sort, copySource: true, includeReadStatements: true, taskId: sourceTaskId, ...(last ? { lastPage: true } : {}) }, statements => {
+        if (generation === loadGeneration.current && mounted.current && !lastRead?.stopped) readHistory.recordReadFailure(statements);
+      })]);
       if (lastRead) lastRead.finished = true;
       if (settled[1].status === 'fulfilled' && settled[1].value.copySource) pendingSource = { connectionId: base.connectionId, source: settled[1].value.copySource };
       if (lastRead?.stopped) {

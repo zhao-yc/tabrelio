@@ -1,4 +1,5 @@
 import { utilityProcess, type UtilityProcess } from 'electron';
+import { TableReadFailure } from '../shared/tableReadStatements';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { ConnectionProfile, TaskEvent } from '../shared/contracts';
@@ -39,7 +40,8 @@ export class EngineBroker {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error)); else pending.resolve(message.result);
+      if (message.tableReadFailure) pending.reject(new TableReadFailure(new Error(message.error), message.tableReadFailure));
+      else if (message.error) pending.reject(new Error(message.error)); else pending.resolve(message.result);
     });
     child.on('exit', () => {
       if (this.child === child) this.child = undefined;

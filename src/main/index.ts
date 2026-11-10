@@ -1,4 +1,5 @@
 import { listExcelWorkbookSource } from '../engine/excelFiles';
+import { TableReadFailure } from '../shared/tableReadStatements';
 import { csvRangeOption } from '../shared/csvImport';
 import { inspectPostgresRecordImportSource } from '../engine/postgres/recordImportFile';
 import { postgresImportColumnOrder, postgresImportFileRecords, type PostgresImportFile, type PostgresImportSource } from '../engine/postgres/importSource';
@@ -3830,6 +3831,7 @@ else {
     historyDelete = new HistoryDelete(store, join(__dirname, 'savedQuerySearchWorker.cjs'), { assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), shuttingDown: () => shuttingDown });
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
       let columns: MainInvocation | undefined;
+      let tableReadRevision: number | undefined;
       let databaseEncodingCommand: DatabaseEncodingOwnerCommand | undefined, databaseEncodingResult: unknown;
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
@@ -3880,6 +3882,9 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         if (payload.command.startsWith('postgres.queryBuilder.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
+        if ((payload.command === 'table.page' || payload.command === 'sqlite.tablePage' || payload.command === 'postgres.table.page' ||
+            payload.command === 'postgres.table.presets.open') && (input as { includeReadStatements?: true }).includeReadStatements)
+          tableReadRevision = store.connectionRevision();
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'mysql.view.inspectQuery' || payload.command === 'mysql.view.dependencies' || payload.command === 'mysql.view.renamePreview' || payload.command === 'mysql.view.renameApply' || payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
@@ -4003,7 +4008,9 @@ else {
         if (databaseEncodingCommand && columns) try { await databaseEncodingOwners.rejectPublication(databaseEncodingCommand, databaseEncodingResult, columns, error); } catch (cleanup) { failure = cleanup; }
         if (tableChecksMain.hasUnpublished(columns?.tableChecksRequest)) try { await tableChecksMain.rejectReply(columns!.tableChecksRequest!, error); } catch (cleanup) { failure = cleanup; }
         if (columns && columnsMain.hasUnpublished(columns)) try { await columnsMain.rejectReply(columns, error); } catch (cleanup) { failure = cleanup; }
-        return { ok: false, error: failure instanceof Error ? failure.message : '客户端操作失败' };
+        return { ok: false, error: failure instanceof Error ? failure.message : '客户端操作失败',
+          ...(tableReadRevision !== undefined && !shuttingDown && tableReadRevision === store.connectionRevision() &&
+            failure instanceof TableReadFailure ? { tableReadFailure: failure.statements } : {}) };
       }
     });
     createMenu(); await createWindow();

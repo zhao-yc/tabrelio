@@ -24,6 +24,7 @@ export interface SqliteTableBrowseControl {
   check(): void;
   beginCleanup(): void;
   cleanupFailed(reason: unknown): void;
+  recordReadAttempt?(sql: string): void;
   queryRecord?(primaryKey: SqliteTablePage['primaryKey'], columns: SqliteTableColumn[]): Promise<SqliteQueryRecordPredicate[]>;
   searchRecord?(catalogue: SqliteTableCatalogue): Promise<{ where: string; parameters: SqliteValue[] }>;
   prepareEdit?(catalogue: SqliteTableCatalogue, driver: SqliteDriverSession): Promise<SqliteEditReadPlan>;
@@ -64,13 +65,13 @@ export function sqliteTableSchemaKey(schemaSql: string, xinfo: readonly (readonl
 }
 
 /** 单条查询只收完整结果；截断不能伪造目录完整、页尾或没有下一页。 */
-async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maxRows: number, control: SqliteTableBrowseControl, header?: (columns: SqliteColumn[]) => void, maxBytes: number = limits.resultBytes): Promise<SqliteValue[][]> {
+async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maxRows: number, control: SqliteTableBrowseControl, header?: (columns: SqliteColumn[]) => void, maxBytes: number = limits.resultBytes, record?: (sql: string) => void): Promise<SqliteValue[][]> {
   control.check(); const values: SqliteValue[][] = [];
   const result = await driver.execute(sql, {
     parameters, maxRows, batchRows: Math.min(200, maxRows), maxBytes,
     onStatement: statement => { control.check(); if (statement.index !== 0) throw Error('SQLite表浏览出现了额外语句'); header?.(statement.columns); },
     onBatch: batch => { control.check(); if (batch.index !== 0 || values.length + batch.rows.length > maxRows) throw Error('SQLite表浏览结果行超出本页预算'); values.push(...batch.rows); },
-  });
+  }, record && (() => record(sql)));
   control.check();
   if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== values.length) throw Error('SQLite表浏览结果或元数据超过预算，无法确认完整分页；请减少每页行数或缩小范围');
   return values;
@@ -91,10 +92,9 @@ export async function countSqliteMatchingRows(driver: SqliteDriverSession, input
   const sql = 'SELECT count(*) FROM (' + source.sql + ') AS "__dbark_count"';
   const result = await rows(driver, sql, source.parameters, 1, control, columns => {
     if (columns.length !== 1) throw Error('SQLite匹配行数返回非预期列');
-  }, 1024);
+  }, 1024, record);
   const value = result[0]?.[0];
   if (result.length !== 1 || result[0].length !== 1 || !value || typeof value !== 'object' || value.type !== 'integer') throw Error('SQLite匹配行数返回不完整');
-  record?.(sql);
   return sqliteRowCountSchema.parse(value.value);
 }
 
@@ -145,7 +145,7 @@ async function readSqliteBrowseKeys(driver: SqliteDriverSession, table: string, 
 export async function readSqliteTablePage(driver: SqliteDriverSession, source: SqliteTablePageInput, control: SqliteTableBrowseControl): Promise<SqliteTablePage> {
   const requested = sqliteTablePageSchema.parse(source), started = performance.now();
   const readSql: string[] = [];
-  const record = requested.includeReadStatements ? (sql: string) => { readSql.push(sql); } : undefined;
+  const record = requested.includeReadStatements ? (sql: string) => { readSql.push(sql); control.recordReadAttempt?.(sql); } : undefined;
   let page: SqliteTablePage | undefined, failed = false, failure: unknown, editPlan: SqliteEditReadPlan | undefined, originalRows: SqliteValue[][] = [];
   let browseRowIdColumn = false;
   try {
@@ -184,10 +184,9 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const read = (sql: string, parameters: SqliteValue[], count: number, maxBytes?: number) => {
       const extraAlias = browseRowIdColumn ? '"__dbark_browse_rowid"' : '"__dbark_edit_locator"';
       const statement = extraColumn ? 'SELECT ' + extraColumn + ' AS ' + extraAlias + ', ' + sql.slice(7) : sql;
-      if (request) record?.(statement);
       return rows(driver, statement, parameters, count, control, actual => {
         if (actual.length !== columns.length + extra || actual.slice(extra).some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
-      }, (maxBytes ?? limits.resultBytes) + (browseRowIdColumn ? count * 64 : 0));
+      }, (maxBytes ?? limits.resultBytes) + (browseRowIdColumn ? count * 64 : 0), request ? record : undefined);
     };
     const values = request ? await read(request.sql, request.parameters, input.limit + 1) : [];
     if (focused) {

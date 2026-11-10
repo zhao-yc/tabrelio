@@ -317,7 +317,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
   async function read(next: PageOptions, isCurrent: () => boolean, extra: PageRead = {}) {
     const { presetLayout, recordEdge, keepHistory, ...readOptions } = extra;
-    const result = await invoke('postgres.table.page', { ...target, ...next, ...readOptions, includeReadStatements: true });
+    const result = await invoke('postgres.table.page', { ...target, ...next, ...readOptions, includeReadStatements: true }, statements => {
+      if (isCurrent()) readHistory.recordReadFailure(statements);
+    });
     const retained = keepHistory ? new Set([...readOptions.retainPageTokens ?? [], ...result.retainedHistoryPageTokens ?? []]) : undefined;
     return publishPage(result, next, isCurrent, presetLayout, recordEdge, retained);
   }
@@ -369,7 +371,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     if (!isCurrent()) return;
     if (!snapshot.entries.some(entry => entry.id === id)) throw Error(tablePresetsZh.tabMissing);
     const { page: result, configuration } = await invoke('postgres.table.presets.open', { ...relation, id, tabId,
-      limit: options.limit, includeReadStatements: true, source: snapshot.source, expectedRevision: snapshot.revision, bindingToken: snapshot.bindingToken });
+      limit: options.limit, includeReadStatements: true, source: snapshot.source, expectedRevision: snapshot.revision, bindingToken: snapshot.bindingToken }, statements => {
+      if (isCurrent()) readHistory.recordReadFailure(statements);
+    });
     if (!await publishPage(result, { ...postgresTablePresetOptions(configuration), offset: 0, limit: options.limit }, isCurrent, configuration.layout) || !isCurrent()) return;
     if (configuration.quickFilter) { setFilterColumn(configuration.quickFilter.column); setFilterText(configuration.quickFilter.text); }
     setMessage(configuration.layout ? tablePresetsZh.appliedWithLayout : tablePresetsZh.applied);

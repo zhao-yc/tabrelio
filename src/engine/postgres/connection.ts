@@ -292,6 +292,7 @@ export class PostgresConnection {
     protocol?: 'extended' | 'parse',
     onNotice?: (notice: unknown, redact: (value: string) => string) => void,
     onFields?: (fields: readonly FieldDef[]) => void,
+    submitting?: () => void,
   ): Promise<QueryResult> {
     const client = this.client;
     if (!client || this.broken)
@@ -421,6 +422,7 @@ export class PostgresConnection {
         if (Number.isSafeInteger(result.rowCount) && result.rowCount >= 0) affected = result.rowCount;
       });
       try {
+        submitting?.();
         client.query(query);
       } catch (reason) {
         failure = reason;

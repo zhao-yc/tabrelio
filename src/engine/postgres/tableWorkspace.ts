@@ -9,7 +9,7 @@ import { isPostgresRelatedTabId } from '../../shared/postgresRelatedTab';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import { FILTER_LIMITS } from '../../shared/filtering';
-import { tableReadStatements } from '../../shared/tableReadStatements';
+import { tableReadStatements, withTableReadTrace, type RecordTableRead } from '../../shared/tableReadStatements';
 import { TableWriteTraceCapture } from '../../shared/tableWriteTrace';
 import {
   isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredWriteMaxRows,
@@ -332,7 +332,7 @@ export class PostgresTableWorkspace {
   /** 当前草稿必须保留。只在同一目录和筛选范围内尽量保留撤销历史，过期历史不阻断翻页。 */
   async page(input: Scoped<PostgresTablePageInput>, connect: Connect): Promise<PostgresTablePage> {
     if (input.searchRecordRef) throw Error('PostgreSQL 搜索编辑缺少原行核验');
-    return (await this.loadPage(input, connect)).page;
+    return withTableReadTrace(input.includeReadStatements, async record => (await this.loadPage(input, connect, undefined, record)).page);
   }
 
   /** 查询和搜索只获得指定原行的单一操作能力，不能替换已有表页或借此获得整表操作。 */
@@ -404,7 +404,7 @@ export class PostgresTableWorkspace {
   }
 
   /** 恢复与活动页在同一个只读快照核验，所有原页一次性签发。 */
-  private async loadPage(input: Scoped<PostgresTablePageInput>, connect: Connect, file?: PostgresDraftDocument):
+  private async loadPage(input: Scoped<PostgresTablePageInput>, connect: Connect, file?: PostgresDraftDocument, record?: RecordTableRead):
     Promise<Pick<PostgresDraftRestored, 'page' | 'entries'>> {
     if (isPostgresRelatedTabId(input.tabId)) throw Error('关联表页必须按原外键范围读取');
     const key = this.key(input);
@@ -437,12 +437,15 @@ export class PostgresTableWorkspace {
           const values: unknown[] = [];
           const condition = postgresTableCondition(options.filter, name => columnIdentifier(relation, name), value => '$' + values.push(value));
           countSql = 'SELECT pg_catalog.count(*)::text FROM ' + only(relation) + (condition ? ' WHERE ' + condition : '');
-          const count = await connection.query(countSql, values, small());
+          const template = countSql;
+          const count = await connection.query(template, values, small(), undefined, undefined, undefined, undefined,
+            record && (() => record(template)));
           if (count.truncated || count.rows.length !== 1) throw Error('PostgreSQL 匹配记录计数未完整返回');
           counted = postgresCountedWindow(count.rows[0].c0, input.limit, input.offset, input.navigation);
         }
         const { sql, args, withOriginal } = readSql(relation, options, { ...input, offset: counted?.offset ?? input.offset });
-        const records = await connection.query(sql, args, { rows: input.limit + 1, bytes: 8 * 1024 * 1024 });
+        const records = await connection.query(sql, args, { rows: input.limit + 1, bytes: 8 * 1024 * 1024 },
+          undefined, undefined, undefined, undefined, record && (() => record(sql)));
         // 数量与页面必须来自同一只读快照。易变视图或截断造成不一致时保留旧页。
         if (counted && (records.truncated || records.rows.length !== counted.expected))
           throw Error('PostgreSQL 计数与本次页记录不一致，请缩小筛选范围或刷新');

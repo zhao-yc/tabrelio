@@ -7,6 +7,7 @@ import '../tableReadHistory.css';
 
 type EntryContent =
   | { kind: 'read'; position: number; rows: number; statements: readonly TableReadStatement[] }
+  | { kind: 'read-failed'; statements: readonly TableReadStatement[] }
   | { kind: 'write'; outcome: TableWriteOutcome; statements: readonly TableReadStatement[]; omitted: number };
 type Entry = EntryContent & {
   sequence: number;
@@ -36,7 +37,10 @@ export function useTableReadHistory(scope: string) {
   function recordWrite(trace: TableWriteTrace | undefined, outcome: TableWriteOutcome) {
     if (trace?.statements.length) append({ kind: 'write', outcome, ...trace });
   }
-  return { entries, open, setOpen, record, recordWrite };
+  function recordReadFailure(statements: readonly TableReadStatement[]) {
+    if (statements.length) append({ kind: 'read-failed', statements });
+  }
+  return { entries, open, setOpen, record, recordReadFailure, recordWrite };
 }
 
 export function TableReadHistory({ history }: { history: ReturnType<typeof useTableReadHistory> }) {
@@ -47,7 +51,8 @@ export function TableReadHistory({ history }: { history: ReturnType<typeof useTa
         {history.entries.length === 0 && <p>{text.empty}</p>}
         {history.entries.map((entry, index) => <details key={entry.sequence} open={index === 0}>
           <summary><time dateTime={entry.time}>{new Date(entry.time).toLocaleTimeString('zh-CN')}</time> · {
-            entry.kind === 'read' ? text.read(entry.position, entry.rows) : text.outcomes[entry.outcome]
+            entry.kind === 'read' ? text.read(entry.position, entry.rows) :
+              entry.kind === 'read-failed' ? text.readFailed : text.outcomes[entry.outcome]
           }</summary>
           {entry.kind === 'write' && entry.omitted > 0 && <p>{text.omitted(entry.omitted)}</p>}
           {entry.statements.map((statement, statementIndex) => <div key={statementIndex}>

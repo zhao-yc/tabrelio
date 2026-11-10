@@ -1,5 +1,5 @@
 import { mysqlJoinPreviewSchema } from '../shared/mysqlJoinPreview';
-import { tableReadStatements } from '../shared/tableReadStatements';
+import { tableReadStatements, withTableReadTrace } from '../shared/tableReadStatements';
 import { TableWriteTraceCapture } from '../shared/tableWriteTrace';
 import { previewMysqlJoin } from './mysqlJoinPreview';
 import { readMysqlViewDependencies } from './mysqlViewDependencies';
@@ -812,16 +812,24 @@ export class Engine {
         return this.withCopySourceTask(input.connectionId, input.taskId, context => this.tableCopySources.read(context, request));
       }
       case 'table.copySourceRelease': return this.tableCopySources.release(input);
-      case 'table.page': if (input.copySource) {
-        this.copySourceProfile(input);
-        return this.withCopySourceTask(input.connectionId, input.taskId, context => this.tableCopySources.page(context, input as CommandMap['table.page']['input'], (managed, sql, page, pageSize, binary) => this.readPage(managed, sql, page, pageSize, binary, true)));
-      } else return this.withConnection(input.connectionId, async managed => {
-        const info = await metadata.tableInfo(managed, input.database, input.table);
-        const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
-        // 筛选值用十六进制字面量嵌入已验证模板，避免文本协议受 SQL 转义模式影响。
-        const sql = inlineParameters(statement.sql, statement.params);
-        const page = await this.readPage(managed, sql, input.page, input.pageSize, info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
-        return input.includeReadStatements ? { ...page, readStatements: tableReadStatements(statement.sql) } : page;
+      case 'table.page': return withTableReadTrace(input.includeReadStatements, record => {
+        if (input.copySource) {
+          this.copySourceProfile(input);
+          return this.withCopySourceTask(input.connectionId, input.taskId, context => this.tableCopySources.page(context,
+            input as CommandMap['table.page']['input'], (managed, sql, page, pageSize, binary, submitting) =>
+              submitting ? this.readPage(managed, sql, page, pageSize, binary, true, undefined, submitting) :
+                this.readPage(managed, sql, page, pageSize, binary, true), record));
+        }
+        return this.withConnection(input.connectionId, async managed => {
+          const info = await metadata.tableInfo(managed, input.database, input.table);
+          const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
+          // 筛选值用十六进制字面量嵌入已验证模板，历史始终使用未内联参数的版本。
+          const sql = inlineParameters(statement.sql, statement.params);
+          const binary = info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type));
+          const args = [managed, sql, input.page, input.pageSize, binary] as const;
+          const page = await (record ? this.readPage(...args, false, undefined, () => record(statement.sql)) : this.readPage(...args));
+          return input.includeReadStatements ? { ...page, readStatements: tableReadStatements(statement.sql) } : page;
+        });
       });
       case 'table.incomingReferences': {
         this.copySourceProfile(input);
@@ -1352,8 +1360,9 @@ export class Engine {
   }
 
   /** 普通表页与关联表页共用流式预算和按真实字段名序列化的规则。 */
-  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false, waitTerminal = false, compareParams?: MysqlPageParameters) {
+  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false, waitTerminal = false, compareParams?: MysqlPageParameters, submitting?: () => void) {
     if (managed.signal?.aborted) throw new Error('任务已取消');
+    submitting?.();
     // 文本协议会截短 FLOAT 的有效位，二进制协议保留相邻 FLOAT/DOUBLE 候选的真实值。
     const query = binaryRows ? managed.connection.execute({ sql, rowsAsArray: true, ...(compareParams ? { values: compareParams } : {}) }) : managed.connection.query({ sql, rowsAsArray: true });
     // 新来源路径在流预算失败时仍等驱动命令/连接真实终态；原表页行为不变。

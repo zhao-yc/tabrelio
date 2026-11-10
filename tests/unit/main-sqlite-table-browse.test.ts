@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mainColumnsHarness, deferred } from './main-columns-owner-harness';
+import { TableReadFailure } from '../../src/shared/tableReadStatements';
 
 const profile = { id: 'sqlite-file', name: '本例文件', group: '', color: '#123456', dialect: 'sqlite', sqlite: { filePath: '仅作已存概要，不打开文件', readOnly: true, busyTimeoutMs: 1000 } };
 const input = { connectionId: profile.id, database: 'main', table: 'subject', taskId: 'read-page', offset: 0, limit: 10, mode: 'and', filters: [], sort: [] };
@@ -7,6 +8,21 @@ const page = { schemaKey: 'a'.repeat(64), target: { connectionId: profile.id, da
 
 /** 经过正式IPC校验与Main分派；只替换数据库执行边界，不打开本机文件或网络连接。 */
 describe('SQLite表页Main任务边界', () => {
+  it('只给显式请求且仍属于原连接修订的失败回复附带模板', async () => {
+    const statements = [{ sql: 'SELECT * FROM subject WHERE label = ?', clipped: false }];
+    for (const mode of ['current', 'no-opt-in', 'changed'] as const) {
+      const f = mainColumnsHarness(), pending = deferred();
+      Object.assign(f.context.store, { connections: () => [profile] });
+      f.request.mockReturnValueOnce(pending.promise);
+      const reading = f.invoke('sqlite.tablePage', { ...input, ...(mode === 'no-opt-in' ? {} : { includeReadStatements: true }) });
+      expect(f.request).toHaveBeenCalledOnce();
+      if (mode === 'changed') f.setRevision(99);
+      pending.reject(new TableReadFailure(Error('原错误'), statements));
+      expect(await reading).toEqual({ ok: false, error: '原错误',
+        ...(mode === 'current' ? { tableReadFailure: statements } : {}) });
+      expect(f.events.every(event => !('tableReadFailure' in event))).toBe(true);
+    }
+  });
   it.each(['count-desc', 'count-asc'] as const)('次数排序%s通过原IPC原样交付并绑定晚发布门', async order => {
     const request = { connectionId: profile.id, database: 'main', table: 'subject', column: 'n', schemaKey: 'a'.repeat(64), taskId: 'frequency', mode: 'and', filters: [], search: '', order };
     const f = mainColumnsHarness(); Object.assign(f.context.store, { connections: () => [profile] }); f.request.mockImplementation(async (command, input) => { expect(command).toBe('sqlite.valueOptions'); expect(input).toEqual(request); return { request, values: [], truncated: false }; });

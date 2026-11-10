@@ -731,7 +731,7 @@ export interface CommandMap {
 }
 export type Command = keyof CommandMap;
 export interface DesktopApi {
-  invoke<C extends Command>(command: C, input: CommandMap[C]['input']): Promise<CommandMap[C]['output']>;
+  invoke<C extends Command>(command: C, input: CommandMap[C]['input'], receiveTableReadFailure?: import('./tableReadStatements').ReceiveTableReadFailure): Promise<CommandMap[C]['output']>;
   onTask(listener: (event: TaskEvent) => void): () => void;
   onMenu(listener: (action: string) => void): () => void;
   /** 用户菜单命令携带准确状态代次，与内部保存状态及警告事件分开。 */

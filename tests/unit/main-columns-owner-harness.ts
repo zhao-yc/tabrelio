@@ -14,6 +14,7 @@ import { SqliteTablePresetMain } from '../../src/main/sqliteTablePresetMain';
 import { SqliteTableLayoutMain, TableLayoutMain } from '../../src/main/sqliteTableLayoutMain';
 import { postgresLayoutSchemas } from '../../src/shared/sqliteTableLayout';
 import { validateCommand } from '../../src/shared/validation';
+import { TableReadFailure } from '../../src/shared/tableReadStatements';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { QueryFileSources } from '../../src/main/queryFileSources';
 import { QueryInsertExports } from '../../src/main/queryInsertExports';
@@ -76,6 +77,7 @@ export function mainColumnsHarness() {
   }
   let handler!: (event: any, payload: any) => Promise<any>;
   const context = createContext({
+    TableReadFailure,
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
     filteredUpdateProgress: new Map(), filteredDeleteProgress: new Map(),

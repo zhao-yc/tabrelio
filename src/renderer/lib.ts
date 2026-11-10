@@ -1,11 +1,12 @@
 import { zh } from './locales/zh-CN';
 import type { CellValue, Command, CommandMap, DataRow } from '../shared/contracts';
 import { binaryCellFromHex } from './binaryCell';
+import type { ReceiveTableReadFailure } from '../shared/tableReadStatements';
 
 /** 所有界面请求经由预加载桥接进入主进程，浏览器页面不直接接触凭据或驱动。 */
-export function invoke<C extends Command>(command: C, input: CommandMap[C]['input']) {
+export function invoke<C extends Command>(command: C, input: CommandMap[C]['input'], receiveTableReadFailure?: ReceiveTableReadFailure) {
   if (!window.dbark) return Promise.reject(new Error(zh.commonMessages.text001)) as Promise<CommandMap[C]['output']>;
-  return window.dbark.invoke(command, input);
+  return receiveTableReadFailure ? window.dbark.invoke(command, input, receiveTableReadFailure) : window.dbark.invoke(command, input);
 }
 
 /** 为标签、草稿行与任务生成互不复用的标识。 */

@@ -1,5 +1,6 @@
 import { Engine } from '../engine';
 import type { EngineCommand } from '../shared/contracts';
+import { TableReadFailure } from '../shared/tableReadStatements';
 
 const parent = process.parentPort;
 if (!parent) throw new Error('数据库引擎只能由客户端启动');
@@ -13,6 +14,7 @@ parent.on('message', async ({ data }) => {
     parent.postMessage({ type: 'response', id, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : '数据库操作失败';
-    parent.postMessage({ type: 'response', id, error: message });
+    parent.postMessage({ type: 'response', id, error: message,
+      ...(error instanceof TableReadFailure ? { tableReadFailure: error.statements } : {}) });
   }
 });

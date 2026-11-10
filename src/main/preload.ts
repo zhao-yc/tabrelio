@@ -5,10 +5,16 @@ import { publicCommands, isUiCommandInvocation } from '../shared/commands';
 /** 沙箱页面只能访问固定 API，不暴露原始 IPC、文件系统或 Node 对象。 */
 const api: DesktopApi = {
   /** 只发送固定命令并将主进程错误转成可由界面处理的异常。 */
-  async invoke(command, input) {
+  async invoke(command, input, receiveTableReadFailure) {
     if (!Object.hasOwn(publicCommands, command)) throw new Error('不支持的客户端操作');
     const response = await ipcRenderer.invoke('dbark:request', { command, input });
-    if (!response.ok) throw new Error(response.error);
+    if (!response.ok) {
+      // 只交给原请求的回调，失败仍按原约定拒绝，模板不经任务广播。
+      if (response.tableReadFailure && typeof receiveTableReadFailure === 'function') {
+        try { receiveTableReadFailure(response.tableReadFailure); } catch { /* 辅助历史不替换原错误。 */ }
+      }
+      throw new Error(response.error);
+    }
     return response.result;
   },
   /** 订阅任务事件并返回解绑函数，避免标签销毁后仍接收数据。 */

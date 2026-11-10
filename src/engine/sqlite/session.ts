@@ -138,8 +138,8 @@ export class SqliteDriverSession {
   }
 
   /** 同一物理连接不并行执行；每个批次等消费者完成后才确认，不无限积压结果。 */
-  execute(sql: string, options: SqliteExecuteOptions = {}): Promise<SqliteExecutionResult> {
-    return this.start(sql, options, false);
+  execute(sql: string, options: SqliteExecuteOptions = {}, submitting?: () => void): Promise<SqliteExecutionResult> {
+    return this.start(sql, options, false, false, submitting);
   }
   /** 原会话只准备 SQL，接收原文校验过的固定范围，不接收查询结果。 */
   syntaxCheck(sql: string): Promise<SqlSyntaxCheckResult> {
@@ -185,7 +185,7 @@ export class SqliteDriverSession {
     return this.start(sql, { ...options, maxRows: 1, maxBytes: 1 }, true, true);
   }
   /** 普通查询继续原100万行/32MiB门槛，流读取不接受其预算覆盖值。 */
-  private start(sql: string, options: SqliteExecuteOptions, stream: boolean, querySource = false): Promise<SqliteExecutionResult> {
+  private start(sql: string, options: SqliteExecuteOptions, stream: boolean, querySource = false, submitting?: () => void): Promise<SqliteExecutionResult> {
     if (!this.opened || this.exited || this.invalid || this.closing || this.active) return Promise.reject(this.error('SQLite会话未就绪或已有运行任务', 'SQLITE_SESSION_UNAVAILABLE'));
     const configured: SqliteExecutionOptions = { maxRows: options.maxRows ?? 1000, batchRows: options.batchRows ?? 200, maxBytes: options.maxBytes ?? limits.resultBytes };
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > limits.sqlBytes || !Number.isInteger(configured.maxRows) || configured.maxRows < 1 || configured.maxRows > limits.rows || !Number.isInteger(configured.batchRows) || configured.batchRows < 1 || configured.batchRows > limits.batchRows || !Number.isInteger(configured.maxBytes) || configured.maxBytes < 1 || configured.maxBytes > limits.resultBytes) return Promise.reject(this.error('SQLite执行参数超出预算', 'SQLITE_INPUT_LIMIT'));
@@ -223,7 +223,7 @@ export class SqliteDriverSession {
     // 无取消调用时也保留原生终态错误的处理端；execute仍通过自己的Promise报告失败。
     void operation.nativeDone.promise.catch(() => {});
     this.active = operation;
-    try { this.transport.send(stream
+    try { submitting?.(); this.transport.send(stream
       ? { kind: 'streamRead', id: operation.id, sql, options: { batchRows: configured.batchRows },
         ...(querySource ? { querySource: true, namedParameters: namedParameters! } : { parameters: options.parameters ?? [] }) }
       : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), ...(namedParameters === undefined ? {} : { namedParameters }), ...(createGuard === undefined ? {} : { createGuard }),
