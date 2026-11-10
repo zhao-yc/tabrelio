@@ -249,6 +249,10 @@ export const zh = {
     resultSql: "查看结果 SQL",
     resultSqlTitle: "结果来源 SQL",
     resultSqlHint: "这里显示结果附带的 SQL 文本。长语句可能被截断，参数查询可能显示模板。查看不会重新执行。",
+    resultSqlShowFull: "查看完整原语句",
+    resultSqlShowReceipt: "返回结果附带 SQL",
+    resultSqlFullTitle: "完整结果原语句",
+    resultSqlFullHint: "从原执行范围读取的完整语句。参数保留模板，可分段查看或查找全文。",
     pinSessionOnly: "固定结果只保留在当前查询标签中。达到结果上限的快照也只含已返回的数据。",
   },
   // 表设计和数据库对象定义。

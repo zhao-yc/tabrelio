@@ -58,3 +58,13 @@ it('读取原结果范围保留完整选区正文，旧模型换代后停止读�
   f.emit('content');
   expect(lease.readRange(range)).toBeUndefined();
 });
+it('完整原范围超过结果预览长度时仍逐字读回，忙态或模态期间不重新取文', () => {
+  const sql = "SELECT 1 /* " + 'x'.repeat(70000) + '尾部🚢 */;';
+  const f = fixture(sql), lease = f.create()!, range = { start: 0, end: sql.length };
+  expect(lease.readRange(range)).toBe(sql);
+  f.scope.modal = true;
+  expect(lease.readRange(range)).toBeUndefined();
+  f.scope.modal = false; f.scope.busy = true;
+  expect(lease.readRange(range)).toBeUndefined();
+  lease.dispose();
+});

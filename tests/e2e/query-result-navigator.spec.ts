@@ -4,6 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { queryResultNavigatorZh as text } from '../../src/renderer/locales/queryResultNavigator.zh-CN';
 import { queryDuplicateZh as duplicateText } from '../../src/renderer/locales/queryDuplicate.zh-CN';
+import { historyPagesZh as previewText } from '../../src/renderer/locales/historyPages.zh-CN';
+import { navigationMenuItem } from './navigation-menu';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -21,7 +23,8 @@ test('多结果查询按名称、字段及序号切换，保持原执行和编�
       const number = index + 1;
       const title = number === 2 || number === 42 ? '-- NAME: 月度汇总\n' : '';
       const column = number === 44 ? 'UniqueOutput' : 'sample';
-      return `${title}SELECT ${number} AS ${column};`;
+      const comment = number === 44 ? ` /* ${'x'.repeat(66000)}完整原语句尾部🚢 */` : '';
+      return `${title}SELECT ${number} AS ${column}${comment};`;
     }).join('\n');
     // 只替换文件选择器。连接、执行、缓存及结果切换仍使用正式应用。
     await desktop.evaluate(({ dialog }, file) => {
@@ -74,6 +77,20 @@ test('多结果查询按名称、字段及序号切换，保持原执行和编�
     await expect(dialog.getByRole('option')).toHaveCount(1);
     await dialog.getByRole('option').click();
     await expect(grid.getByRole('gridcell', { name: '44', exact: true })).toBeVisible();
+    await (await navigationMenuItem(tab, { name: zh.query.resultSql, exact: true })).click();
+    const sourceDialog = page.getByRole('dialog', { name: zh.query.resultSqlTitle, exact: true });
+    await expect(sourceDialog.locator('.monaco-editor .view-lines')).not.toContainText('完整原语句尾部');
+    await sourceDialog.getByRole('button', { name: zh.query.resultSqlShowFull, exact: true }).click();
+    const full = sourceDialog.getByRole('region', { name: zh.query.resultSqlFullTitle, exact: true });
+    const find = full.getByRole('textbox', { name: previewText.sqlFindTitle, exact: true });
+    await find.fill('完整原语句尾部🚢');
+    await find.press('Enter');
+    await expect(full.locator('mark')).toHaveText('完整原语句尾部🚢');
+    await expect(full.getByRole('status', { name: previewText.sqlPartStatus, exact: true })).toHaveText('第 2 / 2 段');
+    await sourceDialog.screenshot({ path: info.outputPath('完整结果原语句.png') });
+    await sourceDialog.getByRole('button', { name: zh.common.close, exact: true }).click();
+    expect(await history()).toEqual(originalHistory);
+    expect(await tasks()).toEqual(originalTasks);
     await trigger.click();
     await search.fill('#2');
     await expect(dialog.getByRole('option')).toHaveCount(1);
@@ -114,6 +131,9 @@ test('多结果查询按名称、字段及序号切换，保持原执行和编�
     await tab.locator('.monaco-editor').getByRole('textbox').focus();
     await page.keyboard.insertText(' ');
     await expect(openStatement).toBeDisabled();
+    await (await navigationMenuItem(tab, { name: zh.query.resultSql, exact: true })).click();
+    await expect(sourceDialog.getByRole('button', { name: zh.query.resultSqlShowFull, exact: true })).toHaveCount(0);
+    await sourceDialog.getByRole('button', { name: zh.common.close, exact: true }).click();
     expect(await history()).toEqual(originalHistory);
     expect(await tasks()).toEqual(originalTasks);
     expect(pageErrors).toEqual([]);

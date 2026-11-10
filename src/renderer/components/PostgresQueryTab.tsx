@@ -13,6 +13,7 @@ import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
 import { QueryResultNavigator } from './QueryResultNavigator';
+import { ResultSqlDialog } from './ResultSqlDialog';
 import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -287,7 +288,7 @@ export function PostgresQueryTab({
   const pinStateRef = useRef(pinState);
   const snapshotOperation = useRef<QueryResultSnapshotIntent | undefined>(undefined);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
-  const [resultSql, setResultSql] = useState<{ result: QueryResult; pinned: boolean }>();
+  const [resultSql, setResultSql] = useState<{ result: QueryResult; pinned: boolean; sourceSql?: string }>();
   const [comparisonDraft, setComparisonDraft] = useState<ComparisonDraft>();
   const comparisonDraftRef = useRef<ComparisonDraft | undefined>(undefined);
   const [resultHistory] = useState(() => new QueryResultHistory());
@@ -1254,10 +1255,12 @@ export function PostgresQueryTab({
       selected: pin === item ? undefined : pinState.selected });
   }
 
-  /** 只展示当前结果附带的原 SQL。编辑草稿不改变已返回的 SQL。 */
+  /** 已核验的原范围保留参数模板，失效时仍可查看结果附带的文本。 */
   function openResultSql() {
     if (!result?.statement.trim() || !(pin || receiptSource) || selectedResultRef.current !== result || !pinNavigationCurrent()) return;
-    setResultSql({result, pinned: !!pin});
+    const sourceSql = receiptSource && resultRanges.current.has(receiptSource)
+      ? failureSource.current?.readRange(receiptSource.sourceRange) : undefined;
+    setResultSql({ result, pinned: !!pin, sourceSql });
   }
 
   /** 旧预览的关闭回调仅能释放自身。 */
@@ -2461,14 +2464,9 @@ export function PostgresQueryTab({
           {result?.truncated && <p className="warning-text">{text.truncated}</p>}
         </div>
       </div>
-      {resultSql && <Modal title={resultSql.pinned ? zh.query.pinSource : zh.query.resultSqlTitle} wide onClose={() => closeResultSql(resultSql)}>
-        <div className="modal-content"><p>{resultSql.pinned ? zh.query.resultSqlHint : text.resultSqlHint}</p>
-          <SqlEditor value={resultSql.result.statement} dialect="postgresql" height={280} readOnly />
-        </div>
-        <footer className="modal-footer"><span className="grow"/>
-          <button onClick={() => closeResultSql(resultSql)}>{zh.common.close}</button>
-        </footer>
-      </Modal>}
+      {resultSql && <ResultSqlDialog title={resultSql.pinned ? zh.query.pinSource : zh.query.resultSqlTitle}
+        hint={resultSql.pinned ? zh.query.resultSqlHint : text.resultSqlHint} statement={resultSql.result.statement}
+        sourceSql={resultSql.sourceSql} dialect="postgresql" onClose={() => closeResultSql(resultSql)}/>}
       {columnDraft && <QueryResultColumnsDialog key={columnDraft.owner} binding={columnDraft.binding}
         initial={columnDraft.initial} owner={columnDraft.owner}
         isCurrent={() => columnCurrent(columnDraft)} onApply={next => applyResultColumns(columnDraft, next)}
