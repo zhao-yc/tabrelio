@@ -22,6 +22,7 @@ export const navigationZh = {
     ['执行光标所在语句', 'Ctrl / ⌘ + Shift + Enter 或编辑器内 Ctrl / ⌘ + Shift + R'],
     ['停止当前查询', 'Windows 用 Ctrl + T，macOS 用 ⌘ + .'],
     ['切换查询结果（第 1 至 10 组）', 'Alt + 1…9、0（macOS 在结果区按 Option + 数字）'],
+    ['在 SQL 编辑器与当前结果之间切换焦点', 'F6'],
     ['按焦点所在列升序或降序', 'macOS 网格内按 ⌘ + ↑ 或 ⌘ + ↓'],
     ['应用正在编辑的表格筛选或排序', 'Ctrl / ⌘ + R'],
     ['刷新当前表数据（聚焦网格）', 'F5 或 macOS 的 ⌘ + R'],

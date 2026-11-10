@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -89,6 +90,40 @@ test('原生查询运行、停止与结果数字切换各自遵循焦点和原�
     await page.keyboard.press('Alt+3');
     await current(3);
 
+    // 两区往返保留当前结果和活动格，菜单通过原生命令走相同入口。
+    await cell(3).click();
+    await page.keyboard.press('F6');
+    await expect(editor).toBeFocused();
+    await page.keyboard.press('F6');
+    await expect(cell(3)).toBeFocused();
+    await expect.poll(() => desktop.evaluate(({ Menu }) =>
+      Menu.getApplicationMenu()?.getMenuItemById('focus-query-pane')?.enabled)).toBe(true);
+    await desktop.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('focus-query-pane');
+      const windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('本例的查询窗格菜单不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    });
+    await expect(editor).toBeFocused();
+    await current(3);
+
+    const layout = query.getByRole('combobox', { name: queryLayoutZh.placement, exact: true });
+    await expect(query).toHaveAttribute('data-result-layout', 'below');
+    if (postgres) await layout.selectOption('results');
+    else {
+      await result.getByRole('button', { name: queryLayoutZh.placement, exact: true }).click();
+      await page.getByRole('menu', { name: queryLayoutZh.placement, exact: true })
+        .getByRole('menuitem', { name: queryLayoutZh.results, exact: true }).click();
+    }
+    await expect(query).toHaveAttribute('data-result-layout', 'results');
+    await expect(editor).toBeHidden();
+    await cell(3).click();
+    await page.keyboard.press('F6');
+    await expect(editor).toBeFocused();
+    await expect(query).toHaveAttribute('data-result-layout', 'below');
+    await current(3);
+    expect(await history()).toEqual(beforeHistory);
+
     if (postgres) await select.selectOption('1');
     else await buttons.nth(1).click();
     await current(2);
@@ -122,6 +157,10 @@ test('原生查询运行、停止与结果数字切换各自遵循焦点和原�
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press(mac ? 'Meta+Shift+ArrowRight' : 'Shift+End');
+    await page.keyboard.press('F6');
+    await expect.poll(() => body.evaluate(node => node.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('F6');
+    await expect(editor).toBeFocused();
     await page.keyboard.press(runKey);
     await expect(body.getByRole('gridcell', { name: '仅执行选区', exact: true })).toBeVisible();
     await expect.poll(async () => (await history()).length).toBe(beforeHistory.length + 2);

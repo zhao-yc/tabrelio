@@ -26,6 +26,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'sql-toggle-comment': '切换行注释', 'sql-toggle-block-comment': '切换块注释',
   'sql-duplicate-lines': '向下复制行', 'sql-move-lines-up': '上移行', 'sql-move-lines-down': '下移行', 'sql-delete-lines': '删除行',
   'toggle-theme': '切换明暗主题', 'focus-mode': '专注模式', 'editor-font': '编辑器字体',
+  'focus-query-pane': '切换编辑器与结果焦点',
   'sql-editor-zoom-in': '放大当前 SQL 编辑器',
   'sql-editor-zoom-out': '缩小当前 SQL 编辑器',
   'sql-editor-zoom-reset': '重置当前 SQL 编辑器缩放',

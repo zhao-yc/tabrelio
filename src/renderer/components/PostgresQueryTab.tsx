@@ -12,7 +12,7 @@ import type { PostgresQueryRecordPageInput } from '../../shared/postgresQueryRec
 import { PostgresQueryReferenceDialog } from './PostgresQueryReferenceDialog';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
-import { focusQueryResultReplacement, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
+import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
@@ -1853,6 +1853,16 @@ export function PostgresQueryTab({
       workspace.notify(transferText.queryCapturedToNetwork(snapshot.rows.length));
     } catch (reason) { setError(errorMessage(reason)); }
   }
+  const hasPaneResult = !!(result || outcome?.analysis || outcome?.explain);
+  /** 恢复编辑区时保留原模型、选区及偏好的结果位置。 */
+  function focusQueryPane(pane: 'editor' | 'result'): boolean {
+    const instance = editor.current;
+    if (!instance || !available() || files.isBusy()) return false;
+    if (pane === 'result') return hasPaneResult && focusQueryResultPane(layoutRoot.current);
+    if (resultsOnly) flushSync(() => setResultsOnly(false));
+    instance.focus();
+    return instance.hasTextFocus();
+  }
   /** 菜单、快捷键和工具栏只操作活动标签中已同步且可编辑的原模型。 */
   function commandEditor() {
     const instance = editor.current;
@@ -2073,6 +2083,8 @@ export function PostgresQueryTab({
     'compact-sql': { enabled: editable, run: () => formatQuery('compact') },
     'sql-format-options': { enabled: editable, run: openFormattingOptions },
     'save-query': { enabled: editable, run: openSaveQuery },
+    'focus-query-pane': { enabled: editable && (hasPaneResult || resultsOnly),
+      run: () => { focusQueryPane(editor.current?.hasTextFocus() ? 'result' : 'editor'); } },
     'sql-copy-quoted': { enabled: editable && !resultsOnly && editorSelection.single, run: () => editorAction(sqlQuotedCopyAction) },
     'sql-clipboard-stack': { enabled: editable && !resultsOnly, run: () => editorAction(sqlClipboardStackAction) },
     'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },
@@ -2171,6 +2183,7 @@ export function PostgresQueryTab({
     <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}
       onKeyDownCapture={event => {
         const focused = () => !!editor.current?.hasTextFocus();
+        if (handleQueryPaneShortcut(event, focused, focusQueryPane)) return;
         if (handleQueryExecutionShortcut(event, tab.id, focused) || handleQueryResultReplaceShortcut(event, openResultReplace)) return;
         handleQueryResultShortcut(event, focused, results.length, selectCurrentResult);
       }}>

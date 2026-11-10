@@ -69,7 +69,7 @@ export class ApplicationMenu {
         item('sql-selection-to-snippet'), item('sql-clipboard-stack'), item('sql-copy-quoted')
       ] },
       { label: text.view, submenu: [
-        item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), separator,
+        item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), item('focus-query-pane'), separator,
         { label: text.zoomIn, role: 'zoomIn' }, { label: text.zoomOut, role: 'zoomOut' }, { label: text.resetZoom, role: 'resetZoom' }, { label: text.fullscreen, role: 'togglefullscreen' }, separator,
         { label: text.editor, submenu: [item('editor-font'), ...sqlEditorZoomCommandIds.map(id => item(id)), separator, item('editor-word-wrap'), item('editor-line-numbers'), item('editor-match-brackets'), item('editor-sql-folding'), item('editor-indent')] }
       ] },

@@ -1,5 +1,35 @@
 import type { KeyboardEvent } from 'react';
 
+type QueryPane = 'editor' | 'result';
+
+/** 优先回到网格当前格，空结果或非网格结果则聚焦稳定的结果容器。 */
+export function focusQueryResultPane(root: HTMLElement | null): boolean {
+  const body = root?.querySelector<HTMLElement>('.query-layout-results > .result-body');
+  if (!body) return false;
+  const grid = body.querySelector<HTMLElement>('.query-result-grid [role="grid"]');
+  const target = grid?.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]') ?? grid;
+  target?.focus({ preventScroll: true });
+  if (target && body.ownerDocument.activeElement === target) return true;
+  body.focus({ preventScroll: true });
+  return body.ownerDocument.activeElement === body;
+}
+
+/** 普通 F6 仅在当前查询的编辑器与结果区之间移动焦点。 */
+export function handleQueryPaneShortcut(event: KeyboardEvent<HTMLDivElement>, editorFocused: () => boolean,
+  focusPane: (pane: QueryPane) => boolean): boolean {
+  if (event.key !== 'F6' || event.defaultPrevented || event.repeat || event.nativeEvent.isComposing || event.keyCode === 229 ||
+      event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || !event.currentTarget.contains(target) ||
+      target.closest('[role="menu"], [role="menuitem"]')) return false;
+  const pane = target.closest('.query-layout-results') ? 'editor' :
+    target.closest('.query-layout-editor .monaco-editor') && editorFocused() ? 'result' : undefined;
+  if (!pane || !focusPane(pane)) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
+}
+
 export function queryResultHost(root: HTMLElement | null, target: EventTarget | null): HTMLElement | undefined {
   if (!(target instanceof HTMLElement) || !root?.contains(target)) return;
   const host = target.closest<HTMLElement>('.query-result-grid');

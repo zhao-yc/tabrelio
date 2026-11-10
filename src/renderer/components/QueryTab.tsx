@@ -3,7 +3,7 @@ import { queryViewDraftZh as queryViewText } from '../locales/queryViewDraft.zh-
 import { sqlClipboardStackAction } from '../sqlClipboardStack';
 import { sqlQuotedCopyAction } from '../sqlQuotedCopy';
 import { handleQueryExecutionShortcut } from '../queryExecutionShortcut';
-import { focusQueryResultReplacement, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
+import { focusQueryResultPane, focusQueryResultReplacement, handleQueryPaneShortcut, handleQueryResultReplaceShortcut, handleQueryResultShortcut, runFocusedQueryReplace } from '../queryResultShortcut';
 import { sqliteStatementTimeoutMaximumMs, validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { appDialogSelector, appModalSelector } from '../modalSelectors';
 import { StatementNavigationController, type StatementNavigationView } from '../statementNavigationController';
@@ -2278,6 +2278,16 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function queryMenuCurrent(): boolean {
     return queryOwnerCurrent() && !document.querySelector(appModalSelector);
   }
+  const hasPaneResult = !!(result || outcome?.sqliteExplain || outcome?.analysis || outcome?.explain);
+  /** 恢复编辑区时保留原模型、选区及偏好的结果位置。 */
+  function focusQueryPane(pane: 'editor' | 'result'): boolean {
+    const instance = editor.current;
+    if (!instance?.getModel() || !queryMenuCurrent() || busyRef.current || fileSource.isBusy()) return false;
+    if (pane === 'result') return hasPaneResult && focusQueryResultPane(layoutRoot.current);
+    if (resultsOnly) flushSync(() => setResultsOnly(false));
+    instance.focus();
+    return instance.hasTextFocus();
+  }
   /** 已连接时以原查询会话的默认库为准，未知上下文不退回侧栏选择。 */
   function openViewDesign(): void {
     if (!onCreateView || !connection || !queryMenuCurrent() || busyRef.current || pendingSession.current || fileSource.isBusy() ||
@@ -2670,6 +2680,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     analyze: { enabled: !sqlite && !busy && !!connection && !closeRequest, run: () => { void openAnalyze(); } },
     'transaction-settings': { enabled: !sqlite && !busy && !!connection && !closeRequest, run: openTransactionSettings },
     'save-query': { enabled: !busy && !closeRequest && !fileSource.busy, run: saveCurrentSource },
+    'focus-query-pane': { enabled: !!searchEditor && (hasPaneResult || resultsOnly) && !busy && !closeRequest && !fileSource.busy,
+      run: () => { focusQueryPane(editor.current?.hasTextFocus() ? 'result' : 'editor'); } },
     find: { enabled: (!!searchEditor || !!selectionBinding) && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !openFocusedQueryResultFind(layoutRoot.current)) openEditorFind(); } },
     'statement-navigation': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy, run: () => openStatementNavigation() },
@@ -2726,6 +2738,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     onKeyDownCapture={event => {
       const focused = () => !!editor.current?.hasTextFocus();
       if (handleQueryExecutionShortcut(event, tab.id, focused)) return;
+      if (handleQueryPaneShortcut(event, focused, focusQueryPane)) return;
       if (handleQueryResultReplaceShortcut(event, openResultReplace)) return;
       handleQueryResultShortcut(event, focused, results.length, index => {
         if (busyRef.current || fileSource.isBusy() || !queryMenuCurrent()) return false;
