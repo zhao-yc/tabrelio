@@ -1,3 +1,4 @@
+import { binaryCellZh as gridImageText } from '../locales/binaryCell.zh-CN';
 import type { ResultCheckedRows } from '../resultExport';
 import type { GridMatchRowsAction } from './GridRowSelectionActions';
 import { tableRefreshShortcut } from '../tableRefreshShortcut';
@@ -171,6 +172,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const workspaceBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
+  const [showGridImages, setShowGridImages] = useState(false);
   const [showFieldType, setShowFieldType] = useState(true);
   const [showFieldComment, setShowFieldComment] = useState(false);
   const [pageConnectionVersion, setPageConnectionVersion] = useState<number>();
@@ -1700,6 +1702,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <button disabled={blocked || !layoutView.ready || layoutView.pending || !layoutScope.current.current()} onClick={() => {
         setLayoutError(''); setLayoutDialog(layoutKey);
       }}>{layoutText.entry}</button>
+      <button type="button" className={showGridImages ? 'selected' : undefined} aria-pressed={showGridImages} disabled={!page || blocked} onClick={() => setShowGridImages(value => !value)}>{gridImageText.gridImages}</button>
       <button type="button" disabled={!page || blocked} onClick={() => setShowFieldType(value => !value)}>{showFieldType ? headerText.hideType : headerText.showType}</button>
       <button type="button" disabled={!page || blocked} onClick={() => setShowFieldComment(value => !value)}>{showFieldComment ? headerText.hideComment : headerText.showComment}</button>
       <div className="pg-view-switch" role="group" aria-label={recordText.title}>
@@ -1752,7 +1755,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           return postgresFindPlan(page, findRows, gridLayout.columns, patches,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
-        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
+        renderGrid={(findTarget, findMarks) => <ResultsGrid showGridImages={showGridImages} key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
         rowJump={canFind} rowJumpCurrent={findIsCurrent} onFindColumn={canFind ? key => openFind(false, key) : undefined}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}

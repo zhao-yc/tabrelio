@@ -1,3 +1,4 @@
+import { binaryCellZh as gridImageText } from '../locales/binaryCell.zh-CN';
 import { tableRefreshShortcut } from '../tableRefreshShortcut';
 import { objectQueryKeyShortcuts, objectQueryShortcutLabel, openTableObjectQuery, tableObjectQueryShortcut } from '../objectQueryNavigation';
 import { objectQueryZh } from '../locales/objectQuery.zh-CN';
@@ -122,6 +123,7 @@ import type { CellValue, ForeignKeyInfo } from '../../shared/contracts';
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys, setTableHeaderColumnVisibility, setTableFrozenThrough, setTableRowHeight } from '../tableColumnPreferences';
 import { applyPageReplacement, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
+import { GridCellImage } from './GridCellImage';
 import { tableFieldFindClass, type TableFieldFindDisplay } from './TableFieldFind';
 import { PageFindPanel, type PageFindDisplay } from './PageFindPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
@@ -1619,6 +1621,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     grid.current.scrollToCell({ idx });
     if (fieldFindTarget.focus) grid.current.setActivePosition({ rowIdx: -1, idx }, { shouldFocus: true });
   }, [fieldFindTarget, visibleKeys]);
+  const [showGridImages, setShowGridImages] = useState(false);
   const [showFieldType, setShowFieldType] = useState(true);
   const [showFieldComment, setShowFieldComment] = useState(false);
   const headerFields = useMemo(() => new Map(info?.columns.map(field => [field.name, field])), [info]);
@@ -1638,8 +1641,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     renderEditCell: props => <TextCellEditor {...props} onEditingChange={onGridEditingChange} binary={isBinaryCell(ownCell(props.row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)}/>,
     renderHeaderCell: () => <span className="data-header">{info?.primaryKey.includes(column.key) && <KeyRound size={11}/>}<GridHeaderDetails name={column.name} type={showFieldType ? headerFields.get(column.key)?.type ?? column.type : undefined}
       comment={showFieldComment ? headerFields.get(column.key)?.comment : undefined}/></span>,
-    renderCell: ({ row, tabIndex }) => { const value = ownCell(row.data, column.key); return <DataTypeColor enabled={settings.dataTypeColors === true} selected={tabIndex === 0 || selectedRows.has(row.id)} value={value} type={settings.dataTypeColors === true ? catalogColorType(info?.columns, column.key) : undefined} source="catalog" className={value === null ? 'grid-row-preview null-value' : value === undefined ? 'grid-row-preview default-value' : 'grid-row-preview'} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</DataTypeColor>; }
-  }))], [visibleColumns, preferences, frozenKeys, editable, info, blocked, record.dirty, externalStale, showFieldType, showFieldComment, headerFields, visibleFind, visibleFieldFind, cellRange.rectangle, rangeRowIndex, settings.dataTypeColors, settings.dataTypeColors === true ? selectedRows : null]);
+    renderCell: ({ row, tabIndex }) => { const value = ownCell(row.data, column.key), label = value === undefined ? zh.common.defaultValue : cellPreview(value); return <DataTypeColor enabled={settings.dataTypeColors === true} selected={tabIndex === 0 || selectedRows.has(row.id)} value={value} type={settings.dataTypeColors === true ? catalogColorType(info?.columns, column.key) : undefined} source="catalog" className={value === null ? 'grid-row-preview null-value' : value === undefined ? 'grid-row-preview default-value' : 'grid-row-preview'} title={label}>{showGridImages && !row.deleted ? <GridCellImage value={value}>{label}</GridCellImage> : label}</DataTypeColor>; }
+  }))], [visibleColumns, preferences, frozenKeys, editable, info, blocked, record.dirty, externalStale, showFieldType, showFieldComment, headerFields, visibleFind, visibleFieldFind, showGridImages, cellRange.rectangle, rangeRowIndex, settings.dataTypeColors, settings.dataTypeColors === true ? selectedRows : null]);
   /** 刷新后网格可能保留同一活动坐标；点击也须用当前行同步选择，不能只等待坐标变化。 */
   function selectCurrentCell(row: DraftRow | undefined, key: string | undefined) {
     // 先永久撤销旧意图；忙碌时忽略新选择也不能让切走再切回的回包复活。
@@ -2400,6 +2403,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     <ActionMenuSection label={tableToolbarZh.display}><button className={record.formOpen ? 'selected' : ''} disabled={!page || blocked} onClick={() => { if (record.formOpen) record.closeForm(); else record.openForm(selection?.rowId); }}>{recordViewZh.title}</button>
 <button disabled={!selection || blocked} onClick={editCell}><Eye size={14}/>{zh.table.text005}</button>
 <button aria-label={tableGridZh.find} title={tableGridZh.find} disabled={!page || blocked} className={showFind ? "selected" : ""} onClick={() => { if (showFind) { setShowFind(false); setFindDisplay(undefined); } else openPageFind(); }}>{tableGridZh.find}</button>
+<button type="button" className={showGridImages ? 'selected' : undefined} aria-pressed={showGridImages} disabled={!page || blocked} onClick={() => setShowGridImages(value => !value)}>{gridImageText.gridImages}</button>
 <button type="button" disabled={!page || blocked} onClick={() => setShowFieldType(value => !value)}>{showFieldType ? headerText.hideType : headerText.showType}</button>
 <button type="button" disabled={!page || blocked} onClick={() => setShowFieldComment(value => !value)}>{showFieldComment ? headerText.hideComment : headerText.showComment}</button>
 <button aria-label={tableGridZh.preferences} title={tableGridZh.preferences} disabled={!page || blocked || preferencesLoading} onClick={() => setShowPreferences(true)}>{tableGridZh.preferences}</button>

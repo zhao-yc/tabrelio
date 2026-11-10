@@ -1,0 +1,16 @@
+.grid-image-thumbnail {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grid-image-thumbnail canvas:not([hidden]) {
+  display: block;
+  width: auto;
+  height: min(48px, calc(var(--grid-data-row-height, 32px) - 6px));
+  max-width: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}

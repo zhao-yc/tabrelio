@@ -1,4 +1,5 @@
 export const binaryCellZh = {
+  gridImages: '在网格显示图片', gridImage: '图片缩略图',
   title: '二进制单元格', open: '查看二进制', hex: 'Hex', text: '按编码查看文本', image: '图片预览', encoding: '查看编码',
   bytes: '{0} 字节', null: 'SQL NULL（没有字节值）', empty: '空二进制值（0 字节）', default: 'DEFAULT（尚未填写）',
   invalidBase64: '二进制原值编码无效，无法查看或编辑。', unsupported: '此值不是完整二进制原值。',
