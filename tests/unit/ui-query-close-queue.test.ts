@@ -12,10 +12,10 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import type { WorkspaceTab } from '../../src/renderer/store';
 
 /** 编译真实App入口和关闭方法；只替换React setter、确认和RAM工作区回执，不复制关闭实现。 */
-function fixture(sql = 'SELECT 原SQL;') {
-  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), methods: string[] = []; const registration = workspaceCommandSource(source, 'close-other-queries');
+function fixture(sql = 'SELECT 原SQL;', commandId = 'close-other-queries') {
+  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), methods: string[] = []; const registration = workspaceCommandSource(source, commandId);
   const visit = (node: ts.Node) => {
-    if (ts.isFunctionDeclaration(node) && ['closeTab', 'finishQueryClose', 'closeOtherQueries', 'commitQueryClose'].includes(node.name?.text ?? '')) methods.push(node.getText(tree));
+    if (ts.isFunctionDeclaration(node) && ['closeTab', 'finishQueryClose', 'closeWorkspaceTabs', 'commitQueryClose'].includes(node.name?.text ?? '')) methods.push(node.getText(tree));
     ts.forEachChild(node, visit);
   }; visit(tree); if (methods.length !== 4) throw Error('实际App关闭入口或方法缺失');
   const make = (id: string): WorkspaceTab => ({ id, kind: 'query', connectionId: 'c', title: id, sql });
@@ -74,5 +74,27 @@ describe('实际App关闭其他查询入口及受控关闭回包', () => {
   });
   it('卸载撤销队列；迟到回包不能删除任何目标', () => {
     const f = fixture(); f.start(); f.otherQueryClose.current!.dispose(); f.finish(f.requests[0], true); expect(f.state.closeTab).not.toHaveBeenCalled(); expect(f.requests).toHaveLength(1); expect(f.listeners.size).toBe(0);
+  });
+});
+
+describe('实际App关闭所有未固定标签入口', () => {
+  it.each(['dirtyTabs', 'activeJobs'] as const)('活动表页遇到 %s 时停止，保留后续页和固定查询', field => {
+    const f = fixture('', 'close-all-tabs');
+    const pinned = { ...f.keep, queryPinned: true };
+    const objects = { ...f.a, id: 'objects', kind: 'objects' as const };
+    f.state.settings.tabs = [pinned, f.a, f.table, objects, f.b];
+    f.state.settings.activeTabId = f.table.id;
+    f.state[field][f.table.id] = true;
+    expect(f.command().enabled).toBe(true);
+    f.start();
+    expect(f.state.closeTab.mock.calls).toEqual([['a']]);
+    expect(f.state.settings.tabs).toEqual([pinned, f.table, objects, f.b]);
+    expect(f.confirm.mock.calls.length).toBe(field === 'dirtyTabs' ? 1 : 0);
+    expect(f.otherQueryClose.current?.running).toBe(false);
+    f.state[field][f.table.id] = false;
+    f.start();
+    expect(f.state.closeTab.mock.calls).toEqual([['a'], ['table'], ['objects'], ['b']]);
+    expect(f.state.settings.tabs).toEqual([pinned]);
+    expect(f.command().enabled).toBe(false);
   });
 });

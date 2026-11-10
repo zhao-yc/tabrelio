@@ -101,3 +101,19 @@ describe('关闭左右查询的原对象范围与顺序', () => {
     f.close(request); expect(f.requests.map(item => item.tabId)).toEqual(['a', 'b']); f.close(f.requests[1]); expect(f.state.settings.tabs.map(item => item.id)).toEqual(['keep', 'table']);
   });
 });
+
+it('关闭所有未固定标签无需锚点，途中新增不入队，同标识替换不能被旧请求关闭', () => {
+  const f = fixture();
+  const pinned = { ...f.keep, queryPinned: true };
+  const table = f.state.settings.tabs[2], added = tab('new');
+  f.change([pinned, f.a, table, f.b]);
+  f.queue.startAll();
+  f.change([...f.state.settings.tabs, added]);
+  f.close(f.requests[0]);
+  expect(f.requests.map(request => request.tabId)).toEqual(['a', 'table']);
+  const replacement = { ...table };
+  f.change([pinned, replacement, f.b, added]);
+  f.close(f.requests[1]);
+  expect(f.state.settings.tabs).toEqual([pinned, replacement, f.b, added]);
+  expect(f.queue.running).toBe(false);
+});

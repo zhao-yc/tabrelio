@@ -21,29 +21,41 @@ export class QueryCloseQueue {
   get running() { return this.#running; }
   get pending() { return !!this.#request || !!this.#commit; }
   get awaitingCommit() { return this.#commit; }
-  /** 同一队列只启动一次，保留查询和全部目标必须是当前准确对象。 */
+  /** 按查询锚点关闭其余查询，表页和对象页保留。 */
   start(keep: WorkspaceTab, range: QueryCloseRange = 'others'): void {
-    if (this.#keep || !this.#valid) return;
-    const state = this.ports.read(); if (keep.kind !== 'query' || !state.settings.tabs.includes(keep)) return;
     if (!['others', 'left', 'right'].includes(range)) return;
-    const anchor = state.settings.tabs.indexOf(keep);
-    this.#keep = keep; this.#targets = state.settings.tabs.filter((tab, index) => tab.kind === 'query' && !tab.queryPinned && tab !== keep && (range === 'others' || (range === 'left' ? index < anchor : index > anchor)));
+    this.#start(range, keep);
+  }
+  /** 全工作台批次无需查询锚点，仍保留固定标签及触发后新开的标签。 */
+  startAll(): void { this.#start('all'); }
+  #start(range: QueryCloseRange | 'all', keep?: WorkspaceTab): void {
+    if (this.#running || this.pending || !this.#valid) return;
+    const state = this.ports.read(), tabs = state.settings.tabs;
+    const anchor = keep ? tabs.indexOf(keep) : -1;
+    if (range !== 'all' && (keep?.kind !== 'query' || anchor === -1)) return;
+    if (new Set(tabs.map(tab => tab.id)).size !== tabs.length) { this.dispose(); return; }
+    this.#keep = keep;
+    this.#targets = tabs.filter((tab, index) => {
+      if (tab.queryPinned || tab === keep) return false;
+      if (range === 'all') return true;
+      return tab.kind === 'query' && (range === 'others' || (range === 'left' ? index < anchor : index > anchor));
+    });
     // 侧关保留触发时完整顺序；只忽略后来新增的标签与本队列已经明确关闭的原对象。
-    if (range !== 'others') this.#order = state.settings.tabs.map(tab => tab.id);
-    if (new Set(state.settings.tabs.map(tab => tab.id)).size !== state.settings.tabs.length) { this.dispose(); return; }
-    for (const tab of [keep, ...this.#targets]) { this.#versions.set(tab.connectionId, state.connectionVersions[tab.connectionId] ?? 0); this.#profiles.set(tab.connectionId, state.connections.find(profile => (profile as { id?: string }).id === tab.connectionId)); }
+    if (range === 'left' || range === 'right') this.#order = tabs.map(tab => tab.id);
+    for (const tab of keep ? [keep, ...this.#targets] : this.#targets) { this.#versions.set(tab.connectionId, state.connectionVersions[tab.connectionId] ?? 0); this.#profiles.set(tab.connectionId, state.connections.find(profile => (profile as { id?: string }).id === tab.connectionId)); }
     this.#running = true; this.ports.changed(true); this.#unsubscribe = this.ports.subscribe(() => this.#inspect()); this.#advance();
   }
   /** 任意目标被移除、同ID重建或换连接都永久停链；新增标签不在快照内。 */
   #inspect(): boolean {
-    if (!this.#valid || !this.#keep) return false;
+    if (!this.#valid || (!this.#running && !this.#request)) return false;
     const state = this.ports.read();
     if (this.#order && this.#running) {
       const closed = new Set([...this.#closed].map(tab => tab.id)), captured = new Set(this.#order);
       const expected = this.#order.filter(id => !closed.has(id)), actual = state.settings.tabs.filter(tab => captured.has(tab.id)).map(tab => tab.id);
       if (expected.length !== actual.length || expected.some((id, index) => id !== actual[index])) { this.#valid = false; this.#stop(); return false; }
     }
-    const watching = this.#running ? [this.#keep, ...this.#targets.filter(tab => !this.#closed.has(tab))] : this.#request && !this.#closed.has(this.#targets[this.#index]) ? [this.#targets[this.#index]] : [];
+    const watching = this.#running ? this.#targets.filter(tab => !this.#closed.has(tab)) : !this.#closed.has(this.#targets[this.#index]) ? [this.#targets[this.#index]] : [];
+    if (this.#running && this.#keep) watching.unshift(this.#keep);
     for (const tab of watching) {
       const actual = state.settings.tabs.find(item => item.id === tab.id);
       if (actual !== tab) {

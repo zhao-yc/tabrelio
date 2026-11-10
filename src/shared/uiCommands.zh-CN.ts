@@ -52,6 +52,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'retained-query-list': '查看已保留的查询草稿',
   'rename-query-tab': '重命名当前查询标签',
   'pin-query-tab': '固定当前查询标签',
+  'close-all-tabs': '关闭所有未固定标签',
   'close-other-queries': '关闭其他查询', 'close-left-queries': '关闭左侧查询', 'close-right-queries': '关闭右侧查询',
   'next-tab': '下一个标签', 'previous-tab': '上一个标签', 'help': '使用说明', 'shortcuts': '快捷键', 'about': '关于 tabrelio'
 };

@@ -13,7 +13,7 @@ export const uiCommandIds = [
   'editor-font', ...sqlEditorZoomCommandIds, 'editor-word-wrap', 'editor-line-numbers', 'editor-match-brackets', 'editor-sql-folding', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
   'execute', 'execute-selection', 'execute-current', 'execute-all', 'stop', 'format', 'compact-sql', 'sql-format-options', 'sql-format-preferences', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation', 'select-current-statement', 'open-current-statement-query', 'previous-statement', 'next-statement',
   'transaction-settings', 'import', 'export', 'schema-compare', 'sqlite-data-compare', 'postgres-data-compare', 'mysql-data-compare', 'structure-search', 'server-monitor', 'postgres-roles', 'backup-archive', 'postgres-table-backup', 'postgres-database-backup', 'postgres-custom-archive', 'postgres-sql-file', 'mysql-sql-file', 'mysql-database-backup',
-  'explain-snapshot', 'result-snapshot', 'task-center', 'tab-search', 'rename-query-tab', 'pin-query-tab', 'close-tab', 'reopen-query', 'retained-query-list', 'close-other-queries',
+  'explain-snapshot', 'result-snapshot', 'task-center', 'tab-search', 'rename-query-tab', 'pin-query-tab', 'close-tab', 'close-all-tabs', 'reopen-query', 'retained-query-list', 'close-other-queries',
   'close-left-queries', 'close-right-queries', 'next-tab', 'previous-tab', 'help', 'shortcuts', 'about'
 ] as const;
 
