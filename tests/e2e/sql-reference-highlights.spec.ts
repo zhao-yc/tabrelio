@@ -11,7 +11,7 @@ test.skip(process.env.DBARK_SQL_REFERENCE_HIGHLIGHTS_TEST !== '1', '仅在隔离
 const sql = ['SELECT s.id,', '(SELECT s.id FROM child s)', 'FROM parent s', 'WHERE s.id=1;'].join('\n');
 const command = 'editor-local-references';
 
-for (const dialect of ['sqlite', 'mysql', 'mariadb'] as const) {
+for (const dialect of ['sqlite', 'mysql', 'mariadb', 'postgresql'] as const) {
   test(`${dialect} 真实光标高亮区分内外层别名，开关保存且不执行查询`, async ({}, info) => {
     if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || process.env.DBARK_DEV_URL || process.env.DBARK_EXECUTABLE_PATH)
       throw Error('局部引用高亮验收只允许隔离源码窗口');

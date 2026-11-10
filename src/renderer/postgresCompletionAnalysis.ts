@@ -1,10 +1,14 @@
 import { postgresCompletionLimits as limits, type PostgresCompletionReference, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
-import { scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
+import { currentPostgresStatement, scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
+import type { LocalReferenceRange, LocalReferences } from '../shared/localReferences';
 
 type Group = { kind: 'group'; start: number; end: number; closed: boolean; closing: ')' | ']'; parts: Part[] };
 type Part = PostgresEditorToken | Group;
-interface Projection { names: (string | null)[]; stars: PostgresCompletionReference[]; exact: boolean; }
+interface Projection { names: (string | null)[]; stars: PostgresCompletionReference[]; exact: boolean; declaration?: LocalReferenceRange; }
 export interface PostgresCompletionRelation extends PostgresCompletionReference { alias?: string; projection?: Projection; }
+interface ScopedRelation extends PostgresCompletionRelation { declaration?: LocalReferenceRange; }
+interface ReferenceTrace { edges: Map<PostgresEditorToken, LocalReferenceRange>; unsupported: boolean; }
+interface RelationSpan { end: number; relation: number; }
 type Scope = ReadonlyMap<string, Projection>;
 type Query = { kind: 'relations'; schema?: string; ctes?: string[] } |
   { kind: 'columns'; relations: PostgresCompletionRelation[]; qualified: boolean };
@@ -29,6 +33,8 @@ const expressionEntries = new Set(['SELECT', 'WHERE', 'HAVING', 'ON', 'RETURNING
   'AND', 'OR', 'NOT', 'BY', 'DISTINCT', 'ALL']);
 const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '^', '~']);
 const unknown: Projection = { names: [], stars: [], exact: false };
+const referenceCommands = new Set(['SELECT', 'WITH', 'VALUES']);
+const unsupportedReferenceSyntax = new Set(['TABLESAMPLE', 'ORDINALITY', 'SEARCH', 'CYCLE', 'XMLTABLE', 'JSON_TABLE']);
 
 /** PostgreSQL 未引用标识符折叠 ASCII 大写字母，引用名称保留原大小写。 */
 const identifier = (part?: Part) => part?.kind === 'identifier' && !part.open ? part.text
@@ -38,13 +44,14 @@ const punct = (part: Part | undefined, value: string) => part?.kind === 'punct' 
 const contains = (part: Group, offset: number) => part.start < offset && (part.closed ? offset < part.end : offset <= part.end);
 
 /** 只建当前语句的括号树，保留未闭合括号以处理编辑中的 SQL。 */
-function groupStatement(tokens: PostgresEditorToken[], offset: number, length: number): Part[] | undefined {
+function groupStatement(tokens: PostgresEditorToken[], offset: number, length: number, strict = false): Part[] | undefined {
   const root: Part[] = [];
   const stack: Group[] = [];
   for (const token of tokens) {
     if (token.kind === 'blocked' && token.text === 'comment') continue;
     if (!stack.length && punct(token, ';')) {
       if (token.start >= offset) break;
+      if (strict) return;
       root.length = 0;
       continue;
     }
@@ -54,6 +61,7 @@ function groupStatement(tokens: PostgresEditorToken[], offset: number, length: n
       group.closed = true;
       continue;
     }
+    if (strict && [')', ']', ';'].some(value => punct(token, value))) return;
     const current = stack.at(-1)?.parts ?? root;
     if (punct(token, '(') || punct(token, '[')) {
       if (stack.length >= 24) return;
@@ -63,7 +71,7 @@ function groupStatement(tokens: PostgresEditorToken[], offset: number, length: n
       stack.push(group);
     } else current.push(token);
   }
-  return root;
+  return strict && stack.length ? undefined : root;
 }
 
 /** 位置别名覆盖已知输出；通配展开缺少位置时只保留显式声明。 */
@@ -216,47 +224,98 @@ function columns(refs: PostgresCompletionRelation[], outer: PostgresCompletionRe
   }
 }
 
-/** 推导当前查询的输出，并且只为包含光标的查询层返回补全目标。 */
-function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRelation[][], context?: QueryContext): Parsed {
-  if (parts.length === 1 && parts[0].kind === 'group') {
-    return parseQuery(parts[0].parts, inherited, outer, context && contains(parts[0], context.offset) ? context : undefined);
+/** 只索引表达式中的关系限定符，排除三段名称、类型、排序规则和模式限定的函数。 */
+function traceQualifier(parts: Part[], i: number, visible: ScopedRelation[][], trace: ReferenceTrace): void {
+  const token = parts[i], member = parts[i + 2], following = parts[i + 3];
+  const name = identifier(token);
+  if (!name || token.kind === 'group' || stop.has(keyword(token)) || !punct(parts[i + 1], '.') ||
+      (!identifier(member) && !punct(member, '*')) || punct(parts[i - 1], '.') || punct(following, '.') ||
+      punct(parts[i - 1], ':') || ['AS', 'COLLATE'].includes(keyword(parts[i - 1])) ||
+      following?.kind === 'group' && following.closing === ')' || following?.kind === 'blocked' && !following.text) return;
+  for (const level of visible) {
+    const matches = level.filter(ref => (ref.alias ?? ref.name) === name);
+    if (!matches.length) continue;
+    if (matches.length === 1 && matches[0].declaration) trace.edges.set(token, matches[0].declaration);
+    return;
   }
-  if (parts.length && parts[0].kind !== 'group' && !commands.has(keyword(parts[0]))) return { projection: unknown };
+}
+
+/** 表达式子查询沿用可见的父查询；表来源自身的括号已经按 LATERAL 规则处理。 */
+function traceExpressions(parts: Part[], scope: Scope, refs: ScopedRelation[], outer: ScopedRelation[][],
+  relations: ReadonlyMap<number, RelationSpan>, trace: ReferenceTrace): void {
+  const levels = [refs, ...outer];
+  let joinStart = 0, lastRelation = -1;
+  for (let i = 0; i < parts.length && !trace.unsupported; i++) {
+    const part = parts[i], word = keyword(part), span = relations.get(i);
+    if (span) {
+      lastRelation = span.relation;
+      if (word === 'FROM' || punct(part, ',')) joinStart = span.relation;
+      levels[0] = refs;
+      i = span.end - 1;
+      continue;
+    }
+    if (endsFrom.has(word)) { levels[0] = refs; lastRelation = -1; }
+    // ON 只可见本 JOIN 链已加入的关系，逗号分隔的前序表仍属于另外的 FROM 项。
+    if (word === 'ON' && lastRelation >= 0) levels[0] = refs.slice(joinStart, lastRelation + 1);
+    if (part.kind === 'group') {
+      const command = keyword(part.parts[0]);
+      if (referenceCommands.has(command)) parseQuery(part.parts, scope, levels, undefined, trace);
+      else if (command === 'TABLE') trace.unsupported = true;
+      else traceExpressions(part.parts, scope, levels[0], outer, new Map(), trace);
+    } else traceQualifier(parts, i, levels, trace);
+  }
+}
+
+/** 推导当前查询输出。引用模式只收集同一作用域树中的局部绑定，跳过投影计算。 */
+function parseQuery(parts: Part[], inherited: Scope, outer: ScopedRelation[][], context?: QueryContext, trace?: ReferenceTrace): Parsed {
+  if (trace?.unsupported) return { projection: unknown };
+  if (parts.length === 1 && parts[0].kind === 'group') {
+    return parseQuery(parts[0].parts, inherited, outer, context && contains(parts[0], context.offset) ? context : undefined, trace);
+  }
+  const unsupported = (): Parsed => { if (trace) trace.unsupported = true; return { projection: unknown }; };
+  if (parts.length && parts[0].kind !== 'group' && !commands.has(keyword(parts[0]))) return unsupported();
   let start = 0;
   let scope = inherited;
   if (keyword(parts[0]) === 'WITH') {
     const ctes = new Map(inherited);
     scope = ctes;
     const recursive = keyword(parts[1]) === 'RECURSIVE';
-    const definitions: { name: string; names: string[]; body: Group }[] = [];
+    const definitions: { name: string; names: string[]; body: Group; declaration: Part }[] = [];
     start = recursive ? 2 : 1;
     do {
-      const name = identifier(parts[start++]);
-      if (!name || name.length > limits.name) return { projection: unknown };
+      const declaration = parts[start++];
+      const name = identifier(declaration);
+      if (!name || name.length > limits.name || trace && definitions.some(item => item.name === name)) return unsupported();
       const names = nameList(parts[start]);
-      if (parts[start]?.kind === 'group') start++;
-      if (keyword(parts[start++]) !== 'AS') return { projection: unknown };
+      if (parts[start]?.kind === 'group') {
+        if (trace && !names.length) return unsupported();
+        start++;
+      }
+      if (keyword(parts[start++]) !== 'AS') return unsupported();
       if (keyword(parts[start]) === 'NOT') start++;
       if (keyword(parts[start]) === 'MATERIALIZED') start++;
       const body = parts[start++];
-      if (body?.kind !== 'group') return { projection: unknown };
-      definitions.push({ name, names, body });
+      if (body?.kind !== 'group') return unsupported();
+      definitions.push({ name, names, body, declaration });
     } while (punct(parts[start], ',') && ++start);
     // 递归 WITH 中先占住所有声明名，避免自引用或后置定义落到同名物理表。
-    if (recursive) for (const { name, names } of definitions) ctes.set(name, rename(unknown, names));
-    for (const { name, names, body } of definitions) {
+    if (recursive) for (const { name, names, declaration } of definitions)
+      ctes.set(name, trace ? { ...unknown, declaration } : rename(unknown, names));
+    for (const { name, names, body, declaration } of definitions) {
       const active = context && contains(body, context.offset) ? context : undefined;
       const anchorEnd = recursive ? body.parts.findIndex(part => keyword(part) === 'UNION') : -1;
       if (active && anchorEnd > 0 && body.parts[anchorEnd].end <= active.offset) {
         const anchor = parseQuery(body.parts.slice(0, anchorEnd), ctes, outer);
         ctes.set(name, rename(anchor.projection, names));
       }
-      const parsed = parseQuery(body.parts, ctes, outer, active);
+      const parsed = parseQuery(body.parts, ctes, outer, active, trace);
       if (active) return parsed;
-      ctes.set(name, rename(parsed.projection, names));
+      ctes.set(name, trace ? { ...unknown, declaration } : rename(parsed.projection, names));
     }
   }
   const main = parts.slice(start);
+  if (trace && main.some((part, i) => unsupportedReferenceSyntax.has(keyword(part)) || keyword(part) === 'INTO' ||
+    keyword(part) === 'USING' && main[i + 1]?.kind === 'group' && keyword(main[i + 2]) === 'AS')) return unsupported();
   const firstSet = main.findIndex(part => setOperators.has(keyword(part)));
   if (firstSet >= 0) {
     let output = unknown, branchStart = 0, query: Query | undefined, routine: PostgresRoutineCompletionTarget | undefined;
@@ -266,9 +325,10 @@ function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRe
       const active = context && (main[branchStart - 1]?.end ?? 0) <= context.offset &&
         (main[i]?.start ?? Infinity) >= context.offset ? context : undefined;
       // 最后一个分支后的 ORDER BY 归组合结果，不能看到该分支的表。
-      const order = branchStart > 0 && i === main.length ? branch.findIndex(part => keyword(part) === 'ORDER') : -1;
+      const order = branchStart > 0 && i === main.length ? branch.findIndex(part => trace
+        ? ['ORDER', 'LIMIT', 'OFFSET', 'FETCH', 'FOR'].includes(keyword(part)) : keyword(part) === 'ORDER') : -1;
       const inOrder = active && order >= 0 && active.offset >= branch[order].start;
-      const parsed = parseQuery(order >= 0 ? branch.slice(0, order) : branch, scope, outer, inOrder ? undefined : active);
+      const parsed = parseQuery(order >= 0 ? branch.slice(0, order) : branch, scope, outer, inOrder ? undefined : active, trace);
       if (branchStart === 0) output = parsed.projection;
       if (inOrder) query = columns([{ name: '', projection: output }], [], active.left);
       else if (active) { query = parsed.query; routine = parsed.routine; }
@@ -278,7 +338,9 @@ function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRe
     return { projection: output, query, routine };
   }
 
-  const refs: PostgresCompletionRelation[] = [];
+  if (trace && !['SELECT', 'VALUES'].includes(keyword(main[0]))) return unsupported();
+  const refs: ScopedRelation[] = [];
+  const spans = trace ? new Map<number, RelationSpan>() : undefined;
   const commas = new Set<number>();
   let from = false;
   for (let i = 0; i < main.length; i++) {
@@ -292,37 +354,63 @@ function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRe
     if (modifier === 'ONLY' || modifier === 'LATERAL') next++;
     let part = main[next];
     let name = '', schema: string | undefined, projection: Projection | undefined;
+    let cte: LocalReferenceRange | undefined;
     if (part?.kind === 'group') {
+      if (trace && part.closing !== ')') return unsupported();
       const active = context && contains(part, context.offset) ? context : undefined;
-      const parsed = parseQuery(part.parts, scope, modifier === 'LATERAL' ? [refs, ...outer] : outer, active);
+      const parsed = parseQuery(part.parts, scope, modifier === 'LATERAL' ? [refs, ...outer] : outer, active, trace);
       if (active) return parsed;
       projection = parsed.projection;
       next++;
     } else {
       const first = identifier(part);
-      if (!first || stop.has(keyword(part))) continue;
+      if (!first || stop.has(keyword(part))) { if (trace) return unsupported(); continue; }
       name = first;
       if (punct(main[++next], '.')) {
         name = identifier(main[next + 1]) ?? '';
         schema = first;
         next += 2;
       }
-      if (!name || punct(main[next], '.')) continue;
+      if (!name || punct(main[next], '.')) { if (trace) return unsupported(); continue; }
       if (main[next]?.kind === 'group' && word !== 'INTO') {
         // 表函数的别名仍会遮蔽外层关系，未声明字段时不查询同名物理表。
         projection = unknown;
+        const args = main[next];
+        if (trace && args.kind === 'group') traceExpressions(args.parts, scope, refs, outer, new Map(), trace);
         next++;
-      } else if (!schema && !writeTarget(main, i)) projection = scope.get(name);
+      } else if (!schema && !writeTarget(main, i)) {
+        projection = scope.get(name);
+        cte = trace && modifier !== 'ONLY' && !punct(main[next], '*') ? projection?.declaration : undefined;
+        if (trace && cte) trace.edges.set(part, cte);
+      }
+      if (trace && punct(main[next], '*')) next++;
     }
-    if (keyword(main[next]) === 'AS') next++;
+    const explicitAlias = keyword(main[next]) === 'AS';
+    if (explicitAlias) next++;
     part = main[next];
     const alias = !stop.has(keyword(part)) ? identifier(part) : undefined;
     if (alias) {
       const renamed = nameList(main[next + 1]);
       if (renamed.length) projection = rename(projection ?? unknown, renamed);
     }
-    if ([name, schema, alias].some(value => value && value.length > limits.name)) continue;
+    if ([name, schema, alias].some(value => value && value.length > limits.name)) { if (trace) return unsupported(); continue; }
+    if (trace) {
+      if (explicitAlias && !alias) return unsupported();
+      let end = next + (alias ? 1 : 0);
+      if (alias && main[end]?.kind === 'group') {
+        if (!nameList(main[end]).length) return unsupported();
+        end++;
+      }
+      spans!.set(i, { end, relation: refs.length });
+      refs.push({ name, alias, schema, declaration: alias ? part : cte });
+      i = end - 1;
+      continue;
+    }
     refs.push({ name, ...(schema ? { schema } : {}), ...(alias ? { alias } : {}), ...(projection ? { projection } : {}) });
+  }
+  if (trace) {
+    traceExpressions(main, scope, refs, outer, spans!, trace);
+    return { projection: unknown };
   }
   const projection = project(main, refs);
   if (!context || start > 0 && (main[0]?.start ?? context.start) > context.start) return { projection };
@@ -357,6 +445,47 @@ function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRe
   }
   return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(refs, outer, left),
     routine: expressionRoutine(main, left, cursorGroup, [refs, ...outer]) };
+}
+
+const noLocalReference: LocalReferences = { status: 'blocked', reason: 'syntax' };
+const rangeOf = ({ start, end }: LocalReferenceRange): LocalReferenceRange => ({ start, end });
+
+/** 只读取光标所在语句。按声明偏移关联引用，保留查询块、CTE 及引号身份。 */
+export function analyzePostgresLocalReferences(source: string, offset: number, standardStrings?: boolean): LocalReferences {
+  if (source.length > limits.source) return { status: 'blocked', reason: 'budget' };
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > source.length || /[\uD800-\uDFFF]/u.test(source)) return noLocalReference;
+
+  function analyze(mode: boolean): LocalReferences {
+    let statement: ReturnType<typeof currentPostgresStatement>;
+    try { statement = currentPostgresStatement(source, offset, mode); }
+    catch { return noLocalReference; }
+    const scanned = scanPostgresEditorTokens(statement.sql, limits.tokens, mode);
+    if (!scanned) return { status: 'blocked', reason: 'budget' };
+    const encoder = new TextEncoder();
+    // 目录未知时不能猜测长名截断或 U& 转义后与哪个声明同名。
+    if (scanned.some(token => (token.kind === 'word' || token.kind === 'identifier') &&
+      (encoder.encode(token.text).length > 63 || token.kind === 'identifier' &&
+        (token.open || !token.text || /u&$/i.test(statement.sql.slice(Math.max(0, token.start - 2), token.start)))))) return noLocalReference;
+    const tokens = scanned.map(token => ({ ...token, start: token.start + statement.start, end: token.end + statement.start }));
+    const target = tokens.find(token => identifier(token) && offset >= token.start && offset <= token.end);
+    if (!target) return noLocalReference;
+    const parts = groupStatement(tokens, offset, statement.end, true);
+    if (!parts) return noLocalReference;
+    const trace: ReferenceTrace = { edges: new Map(), unsupported: false };
+    parseQuery(parts, new Map(), [], undefined, trace);
+    if (trace.unsupported) return noLocalReference;
+    const declaration = trace.edges.get(target) ?? target;
+    const references = [...trace.edges].filter(([, binding]) => binding.start === declaration.start)
+      .map(([token]) => rangeOf(token)).sort((a, b) => a.start - b.start);
+    if (!references.length) return noLocalReference;
+    if (references.length > limits.items) return { status: 'blocked', reason: 'budget' };
+    return { status: 'ready', target: rangeOf(target), declaration: rangeOf(declaration), references };
+  }
+
+  const result = analyze(standardStrings ?? true);
+  // 离线编辑时两种字符串模式必须得到同一个声明和全部引用范围。
+  return standardStrings === undefined && result.status === 'ready' && JSON.stringify(result) !== JSON.stringify(analyze(false))
+    ? noLocalReference : result;
 }
 
 /** 定位当前标识符，屏蔽注释、字符串和参数，再解析当前语句的查询作用域。 */

@@ -53,6 +53,8 @@ import { createLocalReferencesAnalysis } from '../localReferencesAnalysis';
 import { createSqliteLocalReferencesAnalysis } from '../sqliteLocalReferencesAnalysis';
 import { createSqlReferencesProvider } from '../sqlReferencesProvider';
 import { bindSqlReferenceHighlights } from '../sqlReferenceHighlights';
+import { analyzePostgresLocalReferences } from '../postgresCompletionAnalysis';
+import { postgresCompletionLimits } from '../../shared/postgresCompletion';
 import '../sqlReferenceHighlights.css';
 import { SqlReferenceCompletionGuard } from '../sqlReferenceCompletionGuard';
 import { createLocalRenameAnalysis } from '../localRenameAnalysis';
@@ -95,7 +97,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
   const lineNumbers = useWorkspace<'off' | 'on'>(state => state.settings.editorLineNumbers === false ? 'off' : 'on');
   const matchBrackets = useWorkspace<'never' | 'always'>(state => state.settings.editorMatchBrackets === false ? 'never' : 'always');
-  const highlightReferences = useWorkspace(state => state.settings.editorLocalReferences === true) && !!queryTabId && !readOnly && !!dialect;
+  const highlightReferences = useWorkspace(state => state.settings.editorLocalReferences === true) && !!queryTabId && !readOnly && !!requestedDialect;
   const occurrencesHighlight = highlightReferences ? 'off' : 'singleFile';
   const sqlFolding = useWorkspace(state => state.settings.editorSqlFolding === true);
   const tabSize = useWorkspace(state => readEditorTabSize(state.settings.editorTabSize));
@@ -270,7 +272,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   /** 自动高亮只接收活动查询的模型和连接修订；不抢显式引用、重命名或补全的线程。 */
   useEffect(() => {
     const instance = editorRef.current;
-    if (!highlightReferences || !instance || !contentReady || !queryTabId || clipboardDisabled || dialect !== 'sqlite' && !completion) return;
+    const postgres = requestedDialect === 'postgresql';
+    if (!highlightReferences || !instance || !contentReady || !queryTabId || clipboardDisabled || network && !completion) return;
     const initial = useWorkspace.getState(), tab = initial.settings.tabs.find(tab => tab.id === queryTabId);
     if (!tab) return;
     const profile = initial.connections.find(profile => profile.id === tab.connectionId), version = initial.connectionVersions[tab.connectionId];
@@ -281,17 +284,25 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         state.settings.activeTabId === queryTabId && state.settings.editorLocalReferences === true && !props.readOnly && !props.clipboardDisabled &&
         state.settings.tabs.some(item => item.id === queryTabId && item.connectionId === tab.connectionId) &&
         state.connections.includes(profile) && state.connectionVersions[tab.connectionId] === version && !state.activeJobs[queryTabId] &&
-        !state.queryFileOpenings?.[queryTabId] && dialectRef.current === dialect && (!completion || sameCompletionScope(completionRef.current, completion)) &&
+        !state.queryFileOpenings?.[queryTabId] && foldingScope.current.dialect === requestedDialect &&
+        (!postgres || foldingScope.current.standardStrings === postgresStandardStrings) &&
+        (!completion || sameCompletionScope(completionRef.current, completion)) &&
         instance.hasTextFocus() && !suggestionsBlocked() && !document.querySelector(appModalSelector);
     };
-    const worker = dialect === 'sqlite' ? createSqliteLocalReferencesAnalysis({ current, create: () => new LocalReferencesWorkerClient(() => new SqliteLocalReferencesWorker(), 'sqlite') }) : createLocalReferencesAnalysis({ scope: completion!, current,
+    const worker = postgres ? undefined : dialect === 'sqlite' ? createSqliteLocalReferencesAnalysis({ current, create: () => new LocalReferencesWorkerClient(() => new SqliteLocalReferencesWorker(), 'sqlite') }) : createLocalReferencesAnalysis({ scope: completion!, current,
       facts: () => completionServerFacts.get(completion!.connectionId, completion!.connectionVersion),
       state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => new CompletionWorker()),
     });
-    const highlights = bindSqlReferenceHighlights(instance, { current, analyze: worker.analyze, sourceLimit: dialect === 'sqlite' ? sqliteCompletionLimits.sourceUnits : completionLimits.sourceUnits });
+    const highlights = bindSqlReferenceHighlights(instance, {
+      current,
+      analyze: worker?.analyze ?? (async (source, offset) => analyzePostgresLocalReferences(source, offset, postgresStandardStrings)),
+      sourceLimit: postgres ? postgresCompletionLimits.source : dialect === 'sqlite' ? sqliteCompletionLimits.sourceUnits : completionLimits.sourceUnits,
+    });
     const stop = useWorkspace.subscribe(() => { if (!current()) highlights.invalidate(); });
-    return () => { stop(); highlights.dispose(); void worker.dispose().catch(() => {}); };
-  }, [highlightReferences, contentReady, clipboardDisabled, queryTabId, dialect, languageSelector, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+    return () => { stop(); highlights.dispose(); void worker?.dispose().catch(() => {}); };
+  }, [highlightReferences, contentReady, clipboardDisabled, queryTabId, requestedDialect, dialect, network, languageSelector,
+    completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId,
+    postgresCompletion?.connectionId, postgresCompletion?.connectionVersion, postgresCompletion?.database, postgresCompletion?.sessionId, postgresStandardStrings]);
   /** 局部F2重命名独占分析线程；输入框焦点属于本widget，不能借树选择改变目标。 */
   useEffect(() => {
     if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
