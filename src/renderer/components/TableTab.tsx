@@ -333,7 +333,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     if (event.tableApply.evidence.commitMayHaveBeenSent) setCommitLocked(true);
     publishApplyRecovery();
   }), []);
-  const [referenceDialog, setReferenceDialogState] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
+  const [referenceDialog, setReferenceDialogState] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse'; column?: string; cellCurrent?(): boolean } | null>(null);
   const [childReferenceDialog, setChildReferenceDialog] = useState<ChildReferenceIntent | null>(null), childReferenceIntent = useRef<ChildReferenceIntent | null>(null);
   const [tableStatisticsDialog, setTableStatisticsDialog] = useState<{ intent: TableStatisticsIntent; onCount?(count: string): void } | null>(null), tableStatisticsIntent = useRef<TableStatisticsIntent | null>(null);
   const [pageCount, setPageCount] = useState<{ generation: number; refreshVersion: typeof refreshVersion; count: string }>();
@@ -930,13 +930,20 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   const copyMetadataReason = recordCopyMetadataReason(getRecordContext(), copyPage.current, copySources.current?.source);
   const copySourceReady = !copyMetadataReason && recordCopySourceReady(getRecordContext(), referenceRow, copySources.current?.source, referenceRow ? copyRowRefs.current.get(referenceRow.id) : undefined);
   /** 捕获整行草稿及页面代次，多外键在关联窗口内明确选择约束。 */
-  function openReference(mode: 'choose' | 'browse') {
-    if (blocked || referenceDialog || !info || !selection || !relatedKeys.length) return;
+  function openReference(mode: 'choose' | 'browse', hit?: { row: DraftRow; key: string }) {
+    if (blockedRef.current || referenceDialog || !info) return;
     if (record.hasInput()) { setError(recordViewZh.resolveInput); return; }
-    const row = rowsRef.current.find(item => item.id === selection.rowId);
-    if (!row || row.deleted || (mode === 'choose' && !relatedKeys.some(key => referenceWritable(info, key)))) return;
-    setReferenceDialog({ mode, keys: structuredClone(relatedKeys), snapshot: { rowId: row.id, data: structuredClone(row.data), foreignKey: structuredClone(relatedKeys[0]), source: structuredClone(info), generation: loadGeneration.current } });
+    const row = hit?.row ?? rowsRef.current.find(item => item.id === selection?.rowId);
+    const keys = hit ? cellReferenceKeys(hit.row, hit.key) : relatedKeys;
+    if (!row || row.deleted || !keys.length || (mode === 'choose' && !keys.some(key => referenceWritable(info, key)))) return;
+    // 候选回读期间窗口本身会占用表页。只核对命中行、布局和表页身份，不把自己的读取算作过期。
+    const cellCurrent = hit ? () => tableTabCurrent(true) && sortScopeRef.current === sortScope
+      && layoutRevision.current === headerCopyLayoutRevision && rowsRef.current.includes(hit.row) && !activeGridEditor.current : undefined;
+    setReferenceDialog({ mode, column: hit?.key, cellCurrent, keys: structuredClone(keys), snapshot: {
+      rowId: row.id, data: structuredClone(row.data), foreignKey: structuredClone(keys[0]), source: structuredClone(info), generation: loadGeneration.current,
+    } });
   }
+  const openCellReference = useRef(openReference); openCellReference.current = openReference;
   /** 父→子入口不依赖所选字段的正向外键，也不提交或清除已暂存父表草稿。 */
   function openChildReferences() {
     if (tableReadAction.current !== tableReadRender || blockedRef.current || childReferenceIntent.current || !connection || info?.objectKind !== 'table' || !page || !selectionRef.current || externalStale || gridEditing || record.hasInput() || document.querySelector('[role="dialog"]')) return;
@@ -1028,7 +1035,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   function applyReference(values: CellValue[], source: TableInfo, key: ForeignKeyInfo, expected: ForeignKeyInfo, clear: boolean) {
     if (record.hasInput()) throw new Error(recordViewZh.resolveInput);
     const readonly = recordReadonlyReason({ ...getRecordContext(), busy: false }); if (readonly) throw new Error(readonly);
-    if (!referenceDialog || applyingRef.current) throw new Error(referenceZh.changed);
+    if (!referenceDialog || applyingRef.current || referenceDialog.cellCurrent?.() === false) throw new Error(referenceZh.changed);
     const next = patchReferenceRow(rowsRef.current, { ...referenceDialog.snapshot, foreignKey: expected }, loadGeneration.current, source, key, values, clear);
     setRows(next); setError('');
   }
@@ -2118,6 +2125,10 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       event.preventGridDefault(); event.preventDefault(); record.openCell(activeRow.id, activeColumn.key);
     } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && binary) {
       event.preventGridDefault(); event.preventDefault(); record.openCell(activeRow.id, activeColumn.key);
+    } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.shiftKey && !event.altKey
+      && !cellRange.rectangle && cellReferenceKeys(activeRow, activeColumn.key).length) {
+      event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
+      if (!event.repeat) openReference('choose', { row: activeRow, key: activeColumn.key });
     } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && changes.length) {
       event.preventGridDefault(); event.preventDefault(); void makePreview();
     } else if (event.key === 'Delete') {
@@ -2162,6 +2173,13 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     if (column?.enumeration) return enumerationText.choose;
     if (column && recordTemporalSpec(column.type, 'mysql')) return temporalText.action;
   }
+  /** 命中列可能属于多个约束，仅列出可整组暂存的声明。 */
+  function cellReferenceKeys(row: DraftRow, key: string): ForeignKeyInfo[] {
+    const context = getRecordContext();
+    if (!cellActionCurrent(row) || !visibleKeys.includes(key) || !context.info || recordReadonlyReason(context, row, key)) return [];
+    const source = context.info;
+    return referencesForColumn(source, key).keys.filter(reference => referenceWritable(source, reference));
+  }
   function openCellActions(row: DraftRow | undefined, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
     if (!row || key === undefined || !visibleKeys.includes(key) || !cellActionCurrent(row)) return false;
     const rowIndex = rows.indexOf(row);
@@ -2180,6 +2198,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     const current = () => cellActionCurrent(row) && (!rectangle || cellRange.rectangleCurrent(rectangle));
     const sqlActions = tableRowSqlActions(row, current, rectangle);
     const fieldEditor = rectangle ? undefined : specializedFieldEditor(row, key);
+    const chooseReference = !rectangle && cellReferenceKeys(row, key).length > 0;
     return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
       ...(selectAll ? [selectAll] : []),
@@ -2217,6 +2236,9 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         catch (reason) { if (current()) setError(errorMessage(reason)); }
       } },
       ...filters,
+      ...(chooseReference ? [{ label: referenceZh.choose, run: () => {
+        if (current()) openCellReference.current('choose', { row, key });
+      } }] : []),
       ...(fieldEditor ? [{ label: fieldEditor, run: () => {
         if (current() && specializedFieldEditor(row, key) === fieldEditor) record.openCell(row.id, key);
       } }] : []),
@@ -2286,12 +2308,12 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   if (tableToolbarOwner.current.scope !== tableToolbarScope) tableToolbarOwner.current = { scope: tableToolbarScope, revision: tableToolbarOwner.current.revision + 1 };
   const tableToolbarContextKey = JSON.stringify([tab.id, connectionVersion, refreshVersion, tableToolbarOwner.current.revision]);
   /** 执行前读取同步工作区，不能将原菜单动作转交给后来选中的表或隐藏标签。 */
-  function tableTabCurrent(): boolean {
+  function tableTabCurrent(allowDialog = false): boolean {
     const state = useWorkspace.getState();
     return mounted.current && state.settings.activeTabId === tab.id
       && state.settings.tabs.find(item => item.id === tab.id) === tab && state.connections.find(item => item.id === tab.connectionId) === connection
       && (state.connectionVersions[tab.connectionId] ?? 0) === connectionVersion
-      && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+      && (allowDialog || !document.querySelector('[role="dialog"], [role="alertdialog"]'));
   }
   function tableToolbarCurrent(): boolean {
     return tableToolbarOwner.current.scope === tableToolbarScope && tableTabCurrent();
@@ -2544,7 +2566,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     {recordBatchDialog && <TableRecordBatchDialog key={recordBatchDialog.id} intent={recordBatchDialog} current={() => recordBatchCurrent(recordBatchDialog)} onStage={candidates => stageRecordBatch(recordBatchDialog, candidates)} onDirty={dirty => recordBatchDirty(recordBatchDialog, dirty)} onClose={() => closeRecordBatch(recordBatchDialog)}/>}
     {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={assignments => stageBatchFill(batchFillDialog, assignments)} onClose={() => closeBatchFill(batchFillDialog)}/>}
     {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} fitSource={columnFitSource} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
-    {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
+    {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} column={referenceDialog.column} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
     {childReferenceDialog && <ChildReferenceDialog base={base} intent={childReferenceDialog} onClose={() => closeChildReferences(childReferenceDialog)} onActivity={referenceActivity}/>}
     {foreignKeyJoinDialog?.mode === 'directory' && <IncomingForeignKeyJoinDialog intent={foreignKeyJoinDialog.intent} onProceed={foreignKeyJoinDialog.proceed}
       onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog.intent)} onActivity={foreignKeyJoinActivity}/>}

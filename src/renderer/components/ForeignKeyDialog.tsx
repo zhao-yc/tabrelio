@@ -12,7 +12,7 @@ import '../references.css';
 
 type ReferencePage = CommandMap['table.referencePage']['output'];
 /** 所有记录从有界服务器分页读取；选择只回传经服务器复核的元组。 */
-export function ForeignKeyDialog({ base, snapshot, keys, mode, onApply, onClose, onActivity }: { base: { connectionId: string; database: string; table: string }; snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse'; onApply: (values: CellValue[], source: TableInfo, key: ForeignKeyInfo, expected: ForeignKeyInfo, clear: boolean) => void; onClose: () => void; onActivity: (delta: 1 | -1) => void }) {
+export function ForeignKeyDialog({ base, snapshot, keys, mode, column, onApply, onClose, onActivity }: { base: { connectionId: string; database: string; table: string }; snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse'; column?: string; onApply: (values: CellValue[], source: TableInfo, key: ForeignKeyInfo, expected: ForeignKeyInfo, clear: boolean) => void; onClose: () => void; onActivity: (delta: 1 | -1) => void }) {
   const [keyName, setKeyName] = useState(snapshot.foreignKey.name); const key = keys.find(item => item.name === keyName)!;
   const [data, setData] = useState<ReferencePage | null>(null); const [candidate, setCandidate] = useState<DataRow | null>(null);
   const [targetInfo, setTargetInfo] = useState<TableInfo | null>(null);
@@ -87,6 +87,7 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, onApply, onClose,
   const canClear = writable && referenceClearable(data?.source ?? snapshot.source, key);
   return <Modal title={mode === 'choose' ? text.choose : text.browse} wide onClose={close}><div className="modal-content reference-content">
     <UsageHelp><p>{mode === 'choose' ? text.hint : text.browseHint}</p></UsageHelp>
+    {column !== undefined && <p>{text.columnScope(column)}</p>}
     <Field label={text.constraint}><select disabled={busy} value={keyName} onChange={event => { setKeyName(event.target.value); setPageIndex(1); setFilters([]); setSort([]); setClearConfirm(false); }}>{keys.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></Field>
     <p>{text.target}：{key.referencedDatabase}.{key.referencedTable}</p><p className="reference-mapping">{text.mapping}：{key.columns.map((column, index) => `${column} → ${key.referencedColumns[index]}`).join('，')}</p>
     <TableFilterPanel columns={(targetInfo?.columns ?? []).map(column => column.name)} filters={filters} mode={filterMode} disabled={busy || !data} onFiltersChange={next => { if (busy) return false; setFilters(next); setPageIndex(1); return true; }} onModeChange={next => { if (busy) return false; setFilterMode(next); setPageIndex(1); return true; }}/>

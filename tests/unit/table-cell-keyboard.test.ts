@@ -11,13 +11,14 @@ import { recordReadonlyReason, type RecordContext } from '../../src/renderer/rec
 import { blocksBinaryTextInput, tableCellKeyIsComposing } from '../../src/renderer/tableCellKeyboard';
 import { recordTemporalSpec } from '../../src/renderer/recordTemporal';
 import { draftHistoryKey } from '../../src/renderer/draftHistory';
+import { referencesForColumn, referenceWritable } from '../../src/renderer/referenceChanges';
 
 /** 固定当前生产处理函数源码，只替换DOM/状态端口，不能复制一套守卫实现使断言自证。 */
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let handler = '', choose = '', editable = '';
-function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleGridKeyDown') handler = node.getText(tree); if (ts.isFunctionDeclaration(node) && node.name?.text === 'specializedFieldEditor') choose = node.getText(tree); if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'editable') editable = node.initializer.getText(tree); node.forEachChild(visit); }
+let handler = '', choose = '', referenceKeys = '', editable = '';
+function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleGridKeyDown') handler = node.getText(tree); if (ts.isFunctionDeclaration(node) && node.name?.text === 'specializedFieldEditor') choose = node.getText(tree); if (ts.isFunctionDeclaration(node) && node.name?.text === 'cellReferenceKeys') referenceKeys = node.getText(tree); if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'editable') editable = node.initializer.getText(tree); node.forEachChild(visit); }
 visit(tree);
-const code = ts.transpileModule(choose + '\n' + handler + '\nglobalThis.handler=handleGridKeyDown;globalThis.canEdit=(' + editable + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const code = ts.transpileModule(choose + '\n' + referenceKeys + '\n' + handler + '\nglobalThis.handler=handleGridKeyDown;globalThis.referenceKeys=cellReferenceKeys;globalThis.canEdit=(' + editable + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function column(name: string, patch: Partial<ColumnInfo> = {}): ColumnInfo { return { name, type: 'varchar(100)', nullable: true, defaultValue: null, extra: '', generated: false, comment: '', ...patch }; }
 /** 与表页相同的UUID、独立original及精度字符串；所有副作用都由生产处理函数决定。 */
 function fixture() {
@@ -25,16 +26,16 @@ function fixture() {
   const state: RecordContext = { target: { connectionId: 'c', database: 'd', table: 't' }, connectionVersion: 2, generation: 3, info, loaded: true, busy: false, stale: false };
   const data = { id: '18446744073709551615', bytes: { type: 'binary' as const, base64: 'AAH/' }, nullable_bytes: { type: 'binary' as const, base64: 'qg==' }, text: '普通文本', amount: '12345678901234567890.123456', generated: { type: 'binary' as const, base64: 'AA==' } };
   const row: DraftRow = { id: 'uuid-1', data: structuredClone(data), original: structuredClone(data), inserted: false, deleted: false }, other: DraftRow = { ...row, id: 'uuid-2', data: { ...row.data, id: '9007199254740993' }, original: { ...row.original, id: '9007199254740993' } };
-  const rows = [row, other], setRows = vi.fn<(update: DraftRow[] | ((current: DraftRow[]) => DraftRow[])) => void>(), preview = vi.fn(), open = vi.fn(), find = vi.fn(); let dirtyInput = false, modal = false;
-  const context = createContext({ recordTemporalSpec, enumerationText: { choose: '选择字段成员' }, temporalText: { action: '编辑日期和时间' }, visibleKeys: ['status'], cellRange: { rectangle: undefined }, cellActionCurrent: (candidate: DraftRow) => rows.includes(candidate) && !dirtyInput, draftHistoryKey, moveHistory: vi.fn(), blocked: false, editable: true, document: { querySelector: () => modal ? {} : null }, HTMLElement: class {}, record: { dirty: false, hasInput: () => dirtyInput, openCell: open }, info, page: { columns: [{ key: 'bytes', type: 'VAR_STRING' }, { key: 'nullable_bytes', type: 'BLOB' }, { key: 'text', type: 'BLOB' }, { key: 'generated', type: 'BLOB' }] }, rowsRef: { current: rows }, getRecordContext: () => state, ownCell, isBinaryCell, recordReadonlyReason, blocksBinaryTextInput, tableCellKeyIsComposing, changes: [{ kind: 'update' }], column: { key: 'bytes' }, setRows, makePreview: preview, openPageFind: find });
+  const rows = [row, other], setRows = vi.fn<(update: DraftRow[] | ((current: DraftRow[]) => DraftRow[])) => void>(), preview = vi.fn(), open = vi.fn(), openReference = vi.fn(), find = vi.fn(); let dirtyInput = false, modal = false;
+  const context = createContext({ recordTemporalSpec, referencesForColumn, referenceWritable, openReference, enumerationText: { choose: '选择字段成员' }, temporalText: { action: '编辑日期和时间' }, visibleKeys: ['status'], cellRange: { rectangle: undefined }, cellActionCurrent: (candidate: DraftRow) => rows.includes(candidate) && !dirtyInput, draftHistoryKey, moveHistory: vi.fn(), blocked: false, editable: true, document: { querySelector: () => modal ? {} : null }, HTMLElement: class {}, record: { dirty: false, hasInput: () => dirtyInput, openCell: open }, info, page: { columns: [{ key: 'bytes', type: 'VAR_STRING' }, { key: 'nullable_bytes', type: 'BLOB' }, { key: 'text', type: 'BLOB' }, { key: 'generated', type: 'BLOB' }] }, rowsRef: { current: rows }, getRecordContext: () => state, ownCell, isBinaryCell, recordReadonlyReason, blocksBinaryTextInput, tableCellKeyIsComposing, changes: [{ kind: 'update' }], column: { key: 'bytes' }, setRows, makePreview: preview, openPageFind: find });
   setRows.mockImplementation(update => { context.rowsRef.current = typeof update === 'function' ? update(context.rowsRef.current) : update; });
   runInContext(code, context);
   /** React事件端口只记录两种prevent语义，浏览器原生输入与网格命令不能混为一个开关。 */
-  function press(key: string, options: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; nativeEvent?: { isComposing?: boolean; keyCode?: number }; mode?: 'ACTIVE' | 'EDIT'; column?: string; activeRow?: DraftRow } = {}) {
-    const event = { key, ctrlKey: false, metaKey: false, shiftKey: false, nativeEvent: { isComposing: false, keyCode: 0 }, target: {}, preventGridDefault: vi.fn(), preventDefault: vi.fn(), ...options };
+  function press(key: string, options: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; repeat?: boolean; nativeEvent?: { isComposing?: boolean; keyCode?: number }; mode?: 'ACTIVE' | 'EDIT'; column?: string; activeRow?: DraftRow } = {}) {
+    const event = { key, ctrlKey: false, metaKey: false, shiftKey: false, nativeEvent: { isComposing: false, keyCode: 0 }, target: {}, preventGridDefault: vi.fn(), preventDefault: vi.fn(), stopPropagation: vi.fn(), ...options };
     context.handler({ mode: options.mode ?? 'ACTIVE', row: options.activeRow ?? row, column: { key: options.column ?? 'bytes' } }, event); return event;
   }
-  return { context, state, info, row, other, rows, setRows, preview, open, find, press, input(value: boolean) { dirtyInput = value; }, modal(value: boolean) { modal = value; }, canEdit(key: string) { context.column.key = key; return context.canEdit(row) as boolean; } };
+  return { context, state, info, row, other, rows, setRows, preview, open, openReference, find, press, input(value: boolean) { dirtyInput = value; }, modal(value: boolean) { modal = value; }, canEdit(key: string) { context.column.key = key; return context.canEdit(row) as boolean; } };
 }
 
 const compositionFlags = [{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }, { isComposing: true, keyCode: 229 }];
@@ -67,6 +68,31 @@ describe('表格键盘组合输入命令守卫', () => {
     f.context.visibleKeys = [];
     f.press('Enter', { column: 'status' });
     expect(f.open).toHaveBeenCalledOnce();
+    expect(f.setRows).not.toHaveBeenCalled();
+  });
+  it('仅命中列的可写外键优先于预览，修饰 Shift 时仍预览', () => {
+    const f = fixture();
+    f.info.foreignKeys = [
+      { name: 'pair', columns: ['status', 'id'], referencedDatabase: 'd', referencedTable: 'parent', referencedColumns: ['code', 'id'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' },
+      { name: 'status_only', columns: ['status'], referencedDatabase: 'd', referencedTable: 'other', referencedColumns: ['code'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' },
+      { name: 'generated_pair', columns: ['status', 'generated'], referencedDatabase: 'd', referencedTable: 'parent', referencedColumns: ['code', 'data'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' },
+      { name: 'unrelated', columns: ['id'], referencedDatabase: 'd', referencedTable: 'third', referencedColumns: ['id'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' },
+    ];
+    expect(f.context.referenceKeys(f.other, 'status').map((key: { name: string }) => key.name)).toEqual(['pair', 'status_only']);
+    const event = f.press('Enter', { column: 'status', ctrlKey: true, activeRow: f.other });
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
+    f.press('Enter', { column: 'status', metaKey: true, repeat: true });
+    f.press('Enter', { column: 'status', ctrlKey: true, nativeEvent: { keyCode: 229 } });
+    expect(f.openReference).toHaveBeenCalledExactlyOnceWith('choose', { row: f.other, key: 'status' });
+    expect(f.preview).not.toHaveBeenCalled();
+    f.press('Enter', { column: 'status', metaKey: true, shiftKey: true });
+    expect(f.preview).toHaveBeenCalledOnce();
+
+    f.state.stale = true;
+    expect(f.context.referenceKeys(f.row, 'status')).toEqual([]);
+    f.state.stale = false;
+    f.input(true);
+    expect(f.context.referenceKeys(f.row, 'status')).toEqual([]);
     expect(f.setRows).not.toHaveBeenCalled();
   });
   it('原生Ctrl/Meta+C/V与方向导航继续交给网格，普通TEXT不按wire BLOB误判', () => {
