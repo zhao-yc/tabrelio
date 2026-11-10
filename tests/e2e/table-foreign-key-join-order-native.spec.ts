@@ -121,11 +121,30 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       await step(() => expect(dialog().getByLabel(text.distinct, { exact: true })).toBeChecked());
       await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toHaveText(selected!));
     }
+    if (mode === 'filter-dark') {
+      const kind = dialog().getByLabel(text.joinKind, { exact: true }), unmatched = dialog().getByRole('checkbox', { name: text.unmatchedOnly, exact: true });
+      const sql = dialog().getByLabel(text.preview, { exact: true });
+      await step(() => unmatched.check());
+      await step(() => expect(sql).toContainText('WHERE p.`id` IS NULL AND ('));
+      await step(() => kind.selectOption('RIGHT'));
+      await step(() => expect(unmatched).toBeChecked());
+      await step(() => expect(sql).toContainText('WHERE c.`parent_id` IS NULL AND ('));
+      await step(() => kind.selectOption('INNER'));
+      await step(() => expect(unmatched).toBeDisabled());
+      await step(() => expect(unmatched).not.toBeChecked());
+      await step(() => expect(sql).not.toContainText('WHERE c.`parent_id` IS NULL AND ('));
+      await step(() => kind.selectOption('RIGHT'));
+      await step(() => expect(sql).toContainText('RIGHT JOIN'));
+      await step(() => unmatched.check());
+      await step(() => sql.scrollIntoViewIfNeeded());
+      await step(() => page.screenshot({ path: info.outputPath('foreign-key-join-right-unmatched.png') }));
+    }
     const suffix = summarizing ? 'ORDER BY (SUM(p.`amount`) IS NULL) ASC, SUM(p.`amount`) DESC, p.`id` ASC\nLIMIT 2;' : 'ORDER BY c.`id` ASC, (p.`id` IS NULL) ASC, p.`id` DESC\nLIMIT 2;'; await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText(suffix)); const edited = await evidence(); expect(edited.calls.filter(call => call.command !== 'settings.save')).toEqual(before.calls.filter(call => call.command !== 'settings.save')); expect(edited.tabs).toEqual(before.tabs); expect(edited.resultLimit).toBe(43); expect(edited.dirty).toEqual(before.dirty);
     const panel = having ? havingText.title : summarizing ? summaryText.title : filtering ? filterText.title : text.sortTitle;
     await step(() => dialog().getByLabel(panel, { exact: true }).scrollIntoViewIfNeeded()); const layout = await step(() => dialog().getByLabel(panel, { exact: true }).evaluate(element => ({ width: element.clientWidth, scroll: element.scrollWidth, viewport: window.innerWidth, theme: document.documentElement.dataset.theme }))); expect(layout.scroll).toBeLessThanOrEqual(layout.width); expect(layout.viewport).toBe(1024); expect(layout.theme).toBe(theme); await info.attach('JOIN排序原生窗口-' + mode, { body: await step(() => page.screenshot()), contentType: 'image/png' });
     await step(() => dialog().getByRole('button', { name: text.open, exact: true }).click()); await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText(suffix)); const final = await evidence(); expect(final.tabs).toHaveLength(2); expect(final.tabs.filter(tab => tab.kind === 'query')).toHaveLength(1); expect(final.resultLimit).toBe(43); expect(final.denied).toEqual([]); expect(final.dirty).toEqual(before.dirty); expect(final.jobs).toEqual(before.jobs); expect(Object.values(final.jobs).some(Boolean)).toBe(false); expect(final.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'parent', 'child', 'parent']); expect(final.calls.some(call => /query\.|table\.(apply|preview)/.test(call.command))).toBe(false); expect(errors).toEqual([]);
     const sql = final.tabs.find(tab => tab.kind === 'query')?.sql; if (distinct) expect(sql).toMatch(/^SELECT DISTINCT\n/); if (filtering) { expect(sql).toContain('WHERE'); expect(sql).toContain('p.`amount` IN'); expect(sql).toContain('p.`id` IS NULL'); expect(sql).toContain(' OR '); } else expect(sql).not.toContain('WHERE');
+    if (mode === 'filter-dark') { expect(sql).toContain('RIGHT JOIN'); expect(sql).toContain('WHERE c.`parent_id` IS NULL AND ('); }
     check(); await app.close(); closed = true; expect(await exit).toEqual({ code: 0, signal: null }); expect(taskProcess.killed).toBe(false); await info.attach('JOIN排序原生组件终态', { body: JSON.stringify({ pid, directory, theme, mode, sql, filtering, grouping, summarizing, having, calls: final.calls, zeroDatabaseExecutions: true, zeroClipboardOperations: true, sourceDraftUnchanged: true, newQueryCount: 1, originalGlobalLimit: 43, normalExit: true, realDatabaseVerified: false }), contentType: 'application/json' }); accepted = true;
   } finally {
     // 失败原件保留；只请求原应用正常退出，不终止其它窗口或伪称完成清理。

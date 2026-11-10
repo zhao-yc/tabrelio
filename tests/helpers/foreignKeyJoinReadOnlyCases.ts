@@ -1,5 +1,5 @@
 import type { TableInfo } from '../../src/shared/contracts';
-import { buildForeignKeyJoin, type ForeignKeyJoinSort } from '../../src/renderer/tableForeignKeyJoin';
+import { buildForeignKeyJoin, type ForeignKeyJoinKind, type ForeignKeyJoinOptions, type ForeignKeyJoinSort } from '../../src/renderer/tableForeignKeyJoin';
 
 /** 只把生成器的两个固定FROM目标换为合成派生表；不创建物理库表，也不冒称实物外键目录验收。 */
 export function foreignKeyJoinReadOnlyCases() {
@@ -26,4 +26,39 @@ export function foreignKeyJoinReadOnlyCases() {
     const sql=generated.replace(before,'FROM (\n'+c+'\n) AS c\n'+(value.kind??'LEFT')+' JOIN (\n'+p+'\n) AS p\n');
     return {name:value.name,generated,sql,expected:value.expected.map(index=>({c_1_id:ids[index],...(value.outputParent?{p_2_amount:amounts[index]}:{})}))};
   });
+}
+
+/** 复合映射的一项不匹配、任一项 NULL、双方无对应行都用只读常量派生表复核。 */
+export function foreignKeyJoinOuterReadOnlyCases() {
+  const info = (name: string): TableInfo => ({
+    database: 'join_virtual_fixture', name, objectKind: 'table', engine: 'InnoDB',
+    columns: ['id', 'tenant', 'key_id', 'marker'].map(column => ({
+      name: column, type: column === 'id' ? 'varchar(8)' : 'int', nullable: true, generated: false, extra: '', comment: '', defaultValue: null,
+    })), foreignKeys: [], primaryKey: [], editableKey: [], indexes: [], ddl: '',
+  });
+  const child = info('child'), parent = info('parent');
+  child.foreignKeys = [{ name: 'fk', columns: ['tenant', 'key_id'], referencedDatabase: parent.database,
+    referencedTable: parent.name, referencedColumns: ['tenant', 'key_id'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' }];
+  const derived = (rows: readonly (readonly [string, number | null, number | null, number | null])[]) =>
+    rows.map(([id, tenant, key, marker]) => `SELECT '${id}' AS id, ${tenant ?? 'NULL'} AS tenant, ${key ?? 'NULL'} AS key_id, ${marker ?? 'NULL'} AS marker`).join('\nUNION ALL\n');
+  const c = derived([['c1', 1, 10, 1], ['c2', 2, 10, 1], ['c3', null, 10, 1], ['c4', 1, null, 1], ['c5', 1, 20, 1]]);
+  const p = derived([['p1', 1, 10, 1], ['p2', 3, 10, 1], ['p3', null, 10, 1], ['p4', 1, 20, null], ['p5', 1, null, 1], ['p6', 1, 99, 1]]);
+  type Pair = [string | null, string | null];
+  const verify = (name: string, kind: ForeignKeyJoinKind, expected: Pair[], options: Partial<ForeignKeyJoinOptions> = {}) => {
+    const generated = buildForeignKeyJoin(child, parent, 'fk', kind, 50, {
+      childColumns: ['id'], parentColumns: ['id'],
+      sort: [{ side: kind === 'RIGHT' ? 'parent' : 'child', column: 'id', direction: 'ASC' }], ...options,
+    }).sql;
+    const from = `FROM \`join_virtual_fixture\`.\`child\` AS c\n${kind} JOIN \`join_virtual_fixture\`.\`parent\` AS p\n`;
+    if (generated.split(from).length !== 2) throw Error('只读 JOIN 派生表替换目标不唯一');
+    const sql = generated.replace(from, `FROM (\n${c}\n) AS c\n${kind} JOIN (\n${p}\n) AS p\n`);
+    return { name, sql, expected: expected.map(([c_1_id, p_1_id]) => ({ c_1_id, p_1_id })) };
+  };
+  return [
+    verify('RIGHT 保留匹配及未引用的父行', 'RIGHT', [['c1', 'p1'], [null, 'p2'], [null, 'p3'], ['c5', 'p4'], [null, 'p5'], [null, 'p6']]),
+    verify('RIGHT 仅返回未引用的父行', 'RIGHT', [[null, 'p2'], [null, 'p3'], [null, 'p5'], [null, 'p6']], { unmatchedOnly: true }),
+    verify('LEFT 仅返回无匹配的子行', 'LEFT', [['c2', null], ['c3', null], ['c4', null]], { unmatchedOnly: true }),
+    verify('右侧 OR 条件不能纳入已匹配的 p4', 'RIGHT', [[null, 'p3']], { unmatchedOnly: true, filterMode: 'any',
+      filters: [{ side: 'parent', column: 'tenant', operator: 'IS NULL' }, { side: 'parent', column: 'marker', operator: 'IS NULL' }] }),
+  ];
 }

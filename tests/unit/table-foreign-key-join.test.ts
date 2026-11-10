@@ -33,6 +33,28 @@ describe('按一条真实外键生成独立JOIN SELECT', () => {
     expect(left.sql.match(/ = p\./g)).toHaveLength(2);
   });
 
+  it('RIGHT 保留父侧，左右未匹配分别使用补空侧的映射列，并约束整个 OR 条件组', () => {
+    const { child, parent } = fixture();
+    const options = {
+      childColumns: ['id'], parentColumns: ['pid'], unmatchedOnly: true,
+      filters: [
+        { side: 'child', column: 'name', operator: 'IS NULL' },
+        { side: 'parent', column: 'name', operator: 'IS NOT NULL' },
+      ],
+      filterMode: 'any',
+    } satisfies ForeignKeyJoinOptions;
+    const right = buildForeignKeyJoin(child, parent, 'fk_parent', 'RIGHT', 50, options);
+    expect(right.sql).toContain('RIGHT JOIN `父库`.`parents` AS p\nON\n  c.`tenant` = p.`tenant`\n  AND c.`parent_id` = p.`pid`');
+    const groupedFilter = '(((c.`name` IS NULL)) OR ((p.`name` IS NOT NULL)))';
+    expect(right.sql).toContain('WHERE c.`tenant` IS NULL AND ' + groupedFilter + '\n');
+    expect(buildForeignKeyJoin(child, parent, 'fk_parent', 'LEFT', 50, options).sql)
+      .toContain('WHERE p.`tenant` IS NULL AND ' + groupedFilter + '\n');
+    expect(() => buildForeignKeyJoin(child, parent, 'fk_parent', 'INNER', 50, options)).toThrow(text.unmatchedInvalid);
+    expect(() => buildForeignKeyJoin(child, parent, 'fk_parent', 'RIGHT', 50,
+      Object.defineProperty({ childColumns: ['id'], parentColumns: [] }, 'unmatchedOnly', { enumerable: true, get() { throw Error('不应调用访问器'); } }),
+    )).toThrow(text.invalid);
+  });
+
   it('合法可空UNIQUE复合外键不要求非空定位键，关联按a/b而非父主键；NULL实际结果另由实库验收', () => {
     const { child, parent } = fixture();
     parent.columns = [column('id'), column('a', true), { ...column('b', true), type: 'decimal(20,4)' }, column('ancestor_a', true), { ...column('ancestor_b', true), type: 'decimal(20,4)' }];

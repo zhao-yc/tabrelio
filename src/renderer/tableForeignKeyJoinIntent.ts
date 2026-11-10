@@ -1,12 +1,12 @@
 import type { TableInfo } from '../shared/contracts';
-import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, type ForeignKeyJoinOptions } from './tableForeignKeyJoin';
+import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, type ForeignKeyJoinKind, type ForeignKeyJoinOptions } from './tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-CN';
 
 export interface ForeignKeyJoinTarget { connectionId: string; database: string; table: string; }
 export type ForeignKeyJoinRead = (target: ForeignKeyJoinTarget) => Promise<TableInfo>;
 export interface ForeignKeyJoinPreview {
   readonly parent: TableInfo; readonly parentKey: string; readonly childKey: string; readonly foreignKey: string;
-  readonly kind: 'LEFT' | 'INNER'; readonly options: ForeignKeyJoinOptions; readonly sql: string;
+  readonly kind: ForeignKeyJoinKind; readonly options: ForeignKeyJoinOptions; readonly sql: string;
 }
 
 /** 只保留结构和来源身份，不持有行、选中记录或服务器筛选，也不修改父页草稿。 */
@@ -34,7 +34,7 @@ export class TableForeignKeyJoinIntent {
 }
 
 /** 原目录回包需满足真实父目标；helper同时检查对应FK字段存在且关系方向匹配。 */
-export function foreignKeyJoinPreview(intent: TableForeignKeyJoinIntent, parent: TableInfo, foreignKey: string, kind: 'LEFT' | 'INNER', options: ForeignKeyJoinOptions): ForeignKeyJoinPreview {
+export function foreignKeyJoinPreview(intent: TableForeignKeyJoinIntent, parent: TableInfo, foreignKey: string, kind: ForeignKeyJoinKind, options: ForeignKeyJoinOptions): ForeignKeyJoinPreview {
   if (!intent.current()) throw Error(text.stale);
   // 在structuredClone之前检查新排序及上限的自有数据属性，不能先执行输入访问器。
   buildForeignKeyJoin(intent.source, parent, foreignKey, kind, intent.limit, options);

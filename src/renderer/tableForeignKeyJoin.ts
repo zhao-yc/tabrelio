@@ -7,10 +7,11 @@ import { tableForeignKeyJoinHavingZh as havingText } from './locales/tableForeig
 import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-CN';
 
 export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
+export type ForeignKeyJoinKind = 'LEFT' | 'RIGHT' | 'INNER';
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: 'child' | 'parent' | 'aggregate'; column: string; alias: string }
 export interface ForeignKeyJoinSort { side: 'child' | 'parent' | 'aggregate'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
-export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
+export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; unmatchedOnly?: boolean; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
 type Budget = { units: number };
 
 /** 只读自有数据属性；不会为了生成SELECT访问DDL、默认值、注释或调用访问器。 */
@@ -142,25 +143,34 @@ function order(raw: unknown, child: { columns: { name: string }[] }, parent: { c
 }
 
 /** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
-export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName: string, kind: 'LEFT' | 'INNER', limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
-  if (kind !== 'LEFT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
+export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName: string, kind: ForeignKeyJoinKind, limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
+  if (kind !== 'LEFT' && kind !== 'RIGHT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
   const left = snapshot(child), right = snapshot(parent), relation = left.foreignKeys.find(key => key.name === fkName);
   if (!relation) throw Error(text.relation);
   if (right.database !== relation.referencedDatabase || right.name !== relation.referencedTable) throw Error(text.target);
   const parentNames = new Set(right.columns.map(column => column.name));
   if (relation.referencedColumns.some(column => !parentNames.has(column))) throw Error(text.relation);
-  let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, distinct = false, resultLimit = limit, where: string | undefined;
+  let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right.columns.map(column => column.name); }
   else {
-    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'distinct', 'sort', 'limit', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'unmatchedOnly', 'distinct', 'sort', 'limit', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
     childColumns = selected(own(options, 'childColumns'), left.columns); parentColumns = selected(own(options, 'parentColumns'), right.columns);
     rawSort = own(options, 'sort', true); rawSummary = own(options, 'summary', true); rawHaving = own(options, 'having', true);
     const suppliedDistinct = own(options, 'distinct', true);
     if (suppliedDistinct !== undefined) distinct = flag(suppliedDistinct);
+    const suppliedUnmatched = own(options, 'unmatchedOnly', true);
+    if (suppliedUnmatched !== undefined) unmatchedOnly = flag(suppliedUnmatched);
     const filters = own(options, 'filters', true), mode = own(options, 'filterMode', true), group = own(options, 'filterGroup', true);
     if (filters !== undefined || mode !== undefined || group !== undefined) { if (mode !== undefined && mode !== 'all' && mode !== 'any') throw Error(text.invalid); where = buildForeignKeyJoinWhere(left, right, filters === undefined ? [] : filters, mode === undefined ? 'all' : mode, foreignKeyJoinLimits.sqlUnits, group as FilterGroup | undefined); }
     const suppliedLimit = own(options, 'limit', true);
     if (suppliedLimit !== undefined) { if (typeof suppliedLimit !== 'number' || !Number.isSafeInteger(suppliedLimit) || suppliedLimit < 1 || suppliedLimit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); resultLimit = suppliedLimit; }
+  }
+  if (unmatchedOnly) {
+    if (kind === 'INNER') throw Error(text.unmatchedInvalid);
+    // 等值连接成功时，任一映射列均非 NULL。用补空一侧的首个映射列判断是否匹配，即使原字段允许 NULL。
+    const missing = (kind === 'LEFT' ? 'p.' + quote(relation.referencedColumns[0]) : 'c.' + quote(relation.columns[0])) + ' IS NULL';
+    // 用户条件编译器已为整个分组加括号，顶层 OR 也不能绕过未匹配限制。
+    where = where ? missing + ' AND ' + where : missing;
   }
   if (distinct && rawSummary !== undefined) throw Error(text.distinctMode);
   const projected = distinct ? new Set([...childColumns.map(column => JSON.stringify(['child', column])), ...parentColumns.map(column => JSON.stringify(['parent', column]))]) : undefined;
