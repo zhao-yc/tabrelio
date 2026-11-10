@@ -299,8 +299,14 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       const pairGroup = fourth.getByRole('group', { name: text.manualPairs, exact: true });
       const geometry = await step(() => pairGroup.evaluate(element => ({ width: element.clientWidth, content: element.scrollWidth })));
       expect(geometry.content).toBeLessThanOrEqual(geometry.width);
-      await step(() => preview.scrollIntoViewIfNeeded());
-      await step(() => page.screenshot({ path: info.outputPath('manual-join-on-groups.png') }));
+      await step(() => button(text.sample).click());
+      const sample = manual.getByRole('region', { name: text.sampleTitle, exact: true });
+      await step(() => expect(sample.getByText(text.sampleRows(1, true), { exact: true })).toBeVisible());
+      await step(() => expect(sample.getByText('18446744073709551615', { exact: true })).toBeVisible());
+      await step(() => sample.scrollIntoViewIfNeeded());
+      await step(() => page.screenshot({ path: info.outputPath('join-sample-preview.png') }));
+      await step(() => manual.getByLabel(text.resultLimit, { exact: true }).fill('42'));
+      await step(() => expect(sample.getByText(text.sampleRows(1, true), { exact: true })).toHaveCount(0));
       await step(() => open.click());
       const draft = page.getByLabel('本例独立查询SQL', { exact: true });
       await step(() => expect(draft).toContainText(sql));
@@ -308,6 +314,7 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       const result = await evidence();
       expect(result.tabs).toHaveLength(2);
       expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['parent', 'other_payments', 'payments', 'other_payments', 'payments', 'parent', 'payments', 'other_payments', 'parent', 'payments', 'other_payments']);
+      expect(result.calls.filter(call => call.command === 'mysql.join.preview')).toHaveLength(1);
       expect(result.calls.filter(call => call.command.startsWith('joinDesigns.')).map(call => call.command)).toEqual(['joinDesigns.save', 'joinDesigns.list', 'joinDesigns.read']);
       expect(result.calls.filter(call => call.command === 'table.page').map(call => call.input.table)).toEqual(['parent']);
       expect(result.calls.some(call => /query\./.test(call.command))).toBe(false);

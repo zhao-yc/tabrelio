@@ -9,17 +9,17 @@ import { structureTaskQuery, type StructureTaskContext } from './structureDefini
 type ReadContext = Pick<StructureTaskContext, 'managed' | 'checkCancelled' | 'commandStarted'>;
 
 /** 限额到达后结束原命令并等待终态。直接读查询可保留排序、同名列与用户指定的 LIMIT。 */
-async function readPreview(context: ReadContext, sql: string, maxRows: number, maxBytes: number, stop: () => Promise<void>, aliases: string[] = []): Promise<QueryResult> {
+export async function readMysqlPreviewRows(context: ReadContext, sql: string, maxRows: number, maxBytes: number, stop: () => Promise<void>, aliases: string[] = []): Promise<QueryResult> {
   const started = performance.now();
   const result: QueryResult = { columns: [], rows: [], elapsedMs: 0, truncated: false, statement: sql };
-  const limitReached = Error('达到视图预览上限');
+  const limitReached = Error('达到预览上限');
   let bytes = 0;
   try {
     await consumeQueryFrames(context.managed, sql, 'binary', {
       statementOrdinal: 1, ordinals: { results: 0, rows: 0 }, stop,
       checkCancelled: context.checkCancelled, commandStarted: context.commandStarted,
       async consume(frame) {
-        if (frame.resultOrdinal !== 1 || frame.kind === 'status') throw Error('视图预览只接受一个数据结果集。');
+        if (frame.resultOrdinal !== 1 || frame.kind === 'status') throw Error('预览只接受一个数据结果集。');
         if (frame.kind === 'rows-start') {
           if (aliases.length && aliases.length !== frame.columns.length) throw Error('视图列清单与查询结果列数不一致。');
           result.columns = frame.columns.map(({ key, name, type }, index) => ({ key, name: aliases[index] ?? name, type }));
@@ -37,7 +37,7 @@ async function readPreview(context: ReadContext, sql: string, maxRows: number, m
     result.truncated = true;
   }
   context.checkCancelled();
-  if (!result.columns.length) throw Error('数据库未返回视图预览列。');
+  if (!result.columns.length) throw Error('数据库未返回预览列。');
   result.elapsedMs = performance.now() - started;
   return result;
 }
@@ -56,9 +56,9 @@ export async function inspectMysqlViewQuery(context: StructureTaskContext, input
   try {
     if (input.mode === 'explain') return await explainQuery(query, 'auto', {
       mode, status: managed.status, check: checkCancelled, reusable: () => !managed.broken,
-      run: async sql => [await readPreview(context, sql, explainLimits.textRows, 512 * 1024, stop)],
+      run: async sql => [await readMysqlPreviewRows(context, sql, explainLimits.textRows, 512 * 1024, stop)],
     });
-    const result = await readPreview(context, query, mysqlViewSampleRows, 512 * 1024, stop, aliases);
+    const result = await readMysqlPreviewRows(context, query, mysqlViewSampleRows, 512 * 1024, stop, aliases);
     return { results: [result], elapsedMs: result.elapsedMs };
   } finally {
     // 取消或断线时由外层关闭物理连接，不能在不确定状态上排队发送下一条命令。

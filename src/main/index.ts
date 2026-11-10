@@ -1058,6 +1058,7 @@ const mysqlViewRenamePlans = new Map<string, {
   owner: ColumnsInvocation; target: MysqlViewRenameTarget; revision: number; expires: number; stamp: string;
 }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
+const mysqlJoinPreviewOwners = new Map<string, ColumnsInvocation>();
 const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
 function networkCompareOwner(owner: MainInvocation): string {
@@ -2939,6 +2940,32 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       mysqlViewRenamePlans.set(token, { owner, target, revision, expires: Date.now() + 120_000, stamp: result.stamp });
       return { token, sql: result.sql, sourceDdl: result.sourceDdl };
     }
+    case 'mysql.join.previewCancel': {
+      const owner = mysqlJoinPreviewOwners.get(input.taskId);
+      if (!owner) return;
+      columnsMain.assertCapturedOwner(columns);
+      if (!columnsMain.sharesDocumentOwner(owner, columns!)) throw Error('JOIN 预览取消请求与原窗口不符。');
+      return broker.request('query.cancel', { taskId: input.taskId });
+    }
+    case 'mysql.join.preview': {
+      const revision = store.connectionRevision();
+      const check = () => {
+        columnsMain.assertCapturedOwner(columns);
+        connectionConfig.assertAvailable(input.connectionId);
+        if (shuttingDown || revision !== store.connectionRevision()) throw Error('JOIN 预览的连接或客户端状态已变化。');
+      };
+      check();
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'mysql' && profile.dialect !== 'mariadb') throw Error('JOIN 预览需要 MySQL 或 MariaDB 连接。');
+      if (mysqlJoinPreviewOwners.size >= 16 || mysqlJoinPreviewOwners.has(input.taskId) || tasks.has(input.taskId))
+        throw Error('JOIN 预览任务已存在或达到上限。');
+      mysqlJoinPreviewOwners.set(input.taskId, columns!);
+      try {
+        const result = await broker.request(command, { ...input, profile });
+        check();
+        return result;
+      } finally { mysqlJoinPreviewOwners.delete(input.taskId); }
+    }
     case 'mysql.view.dependencies':
     case 'mysql.view.inspectQuery': {
       const revision = store.connectionRevision();
@@ -3811,6 +3838,7 @@ else {
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
         if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command === 'sqlite.view.inspectQuery'||payload.command === 'sqlite.view.dependencies'||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('record.templates.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('mysql.join.preview')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('joinDesigns.')) columns = columnsMain.capture(event);
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
@@ -3864,6 +3892,7 @@ else {
           // 本地快照也不能迟到发布给已经导航或退出的旧文档；已提交配置不自动重放或撤回。
           if (payload.command.startsWith('files.importPresets.')) { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，导入配置回执未发布，请重新读取'); }
           if (databaseEncodingCommand) { databaseEncodingResult = result; await databaseEncodingOwners.after(databaseEncodingCommand, input, result, columns!); }
+          if (payload.command.startsWith('mysql.join.preview')) columnsMain.assertCapturedOwner(columns);
           if (payload.command.startsWith('joinDesigns.')) columnsMain.assertCapturedOwner(columns);
           if(payload.command.startsWith('result.presets.')){columnsMain.assertCapturedOwner(columns);columns?.resultPresetPublication?.();}
           if(payload.command.startsWith('table.presets.')){

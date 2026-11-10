@@ -1,3 +1,4 @@
+import type { MysqlJoinPreviewInput } from './mysqlJoinPreview';
 import type { ManualJoinDesign, ManualJoinDesignScope, ManualJoinDesignSelect, ManualJoinDesignSave, ManualJoinDesignSummary } from './manualJoinDesigns';
 import type { ImportRecordRange } from './importRecordRange';
 import type { ObjectDefinitionInput, ObjectDefinitionOutput } from './objectDefinition';
@@ -502,6 +503,8 @@ export interface CommandMap {
   'mysql.view.dependencies': { input: import('./viewDependencies').MysqlViewDependenciesInput; output: import('./viewDependencies').ViewDependencies };
   'mysql.view.renamePreview': { input: import('./mysqlViewRename').MysqlViewRenameTarget; output: import('./mysqlViewRename').MysqlViewRenamePreview };
   'mysql.view.renameApply': { input: { token: string; confirmed: true }; output: import('./mysqlViewRename').MysqlViewRenameResult };
+  'mysql.join.preview': { input: MysqlJoinPreviewInput; output: QueryOutcome };
+  'mysql.join.previewCancel': { input: { taskId: string }; output: void };
   'mysql.view.inspectQuery': { input: import('./mysqlViewFile').MysqlViewQueryInspectInput; output: QueryOutcome };
   'mysql.compareData.catalogue': { input: import('./postgresDataCompare').PostgresDataCompareCatalogueInput; output: string[] };
   'mysql.compareData.cancel': { input: { taskId: string }; output: void };

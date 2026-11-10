@@ -1,3 +1,5 @@
+import { mysqlJoinPreviewSchema } from '../shared/mysqlJoinPreview';
+import { previewMysqlJoin } from './mysqlJoinPreview';
 import { readMysqlViewDependencies } from './mysqlViewDependencies';
 import { mysqlViewDependenciesSchema } from '../shared/viewDependencies';
 import { mysqlViewRenamePreviewSchema } from '../shared/mysqlViewRename';
@@ -412,6 +414,15 @@ export class Engine {
         this.copySourceProfile(input);
         return this.withCopySourceTask(request.connectionId, randomUUID(),
           context => readMysqlViewDependencies(context, request), '读取视图依赖', 'no-default-database');
+      }
+      case 'mysql.join.preview': {
+        const { profile, ...raw } = input;
+        const request = mysqlJoinPreviewSchema.parse(raw);
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== request.connectionId)
+          throw Error('JOIN 预览需要可信的 MySQL 或 MariaDB 连接。');
+        this.copySourceProfile(input);
+        return this.withCopySourceTask(request.connectionId, request.taskId,
+          context => previewMysqlJoin(context, request, () => this.stopIndependentRead(request.taskId)), '预览 JOIN 数据', 'no-default-database');
       }
       case 'mysql.view.inspectQuery': {
         const { profile, ...raw } = input;

@@ -1,3 +1,4 @@
+import { mysqlJoinPreviewSchema } from './mysqlJoinPreview';
 import { manualJoinDesignScopeSchema, manualJoinDesignSelectSchema, manualJoinDesignSaveSchema } from './manualJoinDesigns';
 import { postgresQueryRecordPageSchema } from './postgresQueryRecord';
 import { postgresResultOriginsSchema } from './postgresResultOrigins';
@@ -446,6 +447,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'mysql.compareData.syncPreview': postgresDataSyncPreviewSchema,
   'mysql.compareData.syncApply': postgresDataSyncApplySchema,
   'mysql.compareData': mysqlDataCompareSchema,
+  'mysql.join.preview': mysqlJoinPreviewSchema,
+  'mysql.join.previewCancel': z.object({ taskId: z.string().uuid() }).strict(),
   'mysql.view.inspectQuery': mysqlViewQueryInspectSchema,
   'mysql.view.dependencies': mysqlViewDependenciesSchema,
   'mysql.view.renamePreview': mysqlViewRenamePreviewSchema, 'mysql.view.renameApply': mysqlViewRenameApplySchema,

@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { TableTab } from '../../../src/renderer/components/TableTab';
 import { useWorkspace, type WorkspaceTab } from '../../../src/renderer/store';
+import { mysqlJoinPreviewSchema } from '../../../src/shared/mysqlJoinPreview';
 import { manualJoinDesignSchema, type ManualJoinDesign } from '../../../src/shared/manualJoinDesigns';
 import type { TableInfo, TablePage } from '../../../src/shared/contracts';
 import type { IncomingReferencesOutput } from '../../../src/shared/incomingReferences';
@@ -30,6 +31,13 @@ Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string
         return { id, name };
       }
       if (command === 'joinDesigns.read' && designs.has(String(input.id))) return structuredClone(designs.get(String(input.id))!.design);
+    }
+    if (command === 'mysql.join.preview') {
+      const request = mysqlJoinPreviewSchema.parse(input);
+      if (request.source.table !== source.name || request.parent.table !== other.name || request.steps.length !== 2 ||
+          'sql' in input || request.steps[1].target.table !== other.name) throw Error('JOIN 预览范围不符');
+      return { results: [{ columns: [{ key: 'c_1_id', name: 'c_1_id', type: 'BIGINT' }],
+        rows: [{ c_1_id: '18446744073709551615' }], elapsedMs: 3, truncated: true }], elapsedMs: 3 };
     }
     if (command === 'metadata.databases') return [source.database, other.database];
     if (command === 'metadata.objects' && input.database === other.database) return [{ name: other.name, kind: 'table' }, { name: another.name, kind: 'table' }, { name: 'view_only', kind: 'view' }];
