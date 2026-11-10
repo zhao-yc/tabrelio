@@ -7,6 +7,9 @@ import { sqliteQueryBuilderZh as text } from '../../src/renderer/locales/sqliteQ
 import { sqliteTableBrowseZh as browse } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
 import { tableForeignKeyJoinZh as joinText } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
+import { tableForeignKeyJoinSummaryZh as aggregate } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
+import { queryBuilderSummaryZh as summary } from '../../src/renderer/locales/queryBuilderSummary.zh-CN';
+import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -95,6 +98,29 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(results.getByRole('gridcell', { name: '精确整数', exact: true })).toBeVisible();
     await expect(results.getByRole('gridcell', { name: '同形文本', exact: true })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('sqlite-query-builder.png') });
+    const summaryMode = builder.getByRole('checkbox', { name: summary.enabled, exact: true });
+    await summaryMode.check();
+    await expect(button(text.open)).toBeDisabled();
+    await button(aggregate.addGroup).click();
+    await builder.getByRole('combobox', { name: aggregate.groupColumn(1), exact: true }).selectOption('label');
+    await button(aggregate.addAggregate).click();
+    await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('SUM');
+    await button(sort.add).click();
+    await builder.getByRole('combobox', { name: sort.field(1), exact: true }).selectOption({ label: '统计_1' });
+    await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('精确合计');
+    await builder.getByRole('combobox', { name: sort.direction(1), exact: true }).selectOption('DESC');
+    const grouped = 'SELECT "label", SUM("value") AS "精确合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
+      maxInteger + ') GROUP BY "label" ORDER BY 2 DESC LIMIT 2;';
+    await expect(sql).toHaveText(grouped);
+    await button(text.inspectLabels.explain).click();
+    await expect(results.getByRole('tree')).toBeVisible();
+    await button(text.inspectLabels.rows).click();
+    await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
+    await expect(results.getByRole('gridcell', { name: maxInteger, exact: true })).toBeVisible();
+    await sql.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('sqlite-query-summary.png') });
+    await summaryMode.uncheck();
+    await expect(sql).toHaveText(expected.replace('LIMIT 3', 'LIMIT 2'));
     expect(await history()).toEqual(originalHistory);
     expect((await settings()).tabs).toEqual(originalTabs);
     await button(text.open).click();

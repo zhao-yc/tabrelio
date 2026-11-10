@@ -7,10 +7,12 @@ import { sqliteReadSqlLimits } from '../../shared/sqliteReadSql';
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteQueryBuilderZh as text } from '../locales/sqliteQueryBuilder.zh-CN';
 import { sqliteTableBrowseZh as browse } from '../locales/sqliteTableBrowse.zh-CN';
+import { queryBuilderSummaryZh as summaryText } from '../locales/queryBuilderSummary.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { sqliteTableDraft, type SqliteFilterDraft, type SqliteSortDraft } from '../sqliteTableBrowser';
 import { useWorkspace } from '../store';
 import { SqliteTableFilters } from './SqliteTableFilters';
+import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft } from './QueryBuilderSummaryPanel';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
@@ -26,6 +28,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
   const [selected, setSelected] = useState<string[]>([]), [filters, setFilters] = useState<SqliteFilterDraft[]>([]);
   const [sort, setSort] = useState<SqliteSortDraft[]>([]), [mode, setMode] = useState<'and' | 'or'>('and');
   const [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
+  const [summaryEnabled, setSummaryEnabled] = useState(false), [summary, setSummary] = useState(emptyQueryBuilderSummary);
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
   const mounted = useRef(false), operation = useRef<object | undefined>(undefined);
   const target = objects?.find(item => item.name === name);
@@ -34,15 +37,16 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
   const preview = useMemo(() => {
     if (!source) return undefined;
     try {
-      if (!selected.length) throw Error(text.noColumns);
+      if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
       const rowLimit = limit === '' ? undefined : Number(limit);
       if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > sqliteReadSqlLimits.limit)) throw Error(text.invalidLimit);
       const { connectionId, database, table } = source.target;
-      const { limit: _limit, ...query } = sqliteTableDraft({ connectionId, database, table }, 1, mode, filters, sort);
-      const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: selected, distinct, rowLimit };
+      const { limit: _limit, ...query } = sqliteTableDraft({ connectionId, database, table }, 1, mode, filters, summaryEnabled ? [] : sort);
+      const design = { ...source.target, ...query, schemaKey: source.schemaKey, columns: summaryEnabled ? [] : selected,
+        distinct: !summaryEnabled && distinct, rowLimit, summary: summaryEnabled ? queryBuilderSummaryFromDraft(summary) : undefined };
       return { design, sql: buildSqliteQueryBuilderSql(design, source) };
     } catch (reason) { return { error: errorMessage(reason) }; }
-  }, [source, selected, filters, sort, mode, distinct, limit]);
+  }, [source, selected, filters, sort, mode, distinct, limit, summaryEnabled, summary]);
 
   function current(): boolean {
     if (!mounted.current || owner.stale) return false;
@@ -84,6 +88,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
           result.target.table !== scope.table || result.target.kind !== scope.kind) throw Error(text.stale);
       setSelected(result.columns.map(column => column.name));
       setFilters([]); setSort([]); setMode('and'); setDistinct(false); setLimit(''); setSource(result);
+      setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
     });
   }
 
@@ -128,7 +133,9 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
         {choices?.length === 0 && <p role="status">{text.empty}</p>}
       </> : <>
         <p>main.{source.target.table}</p>
-        <fieldset disabled={disabled}><legend>{text.columns}</legend>
+        <label className="check"><input type="checkbox" checked={summaryEnabled} disabled={disabled}
+          onChange={event => { if (editable()) setSummaryEnabled(event.target.checked); }}/>{summaryText.enabled}</label>
+        {!summaryEnabled && <fieldset disabled={disabled}><legend>{text.columns}</legend>
           <div className="child-reference-tools">
             <button onClick={() => { if (editable()) setSelected(names); }}>{text.all}</button>
             <button onClick={() => { if (editable()) setSelected([]); }}>{text.none}</button>
@@ -141,10 +148,11 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
             }}/>{name}
           </label>)}</div>
           <label className="check"><input type="checkbox" checked={distinct} onChange={event => { if (editable()) setDistinct(event.target.checked); }}/>{text.distinct}</label>
-        </fieldset>
+        </fieldset>}
         <SqliteTableFilters names={names} filters={filters} mode={mode} disabled={disabled} current={editable} id={uid}
           enabledHint={text.filterHint} onFilters={setFilters} onMode={setMode}/>
-        <fieldset disabled={disabled}><legend>{browse.sorts}</legend>
+        {summaryEnabled ? <QueryBuilderSummaryPanel names={names} draft={summary} disabled={disabled}
+          onChange={next => { if (editable()) setSummary(next); }}/> : <fieldset disabled={disabled}><legend>{browse.sorts}</legend>
           {sort.map((item, index) => <div key={item.id} className="filter-inputs">
             <select aria-label={browse.sortColumn(index + 1)} value={item.column} onChange={event => {
               const column = event.target.value;
@@ -162,7 +170,7 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose }: { co
             const column = names.find(name => !sort.some(item => item.column === name));
             if (column && editable()) setSort([...sort, { id: uid(), column, direction: 'asc' }]);
           }}>{browse.addSort}</button>
-        </fieldset>
+        </fieldset>}
         <Field label={text.limit}><input inputMode="numeric" maxLength={7} disabled={disabled} value={limit}
           onChange={event => { if (editable()) setLimit(event.target.value); }}/></Field>
         <p>{text.limitHint}</p>

@@ -36,4 +36,25 @@ describe('PostgreSQL 单表查询设计', () => {
     expect(postgresQueryBuilderInspectSchema.safeParse({ ...draft, inspect: 'rows', sql: 'SELECT 1' }).success).toBe(false);
     expect(postgresQueryBuilderInspectSchema.safeParse({ ...draft, inspect: 'rows', table: 'bare_name' }).success).toBe(false);
   });
+
+  it('分组后按当前汇总输出排序，别名可与未投影的原字段同名', () => {
+    const grouped: PostgresQueryBuilderDesign = {
+      ...draft, columns: [], rowLimit: 4,
+      filter: { mode: 'all', rules: [{ column: 'id', operator: 'IS NOT NULL' }] },
+      summary: { groups: ['值'], aggregates: [{ fn: 'COUNT_DISTINCT', column: 'id', alias: 'id' },
+        { fn: 'SUM', column: 'id', alias: '合计"值' }],
+      sort: [{ column: 'id', direction: 'DESC', nulls: 'LAST' }] },
+    };
+    expect(buildPostgresQueryBuilderSql(grouped, source)).toBe(
+      'SELECT "值", pg_catalog.COUNT(DISTINCT "id") AS "id", pg_catalog.SUM("id") AS "合计""值" FROM "项目.数据"."表""1" WHERE "id" IS NOT NULL GROUP BY "值" ORDER BY 2 DESC NULLS LAST LIMIT 4');
+    expect(() => buildPostgresQueryBuilderSql({ ...grouped, columns: ['id'] }, source)).toThrow('汇总或明细');
+    expect(() => buildPostgresQueryBuilderSql({ ...grouped, summary: { ...grouped.summary!, groups: ['id'] } }, source)).toThrow('必须唯一');
+    expect(() => buildPostgresQueryBuilderSql({ ...grouped, summary: { ...grouped.summary!, sort: [{ column: '已移除', direction: 'ASC' }] } }, source)).toThrow('当前输出');
+    expect(postgresQueryBuilderInspectSchema.safeParse({ ...grouped, inspect: 'rows', summary: {
+      ...grouped.summary, aggregates: [{ fn: 'COUNT_ALL', alias: '统'.repeat(22) }],
+    } }).success).toBe(false);
+    expect(postgresQueryBuilderInspectSchema.safeParse({ ...grouped, inspect: 'rows', summary: {
+      ...grouped.summary, aggregates: [{ fn: 'SUM', alias: '未授权 SQL', column: 'id', expression: 'nextval(...)' }],
+    } }).success).toBe(false);
+  });
 });

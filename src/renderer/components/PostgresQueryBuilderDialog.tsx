@@ -6,12 +6,14 @@ import { queryDatabasePatch } from '../../shared/queryContext';
 import { errorMessage, invoke } from '../lib';
 import { postgresQueryBuilderZh as text } from '../locales/postgresQueryBuilder.zh-CN';
 import { postgresTableZh } from '../locales/postgresTable.zh-CN';
+import { queryBuilderSummaryZh as summaryText } from '../locales/queryBuilderSummary.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { tableFilterGroupAfterChange } from '../tableFilterGroups';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
 import { TableFilterPanel } from './TableFilterPanel';
 import { TableSortPanel } from './TableSortPanel';
+import { emptyQueryBuilderSummary, QueryBuilderSummaryPanel, queryBuilderSummaryFromDraft } from './QueryBuilderSummaryPanel';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
@@ -32,6 +34,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const [selected, setSelected] = useState<string[]>([]), [distinct, setDistinct] = useState(false), [limit, setLimit] = useState('');
   const [rules, setRules] = useState<FilterRule[]>([]), [mode, setMode] = useState<FilterMode>('all'), [group, setGroup] = useState<FilterGroup>();
   const [sort, setSort] = useState<SortRule[]>([]), [editor, setEditor] = useState<'group' | 'sort'>();
+  const [summaryEnabled, setSummaryEnabled] = useState(false), [summary, setSummary] = useState(emptyQueryBuilderSummary);
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [stale, setStale] = useState(false);
   const mounted = useRef(false), pending = useRef(false);
   const names = useMemo(() => source?.columns.map(column => column.name) ?? [], [source]);
@@ -41,14 +44,16 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
   const preview = useMemo(() => {
     if (!source) return;
     try {
-      if (!selected.length) throw Error(text.noColumns);
+      if (!summaryEnabled && !selected.length) throw Error(text.noColumns);
       const rowLimit = limit ? Number(limit) : undefined;
       if (rowLimit !== undefined && (!/^[1-9]\d*$/.test(limit) || rowLimit > postgresQueryBuilderLimits.rowLimit)) throw Error(text.invalidLimit);
-      const design = { ...source.target, fingerprint: source.fingerprint, columns: selected, distinct, rowLimit, sort,
+      const design = { ...source.target, fingerprint: source.fingerprint, columns: summaryEnabled ? [] : selected,
+        distinct: !summaryEnabled && distinct, rowLimit, sort: summaryEnabled ? [] : sort,
+        summary: summaryEnabled ? queryBuilderSummaryFromDraft(summary) : undefined,
         filter: rules.length ? { rules, mode, group } : undefined };
       return { design, sql: buildPostgresQueryBuilderSql(design, source) };
     } catch (reason) { return { error: errorMessage(reason) }; }
-  }, [source, selected, distinct, limit, sort, rules, mode, group]);
+  }, [source, selected, distinct, limit, sort, rules, mode, group, summaryEnabled, summary]);
 
   function current(): boolean {
     if (!mounted.current || owner.stale) return false;
@@ -101,6 +106,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         throw Error(text.stale);
       setSource(result); setSelected(result.columns.map(column => column.name));
       setRules([]); setMode('all'); setGroup(undefined); setSort([]); setDistinct(false); setLimit('');
+      setSummaryEnabled(false); setSummary(emptyQueryBuilderSummary);
     });
   }
 
@@ -138,7 +144,9 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         {choices?.length === 0 && <p role="status">{text.empty}</p>}
       </> : <>
         <p>{database} / {source.target.table}</p>
-        <fieldset disabled={disabled || !!editor}><legend>{text.columns}</legend>
+        <label className="check"><input type="checkbox" checked={summaryEnabled} disabled={disabled || !!editor}
+          onChange={event => { if (editable()) setSummaryEnabled(event.target.checked); }}/>{summaryText.enabled}</label>
+        {!summaryEnabled && <fieldset disabled={disabled || !!editor}><legend>{text.columns}</legend>
           <div className="child-reference-tools">
             <button onClick={() => { if (editable()) setSelected(names); }}>{text.all}</button>
             <button onClick={() => { if (editable()) setSelected([]); }}>{text.none}</button>
@@ -151,7 +159,7 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
             }}/>{name} <small className="muted">{type}</small>
           </label>)}</div>
           <label className="check"><input type="checkbox" checked={distinct} onChange={event => { if (editable()) setDistinct(event.target.checked); }}/>{text.distinct}</label>
-        </fieldset>
+        </fieldset>}
         <fieldset><legend>{text.filter}</legend>
           <TableFilterPanel columns={names} filters={rules} mode={mode} disabled={disabled || !!editor} multilineScalar applyShortcut
             onFiltersChange={next => {
@@ -166,10 +174,13 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
             onApply={next => { if (!editable()) return false; setMode(next.mode); setGroup(next); setEditor(undefined); return true; }}
             onClose={() => setEditor(undefined)}/>}
         </fieldset>
-        <div className="child-reference-tools"><button disabled={disabled || !!editor} onClick={() => { if (editable()) setEditor('sort'); }}>{text.sort}</button>
-          <span className="muted small">{text.sorted(sort.length)}</span></div>
-        {editor === 'sort' && <TableSortPanel columns={names} initial={sort} hint={text.sortHint} ties={text.sortTies} isCurrent={editable}
-          onApply={next => { if (!editable()) return false; setSort(next); setEditor(undefined); return true; }} onClose={() => setEditor(undefined)}/>}
+        {summaryEnabled ? <QueryBuilderSummaryPanel names={names} draft={summary} disabled={disabled || !!editor}
+          onChange={next => { if (editable()) setSummary(next); }}/> : <>
+          <div className="child-reference-tools"><button disabled={disabled || !!editor} onClick={() => { if (editable()) setEditor('sort'); }}>{text.sort}</button>
+            <span className="muted small">{text.sorted(sort.length)}</span></div>
+          {editor === 'sort' && <TableSortPanel columns={names} initial={sort} hint={text.sortHint} ties={text.sortTies} isCurrent={editable}
+            onApply={next => { if (!editable()) return false; setSort(next); setEditor(undefined); return true; }} onClose={() => setEditor(undefined)}/>}
+        </>}
         <Field label={text.limit}><input inputMode="numeric" maxLength={7} disabled={disabled || !!editor} value={limit}
           onChange={event => { if (editable()) setLimit(event.target.value); }}/></Field>
         <p>{text.limitHint}</p>
