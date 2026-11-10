@@ -273,6 +273,7 @@ export function SqliteTableEditGrid({ showFieldType, page, rows, disabled, selec
   const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
     owner, grid: () => grid.current?.element,
     column: index => page.result.columns[order[index - 2]],
+    columnNameDialect: 'sqlite',
     sort: sort ?? [], current: () => !disabled && baseCurrent() && noModal(),
     canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
     selectColumn: index => cellRange.selectColumnAction(index - 2),

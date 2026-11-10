@@ -472,7 +472,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
           onColumnWidthsChange={binding ? resizeColumns : undefined}
           onSelectionChange={binding ? selectRows : undefined}
           sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons} onSortChange={sortView ? sortGrid : undefined}
-          ownDialog={ownDialog} filterDialect={dialect} onFilterSelected={filterView ? openSelectedFilter : undefined}
+          ownDialog={ownDialog} filterDialect={dialect} columnNameDialect={loaded.snapshot.version === 2 ? 'sqlite' : undefined} onFilterSelected={filterView ? openSelectedFilter : undefined}
           onFilterCell={filterView ? openCellFilter : undefined} onStageFindFilter={filterView ? openFilterRule : undefined} findFilterSource={filterBinding?.source}
           onStatistics={filterView ? openStatistics : undefined}
           onExportRange={binding ? openRangeExport : undefined}

@@ -175,7 +175,7 @@ export function PostgresRelatedTableTab({ tab, active }: { tab: WorkspaceTab; ac
         {!!data.page.rows.length && !data.editToken && <span>{tableText.noWrite}</span>}
       </div>
       {detail && record ? <PostgresReferenceRecord key={row} columns={data.page.columns} row={record}/>
-        : data.page.rows.length ? <div className="pg-table-grid"><ResultsGrid
+        : data.page.rows.length ? <div className="pg-table-grid"><ResultsGrid columnNameDialect="postgresql"
           columns={data.page.columns} rows={data.page.rows} onActiveRowIndexChange={setRow} isCurrent={gridCurrent}
           navigateTo={!data.incoming ? { row: 0, key: data.page.columns[0].key } : undefined}/></div>
           : <p>{data.incoming ? text.emptyChildren : text.emptyParent}</p>}

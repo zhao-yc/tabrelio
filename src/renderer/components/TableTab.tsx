@@ -2207,6 +2207,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const gridSort = sort.map(({ column, direction }) => ({ columnKey: column, direction }));
   const headerMenu = useGridHeaderMenu(cellActionMenu.open, {
     owner: sortScope, grid: () => grid.current?.element, column: index => visibleColumns[index - 1],
+    columnNameDialect: 'mysql',
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
     selectColumn: index => cellRange.selectColumnAction(index - 1),

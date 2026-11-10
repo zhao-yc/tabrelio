@@ -117,6 +117,12 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
       await expect(action).toBeVisible();
       if (count === 2) await page.screenshot({ path: info.outputPath('复制当前单元格.png') });
       if (keyboard) {
+        const menu = action.locator('..');
+        await expect(menu.locator('[role="menuitem"]:focus')).toHaveCount(1);
+        const enabled = await menu.locator('[role="menuitem"]:not(:disabled)').count();
+        for (let step = 1; step < enabled && !await action.evaluate(node => node === node.ownerDocument.activeElement); step++) {
+          await page.keyboard.press('ArrowDown');
+        }
         await expect(action).toBeFocused();
         await page.keyboard.press('Enter');
       } else await action.click();
@@ -204,6 +210,12 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     };
     const amountHeader = tableTab.getByRole('columnheader', { name: /^amount\b/ });
     const labelHeader = tableTab.getByRole('columnheader', { name: /^label\b/ });
+    const quoteName = (name: string) => local || dialect === 'postgresql' ? '"' + name + '"' : '`' + name + '`';
+    await chooseHeaderAction(amountHeader, gridHeaderMenuZh.copyName);
+    expect(await lastPacket()).toEqual({ 'text/plain': 'amount' });
+    await chooseHeaderAction(labelHeader, gridHeaderMenuZh.copyQuotedName, true);
+    expect(await lastPacket()).toEqual({ 'text/plain': quoteName('label') });
+    await expect(tableBCheck).toBeChecked();
     const frozen = /rdg-cell-frozen-start/;
     const checkTableFreeze = async (capture = false) => {
       const previous = await tableSorts();
@@ -229,11 +241,13 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     if (local) {
       await open('json-view');
       await expect(tableCell).toBeVisible();
+      await chooseHeaderAction(amountHeader, gridHeaderMenuZh.copyQuotedName);
+      expect(await lastPacket()).toEqual({ 'text/plain': '"amount"' });
       await expect(tableTab.getByRole('button', { name: deleteSqlCopyZh.action, exact: true })).toHaveCount(0);
       await tableCell.click();
       expect(await copy(tableTab)).toMatchObject([expectedA]);
       expect(await copyCsv(tableTab)).toBe('id,amount,label,payload,nullable\r\n1,9007199254740993,row A,base64:AP8=,\\N\r\n');
-      await menuCopy(tableAmount, expectedA.amount, expectedA.amount);
+      await menuCopy(tableAmount, expectedA.amount, expectedA.amount, { kind: 'integer', value: expectedA.amount });
       await tableBCheck.check();
       await fitAmount();
       await expect(tableBCheck).toBeChecked();
@@ -258,6 +272,13 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     await rowB.locator('..').getByRole('checkbox').check();
     const aliases = grid.getByRole('columnheader', { name: /^alias\b/ });
     await expect(aliases).toHaveCount(2);
+    await aliases.nth(1).click({ button: 'right' });
+    await expect(headerMenu).toBeVisible();
+    await headerMenu.screenshot({ path: info.outputPath('grid-column-name-copy.png') });
+    await headerMenu.getByRole('menuitem', { name: gridHeaderMenuZh.copyName, exact: true }).click();
+    expect(await lastPacket()).toEqual({ 'text/plain': 'alias' });
+    await chooseHeaderAction(aliases.nth(0), gridHeaderMenuZh.copyQuotedName, true);
+    expect(await lastPacket()).toEqual({ 'text/plain': quoteName('alias') });
     const aliasWidth = (index: number) => aliases.nth(index).evaluate(element => Math.round(element.getBoundingClientRect().width));
     const amountWidth = await aliasWidth(0), labelWidth = await aliasWidth(1);
     await aliases.nth(0).locator('.rdg-resize-handle').dblclick();
@@ -271,10 +292,12 @@ test('表格和查询结果复制 JSON 与右键命中的单元格，保留精�
     expect(await copyCsv(query)).toBe('alias,alias [2],payload,nullable\r\n' +
       '9007199254740994,row B,base64:,""\r\n9007199254740993,row A,base64:AP8=,\\N\r\n');
     const resultA = rowA.locator('..'), resultB = rowB.locator('..');
-    await menuCopy(resultA.getByRole('gridcell', { name: expectedA.amount, exact: true }), expectedA.amount, expectedA.amount, undefined, true);
-    await menuCopy(resultA.getByRole('gridcell', { name: 'NULL', exact: true }), null, 'NULL');
-    await menuCopy(resultB.getByRole('gridcell').last(), '', '');
-    await menuCopy(resultA.getByRole('gridcell', { name: /0x00ff|二进制|BLOB/i }), expectedA.payload, '0x00ff');
+    await menuCopy(resultA.getByRole('gridcell', { name: expectedA.amount, exact: true }), expectedA.amount, expectedA.amount,
+      local ? { kind: 'integer', value: expectedA.amount } : undefined, true);
+    await menuCopy(resultA.getByRole('gridcell', { name: 'NULL', exact: true }), null, 'NULL', local ? { kind: 'null' } : undefined);
+    await menuCopy(resultB.getByRole('gridcell').last(), '', '', local ? { kind: 'text', value: '' } : undefined);
+    await menuCopy(resultA.getByRole('gridcell', { name: /0x00ff|二进制|BLOB/i }), expectedA.payload, '0x00ff',
+      local ? { kind: 'blob', value: '00ff' } : undefined);
     await expect(resultA.getByRole('checkbox')).toBeChecked();
     await expect(resultB.getByRole('checkbox')).toBeChecked();
     await chooseHeaderAction(aliases.nth(1), gridHeaderMenuZh.freeze);

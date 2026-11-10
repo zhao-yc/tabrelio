@@ -1,7 +1,12 @@
 import { useRef, type KeyboardEvent, type MouseEvent } from 'react';
 import type { SortColumn } from 'react-data-grid';
+import type { ConnectionProfile } from '../../shared/contracts';
 import { gridHeaderMenuZh as text } from '../locales/gridHeaderMenu.zh-CN';
 import { isGridContextKey, type GridCellAction, type useGridCellActionMenu } from './GridCellActionMenu';
+import { gridColumnName } from '../gridColumnName';
+import { writeTableClipboardEvent } from '../gridClipboard';
+import { errorMessage } from '../lib';
+import { useWorkspace } from '../store';
 
 export interface GridHeaderFreeze {
   current(): boolean;
@@ -12,6 +17,7 @@ interface HeaderMenuSource {
   owner: object | null | undefined;
   grid(): HTMLElement | null | undefined;
   column(index: number): { key: string; name: string } | undefined;
+  columnNameDialect?: ConnectionProfile['dialect'];
   sort: readonly SortColumn[];
   current(): boolean;
   canSort(key: string): boolean;
@@ -40,9 +46,12 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     const index = Number(cell.getAttribute('aria-colindex')) - 1;
     const column = Number.isSafeInteger(index) && index >= 0 ? source.column(index) : undefined;
     if (!column || !source.owner || !source.current()) return;
+    const { key, name } = column;
     const current = () => {
       const now = latest.current;
-      return now.owner === source.owner && now.grid() === grid && now.column(index)?.key === column.key && now.current();
+      const live = now.column(index);
+      return now.owner === source.owner && now.grid() === grid && live?.key === key && live.name === name &&
+        now.columnNameDialect === source.columnNameDialect && now.current();
     };
     return { grid, column, index, current };
   }
@@ -81,6 +90,17 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       };
       actions.push({ label: text.freeze, disabled: source.frozenThrough === column.key, run: () => apply(column.key) },
         { label: text.unfreeze, disabled: source.frozenThrough === undefined, run: () => apply() });
+    }
+    const name = gridColumnName(column.name, source.columnNameDialect);
+    // 标题复制只写纯文本，与网格单元格的类型化剪贴板格式分开。
+    const copy = (value: string) => {
+      try { writeTableClipboardEvent(current, data => data.setData('text/plain', value)); }
+      catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
+    };
+    if (name) {
+      actions.push({ label: text.copyName, run: () => copy(name.plain) });
+      const quoted = name.quoted;
+      if (quoted !== undefined) actions.push({ label: text.copyQuotedName, run: () => copy(quoted) });
     }
     return openMenu(target, grid, { title: column.name, label: text.menu, targetRole: 'columnheader', current, actions }, point);
   }
