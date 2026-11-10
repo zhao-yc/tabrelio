@@ -2,10 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { historyAbsoluteEpoch, canonicalHistoryInstant, historyTimeMatches } from '../../src/shared/historyTimeRange';
 import { historyPageInputSchema } from '../../src/shared/historyPages';
-import { historyLocalInstant, historyInputRange } from '../../src/renderer/historyTimeInput';
+import { historyLocalInstant, historyInputRange, historyPresetRange } from '../../src/renderer/historyTimeInput';
 import { summarizeHistoryRecord } from '../../src/main/historyPageMatch';
 import { validateCommand } from '../../src/shared/validation';
 const from='2026-10-17T00:00:00.000Z',until='2026-10-18T00:00:00.000Z';
+
+describe('历史快捷范围', () => {
+  it('日历日按面板时区取午夜，跨夏令时分别为 23 和 25 小时', () => {
+    expect(historyPresetRange('today', Date.parse('2024-03-10T16:00:00Z'), 'America/New_York'))
+      .toEqual({ from: '2024-03-10T05:00:00.000Z', until: '2024-03-11T04:00:00.000Z' });
+    expect(historyPresetRange('yesterday', Date.parse('2024-11-04T12:00:00Z'), 'America/New_York'))
+      .toEqual({ from: '2024-11-03T04:00:00.000Z', until: '2024-11-04T05:00:00.000Z' });
+  });
+  it('午夜不存在时从该日期首个有效时刻开始，重复午夜取较早者', () => {
+    expect(historyPresetRange('today', Date.parse('2024-09-08T16:00:00Z'), 'America/Santiago'))
+      .toEqual({ from: '2024-09-08T04:00:00.000Z', until: '2024-09-09T03:00:00.000Z' });
+    expect(historyPresetRange('today', Date.parse('2024-11-03T16:00:00Z'), 'America/Havana'))
+      .toEqual({ from: '2024-11-03T04:00:00.000Z', until: '2024-11-04T05:00:00.000Z' });
+  });
+  it('最近时段按经过的真实时间计算，不依赖时区', () => {
+    const now = Date.parse('2024-11-03T06:30:00.250Z');
+    expect(historyPresetRange('lastHour', now, 'America/New_York'))
+      .toEqual({ from: '2024-11-03T05:30:00.250Z', until: '2024-11-03T06:30:00.250Z' });
+    expect(historyPresetRange('lastDay', now, ''))
+      .toEqual({ from: '2024-11-02T06:30:00.250Z', until: '2024-11-03T06:30:00.250Z' });
+    expect(() => historyPresetRange('today', now, '')).toThrow('本机时区');
+  });
+});
 const request=()=>({taskId:randomUUID(),search:'',fields:['sql' as const],scope:{kind:'all' as const},status:'all' as const,onError:'continue' as const});
 describe('历史时间的严格绝对时刻与范围',()=>{
  it('默认无范围保持原协议；新范围只接收规范UTC且拒绝空、相等、倒序与附加参数',()=>{

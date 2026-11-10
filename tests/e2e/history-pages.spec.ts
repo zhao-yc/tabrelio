@@ -102,6 +102,47 @@ test('查询内历史按活动标签连接打开，分页保持范围，全局�
  expect(pageErrors).toEqual([]);
 });
 
+test('执行时间快捷范围组合来源、状态和耗时，刷新沿用原端点', async ({}, info) => {
+ const time = (clock: string) => `2026-10-17T${clock}Z`;
+ await seed(store => {
+  source(store); source(store, 'other');
+  const failed = (id: string, clock: string, patch: Partial<HistoryEntry> = {}) =>
+   entry({ id, startedAt: time(clock), elapsedMs: 30, success: false, ...patch });
+  for (const record of [
+   failed('before-hour', '10:59:59.999'),
+   failed('at-hour', '11:00:00'),
+   failed('inside', '11:30:00'),
+   failed('at-end', '12:00:00'),
+   failed('wrong-source', '11:15:00', { connectionId: 'other' }),
+   failed('wrong-status', '11:15:00', { success: true }),
+   failed('too-fast', '11:15:00', { elapsedMs: 2 }),
+  ]) store.addHistory(record);
+ });
+ const now = new Date(time('12:00:00'));
+ await page.clock.setFixedTime(now);
+ await open();
+ const cards = dialog().locator('.history-card');
+ const ids = () => cards.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-history-id')));
+ const presets = dialog().getByRole('group', { name: text.timePresets, exact: true });
+ await dialog().getByLabel(text.scope, { exact: true }).selectOption('connection:source');
+ await dialog().getByLabel(text.status, { exact: true }).selectOption('failed');
+ await dialog().getByLabel(text.minDuration, { exact: true }).fill('25');
+ await presets.getByRole('button', { name: text.timeLastHour, exact: true }).click();
+ await expect.poll(ids).toEqual(['inside', 'at-hour']);
+ await expect(dialog().getByLabel(text.from, { exact: true })).toHaveValue(time('11:00:00.000'));
+ await expect(dialog().getByLabel(text.until, { exact: true })).toHaveValue(now.toISOString());
+ await dialog().screenshot({ path: info.outputPath('history-time-presets.png') });
+ await page.clock.setFixedTime(new Date(time('12:45:00')));
+ await dialog().getByRole('button', { name: text.refresh, exact: true }).click();
+ await expect(dialog().getByRole('button', { name: text.refresh, exact: true })).toBeEnabled();
+ await expect.poll(ids).toEqual(['inside', 'at-hour']);
+ await page.clock.setFixedTime(now);
+ await presets.getByRole('button', { name: text.timeLastDay, exact: true }).click();
+ await expect.poll(ids).toEqual(['inside', 'at-hour', 'before-hour']);
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('执行历史按原始耗时跨批次排序并保留筛选和勾选', async () => {
  const entries = Array.from({ length: 28 }, (_, index) => entry({
   id: `sort-${String(index).padStart(2, '0')}`, elapsedMs: (index * 11) % 28 + 0.25,

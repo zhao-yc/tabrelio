@@ -4,6 +4,7 @@ export const historyPagesZh={
  durationHint:'按记录耗时筛选，单位为整数毫秒（0–9007199254740991），两端均包含；留空不限。修改后请重新搜索。',
  durationInvalid:'耗时请输入0到9007199254740991的整数毫秒，不接受负号、小数或指数。',durationOrder:'最短耗时不能大于最长耗时；两端均包含，允许相等。',
  timeRange:'执行开始时间范围',from:'开始时间（包含）',until:'结束时间（不包含）',clearTime:'清除时间范围',timeZone:'本机时区（打开面板时）',unknownZone:'未能读取，请填写明确绝对时间',
+ timePresets:'执行时间快捷范围',timeToday:'今天',timeYesterday:'昨天',timeLastHour:'最近 1 小时',timeLastDay:'最近 24 小时',
  timeHint:'填写 YYYY-MM-DD HH:mm[:ss[.SSS]] 或带时区的 ISO 时间；开始包含，结束不包含，留空不限。夏令时重复时刻需指定偏移。',
  search:'搜索完整历史SQL或错误',searchButton:'搜索执行历史',fields:'搜索字段',sql:'SQL正文',error:'错误信息',
  scope:'历史来源',all:'全部来源',unbound:'无来源历史',status:'执行结果',allStatus:'全部结果',success:'执行成功',failed:'执行失败',

@@ -15,7 +15,7 @@ import{errorMessage,invoke,uid}from'../lib';
 import { openQueryTabBatch, useWorkspace, watchQueryBatchConnections } from '../store';
 import{Empty,ErrorBox,Field,Modal,Spinner}from'./ui';
 import'../savedQueryPages.css';
-import { historyInputRange } from '../historyTimeInput';
+import { historyInputRange, historyPresetRange, type HistoryTimePreset } from '../historyTimeInput';
 import { historyDurationInputRange, type HistoryDurationInputRange } from '../historyDurationInput';
 import type { HistoryDeleteApplyOutput, HistoryDeletePreviewInput, HistoryDeleteReference } from '../../shared/historyDelete';
 import { HistoryDeleteIntent, selectHistoryDeleteRecords } from '../historyDeleteUi';
@@ -102,19 +102,29 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   finally{insertionClosing.current=false;}
  }
  /** 明确搜索或续读一批；不累计卡片、原文或失败明细。 */
- async function load(next=false,exact?:Omit<HistoryPageInput,'taskId'>,exactKey?:string,requested=filters){
+ async function load(next=false,exact?:Omit<HistoryPageInput,'taskId'>,exactKey?:string,requested=filters,requestedTime=timeDraft){
   if(locked.current||closed.current)return;if(next&&filterKey!==applied){setError(t.pending);return;}if(!requested.fields.length){setError(t.fieldsRequired);return;}
   if (!next && !exact && requested.database && !savedQueryDatabaseScopeSchema.safeParse(requested.database).success) {
    setError(t.databaseFilterInvalid); return;
   }
   // 所有草稿先完整校验；非法耗时不释放旧游标、不抹页，也不发出搜索请求。
-  let timeRange:HistoryPageInput['timeRange'],durationRange:HistoryDurationInputRange|undefined;try{if(!next&&!exact){timeRange=historyInputRange(timeDraft.from,timeDraft.until,timeZone);durationRange=historyDurationInputRange(durationDraft.minimum,durationDraft.maximum);}}catch(reason){setError(errorMessage(reason));return;}locked.current=true;generation.current++;deleteRef.current?.invalidate();setBusy(true);setError('');const taskId=uid(),source=exact??{...requested,...(timeRange?{timeRange}:{}),...(durationRange?{durationRange}:{})};
+  let timeRange:HistoryPageInput['timeRange'],durationRange:HistoryDurationInputRange|undefined;try{if(!next&&!exact){timeRange=historyInputRange(requestedTime.from,requestedTime.until,timeZone);durationRange=historyDurationInputRange(durationDraft.minimum,durationDraft.maximum);}}catch(reason){setError(errorMessage(reason));return;}locked.current=true;generation.current++;deleteRef.current?.invalidate();setBusy(true);setError('');const taskId=uid(),source=exact??{...requested,...(timeRange?{timeRange}:{}),...(durationRange?{durationRange}:{})};
   try{const previous=cursor.current;if(!next){await release();if(closed.current)return;setReply(undefined);setBatch(0);setTargets(new Map());}else if(!previous)return;
    cursor.current=undefined;active.current=taskId;cancellation.current=undefined;setErrorView(undefined);setSqlView(undefined);setCopiedItem(undefined);setExportNotice(undefined);setSaveDraft(undefined);setSaveNotice(undefined);const request=next?invoke('history.pageContinue',{taskId,cursor:previous!}):invoke('history.page',{taskId,...source});pending.current=request;
    const page=await request;if(pending.current===request)pending.current=undefined;if(active.current===taskId)active.current=undefined;cursor.current=page.cursor;
-   if(closed.current){await release();return;}setReply(page);setBatch(value=>next?value+1:1);setApplied(exactKey??JSON.stringify({filters:requested,timeDraft,timeZone,durationDraft}));if(!next)appliedInput.current=structuredClone(source);setTargets(new Map());
+   if(closed.current){await release();return;}setReply(page);setBatch(value=>next?value+1:1);setApplied(exactKey??JSON.stringify({filters:requested,timeDraft:requestedTime,timeZone,durationDraft}));if(!next)appliedInput.current=structuredClone(source);setTargets(new Map());
   }catch(reason){if(!closed.current)setError(errorMessage(reason));}
   finally{if(cancellation.current)await cancellation.current.catch(reason=>{if(!closed.current)setError(errorMessage(reason));});if(active.current===taskId)active.current=undefined;pending.current=undefined;cancellation.current=undefined;locked.current=false;if(!closed.current)setBusy(false);}
+ }
+ /** 快捷范围固定为点击时的绝对端点，续页和导出继续使用相同范围。 */
+ function applyTimePreset(preset: HistoryTimePreset) {
+  if (locked.current || closed.current || deleteRef.current) return;
+  try {
+   const range = historyPresetRange(preset, Date.now(), timeZone);
+   draftChanged();
+   setTimeDraft(range);
+   void load(false, undefined, undefined, filters, range);
+  } catch (reason) { setError(errorMessage(reason)); }
  }
  /** 切换顺序重新读取首页，匹配范围和已勾选的原记录保持。 */
  function selectSort(sort: HistoryPageSort) {
@@ -471,6 +481,12 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
   </select></label>
   <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={busy||closing} value={filters.onError} onChange={event=>changeFilters({...filters,onError:event.target.value as Filters['onError']})}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>
   <div className="history-time-range" role="group" aria-label={t.timeRange}><label>{t.from}<input type="text" aria-label={t.from} placeholder="YYYY-MM-DD HH:mm:ss" value={timeDraft.from} maxLength={40} disabled={busy||closing} autoComplete="off" onChange={event=>{draftChanged();setTimeDraft({...timeDraft,from:event.target.value});}}/></label><label>{t.until}<input type="text" aria-label={t.until} placeholder="YYYY-MM-DD HH:mm:ss" value={timeDraft.until} maxLength={40} disabled={busy||closing} autoComplete="off" onChange={event=>{draftChanged();setTimeDraft({...timeDraft,until:event.target.value});}}/></label><button disabled={busy||closing||(!timeDraft.from&&!timeDraft.until)} onClick={()=>{draftChanged();setTimeDraft({from:'',until:''});}}>{t.clearTime}</button></div>
+  <div className="inline-field history-time-presets" role="group" aria-label={t.timePresets}>
+    <button type="button" disabled={busy || closing || !timeZone} onClick={() => applyTimePreset('today')}>{t.timeToday}</button>
+    <button type="button" disabled={busy || closing || !timeZone} onClick={() => applyTimePreset('yesterday')}>{t.timeYesterday}</button>
+    <button type="button" disabled={busy || closing} onClick={() => applyTimePreset('lastHour')}>{t.timeLastHour}</button>
+    <button type="button" disabled={busy || closing} onClick={() => applyTimePreset('lastDay')}>{t.timeLastDay}</button>
+  </div>
   <p className="muted small">{t.timeZone}：{timeZone||t.unknownZone}</p>
   <div className="history-time-range" role="group" aria-label={t.durationRange}><label>{t.minDuration}<input type="text" inputMode="numeric" aria-label={t.minDuration} value={durationDraft.minimum} maxLength={64} disabled={busy||closing} autoComplete="off" onChange={event=>{draftChanged();setDurationDraft({...durationDraft,minimum:event.target.value});}}/></label><label>{t.maxDuration}<input type="text" inputMode="numeric" aria-label={t.maxDuration} value={durationDraft.maximum} maxLength={64} disabled={busy||closing} autoComplete="off" onChange={event=>{draftChanged();setDurationDraft({...durationDraft,maximum:event.target.value});}}/></label><button disabled={busy||closing||(!durationDraft.minimum&&!durationDraft.maximum)} onClick={()=>{draftChanged();setDurationDraft({minimum:'',maximum:''});}}>{t.clearDuration}</button></div>
 

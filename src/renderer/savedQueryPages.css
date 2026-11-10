@@ -20,6 +20,7 @@
 .history-pages .history-time-range{display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin-top:12px}
 .history-pages .history-time-range label{display:flex;flex:1 1 230px;flex-direction:column;gap:6px}
 .history-pages .history-time-range input{width:100%;min-width:0}
+.history-pages .history-time-presets{flex-wrap:wrap;margin-top:8px}
 
 .saved-query-organization-layout{display:grid;grid-template-columns:minmax(160px,230px) minmax(0,1fr);gap:16px;align-items:start}
 .saved-query-organization-tree{min-width:0;border:1px solid var(--line);border-radius:6px;padding:10px;max-height:65vh;overflow:auto}

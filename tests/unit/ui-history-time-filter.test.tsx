@@ -24,6 +24,21 @@ function button(label:string){const value=doc.querySelectorAll('button').find(no
 async function click(label:string){expect(button(label).disabled).toBe(false);await act(async()=>button(label).dispatchEvent(new MemoryEvent('click')));}
 async function input(label:string,value:string){const node=doc.querySelector(`input[aria-label="${label}"]`)!;await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent('input'));});}
 describe('历史时间筛选真实ReactDOM与原IPC端口',()=>{
+ it('快捷范围立即应用并冻结端点，续页只使用同一个游标', async () => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-17T12:00:00.000Z'));
+  invoke.mockImplementation(async command => command === 'history.page' ? page('old') : command === 'history.pageContinue' ? page('new') : undefined);
+  await mount();
+  await input(t.minDuration, '25');
+  await click(t.timeLastHour);
+  const request = invoke.mock.calls.filter(call => call[0] === 'history.page').at(-1)![1];
+  expect(request).toMatchObject({
+   durationRange: { minMs: 25 }, timeRange: { from: '2026-10-17T11:00:00.000Z', until: '2026-10-17T12:00:00.000Z' },
+  });
+  now.mockReturnValue(Date.parse('2026-10-17T13:00:00.000Z'));
+  await click(t.next);
+  expect(invoke.mock.calls.find(call => call[0] === 'history.pageContinue')![1]).toEqual({ cursor: 'old', taskId: expect.any(String) });
+  expect(doc.querySelector(`input[aria-label="${t.until}"]`)!.value).toBe('2026-10-17T12:00:00.000Z');
+ });
  it('初始无范围；明确绝对端点原样规范后发送并显示时区及端点说明',async()=>{
   await mount();expect(invoke.mock.calls[0][0]).toBe('history.page');expect(invoke.mock.calls[0][1]).not.toHaveProperty('timeRange');
   expect(doc.body.textContent).toContain(t.timeZone);expect(doc.body.textContent).toContain('结束不包含');
