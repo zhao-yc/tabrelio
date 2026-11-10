@@ -156,6 +156,17 @@ async function refreshFromGrid(grid: Locator, reads: Awaited<ReturnType<typeof o
   expect((await reads()).at(-1)).toEqual(before.at(-1));
 }
 
+/** 组词与连按先走真实输入事件，只有独立 Enter 才产生一次分页。 */
+async function applyFilterWithEnter(input: Locator, reads: Awaited<ReturnType<typeof observeReads>>) {
+  const before = await reads();
+  await input.dispatchEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true });
+  await input.dispatchEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true });
+  await input.dispatchEvent('keydown', { key: 'Enter', repeat: true, bubbles: true, cancelable: true });
+  expect(await reads()).toEqual(before);
+  await input.press('Enter');
+  await expect.poll(async () => (await reads()).length).toBe(before.length + 1);
+}
+
 /** 从真实数据格与列标题分别操作，并核对结果行而非只读排序图标。 */
 async function sortFromGrid(grid: Locator, last: string): Promise<void> {
   const header = grid.getByRole('columnheader').filter({ hasText: /^label/ });
@@ -242,7 +253,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
       key: 'r', isComposing: true, ctrlKey: process.platform !== 'darwin', metaKey: process.platform === 'darwin',
     });
     await expect(rowLabels(tab)).toHaveCount(2);
-    await filter.press(applyKey);
+    await applyFilterWithEnter(filter, reads);
     await expect(rowLabels(tab)).toHaveCount(1);
     await expect(rowLabels(tab).first()).toHaveText(/row B$/);
     const historyPane = await verifyReadHistory(tab, reads, 'subject', 'row B');
@@ -272,6 +283,11 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     const clearDraft = tab.getByRole('gridcell').filter({ hasText: /清除筛选前保留的草稿$/ });
     await expect(clearDraft).toBeVisible();
     const beforeDeclinedClear = await reads();
+    await answerDialogs([1]);
+    const [applyConfirmation] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }), filter.press('Enter')]);
+    expect(applyConfirmation.message()).toBe(sqliteWorkspace.confirmDiscard);
+    await expect(clearDraft).toBeVisible();
+    expect(await reads()).toEqual(beforeDeclinedClear);
     const clear = await navigationMenuItem(tab, { name: tableFilterEnabledZh.clear, exact: true });
     await answerDialogs([1]);
     const [clearConfirmation] = await Promise.all([page.waitForEvent('dialog', { timeout: 5000 }), clear.click()]);
@@ -515,11 +531,13 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
       await tab.getByLabel(postgres.filterColumn, { exact: true }).selectOption('label');
       const quick = tab.getByLabel(postgres.filterText, { exact: true });
       await quick.fill('row B');
-      await quick.press(applyKey);
+      await applyFilterWithEnter(quick, reads);
       await expect(rowLabels(tab)).toHaveCount(1);
       await expect(rowLabels(tab).first()).toHaveText(/row B$/);
-      await tab.getByRole('button', { name: postgres.clearFilter, exact: true }).click();
+      await quick.fill('');
+      await applyFilterWithEnter(quick, reads);
       await expect(rowLabels(tab)).toHaveCount(3);
+      await expect(tab.getByRole('button', { name: postgres.clearFilter, exact: true })).toBeDisabled();
       await tab.getByRole('button', { name: postgres.advancedFilter, exact: true }).click();
     } else {
       await (await navigationMenuItem(tab, { name: zh.table.text006, exact: true })).click();
@@ -534,7 +552,13 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     await field.selectOption('label');
     await value.fill('row C');
     await expect(rowLabels(tab)).toHaveCount(3);
-    await value.press(applyKey);
+    if (dialect === 'postgresql') {
+      const beforeDraft = await reads();
+      await value.press('Enter');
+      await expect(value).toHaveValue('');
+      expect(await reads()).toEqual(beforeDraft);
+      await value.press(applyKey);
+    } else await applyFilterWithEnter(value, reads);
     await expect(rowLabels(tab)).toHaveCount(1);
     await expect(rowLabels(tab).first()).toHaveText(/row C$/);
     await refreshFromGrid(tab, reads, 'F5');

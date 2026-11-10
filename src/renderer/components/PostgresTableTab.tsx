@@ -4,7 +4,7 @@ import type { GridMatchRowsAction } from './GridRowSelectionActions';
 import { tableRefreshShortcut } from '../tableRefreshShortcut';
 import { objectQueryKeyShortcuts, objectQueryShortcutLabel, openTableObjectQuery, tableObjectQueryShortcut } from '../objectQueryNavigation';
 import { navigationZh } from '../locales/navigation.zh-CN';
-import { tableApplyShortcut } from '../tableApplyShortcut';
+import { tableApplyShortcut, tableFilterInputEnter } from '../tableApplyShortcut';
 import { gridQuickValueAssignment, postgresQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridHeaderDetailsZh as headerText } from '../locales/gridHeaderDetails.zh-CN';
 import { postgresTableCopyZh } from '../locales/postgresTableCopy.zh-CN';
@@ -402,8 +402,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   /** 快速筛选按钮与键盘提交共用同一已核对的表页。 */
   function applyQuickFilter() {
     if (frozenPage || !filterColumn) return;
-    closeAdvancedFilters();
-    navigate({ ...firstPage, filter: { column: filterColumn, text: filterText } });
+    const filter = filterText ? { column: filterColumn, text: filterText } : undefined;
+    navigate({ ...firstPage, filter }, false, {}, closeAdvancedFilters);
   }
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
@@ -1764,11 +1764,11 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
       <Field label={text.pageSize}><input type="number" min={1} max={postgresTableLimits.page} value={pageSize} disabled={frozenPage}
         onChange={event => setPageSize(Math.max(1, Math.min(postgresTableLimits.page, Math.trunc(Number(event.target.value)) || 1)))}/></Field>
       <div style={{ display: 'contents' }} onKeyDown={event => {
-        if (!frozenPage && filterColumn && tableApplyShortcut(event)) applyQuickFilter();
+        if (!frozenPage && filterColumn && (tableFilterInputEnter(event) || tableApplyShortcut(event))) applyQuickFilter();
       }}>
       <Field label={text.filterColumn}><select aria-label={text.filterColumn} value={filterColumn} disabled={frozenPage}
         onChange={event => setFilterColumn(event.target.value)}>{page?.columns.map(column => <option key={column.key} value={column.name}>{column.name}</option>)}</select></Field>
-      <Field label={text.filterText}><input value={filterText} maxLength={4096} disabled={frozenPage} onChange={event => setFilterText(event.target.value)}/></Field>
+      <Field label={text.filterText}><input aria-keyshortcuts="Enter" value={filterText} maxLength={4096} disabled={frozenPage} onChange={event => setFilterText(event.target.value)}/></Field>
       <button disabled={frozenPage || !filterColumn} onClick={applyQuickFilter}>{text.filter}</button>
       </div>
       <button disabled={frozenPage} aria-expanded={advancedFilters}

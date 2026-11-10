@@ -1,5 +1,5 @@
 import { isTableRangeOperator, isTableTextFilterOperator } from '../../shared/filtering';
-import { tableApplyShortcut } from '../tableApplyShortcut';
+import { tableApplyShortcut, tableFilterInputEnter } from '../tableApplyShortcut';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Pencil, X } from 'lucide-react';
 import type { FilterRule } from '../../shared/contracts';
@@ -17,6 +17,7 @@ interface Props {
   multilineScalar?: boolean;
   columnLabel?(key: string): string;
   applyShortcut?: true | ((rules: FilterRule[]) => boolean);
+  applyOnInputEnter?: boolean;
   pause?: { active: boolean; available: boolean; onToggle(): boolean };
   columns: string[]; filters: FilterRule[]; mode: FilterMode; disabled: boolean;
   onFiltersChange: (filters: FilterRule[]) => boolean;
@@ -24,7 +25,7 @@ interface Props {
 }
 
 /** 编辑区只维护待应用条件；父组件确认草稿处理后，才替换已应用规则并重新读取服务器。 */
-export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, seedNotice, multilineScalar, pause, applyShortcut, columnLabel }: Props) {
+export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, seedNotice, multilineScalar, pause, applyShortcut, applyOnInputEnter, columnLabel }: Props) {
   const [draft, setDraft] = useState(() => seed ? { ...seed } : emptyFilterDraft(columns[0] ?? ''));
   const [draftChanged, setDraftChanged] = useState(!!seed);
   const [editing, setEditing] = useState<number | null>(null); const [error, setError] = useState('');
@@ -77,8 +78,13 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
     {children}
     {seed && <p className="filter-value-hint">{seedNotice ?? cellText.staged}</p>}
     <div className="filter-mode-row" style={pause ? { flexWrap: 'wrap' } : undefined}><label>{zh.table.filterModeLabel}<select aria-label={zh.table.filterModeLabel} value={mode} disabled={disabled} onChange={event => { if (current()) onModeChange(event.target.value as FilterMode); }}><option value="all">{zh.table.filterModeAll}</option><option value="any">{zh.table.filterModeAny}</option></select></label><button disabled={disabled || !filters.length} onClick={() => { if (current() && onFiltersChange([])) cancelEdit(); }}>{zh.common.clearAll}</button><button aria-label={enabledText.enableAll} title={enabledText.hint} disabled={disabled || enabledCount === filters.length} onClick={() => changeEnabled(null, true)}>{enabledText.enableAllLabel}</button><button aria-label={enabledText.disableAll} title={enabledText.hint} disabled={disabled || enabledCount === 0} onClick={() => changeEnabled(null, false)}>{enabledText.disableAllLabel}</button>{pause && <button type="button" title={enabledText.pauseHint} disabled={disabled || !pause.available || !pause.active && !enabledCount} onClick={togglePause}>{pause.active ? enabledText.resume : enabledText.pause}</button>}<span className="muted small" role="status">{enabledText.status(enabledCount, filters.length)}</span></div>
-    <form className="filter-rule-form" onKeyDown={applyShortcut ? event => {
-      if (!current() || !tableApplyShortcut(event)) return;
+    <form className="filter-rule-form" onKeyDown={applyShortcut || applyOnInputEnter ? event => {
+      if (!current()) return;
+      if (applyOnInputEnter && tableFilterInputEnter(event)) {
+        if (columns.length) applyCondition();
+        return;
+      }
+      if (!applyShortcut || !tableApplyShortcut(event)) return;
       if (applyShortcut === true) {
         if (columns.length) applyCondition();
       } else if (draftChanged || editing !== null) applyCondition(applyShortcut);

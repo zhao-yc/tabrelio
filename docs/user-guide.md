@@ -1322,6 +1322,8 @@ MySQL、MariaDB 和 SQLite 表页的当前页查找也可勾选「高亮所有�
 
 ### 用键盘应用表格筛选和排序
 
+焦点在单行筛选值输入框时，按 Enter 可直接应用。MySQL 和 MariaDB 应用当前条件，PostgreSQL 应用快速筛选，SQLite 应用当前筛选与排序。PostgreSQL 高级筛选仍可按 Enter 先添加条件草稿。输入法组词和多行输入保留各自的 Enter 行为。
+
 在表格的筛选或排序编辑区内，Windows 按 Ctrl+R，macOS 按 ⌘R。MySQL 和 MariaDB 应用当前正在添加或修改的筛选条件。PostgreSQL 高级筛选会把当前正在编辑的条件和已添加的规则一并应用。SQLite 应用编辑区里的整套筛选与排序。已有草稿仍走原来的确认流程。
 
 ### 从列标题排序

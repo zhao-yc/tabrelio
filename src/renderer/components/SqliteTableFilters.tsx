@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react';
 import { sqliteTableBrowseLimits, isSqliteTextFilter } from '../../shared/sqliteTableBrowse';
 import type { SqliteFilterDraft } from '../sqliteTableBrowser';
 import { sqliteTableBrowseZh as text } from '../locales/sqliteTableBrowse.zh-CN';
+import { tableFilterInputEnter } from '../tableApplyShortcut';
 
 interface Props {
   names: readonly string[];
@@ -15,6 +16,7 @@ interface Props {
   id(): string;
   onFilters(update: (values: SqliteFilterDraft[]) => SqliteFilterDraft[]): void;
   onMode(mode: 'and' | 'or'): void;
+  onApplyInput?(): void;
 }
 
 /** 筛选只编辑父级表单；停用保留类型、原值和位置，由原“应用”入口校验并读取。 */
@@ -53,7 +55,9 @@ export function SqliteTableFilters(props: Props) {
   const enabled = filters.filter(filter => filter.enabled !== false).length;
   const title = props.title ?? text.filters;
   const label = props.columnLabel ?? ((name: string) => name);
-  return <fieldset aria-label={title} disabled={disabled}>
+  return <fieldset aria-label={title} disabled={disabled} onKeyDown={props.onApplyInput ? event => {
+    if (current() && tableFilterInputEnter(event)) props.onApplyInput?.();
+  } : undefined}>
     <legend>{title}</legend>
     <select aria-label={text.mode} value={mode} onChange={event => { if (current()) props.onMode(event.target.value as 'and' | 'or'); }}><option value="and">AND</option><option value="or">OR</option></select>
     <button disabled={!names.length || filters.length >= sqliteTableBrowseLimits.filters} onClick={add}>{text.addFilter}</button>
