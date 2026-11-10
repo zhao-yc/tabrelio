@@ -3,22 +3,27 @@ import { isTableRangeOperator, FILTER_LIMITS } from '../../shared/filtering';
 import { filterOperatorLabels, type FilterDraft } from '../tableFilters';
 import type { ForeignKeyJoinFilterDraft } from '../tableForeignKeyJoinFilters';
 import { tableForeignKeyJoinFilterZh as text } from '../locales/tableForeignKeyJoinFilter.zh-CN';
+import { foreignKeyJoinSide, type ForeignKeyJoinSide } from '../tableForeignKeyJoinSources';
 import { UsageHelp } from './ui';
 
 /** 所有输入均为父窗口当前草稿；没有第二份暂存状态、执行接口或隐藏的已生效条件。 */
-export function TableForeignKeyJoinFilters({ child, parent, entries, mode, disabled, onAdd, onChange, onRemove, onClear, onMode }: {
-  child: TableInfo; parent: TableInfo; entries: readonly ForeignKeyJoinFilterDraft[]; mode: FilterMode; disabled: boolean;
-  onAdd(): void; onChange(entry: ForeignKeyJoinFilterDraft, patch: { side?: 'child' | 'parent'; enabled?: boolean; draft?: Partial<FilterDraft> }): void; onRemove(entry: ForeignKeyJoinFilterDraft): void; onClear(): void; onMode(mode: FilterMode): void;
+export function TableForeignKeyJoinFilters({ sources, sourceLabel, entries, mode, disabled, onAdd, onChange, onRemove, onClear, onMode }: {
+  sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>; sourceLabel(side: ForeignKeyJoinSide): string; entries: readonly ForeignKeyJoinFilterDraft[]; mode: FilterMode; disabled: boolean;
+  onAdd(): void; onChange(entry: ForeignKeyJoinFilterDraft, patch: { side?: ForeignKeyJoinSide; enabled?: boolean; draft?: Partial<FilterDraft> }): void; onRemove(entry: ForeignKeyJoinFilterDraft): void; onClear(): void; onMode(mode: FilterMode): void;
 }) {
   return <fieldset disabled={disabled} aria-label={text.title}><legend>{text.title}</legend><UsageHelp><p>{text.hint}</p></UsageHelp>
     <label>{text.mode}<select aria-label={text.mode} value={mode} disabled={disabled} onChange={event => { if (event.target.value === 'all' || event.target.value === 'any') onMode(event.target.value); }}><option value="all">{text.all}</option><option value="any">{text.any}</option></select></label>
     {!entries.length && <p>{text.empty}</p>}
     {entries.map((entry, index) => {
-      const { draft } = entry, position = index + 1, columns = (entry.side === 'child' ? child : parent).columns;
+      const { draft } = entry, position = index + 1, columns = sources.get(entry.side)?.columns ?? [];
       const set = draft.operator === 'IN' || draft.operator === 'NOT IN', range = isTableRangeOperator(draft.operator), nil = draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL';
       return <div key={entry.id} className="join-filter-entry">
         <div className="filter-inputs"><label><input type="checkbox" aria-label={text.enabled(position)} checked={entry.enabled} disabled={disabled} onChange={event => onChange(entry, { enabled: event.target.checked })}/>{position}.</label>
-          <label>{text.side(position)}<select aria-label={text.side(position)} disabled={disabled} value={entry.side} onChange={event => { const side = event.target.value; if (side === 'child' || side === 'parent') { const names = (side === 'child' ? child : parent).columns.map(column => column.name); onChange(entry, { side, draft: { column: names.includes(draft.column) ? draft.column : names[0] } }); } }}><option value="child">{text.child}</option><option value="parent">{text.parent}</option></select></label>
+          <label>{text.side(position)}<select aria-label={text.side(position)} disabled={disabled} value={entry.side} onChange={event => { const side = foreignKeyJoinSide(sources, event.target.value);
+            if (!side) return;
+            const names = sources.get(side)!.columns.map(column => column.name);
+            onChange(entry, { side, draft: { column: names.includes(draft.column) ? draft.column : names[0] } });
+          }}>{Array.from(sources.keys(), side => <option key={side} value={side}>{sourceLabel(side)}</option>)}</select></label>
           <label>{text.column(position)}<select aria-label={text.column(position)} disabled={disabled} value={draft.column} onChange={event => { if (columns.some(column => column.name === event.target.value)) onChange(entry, { draft: { column: event.target.value } }); }}>{columns.map(column => <option key={column.name} value={column.name}>{column.name}</option>)}</select></label>
           <label>{text.operator(position)}<select aria-label={text.operator(position)} disabled={disabled} value={draft.operator} onChange={event => { if (Object.hasOwn(filterOperatorLabels, event.target.value)) onChange(entry, { draft: { operator: event.target.value as FilterDraft['operator'] } }); }}>{Object.entries(filterOperatorLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <button type="button" aria-label={text.remove(position)} disabled={disabled} onClick={() => onRemove(entry)}>×</button>

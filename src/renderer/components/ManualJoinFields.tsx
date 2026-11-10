@@ -85,9 +85,9 @@ export function manualJoinSteps(drafts: readonly AdditionalJoinDraft[]): ManualJ
 }
 
 /** 追加表复用目录和字段对控件。每个步骤的输出可单独增减。 */
-export function AdditionalJoinFields({ draft, index, sources, databases, disabled, canRetarget, showColumns, onRead, onChange, onRemove }: {
+export function AdditionalJoinFields({ draft, index, sources, databases, disabled, canRetarget, targetReferenced, showColumns, onRead, onChange, onRemove }: {
   draft: AdditionalJoinDraft; index: number; sources: readonly TableInfo[]; databases: readonly string[];
-  disabled: boolean; canRetarget: boolean; showColumns: boolean;
+  disabled: boolean; canRetarget: boolean; targetReferenced: boolean; showColumns: boolean;
   onRead(kind: 'databases' | 'tables' | 'preview'): void; onChange(draft: AdditionalJoinDraft): void; onRemove(): void;
 }) {
   const child = sources[draft.source];
@@ -116,7 +116,8 @@ export function AdditionalJoinFields({ draft, index, sources, databases, disable
       onRemove={id => onChange({ ...draft, pairs: draft.pairs.filter(pair => pair.id !== id) })}/>}
     {showColumns && draft.info && <AdditionalJoinColumns key={draft.info.database + '\0' + draft.info.name}
       info={draft.info} columns={draft.columns} onChange={columns => onChange({ ...draft, columns })}/>}
-    {canRetarget && <button onClick={onRemove}>{text.additionalRemove}</button>}
+    {(canRetarget || targetReferenced) && <button disabled={targetReferenced} onClick={onRemove}>{text.additionalRemove}</button>}
+    {targetReferenced && <p>{text.additionalReferenced}</p>}
   </fieldset>;
 }
 

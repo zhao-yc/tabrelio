@@ -59,6 +59,38 @@ describe('外键JOIN原结构与前置核验租约', () => {
     expect(() => intent.consume(draft)).toThrow(text.stale);
   });
 
+  it('追加表字段参与 WHERE、DISTINCT 排序和严格汇总，来源按别名区分', () => {
+    const { child, parent } = tables();
+    const relation: ManualJoinPair[] = [{ child: 'parent_id', parent: 'id' }];
+    const additionalJoins: ManualJoinStep[] = [
+      { source: 1, target: parent, kind: 'LEFT', pairs: [{ child: 'id', parent: 'id' }], columns: ['value'] },
+      { source: 2, target: parent, kind: 'LEFT', pairs: [{ child: 'value', parent: 'value' }], columns: [] },
+    ];
+    const options = {
+      childColumns: [], parentColumns: [], additionalJoins,
+      filters: [{ side: 't4', column: 'value', operator: 'IS NOT NULL' }] as const,
+      sort: [{ side: 't3', column: 'value', direction: 'DESC', nulls: 'LAST' }] as const,
+    };
+    const detail = buildForeignKeyJoin(child, parent, relation, 'INNER', 10, { ...options, distinct: true });
+    expect(detail.sql).toMatch(/^SELECT DISTINCT\n  t3\.`value` AS `t3_2_value`/);
+    expect(detail.sql).toContain('WHERE (((t4.`value` IS NOT NULL)))\nORDER BY (t3.`value` IS NULL) ASC, t3.`value` DESC');
+    expect(() => buildForeignKeyJoin(child, parent, relation, 'INNER', 10, { ...options, distinct: true,
+      sort: [{ side: 't4', column: 'value', direction: 'DESC' }] })).toThrow(text.distinctSort);
+    expect(() => buildForeignKeyJoin(child, parent, relation, 'INNER', 10, { ...options,
+      additionalJoins: additionalJoins.slice(0, 1) })).toThrow();
+    const summary = buildForeignKeyJoin(child, parent, relation, 'INNER', 10, {
+      ...options, summary: {
+        groups: [{ side: 't3', column: 'value' }],
+        aggregates: [{ fn: 'SUM', side: 't4', column: 'value', alias: 'total' }],
+      },
+      having: { filters: [{ column: 'total', operator: '>', value: '0' }] },
+      sort: [{ side: 't3', column: 'value', direction: 'ASC' }, { side: 'aggregate', column: 'total', direction: 'DESC' }],
+    });
+    expect(summary.sql).toContain('t3.`value` AS `t3_2_value`,\n  SUM(t4.`value`) AS `total`');
+    expect(summary.sql).toContain('GROUP BY t3.`value`\nHAVING ((SUM(t4.`value`) > ');
+    expect(summary.sql).toContain('ORDER BY t3.`value` ASC, SUM(t4.`value`) DESC');
+  });
+
   it('禁止前向引用，最后一张表变化后不放行原预览', async () => {
     const { child, parent, intent } = fixture();
     const third = { ...parent, name: 'third' };

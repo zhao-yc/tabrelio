@@ -1,7 +1,7 @@
 import { tableReadIdentifier } from '../shared/tableReadSql';
 import { tableForeignKeyJoinSummaryZh as text } from './locales/tableForeignKeyJoinSummary.zh-CN';
 
-export type ForeignKeyJoinSide = 'child' | 'parent';
+import { foreignKeyJoinSide, foreignKeyJoinSqlAlias, type ForeignKeyJoinSide } from './tableForeignKeyJoinSources';
 export interface ForeignKeyJoinGroupKey { side: ForeignKeyJoinSide; column: string; }
 export type ForeignKeyJoinAggregateFunction = 'COUNT_ALL' | 'COUNT' | 'COUNT_DISTINCT' | 'SUM' | 'AVG' | 'MIN' | 'MAX';
 export type ForeignKeyJoinAggregate = { fn: 'COUNT_ALL'; alias: string } | { fn: Exclude<ForeignKeyJoinAggregateFunction, 'COUNT_ALL'>; side: ForeignKeyJoinSide; column: string; alias: string };
@@ -33,14 +33,16 @@ function list(value: unknown, maximum: number): unknown[] {
 }
 
 /** 本地结构化聚合编译；GROUP BY显式完整列出普通输出，不猜函数依赖或关闭严格模式。 */
-export function buildForeignKeyJoinSummary(child: Source, parent: Source, raw: unknown, alias: (side: ForeignKeyJoinSide, ordinal: number, name: string) => string) {
+export function buildForeignKeyJoinSummary(sources: ReadonlyMap<ForeignKeyJoinSide, Source>, raw: unknown, alias: (side: ForeignKeyJoinSide, ordinal: number, name: string) => string) {
   const root = record(raw,['groups','aggregates']), groups = list(root.groups,foreignKeyJoinSummaryLimits.groups), aggregates = list(root.aggregates,foreignKeyJoinSummaryLimits.aggregates);
   const columns: { side: ForeignKeyJoinSide | 'aggregate'; column: string; alias: string }[] = [], expressions: string[] = [], grouping: string[] = [], outputs: ForeignKeyJoinSummaryOutput[] = [], keys = new Set<string>(), aliases = new Set<string>(), aggregateReferences = new Map<string,string>();
-  /** 列只来自经过主生成器校验的双方元数据，侧别和列名仍按每条声明再核对。 */
-  function source(side: unknown, name: unknown) {
-    if ((side !== 'child' && side !== 'parent') || typeof name !== 'string') throw Error(text.invalid);
-    const source = side === 'child' ? child : parent, index = source.columns.findIndex(column => column.name === name); if (index < 0) throw Error(text.invalid);
-    return { side: side as ForeignKeyJoinSide, column: source.columns[index], ordinal: index+1, reference: (side === 'child' ? 'c.' : 'p.') + tableReadIdentifier(name) };
+  /** 列只来自当前 JOIN 的目录；按别名和列名核对每条声明。 */
+  function source(rawSide: unknown, name: unknown) {
+    const side = foreignKeyJoinSide(sources, rawSide);
+    if (!side || typeof name !== 'string') throw Error(text.invalid);
+    const source = sources.get(side)!, index = source.columns.findIndex(column => column.name === name);
+    if (index < 0) throw Error(text.invalid);
+    return { side, column: source.columns[index], ordinal: index + 1, reference: foreignKeyJoinSqlAlias(side) + '.' + tableReadIdentifier(name) };
   }
   /** 别名独立引用且大小写不重复；禁止与分组字段的稳定输出别名冲突。 */
   function output(side: ForeignKeyJoinSide | 'aggregate', column: string, name: unknown, expression: string, type: string) {
