@@ -1,6 +1,7 @@
 import { savedQueryPagesZh as pagesText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQueryOrganizationZh as organizationText } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { savedQuerySearchZh as searchText } from '../../src/renderer/locales/savedQuerySearch.zh-CN';
+import { localMatchingPagesZh as matchingText } from '../../src/renderer/locales/localMatchingPages.zh-CN';
 import{readFile}from'node:fs/promises';
 import{join}from'node:path';
 import{test,expect,page,dataDir,pageErrors,answerDialogs,quitDesktop,launchDesktop}from'./desktop-fixture';
@@ -32,6 +33,29 @@ test('58条保存查询分三批且只保留当前概要，正文尾部搜索、
  await search('只在全文尾部的目标');await expect(dialog().locator('.history-card')).toHaveCount(0);for(const scanned of[50,58]){await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'读取下一批',exact:true})).click();await expect(dialog().getByRole('status')).toContainText('已检查'+scanned+'条');}await expect(dialog().locator('.history-card')).toHaveCount(1);await expect(dialog().locator('.history-card strong')).toHaveText('保存查询000');await expect(dialog().getByRole('button',{name:'在新标签打开',exact:true})).toBeDisabled();
  const summary=await page.evaluate(()=>window.dbark.invoke('queries.page',{taskId:crypto.randomUUID(),search:'只在全文尾部的目标',onError:'continue'}));expect(summary.items).toEqual([]);expect(summary.cursor).toBeTruthy();await page.evaluate(cursor=>window.dbark.invoke('queries.pageRelease',{cursor}),summary.cursor!);
  const invalid=await page.evaluate(async()=>{try{await window.dbark.invoke('queries.page',{taskId:crypto.randomUUID(),search:'x'.repeat(513),onError:'continue'});return false;}catch{return true;}});expect(invalid).toBe(true);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);expect((await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).tabs).toEqual([]);expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('saved-query-pages-tail-match.png')});
+});
+
+test('保存查询连续读取跳过空批并保留跨批勾选', async ({}, info) => {
+ for (let index = 0; index < 90; index++) {
+  const number = String(index).padStart(2, '0');
+  await save({ id: 'skip-' + number, name: '保存记录 ' + number, sql: index === 89 || index === 5 ? 'SELECT 1 /* 本例连续命中 */' : 'SELECT 2' });
+ }
+ await open();
+ await search('本例连续命中');
+ const cards = dialog().locator('.history-card');
+ const next = dialog().getByRole('button', { name: matchingText.nextMatching, exact: true });
+ await expect(cards.locator('strong')).toHaveText(['保存记录 89']);
+ await cards.getByRole('checkbox').check();
+ await next.click();
+ await expect(cards.locator('strong')).toHaveText(['保存记录 05']);
+ await expect(dialog().getByRole('status').filter({ hasText: '当前第4批' })).toContainText('已检查90条，命中2条');
+ await expect(dialog().getByText(organizationText.selected(1, 1), { exact: true })).toBeVisible();
+ await expect(next).toBeDisabled();
+ await cards.first().scrollIntoViewIfNeeded();
+ await dialog().screenshot({ path: info.outputPath('保存查询下一批匹配.png') });
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
 });
 
 test('列表打开保持四种默认库、精确SQL和独立原草稿，重启后来源记录不被重写',async({},info)=>{

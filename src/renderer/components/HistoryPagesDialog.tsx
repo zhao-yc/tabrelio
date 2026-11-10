@@ -25,12 +25,12 @@ import type { HistoryInsertionTarget } from '../historyInsertion';
 import { historyInsertionZh as insertionText } from '../locales/historyInsertion.zh-CN';
 import { SqlTextPreview } from './SqlTextPreview';
 import { QueryBatchOpenPreview } from './QueryBatchOpenPreview';
+import { matchingPageLimit } from '../localMatchingPages';
 
 type Filters=Omit<HistoryPageInput,'taskId'|'timeRange'|'durationRange'>;
 type BatchSaveDraft = { items: HistoryDeleteReference[]; revision: number; prefix: string; keepSource: boolean; group?: SavedQueryGroupTarget };
 type HistoryOpenRow = { id: string; name: string; connectionId?: string };
 type HistoryOpenBatch = { items: HistoryDeleteReference[]; revision: number; rows: HistoryOpenRow[]; targets: ReadonlyMap<string, string> };
-const matchingBatchLimit = 8;
 
 /** 历史面板仅保留当前概要页，原文、错误全文和打开目标都需明确选择。 */
 export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectionId}:{onClose():void;onQueries():void;insertion?:HistoryInsertionTarget|null;initialConnectionId?:string}){
@@ -139,7 +139,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
    } else if (!cursor.current) return;
    setErrorView(undefined); setSqlView(undefined); setCopiedItem(undefined);
    setExportNotice(undefined); setSaveDraft(undefined); setSaveNotice(undefined);
-   for (let read = 1; read <= (skipEmpty ? matchingBatchLimit : 1); read++) {
+   for (let read = 1; read <= (skipEmpty ? matchingPageLimit : 1); read++) {
     const previous = cursor.current, taskId = uid();
     cursor.current = undefined;
     active.current = taskId;
@@ -158,7 +158,7 @@ export function HistoryPagesDialog({onClose,onQueries,insertion,initialConnectio
     setTargets(new Map());
     if (!skipEmpty || !page.cursor || page.items.length || page.failures.length || page.stoppedOnError) return;
     if (stopMatching.current) { setMatchingNotice(t.matchingPaused); return; }
-    if (read === matchingBatchLimit) setMatchingNotice(t.matchingLimit(matchingBatchLimit));
+    if (read === matchingPageLimit) setMatchingNotice(t.matchingLimit(matchingPageLimit));
    }
   } catch (reason) {
    if (!closed.current) {

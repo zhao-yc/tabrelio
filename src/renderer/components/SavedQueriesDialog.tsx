@@ -7,6 +7,8 @@ import type { ConnectionProfile, QueryFileEncoding } from '../../shared/contract
 import { zh, formatText } from '../locales/zh-CN';
 import { queryContextZh } from '../locales/queryContext.zh-CN';
 import { savedQueryPagesZh as t } from '../locales/savedQueryPages.zh-CN';
+import { localMatchingPagesZh as matchingText } from '../locales/localMatchingPages.zh-CN';
+import { matchingPageLimit, readMatchingPages } from '../localMatchingPages';
 import { savedQuerySearchZh as searchText } from '../locales/savedQuerySearch.zh-CN';
 import { historyPagesZh as sqlText } from '../locales/historyPages.zh-CN';
 import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
@@ -86,6 +88,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [matching, setMatching] = useState<'reading' | 'stopping'>();
+  const stopMatching = useRef(false);
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
   const [selected, setSelected] = useState<ReadonlyMap<string, OpenSelection>>(new Map()), selectedRef = useRef(selected), [editing, setEditing] = useState<Edit>(), editRef = useRef(editing), [needsRefresh, setNeedsRefresh] = useState(false), [targets, setTargets] = useState(new Map<string, string>());
   const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
@@ -153,11 +157,30 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       }));
       cursor.current = page.cursor; if (!owns(ticket)) { await release(); return; }
       setReply(page); setBatch(count => next ? count + 1 : 1); setApplied(criteriaKey(value)); setTargets(new Map());
+      return page;
     } catch (reason) { if (owns(ticket) && next) { setReply(previous => previous ? { ...previous, cursor: undefined } : previous); setNeedsRefresh(true); } throw reason; }
     finally { if (active.current === taskId) active.current = undefined; }
   }
   /** 显式第一页重新读取组织版本，沿用全文、分组、来源和错误策略。 */
   function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current || deleteRef.current || openRef.current || externalRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
+  /** 已应用的分组和筛选由主进程游标固定；停止只阻止继续请求。 */
+  function loadNextMatching() {
+    const value = criteriaRef.current, view = pageView.current;
+    if (!editable() || databasePending || view.needsRefresh || !cursor.current || criteriaKey(value) !== view.applied) return;
+    return run(async ticket => {
+      stopMatching.current = false;
+      setMatching('reading');
+      try {
+        const outcome = await readMatchingPages(
+          () => owns(ticket) ? readPage(ticket, value, true) : Promise.resolve(undefined),
+          page => !!page.items.length, () => stopMatching.current,
+        );
+        if (!owns(ticket)) return;
+        if (outcome === 'paused') setNotice(matchingText.matchingPaused);
+        if (outcome === 'limit') setNotice(matchingText.matchingLimit(matchingPageLimit));
+      } finally { if (alive.current) setMatching(undefined); }
+    });
+  }
   useEffect(() => {
     alive.current = true; closed.current = false; const ticket = epoch.current;
     // StrictMode的旧setup尚未投递时只留本轮启动权；cleanup不消费父传入的子权限。
@@ -717,7 +740,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         {opening && <QueryBatchOpenPreview rows={[...opening.selection.values()]} targets={opening.targets} connections={connections}
           busy={busy || closing} onTarget={(id, connectionId) => changeOpenBatchTarget(opening, id, connectionId)}
           onCancel={cancelOpenBatch} onConfirm={() => applyOpenBatch(opening)}/>}
-        <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p role="status">{notice}</p>}{busy && <Spinner/>}
+        <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p role="status">{notice}</p>}{busy && <Spinner
+          text={matching === 'stopping' ? matchingText.matchingStopping : matching ? matchingText.matchingReading : undefined}/>}
         {!external && <button disabled={blocked} onClick={() => beginExternal()}>{externalText.resume}</button>}
         {external && <SavedQueryExternalEditor key={external.sessionId} session={external} request={io.request} onDone={message => finishExternal(external, message)}/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
@@ -762,6 +786,16 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       ? <SavedQueryRebindEditor key={editing.epoch} rows={editing.selected} connections={editing.connectionSnapshot.connections} busy={busy || closing} onCancel={cancelEdit} onConfirm={target => applyRebind(editing, target)}/>
       : 'duplicateSnapshot' in editing ? <SavedQueryDuplicateBatchEditor key={editing.epoch} rows={editing.selected} snapshot={editing.duplicateSnapshot} busy={busy || closing} onCancel={cancelEdit} onConfirm={(items, destination) => applyDuplicateBatch(editing, items, destination)}/>
       : <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>)}</div>
-    <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing || !!external} onClick={() => void close()}>{zh.common.close}</button></footer>
+    <footer className="modal-footer">
+      <button disabled={blocked} onClick={() => void load()}>{t.refresh}</button>
+      <button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>
+      <button disabled={blocked || needsRefresh || !reply?.cursor || changed} title={matchingText.nextMatchingHint}
+        onClick={() => void loadNextMatching()}>{matchingText.nextMatching}</button>
+      {matching ? <button disabled={closing || matching === 'stopping'} onClick={() => {
+        stopMatching.current = true; setMatching('stopping');
+      }}>{matchingText.stopMatching}</button> : busy && <button disabled={closing || !active.current}
+        onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}
+      <span className="grow"/><button disabled={closing || !!external} onClick={() => void close()}>{zh.common.close}</button>
+    </footer>
   </Modal>;
 }

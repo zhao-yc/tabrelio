@@ -7,6 +7,7 @@ import type{RowDataPacket}from'mysql2/promise';
 import {savedQueryNavigationZh as navigationText} from '../../src/renderer/locales/savedQueryNavigation.zh-CN';
 import {savedQueryInsertionZh as insertionText} from '../../src/renderer/locales/savedQueryInsertion.zh-CN';
 import { savedQueryPagesZh as pagesText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
+import { localMatchingPagesZh as matchingText } from '../../src/renderer/locales/localMatchingPages.zh-CN';
 import {zh} from '../../src/renderer/locales/zh-CN';
 
 test.use({trace:'off'});
@@ -148,6 +149,31 @@ test('无连接也可搜索58条全文并分三页，虚拟表格、非法输入
  test.setTimeout(120000);for(let i=0;i<58;i++)await save({id:'q'+String(i).padStart(3,'0'),name:'本地查询'+i,sql:'-- 第一行\r\nSELECT 9007199254740993;\r\n-- '+ 'x'.repeat(5000)+'全文命中_'+String(i).padStart(3,'0')});await open();await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'开始本地搜索',exact:true})).click();await expect(dialog().locator('.error-box')).toContainText('请检查本地搜索条件');expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);await page.keyboard.press(`${modifier}+t`);await expect(page.getByRole('dialog')).toHaveCount(1);
  await search('全文命中_\\d{3}','regexp');await expect(dialog().getByRole('status')).toContainText('命中查询 25');for(const count of[50,58]){await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'继续搜索',exact:true})).click();await expect(dialog().getByRole('button',{name:'开始本地搜索',exact:true})).toBeEnabled();await expect(dialog().getByRole('status')).toContainText('命中查询 '+count);}await expect(dialog().getByRole('status')).toContainText('已检查当前全部保存查询');expect(await dialog().locator('.rdg-row').count()).toBeLessThan(40);await dialog().locator('.rdg-row').first().click();await expect(dialog().locator('.saved-query-search-preview')).toContainText('全文命中_');await expect(dialog().getByLabel('打开查询的连接',{exact:true})).toHaveValue('');await expect(dialog().getByRole('button',{name:'打开查询（不执行）',exact:true})).toBeDisabled();await page.screenshot({path:info.outputPath('saved-query-local-paging.png')});await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'关闭',exact:true})).click();
  const tasks=await page.evaluate(()=>window.dbark.invoke('tasks.list',{}));expect(tasks).toHaveLength(3);expect(tasks.every(task=>task.kind.startsWith('search.savedQueries')&&task.status==='completed'&&!task.message.includes('全文命中_'))).toBe(true);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);const bytes=await readFile(join(dataDir,'dbark.sqlite'));expect(bytes.includes(Buffer.from('全文命中_\\d{3}'))).toBe(false);expect(bytes.includes(Buffer.from('全文命中_\\\\d{3}'))).toBe(false);expect(pageErrors).toEqual([]);
+});
+
+test('全文搜索连续读取跳过空批并累积前后命中', async ({}, info) => {
+ for (let index = 0; index < 90; index++) {
+  const number = String(index).padStart(2, '0');
+  await save({ id: 'skip-' + number, name: '全文记录 ' + number, sql: index === 89 || index === 5 ? 'SELECT 1 /* 连续全文命中 */' : 'SELECT 2' });
+ }
+ await open();
+ await search('连续全文命中');
+ const next = dialog().getByRole('button', { name: matchingText.nextMatching, exact: true });
+ // 独立全文搜索按内部编号升序扫描，查询库默认按更新时间降序。
+ const first = dialog().getByRole('gridcell', { name: '全文记录 05', exact: true });
+ const last = dialog().getByRole('gridcell', { name: '全文记录 89', exact: true });
+ await expect(first).toBeVisible();
+ await next.click();
+ await expect(last).toBeVisible();
+ await expect(first).toBeVisible();
+ await expect(dialog().getByRole('status')).toContainText('命中查询 2');
+ await expect(next).toBeDisabled();
+ await dialog().screenshot({ path: info.outputPath('全文搜索下一批匹配.png') });
+ const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+ expect(tasks).toHaveLength(4);
+ expect(tasks.every(task => task.kind.startsWith('search.savedQueries') && task.status === 'completed')).toBe(true);
+ expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
 });
 
 test('打开命中保留已知库、无库、未知及遗留上下文，光标直达正文并保留原草稿',async({},info)=>{
