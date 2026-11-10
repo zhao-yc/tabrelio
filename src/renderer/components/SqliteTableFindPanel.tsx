@@ -19,7 +19,7 @@ import '../sqliteTableFind.css';
 import '../queryResultFind.css';
 
 export interface SqliteTableFindFocusRequest { id: number; mode: 'find' | 'replace'; column?: number; }
-export interface SqliteTableFindSeed { options: SqliteFindOptions; replacement: string; mode: 'find' | 'replace'; highlightAll?: boolean; checkedOnly?: boolean; }
+export interface SqliteTableFindSeed { options: SqliteFindOptions; replacement: string; mode: 'find' | 'replace'; highlightAll?: boolean; checkedOnly?: boolean; incremental?: boolean; }
 export interface SqliteTableFindHighlights { owner: string; marks: ReadonlyMap<string, ReadonlySet<number>>; }
 interface Props {
   page: SqliteTablePage; rows: readonly SqliteDraftRow[]; focusRequest: SqliteTableFindFocusRequest;
@@ -40,7 +40,7 @@ const defaultOptions: SqliteFindOptions = { kind: 'text', query: '', caseSensiti
 export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns, checkedRows, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onMatchRows, onHighlights, onStageFilter }: Props) {
   const owner = useRef({ page, rows, visibleColumns, seed, previewOwner, isCurrent, onJump, onStage, onPreviewChange, onClearHit, onClose, onMatchRows }).current;
   const invalid = useRef(false), propsInvalid = useRef(false), closed = useRef(false), mounted = useRef(false), consumed = useRef(new WeakSet<SqliteTextReplacementPlan>()), staging = useRef(false);
-  const [draft, setDraft] = useState<Draft>(() => ({ options: { ...(seed?.options ?? defaultOptions) }, replacement: seed?.replacement ?? '', mode: seed?.mode ?? focusRequest.mode, checkedOnly: seed?.checkedOnly, epoch: {}, position: -1, error: '' })), live = useRef(draft); live.current = draft;
+  const [draft, setDraft] = useState<Draft>(() => ({ options: { ...(seed?.options ?? defaultOptions) }, replacement: seed?.replacement ?? '', mode: seed?.mode ?? focusRequest.mode, checkedOnly: seed?.checkedOnly, incremental: seed?.incremental, epoch: {}, position: -1, error: '' })), live = useRef(draft); live.current = draft;
   const checked = draft.checkedOnly ? checkedRows ?? undefined : undefined;
   const emptyChecked = draft.checkedOnly && !checked?.ids.length;
   const lastRange = useRef<{ only?: boolean; checked?: SqliteFindRowScope }>({});
@@ -88,7 +88,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
   function schedule(): void {
     clearTimeout(timer.current); const value = live.current;
     // 正则与捕获选项只约束文本模式，切换到原值类型时应立即按新模式查找。
-    if (!rowsCurrent() || composing.current || value.options.kind === 'text' &&
+    if (value.incremental === false || !rowsCurrent() || composing.current || value.options.kind === 'text' &&
         (value.options.regex || value.options.captureReplacement || !value.options.query)) return;
     const request = serial.current;
     timer.current = setTimeout(() => { timer.current = undefined; if (serial.current === request && mounted.current && sourceCurrent() && !work.current && !composing.current) void run('find'); }, 160);
@@ -138,7 +138,7 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
     try {
       sqliteTextReplacementPlanPreview(chosen.plan, owner.page, owner.rows);
       if (!sourceCurrent()) throw Error(text.stale);
-      const continuation: SqliteTableFindSeed = { options: { ...draft.options }, replacement: draft.replacement, mode: draft.mode, highlightAll, checkedOnly: draft.checkedOnly };
+      const continuation: SqliteTableFindSeed = { options: { ...draft.options }, replacement: draft.replacement, mode: draft.mode, highlightAll, checkedOnly: draft.checkedOnly, ...(draft.incremental === false ? { incremental: false } : {}) };
       if (owner.onStage(chosen.plan, continuation) === false) throw Error(text.stale);
       // 父成功可同步卸载旧panel并创建全新source；不可再核旧rows或误清新窗口。
       if (mounted.current) previewClosed();
@@ -156,7 +156,13 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
     if (!local() || !sourceCurrent() || live.current.preview) return;
     if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || composing.current) return;
     if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); close(); }
-    else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); if (event.repeat) return; if (target === 'replacement' && !event.shiftKey) void run('one'); else jump(event.shiftKey ? -1 : 1, false); }
+    else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault(); event.stopPropagation();
+      if (event.repeat) return;
+      if (target === 'query' && live.current.incremental === false && !live.current.found) void run('find');
+      else if (target === 'replacement' && !event.shiftKey) void run('one');
+      else jump(event.shiftKey ? -1 : 1, false);
+    }
   }
   useLayoutEffect(() => { mounted.current = true; committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; mounted.current = false; }; });
   // 勾选换代先撤预览和命中，等待旧线程退出后才按新范围查找。
@@ -198,13 +204,18 @@ export function SqliteTableFindPanel({ page, rows, focusRequest, visibleColumns,
         if (local()) changeOptions({ edge, wholeCell: edge ? false : options.wholeCell }, undefined, true);
       }}/>
       <label><input type="checkbox" checked={highlightAll} disabled={unavailable} onChange={event => { if (local()) setHighlightAll(event.target.checked); }}/>{findText.highlightAll}</label>
+      <label><input type="checkbox" checked={draft.incremental !== false} disabled={unavailable} onChange={event => {
+        if (!inputCurrent() || composing.current) return;
+        replace({ ...live.current, incremental: event.target.checked, error: '' });
+        cancelWork('', true, schedule);
+      }}/>{findText.incremental}</label>
       {checkedRows !== undefined && <label><input type="checkbox" checked={draft.checkedOnly === true} disabled={unavailable}
         onChange={event => {
           if (!local() || !inputCurrent() || composing.current) return;
           replace({ ...live.current, checkedOnly: event.target.checked, epoch: {}, found: undefined, position: -1, error: '' });
         }}/>{checkedText.checkedOnly}</label>}
       {!readonly && <button type="button" aria-pressed={draft.mode === 'replace'} disabled={unavailable} onClick={() => { if (local() && inputCurrent()) replace({ ...draft, mode: draft.mode === 'replace' ? 'find' : 'replace', epoch: {} }); }}>{text.replaceMode}</button>}
-    </div><div className="sqlite-table-find-actions"><span role="status">{emptyChecked ? checkedText.checkedEmpty : working === 'running' ? text.searching : working === 'stopping' ? text.stopping : text.count(found?.matches.length ?? 0, found?.occurrences.length ?? 0, draft.position)}</span>
+    </div><div className="sqlite-table-find-actions"><span role="status">{emptyChecked ? checkedText.checkedEmpty : working === 'running' ? text.searching : working === 'stopping' ? text.stopping : draft.incremental === false && !found ? findText.awaitingSearch : text.count(found?.matches.length ?? 0, found?.occurrences.length ?? 0, draft.position)}</span>
       <button type="button" disabled={unavailable || !!working || emptyChecked || options.kind === 'text' && !options.query} onClick={() => { if (local()) void run('find'); }}>{text.search}</button>{working && <button type="button" disabled={working === 'stopping'} onClick={() => { if (local()) { previewClosed(); cancelWork(text.stopped, true); } }}>{text.stop}</button>}
       <button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button type="button" disabled={unavailable || !!working || !found?.occurrences.length} onClick={() => jump(1)}>{text.next}</button>
       {onMatchRows && <GridFindMatchActions disabled={unavailable || !!working || !found?.matches.length} onChange={matchRows}/>}

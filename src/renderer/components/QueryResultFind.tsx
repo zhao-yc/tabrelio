@@ -55,6 +55,8 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   const emptyChecked = checkedScope === null;
   const usesText = isTextResultFind(mode);
   const [highlightAll, setHighlightAll] = useState(false);
+  const [incremental, setIncremental] = useState(true), [composing, setComposing] = useState(false);
+  const composingInput = useRef(false);
   const [view, setView] = useState<{ run: Run; progress: QueryResultFindProgress; index: number }>();
   /** 原scope或父接纳门变化时仅撤销本地查找，不改变选择或业务资源。 */
   function own(): boolean { try { return alive.current && latest.current.owner === owner && latest.current.rows === rows && latest.current.columns === columns && isCurrent(); } catch { return false; } }
@@ -73,10 +75,11 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   // 只在有新增命中或显示开关变化时刷新网格样式，复用原扫描和原坐标。
   useLayoutEffect(() => { onHighlights(markScan); }, [markScan, markCount, onHighlights]);
 
-  /** 条件变化都开启新查找，旧定时器不能发布或导航。 */
-  function start(value: string, caseSensitive: boolean, selectedColumn: string | undefined, nextMode: QueryResultFindMode, restrict = checkedOnly) {
-    if (!panelCurrent() || run.current !== view?.run) return;
+  /** 条件变化同步撤销旧命中；手动或组词状态只保存新条件，不创建扫描。 */
+  function start(value: string, caseSensitive: boolean, selectedColumn: string | undefined, nextMode: QueryResultFindMode, restrict = checkedOnly, scan = incremental) {
+    if (!panelCurrent()) return;
     cancel(); setQuery(value); setSensitive(caseSensitive); setColumnKey(selectedColumn); setMode(nextMode); setCheckedOnly(restrict); onHit(undefined);
+    if (!scan || composingInput.current) { setView(undefined); return; }
     // RDG每次render重发handle；实例以本挂载/原scope及可取得的原宿主核验，导航使用最新handle。
     const originalMount = mountOwner.current, originalElement = grid.current?.element;
     const rowScope = restrict ? checkedRows ?? null : undefined;
@@ -97,7 +100,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   }
   // 勾选换代立即撤销旧坐标，并保留原查找条件重新扫描；空勾选不会扩大范围。
   useLayoutEffect(() => {
-    if (checkedOnly && run.current?.rowScope !== checkedScope && panelCurrent()) start(query, sensitive, columnKey, mode);
+    if (checkedOnly && run.current && run.current.rowScope !== checkedScope && panelCurrent()) start(query, sensitive, columnKey, mode);
   }, [checkedOnly, checkedScope, visible]);
   /** 列标题带入实际列键。只有切列才撤销旧命中，普通再次打开保留当前定位。 */
   function open(key?: string): boolean {
@@ -108,7 +111,7 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
       (usesText ? input.current : modeSelect.current)?.focus({ preventScroll: true });
       return true;
     }
-    cancel(); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(key); setMode('contains'); setCheckedOnly(false);
+    cancel(); composingInput.current = false; setComposing(false); onHit(undefined); panel.current = {}; setOpened({ owner, token: panel.current }); setView(undefined); setQuery(''); setColumnKey(key); setMode('contains'); setCheckedOnly(false);
     return true;
   }
   useImperativeHandle(control, () => ({ openColumn: open }));
@@ -150,17 +153,22 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
   }
   /** 快捷键只在本包围元素中冒泡；输入法、Alt组合及其它按键均交还原控件。 */
   function keyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || !own()) return;
+    if (composingInput.current || event.nativeEvent.isComposing || event.keyCode === 229 || event.altKey || !own()) return;
     const direction = visible && !event.defaultPrevented && gridFindDirection(event.nativeEvent, event.currentTarget, toolbar.current, true);
     if (direction) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) navigate(direction, !toolbar.current?.contains(event.target as Node)); return; }
     if (!event.defaultPrevented && !event.repeat && !event.shiftKey && !!event.ctrlKey !== !!event.metaKey &&
         event.key.toLowerCase() === 'f' && openFromFocus(event.target)) { event.preventDefault(); event.stopPropagation(); }
     else if (visible && event.key === 'Escape' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); close(); }
-    else if (visible && event.target === input.current && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) { event.preventDefault(); event.stopPropagation(); navigate(event.shiftKey ? -1 : 1); }
+    else if (visible && event.target === input.current && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault(); event.stopPropagation();
+      if (active) navigate(event.shiftKey ? -1 : 1);
+      else if (!event.repeat && canSearch) start(query, sensitive, columnKey, mode, checkedOnly, true);
+    }
   }
   const progress = active?.progress;
+  const canSearch = available && !emptyChecked && !composing && (!usesText || !!query);
   const canCheckMatches = available && progress?.phase === 'complete' && progress.count > 0;
-  const status = emptyChecked ? text.checkedEmpty : usesText && !query ? text.empty : !active ? text.stopped : progress?.phase === 'invalid' ? text.invalid :
+  const status = composing ? text.composing : emptyChecked ? text.checkedEmpty : usesText && !query ? text.empty : !active ? (incremental ? text.stopped : text.awaitingSearch) : progress?.phase === 'invalid' ? text.invalid :
     progress?.phase === 'searching' ? text.searching(progress.count, progress.scannedCells, progress.totalCells) :
       (progress && regexErrors[progress.phase]) ?? (progress?.count ? text.count(progress.count, active.index) : text.noMatch);
   const hit = active && active.index >= 0 ? active.run.scan.match(active.index) : undefined;
@@ -180,7 +188,14 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
           {Object.entries(text.modes).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
         <input ref={input} type="text" aria-label={text.input} value={query} disabled={!usesText}
-          onChange={event => start(event.target.value, sensitive, columnKey, mode)}/>
+          onCompositionStart={() => {
+            if (!panelCurrent()) return;
+            composingInput.current = true; setComposing(true); cancel(); setView(undefined); onHit(undefined);
+          }} onCompositionEnd={event => {
+            if (!composingInput.current) return;
+            composingInput.current = false; setComposing(false);
+            start(event.currentTarget.value, sensitive, columnKey, mode);
+          }} onChange={event => start(event.target.value, sensitive, columnKey, mode)}/>
         <select aria-label={text.columns} value={columnKey === undefined ? '' : 'column:' + columnKey} disabled={!available}
           onChange={event => { const value = event.target.value; start(query, sensitive, value ? value.slice('column:'.length) : undefined, mode); }}>
           <option value="">{text.allColumns}</option>
@@ -188,8 +203,13 @@ export function QueryResultFind({ owner, rows, columns, checkedRows, grid, contr
         </select>
         <label className="check"><input type="checkbox" checked={sensitive} disabled={!usesText} onChange={event => start(query, event.target.checked, columnKey, mode)}/>{text.sensitive}</label>
         <label className="check"><input type="checkbox" checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{text.highlightAll}</label>
+        <label className="check"><input type="checkbox" checked={incremental} disabled={!available || composing} onChange={event => {
+          const enabled = event.target.checked;
+          setIncremental(enabled); start(query, sensitive, columnKey, mode, checkedOnly, enabled);
+        }}/>{text.incremental}</label>
         <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!available}
           onChange={event => start(query, sensitive, columnKey, mode, event.target.checked)}/>{checkedText.checkedOnly}</label>
+        {!incremental && <button type="button" disabled={!canSearch} onClick={() => start(query, sensitive, columnKey, mode, checkedOnly, true)}>{text.search}</button>}
         <button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button>
         <button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button>
         <button type="button" title={text.checkRowsHint} disabled={!canCheckMatches || checkedOnly} onClick={() => applyMatchingRows(indices => onMatchingRows(indices, true))}>{text.checkRows}</button>

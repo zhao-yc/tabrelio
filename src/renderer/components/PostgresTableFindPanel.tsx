@@ -51,6 +51,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const searchRows = useMemo(() => checkedOnly ? checked?.indices.map(index => rows[index]).filter(row => row && !row.deleted) ?? [] : rows, [checkedOnly, checked, rows]);
   const writableRows = useMemo(() => replacementRows && (checkedOnly ? checked?.indices.map(index => replacementRows[index]) ?? [] : replacementRows), [checkedOnly, checked, replacementRows]);
   const [composing, setComposing] = useState(false);
+  const [incremental, setIncremental] = useState(true);
   const queryInput = useRef<HTMLInputElement>(null), replacementInput = useRef<HTMLInputElement>(null);
   const modeInput = useRef<HTMLSelectElement>(null);
   const stageButton = useRef<HTMLButtonElement>(null);
@@ -59,6 +60,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   const snapshot = useMemo(() => ({ request, scope, enabled, searchRows, writableRows, checkedOnly, checked, columns, mode, column, query, sensitive, whole, edge, regex, composing }),
     [request, scope, enabled, searchRows, writableRows, checkedOnly, checked, columns, mode, column, query, sensitive, whole, edge, regex, composing]);
   const latest = useRef(snapshot); latest.current = snapshot;
+  const [manual, setManual] = useState<{ snapshot: typeof snapshot }>();
   const runningPreview = useRef<{ snapshot: typeof snapshot }>(undefined);
   const [preparing, setPreparing] = useState<typeof snapshot>();
   const [result, setResult] = useState<{ snapshot: typeof snapshot; hits: PageOccurrence[]; error?: string }>();
@@ -101,7 +103,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
   useEffect(() => { if (column && !columns.some(item => item.key === column)) setColumn(''); }, [columns, column]);
   useEffect(() => () => { void client.current?.dispose(); client.current = undefined; }, []);
   useEffect(() => {
-    if (!request || !enabled || !canSearch || composing) return;
+    if (!request || !enabled || !canSearch || composing || (!incremental && manual?.snapshot !== snapshot)) return;
     let cancelled = false;
     const accepts = () => !cancelled && latest.current === snapshot && isCurrent() && (mode === 'field' || rowsCurrent());
     const selected = anchor();
@@ -138,7 +140,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
       else if (answer.status === 'blocked') setResult({ snapshot, hits: [], error: answer.message });
     }, 100);
     return () => { cancelled = true; clearTimeout(timer); void client.current?.cancel(); };
-  }, [snapshot, canSearch]);
+  }, [snapshot, canSearch, incremental, manual]);
 
   const target = useMemo(() => hit ? { row: Number(hit.rowId), key: hit.key } : undefined, [hit, position]);
   const marks = useMemo(() => request && highlight && found ? new Set(found.hits.map(match => match.rowId + ':' + match.key)) : undefined,
@@ -209,7 +211,10 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
       if (!event.repeat) onOpen(replaceShortcut);
     } else if (request && !modifier && !event.altKey && (key === 'f3' || key === 'enter' && event.target === queryInput.current)) {
       event.preventDefault(); event.stopPropagation();
-      if (!event.repeat) jump(event.shiftKey ? -1 : 1);
+      if (!event.repeat) {
+        if (key === 'enter' && !incremental && !found && canSearch && !locked) setManual({ snapshot });
+        else jump(event.shiftKey ? -1 : 1);
+      }
     } else if (request && !modifier && !event.altKey && key === 'escape') {
       event.preventDefault(); event.stopPropagation();
       if (pending) cancelPending(); else if (review) setPreview(undefined); else onClose();
@@ -238,8 +243,13 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
         {mode === 'text' && <label className="check"><input type="checkbox" checked={regex} disabled={!enabled || locked}
           onChange={event => { setRegex(event.target.checked); setCapture(false); setError(''); }}/>{text.regex}</label>}
         <label className="check"><input type="checkbox" checked={highlight} onChange={event => setHighlight(event.target.checked)}/>{text.highlight}</label>
+        <label className="check"><input type="checkbox" checked={incremental} disabled={!enabled || locked || composing} onChange={event => {
+          setManual(undefined); setIncremental(event.target.checked);
+        }}/>{queryResultFindZh.incremental}</label>
         {replaceSelection !== undefined && mode !== 'field' && <label className="check"><input type="checkbox" checked={checkedOnly} disabled={!enabled || locked}
           onChange={event => { setCheckedRequest(event.target.checked ? request : undefined); setError(''); }}/>{text.checkedOnly}</label>}
+        {!incremental && <button type="button" disabled={!enabled || !canSearch || locked || composing}
+          onClick={() => setManual({ snapshot })}>{queryResultFindZh.search}</button>}
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(-1)}>{text.previous}</button>
         <button type="button" disabled={!enabled || !found?.hits.length || locked} onClick={() => jump(1)}>{text.next}</button>
         {onMatchRows && mode !== 'field' && <GridFindMatchActions disabled={!enabled || !found?.hits.length || locked || composing} onChange={matchRows}/>}
@@ -262,7 +272,7 @@ export function PostgresTableFindPanel<Column extends ResultColumn, Plan extends
       <div className="query-result-find-status">
         {emptyChecked && <span role="status">{text.checkedEmpty}</span>}
         {checkedOnly && !emptyChecked && mode !== 'field' && <span>{text.checkedScope(searchRows.length)}</span>}
-        {enabled && canSearch && !composing && !found?.error && <span role="status">{pending ? text.preparing : !found ? text.searching : found.hits.length ? text.ready(found.hits.length, chosen) : text.noMatch}</span>}
+        {enabled && canSearch && !composing && !found?.error && <span role="status">{pending ? text.preparing : !found ? (!incremental && manual?.snapshot !== snapshot ? queryResultFindZh.awaitingSearch : text.searching) : found.hits.length ? text.ready(found.hits.length, chosen) : text.noMatch}</span>}
         {hit && <span>{text.location(Number(hit.rowId), columns.find(column => column.key === hit.key)?.name ?? hit.key)}</span>}
         <span className="muted">{scopeDescription}</span>
       </div>

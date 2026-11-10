@@ -64,6 +64,16 @@ test('离线快照列标题查找按原列键定位重名列，重排后仍只�
   await expect(field).toHaveValue('column:right');
   await expect(search).toHaveValue('目标记录');
   await expect(status).toHaveText(findText.count(1, -1));
+  await search.dispatchEvent('compositionstart', { data: '' });
+  await search.fill('其它');
+  await expect(status).toHaveText(findText.composing);
+  await search.press('Enter');
+  await expect(status).toHaveText(findText.composing);
+  await viewer.screenshot({ path: info.outputPath('离线查找等待组词.png') });
+  await search.dispatchEvent('compositionend', { data: '其它' });
+  await expect(status).toHaveText(findText.count(1, -1));
+  await search.fill('目标记录');
+  await expect(status).toHaveText(findText.count(1, -1));
   await search.press('Enter');
   await expect(grid.getByRole('gridcell', { name: '目标记录', exact: true })).toHaveClass(/query-result-find-hit/);
   await expect(selectedRow).toBeChecked();

@@ -17,6 +17,9 @@ import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { copyInsertSqlZh } from '../../src/shared/copyInsertSql.zh-CN';
 import { updateSqlCopyZh } from '../../src/renderer/locales/updateSqlCopy.zh-CN';
+import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
+import { postgresTableFindZh } from '../../src/renderer/locales/postgresTableFind.zh-CN';
+import { sqliteTableFindZh } from '../../src/renderer/locales/sqliteTableFind.zh-CN';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
@@ -304,6 +307,27 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await left.press('Enter');
     await expect(header).toHaveAttribute('aria-colindex', String(amountIndex));
     await expect(header).toBeFocused();
+    await labelHeader.click({ button: 'right' });
+    await columnMenu.getByRole('menuitem', { name: headerText.findColumn, exact: true }).click();
+    const findPanel = tableTab.locator('.pg-table-find:visible, .sqlite-table-find:visible, .page-find-panel:visible');
+    const findBox = findPanel.getByRole('textbox').first();
+    const incremental = findPanel.getByRole('checkbox', { name: findText.incremental, exact: true });
+    const nextMatch = findPanel.getByRole('button', { name: local ? sqliteTableFindZh.next : dialect === 'postgresql' ? postgresTableFindZh.next : tableGridZh.next, exact: true });
+    await expect(incremental).toBeChecked();
+    await incremental.uncheck();
+    await findBox.fill('row A');
+    await expect(findPanel.getByRole('status').filter({ hasText: findText.awaitingSearch })).toBeVisible();
+    await expect(nextMatch).toBeDisabled();
+    await page.screenshot({ path: info.outputPath('增量与手动查找.png') });
+    await findBox.press('Enter');
+    await expect(nextMatch).toBeEnabled();
+    await findBox.fill('row B');
+    await expect(nextMatch).toBeDisabled();
+    await incremental.check();
+    await expect(nextMatch).toBeEnabled();
+    if (local || dialect === 'postgresql') await findPanel.getByRole('button', { name: local ? sqliteTableFindZh.close : postgresTableFindZh.close, exact: true }).click();
+    else await (await navigationMenuItem(tableTab, { name: tableGridZh.find, exact: true })).click();
+    await expect(findPanel).toBeHidden();
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -448,6 +472,17 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await columnMenu.getByRole('menuitem', { name: headerText.showAllColumns, exact: true }).click();
     await expect(grid.getByRole('columnheader').filter({ hasText: /^duplicate/i })).toHaveCount(2);
     await expect(firstAmount()).toBeVisible();
+    expect(await history()).toEqual(historyBeforeWidth);
+    await thirdHeader.click({ button: 'right' });
+    await columnMenu.getByRole('menuitem', { name: headerText.findColumn, exact: true }).click();
+    const resultFind = query.getByRole('textbox', { name: findText.input, exact: true });
+    await query.getByRole('checkbox', { name: findText.incremental, exact: true }).uncheck();
+    await resultFind.fill('9007199254740994');
+    const resultStatus = query.locator('.query-result-find-status').getByRole('status');
+    await expect(resultStatus).toHaveText(findText.awaitingSearch);
+    await query.getByRole('button', { name: findText.search, exact: true }).click();
+    await expect(resultStatus).toHaveText(findText.count(1, -1));
+    await query.getByRole('button', { name: findText.close, exact: true }).click();
     expect(await history()).toEqual(historyBeforeWidth);
     if (dialect === 'postgresql') {
       await open('row-sql-query');

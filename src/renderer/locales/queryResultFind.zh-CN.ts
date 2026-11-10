@@ -1,5 +1,6 @@
 export const queryResultFindZh = {
   highlightAll: '高亮所有匹配',
+  incremental: '增量查找', search: '开始查找', awaitingSearch: '等待开始查找。', composing: '等待输入完成。',
   checkRows: '勾选匹配行', uncheckRows: '取消匹配行勾选',
   checkRowsHint: '查找完整结束后，只调整命中行的勾选。',
   showMatchingRows: '只显示匹配行', clearMatchView: '恢复查找前结果',

@@ -33,6 +33,7 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   const searchRows = useMemo(() => checkedOnly ? rows.filter(row => !row.deleted && checked?.ids.has(row.id)) : rows, [checkedOnly, checked, rows]);
   const emptyChecked = checkedOnly && !searchRows.length;
   const [highlightAll, setHighlightAll] = useState(false);
+  const [incremental, setIncremental] = useState(true);
   const [replacement, setReplacement] = useState(''); const [position, setPosition] = useState(-1); const [preview, setPreview] = useState<PageReplacement | null>(null); const [error, setError] = useState(''); const applyLock = useRef(false);
   const [working, setWorking] = useState(false), [composing, setComposing] = useState(false);
   const workingRef = useRef(false), composingRef = useRef(false), singleLock = useRef(false), positionRef = useRef(-1);
@@ -88,14 +89,14 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   function changeReplacement(value: string) {
     invalidateIntent(); latestReplacement.current = value; setReplacement(value);
     // 输入替换值可能取消尚未完成的自动查找，空字符串模式也应恢复扫描。
-    if (!found.length && (options.kind === 'empty' || options.kind === 'text' && options.query && !options.regex))
+    if (incremental && !found.length && (options.kind === 'empty' || options.kind === 'text' && options.query && !options.regex))
       autoTimer.current = setTimeout(() => { void run('find'); }, 120);
   }
   /** 查找类型、文字、列及匹配选项统一撤销在途计划。 */
   function changeOptions(value: PageFindOptions) { invalidateIntent(); if (value.captureReplacement && (value.kind !== 'text' || !value.regex)) value = { ...value, captureReplacement: false }; activeOptions.current = value; setOptions(value); }
   /** 组合开始和结束各自都是新意图，结束后不能恢复组合前的预览授权。 */
   function compositionStarted() { invalidateIntent(); composingRef.current = true; setComposing(true); }
-  function compositionEnded(target: EventTarget | null) { invalidateIntent(); composingRef.current = false; setComposing(false); if (target === queryInput.current && !options.regex) autoTimer.current = setTimeout(() => { void run('find'); }, 120); }
+  function compositionEnded(target: EventTarget | null) { invalidateIntent(); composingRef.current = false; setComposing(false); if (incremental && target === queryInput.current && !options.regex) autoTimer.current = setTimeout(() => { void run('find'); }, 120); }
   /** 最终提交前再核精确选中位置，不依赖当前渲染文字或格内序号单独推断。 */
   function sameCurrent(only: PageOccurrence) { const selected = occurrences[positionRef.current]; return !!selected && selected.rowId === only.rowId && selected.key === only.key && selected.occurrence === only.occurrence && selected.range?.start === only.range?.start && selected.range?.end === only.range?.end; }
   /** 上下文一变就清空旧位置，并终止线程；字面模式短暂防抖，用户正则只接受明确触发。 */
@@ -106,10 +107,10 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     intentRevision.current++;
     acceptedFind.current = undefined; setFound({ matches: [], snapshot: null }); selectPosition(-1); setPreview(null); setError('');
     void client.current?.cancel().then(() => { if (serial === requestSerial.current) { workingRef.current = false; setWorking(false); } });
-    if (disabled || emptyChecked || (options.kind === 'text' && (!options.query || (options.regex && !ownUpdate)))) return;
+    if (!incremental || disabled || emptyChecked || (options.kind === 'text' && (!options.query || (options.regex && !ownUpdate)))) return;
     autoTimer.current = setTimeout(() => { void run('find', undefined, ownUpdate ? resume : undefined); }, 120);
     return () => { clearTimeout(autoTimer.current); requestSerial.current++; void client.current?.cancel(); };
-  }, [snapshot]);
+  }, [snapshot, incremental]);
   useEffect(() => { setPreview(null); }, [replacement]);
   useEffect(() => () => { acceptedFind.current = undefined; requestSerial.current++; void client.current?.dispose(); client.current = null; }, []);
   useEffect(() => { setOptions(current => current.column && !keys.includes(current.column) ? { ...current, column: undefined } : current); }, [keys]);
@@ -121,7 +122,15 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
   /** 单处命令只接受当前快照中的精确出现位置；不能回退成整格或整页替换。 */
   function replaceCurrent() { const match = occurrences[positionRef.current], row = match && rows.find(row => row.id === match.rowId); if (disabled || composingRef.current || workingRef.current || singleLock.current || replaceDisabled || !replaceableKind || !info || !match?.range || !row || typeof ownCell(row.data, match.key) !== 'string' || !pageReplaceWritable(info, match.key)) return; void run('preview', match); }
   /** Enter仅处理本面板输入；组合标志或229保留原生输入，不产生导航或草稿。 */
-  function inputKey(event: InputKeyEvent<HTMLInputElement>, target: 'query' | 'replacement') { if (composingRef.current || tableCellKeyIsComposing(event.nativeEvent) || event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey) return; event.preventDefault(); event.stopPropagation(); if (event.repeat) return; if (event.shiftKey) jump(-1, false); else if (target === 'query') jump(1, false); else replaceCurrent(); }
+  function inputKey(event: InputKeyEvent<HTMLInputElement>, target: 'query' | 'replacement') {
+    if (composingRef.current || tableCellKeyIsComposing(event.nativeEvent) || event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault(); event.stopPropagation();
+    if (event.repeat) return;
+    if (target === 'query' && foundState.snapshot !== snapshot && !workingRef.current && options.query) void run('find');
+    else if (event.shiftKey) jump(-1, false);
+    else if (target === 'query') jump(1, false);
+    else replaceCurrent();
+  }
   /** 完成消息必须仍属于当前快照和请求；单处替换与整批预览共用原值、资格和预算政策。 */
   async function run(operation: 'find' | 'preview', only?: PageOccurrence, resume?: NonNullable<typeof advance.current>) {
     if (disabled || !checkedCurrent() || composingRef.current || latest.current !== snapshot || activeOptions.current !== snapshot.options || (operation === 'preview' && (!replaceableKind || !info || replaceDisabled || workingRef.current || singleLock.current || (only && !sameCurrent(only))))) return;
@@ -165,8 +174,9 @@ export function PageFindPanel({ rows, keys, info, generation, disabled, replaceD
     <TableFindEdgeSelect edge={options.edge} disabled={disabled || options.kind !== 'text'} onChange={edge =>
       changeOptions({ ...options, edge, wholeCell: edge ? false : options.wholeCell })}/>
     <label><input type="checkbox" disabled={disabled} checked={highlightAll} onChange={event => setHighlightAll(event.target.checked)}/>{findText.highlightAll}</label>
+    <label><input type="checkbox" disabled={disabled || composing} checked={incremental} onChange={event => { invalidateIntent(); setIncremental(event.target.checked); }}/>{findText.incremental}</label>
     {checkedRows && <label><input type="checkbox" checked={checkedOnly} disabled={disabled} onChange={event => { invalidateIntent(); setCheckedOnly(event.target.checked); }}/>{checkedText.checkedOnly}</label>}
-  </div><div className="page-find-actions"><span role="status">{emptyChecked ? checkedText.checkedEmpty : working ? text.searching : formatText(text.matches, found.length, position < 0 ? 0 : position + 1, occurrences.length)}</span>{checkedOnly && !emptyChecked && <span>{checkedText.checkedScope(searchRows.length)}</span>}<button disabled={disabled || working || emptyChecked || (options.kind === 'text' && !options.query)} onClick={() => void run('find')}>{text.search}</button>{working && <button onClick={() => void cancel()}>{text.cancelSearch}</button>}<button disabled={disabled || composing || !occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button disabled={disabled || composing || !occurrences.length} onClick={() => jump(1)}>{text.next}</button>{onMatchRows && <GridFindMatchActions disabled={disabled || working || composing || !!preview || !found.length} onChange={matchRows}/>}<span className="grow"/>{onStageFilter && <button type="button" title={findFilter ? filterText.hint : filterText.unavailable} disabled={disabled || composing || !!preview || !findFilter} onClick={() => {
+  </div><div className="page-find-actions"><span role="status">{emptyChecked ? checkedText.checkedEmpty : working ? text.searching : !incremental && foundState.snapshot !== snapshot ? findText.awaitingSearch : formatText(text.matches, found.length, position < 0 ? 0 : position + 1, occurrences.length)}</span>{checkedOnly && !emptyChecked && <span>{checkedText.checkedScope(searchRows.length)}</span>}<button disabled={disabled || working || emptyChecked || (options.kind === 'text' && !options.query)} onClick={() => void run('find')}>{text.search}</button>{working && <button onClick={() => void cancel()}>{text.cancelSearch}</button>}<button disabled={disabled || composing || !occurrences.length} onClick={() => jump(-1)}>{text.previous}</button><button disabled={disabled || composing || !occurrences.length} onClick={() => jump(1)}>{text.next}</button>{onMatchRows && <GridFindMatchActions disabled={disabled || working || composing || !!preview || !found.length} onChange={matchRows}/>}<span className="grow"/>{onStageFilter && <button type="button" title={findFilter ? filterText.hint : filterText.unavailable} disabled={disabled || composing || !!preview || !findFilter} onClick={() => {
       if (findFilter && !disabled && !preview && !composingRef.current && latest.current === snapshot && activeOptions.current === options) onStageFilter(findFilter, generation);
     }}>{filterText.action}</button>}<button disabled={disabled} onClick={onFilter}>{text.filter}</button></div>
     {current && <div className="page-find-current" aria-live="polite"><span>{formatText(text.location, currentRow + 1, current.key, current.occurrence, current.range ? current.range.start + 1 : 1)}</span>{typeof currentValue === 'string' && current.range && <pre>{currentValue.slice(Math.max(0, current.range.start - 60), current.range.start)}<mark>{current.range.start === current.range.end ? text.zeroWidth : currentValue.slice(current.range.start, Math.min(current.range.end, current.range.start + 160))}</mark>{currentValue.slice(current.range.end, current.range.end + 60)}</pre>}</div>}
