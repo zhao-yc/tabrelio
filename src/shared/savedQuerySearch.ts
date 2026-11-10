@@ -37,7 +37,7 @@ export const savedQueryExportSqlArchiveSchema = z.object({ items: z.array(savedQ
 export type SavedQueryExportSqlArchiveInput = z.infer<typeof savedQueryExportSqlArchiveSchema>;
 export type SavedQueryExportSqlArchiveResult = { status: 'cancelled' } | { status: 'saved'; name: string; count: number };
 /** 只接受已保存连接的编号和显式默认库，不接受文件路径、SQL 或认证材料。 */
-const savedQueryImportTargetSchema = z.object({ connectionId: id, database: name.refine(value => !value.includes('\0')).nullable() }).strict();
+export const savedQueryImportTargetSchema = z.object({ connectionId: id, database: name.refine(value => !value.includes('\0')).nullable() }).strict();
 export type SavedQueryImportTarget = z.infer<typeof savedQueryImportTargetSchema>;
 export const savedQueryImportSqlSchema = z.object({ encoding: querySqlExportEncodingSchema, group: savedQueryGroupTargetSchema.optional(), target: savedQueryImportTargetSchema.optional() }).strict();
 export type SavedQueryImportSqlInput = z.infer<typeof savedQueryImportSqlSchema>;

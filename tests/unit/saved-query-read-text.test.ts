@@ -80,16 +80,16 @@ function mainFixture() {
   const chooseImport = vi.fn(async () => ({ canceled: true, filePaths: [] as string[] }));
   const snapshot = vi.fn(async (_path: string, assertCurrent: () => void) => { assertCurrent(); return { bytes: Buffer.from('SELECT 1;') }; });
   const create = vi.fn((_files: { name: string; sql: string }[], assertCurrent: () => void) => assertCurrent());
-  const assertImportedQueryTarget = vi.fn(), assertAvailable = vi.fn();
+  const assertSavedQueryTarget = vi.fn(), assertAvailable = vi.fn();
   let connectionRevision = 0;
   const release = vi.fn(), reserve = vi.fn(async (_path: string) => release);
   const write = vi.fn(async (_path: string, _bytes: Buffer, assertCurrent: () => void) => assertCurrent());
   const clipboardWrite = vi.fn((_sql: string) => {});
-  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => connectionRevision, assertImportedQueryTarget, createImportedQueries: create }, broker: { request: unexpected }, basename, dialog: { showSaveDialog: choose, showOpenDialog: chooseImport }, queryFileOperation: (action: () => Promise<unknown>) => action(), exportReservations: { acquire: reserve }, writeQueryFileBytes: write, readQueryFileSnapshot: snapshot, decodeQueryFile, encodeQueryFile, savedQueryImportLimits, clipboard: { writeText: clipboardWrite } });
+  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => connectionRevision, assertSavedQueryTarget, createImportedQueries: create }, broker: { request: unexpected }, basename, dialog: { showSaveDialog: choose, showOpenDialog: chooseImport }, queryFileOperation: (action: () => Promise<unknown>) => action(), exportReservations: { acquire: reserve }, writeQueryFileBytes: write, readQueryFileSnapshot: snapshot, decodeQueryFile, encodeQueryFile, savedQueryImportLimits, clipboard: { writeText: clipboardWrite } });
   const code = extractMainProductionBinding(source, 'tableChecksMain') + '\nasync function dispatch(command:any,input:any,columns?:any){' + branches.map(branch => branch.getText(tree)).join('\n') + "throw Error('未授权其它分发');}\nglobalThis.request=" + wrapper.getText(tree) + ';';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   const event = { sender: contents, senderFrame: frame };
-  return { ...f, context, unexpected, event, contents, choose, chooseImport, snapshot, create, assertImportedQueryTarget, assertAvailable, bumpConnection: () => { connectionRevision++; }, reserve, release, write, clipboardWrite, request: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.readText', input }), copySql: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.copySql', input }), exportSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.exportSql', input }), importSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.importSql', input }) };
+  return { ...f, context, unexpected, event, contents, choose, chooseImport, snapshot, create, assertSavedQueryTarget, assertAvailable, bumpConnection: () => { connectionRevision++; }, reserve, release, write, clipboardWrite, request: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.readText', input }), copySql: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.copySql', input }), exportSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.exportSql', input }), importSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.importSql', input }) };
 }
 
 describe('按本地原记录复制完整 SQL', () => {
@@ -194,7 +194,7 @@ describe('queries.importSql 真实 Main 分支', () => {
     const group = { id: 'target', expectedRevision: 'a'.repeat(64) };
     const target = { connectionId: 'c', database: null };
     expect(await f.importSql({ ...input, group, target })).toEqual({ ok: true, result: { status: 'imported', names: ['中文😀'] } });
-    expect(f.assertImportedQueryTarget).toHaveBeenCalledExactlyOnceWith(target);
+    expect(f.assertSavedQueryTarget).toHaveBeenCalledExactlyOnceWith(target);
     expect(f.assertAvailable).toHaveBeenCalledWith('c');
     expect(f.create).toHaveBeenCalledExactlyOnceWith([{ name: '中文😀', sql }], expect.any(Function), group, target);
     expect(f.unexpected).not.toHaveBeenCalled();

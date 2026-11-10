@@ -54,6 +54,7 @@ import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql'
 import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
 import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, importPresetText, type ImportPresetDocument, type ImportPresetSnapshot, type ImportPresetSaveInput, type ImportPresetDeleteInput } from '../shared/importPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
+import { savedQueryRebindLimits, savedQueryRebindSchema } from '../shared/savedQueryRebind';
 import { savedQueryRenameSchema, savedQueryRenameZh } from '../shared/savedQueryRename';
 import { savedQueryDuplicateSchema, savedQueryDuplicateZh } from '../shared/savedQueryDuplicate';
 import { savedQueryDeleteSelectedLimits, savedQueryDeleteSelectedSchema, savedQueryDeleteSelectedZh } from '../shared/savedQueryDeleteSelected';
@@ -1099,10 +1100,10 @@ export class LocalStore {
     return records.length;
   }
   /** 只核对本机配置，不解析凭据或连接数据库。 */
-  assertImportedQueryTarget(target: SavedQueryImportTarget): void {
+  assertSavedQueryTarget(target: SavedQueryImportTarget): void {
     const profile = this.querySourceProfile(target.connectionId);
-    if (!profile) throw Error('导入目标连接已删除，请重新选择');
-    if (profile.dialect === 'sqlite' && target.database !== 'main') throw Error('SQLite 导入目标数据库须为 main');
+    if (!profile) throw Error('目标连接已删除，请重新选择');
+    if (profile.dialect === 'sqlite' && target.database !== 'main') throw Error('SQLite 目标数据库须为 main');
   }
   /** 文件正文、连接上下文和分组同事务写入，目标变化或写盘失败时整批恢复。 */
   createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void, group?: SavedQueryGroupTarget, target?: SavedQueryImportTarget): void {
@@ -1112,10 +1113,32 @@ export class LocalStore {
     assertCurrent();
     this.mutate(() => {
       this.assertQuerySaveGroup(group);
-      if (target) this.assertImportedQueryTarget(target);
+      if (target) this.assertSavedQueryTarget(target);
       for (const record of records) this.insertNewBoundQuery(record, group);
     }, assertCurrent);
     this.queryRevisionValue++;
+  }
+  /** 保留查询编号、原文和分组。来源摘要及连接修订在同一事务核对，任一失败整批回滚。 */
+  rebindQueriesChecked(raw: unknown): { updated: number } {
+    const { queries, target, expectedConnectionRevision } = savedQueryRebindSchema.parse(raw);
+    this.mutate(() => {
+      if (expectedConnectionRevision !== this.connectionRevisionValue) throw Error('连接配置已变化，请重新核对所选查询');
+      if (target) this.assertSavedQueryTarget(target);
+      let bytes = 0;
+      const updatedAt = new Date().toISOString(), database = target?.database ?? null;
+      for (const { id, digest } of queries) {
+        const previous = this.querySearchRaw(id);
+        if (previous === undefined || createHash('sha256').update(previous).digest('hex') !== digest) throw Error('所选保存查询已变化，请刷新后重新选择');
+        bytes += Buffer.byteLength(previous);
+        if (bytes > savedQueryRebindLimits.bytes) throw Error('所选查询原文合计超过 128 MiB，请减少所选条数');
+        const query = parseSavedQueryRecord(id, previous);
+        const updated: SavedQuery = { ...query, connectionId: target?.connectionId, database: database ?? undefined,
+          databaseContext: { state: 'known', database }, updatedAt };
+        this.db.run('UPDATE queries SET data=?,updated_at=? WHERE id=?', [JSON.stringify(updated), updatedAt, id]);
+      }
+    });
+    this.queryRevisionValue++;
+    return { updated: queries.length };
   }
   /** 恢复记录只保存私有副本定位和原查询摘要，预览凭据与正文不写入恢复记录。 */
   savedQueryExternalRecovery(): SavedQueryExternalRecord | undefined {

@@ -14,6 +14,9 @@ import { errorMessage, invoke, uid } from '../lib';
 import { openQueryTabBatch, useWorkspace, watchQueryBatchConnections, type WorkspaceTab } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
+import { SavedQueryRebindEditor } from './SavedQueryRebindEditor';
+import { savedQueryRebindSchema, type SavedQueryRebindInput } from '../../shared/savedQueryRebind';
+import type { ConnectionOrganizationSnapshot } from '../../shared/connectionOrganization';
 import { SavedQueryRenameEditor, type SavedQueryRenameOrigin } from './SavedQueryRenameEditor';
 import { savedQueryRenameSchema, savedQueryRenameZh as renameText } from '../../shared/savedQueryRename';
 import { savedQueryDuplicateSchema, savedQueryDuplicateZh as duplicateText } from '../../shared/savedQueryDuplicate';
@@ -41,7 +44,9 @@ const queryTab = (result: SavedQueryOpenResult): Omit<WorkspaceTab, 'id'> => ({
   databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding,
 });
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group, value.scope, value.sort]);
-interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
+interface OrganizationEdit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
+interface RebindEdit { connectionSnapshot: ConnectionOrganizationSnapshot; selection: ReadonlyMap<string, OpenSelection>; selected: readonly SelectedSavedQuery[]; epoch: number; }
+type Edit = OrganizationEdit | RebindEdit;
 
 /** 原Promise锁覆盖分组和列表；跨页选择只存编号、摘要和名称，不累计SQL正文。 */
 export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConnectionId, services: io = services }: { onClose(): void; onHistory(): void; insertion?: HistoryInsertionTarget | null; initialConnectionId?: string; services?: Services }) {
@@ -164,9 +169,47 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function edit(value: SavedQueryOrganizationEdit) { if (!editable() || !organizationRef.current || needsRefresh) return; const next = { value, snapshot: organizationRef.current, selected: Object.freeze([...selectedRef.current.values()].map(item => Object.freeze({ ...item }))), epoch: ++epoch.current }; editRef.current = next; setEditing(next); setError(''); }
   function cancelEdit() { if (locked.current || !editRef.current) return; epoch.current++; editRef.current = undefined; setEditing(undefined); }
   /** 仅提交已展示的冻结CAS补丁；失败要求手动刷新，不重放、不逐条降级写入。 */
-  function apply(preview: SavedQueryOrganizationPreview, origin: Edit) {
+  function apply(preview: SavedQueryOrganizationPreview, origin: OrganizationEdit) {
     if (closed.current || locked.current || editRef.current !== origin || epoch.current !== origin.epoch || organizationRef.current !== origin.snapshot || preview.input.expectedRevision !== origin.snapshot.revision) return;
     void run(async ticket => { try { const raw = await io.request('queries.organizationApply', preview.input); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); editRef.current = undefined; setEditing(undefined); selectedRef.current = new Map(); setSelected(selectedRef.current); setNeedsRefresh(false); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); if (owns(ticket)) setNotice(text.saved); } catch (reason) { if (owns(ticket)) { editRef.current = undefined; setEditing(undefined); setNeedsRefresh(true); setError(errorMessage(reason)); } } }, origin.epoch);
+  }
+  /** 先从 Main 获取连接修订，再把跨页选择与显示的连接一起冻结到确认面板。 */
+  function beginRebind() {
+    if (!editable() || needsRefresh || !selectedRef.current.size) return;
+    const selection = selectedRef.current;
+    void run(async ticket => {
+      const connectionSnapshot = await io.request('connections.organizationGet', {});
+      if (!owns(ticket) || selectedRef.current !== selection) return;
+      const origin = { connectionSnapshot, selection, selected: Object.freeze([...selection.values()]), epoch: ticket };
+      editRef.current = origin; setEditing(origin);
+    });
+  }
+  /** 不重放修改。写入回执与后续列表刷新分别处理，防止刷新失败被当作未保存。 */
+  function applyRebind(origin: RebindEdit, target: SavedQueryRebindInput['target']) {
+    if (locked.current || editRef.current !== origin || !owns(origin.epoch) || selectedRef.current !== origin.selection) return;
+    const input = savedQueryRebindSchema.safeParse({ target, expectedConnectionRevision: origin.connectionSnapshot.revision,
+      queries: origin.selected.map(({ id, digest }) => ({ id, digest })) });
+    if (!input.success) { setError(t.rebindInvalid); return; }
+    void run(async ticket => {
+      let committed = false;
+      try {
+        const result = await io.request('queries.rebindSelectedChecked', input.data);
+        if (result.updated !== origin.selected.length) throw Error(t.rebindInvalid);
+        committed = true;
+        if (!owns(ticket)) return;
+        editRef.current = undefined; setEditing(undefined); setNeedsRefresh(true);
+        selectedRef.current = new Map(); setSelected(selectedRef.current);
+        const raw = await io.request('queries.organizationGet', {});
+        if (!owns(ticket)) return;
+        const group = publish(raw, criteriaRef.current.group);
+        await readPage(ticket, { ...criteriaRef.current, group });
+        if (owns(ticket)) { setNeedsRefresh(false); setNotice(t.rebindSaved(result.updated)); }
+      } catch (reason) {
+        if (!owns(ticket)) return;
+        editRef.current = undefined; setEditing(undefined); setNeedsRefresh(true); setError(errorMessage(reason));
+        if (committed) setNotice(t.rebindRefresh);
+      }
+    }, origin.epoch);
   }
   /** 只捕获所见记录的名称和摘要，不读取完整SQL或借用当前打开查询。 */
   function beginRename(item: SavedQueryPageEntry, duplicate = false): void {
@@ -423,7 +466,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const importGroupStale = !!importGroup && (needsRefresh || importGroup.expectedRevision !== organization?.revision || !tree.some(item => item.id === importGroup.id));
   const importConnectionStale = !!importConnection && !connections.includes(importConnection);
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
-  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else void close(); }}
+  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else if (openRef.current && !locked.current) cancelOpenBatch(); else if (editRef.current && 'connectionSnapshot' in editRef.current) cancelEdit(); else void close(); }}
     onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
     <div className="dialog-tabs"><button disabled={closing || !!external} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><UsageHelp><p>{text.metadataOnly}</p><p>{insertionText.hint}</p><p>{t.hint}</p><p>{t.openHint}</p></UsageHelp><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
@@ -475,7 +518,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           <option value="name-asc">{t.sortNameAsc}</option><option value="name-desc">{t.sortNameDesc}</option>
         </select></label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
-        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginRebind}>{t.rebindOpen}</button><button disabled={blocked || !selected.size || needsRefresh || selected.size > savedQueryOpenBatchLimits.queries} ref={openBatchTrigger} onClick={beginOpenBatch}>{t.openBatch}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         {selected.size > savedQueryOpenBatchLimits.queries && <p className="muted small">{t.openBatchLimit(savedQueryOpenBatchLimits.queries)}</p>}
         {opening && <QueryBatchOpenPreview rows={[...opening.selection.values()]} targets={opening.targets} connections={connections}
           busy={busy || closing} onTarget={(id, connectionId) => changeOpenBatchTarget(opening, id, connectionId)}
@@ -490,7 +533,9 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}
       </div>
-    </div>{deleting && <SavedQueryDeleteSelectedPreview key={deleting.epoch} items={deleting.items} busy={busy || closing} onCancel={() => cancelDeleteSelected(deleting)} onConfirm={() => applyDeleteSelected(deleting)}/>}{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} mode={renaming.duplicateRevision ? 'duplicate' : 'rename'} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>}</div>
+    </div>{deleting && <SavedQueryDeleteSelectedPreview key={deleting.epoch} items={deleting.items} busy={busy || closing} onCancel={() => cancelDeleteSelected(deleting)} onConfirm={() => applyDeleteSelected(deleting)}/>}{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} mode={renaming.duplicateRevision ? 'duplicate' : 'rename'} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && ('connectionSnapshot' in editing
+      ? <SavedQueryRebindEditor key={editing.epoch} rows={editing.selected} connections={editing.connectionSnapshot.connections} busy={busy || closing} onCancel={cancelEdit} onConfirm={target => applyRebind(editing, target)}/>
+      : <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>)}</div>
     <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing || !!external} onClick={() => void close()}>{zh.common.close}</button></footer>
   </Modal>;
 }

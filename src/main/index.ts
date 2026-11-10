@@ -2016,7 +2016,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       }
     };
     assertCurrent();
-    if (target) store.assertImportedQueryTarget(target);
+    if (target) store.assertSavedQueryTarget(target);
     return queryFileOperation(async () => {
       const selected = await dialog.showOpenDialog(columns!.owner.window, {
         title: '导入 SQL 到保存查询', properties: ['openFile', 'multiSelections'], filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
@@ -2765,6 +2765,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'queries.renameChecked':if(shuttingDown)throw Error('客户端正在退出，不能重命名保存查询');return store.renameQueryChecked(input);
     case 'queries.duplicateChecked':if(shuttingDown)throw Error('客户端正在退出，不能复制保存查询');return store.duplicateQueryChecked(input);
     case 'queries.deleteSelectedChecked':if(shuttingDown)throw Error('客户端正在退出，不能批量删除保存查询');return store.deleteQueriesChecked(input);
+    case 'queries.rebindSelectedChecked':
+      if (shuttingDown) throw Error('客户端正在退出，不能修改保存查询的连接');
+      connectionConfig.assertAvailable(input.target?.connectionId);
+      return store.rebindQueriesChecked(input);
     case 'queries.page':case 'queries.pageContinue':case 'history.page':case 'history.pageContinue':{
       if(shuttingDown)throw Error('客户端正在退出，不能读取查询列表');
       if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(input.taskId)))throw Error('请求编号已使用');

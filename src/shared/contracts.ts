@@ -277,6 +277,7 @@ export interface CommandMap {
   'queries.renameChecked':{input:import('./savedQueryRename').SavedQueryRenameInput;output:void};
   'queries.duplicateChecked':{input:import('./savedQueryDuplicate').SavedQueryDuplicateInput;output:void};
   'queries.deleteSelectedChecked':{input:import('./savedQueryDeleteSelected').SavedQueryDeleteSelectedInput;output:import('./savedQueryDeleteSelected').SavedQueryDeleteSelectedResult};
+  'queries.rebindSelectedChecked':{input:import('./savedQueryRebind').SavedQueryRebindInput;output:{updated:number}};
   'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
   'search.release':{input:{connectionId:string;cursor:string};output:void};
   'search.dataStart':{input:DataSearchInput;output:DataSearchReply};

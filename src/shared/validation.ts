@@ -142,6 +142,7 @@ import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import { connectionOrganizationGetSchema, connectionOrganizationApplySchema } from './connectionOrganization';
 import { savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
+import { savedQueryRebindSchema } from './savedQueryRebind';
 import type { Command, ResultExportData } from './contracts';
 import { resultArchiveMaxSets, validateResultExportData } from './resultExport';
 import { assertResultExcelData, validateResultArchiveOptions } from './resultExcel';
@@ -550,6 +551,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'queries.renameChecked': savedQueryRenameSchema,
   'queries.duplicateChecked': savedQueryDuplicateSchema,
   'queries.deleteSelectedChecked': savedQueryDeleteSelectedSchema,
+  'queries.rebindSelectedChecked': savedQueryRebindSchema,
   'search.structureContinue':structureSearchContinueSchema,
   'search.release':structureSearchReleaseSchema,
   'search.dataStart':dataSearchInputSchema,'search.dataNext':dataSearchNextSchema,'search.dataRelease':dataSearchReleaseSchema,

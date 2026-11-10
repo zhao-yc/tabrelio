@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { LocalStore } from '../../src/main/storage';
 import { commandSchemas } from '../../src/shared/validation';
 import { type QuerySaveContent, type SavedQueryOriginContext } from '../../src/shared/queryBinding';
@@ -79,12 +80,47 @@ describe('保存查询来源绑定和真实原子 CAS', () => {
     const { store, directory } = await open();
     const batch = [{ name: '空库脚本', sql: 'SELECT 1;' }];
     store.saveConnection({ id: 'sqlite', dialect: 'sqlite', name: 'SQLite', group: '', color: '', sqlite: { filePath: join(directory, 'offline.sqlite'), readOnly: true, busyTimeoutMs: 1000 } });
-    expect(() => store.createImportedQueries(batch, () => {}, undefined, { connectionId: 'missing', database: null })).toThrow('导入目标连接已删除');
+    expect(() => store.createImportedQueries(batch, () => {}, undefined, { connectionId: 'missing', database: null })).toThrow('目标连接已删除');
     expect(() => store.createImportedQueries(batch, () => {}, undefined, { connectionId: 'sqlite', database: null })).toThrow('须为 main');
     expect(store.queries()).toEqual([]);
     store.createImportedQueries(batch, () => {}, undefined, { connectionId: profile.id, database: null });
     expect(store.queries()).toMatchObject([{ connectionId: profile.id, databaseContext: { state: 'known', database: null } }]);
     store.close();
+  });
+  it('批量改绑核对连接修订和全部摘要，保留原文、编号、分组与活动草稿', async () => {
+    const { store, path, wasm } = await open();
+    store.saveConnection({ ...profile, id: 'next', name: '新连接' });
+    const first = store.createBoundQuery(content());
+    const second = store.createBoundQuery({ ...content(), name: '第二条', sql: '-- 原换行\r\nSELECT 2;\r\n' });
+    const queries = [first.source, second.source].map(({ id, digest }) => ({ id, digest }));
+    const group = store.applyQueryOrganization({ expectedRevision: store.queryOrganization().revision, operation: { kind: 'create', name: '原分组', parentId: null } });
+    store.applyQueryOrganization({ expectedRevision: group.revision, operation: { kind: 'moveQueries', queries, groupId: group.groups[0].id } });
+    store.saveSettings({ ...store.settings(), activeTabId: 'draft', tabs: [{ id: 'draft', kind: 'query', title: first.name,
+      connectionId: profile.id, sql: '已有草稿', sourceBinding: first.source }] });
+    const before = store.queries(), settings = store.settings(), original = readFileSync(path), revision = store.querySearchRevision();
+    const input = { queries, expectedConnectionRevision: store.connectionRevision(), target: { connectionId: 'next', database: null } };
+    expect(() => store.rebindQueriesChecked({ ...input, expectedConnectionRevision: input.expectedConnectionRevision - 1 })).toThrow('连接配置已变化');
+    expect(() => store.rebindQueriesChecked({ ...input, queries: [queries[0], { ...queries[1], digest: '0'.repeat(64) }] })).toThrow('所选保存查询已变化');
+    mkdirSync(path + '.tmp');
+    try { expect(() => store.rebindQueriesChecked(input)).toThrow('修改未保存'); }
+    finally { rmdirSync(path + '.tmp'); }
+    expect(store.queries()).toEqual(before);
+    expect(store.querySearchRevision()).toBe(revision);
+    expect(readFileSync(path)).toEqual(original);
+    expect(store.rebindQueriesChecked(input)).toEqual({ updated: 2 });
+    expect(() => store.bindQuerySource(first.source.id, first.source.digest)).toThrow('原查询已修改');
+    store.close();
+    const restored = await LocalStore.open(path, wasm, protector);
+    for (const query of before) expect(restored.queries().find(item => item.id === query.id)).toMatchObject({
+      name: query.name, sql: query.sql, connectionId: 'next', databaseContext: { state: 'known', database: null },
+    });
+    expect(restored.queryOrganization()).toMatchObject({ unfiledCount: 0, groups: [{ id: group.groups[0].id, count: 2 }] });
+    expect(restored.settings()).toEqual(settings);
+    const id = first.source.id, digest = createHash('sha256').update(restored.querySearchRaw(id)!).digest('hex');
+    expect(restored.rebindQueriesChecked({ queries: [{ id, digest }], expectedConnectionRevision: restored.connectionRevision(), target: null })).toEqual({ updated: 1 });
+    expect(restored.queries().find(item => item.id === id)).not.toHaveProperty('connectionId');
+    expect(restored.queryOrganization().groups[0].count).toBe(2);
+    restored.close();
   });
   it('新建独立编号、原文摘要和正文精度，另存绝不改源记录', async () => {
     const { store } = await open(), first = store.createBoundQuery(content()), before = store.querySearchRaw(first.source.id);
