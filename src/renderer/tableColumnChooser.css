@@ -1,0 +1,39 @@
+.table-column-chooser[hidden] { display: none; }
+.table-column-chooser {
+  display: flex;
+  flex: 0 0 clamp(150px, 24%, 230px);
+  min-inline-size: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-inline-end: 1px solid var(--line);
+  background: var(--surface);
+}
+.table-column-chooser > header, .table-column-chooser-controls > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.table-column-chooser > header { padding: 6px 8px; border-block-end: 1px solid var(--line-soft); }
+.table-column-chooser h2 { margin: 0; font-size: 12px; font-weight: 600; }
+.table-column-chooser-controls { display: grid; gap: 6px; padding: 8px; color: var(--muted); }
+.table-column-chooser-controls input { width: 100%; min-width: 0; }
+.table-column-chooser-list { min-block-size: 0; overflow: auto; overscroll-behavior: contain; }
+.table-column-chooser-list > p { padding-inline: 8px; color: var(--muted); }
+.table-column-chooser-list label { display: flex; align-items: center; gap: 7px; padding: 4px 8px; }
+.table-column-chooser-list label:hover { background: var(--bg); }
+.table-column-chooser-list label span { overflow-wrap: anywhere; }
+.table-column-chooser-layout, .table-column-chooser-grid-content { display: contents; }
+.table-column-chooser-layout:has(> .table-column-chooser:not([hidden])) {
+  display: flex;
+  flex: 1;
+  min-inline-size: 0;
+}
+.table-column-chooser-layout:has(> .table-column-chooser:not([hidden])) > .table-column-chooser-grid-content {
+  display: flex;
+  flex: 1;
+  min-inline-size: 0;
+  min-block-size: 0;
+  flex-direction: column;
+}
+.table-column-chooser-layout > .sqlite-browse-result { min-inline-size: 0; }

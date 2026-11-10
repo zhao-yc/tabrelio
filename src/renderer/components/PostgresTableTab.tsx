@@ -33,6 +33,8 @@ import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
 import { PostgresRecordTransferDialog } from './PostgresRecordTransferDialog';
 import { PostgresRecordForm } from './PostgresRecordFields';
 import { TableReadHistory, useTableReadHistory } from './TableReadHistory';
+import { TableColumnChooser, useTableColumnChooser } from './TableColumnChooser';
+import { tableColumnChooserZh } from '../locales/tableColumnChooser.zh-CN';
 import { tableReadHistoryZh } from '../locales/tableReadHistory.zh-CN';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
@@ -173,6 +175,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
   const resultLimit = useWorkspace(state => state.settings.resultLimit);
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const readHistory = useTableReadHistory(JSON.stringify([tab.connectionId, connectionVersion, tab.database, tab.table]));
+  const columnChooser = useTableColumnChooser(JSON.stringify([tab.connectionId, connectionVersion, tab.database, tab.table]));
   const workspaceBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
@@ -1346,6 +1349,13 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     },
   };
 
+  const columnChooserBlocked = !page || !active || blocked || recordView || !layoutView.ready || layoutView.pending;
+  function applyColumnChooser(update: (current: TablePreferences) => TablePreferences) {
+    if (columnChooserBlocked || !headerFreeze.current() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    try { changeLayout(update(layout.view.preferences)); }
+    catch (reason) { setLayoutError(errorMessage(reason)); }
+  }
+
   const columnVisibility = {
     current: headerFreeze.current,
     canHide: gridLayout.columns.length > 1, hasHidden: layoutView.preferences.columns.some(column => column.hidden),
@@ -1669,6 +1679,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     <div className="query-toolbar pg-table-toolbar">
       <button data-table-refresh title={navigationZh.tableRefreshShortcut} disabled={refreshDisabled}
         onClick={refreshTable}>{retryPreset ? tablePresetsZh.treeRetry : text.refresh}</button>
+      <button type="button" disabled={columnChooserBlocked} {...columnChooser.toggleProps}>{tableColumnChooserZh.title}</button>
       <button type="button" disabled={!active || busy} {...readHistory.toggleProps}>{tableReadHistoryZh.title}</button>
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
       {onCopyTable && <button disabled={blocked || requiresRefresh || page?.relationKind !== 'r' || !!draft.length} onClick={onCopyTable}>{postgresTableCopyZh.open}</button>}
@@ -1806,7 +1817,9 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         projectionCurrent={() => !!page.exportToken && issued.current === page.exportToken && layoutScope.current.current()}
         moves={moves} onMove={moveRecord} canSelectRecord={canMoveRecord} onSelectRecord={selectRecord}
         onDirty={changeRecordInput} onStage={stageRecordView}/>}
-      {page ? <div className="pg-record-grid-host" hidden={recordView}><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
+      {page ? <div className="pg-record-grid-host" hidden={recordView}><div className="table-column-chooser-layout">
+        <TableColumnChooser chooser={columnChooser} preferences={layoutView.preferences} disabled={columnChooserBlocked} apply={applyColumnChooser}/>
+        <div className="table-column-chooser-grid-content"><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
         rows={findRows} replaceSelection={checkedFindRows ?? null} columns={gridLayout.columns} isCurrent={findIsCurrent} replaceWritable={postgresFindWritable}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
         onOpen={openFind} onClose={() => setFindRequest(undefined)} onStage={stageFind} onMatchRows={changeFindMatches}
@@ -1819,7 +1832,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           return postgresFindPlan(page, findRows, gridLayout.columns, patches,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
-        renderGrid={(findTarget, findMarks) => <ResultsGrid zoomable showGridImages={showGridImages} key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
+        renderGrid={(findTarget, findMarks) => <ResultsGrid zoomable preserveCheckedRowsOnColumnLayout showGridImages={showGridImages} key={page.exportToken} columnNameDialect="postgresql" matchRowsRef={matchRowsRef} onCheckedRows={setCheckedFindRows} columns={gridLayout.columns} rows={page.rows} headerDetails={headerDetails}
         rowJump={canFind} rowJumpCurrent={findIsCurrent} onFindColumn={canFind ? key => openFind(false, key) : undefined}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}
@@ -1939,7 +1952,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
             }));
             navigate({ ...firstPage, sort: validateTableSort(rules, columnNames) });
           } catch (reason) { setError(errorMessage(reason)); }
-        }}/>}/></div> : <Empty title={text.empty}/>}
+        }}/>}/></div></div></div> : <Empty title={text.empty}/>}
     </div>
     {inlineEdit && <PostgresInlineCellEditor anchor={inlineEdit.anchor} column={inlineEdit.column}
       initial={inlineEdit.initial} originalText={inlineEdit.originalText} typed={inlineEdit.typed} visible={active}

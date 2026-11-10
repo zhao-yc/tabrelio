@@ -16,6 +16,7 @@ import { recordViewZh as recordForm } from '../../src/renderer/locales/recordVie
 import { postgresRecordViewZh as pgForm } from '../../src/renderer/locales/postgresRecordView.zh-CN';
 import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 import { tableReadHistoryZh as readHistory } from '../../src/renderer/locales/tableReadHistory.zh-CN';
+import { tableColumnChooserZh as chooserText } from '../../src/renderer/locales/tableColumnChooser.zh-CN';
 import { sqliteTableEditZh as sqliteEdit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteEditWorkspaceZh as sqliteWorkspace } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 
@@ -79,6 +80,48 @@ async function verifyGridZoom(scope: Locator, header: Locator): Promise<void> {
   await expect(grid).toHaveCSS('font-size', '13.75px');
   await expect.poll(height).toBe(Math.round(initialHeight * 1.25));
   expect(await width()).toBe(initialWidth);
+}
+
+/** 走真实侧栏入口，核对列标题、原行勾选和数据库读取次数。 */
+async function verifyColumnChooser(scope: Locator, reads: Awaited<ReturnType<typeof observeReads>>, screenshot?: string) {
+  const grid = scope.getByRole('grid');
+  const checked = grid.getByRole('row').nth(1).getByRole('checkbox');
+  await checked.check();
+  const before = await reads();
+  await (await navigationMenuItem(scope, { name: chooserText.title, exact: true })).click();
+  const chooser = scope.getByRole('region', { name: chooserText.title, exact: true });
+  await expect(chooser).toBeVisible();
+  const [paneBox, gridBox] = await Promise.all([chooser.boundingBox(), grid.boundingBox()]);
+  expect(paneBox).not.toBeNull();
+  expect(gridBox).not.toBeNull();
+  expect(gridBox!.x).toBeGreaterThanOrEqual(paneBox!.x + paneBox!.width - 1);
+  const filter = chooser.getByRole('searchbox', { name: chooserText.search });
+  const label = chooser.getByRole('checkbox', { name: 'label', exact: true });
+  const labelHeader = grid.getByRole('columnheader').filter({ hasText: /^label/ });
+  const columns = chooser.getByRole('checkbox');
+  const total = await columns.count();
+  expect(total).toBeGreaterThan(1);
+  await filter.fill('LABEL');
+  await expect(columns).toHaveCount(1);
+  await label.uncheck();
+  await expect(labelHeader).toHaveCount(0);
+  if (screenshot) await page.screenshot({ path: screenshot });
+  await label.check();
+  await expect(labelHeader).toBeVisible();
+  await filter.fill('');
+  for (let index = 0; index < total; index++) {
+    const option = columns.nth(index);
+    if (await option.evaluate(input => input.closest('label')?.title) !== 'label') await option.uncheck();
+  }
+  await expect(label).toBeDisabled();
+  await expect(checked).toBeChecked();
+  await chooser.getByRole('button', { name: chooserText.showAll, exact: true }).click();
+  await expect(chooser.getByText(chooserText.count(total, total), { exact: true })).toBeVisible();
+  await expect(labelHeader).toBeVisible();
+  await filter.press('Escape');
+  await expect(chooser).toBeHidden();
+  expect(await reads()).toEqual(before);
+  await checked.uncheck();
 }
 
 /** 旁观正式分页回包，只记录筛选、排序和分页条件，不替换 Main 或驱动结果。 */
@@ -171,6 +214,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     const header = (name: string) => tab.getByRole('columnheader').filter({ has: page.locator('.grid-header-detail-name').filter({ hasText: new RegExp('^' + name + '$') }) });
     const toggle = async (name: string) => (await navigationMenuItem(tab, { name, exact: true })).click();
     await expect(header('label')).toBeVisible();
+    await verifyColumnChooser(tab, reads, info.outputPath('SQLite列显隐侧栏.png'));
     const before = await taskIds();
     const readsBeforeDisplay = await reads();
     await verifyGridZoom(tab, header('label'));
@@ -249,6 +293,13 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await editor.getByRole('button', { name: sqliteEdit.saveInput, exact: true }).click();
     const draft = tab.getByRole('gridcell').filter({ hasText: /只留在本地的值$/ });
     await expect(draft).toBeVisible();
+    await (await navigationMenuItem(tab, { name: chooserText.title, exact: true })).click();
+    const columnChooser = tab.getByRole('region', { name: chooserText.title, exact: true });
+    const dynamicColumn = columnChooser.getByRole('checkbox', { name: 'dynamic_value', exact: true });
+    await dynamicColumn.uncheck();
+    await expect(draft).toBeVisible();
+    await dynamicColumn.check();
+    await columnChooser.getByRole('button', { name: chooserText.close, exact: true }).click();
     await toggleFromHeader(header('label'), headerMenuText.zoomReset);
     await expect(draft).toBeVisible();
     await answerDialogs([1]);
@@ -277,6 +328,7 @@ test('SQLite 表和只读视图的声明类型可切换，排序仍使用原字�
     await tab.getByRole('gridcell').filter({ hasText: 'row A' }).click({ button: 'right' });
     await expect(page.getByRole('menuitem', { name: sqlite.showRowId, exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
+    await verifyColumnChooser(tab, reads);
     await (await navigationMenuItem(tab, { name: readHistory.title, exact: true })).click();
     await expect(visibleHistory.locator('pre')).toContainText('"subject_view"');
     await page.locator('[data-workspace-tab-id="subject"] .tab-select').click();
@@ -369,6 +421,7 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     const toggle = async (name: string) => (await navigationMenuItem(tab, { name, exact: true })).click();
     await expect(header.locator('.column-type')).toHaveText('text');
     await expect(header.locator('.grid-header-comment')).toHaveCount(0);
+    await verifyColumnChooser(tab, reads);
     const before = await taskIds();
     const readsBeforeDisplay = await reads();
     const checked = tab.getByRole('grid').getByRole('row').nth(1).getByRole('checkbox');
