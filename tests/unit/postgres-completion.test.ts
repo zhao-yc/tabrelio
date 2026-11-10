@@ -110,6 +110,40 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('UPDATE orders d SET value=1 FROM get_records(d.|) AS r(id int)')?.query).toBeUndefined();
     expect(at('SELECT * FROM get_records() AS r(id r.|type)')?.query).toBeUndefined();
   });
+  it('MERGE 在尚未写完的 ON 和 WHEN 中绑定字段及分支作用域', () => {
+    const merge = 'MERGE INTO app.orders d USING (SELECT 1 id, 2 value) s ON ';
+    const source = { relations: [{ alias: 's', projection: { names: ['id', 'value'], stars: [] } }] };
+    const target = { relations: [{ name: 'orders', schema: 'app', alias: 'd' }] };
+    expect(at(merge + 'd.id=s.|')?.query).toMatchObject(source);
+    expect(at(merge + 'true WHEN MATCHED AND CASE WHEN d.id=1 THEN s.|')?.query).toMatchObject(source);
+    expect(at(merge + 'true WHEN NOT MATCHED BY SOURCE AND d.|')?.query).toMatchObject(target);
+    expect(at(merge + 'true WHEN NOT MATCHED BY SOURCE AND s.|')?.query).toBeUndefined();
+    expect(at(merge + 'true WHEN NOT MATCHED BY TARGET AND d.|')?.query).toBeUndefined();
+    expect(at(merge + 'true WHEN MATCHED THEN UPDATE SET value=(SELECT s.|)')?.query).toMatchObject(source);
+    expect(at(merge + 'true WHEN NOT MATCHED THEN INSERT (id) VALUES (s.|')?.query).toMatchObject(source);
+    expect(at(merge + 'true WHEN NOT MATCHED THEN INSERT (id) VALUES (d.|)')?.query).toBeUndefined();
+    expect(at(merge + 'true WHEN MATCHED THEN UPDATE SET value=s.value, |')?.query).toMatchObject(target);
+    expect(at(merge + 'true WHEN NOT MATCHED THEN INSERT (|) VALUES (s.id)')?.query).toMatchObject(target);
+    expect(at(merge + 'true WHEN MATCHED THEN UPDATE SET d.|')?.query).toBeUndefined();
+  });
+  it('MERGE 在来源 JOIN、CTE 和 RETURNING 内按绑定取得字段', () => {
+    expect(at('MERGE INTO orders d USING (SELECT 1 id) s JOIN (SELECT 1 id) t ON s.|')?.query)
+      .toMatchObject({ relations: [{ alias: 's', projection: { names: ['id'] } }] });
+    expect(at('MERGE INTO orders d USING (SELECT 1 id) s JOIN (SELECT 1 id) t ON d.| ON true')?.query).toBeUndefined();
+    expect(at('MERGE INTO orders d USING ((SELECT 1 id, 2 n) s JOIN (SELECT 1 id, 3 f) t USING (id)) j(key) ON j.|')?.query)
+      .toMatchObject({ relations: [{ name: 'j', projection: { names: ['key', 'n', 'f'], exact: true } }] });
+    expect(at('MERGE INTO orders d USING a JOIN b USING (id) AS k ON k.|')?.query)
+      .toMatchObject({ relations: [{ name: 'k', projection: { names: ['id'], stars: [] } }] });
+    const merge = 'MERGE INTO app.orders d USING feed s ON d.id=s.id WHEN MATCHED THEN DELETE';
+    expect(at(merge + ' RETURNING WITH (OLD AS previous) previous.|')?.query)
+      .toMatchObject({ relations: [{ name: 'orders', schema: 'app', alias: 'previous' }] });
+    expect(at(merge + ' RETURNING new.|')?.query).toMatchObject({ relations: [{ name: 'orders', alias: 'new' }] });
+    expect(at(merge + ' RETURNING WITH (OLD AS previous) old.|')?.query).toBeUndefined();
+    expect(at('WITH feed(id) AS (VALUES (1)), changed AS (' + merge + ' RETURNING WITH (OLD AS previous) previous.id AS removed) SELECT changed.| FROM changed')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['removed'] } }] });
+    expect(at('WITH feed(id, extra) AS (VALUES (1,2)), changed AS (' + merge + ' RETURNING *) SELECT changed.| FROM changed')?.query)
+      .toMatchObject({ relations: [{ projection: { names: ['id', 'extra'], stars: [{ schema: 'app', name: 'orders' }] } }] });
+  });
   it('作用域跟随光标，区分普通派生表、LATERAL、相关子查询与集合分支', () => {
     expect(at('SELECT (SELECT p.| FROM child) FROM parent p')?.query)
       .toMatchObject({ relations: [{ name: 'parent', alias: 'p' }] });
@@ -233,6 +267,24 @@ it('表函数声明列补全使用安全引用和原文替换范围，零目录�
     expect((await duplicate.suggest())?.suggestions).toEqual([]);
     expect(inputs).toEqual([]);
   } finally { local.provider.dispose(); duplicate.provider.dispose(); }
+});
+
+it('MERGE 只向目录发送当前目标身份，本地来源字段直接补全', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const request = async (input: PostgresCompletionInput): Promise<PostgresCompletionResult> => {
+    inputs.push(input);
+    return { items: [{ kind: 'column', reference: 0, name: 'note', type: 'text' }], incomplete: false };
+  };
+  const merge = 'MERGE INTO app.orders d USING (SELECT 1 AS "编号") s ON true WHEN MATCHED THEN DELETE';
+  const source = editor(merge + ' RETURNING s.编|', request);
+  const target = editor(merge + ' RETURNING WITH (OLD AS previous) previous.no|', request);
+  try {
+    expect((await source.suggest())?.suggestions).toMatchObject([{ insertText: '"编号"' }]);
+    expect(inputs).toEqual([]);
+    expect((await target.suggest())?.suggestions).toMatchObject([{ insertText: '"note"', detail: 'text' }]);
+    expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', prefix: 'no', kind: 'columns',
+      relations: [{ schema: 'app', name: 'orders' }] }]);
+  } finally { source.provider.dispose(); target.provider.dispose(); }
 });
 
 it('切走再返回原标签时丢弃迟到目录，并由原承诺串行收尾', async () => {

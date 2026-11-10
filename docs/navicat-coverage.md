@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。PostgreSQL MERGE 字段补全覆盖来源 JOIN、ON、WHEN 条件、写入动作和 RETURNING。局部投影可离线补全，物理目标列继续使用只读目录。Q01 仍为部分覆盖。
+
 2026-11-11 源码增量。PostgreSQL 表函数字段补全直接使用显式列定义、位置别名和序号列，支持 `ROWS FROM`、派生表、CTE 及 UPDATE FROM／DELETE USING。只含本地声明的限定字段补全可离线使用。Q01 仍为部分覆盖。
 
 2026-11-11 源码增量。PostgreSQL 局部引用编辑支持带类型列定义的表函数和 `ROWS FROM`，识别 `WITH ORDINALITY`、函数默认关系名和外层别名，覆盖 SELECT、写入语句的读取来源及 MERGE。Q01 仍为部分覆盖。
