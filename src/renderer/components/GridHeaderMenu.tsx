@@ -29,7 +29,7 @@ interface HeaderMenuSource {
   canSort(key: string): boolean;
   applySort(next: readonly SortColumn[], current: () => boolean): void;
   selectColumn?(index: number): GridCellAction | undefined;
-  columnActions?(current: () => boolean): readonly GridCellAction[];
+  columnActions?(column: { key: string; name: string }, current: () => boolean): readonly GridCellAction[];
   findColumn?(key: string): void;
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
@@ -212,7 +212,7 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
       const quoted = name.quoted;
       if (quoted !== undefined) actions.push({ label: text.copyQuotedName, run: () => copy(quoted) });
     }
-    actions.push(...(source.columnActions?.(current) ?? []));
+    actions.push(...(source.columnActions?.(column, current) ?? []));
     if (source.findColumn) actions.push({ label: text.findColumn, run: () => {
       if (current()) latest.current.findColumn?.(column.key);
     } });

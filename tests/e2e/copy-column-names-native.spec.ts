@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, restartOwnedDesktop, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
-import { readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { readGridMenuClipboard, readGridRangeClipboard } from './grid-cell-range-clipboard';
+import { decodeClipboard } from '../../src/renderer/gridClipboard';
 import { tableHeaderCopyZh as text } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { gridRangeCopyZh as range } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
@@ -197,6 +198,15 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     expect(one).not.toContain('9007199254740993');
     await expect(firstCheck).toBeChecked();
     await expect(secondCheck).not.toBeChecked();
+    await secondHeader.click({ button: 'right' });
+    const rowCopy = await readGridMenuClipboard(page, rowMenu.getByRole('menuitem', { name: headerText.copyRowDataWithNames, exact: true }));
+    expect(rowCopy.text.split('\n')[0]).toBe(tableNames);
+    const rowValues = decodeClipboard(rowCopy.typed, rowCopy.text);
+    expect(rowValues).toHaveLength(1);
+    expect(rowValues[0][1]).toBe('9007199254740994');
+    expect(rowValues[0][3]).toEqual({ type: 'binary', base64: '' });
+    expect(rowValues[0][4]).toBe('');
+    if (local) expect(JSON.parse(rowCopy.sqlite).rows[0][1]).toEqual({ kind: 'integer', value: '9007199254740994' });
     await secondCheck.check();
     await secondHeader.press('Shift+F10');
     await expect(sqlAction(updateSqlCopyZh.selected)).toBeVisible();
@@ -209,6 +219,12 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(firstCheck).toBeChecked();
     await expect(secondCheck).toBeChecked();
     await expect(secondHeader).toBeFocused();
+    await secondHeader.press('Shift+F10');
+    const checkedRowCopy = await readGridMenuClipboard(page, rowMenu.getByRole('menuitem', { name: headerText.copyRowData, exact: true }));
+    const checkedValues = decodeClipboard(checkedRowCopy.typed, checkedRowCopy.text);
+    expect(checkedValues.map(row => row[1])).toEqual(['9007199254740993', '9007199254740994']);
+    expect(checkedValues[0][4]).toBeNull();
+    expect(checkedRowCopy.text.startsWith(tableNames)).toBe(false);
     await secondCheck.uncheck();
     const tableAmountFirst = indexedCell(tableGrid, 2, amountIndex), tableAmountSecond = indexedCell(tableGrid, 3, amountIndex);
     await tableAmountFirst.click();
@@ -242,6 +258,13 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     expect(checkedColumnSql).toContain('9007199254740993');
     expect(checkedColumnSql).not.toContain('9007199254740994');
     await expect(firstCheck).toBeChecked();
+    await header.click({ button: 'right' });
+    await expect(columnMenu.getByRole('menuitem', { name: headerText.copyColumnDataWithName, exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('标题复制数据.png') });
+    const checkedColumnCopy = await readGridMenuClipboard(page, columnMenu.getByRole('menuitem', { name: headerText.copyColumnDataWithName, exact: true }));
+    expect(checkedColumnCopy.text).toBe('amount\n9007199254740993');
+    expect(decodeClipboard(checkedColumnCopy.typed, checkedColumnCopy.text)).toEqual([['9007199254740993']]);
+    if (local) expect(JSON.parse(checkedColumnCopy.sqlite).rows).toEqual([[{ kind: 'integer', value: '9007199254740993' }]]);
     await firstCheck.uncheck();
     await header.press('Shift+F10');
     await expect(columnSql(copyInsertSqlZh.all)).toBeVisible();
@@ -254,6 +277,10 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(header).toBeFocused();
     await expect(firstCheck).not.toBeChecked();
     await expect(secondCheck).not.toBeChecked();
+    await header.press('Shift+F10');
+    const allColumnCopy = await readGridMenuClipboard(page, columnMenu.getByRole('menuitem', { name: headerText.copyColumnData, exact: true }));
+    expect(allColumnCopy.text).toBe('9007199254740993\n9007199254740994');
+    await expect(header).toBeFocused();
     if (local) {
       await open('header-view');
       await expect(header).toBeVisible();
@@ -277,6 +304,7 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
     await expect(columnMenu).toBeVisible();
     await expect(columnSql(copyInsertSqlZh.all)).toHaveCount(0);
     await expect(columnSql(updateSqlCopyZh.all)).toHaveCount(0);
+    await expect(columnMenu.getByRole('menuitem', { name: headerText.copyColumnData, exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
     const layout = page.getByRole('dialog', { name: columnsText.title, exact: true });
     const arrange = async () => {
@@ -306,6 +334,11 @@ test('无需选行即可复制表格和空查询结果的可见列名', async ({
 
     const checkedRow = grid.getByRole('row').nth(2).getByRole('checkbox');
     await checkedRow.check();
+    await names[1].click({ button: 'right' });
+    const aliasedCopy = await readGridMenuClipboard(page, columnMenu.getByRole('menuitem', { name: headerText.copyColumnDataWithName, exact: true }));
+    expect(aliasedCopy.text).toBe('duplicate\nrow B');
+    expect(decodeClipboard(aliasedCopy.typed, aliasedCopy.text)).toEqual([['row B']]);
+    await expect(checkedRow).toBeChecked();
     const active = indexedCell(grid, 2, first);
     const inRange = grid.locator('.grid-cell-in-range');
     await active.click();

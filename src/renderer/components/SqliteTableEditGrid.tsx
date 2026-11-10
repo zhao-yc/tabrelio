@@ -7,7 +7,7 @@ import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref, type CSSProperties } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
-import { copyGridRangeNames, copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { sqliteBinaryOriginalCell } from '../sqliteBinaryInput';
@@ -182,9 +182,29 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
   function clipboardContent(checked: SqliteDraftRow[], row: SqliteDraftRow | undefined, key: string, headers = false) {
     const index = Number(key.slice(1));
     if (!checked.length && (!row || row.deleted || !/^c\d+$/.test(key) || !order.includes(index) || !page.columns[index] || row.values.length !== page.columns.length)) return;
-    if (checked.some(item => item.values.length !== page.columns.length)) throw Error(clipboardText.invalid);
-    const values = checked.length ? checked.map(item => order.map(index => item.values[index])) : [[row!.values[index]]];
-    return encodeSqliteClipboard(values, checked.length ? order.map(index => page.columns[index].name) : [page.columns[index].name], headers);
+    return encodeGridCells(checked.length ? checked : [row!], checked.length ? order : [index], headers);
+  }
+  function encodeGridCells(records: readonly SqliteDraftRow[], indices: readonly number[], headers: boolean) {
+    if (records.some(item => item.values.length !== page.columns.length)) throw Error(clipboardText.invalid);
+    return encodeSqliteClipboard(records.map(item => indices.map(index => item.values[index])),
+      indices.map(index => page.columns[index].name), headers);
+  }
+  /** 标题入口使用本页草稿显示值，编码仍保留 SQLite 存储类及字段名称。 */
+  function sqliteHeaderDataActions(current: () => boolean, key?: string, row?: SqliteDraftRow) {
+    const index = key === undefined ? undefined : order.find(item => key === 'c' + item);
+    if (!rows.length || row?.deleted || key !== undefined && index === undefined) return [];
+    const checked = row ? selectedRows.has(row.id) : selectedRows.size > 0;
+    const allowed = () => current() && selection.current.revision === selectionTicket && orderRef.current.indices === order && noModal();
+    return gridHeaderDataCopyActions(index !== undefined, headers => {
+      if (!allowed()) return;
+      try {
+        const records = row && !checked ? [row] : rows.filter(item => !item.deleted && (!checked || selectedRows.has(item.id)));
+        if (!records.length) throw Error(headerCopyText.stale);
+        const content = encodeGridCells(records, index === undefined ? order : [index], headers);
+        writeTableClipboardEvent(allowed, data => writeSqliteClipboardData(data, content));
+        setError('');
+      } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : headerCopyText.unavailable); }
+    });
   }
   /** RDG的真实copy事件同步写三种MIME；先编码完整内容，失败只清本事件已写的数据。 */
   function copy(row: SqliteDraftRow, key: string, event: ClipboardEvent<HTMLDivElement>): void {
@@ -238,8 +258,7 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
         if (index === undefined) throw Error(headerCopyText.stale);
         const records = selectedRows.size ? checked : rows.filter(row => !row.deleted);
         if (!records.length) throw Error(headerCopyText.stale);
-        if (records.some(row => row.values.length !== page.columns.length)) throw Error(clipboardText.invalid);
-        content = encodeSqliteClipboard(records.map(row => [row.values[index]]), [page.columns[index].name]);
+        content = encodeGridCells(records, [index], false);
       } else {
         content = clipboardContent(checked, cell?.row, cell?.key ?? '', true);
       }
@@ -296,15 +315,17 @@ export function SqliteTableEditGrid({ onFindColumn, showFieldType, showRowId, on
     sort: sort ?? [], current: () => !disabled && baseCurrent() && noModal(),
     canSort: () => !!onSortChange, applySort: next => onSortChange?.(next),
     selectColumn: index => cellRange.selectColumnAction(index - 2),
-    columnActions: current => sqliteRowSqlActions(undefined, () => current() && selection.current.revision === selectionTicket,
-      undefined, selectedRows.size > 0),
+    columnActions: (column, current) => [
+      ...sqliteHeaderDataActions(current, column.key),
+      ...sqliteRowSqlActions(undefined, () => current() && selection.current.revision === selectionTicket, undefined, selectedRows.size > 0),
+    ],
     resizeColumn: onColumnResize, rowHeaderColumns: 2,
     rowActions: (index, current) => {
       const row = rows[index];
       if (!row || !baseCurrent(row)) return [];
       // 打开菜单会重渲染网格。行菜单用最新网格状态和原勾选代次核对行，不绑定打开前的渲染票据。
-      return sqliteRowSqlActions(row, () => current() && rows[index] === row && selection.current.revision === selectionTicket,
-        undefined, selectedRows.has(row.id));
+      const allowed = () => current() && rows[index] === row && selection.current.revision === selectionTicket;
+      return [...sqliteHeaderDataActions(allowed, undefined, row), ...sqliteRowSqlActions(row, allowed, undefined, selectedRows.has(row.id))];
     },
     visibility: { showType: !!showFieldType, onShowTypeChange: onShowFieldTypeChange },
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined,

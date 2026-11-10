@@ -1,5 +1,6 @@
 import { copyGridColumnNames, encodeGridCsv, encodeGridJson, writeTableClipboardEvent, type ClipboardCell } from './gridClipboard';
 import { gridRangeCopyZh as text } from './locales/gridRangeCopy.zh-CN';
+import { gridHeaderMenuZh as headerText } from './locales/gridHeaderMenu.zh-CN';
 
 export function gridRangeCopyActions(copy: (format: 'plain' | 'headers' | 'names' | 'csv' | 'json') => void) {
   return [
@@ -8,6 +9,14 @@ export function gridRangeCopyActions(copy: (format: 'plain' | 'headers' | 'names
     { label: text.namesOnly, run: () => copy('names') },
     { label: text.csv, run: () => copy('csv') },
     { label: text.json, run: () => copy('json') },
+  ];
+}
+
+/** 两个入口只改变外部文本是否带列名，内部粘贴始终读取同一组数据行。 */
+export function gridHeaderDataCopyActions(column: boolean, copy: (headers: boolean) => void) {
+  return [
+    { label: column ? headerText.copyColumnData : headerText.copyRowData, run: () => copy(false) },
+    { label: column ? headerText.copyColumnDataWithName : headerText.copyRowDataWithNames, run: () => copy(true) },
   ];
 }
 

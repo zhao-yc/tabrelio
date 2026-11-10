@@ -20,5 +20,9 @@ export const gridHeaderMenuZh = {
   staleWidth: '原列或网格已变化，请重新从列标题设置列宽。',
   copyName: '复制列名',
   copyQuotedName: '复制 SQL 引用列名',
+  copyColumnData: '复制此列数据',
+  copyColumnDataWithName: '复制此列数据（含列名）',
+  copyRowData: '复制行数据',
+  copyRowDataWithNames: '复制行数据（含列名）',
   findColumn: '在此列查找',
 };

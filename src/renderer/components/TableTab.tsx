@@ -18,7 +18,7 @@ import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowSelectionActions, gridRowKeys, mergeGridMatchSelection, handleGridSelectAllKey } from './GridRowSelectionActions';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
-import { copyGridRangeNames, copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { snapshotGridRangeExport } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill } from './GridRangeFill';
@@ -2028,15 +2028,31 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         useWorkspace.getState().notify(labels.copied);
         return;
       }
-      const headers = mode === 'headers' ? columns.map(column => column.name) : undefined;
-      if ((records.length + (headers ? 1 : 0)) * columns.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
-      const content = encodeClipboard(records.map(row => columns.map(column => ownCell(row.data, column.key))), headers);
-      writeTableClipboardEvent(current, data => {
-        data.setData('text/plain', content.text);
-        data.setData(cellClipboardType, content.typed);
-      });
-      setError('');
+      copyTableCells(records, columns, mode === 'headers', current);
     } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 标题菜单与工具栏共享当前显示值、大小限制和应用内粘贴格式。 */
+  function copyTableCells(records: readonly DraftRow[], columns: readonly { key: string; name: string }[], headers: boolean, current: () => boolean) {
+    if (!columns.length || !records.length) throw Error(headerCopyText.stale);
+    if ((records.length + Number(headers)) * columns.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
+    copyGridCells(records.map(row => columns.map(column => ownCell(row.data, column.key))), current,
+      headers ? columns.map(column => column.name) : undefined);
+    setError('');
+  }
+  /** 从标题定位列或行，勾选和布局变化后旧菜单不能读取新的范围。 */
+  function tableHeaderDataActions(current: () => boolean, column?: { key: string; name: string }, row?: DraftRow) {
+    const fields = column ? [column] : visibleColumns;
+    if (!rows.length || !fields.length || row?.deleted) return [];
+    const checked = row ? selectedRows.has(row.id) : selectedRows.size > 0;
+    const allowed = () => current() && rowsRef.current === rows && selectedRowsRef.current === selectedRows &&
+      layoutRevision.current === headerCopyLayoutRevision && !blockedRef.current && !externalStaleRef.current && !record.hasInput();
+    return gridHeaderDataCopyActions(!!column, headers => {
+      if (!allowed()) return;
+      try {
+        const records = row && !checked ? [row] : rows.filter(item => !item.deleted && (!checked || selectedRows.has(item.id)));
+        copyTableCells(records, fields, headers, allowed);
+      } catch (reason) { if (allowed()) setError(errorMessage(reason)); }
+    });
   }
   /** 原生粘贴事件提供内容，完全不依赖被禁用的浏览器剪贴板权限。 */
   function pasteClipboard({ row, column }: { row: DraftRow; column: { key: string } }, event: React.ClipboardEvent) {
@@ -2275,14 +2291,17 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     sort: gridSort, current: () => tableToolbarCurrent() && !reloadBlocked() && !activeGridEditor.current,
     canSort: () => sortPanelAvailable, applySort: applyGridSort,
     selectColumn: index => cellRange.selectColumnAction(index - 1),
-    columnActions: current => tableRowSqlActions(undefined, current, undefined, selectedRows.size > 0),
+    columnActions: (column, current) => [
+      ...tableHeaderDataActions(current, column), ...tableRowSqlActions(undefined, current, undefined, selectedRows.size > 0),
+    ],
     findColumn: page ? key => openPageFind('query', key) : undefined,
     visibility: page && !blocked ? { showType: showFieldType, showComment: showFieldComment,
       onShowTypeChange: setShowFieldType, onShowCommentChange: setShowFieldComment } : undefined,
     rowActions: (index, current) => {
       const row = rows[index];
       if (!row || !cellActionCurrent(row)) return [];
-      return tableRowSqlActions(row, () => current() && cellActionCurrent(row), undefined, selectedRows.has(row.id));
+      const allowed = () => current() && cellActionCurrent(row);
+      return [...tableHeaderDataActions(allowed, undefined, row), ...tableRowSqlActions(row, allowed, undefined, selectedRows.has(row.id))];
     },
     resizeRows: page && !externalStale && !preferencesLoading && !preferencesLock.current ? { height,
       apply: next => updatePreferences(setTableRowHeight(preferencesRef.current, next)),

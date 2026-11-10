@@ -35,7 +35,7 @@ import type { QueryResultRowViewKind } from './QueryResultMatchView';
 import { queryResultFindZh as rowViewText } from '../locales/queryResultFind.zh-CN';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
 import { encodeSqliteResultClipboard, sqliteCellClipboardType } from '../sqliteTableClipboard';
-import { copyGridRangeNames, copyGridRangeText, gridRangeCopyActions } from '../gridRangeCopy';
+import { copyGridRangeNames, copyGridRangeText, gridHeaderDataCopyActions, gridRangeCopyActions } from '../gridRangeCopy';
 import { gridRangeSqliteStorage, snapshotGridRangeExport, type GridRangeExportData } from '../gridRangeExport';
 import { gridRangeExportZh as rangeExportText } from '../locales/gridRangeExport.zh-CN';
 import { GridRangeFill } from './GridRangeFill';
@@ -377,6 +377,24 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     };
   }
 
+  /** 读取标题关联的显示列和行，保留通用及 SQLite 原生剪贴板载荷。 */
+  function resultHeaderDataActions(current: () => boolean, column?: { key: string; name: string }, index?: number) {
+    const fields = column ? [column] : columns;
+    if (!rangeTools || !rows.length || !fields.length || tableCopy?.enabled === false) return [];
+    const checked = index === undefined ? selectedRows.size > 0 : selectedRows.has(index);
+    const allowed = () => current() && selectedActionCurrent() && tableCopy?.isCurrent() !== false;
+    return gridHeaderDataCopyActions(!!column, headers => {
+      if (!allowed()) return;
+      try {
+        const indices = index !== undefined && !checked ? [index] : rows.flatMap((row, position) =>
+          !skipRowInInversion?.(row) && (!checked || selectedRows.has(position)) ? [position] : []);
+        if (!indices.length) throw Error(copyText.invalid);
+        writeTableClipboardEvent(allowed, gridCopyData(indices, fields.map(field => field.key),
+          headers ? fields.map(field => field.name) : undefined));
+      } catch (reason) { if (allowed()) useWorkspace.getState().notify(errorMessage(reason), true); }
+    });
+  }
+
   function rangeCopyIndices(target: GridRangeTarget<DataRow>): number[] {
     return target.rows.flatMap((row, index) => skipRowInInversion?.(row) ? [] : [target.startRow + index]);
   }
@@ -633,13 +651,17 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
     sort: sort?.map(({ column, direction }) => ({ columnKey: column, direction })) ?? [],
     current: actionCurrent, canSort: key => !!onSortChange && !sortReasons?.get(key), applySort: changeSortColumns,
     selectColumn: rangeTools ? index => cellRange.selectColumnAction(index - 1) : undefined,
-    columnActions: current => resultRowSqlActions(undefined, () => current() && selectedActionCurrent(), undefined, selectedRows.size > 0),
+    columnActions: (column, current) => [
+      ...resultHeaderDataActions(current, column),
+      ...resultRowSqlActions(undefined, () => current() && selectedActionCurrent(), undefined, selectedRows.size > 0),
+    ],
     resizeColumn: fitHeader ? resizeColumn : undefined, ownDialog,
     resizeRows: onRowHeightChange ? { height, apply: onRowHeightChange } : undefined, rowHeaderColumns: onActiveRowChange ? 0 : 1,
-    rowActions: insertSql || updateSql ? (index, current) => {
+    rowActions: rangeTools || insertSql || updateSql ? (index, current) => {
       const row = rows[index];
       if (!row || skipRowInInversion?.(row) || tableCopy?.enabled === false || tableCopy?.isCurrent() === false) return [];
-      return resultRowSqlActions(index, () => current() && rows[index] === row && selectedActionCurrent(), undefined, selectedRows.has(index));
+      const allowed = () => current() && rows[index] === row && selectedActionCurrent();
+      return [...resultHeaderDataActions(allowed, undefined, index), ...resultRowSqlActions(index, allowed, undefined, selectedRows.has(index))];
     } : undefined,
     visibility: headerDetails,
     freeze: freezeColumns, frozenThrough: columns[frozenCount - 1]?.key,

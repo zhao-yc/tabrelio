@@ -10,6 +10,7 @@ import { gridRowHeightZh as rowHeightText } from '../../src/renderer/locales/gri
 import { navigationMenuItem } from './navigation-menu';
 import { gridRangeCopyZh as rangeCopy } from '../../src/renderer/locales/gridRangeCopy.zh-CN';
 import { readGridMenuClipboard } from './grid-cell-range-clipboard';
+import { decodeClipboard } from '../../src/renderer/gridClipboard';
 
 test('离线快照列标题查找按原列键定位重名列，重排后仍只查命中的列', async ({}, info) => {
   const name = '同名列离线样本.dbark-result.json', path = join(realpathSync(dataDir), name);
@@ -81,6 +82,14 @@ test('离线快照列标题查找按原列键定位重名列，重排后仍只�
   await expect(status).toHaveText(findText.count(1, -1));
   await viewer.screenshot({ path: info.outputPath('query-result-header-find.png') });
   await selectedRow.check();
+  await headers.nth(0).click({ button: 'right' });
+  const fromHeader = await readGridMenuClipboard(page, viewer.getByRole('menuitem', { name: headerText.copyColumnDataWithName, exact: true }));
+  expect(fromHeader.text).toBe('重复列\n其它右值');
+  expect(decodeClipboard(fromHeader.typed, fromHeader.text)).toEqual([['其它右值']]);
+  await selectedRow.press('Shift+F10');
+  const fromRow = await readGridMenuClipboard(page, viewer.getByRole('menuitem', { name: headerText.copyRowData, exact: true }));
+  expect(decodeClipboard(fromRow.typed, fromRow.text)).toEqual([['其它右值', '其它左值', '末行空列名', '末行末格']]);
+  await expect(selectedRow).toBeChecked();
   const start = grid.getByRole('gridcell', { name: '末行末格', exact: true });
   const end = grid.getByRole('gridcell', { name: '目标记录', exact: true });
   await start.click();
