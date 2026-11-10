@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询构建器可为分组字段单独设置输出别名。原字段继续用于 GROUP BY、HAVING 和排序。别名随设计保存，并进入查询及视图输出。O04 仍为部分覆盖。
+
 2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询构建器新增不同值合计与平均（SUM DISTINCT、AVG DISTINCT），可与普通聚合并列使用，支持 HAVING、汇总排序、保存设计及视图。O04 仍为部分覆盖。
 
 2026-11-10 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的查询构建器可直接复制完整预览 SQL，或保存为绑定原连接及数据库的本地查询并选填分组。保存前复核来源，完成后继续留在原设计。O04 与 Q03 仍为部分覆盖。

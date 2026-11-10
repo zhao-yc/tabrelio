@@ -1,5 +1,6 @@
 import type { SortRule } from '../../shared/contracts';
 import type { QueryBuilderSummary } from '../../shared/queryBuilderSummary';
+import { queryBuilderAliasBytes, type QueryBuilderColumnAlias } from '../../shared/queryBuilderProjection';
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits, type ForeignKeyJoinAggregateFunction } from '../../shared/tableForeignKeyJoinSummary';
 import { uid } from '../lib';
 import { tableForeignKeyJoinSummaryZh as aggregateText } from '../locales/tableForeignKeyJoinSummary.zh-CN';
@@ -7,11 +8,12 @@ import { tableSortZh as sortText } from '../locales/tableSort.zh-CN';
 import { queryBuilderSummaryZh as text } from '../locales/queryBuilderSummary.zh-CN';
 
 interface AggregateDraft { id: string; fn: ForeignKeyJoinAggregateFunction; column: string; alias: string }
-export interface QueryBuilderSummaryDraft { groups: string[]; aggregates: AggregateDraft[]; sort: SortRule[] }
+export interface QueryBuilderSummaryDraft { groups: string[]; groupAliases?: QueryBuilderColumnAlias[]; aggregates: AggregateDraft[]; sort: SortRule[] }
 export const emptyQueryBuilderSummary: QueryBuilderSummaryDraft = { groups: [], aggregates: [], sort: [] };
 
 export function queryBuilderSummaryOutputs(draft: QueryBuilderSummaryDraft) {
-  return [...draft.groups.map(name => ({ key: 'field:' + name, name })),
+  const aliases = new Map(draft.groupAliases?.map(item => [item.column, item.alias]));
+  return [...draft.groups.map(column => ({ key: 'field:' + column, name: aliases.get(column) ?? column })),
     ...draft.aggregates.map(item => ({ key: 'aggregate:' + item.id, name: item.alias }))];
 }
 
@@ -29,7 +31,7 @@ export function summaryConditionLabel(outputs: ReturnType<typeof queryBuilderSum
 /** 排序草稿用稳定身份。改别名跟随原指标，删除后新同名指标不会接管。 */
 export function queryBuilderSummaryFromDraft(draft: QueryBuilderSummaryDraft): QueryBuilderSummary {
   const byId = new Map(queryBuilderSummaryOutputs(draft).map(item => [item.key, item.name]));
-  return { groups: draft.groups,
+  return { groups: draft.groups, ...(draft.groupAliases?.length ? { groupAliases: draft.groupAliases } : {}),
     aggregates: draft.aggregates.map(({ fn, column, alias }) => fn === 'COUNT_ALL' ? { fn, alias } : { fn, column, alias }),
     sort: draft.sort.map(rule => ({ ...rule, column: byId.get(rule.column) ?? '' })) };
 }
@@ -45,14 +47,15 @@ function move<T>(items: T[], index: number, offset: -1 | 1): T[] {
 export function QueryBuilderSummaryPanel({ names, draft, disabled, onChange }: {
   names: readonly string[]; draft: QueryBuilderSummaryDraft; disabled: boolean; onChange(next: QueryBuilderSummaryDraft): void;
 }) {
-  const { groups, aggregates, sort } = draft;
+  const { groups, groupAliases, aggregates, sort } = draft;
   const availableGroup = names.find(name => !groups.includes(name));
   const availableOutputs = queryBuilderSummaryOutputs(draft);
   const availableSort = availableOutputs.find(item => !sort.some(rule => rule.column === item.key));
   const change = (patch: Partial<QueryBuilderSummaryDraft>) => {
     if (disabled) return;
     const next = { ...draft, ...patch }, keys = new Set(queryBuilderSummaryOutputs(next).map(item => item.key));
-    onChange({ ...next, sort: next.sort.filter(rule => keys.has(rule.column)) });
+    const aliases = next.groupAliases?.filter(item => keys.has('field:' + item.column));
+    onChange({ ...next, groupAliases: aliases?.length ? aliases : undefined, sort: next.sort.filter(rule => keys.has(rule.column)) });
   };
   const changeAggregate = (index: number, patch: Partial<AggregateDraft>) =>
     change({ aggregates: aggregates.map((item, position) => position === index ? { ...item, ...patch } : item) });
@@ -74,6 +77,12 @@ export function QueryBuilderSummaryPanel({ names, draft, disabled, onChange }: {
         const field = event.target.value;
         change({ groups: groups.map((before, position) => position === index ? field : before) });
       }}>{names.map(field => <option key={field} value={field} disabled={field !== name && groups.includes(field)}>{field}</option>)}</select>
+      <input aria-label={aggregateText.groupAlias(index + 1)} placeholder={aggregateText.groupAliasPlaceholder} maxLength={queryBuilderAliasBytes}
+        value={groupAliases?.find(item => item.column === name)?.alias ?? ''} onChange={event => {
+          const alias = event.target.value;
+          const next = (groupAliases ?? []).filter(item => item.column !== name);
+          change({ groupAliases: alias ? [...next, { column: name, alias }] : next });
+        }}/>
       <button type="button" aria-label={aggregateText.groupEarlier(index + 1)} disabled={index === 0} onClick={() => change({ groups: move(groups, index, -1) })}>↑</button>
       <button type="button" aria-label={aggregateText.groupLater(index + 1)} disabled={index === groups.length - 1} onClick={() => change({ groups: move(groups, index, 1) })}>↓</button>
       <button type="button" aria-label={aggregateText.groupRemove(index + 1)} onClick={() => change({ groups: groups.filter(field => field !== name) })}>×</button>

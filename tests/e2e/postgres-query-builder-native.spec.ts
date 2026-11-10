@@ -114,6 +114,7 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await summaryMode.check();
     await button(aggregate.addGroup).click();
     await builder.getByRole('combobox', { name: aggregate.groupColumn(1), exact: true }).selectOption('label');
+    await builder.getByLabel(aggregate.groupAlias(1), { exact: true }).fill('类别"名称');
     await button(aggregate.addAggregate).click();
     await button(aggregate.addAggregate).click();
     await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('AVG_DISTINCT');
@@ -130,7 +131,7 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await having.getByLabel(zh.table.text011).fill(max);
     await having.getByRole('button', { name: zh.table.text013, exact: true }).click();
     await builder.getByRole('textbox', { name: aggregate.alias(2), exact: true }).fill('最终合计');
-    const grouped = `SELECT "label", pg_catalog.AVG(DISTINCT "id") AS "去重均值", pg_catalog.SUM(DISTINCT "id") AS "最终合计" FROM ${view} WHERE "id" >= E'${min}' GROUP BY "label" HAVING pg_catalog.SUM(DISTINCT "id") < E'${max}' ORDER BY 3 DESC NULLS LAST LIMIT 2;`;
+    const grouped = `SELECT "label" AS "类别""名称", pg_catalog.AVG(DISTINCT "id") AS "去重均值", pg_catalog.SUM(DISTINCT "id") AS "最终合计" FROM ${view} WHERE "id" >= E'${min}' GROUP BY "label" HAVING pg_catalog.SUM(DISTINCT "id") < E'${max}' ORDER BY 3 DESC NULLS LAST LIMIT 2;`;
     // 此阈值下重复值若未去重，HAVING 会淘汰本应保留的分组。
     const duplicate = (await observer.query('INSERT INTO ' + table + ' VALUES ($1, $2, NULL) RETURNING ctid::text', [min, '精确整数'])).rows[0].ctid;
     await expect(sql).toHaveText(grouped);
@@ -141,7 +142,7 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await expect(results.getByRole('gridcell', { name: max, exact: true })).toHaveCount(0);
     await expect(results.getByRole('gridcell', { name: min, exact: true }).first()).toBeVisible();
     await sql.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath('postgres-builder-distinct-aggregate.png') });
+    await page.screenshot({ path: info.outputPath('postgres-builder-group-alias.png') });
     await summaryMode.uncheck();
     await expect(sql).toHaveText(expected.replace('LIMIT 3', 'LIMIT 2'));
     await summaryMode.check();
@@ -163,8 +164,8 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await page.screenshot({ path: info.outputPath('postgres-builder-view.png') });
     await viewButton(create.apply).click();
     await expect(sql).toHaveText(grouped);
-    expect((await observer.query('SELECT label, "最终合计", "去重均值" = "最终合计" AS "均值正确" FROM "odd.schema".builder_summary')).rows).toEqual([
-      { label: '精确整数', 均值正确: true, 最终合计: min },
+    expect((await observer.query('SELECT "类别""名称", "最终合计", "去重均值" = "最终合计" AS "均值正确" FROM "odd.schema".builder_summary')).rows).toEqual([
+      { '类别"名称': '精确整数', 均值正确: true, 最终合计: min },
     ]);
     await observer.query('DELETE FROM ' + table + ' WHERE ctid = $1::tid', [duplicate]);
     await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();

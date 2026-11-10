@@ -3,9 +3,10 @@ import { queryBuilderColumnAliasesSchema } from './queryBuilderProjection';
 import { foreignKeyJoinSqlAlias, type ForeignKeyJoinSide } from './tableForeignKeyJoinSources';
 
 export const mysqlQueryProjectionLimit = 1024;
+export const mysqlQueryOutputAliasSchema = queryBuilderColumnAliasesSchema.element.shape.alias
+  .refine(value => value.trimEnd() === value, 'MySQL／MariaDB 的输出别名末尾不能是空白。');
 export const mysqlQueryProjectionSchema = z.array(queryBuilderColumnAliasesSchema.element
-  .extend({ alias: queryBuilderColumnAliasesSchema.element.shape.alias
-    .refine(value => value.trimEnd() === value, 'MySQL／MariaDB 的输出别名末尾不能是空白。').optional() }))
+  .extend({ alias: mysqlQueryOutputAliasSchema.optional() }))
   .min(1).max(mysqlQueryProjectionLimit);
 export type MysqlQueryProjection = z.infer<typeof mysqlQueryProjectionSchema>;
 

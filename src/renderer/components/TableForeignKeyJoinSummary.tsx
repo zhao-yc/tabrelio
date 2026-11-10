@@ -1,4 +1,5 @@
 import type { TableInfo } from '../../shared/contracts';
+import { queryBuilderAliasBytes } from '../../shared/queryBuilderProjection';
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits, type ForeignKeyJoinAggregateDraft, type ForeignKeyJoinGroupDraft } from '../tableForeignKeyJoinSummary';
 import { tableForeignKeyJoinSummaryZh as text } from '../locales/tableForeignKeyJoinSummary.zh-CN';
 import { tableForeignKeyJoinZh as queryText } from '../locales/tableForeignKeyJoin.zh-CN';
@@ -9,7 +10,7 @@ import { UsageHelp } from './ui';
 export function TableForeignKeyJoinSummary({sources,sourceLabel,groups,aggregates,disabled,onAddGroup,onGroup,onRemoveGroup,onMoveGroup,onClearGroups,onAddAggregate,onAggregate,onRemoveAggregate,onMoveAggregate,onClearAggregates,single = false}:{
   single?: boolean;
   sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>; sourceLabel(side: ForeignKeyJoinSide): string; groups:readonly ForeignKeyJoinGroupDraft[];aggregates:readonly ForeignKeyJoinAggregateDraft[];disabled:boolean;
-  onAddGroup():void;onGroup(entry:ForeignKeyJoinGroupDraft,patch:Partial<Pick<ForeignKeyJoinGroupDraft,'side'|'column'>>):void;onRemoveGroup(entry:ForeignKeyJoinGroupDraft):void;onMoveGroup(entry:ForeignKeyJoinGroupDraft,offset:-1|1):void;onClearGroups():void;
+  onAddGroup():void;onGroup(entry:ForeignKeyJoinGroupDraft,patch:Partial<Omit<ForeignKeyJoinGroupDraft,'id'>>):void;onRemoveGroup(entry:ForeignKeyJoinGroupDraft):void;onMoveGroup(entry:ForeignKeyJoinGroupDraft,offset:-1|1):void;onClearGroups():void;
   onAddAggregate():void;onAggregate(entry:ForeignKeyJoinAggregateDraft,patch:Partial<Omit<ForeignKeyJoinAggregateDraft,'id'>>):void;onRemoveAggregate(entry:ForeignKeyJoinAggregateDraft):void;onMoveAggregate(entry:ForeignKeyJoinAggregateDraft,offset:-1|1):void;onClearAggregates():void;
 }){
   const columns = (side: ForeignKeyJoinSide) => sources.get(side)?.columns.map(column => column.name) ?? [];
@@ -21,6 +22,8 @@ export function TableForeignKeyJoinSummary({sources,sourceLabel,groups,aggregate
     <strong>{text.groups}</strong>{groups.map((entry,index)=>{const n=index+1,names=columns(entry.side),allowed=new Set(available(entry.side,entry));return <div className="filter-inputs" key={entry.id}>
       <label>{text.groupSide(n)}<select aria-label={text.groupSide(n)} value={entry.side} disabled={disabled} onChange={event=>{const side=foreignKeyJoinSide(sources,event.target.value);if(side){const names=available(side,entry),column=names.includes(entry.column)?entry.column:names[0];if(column)onGroup(entry,{side,column});}}}>{sides.map(side => <option key={side} value={side} disabled={!available(side,entry).length}>{sourceLabel(side)}</option>)}</select></label>
       <label>{text.groupColumn(n)}<select aria-label={text.groupColumn(n)} value={entry.column} disabled={disabled} onChange={event=>{if(allowed.has(event.target.value))onGroup(entry,{column:event.target.value});}}>{names.map(name=><option value={name} key={name} disabled={!allowed.has(name)}>{name}</option>)}</select></label>
+      <input aria-label={text.groupAlias(n)} placeholder={text.groupAliasPlaceholder} maxLength={queryBuilderAliasBytes}
+        value={entry.alias ?? ''} onChange={event => onGroup(entry, { alias: event.target.value || undefined })}/>
       <button type="button" aria-label={text.groupEarlier(n)} disabled={disabled||index===0} onClick={()=>onMoveGroup(entry,-1)}>↑</button><button type="button" aria-label={text.groupLater(n)} disabled={disabled||index===groups.length-1} onClick={()=>onMoveGroup(entry,1)}>↓</button><button type="button" aria-label={text.groupRemove(n)} disabled={disabled} onClick={()=>onRemoveGroup(entry)}>×</button>
     </div>;})}<button type="button" disabled={disabled||groups.length>=foreignKeyJoinSummaryLimits.groups||!sides.some(side => available(side).length)} onClick={onAddGroup}>{text.addGroup}</button><button type="button" disabled={disabled||!groups.length} onClick={onClearGroups}>{text.clearGroups}</button>
     <p><strong>{text.aggregates}</strong></p>{aggregates.map((entry,index)=>{const n=index+1;return <div key={entry.id}><div className="filter-inputs">

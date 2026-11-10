@@ -23,7 +23,7 @@ const design: ManualJoinDesign = {
   filters: [{ id: 'where1', side: 't3', enabled: false, draft: { column: 'label', operator: 'IN', value: '', upperValue: '', valuesText: ' 保留🚢\n第二行', includeEmptyString: true } }],
   filterMode: 'all', filterGroup: { mode: 'all', children: [0] },
   sort: [{ id: 'sort1', rule: { side: 't3', column: 'label', direction: 'DESC', nulls: 'LAST' } }],
-  summaryEnabled: true, summaryGroups: [{ id: 'g1', side: 't3', column: 'label' }], summarySort: [],
+  summaryEnabled: true, summaryGroups: [{ id: 'g1', side: 't3', column: 'label', alias: '地区名称' }], summarySort: [],
   aggregates: [{ id: 'a1', fn: 'SUM', side: 'parent', column: 'total', alias: '合计' }],
   having: [{ id: 'having1', enabled: true, targetLabel: '聚合输出 · 合计', draft: { column: 'a:a1', operator: '>', value: '9007199254740993', upperValue: '', valuesText: '', includeEmptyString: false } }],
   havingMode: 'all',

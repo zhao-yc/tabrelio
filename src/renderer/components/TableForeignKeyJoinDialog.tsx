@@ -106,13 +106,17 @@ function joinHavingTargets(selection: Selection, sources: ReadonlyMap<ForeignKey
 function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selection, parent: TableInfo | undefined, sources: ReadonlyMap<ForeignKeyJoinSide, TableInfo>, havingTargets: readonly ForeignKeyJoinHavingTarget[]): MysqlQueryBuilderPreview {
   const limit = foreignKeyJoinResultLimit(selection.limit), offset = readQueryBuilderOffset(selection.offset);
   const filters = foreignKeyJoinFiltersFromDraft(selection.filters, sources);
+  const summary = selection.summaryEnabled ? foreignKeyJoinSummaryFromDraft(selection.summaryGroups, selection.aggregates) : undefined;
+  // 先报告使整个汇总预览失效的别名错误，避免把仍绑定原分组的条件误报为丢失。
+  if (summary && selection.having.length && !havingTargets.length)
+    buildForeignKeyJoinSummary(sources, summary, foreignKeyJoinColumnAlias);
   const having = selection.summaryEnabled ? foreignKeyJoinHavingFromDraft(selection.having, havingTargets) : [];
   const sorting = selection.summaryEnabled ? selection.summarySort : selection.sort;
   const options = {
     childColumns: selection.child,
     ...(selection.projection ? { projection: selection.projection } : {}),
     ...(!selection.summaryEnabled && selection.distinct ? { distinct: true } : {}),
-    ...(selection.summaryEnabled ? { summary: foreignKeyJoinSummaryFromDraft(selection.summaryGroups, selection.aggregates) } : {}),
+    ...(summary ? { summary } : {}),
     ...(having.length ? { having: { filters: having, mode: selection.havingMode, ...(selection.havingGroup ? { group: selection.havingGroup } : {}) } } : {}),
     ...(filters.length ? { filters, filterMode: selection.filterMode, ...(selection.filterGroup ? { filterGroup: selection.filterGroup } : {}) } : {}),
     ...(sorting.length ? { sort: sorting.map(item => item.rule) } : {}),
@@ -573,8 +577,13 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     for(const [side, info] of sources){const column=info.columns.find(column=>!selection.summaryGroups.some(item=>item.side===side&&item.column===column.name));if(column){revise({...selection,summaryGroups:[...selection.summaryGroups,{id:uid(),side,column:column.name}]});return;}}
   }
   /** 老行及老渲染不能编辑后继；字段必须来自当前目录且不重复，值本身不由SQL表达式提供。 */
-  function editSummaryGroup(entry:ForeignKeyJoinGroupDraft,patch:Partial<Pick<ForeignKeyJoinGroupDraft,'side'|'column'>>):void{
-    if(!editable()||!sourceReady||!selection.summaryGroups.includes(entry))return;const next={...entry,...patch};if(!sources.get(next.side)?.columns.some(column=>column.name===next.column)||selection.summaryGroups.some(item=>item!==entry&&item.side===next.side&&item.column===next.column))return;revise({...selection,summaryGroups:selection.summaryGroups.map(item=>item===entry?next:item)});
+  function editSummaryGroup(entry: ForeignKeyJoinGroupDraft, patch: Partial<Omit<ForeignKeyJoinGroupDraft, 'id'>>): void {
+    if (!editable() || !sourceReady || !selection.summaryGroups.includes(entry)) return;
+    const next = { ...entry, ...patch };
+    if (!sources.get(next.side)?.columns.some(column => column.name === next.column) ||
+        selection.summaryGroups.some(item => item !== entry && item.side === next.side && item.column === next.column)) return;
+    if (next.side !== entry.side || next.column !== entry.column) delete next.alias;
+    revise({ ...selection, summaryGroups: selection.summaryGroups.map(item => item === entry ? next : item) });
   }
   /** 明确添加COUNT(*)草稿，默认别名避开已用别名；空汇总不会回退明细查询。 */
   function addAggregate():void{

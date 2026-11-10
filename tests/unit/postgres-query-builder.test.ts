@@ -157,4 +157,19 @@ describe('PostgreSQL 单表查询设计', () => {
     expect(sql).toContain('pg_catalog.AVG(DISTINCT "id") AS "不同值平均"');
     expect(sql).toContain("HAVING pg_catalog.AVG(DISTINCT \"id\") > E'1.25' ORDER BY 2 DESC");
   });
+
+  it('分组别名只改变输出，原字段继续用于 WHERE、GROUP BY 和 HAVING', () => {
+    const grouped: PostgresQueryBuilderDesign = { ...draft, columns: [],
+      filter: { mode: 'all', rules: [{ column: '值', operator: 'IS NOT NULL' }] },
+      summary: { groups: ['值'], groupAliases: [{ column: '值', alias: '类"别' }],
+        aggregates: [{ fn: 'COUNT_ALL', alias: '值' }], sort: [{ column: '类"别', direction: 'ASC' }],
+        having: { mode: 'all', rules: [{ column: '类"别', operator: '=', value: '原值' }] },
+      } };
+    const sql = buildPostgresQueryBuilderSql(grouped, source);
+    expect(sql).toContain('SELECT "值" AS "类""别", pg_catalog.COUNT(*) AS "值"');
+    expect(sql).toContain('WHERE "值" IS NOT NULL GROUP BY "值" HAVING "值" = E\'原值\' ORDER BY 1 ASC');
+    for (const groupAliases of [[{ column: 'id', alias: '未分组' }], [{ column: '值', alias: '值' }]]) {
+      expect(() => buildPostgresQueryBuilderSql({ ...grouped, summary: { ...grouped.summary!, groupAliases } }, source)).toThrow();
+    }
+  });
 });

@@ -1,5 +1,5 @@
 import { queryBuilderOffsetDraftSchema } from './queryBuilderOffset';
-import { assertMysqlQueryProjection, mysqlQueryProjectionSchema, mysqlSelectedOutputKeys } from './mysqlQueryProjection';
+import { assertMysqlQueryProjection, mysqlQueryOutputAliasSchema, mysqlQueryProjectionSchema, mysqlSelectedOutputKeys } from './mysqlQueryProjection';
 import { z } from 'zod';
 import { foreignKeyJoinAggregateFunctions } from './tableForeignKeyJoinSummary';
 import { FILTER_LIMITS, filterGroupSchema, tableFilterOperators, validateFilterGroup } from './filtering';
@@ -52,7 +52,7 @@ const queryDesignFields = z.object({
   filterMode: mode, filterGroup: filterGroupSchema.optional(),
   sort: sorts, summarySort: sorts,
   summaryEnabled: z.boolean(),
-  summaryGroups: z.array(z.object({ id, side, column: identifier }).strict()).max(20),
+  summaryGroups: z.array(z.object({ id, side, column: identifier, alias: mysqlQueryOutputAliasSchema.optional() }).strict()).max(20),
   aggregates: z.array(z.object({
     id, side, column: identifier, fn: z.enum(foreignKeyJoinAggregateFunctions), alias: z.string().max(128),
   }).strict()).max(32),

@@ -16,6 +16,7 @@ const sqliteMode = z.enum(['and', 'or']);
 const draftSort = z.object({ column: field, direction: z.enum(['ASC', 'DESC']), nulls: z.enum(['FIRST', 'LAST']).optional() }).strict();
 const summary = z.object({
   groups: z.array(field).max(foreignKeyJoinSummaryLimits.groups),
+  groupAliases: queryBuilderColumnAliasesSchema.max(foreignKeyJoinSummaryLimits.groups).optional(),
   aggregates: z.array(z.object({ id, fn: z.enum(foreignKeyJoinAggregateFunctions), column: field, alias: z.string().max(63) }).strict())
     .max(foreignKeyJoinSummaryLimits.aggregates),
   sort: z.array(draftSort).max(20),
@@ -55,7 +56,10 @@ const postgresDraft = base.extend({
 export const singleQueryDraftSchema = z.discriminatedUnion('dialect', [sqliteDraft, postgresDraft]).superRefine((draft, ctx) => {
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
   const unique = (values: string[]) => new Set(values).size === values.length;
-  try { queryBuilderAliasMap(draft.selected, draft.columnAliases); }
+  try {
+    queryBuilderAliasMap(draft.selected, draft.columnAliases);
+    queryBuilderAliasMap(draft.summary.groups, draft.summary.groupAliases);
+  }
   catch (reason) { issue(reason instanceof Error ? reason.message : '查询设计的输出别名无效。'); }
   if (!unique(draft.selected) || !unique(draft.summary.groups) || !unique(draft.summary.aggregates.map(item => item.id)) ||
       !unique(draft.summary.sort.map(item => item.column)) || !unique(draft.sort.map(item => item.column))) issue('查询设计包含重复编辑项。');

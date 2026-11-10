@@ -71,6 +71,7 @@ function qualifySingleDraft(draft: SqliteSingleQueryDraft): SqliteSingleQueryDra
     sort: draft.sort.map(rule => ({ ...rule, column: qualify(rule.column) })),
     havingFilters: draft.havingFilters.map(rule => ({ ...rule, column: outputKey(rule.column) })),
     summary: { groups: draft.summary.groups.map(qualify),
+      groupAliases: draft.summary.groupAliases?.map(item => ({ ...item, column: qualify(item.column) })),
       aggregates: draft.summary.aggregates.map(item => ({ ...item, column: qualify(item.column) })),
       sort: draft.summary.sort.map(rule => ({ ...rule, column: outputKey(rule.column) })) },
   };

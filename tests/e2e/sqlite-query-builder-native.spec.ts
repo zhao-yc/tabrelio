@@ -129,6 +129,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(button(text.open)).toBeDisabled();
     await button(aggregate.addGroup).click();
     await builder.getByRole('combobox', { name: aggregate.groupColumn(1), exact: true }).selectOption('label');
+    await builder.getByLabel(aggregate.groupAlias(1), { exact: true }).fill('业务类别');
     await button(aggregate.addAggregate).click();
     await builder.getByRole('combobox', { name: aggregate.fn(1), exact: true }).selectOption('SUM_DISTINCT');
     await button(sort.add).click();
@@ -141,7 +142,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await having.getByLabel(browse.filterKind(1)).selectOption('integer');
     await having.getByLabel(browse.filterValue(1)).fill(maxInteger);
     await builder.getByRole('textbox', { name: aggregate.alias(1), exact: true }).fill('最终合计');
-    const grouped = 'SELECT "label", SUM(DISTINCT "value") AS "最终合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
+    const grouped = 'SELECT "label" AS "业务类别", SUM(DISTINCT "value") AS "最终合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
       maxInteger + ') GROUP BY "label" HAVING (typeof(SUM(DISTINCT "value")) = \'integer\' AND SUM(DISTINCT "value") = ' + maxInteger + ') ORDER BY 2 DESC LIMIT 2;';
     await expect(sql).toHaveText(grouped);
     await page.evaluate(async () => {
@@ -168,7 +169,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
     await expect(results.getByRole('gridcell', { name: maxInteger, exact: true })).toBeVisible();
     await sql.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath('sqlite-builder-distinct-aggregate.png') });
+    await page.screenshot({ path: info.outputPath('sqlite-builder-group-alias.png') });
     await button(viewDraft.builderEntry).click();
     await expect(editor.locator('.monaco-editor .view-lines')).toContainText('HAVING');
     await viewButton(objects.close).click();
@@ -188,7 +189,7 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     try {
       const read = reader.prepare('SELECT * FROM builder_summary');
       read.setReadBigInts(true);
-      expect(read.all()).toEqual([{ label: '精确整数', 最终合计: BigInt(maxInteger) }]);
+      expect(read.all()).toEqual([{ 业务类别: '精确整数', 最终合计: BigInt(maxInteger) }]);
     } finally { reader.close(); }
     const fileAfterView = readFileSync(database);
     await builder.locator('summary').filter({ hasText: joinText.singleDesignTitle }).click();

@@ -1,8 +1,9 @@
 import { tableReadIdentifier } from './tableReadSql';
 import { tableForeignKeyJoinSummaryZh as text } from './tableForeignKeyJoinSummary.zh-CN';
+import { mysqlQueryOutputAliasSchema } from './mysqlQueryProjection';
 
 import { foreignKeyJoinSide, foreignKeyJoinSqlAlias, type ForeignKeyJoinSide } from './tableForeignKeyJoinSources';
-export interface ForeignKeyJoinGroupKey { side: ForeignKeyJoinSide; column: string; }
+export interface ForeignKeyJoinGroupKey { side: ForeignKeyJoinSide; column: string; alias?: string; }
 export type ForeignKeyJoinAggregateFunction = typeof foreignKeyJoinAggregateFunctions[number];
 export type ForeignKeyJoinAggregate = { fn: 'COUNT_ALL'; alias: string } | { fn: Exclude<ForeignKeyJoinAggregateFunction, 'COUNT_ALL'>; side: ForeignKeyJoinSide; column: string; alias: string };
 export interface ForeignKeyJoinSummary { groups: readonly ForeignKeyJoinGroupKey[]; aggregates: readonly ForeignKeyJoinAggregate[]; }
@@ -26,12 +27,18 @@ function isAggregateFunction(value: unknown): value is ForeignKeyJoinAggregateFu
 }
 
 /** 聚合协议只读普通自有数据属性，拒绝未知项、访问器、空洞和附加数组属性。 */
-function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
+function record(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(text.invalid);
   const prototype = Object.getPrototypeOf(value); if (prototype !== Object.prototype && prototype !== null) throw Error(text.invalid);
-  const own = Reflect.ownKeys(value); if (own.length !== keys.length || own.some(key => typeof key !== 'string' || !keys.includes(key))) throw Error(text.invalid);
-  const result: Record<string, unknown> = {};
-  for (const key of keys) { const descriptor = Object.getOwnPropertyDescriptor(value,key); if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error(text.invalid); result[key] = descriptor.value; }
+  const own = Reflect.ownKeys(value);
+  if (own.some(key => typeof key !== 'string' || !keys.includes(key) && !optional.includes(key))) throw Error(text.invalid);
+  const result: Record<string, unknown> = Object.create(null);
+  for (const key of [...keys, ...optional]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor && optional.includes(key) && !(key in value)) continue;
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error(text.invalid);
+    result[key] = descriptor.value;
+  }
   return result;
 }
 /** 先核长度再枚举，输出有界新数组，不调用外部迭代器。 */
@@ -61,7 +68,15 @@ export function buildForeignKeyJoinSummary(sources: ReadonlyMap<ForeignKeyJoinSi
     if (typeof name !== 'string') throw Error(text.invalid); const quoted = tableReadIdentifier(name), key = name.toLowerCase();
     if (aliases.has(key)) throw Error(text.aliasConflict); aliases.add(key); columns.push({side,column,alias:name});expressions.push(expression+' AS '+quoted);outputs.push({alias:name,type,expression});if(side==='aggregate')aggregateReferences.set(name,expression);
   }
-  for (const raw of groups) { const value=record(raw,['side','column']), item=source(value.side,value.column), key=JSON.stringify([item.side,item.column.name]);if(keys.has(key))throw Error(text.invalid);keys.add(key);grouping.push(item.reference);output(item.side,item.column.name,alias(item.side,item.ordinal,item.column.name),item.reference,item.column.type); }
+  for (const raw of groups) {
+    const value = record(raw, ['side', 'column'], ['alias']), item = source(value.side, value.column);
+    const key = JSON.stringify([item.side, item.column.name]);
+    if (keys.has(key)) throw Error(text.invalid);
+    const name = value.alias === undefined ? alias(item.side, item.ordinal, item.column.name) : mysqlQueryOutputAliasSchema.parse(value.alias);
+    keys.add(key);
+    grouping.push(item.reference);
+    output(item.side, item.column.name, name, item.reference, item.column.type);
+  }
   for (const raw of aggregates) {
     if (!raw || typeof raw !== 'object') throw Error(text.invalid);
     const descriptor=Object.getOwnPropertyDescriptor(raw,'fn');if(!descriptor || !descriptor.enumerable || !('value' in descriptor))throw Error(text.invalid);
@@ -83,5 +98,6 @@ export function buildForeignKeyJoinSummary(sources: ReadonlyMap<ForeignKeyJoinSi
 
 /** COUNT(*)只携带函数和别名，其它隐藏来源输入保留在界面草稿，不混进有效声明。 */
 export function foreignKeyJoinSummaryFromDraft(groups: readonly ForeignKeyJoinGroupDraft[], aggregates: readonly ForeignKeyJoinAggregateDraft[]): ForeignKeyJoinSummary {
-  return { groups: groups.map(({side,column})=>({side,column})), aggregates: aggregates.map(value=>value.fn==='COUNT_ALL'?{fn:'COUNT_ALL',alias:value.alias}:{fn:value.fn,side:value.side,column:value.column,alias:value.alias}) };
+  return { groups: groups.map(({ side, column, alias }) => ({ side, column, ...(alias ? { alias } : {}) })),
+    aggregates: aggregates.map(value=>value.fn==='COUNT_ALL'?{fn:'COUNT_ALL',alias:value.alias}:{fn:value.fn,side:value.side,column:value.column,alias:value.alias}) };
 }

@@ -16,6 +16,17 @@ function fixture(){
   return{child,parent,options,summary,build:(extra:Partial<ForeignKeyJoinOptions>={})=>buildForeignKeyJoin(child,parent,'fk','LEFT',43,{...options,...extra})};
 }
 describe('JOIN结构化分组聚合',()=>{
+  it('分组别名与原字段独立，WHERE、HAVING 和排序均保持原表达式', () => {
+    const f = fixture();
+    const summary: ForeignKeyJoinSummary = { ...f.summary, groups: [{ side: 'child', column: 'pid', alias: '原`金额' }] };
+    const sql = f.build({ summary, having: { filters: [{ column: '原`金额', operator: 'IS NOT NULL' }] },
+      sort: [{ side: 'child', column: 'pid', direction: 'ASC' }] }).sql;
+    expect(sql).toContain('c.`pid` AS `原``金额`');
+    expect(sql).toContain('GROUP BY c.`pid`\nHAVING ((c.`pid` IS NOT NULL))\nORDER BY c.`pid` ASC');
+    for (const alias of ['金额', '空格 ', '字'.repeat(22)]) {
+      expect(() => f.build({ summary: { ...summary, groups: [{ ...summary.groups[0], alias }] } })).toThrow();
+    }
+  });
   it('十六份真实表向量包含全部指标，四模式下仍为单条无参数SELECT',()=>{const f=fixture(),cases=foreignKeyJoinSummaryReadOnlyCases();expect(cases).toHaveLength(16);for(const test of cases){const sql=f.build(test.options).sql;for(const ansiQuotes of [false,true])for(const noBackslashEscapes of [false,true]){expect(splitSql(sql,noBackslashEscapes,ansiQuotes)).toHaveLength(1);expect(namedParameterTokens(sql,{ansiQuotes,noBackslashEscapes})).toEqual([]);}}});
   it('未开启聚合保持旧字节，空聚合不静默回退明细，允许无分组全体汇总及仅分组',()=>{const f=fixture();expect(f.build({summary:undefined})).toEqual(f.build());expect(()=>f.build({summary:{groups:[],aggregates:[]}})).toThrow(/至少/);const total=f.build({childColumns:[],parentColumns:[],summary:{groups:[],aggregates:[{fn:'COUNT_ALL',alias:'n'}]}});expect(total.sql).toContain('COUNT(*) AS `n`');expect(total.sql).not.toContain('GROUP BY');expect(total.columns).toEqual([{side:'aggregate',column:'n',alias:'n'}]);const group=f.build({summary:{groups:[{side:'parent',column:'id'}],aggregates:[]}}).sql;expect(group).toContain('p.`id` AS `p_1_id`');expect(group).toContain('GROUP BY p.`id`\n');expect(group).not.toContain('c.`id` AS');});
   it('显式分组输出有序、双方同名区分，不继承明细字段或猜测函数依赖',()=>{const f=fixture(),result=f.build({summary:{groups:[{side:'parent',column:'id'},{side:'child',column:'id'}],aggregates:[{fn:'COUNT_ALL',alias:'n'}]}});expect(result.columns.map(c=>c.alias)).toEqual(['p_1_id','c_1_id','n']);expect(result.sql).toContain('GROUP BY p.`id`, c.`id`\n');expect(result.sql).not.toContain('p.`amount` AS');});

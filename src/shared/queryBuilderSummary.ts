@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { foreignKeyJoinAggregateFunctions, foreignKeyJoinSummaryLimits, queryBuilderAggregateCall } from './tableForeignKeyJoinSummary';
+import { queryBuilderAliasMap, queryBuilderColumnAliasesSchema } from './queryBuilderProjection';
 
 const fieldName = z.string().min(1).max(515).refine(value => !/[\0\r\n\uD800-\uDFFF]/u.test(value), '汇总字段名不能含换行、空字符或无效 Unicode');
 const alias = fieldName.refine(value => value.trim().length > 0 && new TextEncoder().encode(value).length <= 63, '聚合别名须为 1～63 个 UTF-8 字节');
@@ -10,6 +11,7 @@ const aggregate = z.discriminatedUnion('fn', [
 
 export const queryBuilderSummarySchema = z.object({
   groups: z.array(fieldName).max(foreignKeyJoinSummaryLimits.groups),
+  groupAliases: queryBuilderColumnAliasesSchema.max(foreignKeyJoinSummaryLimits.groups).optional(),
   aggregates: z.array(aggregate).max(foreignKeyJoinSummaryLimits.aggregates),
   sort: z.array(z.object({ column: fieldName, direction: z.enum(['ASC', 'DESC']), nulls: z.enum(['FIRST', 'LAST']).optional() }).strict()).max(20),
 }).strict();
@@ -19,6 +21,7 @@ export type QueryBuilderSummary = z.infer<typeof queryBuilderSummarySchema>;
 export function compileQueryBuilderSummary(summary: QueryBuilderSummary, field: (name: string) => string,
   quote: (name: string) => string, functionPrefix = '', groupAlias?: (name: string) => string) {
   const { groups, aggregates, sort } = summary;
+  const groupAliases = queryBuilderAliasMap(groups, summary.groupAliases);
   const outputs = new Map<string, { position: number; expression: string }>(), folded = new Set<string>();
   function addOutput(name: string, expression: string, alias = name) {
     const key = alias.toLowerCase();
@@ -28,8 +31,10 @@ export function compileQueryBuilderSummary(summary: QueryBuilderSummary, field: 
   }
   const grouping = groups.map(field);
   const groupOutputs = groups.map((name, index) => {
-    const expression = grouping[index], alias = groupAlias?.(name);
-    addOutput(name, expression, alias);
+    const expression = grouping[index], explicit = groupAliases.get(name);
+    const alias = explicit ?? groupAlias?.(name);
+    // 草稿条件始终持有字段身份；编译后的条件用当前名称定位原表达式。
+    addOutput(explicit ?? name, expression, alias);
     return alias === undefined ? expression : expression + ' AS ' + quote(alias);
   });
   const expressions = aggregates.map(item => {

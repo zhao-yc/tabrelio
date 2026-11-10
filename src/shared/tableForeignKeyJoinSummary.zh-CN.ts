@@ -4,6 +4,7 @@ export const tableForeignKeyJoinSummaryZh = {
   hint: '分组字段和聚合项独立于明细选列。无分组字段时生成全体汇总；也可只分组不聚合。原 WHERE 在聚合之前生效，LIMIT 在聚合与排序之后生效。切回明细会恢复原选列和排序。',
   semantics: 'COUNT(*) 统计 JOIN 后的行；COUNT(字段) 不计 NULL。SUM/AVG 使用全部非 NULL 值。选择 DISTINCT 函数时，数据库按字段值去重后再计数、求和或求平均。FLOAT/DOUBLE 的聚合仍是近似值。',
   groups: 'GROUP BY 字段', aggregates: '聚合输出', addGroup: '添加分组字段', clearGroups: '清空分组字段', addAggregate: '添加聚合项', clearAggregates: '清空聚合项',
+  groupAlias: (n: number) => `第 ${n} 项分组输出别名`, groupAliasPlaceholder: '输出别名（可选）',
   groupSide: (n:number)=>`第 ${n} 项分组来源`, groupColumn: (n:number)=>`第 ${n} 项分组字段`, groupEarlier: (n:number)=>`上移第 ${n} 项分组`, groupLater: (n:number)=>`下移第 ${n} 项分组`, groupRemove: (n:number)=>`移除第 ${n} 项分组`,
   fn: (n:number)=>`第 ${n} 项聚合函数`, side: (n:number)=>`第 ${n} 项聚合来源`, column: (n:number)=>`第 ${n} 项聚合字段`, alias: (n:number)=>`第 ${n} 项聚合别名`, remove: (n:number)=>`移除第 ${n} 项聚合`, earlier: (n:number)=>`上移第 ${n} 项聚合`, later: (n:number)=>`下移第 ${n} 项聚合`, defaultAlias: (n:number)=>`统计_${n}`,
   functions: {
