@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo, FilterGroup, FilterMode, FilterRule, QueryOutcome } from '../../shared/contracts';
-import { manualJoinDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary } from '../../shared/manualJoinDesigns';
+import { queryBuilderDesignSchema, manualJoinOnRules, type ManualJoinDesign, type ManualJoinDesignSummary, type QueryBuilderDesign } from '../../shared/manualJoinDesigns';
 import { mysqlJoinSampleRows, type MysqlJoinedPreviewInput, type MysqlJoinPreviewInput, type MysqlJoinPreviewTarget } from '../../shared/mysqlJoinPreview';
 import { ExplainPlanView } from './ExplainPlanView';
 import { ResultsGrid } from './ResultsGrid';
@@ -36,18 +36,20 @@ const pageSize = 50;
 type DesignOperation = 'listDesigns' | 'saveDesign' | 'replaceDesign' | 'loadDesign' | 'deleteDesign';
 
 /** 保存可编辑输入和稳定条目编号。目录缓存与搜索位置留在当前窗口。 */
-function captureDesign(selection: Selection): ManualJoinDesign {
-  const { kind, distinct, unmatchedOnly, child, parent, limit, filters, filterMode, filterGroup,
+function captureDesign(selection: Selection): QueryBuilderDesign {
+  const { distinct, child, limit, filters, filterMode, filterGroup,
     sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup } = selection;
+  const settings = { version: 1, distinct, child, limit, filters, filterMode, filterGroup,
+    sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup };
+  if (!selection.manual) return queryBuilderDesignSchema.parse({ ...settings, single: true });
   const stripIds = ({ pairs }: ManualJoinSelection) => pairs.map(({ id: _id, ...pair }) => pair);
-  const first = selection.manual!;
-  return manualJoinDesignSchema.parse({
-    version: 1, first: { database: first.database, table: first.table, pairs: stripIds(first), on: first.on },
+  const first = selection.manual;
+  return queryBuilderDesignSchema.parse({
+    ...settings, first: { database: first.database, table: first.table, pairs: stripIds(first), on: first.on },
     additional: selection.additional.map(step => ({
       database: step.database, table: step.table, source: step.source, kind: step.kind, pairs: stripIds(step), columns: step.columns, on: step.on,
     })),
-    kind, distinct, unmatchedOnly, child, parent, limit, filters, filterMode, filterGroup,
-    sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup,
+    kind: selection.kind, unmatchedOnly: selection.unmatchedOnly, parent: selection.parent,
   });
 }
 
@@ -118,6 +120,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   const [selection, setSelection] = useState<Selection>(() => ({ distinct: false, unmatchedOnly: false, additional: [], fk: choices[0]?.name ?? '', manual: origin.manual ? { database: intent.source.database, table: '', pairs: [] } : undefined, kind: origin.fixed?.kind ?? (origin.manual ? 'INNER' : 'LEFT'), child: origin.intent.source.columns.map(column => column.name), parent: origin.fixed?.parent.columns.map(column => column.name) ?? [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all', summaryEnabled: false, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' }));
   const selectionRef = useRef(selection), [parent, setParent] = useState<{ fk: string; info: TableInfo } | undefined>(() =>
     origin.fixed && { fk: origin.fixed.foreignKey, info: origin.fixed.parent });
+  const initialSelection = useRef(selection).current;
   const [databases, setDatabases] = useState(() => [intent.source.database]);
   const [tables, setTables] = useState<string[]>();
   const [designs, setDesigns] = useState<ManualJoinDesignSummary[]>([]);
@@ -215,7 +218,8 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   }
 
   /** 恢复只读精确表身份，串行去重，全部核对完成后才发布一份完整草稿。 */
-  async function restoreDesign(design: ManualJoinDesign, selected: Selection, active: Operation, owns: () => boolean) {
+  async function restoreDesign(design: QueryBuilderDesign, selected: Selection, active: Operation, owns: () => boolean) {
+    if (origin.single !== ('single' in design)) throw Error(text.designModeMismatch);
     const base = origin.intent.source;
     const cache = new Map<string, TableInfo>();
     async function load(database: string, table: string): Promise<TableInfo> {
@@ -232,6 +236,17 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       return info;
     }
     await load(base.database, base.name);
+    if ('single' in design) {
+      const { single: _single, version: _version, ...settings } = design;
+      const next: Selection = { ...selected, ...settings, childSearch: '', childPage: 1 };
+      const sources = joinSources(base, undefined, []);
+      compileSelection(origin.intent, next, undefined, sources, joinHavingTargets(next, sources));
+      if (!owns()) return;
+      selectionRef.current = next;
+      setSelection(next);
+      setDesignNotice(text.designRestored);
+      return;
+    }
     const { first, additional, version: _version, ...settings } = design;
     const firstInfo = await load(first.database, first.table);
     const withIds = (pairs: ManualJoinDesign['first']['pairs']) => pairs.map(pair => ({ ...pair, id: uid() }));
@@ -265,9 +280,9 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     const designOperation = kind.endsWith('Design') || kind === 'listDesigns';
     const designTarget = designs.find(item => item.id === designId);
     const saveDesign = kind === 'saveDesign' || kind === 'replaceDesign';
-    if (designOperation && (!selection.manual || (saveDesign && (!preview.value || !designName.trim())) ||
+    if (designOperation && ((!selection.manual && !origin.single) || (saveDesign && (!preview.value || !designName.trim())) ||
         (kind !== 'listDesigns' && kind !== 'saveDesign' && !designTarget))) return;
-    if (kind === 'loadDesign' && selection.manual?.table && !window.confirm(text.designRestoreConfirm) ||
+    if (kind === 'loadDesign' && (origin.single ? selection !== initialSelection : !!selection.manual?.table) && !window.confirm(text.designRestoreConfirm) ||
         kind === 'replaceDesign' && !window.confirm(text.designReplaceConfirm) ||
         kind === 'deleteDesign' && !window.confirm(text.designDeleteConfirm)) return;
     if (!editable()) return;
@@ -288,9 +303,10 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     active.promise = Promise.resolve().then(async () => {
       if (!owns()) return;
       if (designOperation) {
-        const scope = { connectionId: origin.intent.connectionId, database: origin.intent.source.database, table: origin.intent.source.name };
+        const scope = { connectionId: origin.intent.connectionId, database: origin.intent.source.database, table: origin.intent.source.name,
+          ...(origin.single ? { single: true as const } : {}) };
         if (kind === 'loadDesign') {
-          const design = manualJoinDesignSchema.parse(await invoke('joinDesigns.read', { ...scope, id: designTarget!.id }));
+          const design = queryBuilderDesignSchema.parse(await invoke('joinDesigns.read', { ...scope, id: designTarget!.id }));
           if (owns()) await restoreDesign(design, selected, active, owns);
         } else if (saveDesign) {
           const entry = await invoke('joinDesigns.save', { ...scope, name: designName, design: captureDesign(selected),
@@ -540,14 +556,15 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   }
   const resultLimitLabel = origin.single ? text.singleLimit : text.resultLimit;
   const sortTitle = origin.single ? text.singleSort : text.sortTitle;
+  const designTitle = origin.single ? text.singleDesignTitle : text.designTitle;
   return <Modal title={title} wide onClose={close} onEscape={groupEditor ? event => { if (!event.target || !groupPanel.current?.contains(event.target as Node)) event.stopPropagation(); } : undefined}><div className="modal-content" aria-busy={busy || closing}>
     <p>{origin.single ? text.singleScope : selection.manual ? text.manualScope : text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
-    {selection.manual && <details>
-      <summary>{text.designTitle}</summary>
+    {(selection.manual || origin.single) && <details>
+      <summary>{designTitle}</summary>
       <p>{text.designHint}</p>
       <fieldset disabled={busy || unavailable}>
-        <button type="button" onClick={() => run('listDesigns')}>{text.designRefresh}</button>
-        <label>{text.designTitle}<select value={designId} onChange={event => {
+        <div className="child-reference-tools"><button type="button" onClick={() => run('listDesigns')}>{text.designRefresh}</button></div>
+        <label>{designTitle}<select value={designId} onChange={event => {
           const id = event.target.value;
           setDesignId(id);
           if (id) setDesignName(designs.find(item => item.id === id)?.name ?? '');
@@ -555,11 +572,15 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
         }}><option value="">{text.manualSelect}</option>
           {designs.map(entry => <option value={entry.id} key={entry.id}>{entry.name}</option>)}
         </select></label>
-        <button type="button" disabled={!designId} onClick={() => run('loadDesign')}>{text.designLoad}</button>
-        <button type="button" disabled={!designId} onClick={() => run('deleteDesign')}>{text.designDelete}</button>
+        <div className="child-reference-tools">
+          <button type="button" disabled={!designId} onClick={() => run('loadDesign')}>{text.designLoad}</button>
+          <button type="button" disabled={!designId} onClick={() => run('deleteDesign')}>{text.designDelete}</button>
+        </div>
         <label>{text.designName}<input value={designName} maxLength={80} onChange={event => setDesignName(event.target.value)}/></label>
-        <button type="button" disabled={!preview.value || !designName.trim()} onClick={() => run('saveDesign')}>{text.designSave}</button>
-        <button type="button" disabled={!preview.value || !designName.trim() || !designId} onClick={() => run('replaceDesign')}>{text.designReplace}</button>
+        <div className="child-reference-tools">
+          <button type="button" disabled={!preview.value || !designName.trim()} onClick={() => run('saveDesign')}>{text.designSave}</button>
+          <button type="button" disabled={!preview.value || !designName.trim() || !designId} onClick={() => run('replaceDesign')}>{text.designReplace}</button>
+        </div>
         {designNotice && <p role="status">{designNotice}</p>}
       </fieldset>
     </details>}

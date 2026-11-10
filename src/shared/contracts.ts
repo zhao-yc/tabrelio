@@ -1,5 +1,5 @@
 import type { MysqlJoinPreviewInput } from './mysqlJoinPreview';
-import type { ManualJoinDesign, ManualJoinDesignScope, ManualJoinDesignSelect, ManualJoinDesignSave, ManualJoinDesignSummary } from './manualJoinDesigns';
+import type { QueryBuilderDesign, ManualJoinDesignScope, ManualJoinDesignSelect, ManualJoinDesignSave, ManualJoinDesignSummary } from './manualJoinDesigns';
 import type { ImportRecordRange } from './importRecordRange';
 import type { ObjectDefinitionInput, ObjectDefinitionOutput } from './objectDefinition';
 import type { PostgresTransactionApplyInput, PostgresTransactionSnapshot } from './postgresTransactionSettings';
@@ -176,7 +176,7 @@ export interface CommandMap {
   'result.insertApply': { input: import('./resultInsert').ResultInsertApplyInput; output: import('./resultInsert').ResultInsertApplyOutput };
   'result.insertRelease': { input: import('./resultInsert').ResultInsertReleaseInput; output: void };
   'joinDesigns.list': { input: ManualJoinDesignScope; output: ManualJoinDesignSummary[] };
-  'joinDesigns.read': { input: ManualJoinDesignSelect; output: ManualJoinDesign };
+  'joinDesigns.read': { input: ManualJoinDesignSelect; output: QueryBuilderDesign };
   'joinDesigns.save': { input: ManualJoinDesignSave; output: ManualJoinDesignSummary };
   'joinDesigns.delete': { input: ManualJoinDesignSelect; output: void };
   'result.presets.list': { input: QueryResultPresetTarget; output: QueryResultPresetSnapshot };

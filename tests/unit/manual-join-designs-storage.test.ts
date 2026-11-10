@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import initSqlJs from 'sql.js';
 import { mainColumnsHarness } from './main-columns-owner-harness';
 import { LocalStore } from '../../src/main/storage';
-import { manualJoinDesignSaveSchema, type ManualJoinDesign } from '../../src/shared/manualJoinDesigns';
+import { manualJoinDesignSaveSchema, singleTableQueryDesignSchema, type ManualJoinDesign } from '../../src/shared/manualJoinDesigns';
 
 const require = createRequire(import.meta.url);
 const wasm = require.resolve('sql.js/dist/sql-wasm.wasm'), directories: string[] = [];
@@ -24,6 +25,12 @@ const design: ManualJoinDesign = {
   having: [{ id: 'having1', enabled: true, targetLabel: '聚合输出 · 合计', draft: { column: 'a:a1', operator: '>', value: '9007199254740993', upperValue: '', valuesText: '', includeEmptyString: false } }],
   havingMode: 'all',
 };
+const singleScope = { ...scope, single: true as const };
+const singleDesign = singleTableQueryDesignSchema.parse({ version: 1, single: true, distinct: false, child: ['id'], limit: '8',
+  filters: [{ ...design.filters[0], side: 'child' }], filterMode: 'all', filterGroup: design.filterGroup,
+  sort: [], summarySort: [{ id: 's1', rule: { side: 'aggregate', column: '合计', direction: 'DESC' } }],
+  summaryEnabled: true, summaryGroups: [{ id: 'g1', side: 'child', column: 'label' }],
+  aggregates: [{ ...design.aggregates[0], side: 'child' }], having: design.having, havingMode: 'all' });
 
 async function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'dbark-manual-join-designs-')); directories.push(directory);
@@ -110,5 +117,58 @@ describe('手动 JOIN 设计本地配置库', () => {
     expect(parse({ ...design, additional: [{ ...step, source: 2 }] })).toBe(false);
     expect(parse({ ...design, additional: [{ ...step, pairs: [{ ...step.pairs[0], source: 2 }] }] })).toBe(false);
     expect(parse({ ...design, first: { ...design.first, pairs: [{ ...design.first.pairs[0], source: 0 }] } })).toBe(false);
+  });
+
+  it('从旧配置库升级并重开，保留同名 JOIN 与单表设计，跨模式不能读写或删除', async () => {
+    const { file, store } = await fixture();
+    const legacy = store.saveManualJoinDesign({ ...scope, name: '同名设计', design });
+    store.close();
+    const SQL = await initSqlJs({ locateFile: () => wasm }), previous = new SQL.Database(readFileSync(file));
+    try {
+      previous.run('DROP TRIGGER single_table_query_designs_cleanup; DROP TABLE single_table_query_designs;');
+      writeFileSync(file, previous.export());
+    } finally { previous.close(); }
+    const upgraded = await LocalStore.open(file, wasm, protector);
+    let entry;
+    try {
+      expect(upgraded.readManualJoinDesign({ ...scope, id: legacy.id })).toEqual(design);
+      expect(upgraded.listManualJoinDesigns(singleScope)).toEqual([]);
+      entry = upgraded.saveManualJoinDesign({ ...singleScope, name: '同名设计', design: singleDesign });
+    } finally { upgraded.close(); }
+    const reopened = await LocalStore.open(file, wasm, protector);
+    try {
+      expect(reopened.listManualJoinDesigns(singleScope)).toEqual([entry]);
+      expect(reopened.readManualJoinDesign({ ...singleScope, id: entry.id })).toEqual(singleDesign);
+      expect(() => reopened.readManualJoinDesign({ ...scope, id: entry.id })).toThrow('已变化');
+      expect(() => reopened.deleteManualJoinDesign({ ...singleScope, id: legacy.id })).toThrow('已变化');
+      expect(() => reopened.saveManualJoinDesign({ ...singleScope, replaceId: legacy.id, name: '同名设计', design: singleDesign })).toThrow('已变化');
+      const replacement = reopened.saveManualJoinDesign({ ...singleScope, replaceId: entry.id, name: '同名设计', design: { ...singleDesign, limit: '9' } });
+      expect(() => reopened.deleteManualJoinDesign({ ...singleScope, id: entry.id })).toThrow('已变化');
+      expect(reopened.readManualJoinDesign({ ...singleScope, id: replacement.id }).limit).toBe('9');
+      expect(reopened.readManualJoinDesign({ ...scope, id: legacy.id })).toEqual(design);
+      reopened.deleteConnection(profile.id);
+      reopened.saveConnection(profile);
+      expect(reopened.listManualJoinDesigns(scope)).toEqual([]);
+      expect(reopened.listManualJoinDesigns(singleScope)).toEqual([]);
+    } finally { reopened.close(); }
+  });
+
+  it('正式 IPC 仅接收单表结构化设计，重定向连接后拒绝恢复', async () => {
+    const { store } = await fixture();
+    try {
+      const main = mainColumnsHarness();
+      main.context.store = store;
+      main.setRevision(store.connectionRevision());
+      const request = { ...singleScope, name: '单表设计', design: singleDesign };
+      const entry = await main.run('joinDesigns.save', request);
+      expect(await main.run('joinDesigns.read', { ...singleScope, id: entry.id })).toEqual(singleDesign);
+      for (const invalid of [ { ...request, single: undefined }, { ...request, design },
+        { ...request, design: { ...singleDesign, sql: 'SELECT 1' } },
+        { ...request, design: { ...singleDesign, filters: [{ ...singleDesign.filters[0], side: 'parent' }] } },
+      ]) expect(manualJoinDesignSaveSchema.safeParse(invalid).success).toBe(false);
+      store.saveConnection({ ...profile, host: 'other.invalid' });
+      expect(() => store.readManualJoinDesign({ ...singleScope, id: entry.id })).toThrow('连接目标已更改');
+      expect(main.request).not.toHaveBeenCalled();
+    } finally { store.close(); }
   });
 });

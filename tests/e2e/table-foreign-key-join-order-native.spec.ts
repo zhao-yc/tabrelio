@@ -37,7 +37,7 @@ for (const scenario of ['open', 'single', 'cancel', 'stale'] as const) {
       calls: Array<{ command: string; input: Record<string, unknown> }>; tabs: Array<{ kind: string; sql?: string; database?: string; databaseContext?: unknown }>;
       denied: string[]; jobs: Record<string, unknown>;
     } }).__joinOrderEvidence());
-    const control = (action: 'releaseSource' | 'releaseCancel' | 'invalidate') => page.evaluate(name =>
+    const control = (action: 'releaseSource' | 'releaseCancel' | 'invalidate' | 'addOldDesign') => page.evaluate(name =>
       (window as typeof window & { __joinEntryControls: Record<typeof name, () => void> }).__joinEntryControls[name](), action);
     try {
       const newQuery = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
@@ -95,11 +95,38 @@ for (const scenario of ['open', 'single', 'cancel', 'stale'] as const) {
         await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5;');
         await sql.evaluate(element => element.scrollIntoView({ block: 'center' }));
         await page.screenshot({ path: info.outputPath('query-single-table.png') });
+        await builder.getByText(text.singleDesignTitle, { exact: true }).first().click();
+        const name = builder.getByRole('textbox', { name: text.designName, exact: true });
+        await name.fill('待复核订单');
+        await builder.getByRole('button', { name: text.designSave, exact: true }).click();
+        await expect(builder.getByRole('status').filter({ hasText: text.designSaved })).toBeVisible();
+        await builder.getByLabel(text.singleLimit, { exact: true }).fill('6');
+        const approveRestore = () => page.evaluate(expected => {
+          const original = window.confirm;
+          window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是恢复设计的确认'); return true; };
+        }, text.designRestoreConfirm);
+        await approveRestore();
+        await builder.getByRole('button', { name: text.designLoad, exact: true }).click();
+        await expect(builder.getByLabel(text.singleLimit, { exact: true })).toHaveValue('5');
+        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5;');
+        await builder.getByText(text.designRestored, { exact: true }).scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('single-table-design-restored.png') });
+        await control('addOldDesign');
+        await builder.getByRole('button', { name: text.designRefresh, exact: true }).click();
+        await builder.getByRole('combobox', { name: text.singleDesignTitle, exact: true }).selectOption({ label: '旧字段样本' });
+        await approveRestore();
+        await builder.getByRole('button', { name: text.designLoad, exact: true }).click();
+        await expect(builder.getByRole('alert')).toContainText(text.columns);
+        await expect(builder.getByLabel(text.singleLimit, { exact: true })).toHaveValue('5');
+        await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5;');
         await builder.getByRole('button', { name: text.open, exact: true }).click();
         await expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('c.`id` AS `id`');
         const result = await evidence();
         expect(result.tabs).toHaveLength(2);
-        expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'child']);
+        expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'child', 'child', 'child']);
+        const designCalls = result.calls.filter(call => call.command.startsWith('joinDesigns.'));
+        expect(designCalls.map(call => [call.command, call.input.single])).toEqual([['joinDesigns.save', true], ['joinDesigns.read', true], ['joinDesigns.list', true], ['joinDesigns.read', true]]);
+        expect(designCalls[0].input.design).toMatchObject({ single: true, child: ['id'], limit: '5' });
         const inspections = result.calls.filter(call => call.command === 'mysql.join.preview').map(call => call.input);
         expect(inspections.map(input => input.mode)).toEqual(['rows', 'explain']);
         expect(inspections.every(input => input.single === true && !('parent' in input) && !('sql' in input))).toBe(true);

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { TableTab } from '../../../src/renderer/components/TableTab';
 import { useWorkspace, type WorkspaceTab } from '../../../src/renderer/store';
 import { mysqlJoinPreviewSchema } from '../../../src/shared/mysqlJoinPreview';
-import { manualJoinDesignSchema, type ManualJoinDesign } from '../../../src/shared/manualJoinDesigns';
+import { manualJoinDesignSchema, manualJoinDesignSaveSchema, type ManualJoinDesign, type QueryBuilderDesign } from '../../../src/shared/manualJoinDesigns';
 import type { QueryOutcome, TableInfo, TablePage } from '../../../src/shared/contracts';
 import { parseExplainPlan } from '../../../src/shared/explain';
 import type { IncomingReferencesOutput } from '../../../src/shared/incomingReferences';
@@ -22,17 +22,35 @@ const source = incoming || manual ? parent : child;
 const other = { ...table('payments', ['order_id', 'total']), database: '另一库' };
 const another = { ...other, name: 'other_payments' };
 const designs = new Map<string, { id: string; name: string; design: ManualJoinDesign }>();
+const singleDesigns = new Map<string, { id: string; name: string; design: QueryBuilderDesign }>();
+let singleDesignId = 0;
 const calls: { command: string; input: unknown }[] = [], denied: string[] = [];
 let releaseSource!: () => void, releaseCancel!: () => void;
 const sourceGate = new Promise<void>(resolve => { releaseSource = resolve; }), cancelGate = new Promise<void>(resolve => { releaseCancel = resolve; });
 Object.defineProperty(window, '__joinEntryControls', { value: { releaseSource, releaseCancel, invalidate: () => {
   useWorkspace.setState({ connectionVersions: { 'offline-join': 1 } });
   useWorkspace.setState({ connectionVersions: {} });
+}, addOldDesign: () => {
+  const saved = singleDesigns.values().next().value;
+  if (!saved || !('single' in saved.design)) throw Error('需要先保存本例设计');
+  const id = 'fixture-old-single-design';
+  singleDesigns.set(id, { id, name: '旧字段样本', design: { ...saved.design, child: ['已删除字段'], limit: '70' } });
 } } });
 /** 只替代数据库输入；真实TableTab、菜单、JOIN窗口、来源租约及工作区打开行为均参与。 */
 Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string, input: Record<string, unknown>) => {
   calls.push({ command, input: structuredClone(input) });
   if (queryEntry) {
+    if (command.startsWith('joinDesigns.') && input.single === true && input.connectionId === 'offline-join' && input.database === child.database && input.table === child.name) {
+      if (command === 'joinDesigns.list') return Array.from(singleDesigns.values(), ({ id, name }) => ({ id, name }));
+      if (command === 'joinDesigns.save') {
+        const request = manualJoinDesignSaveSchema.parse(input), id = 'fixture-single-design-' + ++singleDesignId;
+        if (request.replaceId && !singleDesigns.delete(request.replaceId)) throw Error('单表设计不存在');
+        singleDesigns.set(id, { id, name: request.name, design: request.design });
+        return { id, name: request.name };
+      }
+      if (command === 'joinDesigns.read' && singleDesigns.has(String(input.id))) return structuredClone(singleDesigns.get(String(input.id))!.design);
+      if (command === 'joinDesigns.delete' && singleDesigns.delete(String(input.id))) return;
+    }
     if (command === 'mysql.join.preview') {
       const request = mysqlJoinPreviewSchema.parse(input);
       if (!('single' in request) || request.source.table !== child.name) throw Error('单表预览范围不符');

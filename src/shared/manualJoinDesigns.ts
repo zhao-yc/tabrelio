@@ -38,12 +38,9 @@ const sorts = z.array(z.object({
 }).strict()).max(20);
 
 /** 本地设计只保存可编辑输入，不保存查询正文、服务器目录回包或连接认证信息。 */
-export const manualJoinDesignSchema = z.object({
+const queryDesignFields = z.object({
   version: z.literal(1),
-  first: target.extend({ pairs, on: onSchema.optional() }).strict(),
-  additional: z.array(target.extend({ source, kind: z.enum(['INNER', 'LEFT']), pairs: additionalPairs, on: onSchema.optional(), columns }).strict()).max(6),
-  kind, distinct: z.boolean(), unmatchedOnly: z.boolean(),
-  child: columns, parent: columns, limit: z.string().regex(/^[1-9]\d{0,5}$/),
+  distinct: z.boolean(), child: columns, limit: z.string().regex(/^[1-9]\d{0,5}$/),
   filters: z.array(z.object({ id, side, enabled: z.boolean(), draft: filterDraft }).strict()).max(FILTER_LIMITS.conditions),
   filterMode: mode, filterGroup: filterGroupSchema.optional(),
   sort: sorts, summarySort: sorts,
@@ -54,23 +51,45 @@ export const manualJoinDesignSchema = z.object({
   }).strict()).max(32),
   having: z.array(z.object({ id, enabled: z.boolean(), targetLabel: z.string().max(512), draft: filterDraft }).strict()).max(FILTER_LIMITS.conditions),
   havingMode: mode, havingGroup: filterGroupSchema.optional(),
-}).strict().superRefine((design, context) => {
+}).strict();
+
+/** 两种设计使用同一草稿编号和字节预算，防止恢复时条件或聚合引用串到另一项。 */
+function validateDesignDraft(design: z.infer<typeof queryDesignFields>, context: z.RefinementCtx) {
+  for (const entries of [design.filters, design.having, design.sort, design.summarySort, design.summaryGroups, design.aggregates]) {
+    if (new Set(entries.map(entry => entry.id)).size !== entries.length) context.addIssue({ code: 'custom', message: '查询设计包含重复编辑项。' });
+  }
+  if (new TextEncoder().encode(JSON.stringify(design)).length > manualJoinDesignLimits.bytes)
+    context.addIssue({ code: 'custom', message: '查询设计超过 1 MiB。' });
+}
+
+export const manualJoinDesignSchema = queryDesignFields.extend({
+  first: target.extend({ pairs, on: onSchema.optional() }).strict(),
+  additional: z.array(target.extend({ source, kind: z.enum(['INNER', 'LEFT']), pairs: additionalPairs, on: onSchema.optional(), columns }).strict()).max(6),
+  kind, unmatchedOnly: z.boolean(), parent: columns,
+}).superRefine((design, context) => {
   const invalid = (message: string) => context.addIssue({ code: 'custom', message });
   if (design.additional.some((step, index) => step.source >= index + 2 || step.pairs.some(pair => (pair.source ?? step.source) >= index + 2))) invalid('JOIN 设计不能引用尚未加入的表。');
   for (const step of [design.first, ...design.additional]) {
     try { manualJoinOnGroup(step.on, step.pairs.length); }
     catch { invalid('ON 分组必须恰好包含每条比较条件一次。'); }
   }
-  for (const entries of [design.filters, design.having, design.sort, design.summarySort, design.summaryGroups, design.aggregates]) {
-    if (new Set(entries.map(entry => entry.id)).size !== entries.length) invalid('JOIN 设计包含重复编辑项。');
-  }
-  const bytes = new TextEncoder().encode(JSON.stringify(design)).length;
-  if (bytes > manualJoinDesignLimits.bytes) invalid('JOIN 设计超过 1 MiB。');
+  validateDesignDraft(design, context);
 });
 export type ManualJoinDesign = z.infer<typeof manualJoinDesignSchema>;
-export const manualJoinDesignScopeSchema = target.extend({ connectionId: id }).strict();
+export const singleTableQueryDesignSchema = queryDesignFields.extend({ single: z.literal(true) }).superRefine((design, context) => {
+  validateDesignDraft(design, context);
+  if ([...design.filters, ...design.summaryGroups, ...design.aggregates].some(entry => entry.side !== 'child') ||
+      design.sort.some(entry => entry.rule.side !== 'child') ||
+      design.summarySort.some(entry => entry.rule.side !== 'child' && entry.rule.side !== 'aggregate'))
+    context.addIssue({ code: 'custom', message: '单表设计只能引用起始表和它的聚合输出。' });
+});
+export const queryBuilderDesignSchema = z.union([manualJoinDesignSchema, singleTableQueryDesignSchema]);
+export type QueryBuilderDesign = z.infer<typeof queryBuilderDesignSchema>;
+export const manualJoinDesignScopeSchema = target.extend({ connectionId: id, single: z.literal(true).optional() }).strict();
 export const manualJoinDesignSelectSchema = manualJoinDesignScopeSchema.extend({ id }).strict();
-export const manualJoinDesignSaveSchema = manualJoinDesignScopeSchema.extend({ name: title, replaceId: id.optional(), design: manualJoinDesignSchema }).strict();
+export const manualJoinDesignSaveSchema = manualJoinDesignScopeSchema.extend({ name: title, replaceId: id.optional(), design: queryBuilderDesignSchema }).superRefine((input, context) => {
+  if ((input.single === true) !== ('single' in input.design)) context.addIssue({ code: 'custom', message: '查询设计与所选模式不符。' });
+});
 export type ManualJoinDesignScope = z.infer<typeof manualJoinDesignScopeSchema>;
 export type ManualJoinDesignSelect = z.infer<typeof manualJoinDesignSelectSchema>;
 export type ManualJoinDesignSave = z.infer<typeof manualJoinDesignSaveSchema>;
