@@ -19,6 +19,7 @@ const design: ManualJoinDesign = {
   version: 1, first: { database: 'warehouse', table: 'payments', pairs: [{ child: 'id', parent: 'order_id' }] },
   additional: [{ database: 'warehouse', table: 'regions', source: 1, kind: 'LEFT', pairs: [{ child: 'region', parent: 'id', operator: '>=' }], columns: ['label'] }],
   kind: 'INNER', distinct: false, unmatchedOnly: false, child: ['id'], parent: ['total'], limit: '42',
+  projection: [{ column: 't3.label', alias: '地区' }, { column: 'c.id' }, { column: 'p.total', alias: '总额' }],
   filters: [{ id: 'where1', side: 't3', enabled: false, draft: { column: 'label', operator: 'IN', value: '', upperValue: '', valuesText: ' 保留🚢\n第二行', includeEmptyString: true } }],
   filterMode: 'all', filterGroup: { mode: 'all', children: [0] },
   sort: [{ id: 'sort1', rule: { side: 't3', column: 'label', direction: 'DESC', nulls: 'LAST' } }],

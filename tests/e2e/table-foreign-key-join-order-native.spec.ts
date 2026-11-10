@@ -14,6 +14,7 @@ import { explainZh as explainText } from '../../src/renderer/locales/explain.zh-
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryViewDraftZh } from '../../src/renderer/locales/queryViewDraft.zh-CN';
 import { queryBuilderPaginationZh as pagination } from '../../src/renderer/locales/queryBuilderPagination.zh-CN';
+import { queryBuilderProjectionZh as projection } from '../../src/renderer/locales/queryBuilderProjection.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 const enabled = process.env.DBARK_JOIN_ORDER_NATIVE === '1';
@@ -79,6 +80,9 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await builder.getByRole('button', { name: text.manualRead, exact: true }).click();
         await builder.getByRole('combobox', { name: text.manualChild(1), exact: true }).selectOption('id');
         await builder.getByRole('combobox', { name: text.manualParent(1), exact: true }).selectOption('order_id');
+        await builder.getByText(projection.order, { exact: true }).click();
+        await builder.getByRole('button', { name: projection.earlier('p.order_id'), exact: true }).click();
+        await builder.getByRole('textbox', { name: projection.alias('p.order_id'), exact: true }).fill('目标订单');
         await openView();
         await expect(view.locator('.view-lines')).toContainText(/JOIN.*另一库.*payments/);
         await expect(view.locator('.view-lines')).toContainText(/LIMIT.*43/);
@@ -86,6 +90,7 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await builder.getByRole('button', { name: text.open, exact: true }).click();
         const sql = page.getByLabel('本例独立查询SQL', { exact: true });
         await expect(sql).toContainText('FROM `合成关联库`.`child` AS c');
+        await expect(sql).toContainText('p.`order_id` AS `目标订单`,\n  c.`parent_id`');
         await expect(sql).toContainText('INNER JOIN `另一库`.`payments` AS p');
         await expect(sql).toContainText('LIMIT 43;');
         const result = await evidence();
@@ -107,6 +112,9 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await builder.getByLabel(text.singleLimit, { exact: true }).fill('5');
         const offset = builder.getByLabel(pagination.offset, { exact: true });
         await offset.fill('7');
+        await builder.getByText(projection.order, { exact: true }).click();
+        const outputAlias = builder.getByRole('textbox', { name: projection.alias('id'), exact: true });
+        await outputAlias.fill('编号`样本');
         await expect(plan).toHaveCount(0);
         await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5 OFFSET 7;');
         await openView();
@@ -125,6 +133,8 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await expect(builder.getByRole('status').filter({ hasText: text.designSaved })).toBeVisible();
         await builder.getByLabel(text.singleLimit, { exact: true }).fill('6');
         await offset.clear();
+        await builder.getByText(projection.order, { exact: true }).click();
+        await outputAlias.clear();
         const approveRestore = () => page.evaluate(expected => {
           const original = window.confirm;
           window.confirm = message => { window.confirm = original; if (message !== expected) throw Error('不是恢复设计的确认'); return true; };
@@ -133,6 +143,7 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await builder.getByRole('button', { name: text.designLoad, exact: true }).click();
         await expect(builder.getByLabel(text.singleLimit, { exact: true })).toHaveValue('5');
         await expect(offset).toHaveValue('7');
+        await expect(outputAlias).toHaveValue('编号`样本');
         await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5 OFFSET 7;');
         await builder.getByText(text.designRestored, { exact: true }).scrollIntoViewIfNeeded();
         await page.screenshot({ path: info.outputPath('single-table-design-restored.png') });
@@ -145,13 +156,14 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await expect(builder.getByLabel(text.singleLimit, { exact: true })).toHaveValue('5');
         await expect(sql).toContainText('ORDER BY c.`parent_id` ASC\nLIMIT 5 OFFSET 7;');
         await builder.getByRole('button', { name: text.open, exact: true }).click();
-        await expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('c.`id` AS `id`');
+        await expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText('c.`id` AS `编号``样本`');
         const result = await evidence();
         expect(result.tabs).toHaveLength(2);
         expect(result.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'child', 'child', 'child', 'child']);
         const designCalls = result.calls.filter(call => call.command.startsWith('joinDesigns.'));
         expect(designCalls.map(call => [call.command, call.input.single])).toEqual([['joinDesigns.save', true], ['joinDesigns.read', true], ['joinDesigns.list', true], ['joinDesigns.read', true]]);
-        expect(designCalls[0].input.design).toMatchObject({ single: true, child: ['id'], limit: '5', offset: '7' });
+        expect(designCalls[0].input.design).toMatchObject({ single: true, child: ['id'], limit: '5', offset: '7',
+          projection: [{ column: 'c.id', alias: '编号`样本' }] });
         const inspections = result.calls.filter(call => call.command === 'mysql.join.preview').map(call => call.input);
         expect(inspections.map(input => input.mode)).toEqual(['rows', 'explain']);
         expect(inspections.every(input => input.single === true && !('parent' in input) && !('sql' in input))).toBe(true);

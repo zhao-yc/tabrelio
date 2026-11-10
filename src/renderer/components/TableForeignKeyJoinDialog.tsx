@@ -1,4 +1,6 @@
 import { readQueryBuilderOffset } from '../../shared/queryBuilderOffset';
+import { mysqlSelectedOutputKeys, type MysqlQueryProjection } from '../../shared/mysqlQueryProjection';
+import { QueryBuilderProjectionOrder } from './QueryBuilderProjectionPanel';
 import { queryBuilderPaginationZh as pagination } from '../locales/queryBuilderPagination.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo, FilterGroup, FilterMode, FilterRule, QueryOutcome } from '../../shared/contracts';
@@ -35,7 +37,7 @@ import type { ForeignKeyJoinSide } from '../tableForeignKeyJoinSources';
 export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget & { taskId: string }): Promise<TableInfo>; cancel(taskId: string): Promise<unknown>; }
 /** 每次正式元数据读取均持有独立任务编号；取消不借普通查询或复用数据库会话。 */
 export const tableForeignKeyJoinServices: TableForeignKeyJoinServices = { read: input => invoke('metadata.table', input), cancel: taskId => invoke('query.cancel', { taskId }) };
-interface Selection { distinct: boolean; unmatchedOnly: boolean; fk: string; manual?: ManualJoinSelection; additional: AdditionalJoinDraft[]; kind: ForeignKeyJoinKind; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; offset: string; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; filterGroup?: FilterGroup; summaryEnabled: boolean; summaryGroups: ForeignKeyJoinGroupDraft[]; aggregates: ForeignKeyJoinAggregateDraft[]; summarySort: { id: string; rule: ForeignKeyJoinSort }[]; having: ForeignKeyJoinHavingDraft[]; havingMode: FilterMode; havingGroup?: FilterGroup; }
+interface Selection { distinct: boolean; unmatchedOnly: boolean; fk: string; manual?: ManualJoinSelection; additional: AdditionalJoinDraft[]; kind: ForeignKeyJoinKind; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; offset: string; projection?: MysqlQueryProjection; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; filterGroup?: FilterGroup; summaryEnabled: boolean; summaryGroups: ForeignKeyJoinGroupDraft[]; aggregates: ForeignKeyJoinAggregateDraft[]; summarySort: { id: string; rule: ForeignKeyJoinSort }[]; having: ForeignKeyJoinHavingDraft[]; havingMode: FilterMode; havingGroup?: FilterGroup; }
 interface GroupEditor { selection: Selection; kind: 'where' | 'having' | 'on'; applyOn?(group: FilterGroup): Selection; trigger?: HTMLButtonElement; mode: FilterMode; initial?: FilterGroup; rules: readonly FilterRule[]; presentation: TableFilterGroupPresentation; }
 interface Operation { promise: Promise<void>; cancelled: boolean; read?: { taskId: string; cancel?: () => Promise<unknown>; cancelPromise?: Promise<unknown> }; cancellation?: Promise<unknown>; }
 const pageSize = 50;
@@ -43,9 +45,9 @@ type DesignOperation = 'listDesigns' | 'saveDesign' | 'replaceDesign' | 'loadDes
 
 /** 保存可编辑输入和稳定条目编号。目录缓存与搜索位置留在当前窗口。 */
 function captureDesign(selection: Selection): QueryBuilderDesign {
-  const { distinct, child, limit, offset, filters, filterMode, filterGroup,
+  const { distinct, child, limit, offset, projection, filters, filterMode, filterGroup,
     sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup } = selection;
-  const settings = { version: 1, distinct, child, limit, offset: offset || undefined, filters, filterMode, filterGroup,
+  const settings = { version: 1, distinct, child, limit, offset: offset || undefined, projection, filters, filterMode, filterGroup,
     sort, summarySort, summaryEnabled, summaryGroups, aggregates, having, havingMode, havingGroup };
   if (!selection.manual) return queryBuilderDesignSchema.parse({ ...settings, single: true });
   const stripIds = ({ pairs }: ManualJoinSelection) => pairs.map(({ id: _id, ...pair }) => pair);
@@ -57,6 +59,15 @@ function captureDesign(selection: Selection): QueryBuilderDesign {
     })),
     kind: selection.kind, unmatchedOnly: selection.unmatchedOnly, parent: selection.parent,
   });
+}
+
+/** 增删选列时保留剩余列的输出顺序，新列附在末尾。换源清空的列不会携带原别名。 */
+function reconcileProjection(selection: Selection): Selection {
+  if (!selection.projection) return selection;
+  const available = new Set(mysqlSelectedOutputKeys(selection.child, selection.parent, selection.additional));
+  const retained = selection.projection.filter(item => available.delete(item.column));
+  const projection = [...retained, ...[...available].map(column => ({ column }))];
+  return { ...selection, projection: projection.length ? projection : undefined };
 }
 
 function joinSources(child: TableInfo, parent: TableInfo | undefined, additional: readonly AdditionalJoinDraft[]) {
@@ -97,6 +108,7 @@ function compileSelection(intent: TableForeignKeyJoinIntent, selection: Selectio
   const sorting = selection.summaryEnabled ? selection.summarySort : selection.sort;
   const options = {
     childColumns: selection.child,
+    ...(selection.projection ? { projection: selection.projection } : {}),
     ...(!selection.summaryEnabled && selection.distinct ? { distinct: true } : {}),
     ...(selection.summaryEnabled ? { summary: foreignKeyJoinSummaryFromDraft(selection.summaryGroups, selection.aggregates) } : {}),
     ...(having.length ? { having: { filters: having, mode: selection.havingMode, ...(selection.havingGroup ? { group: selection.havingGroup } : {}) } } : {}),
@@ -174,6 +186,9 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     try { return { value: compileSelection(origin.intent, selection, currentParent, sources, havingTargets), error: '' }; }
     catch (reason) { return { value: undefined, error: errorMessage(reason) }; }
   }, [origin.intent, sourceReady, currentParent, selection, sources, havingTargets]);
+  const outputKeys = selection.projection?.map(item => item.column) ??
+    mysqlSelectedOutputKeys(selection.child, selection.parent, selection.additional);
+  const outputAliases = selection.projection?.flatMap(({ column, alias }) => alias === undefined ? [] : [{ column, alias }]) ?? [];
   const outcome = inspection?.owner === preview.value ? inspection?.result : undefined;
   const sampleResult = outcome?.explain ? undefined : outcome?.results[0];
   const aliases = useMemo(() => {
@@ -247,7 +262,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     await load(base.database, base.name);
     if ('single' in design) {
       const { single: _single, version: _version, ...settings } = design;
-      const next: Selection = { ...selected, ...settings, offset: settings.offset ?? '', childSearch: '', childPage: 1 };
+      const next: Selection = { ...selected, ...settings, offset: settings.offset ?? '', projection: settings.projection, childSearch: '', childPage: 1 };
       const sources = joinSources(base, undefined, []);
       compileSelection(origin.intent, next, undefined, sources, joinHavingTargets(next, sources));
       if (!owns()) return;
@@ -264,7 +279,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       const info = await load(step.database, step.table);
       extra.push({ ...step, id: uid(), tables: [step.table], pairs: withIds(step.pairs), info });
     }
-    const next: Selection = { ...selected, ...settings, offset: settings.offset ?? '', additional: extra, manual: { ...first, pairs: withIds(first.pairs) },
+    const next: Selection = { ...selected, ...settings, offset: settings.offset ?? '', projection: settings.projection, additional: extra, manual: { ...first, pairs: withIds(first.pairs) },
       childSearch: '', parentSearch: '', childPage: 1, parentPage: 1 };
     const sources = joinSources(base, firstInfo, extra);
     compileSelection(origin.intent, next, firstInfo, sources, joinHavingTargets(next, sources));
@@ -363,7 +378,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
         if (previous && foreignKeyJoinMetadataKey(previous.info) !== metadataKey) { origin.intent.invalidate(); throw Error(text.stale); }
         if (!selected.manual) buildForeignKeyJoin(origin.intent.source, metadata, selected.fk, selected.kind, origin.intent.limit, { childColumns: [origin.intent.source.columns[0].name], parentColumns: [] });
         const manual = selected.manual && !previous ? { ...selected.manual, pairs: [newManualJoinPair()] } : selected.manual;
-        const next = { ...selected, manual, parent: previous ? selected.parent : metadata.columns.map(column => column.name), parentSearch: previous ? selected.parentSearch : '', parentPage: previous ? selected.parentPage : 1 };
+        const next = reconcileProjection({ ...selected, manual, parent: previous ? selected.parent : metadata.columns.map(column => column.name), parentSearch: previous ? selected.parentSearch : '', parentPage: previous ? selected.parentPage : 1 });
         selectionRef.current = next; setSelection(next); setParent({ fk: selected.fk, info: structuredClone(metadata) });
       } else if (inspectionMode && receipt) {
         await inspect(active, receipt, inspectionMode, owns);
@@ -395,7 +410,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   /** 更换目标会废弃原结构及依赖该目标的草稿。筛选、排序和字段映射都不跨表套用。 */
   function resetRelation(selection: Selection): void {
     cancel(); revision.current++; setParent(undefined); setError('');
-    const next = { ...selection, distinct: false, child: origin.intent.source.columns.map(column => column.name), parent: [], parentSearch: '', childPage: 1, parentPage: 1, sort: [], filters: [], filterMode: 'all' as const, filterGroup: undefined, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all' as const, havingGroup: undefined };
+    const next = reconcileProjection({ ...selection, distinct: false, child: origin.intent.source.columns.map(column => column.name), parent: [], parentSearch: '', childPage: 1, parentPage: 1, sort: [], filters: [], filterMode: 'all' as const, filterGroup: undefined, summaryGroups: [], aggregates: [], summarySort: [], having: [], havingMode: 'all', havingGroup: undefined });
     selectionRef.current = next; setSelection(next);
   }
   function changeManualTarget(database: string, table: string) {
@@ -413,7 +428,11 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       ![...selection.sort, ...selection.summarySort].some(item => item.rule.side === side);
   }
   /** 搜索只影响本地分页；字段变化后同步废弃旧打开闭包，未选字段不会改变JOIN条件。 */
-  function revise(next: Selection): void { if (!editable()) return; revision.current++; selectionRef.current = next; setSelection(next); setError(''); }
+  function revise(next: Selection): void {
+    if (!editable()) return;
+    const draft = reconcileProjection(next);
+    revision.current++; selectionRef.current = draft; setSelection(draft); setError('');
+  }
   /** 关闭状态真实等待原读取与取消响应，不把局部卸载或取消ACK冒充服务器已收尾。 */
   function close(): void {
     if (!alive.current || closingRef.current || committed.current !== ticket) return;
@@ -648,6 +667,14 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     <label><input type="checkbox" aria-label={summaryText.enabled} checked={selection.summaryEnabled} disabled={busy || unavailable || !sourceReady} onChange={event=>revise({...selection,summaryEnabled:event.target.checked})}/>{summaryText.enabled}</label>
     {!selection.summaryEnabled && <><label><input type="checkbox" aria-label={text.distinct} checked={selection.distinct} disabled={busy || unavailable} onChange={event => revise({ ...selection, distinct: event.target.checked })}/>{text.distinct}</label><UsageHelp><p>{text.distinctHint}</p></UsageHelp></>}
     {selection.summaryEnabled ? sourceReady && <TableForeignKeyJoinSummary single={origin.single} sources={sources} sourceLabel={label} groups={selection.summaryGroups} aggregates={selection.aggregates} disabled={busy||unavailable} onAddGroup={addSummaryGroup} onGroup={editSummaryGroup} onRemoveGroup={entry=>{if(selection.summaryGroups.includes(entry))revise({...selection,summaryGroups:selection.summaryGroups.filter(item=>item!==entry)});}} onMoveGroup={(entry,offset)=>moveSummary('summaryGroups',entry,offset)} onClearGroups={()=>revise({...selection,summaryGroups:[]})} onAddAggregate={addAggregate} onAggregate={editAggregate} onRemoveAggregate={entry=>{if(selection.aggregates.includes(entry))revise({...selection,aggregates:selection.aggregates.filter(item=>item!==entry)});}} onMoveAggregate={(entry,offset)=>moveSummary('aggregates',entry,offset)} onClearAggregates={()=>revise({...selection,aggregates:[]})}/> : <>{fieldList('child',origin.intent.source)}{parent && parent.fk===selection.fk && fieldList('parent',parent.info)}</>}
+    {!selection.summaryEnabled && sourceReady && outputKeys.length > 0 && outputKeys.length <= foreignKeyJoinLimits.outputColumns &&
+      <QueryBuilderProjectionOrder selected={outputKeys} aliases={outputAliases} disabled={busy || unavailable}
+        labelFor={key => origin.single ? key.slice(2) : key}
+        onChange={(keys, aliases) => {
+          const names = new Map(aliases.map(item => [item.column, item.alias]));
+          revise({ ...selection, projection: keys.map(column => ({ column, alias: names.get(column) })) });
+        }}
+        onReset={selection.projection ? () => revise({ ...selection, projection: undefined }) : undefined}/>}
     {selection.summaryEnabled&&sourceReady&&<><TableForeignKeyJoinHaving entries={selection.having} targets={havingTargets} mode={selection.havingMode} disabled={busy||unavailable} onAdd={addHaving} onChange={editHaving} onRemove={entry=>{if(selection.having.includes(entry))reviseHaving(selection.having.filter(item=>item!==entry));}} onClear={()=>reviseHaving([])} onMode={havingMode=>revise({...selection,havingMode,havingGroup:tableFilterGroupWithMode(selection.havingGroup,havingMode)})}/>
       <button ref={havingGroupTrigger} type="button" disabled={busy||unavailable||!selection.having.length||!preview.value} onClick={()=>openGroups('having')}>{havingText.groups}</button>{selection.havingGroup&&<><p aria-label={havingText.structure}>{tableFilterGroupSummary(selection.havingGroup)}</p><button type="button" disabled={busy||unavailable} onClick={()=>revise({...selection,havingGroup:undefined})}>{havingText.flat}</button></>}</>}
     {sourceReady && <><TableForeignKeyJoinFilters single={origin.single} sources={sources} sourceLabel={label} entries={selection.filters} mode={selection.filterMode} disabled={busy || unavailable} onAdd={addFilter} onChange={editFilter} onMode={filterMode => revise({ ...selection, filterMode, filterGroup: tableFilterGroupWithMode(selection.filterGroup, filterMode) })} onRemove={entry => { if (selection.filters.includes(entry)) reviseFilters(selection.filters.filter(item => item !== entry)); }} onClear={() => reviseFilters([])}/>

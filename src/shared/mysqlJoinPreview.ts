@@ -19,6 +19,8 @@ const base = z.object({
   limit: z.number().int().min(1).max(100000),
   options: z.unknown().refine(value => {
     if (!value || typeof value !== 'object' || Array.isArray(value) || 'additionalJoins' in value) return false;
+    const projection = Object.getOwnPropertyDescriptor(value, 'projection');
+    if (projection ? !('value' in projection) || (projection.value !== undefined && !Array.isArray(projection.value)) : 'projection' in value) return false;
     const offset = Object.getOwnPropertyDescriptor(value, 'offset');
     return offset ? 'value' in offset && (offset.value === undefined || queryBuilderOffsetSchema.safeParse(offset.value).success) : !('offset' in value);
   }),

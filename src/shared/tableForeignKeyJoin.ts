@@ -1,4 +1,7 @@
 import { queryBuilderOffsetError, queryBuilderOffsetSchema } from './queryBuilderOffset';
+import { assertMysqlQueryProjection, mysqlQueryOutputKey, mysqlQueryProjectionLimit, mysqlQueryProjectionSchema,
+  type MysqlQueryProjection } from './mysqlQueryProjection';
+import { queryBuilderOutputAliases } from './queryBuilderProjection';
 import { foreignKeyJoinSide, foreignKeyJoinSqlAlias, type ForeignKeyJoinSide } from './tableForeignKeyJoinSources';
 import type { FilterGroup, FilterMode, TableInfo } from './contracts';
 import { buildForeignKeyJoinWhere, type ForeignKeyJoinFilter } from './tableForeignKeyJoinFilters';
@@ -8,7 +11,7 @@ import { buildForeignKeyJoinHaving, type ForeignKeyJoinHaving } from './tableFor
 import { tableForeignKeyJoinHavingZh as havingText } from './tableForeignKeyJoinHaving.zh-CN';
 import { tableForeignKeyJoinZh as text } from './tableForeignKeyJoin.zh-CN';
 
-export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, manualPairs: 64, additionalJoins: 6, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
+export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, manualPairs: 64, additionalJoins: 6, metadataUnits: 2 * 1024 * 1024, outputColumns: mysqlQueryProjectionLimit, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
 export type ForeignKeyJoinKind = 'LEFT' | 'RIGHT' | 'INNER';
 export { manualJoinOperators } from './manualJoinDesigns';
 import { manualJoinOnGroup, manualJoinOperators, type ManualJoinOn } from './manualJoinDesigns';
@@ -37,7 +40,7 @@ export function manualJoinAlias(index: number): 'c' | 'p' | `t${number}` {
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: ForeignKeyJoinSide | 'aggregate'; column: string; alias: string }
 export interface ForeignKeyJoinSort { side: ForeignKeyJoinSide | 'aggregate'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
-export interface MysqlSingleTableSelectOptions { childColumns: readonly string[]; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; offset?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
+export interface MysqlSingleTableSelectOptions { childColumns: readonly string[]; projection?: MysqlQueryProjection; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; offset?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
 export interface ForeignKeyJoinOptions extends MysqlSingleTableSelectOptions { parentColumns: readonly string[]; unmatchedOnly?: boolean; manualOn?: ManualJoinOn; additionalJoins?: readonly ManualJoinStep[]; }
 type Budget = { units: number };
 
@@ -134,6 +137,22 @@ function selected(value: unknown, columns: { name: string }[]): string[] {
     if (typeof item !== 'string' || !names.has(item) || seen.has(item)) throw Error(text.columns);
     seen.add(item); return item;
   });
+}
+
+/** 从选中字段的可信目录创建结果列，用户别名仅影响最终列名。 */
+function arrangeProjection(columns: (ForeignKeyJoinColumn & { side: ForeignKeyJoinSide })[], raw: unknown): ForeignKeyJoinColumn[] {
+  if (raw === undefined) return columns;
+  const projection = mysqlQueryProjectionSchema.parse(array(raw, mysqlQueryProjectionLimit).map(item => {
+    const column = own(item, 'column'), alias = own(item, 'alias', true);
+    if (Reflect.ownKeys(item as object).some(key => key !== 'column' && key !== 'alias')) throw Error(text.invalid);
+    return { column, alias };
+  }));
+  const byKey = new Map(columns.map(column => [mysqlQueryOutputKey(column.side, column.column), column]));
+  assertMysqlQueryProjection(projection, [...byKey.keys()]);
+  const keys = projection.map(item => item.column);
+  const aliases = queryBuilderOutputAliases(keys, projection.flatMap(item => item.alias === undefined ? [] : [{ column: item.column, alias: item.alias }]),
+    key => byKey.get(key)!.alias, name => name.toLowerCase());
+  return keys.map(key => ({ ...byKey.get(key)!, alias: aliases.get(key) ?? byKey.get(key)!.alias }));
 }
 
 /** 别名绑定原列序号而非选中顺序；截断按Unicode字符进行，不切坏代理对。 */
@@ -254,16 +273,17 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
   const left = snapshot(child), right = join && snapshot(join.parent);
   const conditions = join && right ? joinConditions([left], 0, right, join.input) : [];
   let childColumns: string[], parentColumns: string[] = [], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, unmatchedOnly = false, distinct = false, resultLimit = limit, where: string | undefined;
-  let extra: ReturnType<typeof additionalJoins> = [], resultOffset = 0;
+  let extra: ReturnType<typeof additionalJoins> = [], resultOffset = 0, rawProjection: unknown;
   let firstOn = right ? compileOn(undefined, conditions, 'p') : undefined;
   const sources = new Map<ForeignKeyJoinSide, ReturnType<typeof snapshot>>([['child', left]]);
   if (right) sources.set('parent', right);
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right?.columns.map(column => column.name) ?? []; }
   else {
-    const keys = ['childColumns', 'distinct', 'sort', 'limit', 'offset', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'];
+    const keys = ['childColumns', 'projection', 'distinct', 'sort', 'limit', 'offset', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'];
     if (right) keys.push('parentColumns', 'unmatchedOnly', 'manualOn', 'additionalJoins');
     if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !keys.includes(key as string))) throw Error(text.invalid);
     childColumns = selected(own(options, 'childColumns'), left.columns);
+    rawProjection = own(options, 'projection', true);
     if (join && right) {
       parentColumns = selected(own(options, 'parentColumns'), right.columns);
       const manualOn = own(options, 'manualOn', true);
@@ -309,18 +329,21 @@ function buildSelect(child: TableInfo, limit: number, options?: MysqlSingleTable
   if(rawHaving!==undefined&&!summary)throw Error(havingText.requiresSummary);
   const having=rawHaving===undefined?undefined:buildForeignKeyJoinHaving(summary!.outputs,rawHaving,foreignKeyJoinLimits.sqlUnits);
   const count = childColumns.length + parentColumns.length + extra.reduce((total, step) => total + step.columns.length, 0);
-  if (!summary && !count) throw Error(text.columns);
-  if (!summary && count > foreignKeyJoinLimits.outputColumns) throw Error(text.budget);
-  const columns: ForeignKeyJoinColumn[] = summary ? summary.columns : [];
-  if (!summary) for (const [side, selectedColumns, metadata] of [['child', childColumns, left], ['parent', parentColumns, right]] as const) {
+  const needsDetail = !summary || rawProjection !== undefined;
+  if (needsDetail && !count) throw Error(text.columns);
+  if (needsDetail && count > foreignKeyJoinLimits.outputColumns) throw Error(text.budget);
+  const detailColumns: (ForeignKeyJoinColumn & { side: ForeignKeyJoinSide })[] = [];
+  if (needsDetail) for (const [side, selectedColumns, metadata] of [['child', childColumns, left], ['parent', parentColumns, right]] as const) {
     if (!metadata) continue;
     const ordinals = new Map(metadata.columns.map((column, index) => [column.name, index + 1]));
-    for (const column of selectedColumns) columns.push({ side, column, alias: join ? foreignKeyJoinColumnAlias(side, ordinals.get(column)!, column) : column });
+    for (const column of selectedColumns) detailColumns.push({ side, column, alias: join ? foreignKeyJoinColumnAlias(side, ordinals.get(column)!, column) : column });
   }
-  if (!summary) for (const step of extra) {
+  if (needsDetail) for (const step of extra) {
     const ordinals = new Map(step.metadata.columns.map((column, index) => [column.name, index + 1]));
-    for (const column of step.columns) columns.push({ side: step.alias, column, alias: foreignKeyJoinColumnAlias(step.alias, ordinals.get(column)!, column) });
+    for (const column of step.columns) detailColumns.push({ side: step.alias, column, alias: foreignKeyJoinColumnAlias(step.alias, ordinals.get(column)!, column) });
   }
+  const orderedDetail = arrangeProjection(detailColumns, rawProjection);
+  const columns = summary?.columns ?? orderedDetail;
   let sql = distinct ? 'SELECT DISTINCT\n' : 'SELECT\n';
   const append = (part: string) => { if (sql.length + part.length > foreignKeyJoinLimits.sqlUnits) throw Error(text.budget); sql += part; };
   columns.forEach((column, index) => append(`  ${summary ? summary.expressions[index] : (column.side === 'aggregate' ? column.side : foreignKeyJoinSqlAlias(column.side))+'.'+quote(column.column)+' AS '+quote(column.alias)}${index + 1 === columns.length ? '\n' : ',\n'}`));

@@ -1,4 +1,5 @@
 import { queryBuilderOffsetDraftSchema } from './queryBuilderOffset';
+import { assertMysqlQueryProjection, mysqlQueryProjectionSchema, mysqlSelectedOutputKeys } from './mysqlQueryProjection';
 import { z } from 'zod';
 import { FILTER_LIMITS, filterGroupSchema, tableFilterOperators, validateFilterGroup } from './filtering';
 
@@ -43,6 +44,7 @@ const queryDesignFields = z.object({
   version: z.literal(1),
   distinct: z.boolean(), child: columns, limit: z.string().regex(/^[1-9]\d{0,5}$/),
   offset: queryBuilderOffsetDraftSchema.optional(),
+  projection: mysqlQueryProjectionSchema.optional(),
   filters: z.array(z.object({ id, side, enabled: z.boolean(), draft: filterDraft }).strict()).max(FILTER_LIMITS.conditions),
   filterMode: mode, filterGroup: filterGroupSchema.optional(),
   sort: sorts, summarySort: sorts,
@@ -56,12 +58,16 @@ const queryDesignFields = z.object({
 }).strict();
 
 /** 两种设计使用同一草稿编号和字节预算，防止恢复时条件或聚合引用串到另一项。 */
-function validateDesignDraft(design: z.infer<typeof queryDesignFields>, context: z.RefinementCtx) {
+function validateDesignDraft(design: z.infer<typeof queryDesignFields>, context: z.RefinementCtx, selected: readonly string[]) {
   for (const entries of [design.filters, design.having, design.sort, design.summarySort, design.summaryGroups, design.aggregates]) {
     if (new Set(entries.map(entry => entry.id)).size !== entries.length) context.addIssue({ code: 'custom', message: '查询设计包含重复编辑项。' });
   }
   if (new TextEncoder().encode(JSON.stringify(design)).length > manualJoinDesignLimits.bytes)
     context.addIssue({ code: 'custom', message: '查询设计超过 1 MiB。' });
+  if (design.projection) {
+    try { assertMysqlQueryProjection(design.projection, selected); }
+    catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '输出设计无效。' }); }
+  }
 }
 
 export const manualJoinDesignSchema = queryDesignFields.extend({
@@ -75,11 +81,11 @@ export const manualJoinDesignSchema = queryDesignFields.extend({
     try { manualJoinOnGroup(step.on, step.pairs.length); }
     catch { invalid('ON 分组必须恰好包含每条比较条件一次。'); }
   }
-  validateDesignDraft(design, context);
+  validateDesignDraft(design, context, mysqlSelectedOutputKeys(design.child, design.parent, design.additional));
 });
 export type ManualJoinDesign = z.infer<typeof manualJoinDesignSchema>;
 export const singleTableQueryDesignSchema = queryDesignFields.extend({ single: z.literal(true) }).superRefine((design, context) => {
-  validateDesignDraft(design, context);
+  validateDesignDraft(design, context, mysqlSelectedOutputKeys(design.child));
   if ([...design.filters, ...design.summaryGroups, ...design.aggregates].some(entry => entry.side !== 'child') ||
       design.sort.some(entry => entry.rule.side !== 'child') ||
       design.summarySort.some(entry => entry.rule.side !== 'child' && entry.rule.side !== 'aggregate'))

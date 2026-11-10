@@ -34,7 +34,8 @@ Object.defineProperty(window, '__joinEntryControls', { value: { releaseSource, r
   const saved = singleDesigns.values().next().value;
   if (!saved || !('single' in saved.design)) throw Error('需要先保存本例设计');
   const id = 'fixture-old-single-design';
-  singleDesigns.set(id, { id, name: '旧字段样本', design: { ...saved.design, child: ['已删除字段'], limit: '70' } });
+  const { projection: _projection, ...oldDesign } = saved.design;
+  singleDesigns.set(id, { id, name: '旧字段样本', design: { ...oldDesign, child: ['已删除字段'], limit: '70' } });
 } } });
 /** 只替代数据库输入；真实TableTab、菜单、JOIN窗口、来源租约及工作区打开行为均参与。 */
 Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string, input: Record<string, unknown>) => {

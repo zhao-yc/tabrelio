@@ -91,6 +91,21 @@ describe('手动 JOIN 独立预览', () => {
     expect(buildMysqlSingleTableSelect(child, 3, { childColumns: ['id'], offset: 0 }).sql).toMatch(/LIMIT 3;$/);
   });
 
+  it('多表输出可跨来源排序，重复表别名独立，预览仍按原字段排序', async () => {
+    const request = mysqlJoinPreviewSchema.parse({ ...input, options: { ...input.options as object,
+      parentColumns: ['id'], projection: [{ column: 't3.id', alias: '第三侧' }, { column: 'c.id' }, { column: 'p.id', alias: '主`表' }] } });
+    await previewMysqlJoin(context, request, async () => {});
+    const sql = vi.mocked(consumeQueryFrames).mock.calls[0][1];
+    expect(sql).toMatch(/^SELECT\n  t3\.`id` AS `第三侧`,\n  c\.`id` AS `c_1_id`,\n  p\.`id` AS `主``表`\nFROM/);
+    expect(sql).toContain('ORDER BY c.`id` DESC');
+    expect(() => buildMysqlSingleTableSelect(child, 5, { childColumns: ['id', '编号/*!`列'],
+      projection: [{ column: 'c.id' }, { column: 'c.编号/*!`列', alias: 'ID' }] })).toThrow('输出别名不能与其他输出列同名');
+    expect(() => buildMysqlSingleTableSelect(child, 5, { childColumns: ['id'], projection: [{ column: 'p.id' }] }))
+      .toThrow('输出顺序必须恰好包含');
+    expect(() => buildMysqlSingleTableSelect(child, 5, { childColumns: ['id', '编号/*!`列'],
+      projection: [{ column: 'c.id' }, { column: 'c.id' }] })).toThrow('输出顺序必须恰好包含');
+  });
+
   it('合同拒绝渲染端提交 SQL、物理目录回包及超额步骤', () => {
     expect(mysqlJoinPreviewSchema.safeParse(input).success).toBe(true);
     for (const extra of [{ sql: 'SELECT SLEEP(5)' }, { mode: 'analyze' }, { options: { additionalJoins: [] } }, { steps: Array(7).fill(input.steps[0]) },
