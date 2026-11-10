@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { TableInfo } from '../../shared/contracts';
-import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinOperators, type ManualJoinPair } from '../tableForeignKeyJoin';
+import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinAlias, manualJoinOperators, type ManualJoinPair, type ManualJoinStep } from '../tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
+import { uid } from '../lib';
 import '../childReferences.css';
 
 export interface ManualJoinSelection {
@@ -64,4 +65,78 @@ export function ManualJoinPairFields({ selection, child, parent, disabled, onAdd
     </div>)}
     <button disabled={selection.pairs.length >= foreignKeyJoinLimits.manualPairs} onClick={onAdd}>{text.manualAddPair}</button>
   </fieldset>;
+}
+
+export interface AdditionalJoinDraft extends ManualJoinSelection {
+  id: string;
+  source: number;
+  kind: 'INNER' | 'LEFT';
+  tables?: readonly string[];
+  info?: TableInfo;
+  columns: string[];
+}
+
+/** 只发布已明确读过的目录。缺失表结构时停留在草稿，不生成部分 JOIN。 */
+export function manualJoinSteps(drafts: readonly AdditionalJoinDraft[]): ManualJoinStep[] {
+  return drafts.map(({ source, kind, info, pairs, columns }) => {
+    if (!info) throw Error(text.additionalIncomplete);
+    return { source, kind, target: info, pairs: pairs.map(({ id: _id, ...condition }) => condition), columns };
+  });
+}
+
+/** 追加表复用目录和字段对控件。每个步骤的输出可单独增减。 */
+export function AdditionalJoinFields({ draft, index, sources, databases, disabled, canRetarget, showColumns, onRead, onChange, onRemove }: {
+  draft: AdditionalJoinDraft; index: number; sources: readonly TableInfo[]; databases: readonly string[];
+  disabled: boolean; canRetarget: boolean; showColumns: boolean;
+  onRead(kind: 'databases' | 'tables' | 'preview'): void; onChange(draft: AdditionalJoinDraft): void; onRemove(): void;
+}) {
+  const child = sources[draft.source];
+  return <fieldset disabled={disabled}>
+    <legend>{text.additionalTitle(manualJoinAlias(index + 2))}</legend>
+    <ManualJoinTableFields key={draft.database} selection={draft} databases={databases} tables={draft.tables}
+      disabled={!canRetarget} onDatabases={() => onRead('databases')} onTables={() => onRead('tables')}
+      onTarget={(database, table) => onChange({ ...draft, database, table, tables: database === draft.database ? draft.tables : undefined,
+        info: undefined, pairs: [], columns: [] })}/>
+    <button disabled={!canRetarget || !draft.tables?.includes(draft.table)} onClick={() => onRead('preview')}>{text.manualRead}</button>
+    <label>{text.additionalSource}<select value={draft.source} onChange={event => {
+      const source = Number(event.target.value);
+      if (sources[source] && source !== draft.source) onChange({ ...draft, source, pairs: draft.pairs.map(pair => ({ ...pair, child: '' })) });
+    }}>
+      {sources.map((info, index) => <option value={index} key={index}>{manualJoinAlias(index)} · {info.database}.{info.name}</option>)}
+    </select></label>
+    <label>{text.joinKind}<select value={draft.kind} onChange={event => {
+      const kind = event.target.value;
+      if (kind === 'INNER' || kind === 'LEFT') onChange({ ...draft, kind });
+    }}>
+      <option value="INNER">{text.additionalInner}</option><option value="LEFT">{text.additionalLeft}</option>
+    </select></label>
+    {child && draft.info && <ManualJoinPairFields selection={draft} child={child} parent={draft.info} disabled={disabled}
+      onAdd={() => onChange({ ...draft, pairs: [...draft.pairs, newManualJoinPair()] })}
+      onChange={(id, patch) => onChange({ ...draft, pairs: draft.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) })}
+      onRemove={id => onChange({ ...draft, pairs: draft.pairs.filter(pair => pair.id !== id) })}/>}
+    {showColumns && draft.info && <AdditionalJoinColumns key={draft.info.database + '\0' + draft.info.name}
+      info={draft.info} columns={draft.columns} onChange={columns => onChange({ ...draft, columns })}/>}
+    {canRetarget && <button onClick={onRemove}>{text.additionalRemove}</button>}
+  </fieldset>;
+}
+
+export function newManualJoinPair() { return { id: uid(), child: '', parent: '' }; }
+
+function AdditionalJoinColumns({ info, columns, onChange }: { info: TableInfo; columns: string[]; onChange(value: string[]): void }) {
+  const [search, setSearch] = useState(''), [page, setPage] = useState(0);
+  const names = info.columns.map(column => column.name).filter(name => name.toLowerCase().includes(search.toLowerCase()));
+  const last = Math.max(0, Math.ceil(names.length / 50) - 1), index = Math.min(last, page);
+  return <details>
+    <summary>{text.additionalColumns} · {text.selected(columns.length, info.columns.length)}</summary>
+    <label>{text.search}<input value={search} maxLength={64} onChange={event => { setSearch(event.target.value); setPage(0); }}/></label>
+    {names.slice(index * 50, (index + 1) * 50).map(name => <label key={name} style={{ display: 'block' }}>
+      <input type="checkbox" checked={columns.includes(name)} onChange={event => onChange(event.target.checked ? [...columns, name] : columns.filter(column => column !== name))}/>
+      {name}
+    </label>)}
+    {last > 0 && <div className="child-reference-tools">
+      <button disabled={index === 0} onClick={() => setPage(index - 1)}>{text.previous}</button>
+      <span>{text.page(index + 1, last + 1)}</span>
+      <button disabled={index === last} onClick={() => setPage(index + 1)}>{text.next}</button>
+    </div>}
+  </details>;
 }

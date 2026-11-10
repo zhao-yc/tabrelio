@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TableInfo } from '../../src/shared/contracts';
 import { foreignKeyJoinPreview, fixedForeignKeyJoinStart, revalidateForeignKeyJoin, TableForeignKeyJoinIntent, type ForeignKeyJoinTarget } from '../../src/renderer/tableForeignKeyJoinIntent';
-import { buildForeignKeyJoin, type ManualJoinPair } from '../../src/renderer/tableForeignKeyJoin';
+import { buildForeignKeyJoin, type ManualJoinPair, type ManualJoinStep } from '../../src/renderer/tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 
 /** 完全合成的目录，不创建数据库会话或伪造查询执行成功。 */
@@ -40,6 +40,43 @@ describe('外键JOIN原结构与前置核验租约', () => {
     }
     expect(() => buildForeignKeyJoin(child, parent, [{ child: 'id', parent: 'id' }, pairs[0]], 'INNER', 1)).toThrow(text.manualInvalid);
   });
+  it('按顺序引用此前任一表，重用物理表时保持不同输出别名并只重读一次', async () => {
+    const { child, parent, intent } = fixture();
+    const third = { ...parent, name: 'third' };
+    const pairs: ManualJoinPair[] = [{ child: 'parent_id', parent: 'id' }];
+    const additionalJoins: ManualJoinStep[] = [
+      { source: 1, target: third, kind: 'LEFT', pairs: [{ child: 'id', parent: 'id' }], columns: ['value'] },
+      { source: 2, target: parent, kind: 'INNER', pairs: [{ child: 'value', operator: '>=', parent: 'value' }], columns: ['value'] },
+    ];
+    const options = { childColumns: ['id'], parentColumns: [], additionalJoins };
+    const draft = foreignKeyJoinPreview(intent, parent, pairs, 'INNER', options);
+    expect(draft.sql).toContain('t3.`value` AS `t3_2_value`,\n  t4.`value` AS `t4_2_value`');
+    expect(draft.sql).toContain('LEFT JOIN `parent_db`.`third` AS t3\nON\n  p.`id` = t3.`id`\nINNER JOIN `parent_db`.`parent` AS t4\nON\n  t3.`value` >= t4.`value`');
+    const read = vi.fn(async (target: ForeignKeyJoinTarget) => [child, parent, third].find(info => info.name === target.table)!);
+    await revalidateForeignKeyJoin(intent, draft, read, () => true);
+    expect(read.mock.calls.map(([target]) => target.table)).toEqual(['child', 'parent', 'third']);
+    expect(intent.consume(draft)).toBe(draft.sql);
+    expect(() => intent.consume(draft)).toThrow(text.stale);
+  });
+
+  it('禁止前向引用，最后一张表变化后不放行原预览', async () => {
+    const { child, parent, intent } = fixture();
+    const third = { ...parent, name: 'third' };
+    const relation: ManualJoinPair[] = [{ child: 'parent_id', parent: 'id' }];
+    const step: ManualJoinStep = { source: 2, target: third, kind: 'LEFT', pairs: [{ child: 'id', parent: 'id' }], columns: ['id'] };
+    const options = { childColumns: [], parentColumns: [], additionalJoins: [step] };
+    expect(() => foreignKeyJoinPreview(intent, parent, relation, 'LEFT', options)).toThrow(text.manualInvalid);
+    step.source = 0;
+    const draft = foreignKeyJoinPreview(intent, parent, relation, 'LEFT', options);
+    step.columns = [];
+    expect(draft.options.additionalJoins?.[0].columns).toEqual(['id']);
+    const changed = structuredClone(third);
+    changed.columns[0].type = 'int';
+    const read = vi.fn(async (target: ForeignKeyJoinTarget) => [child, parent, changed].find(info => info.name === target.table)!);
+    await expect(revalidateForeignKeyJoin(intent, draft, read, () => true)).rejects.toThrow(text.stale);
+    expect(intent.current()).toBe(false);
+  });
+
   it('没有外键也可生成跨库复合 JOIN，配对被快照固定，换目标结构不能打开旧 SQL', async () => {
     const { child, parent } = tables();
     child.foreignKeys = [];

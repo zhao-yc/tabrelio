@@ -8,6 +8,7 @@ export type ForeignKeyJoinRead = (target: ForeignKeyJoinTarget) => Promise<Table
 export interface FixedForeignKeyJoinStart { foreignKey: string; parent: TableInfo; kind: 'LEFT' | 'RIGHT' }
 export interface ForeignKeyJoinPreview {
   readonly parent: TableInfo; readonly parentKey: string; readonly childKey: string; readonly relation: ForeignKeyJoinRelation;
+  readonly additionalKeys?: readonly string[];
   readonly kind: ForeignKeyJoinKind; readonly options: ForeignKeyJoinOptions; readonly sql: string;
 }
 
@@ -43,7 +44,8 @@ export class TableForeignKeyJoinIntent {
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   /** 打开只消费一次；确认SQL仍由同一结构和选列生成，不信任旧按钮携带的字符串。 */
   consume(preview: ForeignKeyJoinPreview): string {
-    if (!this.current() || preview.childKey !== this.metadataKey || foreignKeyJoinMetadataKey(preview.parent) !== preview.parentKey || buildForeignKeyJoin(this.source, preview.parent, preview.relation, preview.kind, this.limit, preview.options).sql !== preview.sql) throw Error(text.stale);
+    if (!this.current() || preview.childKey !== this.metadataKey || foreignKeyJoinMetadataKey(preview.parent) !== preview.parentKey ||
+        !sameAdditionalMetadata(preview) || buildForeignKeyJoin(this.source, preview.parent, preview.relation, preview.kind, this.limit, preview.options).sql !== preview.sql) throw Error(text.stale);
     this.consumed = true; return preview.sql;
   }
 }
@@ -56,20 +58,41 @@ export function foreignKeyJoinPreview(intent: TableForeignKeyJoinIntent, parent:
   const target = immutable(structuredClone(parent)), selection = immutable(structuredClone(options));
   const mapping = immutable(structuredClone(relation));
   const result = buildForeignKeyJoin(intent.source, target, mapping, kind, intent.limit, selection);
-  return Object.freeze({ parent: target, parentKey: foreignKeyJoinMetadataKey(target), childKey: intent.metadataKey, relation: mapping, kind, options: selection, sql: result.sql });
+  return Object.freeze({ parent: target, parentKey: foreignKeyJoinMetadataKey(target), childKey: intent.metadataKey, relation: mapping, kind, options: selection, sql: result.sql,
+    ...(selection.additionalJoins ? { additionalKeys: Object.freeze(selection.additionalJoins.map(step => foreignKeyJoinMetadataKey(step.target))) } : {}) });
 }
 
-/** 原预览不自动换SQL；打开前串行只读重核双方相关结构，自关联只读取一次。 */
+function sameAdditionalMetadata(preview: ForeignKeyJoinPreview): boolean {
+  const steps = preview.options.additionalJoins ?? [], keys = preview.additionalKeys ?? [];
+  return steps.length === keys.length && steps.every((step, index) => foreignKeyJoinMetadataKey(step.target) === keys[index]);
+}
+
+/** 按顺序重读各真实目标。同一物理表在一次核验中只读取一次，仍按各别名核对签名。 */
 export async function revalidateForeignKeyJoin(intent: TableForeignKeyJoinIntent, preview: ForeignKeyJoinPreview, read: ForeignKeyJoinRead, current: () => boolean): Promise<void> {
   const assert = () => { if (!intent.current() || !current()) throw Error(text.stale); };
+  const reject = () => { intent.invalidate(); throw Error(text.stale); };
+  const checked = new Map<string, TableInfo>();
+  async function check(target: TableInfo, expected: string | undefined): Promise<TableInfo> {
+    assert();
+    const key = JSON.stringify([target.database, target.name]);
+    const info = checked.get(key) ?? await read({ connectionId: intent.connectionId, database: target.database, table: target.name });
+    assert();
+    if (foreignKeyJoinMetadataKey(info) !== expected) reject();
+    checked.set(key, info);
+    return info;
+  }
+  const child = await check(intent.source, preview.childKey);
+  const parent = await check(preview.parent, preview.parentKey);
+  const options = { ...preview.options };
+  if (options.additionalJoins) {
+    const steps = [];
+    for (const [index, step] of options.additionalJoins.entries()) {
+      steps.push({ ...step, target: await check(step.target, preview.additionalKeys?.[index]) });
+    }
+    options.additionalJoins = steps;
+  }
   assert();
-  const child = await read({ connectionId: intent.connectionId, database: intent.source.database, table: intent.source.name });
-  assert();
-  if (foreignKeyJoinMetadataKey(child) !== preview.childKey) { intent.invalidate(); throw Error(text.stale); }
-  const self = preview.parent.database === intent.source.database && preview.parent.name === intent.source.name;
-  const parent = self ? child : await read({ connectionId: intent.connectionId, database: preview.parent.database, table: preview.parent.name });
-  assert();
-  if (foreignKeyJoinMetadataKey(parent) !== preview.parentKey || buildForeignKeyJoin(child, parent, preview.relation, preview.kind, intent.limit, preview.options).sql !== preview.sql) { intent.invalidate(); throw Error(text.stale); }
+  if (buildForeignKeyJoin(child, parent, preview.relation, preview.kind, intent.limit, options).sql !== preview.sql) reject();
 }
 
 /** 冻结仅用于本地只读结构快照，不改变正式metadata回包或原表页对象。 */
