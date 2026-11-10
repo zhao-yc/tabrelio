@@ -12,6 +12,9 @@ import { sqliteTableBrowseZh as sqlite } from '../../src/renderer/locales/sqlite
 import { postgresTableZh as postgres } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableSortZh as sort } from '../../src/renderer/locales/tableSort.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { recordViewZh as recordForm } from '../../src/renderer/locales/recordViews.zh-CN';
+import { postgresRecordViewZh as pgForm } from '../../src/renderer/locales/postgresRecordView.zh-CN';
+import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 import { sqliteTableEditZh as sqliteEdit } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteEditWorkspaceZh as sqliteWorkspace } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 
@@ -334,6 +337,33 @@ test('网络数据库表头独立显示声明类型及字段注释', async ({}, 
     expect(await reads()).toEqual(readsBeforeDisplay);
     if (process.platform === 'darwin') await sortFromGrid(tab, 'row C');
     await expect(tab.getByRole('grid')).toHaveCSS('font-size', '13.75px');
+
+    const beforeRecordNav = await reads();
+    const lastRecordLabel = (await rowLabels(tab).nth(2).textContent())?.trim();
+    expect(lastRecordLabel).toMatch(/^row [ABC]$/);
+    const postgresForm = dialect === 'postgresql';
+    const recordToggle = postgresForm ? tab.getByRole('button', { name: pgForm.view, exact: true })
+      : await navigationMenuItem(tab, { name: recordForm.title, exact: true });
+    await recordToggle.click();
+    const record = tab.locator(postgresForm ? '.pg-record-view' : '.record-form-panel');
+    await record.getByRole('button', { name: recordNav.title, exact: true }).click();
+    const recordList = record.getByRole('region', { name: recordNav.title, exact: true });
+    await recordList.getByText(recordNav.columns, { exact: true }).click();
+    await recordList.getByLabel(recordNav.column(0), { exact: true }).selectOption({ label: 'label' });
+    const targetRecord = recordList.getByRole('button', { name: /^第 3 条/ });
+    await expect(targetRecord).toContainText(lastRecordLabel!);
+    await targetRecord.click();
+    await expect(targetRecord).toHaveAttribute('aria-current', 'true');
+    await expect(record.getByText(postgresForm ? pgForm.position(2, 0, 3) : '本页第 3 / 3 条', { exact: true })).toBeVisible();
+    if (postgresForm) {
+      const [listBox, formBox] = await Promise.all([recordList.boundingBox(), record.locator('.pg-record-content').boundingBox()]);
+      expect(listBox && formBox && listBox.x + listBox.width < formBox.x).toBe(true);
+      await expect(record.locator('.pg-record-content')).toBeInViewport();
+    }
+    await page.screenshot({ path: info.outputPath('本页记录导航.png') });
+    expect(await reads()).toEqual(beforeRecordNav);
+    await (postgresForm ? tab.getByRole('button', { name: pgForm.grid, exact: true })
+      : record.getByRole('button', { name: recordForm.close, exact: true })).click();
 
     await (await navigationMenuItem(tab, { name: sort.entry, exact: true })).click();
     const sortPanel = tab.getByRole('region', { name: sort.title, exact: true });

@@ -141,6 +141,7 @@ import { usePostgresRecordTransfer, type PostgresRecordTransfer } from '../postg
 import { queryToSqliteValues, sqliteColumnAcceptsTransferValue, sqliteTransferEngine, type SqliteTransferEngine } from '../sqliteRecordTransfer';
 import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView } from '../queryRowDetails';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
+import { useRecordNavigator } from './RecordNavigator';
 import { queryRowDetailsZh as detailText } from '../locales/queryRowDetails.zh-CN';
 import '../sqliteTableBrowse.css';
 
@@ -182,6 +183,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const [view, setView] = useState<SqliteTableView>({ busy: false, stopping: false, error: '', columns: [] });
   const browserViewRef = useRef(view);
   const recordPageRef = useRef<SqliteRecordPageNavigation | undefined>(undefined), [recordPageNotice, setRecordPageNotice] = useState('');
+  const recordNavigator = useRecordNavigator();
   const [conditions, setConditions] = useState(false), [limit, setLimit] = useState(100), [mode, setMode] = useState<'and' | 'or'>('and');
   const [filters, setFilters] = useState<SqliteFilterDraft[]>([]), [sort, setSort] = useState<SqliteSortDraft[]>([]), [validation, setValidation] = useState('');
   const [pageJump, setPageJump] = useState('');
@@ -1069,11 +1071,13 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     return sqliteAdjacentRecord(ticket.rows, ticket.row, direction);
   }
   /** 切换前核对唯一表单及原票据，暂存后用新票据交接给下一条。 */
-  function moveRecordInput(ticket: EditInputTicket, direction: -1 | 1, values?: (SqliteOriginalValue | undefined)[]): boolean {
+  function moveRecordInput(ticket: EditInputTicket, destination: -1 | 1 | { index: number }, values?: (SqliteOriginalValue | undefined)[]): boolean {
     const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
-    const next = adjacentRecord(ticket, direction);
     if (!inputCurrent(ticket) || dialogs.length !== 1 || !dialogs[0].querySelector('[data-sqlite-record-input="' + ticket.id + '"]')) return false;
-    if (!next) return moveRecordPage(ticket, direction, values);
+    const next = typeof destination === 'number' ? adjacentRecord(ticket, destination)
+      : Number.isSafeInteger(destination.index) ? ticket.rows[destination.index] : undefined;
+    if (!next && typeof destination === 'number') return moveRecordPage(ticket, destination, values);
+    if (!next || next === ticket.row || next.index === undefined || next.deleted) return false;
     if (values) ticket.editor.save(ticket.row.id, values);
     if (inputRef.current !== ticket || editorRef.current !== ticket.editor || !ticket.editor.canEdit() || !ticket.editor.view.rows.includes(next)) return false;
     setSelectedRow(next.id);
@@ -1899,6 +1903,8 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         ownerId: cellInput.id, previous: !!adjacentRecord(cellInput, -1) || sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, -1) !== undefined, next: !!adjacentRecord(cellInput, 1) || sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, 1) !== undefined,
         pagePrevious: !adjacentRecord(cellInput, -1) && sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, -1) !== undefined, pageNext: !adjacentRecord(cellInput, 1) && sqliteRecordPageOffset(cellInput.page, cellInput.rows, cellInput.row, 1) !== undefined,
         move: (direction, values) => moveRecordInput(cellInput, direction, values),
+        records: { state: recordNavigator, rows: cellInput.rows,
+          select: (index, values) => moveRecordInput(cellInput, { index }, values) },
       } : undefined} current={() => inputCurrent(cellInput)} onSave={values => saveInput(cellInput, values)} onClose={() => closeInput(cellInput)}/>}
     {previewOpen && editView && previewOpen.editor === renderedEditor && <SqliteTablePreviewDialog key={previewOpen.id + ':' + (editView.preview?.previewId ?? 'pending')} ticket={previewOpen} view={editView} current={() => previewCurrent(previewOpen, editView.preview, editView.taskId)} onApply={() => applyPreview(previewOpen, editView.preview)} onClose={() => closePreview(previewOpen, editView.preview)} onStop={() => stopPreview(previewOpen, editView.preview, editView.taskId)}/>}
   </div>;

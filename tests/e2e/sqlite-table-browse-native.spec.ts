@@ -9,6 +9,7 @@ import { sqliteValueOptionsZh as valuesText } from '../../src/renderer/locales/s
 import { tableGridZh as layoutFields } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
+import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 
 // 默认及--list仅注册跳过项；真实桌面、文件和NodeSQLite只在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -200,10 +201,6 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => page.locator('.object-row .tree-label').filter({ hasText: tableName }).dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible());
     await step(() => expect.poll(async () => (await audit()).pages.length).toBe(1)); expect((await settings()).tabs).toHaveLength(1); expect((await settings()).tabs[0]).toMatchObject({ kind: 'table', connectionId: profile.id, database: 'main', table: tableName });
     const firstPage = (await step(audit)).pages[0]; expect(firstPage.request).toMatchObject({ table: tableName, offset: 0, limit: 100 }); expect(firstPage.reply).toMatchObject({ ok: true, result: { target: { kind: 'table', table: tableName }, hasMore: false } }); expect(pageRows(firstPage.reply)).toHaveLength(34);
-    await controls(true); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5'));
-    // 分页断言由明确唯一id排序保证，不把未指定排序的扫描顺序当作跨版本合同。
-    await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
-    stage = '只读当前页行详情复用原值并区分动态类型';
     const details = () => table().getByRole('region', { name: detailText.sqlitePage, exact: true });
     const detailField = (name: string) => details().locator('article').filter({ has: page.locator('h4', { hasText: name }) });
     /** 经虚拟网格选格和真实更多菜单打开，行详情只读取已加载页。 */
@@ -212,6 +209,20 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
       await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: detailText.open, exact: true }, check)).click());
       await step(() => expect(details()).toBeVisible());
     };
+    const recordList = () => details().getByRole('region', { name: recordNav.title, exact: true });
+    await openDetail();
+    await step(() => details().getByRole('button', { name: recordNav.title, exact: true }).click());
+    await step(() => expect(recordList().getByRole('listitem')).toHaveCount(25));
+    await step(() => recordList().getByRole('button', { name: recordNav.next, exact: true }).click());
+    await step(() => expect(recordList().getByRole('listitem')).toHaveCount(9));
+    await step(() => recordList().getByRole('button', { name: /^第 26 条/ }).click());
+    await step(() => expect(details().getByLabel(detailText.sqliteRow, { exact: true })).toHaveValue('26'));
+    await step(() => details().getByRole('button', { name: detailText.close, exact: true }).click());
+    expect((await step(audit)).pages).toEqual([firstPage]);
+    await controls(true); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5'));
+    // 分页断言由明确唯一id排序保证，不把未指定排序的扫描顺序当作跨版本合同。
+    await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
+    stage = '只读当前页行详情复用原值并区分动态类型';
     const beforeDetails = await step(audit);
     await openDetail();
     await step(() => expect(details().getByRole('button', { name: detailText.previous, exact: true })).toBeDisabled());
@@ -221,6 +232,12 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => expect(detailField('nullable').locator('pre')).toHaveText(detailText.null));
     await step(() => expect(detailField('payload').locator('small')).toHaveText('BLOB'));
     await step(() => expect(detailField('payload').locator('pre')).toHaveText('AP8='));
+    await step(() => details().getByRole('button', { name: recordNav.title, exact: true }).click());
+    await step(() => recordList().getByRole('button', { name: /^第 5 条/ }).click());
+    await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[4].note));
+    await step(() => recordList().getByRole('button', { name: /^第 1 条/ }).click());
+    await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[0].note));
+    await step(() => details().getByRole('button', { name: recordNav.title, exact: true }).click());
     const fieldSearch = () => details().getByRole('searchbox', { name: detailText.fieldSearch, exact: true });
     await step(() => fieldSearch().fill('MIXED'));
     await step(() => expect(details().locator('article')).toHaveCount(1));

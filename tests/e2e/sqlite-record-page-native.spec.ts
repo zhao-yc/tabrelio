@@ -5,6 +5,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteTableEditZh as editText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { recordNavigatorZh as recordNav } from '../../src/renderer/locales/recordNavigator.zh-CN';
 
 // 默认/--list不加载桌面、NodeSQLite或文件句柄，仅注册一个明确跳过项。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list=')), active = !listing && process.env.DBARK_SQLITE_RECORD_PAGE_NATIVE_TEST === '1';
@@ -99,6 +100,30 @@ test('SQLite真实表单连续跨页、输入与整页草稿保护、停止空�
     stage='原筛选/降序/两行页与未应用筛选草稿';await menu('筛选与排序');await step(()=>table().getByLabel(browseText.limit,{exact:true}).fill('2'));await step(()=>table().getByRole('button',{name:browseText.addFilter,exact:true}).click());await step(()=>table().getByLabel(browseText.filterColumn(1),{exact:true}).selectOption('cohort'));await step(()=>table().getByLabel(browseText.filterValue(1),{exact:true}).fill('keep'));await step(()=>table().getByRole('button',{name:browseText.addSort,exact:true}).click());await step(()=>table().getByLabel(browseText.sortColumn(1),{exact:true}).selectOption('id'));await step(()=>table().getByLabel(browseText.sortDirection(1),{exact:true}).selectOption('desc'));await step(()=>table().getByRole('button',{name:browseText.apply,exact:true}).click());await step(()=>expect(grid().getByRole('button',{name:editText.select(2),exact:true})).toBeVisible());await step(()=>table().getByLabel(browseText.filterValue(1),{exact:true}).fill('skip'));await menu('筛选与排序');
     stage='真正读下一页首条再回前页末条，页内导航零额外读取';await openRecord();await cross(editText.nextPageRecord,4);await step(()=>expect(field('huge')).toHaveValue('9223372036854775807'));await step(()=>expect(field('payload')).toHaveValue('00ff'));await cross(editText.previousPageRecord,5,true);
     const beforeLocal=readFacts(await step(audit)).length;await step(()=>input().getByRole('button',{name:editText.previousRecord,exact:true}).click());await currentId(6);await step(()=>input().getByRole('button',{name:editText.nextRecord,exact:true}).click());await currentId(5);expect(readFacts(await step(audit))).toHaveLength(beforeLocal);expect(disk()).toEqual(baseline);
+    const recordList = () => input().getByRole('region', { name: recordNav.title, exact: true });
+    await step(() => input().getByRole('button', { name: recordNav.title, exact: true }).click());
+    await step(() => recordList().getByText(recordNav.columns, { exact: true }).click());
+    await step(() => recordList().getByLabel(recordNav.column(0), { exact: true }).selectOption({ label: 'label' }));
+    await step(() => recordList().getByRole('button', { name: /第 1 条.*原记录6/ }).click());
+    await currentId(6);
+    await step(() => recordList().getByRole('button', { name: /第 2 条.*原记录5/ }).click());
+    await currentId(5);
+    await step(() => field('payload').fill('非法十六进制'));
+    await step(() => recordList().getByRole('button', { name: /暂存并查看第 1 条.*原记录6/ }).click());
+    await currentId(5);
+    await step(() => expect(field('payload')).toHaveValue('非法十六进制'));
+    await step(() => field('payload').fill('00ae'));
+    await step(() => recordList().getByRole('button', { name: /暂存并查看第 1 条.*原记录6/ }).click());
+    await currentId(6);
+    await step(() => recordList().getByRole('button', { name: /第 2 条.*原记录5/ }).click());
+    await currentId(5);
+    await step(() => expect(field('payload')).toHaveValue('00ae'));
+    expect(readFacts(await step(audit))).toHaveLength(beforeLocal);
+    expect(disk()).toEqual(baseline);
+    await cancelInput();
+    await step(() => table().getByRole('button', { name: editText.undo, exact: true }).click());
+    await openRecord();
+    await step(() => input().getByRole('button', { name: recordNav.title, exact: true }).click());
     // 不让Playwright的自动scrollIntoView掩盖被overflow:hidden裁切的导航栏。
     const geometry=await step(()=>input().evaluate(element=>{const modal=element.getBoundingClientRect(),body=element.querySelector('.dialog-body')!,footer=element.querySelector('.modal-footer')!,rect=footer.getBoundingClientRect();return{modal:{top:modal.top,bottom:modal.bottom},footer:{top:rect.top,bottom:rect.bottom},viewport:innerHeight,scrollable:getComputedStyle(body).overflowY,contentHeight:body.scrollHeight,visibleHeight:body.clientHeight};}));expect(geometry.footer.top).toBeGreaterThanOrEqual(geometry.modal.top);expect(geometry.footer.bottom).toBeLessThanOrEqual(Math.min(geometry.modal.bottom,geometry.viewport));expect(geometry.scrollable).toBe('auto');expect(geometry.contentHeight).toBeGreaterThan(geometry.visibleHeight);await info.attach('记录表单可见导航几何',{body:JSON.stringify(geometry),contentType:'application/json'});
     const picture=info.outputPath('SQLite记录跨页真实表单.png');await step(()=>page.screenshot({path:picture}));await info.attach('SQLite记录跨页真实表单',{path:picture,contentType:'image/png'});

@@ -14,6 +14,7 @@ import { recordDocumentZh as documentText } from '../locales/recordDocument.zh-C
 import { recordJsonNodeInputZh as nodeText } from '../locales/recordJsonNodeInput.zh-CN';
 import {RecordJsonStructureEditor} from './RecordJsonStructureEditor';
 import { RecordValueEditor } from './RecordValueEditor';
+import { RecordNavigator, useRecordNavigator } from './RecordNavigator';
 import { RecordReadonlyProjection } from './RecordReadonlyProjection';
 import { RecordJsonNodeEditor } from './RecordJsonNodeEditor';
 import { recordDocumentInputBudget } from '../recordInputDocument';
@@ -38,6 +39,7 @@ function binarySnapshotCurrent(row: DraftRow | undefined, draft: RecordDraft | n
 /** 当前页侧面表单只有展示与缓冲，不拥有第二份页数据或数据库写路径。 */
 export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, pageNavigation, batch = false }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; visibleKeys: string[]; onSelect(rowId: string): void; pageNavigation?: RecordPageNavigationView; batch?: boolean }) {
   const [showHidden, setShowHidden] = useState(false); const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const navigator = useRecordNavigator();
   const heading = useRef<HTMLHeadingElement>(null); const row = rows.find(item => item.id === editor.draft?.rowId);
   useEffect(() => { heading.current?.focus(); setExpanded(new Set()); }, [editor.draft?.rowId]);
   useEffect(() => { if (editor.focusKey) { setExpanded(current => new Set([...current, editor.focusKey!])); if (!visibleKeys.includes(editor.focusKey)) setShowHidden(true); } }, [editor.focusKey, visibleKeys]);
@@ -58,6 +60,10 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, 
     <p className="record-context">{context.target.database} / {context.target.table}</p>
     <nav aria-label={batch ? batchText.panel : text.title}><button disabled={(!previous && !pageNavigation?.previous) || context.busy} onClick={() => previous ? onSelect(previous) : pageNavigation?.onNavigate(-1)}>{batch ? batchText.previous : !previous && pageNavigation?.previous ? pageNavigation.previousLabel ?? text.previous : text.previous}</button><span>{row ? batch ? batchText.position(rows.indexOf(row) + 1, rows.length) : formatText(text.position, rows.indexOf(row) + 1, rows.length) : text.empty}</span><button disabled={(!next && !pageNavigation?.next) || context.busy} onClick={() => next ? onSelect(next) : pageNavigation?.onNavigate(1)}>{batch ? batchText.next : !next && pageNavigation?.next ? pageNavigation.nextLabel ?? text.next : text.next}</button></nav>
     {pageNavigation?.message && <p role="note" aria-label={text.pageNavigation} aria-live="polite">{pageNavigation.message}</p>}
+    {!batch && <RecordNavigator state={navigator} columns={context.info?.columns.map(column => ({ key: column.name, name: column.name })) ?? []}
+      count={rows.length} active={row ? rows.indexOf(row) : -1} disabled={context.busy || context.stale || !!editor.pending}
+      value={(index, key) => recordValueSummary(ownCell(rows[index].data, key))}
+      onSelect={index => onSelect(rows[index].id)}/>}
     <p aria-live="polite">{status}{editor.dirty ? ` · ${text.inputDirty}` : ''}</p>
     <div className="record-display-modes" role="group" aria-label={projectionText.mode}>{(['form', 'tree', 'json', 'input'] as const).map(mode => <button key={mode} aria-pressed={editor.displayMode === mode} disabled={context.busy || editor.pending || (mode==='input' && !!reason)} title={mode==='input' ? reason : mode==='tree' ? nodeText.treeHint : mode==='json' ? projectionText.readonly : undefined} onClick={() => editor.changeDisplayMode(mode)}>{mode==='input'?documentText.input:projectionText[mode]}</button>)}</div>
     {editor.displayMode !== 'json' && editor.displayMode !== 'input' && <label className="record-hidden-toggle"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/>{text.showHidden}</label>}

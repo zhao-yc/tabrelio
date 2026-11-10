@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import type { PostgresTableColumn, PostgresTableField, PostgresTablePage } from '../../shared/postgresTable';
-import { errorMessage } from '../lib';
+import { errorMessage, ownCell } from '../lib';
+import { recordValueSummary } from '../recordViews';
+import { RecordNavigator, RecordNavigatorToggle, useRecordNavigator } from './RecordNavigator';
 import { postgresRecordViewZh as text } from '../locales/postgresRecordView.zh-CN';
 import { postgresReadonlyRecordZh as projectionText } from '../locales/postgresReadonlyRecord.zh-CN';
 import { postgresRecordJsonZh as jsonText } from '../locales/postgresRecordJson.zh-CN';
@@ -129,14 +131,16 @@ function RecordInput({ page, row, columns, draft, editable, reference, current, 
 }
 
 export function PostgresTableRecordView({ page, row, offset, visible, draft, editable, reference, pending, projectionAvailable,
-  projectionCurrent, moves, onMove, onDirty, onStage }: {
+  projectionCurrent, moves, onMove, canSelectRecord, onSelectRecord, onDirty, onStage }: {
   page: PostgresTablePage; row: number | null; offset: number; visible: PostgresTableColumn[]; draft?: RecordDraft; editable: boolean;
   reference?: PostgresReferenceSource;
   pending: boolean; projectionAvailable: boolean; projectionCurrent(): boolean;
   moves: Record<PostgresRecordMove, boolean>; onMove(move: PostgresRecordMove): void;
+  canSelectRecord: boolean; onSelectRecord(index: number): void;
   onDirty(row: number, dirty: boolean): void; onStage(row: number, fields: PostgresTableField[]): void;
 }) {
   const [mode, setMode] = useState<'form' | 'tree' | 'json'>('form');
+  const navigator = useRecordNavigator();
   const [showNavigation, setShowNavigation] = useState(true), [showHidden, setShowHidden] = useState(false), [query, setQuery] = useState('');
   const fieldArea = useRef<HTMLDivElement>(null);
   const columns = useMemo(() => {
@@ -157,6 +161,7 @@ export function PostgresTableRecordView({ page, row, offset, visible, draft, edi
       {(['first', 'previous', 'next', 'last'] as const).map(move =>
         <button type="button" key={move} disabled={!moves[move]} onClick={() => onMove(move)}>{text[move]}</button>)}
       {row !== null && <strong>{text.position(row, offset, page.rows.length)}</strong>}
+      {row !== null && <RecordNavigatorToggle state={navigator}/>}
       <div role="group" aria-label={projectionText.modes} className="pg-view-switch">
         {(['form', 'tree', 'json'] as const).map(kind => <button key={kind} type="button" aria-pressed={mode === kind}
           disabled={kind !== 'form' && (row === null || !projectionAvailable)} onClick={() => changeMode(kind)}>{projectionText[kind]}</button>)}
@@ -168,6 +173,8 @@ export function PostgresTableRecordView({ page, row, offset, visible, draft, edi
       {mode !== 'json' && <input type="search" aria-label={text.search} placeholder={text.search} value={query} onChange={event => setQuery(event.target.value)}/>}
     </div>
     {row === null || !page.rows[row] ? <Empty title={tableText.noSelection}/> : <div className="pg-record-body">
+      <RecordNavigator state={navigator} columns={page.columns} count={page.rows.length} active={row} disabled={!canSelectRecord} showToggle={false}
+        value={(index, key) => recordValueSummary(ownCell(page.rows[index], key))} onSelect={onSelectRecord}/>
       {mode === 'form' && showNavigation && <nav aria-label={text.fields}>{columns.map(column => <button type="button" key={column.key} onClick={() => {
         const heading = fieldArea.current?.querySelector<HTMLElement>(`[data-record-column="${column.key}"] > strong`);
         heading?.scrollIntoView({ block: 'nearest' });

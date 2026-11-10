@@ -7,6 +7,9 @@ import { SqliteReadonlyRecordView } from './SqliteReadonlyRecordView';
 import { useMemo, useState } from 'react';
 import { queryRowDetailPrefix, queryRowDetailValue, queryRowDetailsLimits, type QueryRowDetails, type QueryRowDetailsView } from '../queryRowDetails';
 import { queryRowDetailsZh as text } from '../locales/queryRowDetails.zh-CN';
+import { RecordNavigator, useRecordNavigator } from './RecordNavigator';
+import { ownCell } from '../lib';
+import { recordValueSummary } from '../recordViews';
 import '../queryRowDetails.css';
 
 interface Props {
@@ -22,13 +25,15 @@ interface Props {
 /** 搜索词随当前结果保留；换行后重新创建行号、展开和字段分页状态。 */
 export function QueryRowDetailsPanel(props: Props) {
   const [mode, setMode] = useState<'fields' | 'tree' | 'json'>('fields');
+  const navigator = useRecordNavigator();
   const [search, setSearch] = useState({ binding: props.view.binding, text: '' });
   const filter = search.binding === props.view.binding ? search.text : '';
-  return <RowDetailsContent key={props.view.id} {...props} filter={filter} mode={mode} onMode={setMode} onFilter={text => setSearch({ binding: props.view.binding, text })}/>;
+  return <RowDetailsContent key={props.view.id} {...props} navigator={navigator}
+    filter={filter} mode={mode} onMode={setMode} onFilter={text => setSearch({ binding: props.view.binding, text })}/>;
 }
 
 /** 内联只读区域不参与全局模态观察；每个迟到事件仍复核准确原行租约。 */
-function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlitePage, pageNavigation, filter, onFilter, mode, onMode }: Props & { filter: string; onFilter(text: string): void; mode: 'fields' | 'tree' | 'json'; onMode(mode: 'fields' | 'tree' | 'json'): void }) {
+function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlitePage, pageNavigation, navigator, filter, onFilter, mode, onMode }: Props & { navigator: ReturnType<typeof useRecordNavigator>; filter: string; onFilter(text: string): void; mode: 'fields' | 'tree' | 'json'; onMode(mode: 'fields' | 'tree' | 'json'): void }) {
   const [page, setPage] = useState(0), [expanded, setExpanded] = useState<number | null>(null), [row, setRow] = useState(String(view.index + 1));
   const current = () => isCurrent() && controller.valid(view);
   const columns = view.binding.metadata;
@@ -60,6 +65,9 @@ function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlit
   return <section role="region" aria-label={sqlitePage ? text.sqlitePage : text.region} className="query-row-details">
     <header><strong>{text.open} · {view.index + 1} / {view.binding.rows.length}</strong><button onClick={() => { if (current()) onClose(view); }}>{text.close}</button></header>
     <p title={pageNavigation ? text.sqlitePageNavigation : text.readonly}>{text.scope}</p>{pageNavigation && <p>{text.sqlitePageNavigation}</p>}{view.binding.truncated && <p className="warning-text">{text.truncated}</p>}
+    {pageNavigation && <RecordNavigator state={navigator} columns={columns} count={view.binding.rows.length} active={view.index}
+      value={(index, key) => recordValueSummary(ownCell(view.binding.rows[index], key))}
+      onSelect={index => { if (current()) onMove(view, index); }}/>}
     <div className="query-row-details-actions"><button disabled={view.index === 0 && !previousPage} onClick={() => move(-1)}>{previousPage ? text.sqlitePreviousPage : text.previous}</button><button disabled={view.index + 1 >= view.binding.rows.length && !nextPage} onClick={() => move(1)}>{nextPage ? text.sqliteNextPage : text.next}</button><label>{rowLabel}<input aria-label={rowLabel} value={row} inputMode="numeric" maxLength={6} onChange={event => { if (current()) setRow(event.target.value); }}/></label><button disabled={!/^[1-9][0-9]{0,5}$/u.test(row) || Number(row) > view.binding.rows.length} onClick={() => { if (current() && /^[1-9][0-9]{0,5}$/u.test(row) && Number(row) <= view.binding.rows.length) onMove(view, Number(row) - 1); }}>{text.go}</button></div>
     {(fullSqlitePage || !sqlitePage) && <div className="query-row-details-actions" role="group" aria-label={modeText.modes}>{(['fields','tree','json'] as const).map(value => <button key={value} aria-pressed={display === value} onClick={() => { if (current()) onMode(value); }}>{modeText[value]}</button>)}</div>}
     {display !== 'json' && <div className="query-row-details-search"><input type="search" aria-label={text.fieldSearch} placeholder={text.fieldSearch} value={filter} maxLength={256} onChange={event => changeFilter(event.target.value)}/><button disabled={!filter} onClick={() => changeFilter('')}>{text.clearFieldSearch}</button></div>}

@@ -1588,6 +1588,12 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     next: canMoveRecord && (recordIndex < recordCount - 1 || !!page?.hasNext && options.offset + options.limit <= postgresTableLimits.offset),
   };
 
+  /** 本页跳转沿用现有表单换行屏障，未暂存输入仍属于原行。 */
+  function selectRecord(index: number) {
+    if (!canMoveRecord || !recordViewCurrent() || recordInput.current || !Number.isSafeInteger(index) || !page?.rows[index]) return;
+    setRow(index);
+  }
+
   /** 跨页延用当前筛选、排序和原草稿页；到达相邻页时选中对应边界记录。 */
   function moveRecord(move: PostgresRecordMove) {
     if (!moves[move] || !recordViewCurrent() || recordInput.current || !page || row === null) return;
@@ -1787,7 +1793,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         pending={recordInputDirty} projectionAvailable={active && !requiresRefresh && pageConnectionVersion === connectionVersion &&
           !!page.exportToken && issued.current === page.exportToken}
         projectionCurrent={() => !!page.exportToken && issued.current === page.exportToken && layoutScope.current.current()}
-        moves={moves} onMove={moveRecord} onDirty={changeRecordInput} onStage={stageRecordView}/>}
+        moves={moves} onMove={moveRecord} canSelectRecord={canMoveRecord} onSelectRecord={selectRecord}
+        onDirty={changeRecordInput} onStage={stageRecordView}/>}
       {page ? <div className="pg-record-grid-host" hidden={recordView}><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
         rows={findRows} replaceSelection={checkedFindRows ?? null} columns={gridLayout.columns} isCurrent={findIsCurrent} replaceWritable={postgresFindWritable}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
