@@ -1,6 +1,8 @@
 import { Client } from 'pg';
 import { confirmOwnedDesktopExit, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
+import { expectCopiedBuilderSql } from './query-builder-output';
+import { queryBuilderOutputZh as output } from '../../src/renderer/locales/queryBuilderOutput.zh-CN';
 import { postgresQueryBuilderZh as text } from '../../src/renderer/locales/postgresQueryBuilder.zh-CN';
 import { tableForeignKeyJoinZh as joinText } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 import { tableForeignKeyJoinSummaryZh as aggregate } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
@@ -243,6 +245,16 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     const joins = ` FROM ${view} AS t1 LEFT JOIN "public"."builder_link" AS t2 ON (t1."id" = t2."id") LEFT JOIN "public"."builder_link" AS t3 ON (t1."id" <= t3."id" AND (t2."id" = t3."id" OR t1."id" = t3."alternate_id")) WHERE t1."id" >= E'${min}'`;
     const joinSql = 'SELECT t1."id" AS "t1.id", t3."note" AS "t3.note"' + joins + ';';
     await expect(sql).toHaveText(joinSql);
+    await expectCopiedBuilderSql(builder, joinSql);
+    await builder.getByText(output.save, { exact: true }).click();
+    await builder.getByLabel(output.name, { exact: true }).fill('PostgreSQL 跨 schema 脚本');
+    const tabsBeforeSave = (await settings()).tabs;
+    await button(output.confirm).click();
+    await expect.poll(() => page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([
+      expect.objectContaining({ name: 'PostgreSQL 跨 schema 脚本', sql: joinSql, connectionId, databaseContext: { state: 'known', database } }),
+    ]);
+    expect((await settings()).tabs).toEqual(tabsBeforeSave);
+    await page.screenshot({ path: info.outputPath('postgres-builder-output.png') });
     await button(text.inspectLabels.explain).click();
     await expect(results.getByRole('tree')).toBeVisible();
     await button(text.inspectLabels.rows).click();
@@ -382,6 +394,11 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
     await offset.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('postgres-builder-offset.png') });
     await observer.query('ALTER TABLE ' + table + ' ADD COLUMN new_column text');
+    await builder.getByText(output.save, { exact: true }).click();
+    await builder.getByLabel(output.name, { exact: true }).fill('过期来源');
+    await button(output.confirm).click();
+    await expect(builder.locator('.modal-content > [role=alert]')).toContainText('来源已变化');
+    expect(await page.evaluate(async () => (await window.dbark.invoke('queries.list', {})).map(item => item.name))).toEqual(['PostgreSQL 跨 schema 脚本']);
     await button(text.inspectLabels.rows).click();
     await expect(results.getByRole('alert')).toContainText('PostgreSQL 查询来源已变化');
     await button(text.open).click();

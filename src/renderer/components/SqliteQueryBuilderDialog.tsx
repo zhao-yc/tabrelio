@@ -28,6 +28,7 @@ import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
 import { QueryBuilderProjectionPanel } from './QueryBuilderProjectionPanel';
 import type { QueryBuilderColumnAlias } from '../../shared/queryBuilderProjection';
 import { QueryBuilderJoinPanel, type QueryBuilderJoinDraft } from './QueryBuilderJoinPanel';
+import { QueryBuilderOutput, saveQueryBuilderSql, type QueryBuilderOutputTarget } from './QueryBuilderOutput';
 import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { ViewQueryInspect } from './ViewQueryInspect';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
@@ -255,9 +256,9 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
     applyDraft(singleDraft.current); singleDraft.current = undefined; setJoins([]); setError('');
   }
 
-  /** 返回构建器时保留原草稿，视图提交前重新核对同一个 SQLite 来源。 */
-  function open(asView = false) {
-    if (!source || editingJoin !== undefined || filterEditor || !preview?.design || asView && !canCreateView) return;
+  /** 三个输出入口均复核当前 SQLite 来源，视图提交前还会再核一次。 */
+  function publish(destination: QueryBuilderOutputTarget) {
+    if (!source || editingJoin !== undefined || filterEditor || !preview?.design || destination === 'view' && !canCreateView) return;
     const { design, sql } = preview;
     const target = source.target;
     async function verify() {
@@ -268,7 +269,11 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
     void run(text.checking, async owns => {
       await verify();
       if (!owns()) return;
-      if (asView) {
+      if (typeof destination === 'object') {
+        await saveQueryBuilderSql(destination, connectionId, target.database, sql + ';');
+        return;
+      }
+      if (destination === 'view') {
         setViewSeed({ sql: queryViewDefinition(sql, 'sqlite'), version: owner.version, current, beforeApply: verify });
         return;
       }
@@ -372,6 +377,8 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
         {preview?.design && <ViewQueryInspect owner={preview} labels={text.inspectLabels} hint={text.inspection(sqliteQueryBuilderSampleRows)} disabled={controlsDisabled} current={current}
           read={inspect => invoke('sqlite.queryBuilder.inspect', { ...preview.design, inspect })}/>}
         {preview?.sql && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.sql};</pre></section>}
+        <QueryBuilderOutput preview={preview} sql={preview?.sql ? preview.sql + ';' : undefined}
+          disabled={controlsDisabled} current={editable} onSave={publish}/>
       </>}
       <ErrorBox message={stale ? text.stale : error || preview?.error}/>{message && <Spinner text={message}/>}
     </div>
@@ -380,8 +387,8 @@ export function SqliteQueryBuilderDialog({ connectionId, onBack, onClose, onView
         <button onClick={() => close(onBack)}>{text.back}</button>}
       <span className="grow"/><button onClick={() => close(onClose)}>{zh.common.cancel}</button>
       {source && <button disabled={controlsDisabled || !preview?.design || !canCreateView} title={canCreateView ? undefined : viewText.builderReadOnly}
-        onClick={() => open(true)}>{viewText.builderEntry}</button>}
-      {source ? <button className="primary" disabled={controlsDisabled || !preview?.design} onClick={() => open()}>{text.open}</button> :
+        onClick={() => publish('view')}>{viewText.builderEntry}</button>}
+      {source ? <button className="primary" disabled={controlsDisabled || !preview?.design} onClick={() => publish('open')}>{text.open}</button> :
         <button className="primary" disabled={controlsDisabled || !target} onClick={readSource}>{text.read}</button>}
     </footer>
   </Modal>;

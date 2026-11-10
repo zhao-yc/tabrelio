@@ -1,6 +1,7 @@
 import { readQueryBuilderOffset } from '../../shared/queryBuilderOffset';
 import { mysqlSelectedOutputKeys, type MysqlQueryProjection } from '../../shared/mysqlQueryProjection';
 import { QueryBuilderProjectionOrder } from './QueryBuilderProjectionPanel';
+import { QueryBuilderOutput, saveQueryBuilderSql, type QueryBuilderSaveTarget } from './QueryBuilderOutput';
 import { queryBuilderPaginationZh as pagination } from '../locales/queryBuilderPagination.zh-CN';
 import { queryBuilderJoinZh as joinText } from '../locales/queryBuilderJoin.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -295,15 +296,16 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
   }
 
   /** 同步占门后才排原异步链，按钮连点和旧DOM均不能建立第二个在途操作。 */
-  function run(kind: 'preview' | 'open' | 'view' | NonNullable<MysqlJoinPreviewInput['mode']> | 'databases' | 'tables' | DesignOperation, index?: number): void {
+  function run(kind: 'preview' | 'open' | 'view' | NonNullable<MysqlJoinPreviewInput['mode']> | 'databases' | 'tables' | DesignOperation | QueryBuilderSaveTarget, index?: number): void {
     const step = index === undefined ? undefined : selection.additional[index];
     if (index !== undefined && !step) return;
     const chosenTarget = step ? step.tables?.includes(step.table) && { database: step.database, table: step.table } : target;
     const inspectionMode = kind === 'rows' || kind === 'explain' || kind === 'explainText' ? kind : undefined;
+    const saveQuery = typeof kind === 'object' ? kind : undefined;
     if (!editable() || (kind === 'preview' && !chosenTarget) || (kind === 'view' && !onViewApplied) ||
-        ((kind === 'open' || kind === 'view' || inspectionMode) && !preview.value) ||
+        ((kind === 'open' || kind === 'view' || saveQuery || inspectionMode) && !preview.value) ||
         ((kind === 'databases' || kind === 'tables') && !selection.manual)) return;
-    const designOperation = kind.endsWith('Design') || kind === 'listDesigns';
+    const designOperation = typeof kind === 'string' && (kind.endsWith('Design') || kind === 'listDesigns');
     const designTarget = designs.find(item => item.id === designId);
     const saveDesign = kind === 'saveDesign' || kind === 'replaceDesign';
     if (designOperation && ((!selection.manual && !origin.single) || (saveDesign && (!preview.value || !designName.trim())) ||
@@ -325,7 +327,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     if (designOperation) setDesignNotice('');
     if (inspectionMode) setInspection(undefined);
     const inspectionMessage = inspectionMode === 'rows' ? text.sampleLoading : text.explainLoading;
-    setBusy(true); setError(''); setMessage(designOperation ? text.designWorking : inspectionMode ? inspectionMessage : kind === 'open' || kind === 'view' ? text.checking : kind === 'databases' ? text.manualDatabases : kind === 'tables' ? text.manualTables : text.parentLoading);
+    setBusy(true); setError(''); setMessage(designOperation ? text.designWorking : inspectionMode ? inspectionMessage : kind === 'open' || kind === 'view' || saveQuery ? text.checking : kind === 'databases' ? text.manualDatabases : kind === 'tables' ? text.manualTables : text.parentLoading);
     active.promise = Promise.resolve().then(async () => {
       if (!owns()) return;
       if (designOperation) {
@@ -383,11 +385,15 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
         selectionRef.current = next; setSelection(next); setParent({ fk: selected.fk, info: structuredClone(metadata) });
       } else if (inspectionMode && receipt) {
         await inspect(active, receipt, inspectionMode, owns);
-      } else if ((kind === 'open' || kind === 'view') && receipt) {
+      } else if ((kind === 'open' || kind === 'view' || saveQuery) && receipt) {
         // 视图与独立查询都先复核同一份设计，视图草稿仅通过现有视图定义词法门槛。
         const viewSql = kind === 'view' ? mysqlViewFileQuery(receipt.sql) + '\n' : undefined;
         await revalidateForeignKeyJoin(origin.intent, receipt, target => read(active, target, owns), owns);
         if (!owns()) return;
+        if (saveQuery) {
+          await saveQueryBuilderSql(saveQuery, origin.intent.connectionId, origin.intent.source.database, receipt.sql);
+          return;
+        }
         if (viewSql) {
           const version = useWorkspace.getState().connectionVersions[origin.intent.connectionId] ?? 0;
           const seed = { sql: viewSql, version };
@@ -715,5 +721,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       </>}
     </section>}
     {preview.value && !unavailable && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.value.sql}</pre></section>}
+    {sourceReady && <QueryBuilderOutput preview={preview.value} sql={preview.value?.sql} disabled={busy || unavailable}
+      current={editable} onSave={run}/>}
   </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button>{!origin.single && <button disabled={busy || unavailable || !target} onClick={() => run('preview')}>{selection.manual ? text.manualRead : text.preview}</button>}{onViewApplied && <button disabled={busy || unavailable || !preview.value} onClick={() => run('view')}>{text.openView}</button>}<button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;
 }

@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
+import { expectCopiedBuilderSql } from './query-builder-output';
+import { queryBuilderOutputZh as output } from '../../src/renderer/locales/queryBuilderOutput.zh-CN';
+import { savedQueryOrganizationZh as organization } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { sqliteQueryBuilderZh as text } from '../../src/renderer/locales/sqliteQueryBuilder.zh-CN';
 import { sqliteTableBrowseZh as browse } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQueryInspect.zh-CN';
@@ -110,9 +113,11 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     const expected = 'SELECT DISTINCT "label" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
       maxInteger + ') ORDER BY "label" DESC LIMIT 3;';
     await expect(sql).toHaveText(expected);
+    await expectCopiedBuilderSql(builder, expected);
     await button(text.inspectLabels.explain).click();
     await expect(results.getByRole('tree')).toContainText(table);
     await builder.getByLabel(text.limit, { exact: true }).fill('2');
+    await expect(builder.getByText(output.copied, { exact: true })).toHaveCount(0);
     await expect(results.getByRole('tree')).toHaveCount(0);
     await button(text.inspectLabels.rows).click();
     await expect(results.getByText(inspect.count(1), { exact: true })).toBeVisible();
@@ -139,6 +144,24 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
     const grouped = 'SELECT "label", SUM("value") AS "最终合计" FROM "main"."查询视图" WHERE (typeof("value") = \'integer\' AND "value" = ' +
       maxInteger + ') GROUP BY "label" HAVING (typeof(SUM("value")) = \'integer\' AND SUM("value") = ' + maxInteger + ') ORDER BY 2 DESC LIMIT 2;';
     await expect(sql).toHaveText(grouped);
+    await page.evaluate(async () => {
+      const snapshot = await window.dbark.invoke('queries.organizationGet', {});
+      await window.dbark.invoke('queries.organizationApply', { expectedRevision: snapshot.revision,
+        operation: { kind: 'create', name: '构建器验收分组', parentId: null } });
+    });
+    await builder.getByText(output.save, { exact: true }).click();
+    await builder.getByLabel(output.name, { exact: true }).fill('SQLite 汇总脚本');
+    await button(organization.chooseSaveGroup).click();
+    await builder.getByLabel(organization.saveGroup, { exact: true }).selectOption({ label: '构建器验收分组' });
+    await button(output.confirm).click();
+    await expect.poll(() => page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([
+      expect.objectContaining({ name: 'SQLite 汇总脚本', sql: grouped, connectionId, databaseContext: { state: 'known', database: 'main' } }),
+    ]);
+    const storedGroup = await page.evaluate(() => window.dbark.invoke('queries.organizationGet', {}));
+    expect(storedGroup.groups).toEqual([expect.objectContaining({ name: '构建器验收分组', count: 1 })]);
+    expect((await settings()).tabs).toEqual(originalTabs);
+    expect(await history()).toEqual(originalHistory);
+    await page.screenshot({ path: info.outputPath('sqlite-builder-output.png') });
     await button(text.inspectLabels.explain).click();
     await expect(results.getByRole('tree')).toBeVisible();
     await button(text.inspectLabels.rows).click();

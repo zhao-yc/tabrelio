@@ -27,6 +27,7 @@ import { SingleQueryDesignPanel } from './SingleQueryDesignPanel';
 import { QueryBuilderProjectionPanel } from './QueryBuilderProjectionPanel';
 import type { QueryBuilderColumnAlias } from '../../shared/queryBuilderProjection';
 import { QueryBuilderJoinPanel, type QueryBuilderJoinDraft } from './QueryBuilderJoinPanel';
+import { QueryBuilderOutput, saveQueryBuilderSql, type QueryBuilderOutputTarget } from './QueryBuilderOutput';
 import { queryBuilderForeignKeyPairs, type QueryBuilderForeignKeyChoice } from '../../shared/queryBuilderJoin';
 import { tableForeignKeyJoinZh as designText } from '../locales/tableForeignKeyJoin.zh-CN';
 import { ViewQueryInspect } from './ViewQueryInspect';
@@ -250,8 +251,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
     setJoins([]); setError('');
   }
 
-  /** 原设计保持在当前组件中；提交视图前再次对照同一份结构和查询。 */
-  function open(asView = false) {
+  /** 打开、创建视图和保存到查询库共用同一份目录核验。 */
+  function publish(destination: QueryBuilderOutputTarget) {
     if (!source || !preview?.design || editor) return;
     const { design, sql } = preview;
     const target = source.target;
@@ -268,7 +269,11 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
     void run(text.checking, async () => {
       await verify();
       if (!current()) return;
-      if (asView) {
+      if (typeof destination === 'object') {
+        await saveQueryBuilderSql(destination, connectionId, database, sql + ';');
+        return;
+      }
+      if (destination === 'view') {
         setViewSeed({ sql: queryViewDefinition(sql, 'postgresql'), version: owner.version,
           preferredSchema: postgresRelationName(source.target.table).schema, current, beforeApply: verify });
         return;
@@ -381,6 +386,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
         {preview?.design && <ViewQueryInspect owner={preview} labels={text.inspectLabels} hint={text.inspection(postgresQueryBuilderLimits.rows)}
           disabled={disabled || !!editor} current={current} read={inspect => invoke('postgres.queryBuilder.inspect', { ...preview.design, inspect })}/>}
         {preview?.sql && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.sql};</pre></section>}
+        <QueryBuilderOutput preview={preview} sql={preview?.sql ? preview.sql + ';' : undefined}
+          disabled={disabled || !!editor} current={editable} onSave={publish}/>
       </>}
       <ErrorBox message={stale ? text.stale : error || preview?.error}/>{message && <Spinner text={message}/>}
     </div>
@@ -388,8 +395,8 @@ export function PostgresQueryBuilderDialog({ connectionId, database, onBack, onC
       {source ? <button disabled={disabled || !!editor} onClick={() => { if (editable()) { setSource(undefined); setError(''); } }}>{text.changeSource}</button> :
         <button onClick={() => close(onBack)}>{text.back}</button>}
       <span className="grow"/><button onClick={() => close(onClose)}>{zh.common.cancel}</button>
-      {source && <button disabled={disabled || !!editor || !preview?.design} onClick={() => open(true)}>{viewText.builderEntry}</button>}
-      {source ? <button className="primary" disabled={disabled || !!editor || !preview?.design} onClick={() => open()}>{text.open}</button> :
+      {source && <button disabled={disabled || !!editor || !preview?.design} onClick={() => publish('view')}>{viewText.builderEntry}</button>}
+      {source ? <button className="primary" disabled={disabled || !!editor || !preview?.design} onClick={() => publish('open')}>{text.open}</button> :
         <button className="primary" disabled={disabled || !table} onClick={loadSource}>{text.read}</button>}
     </footer>
   </Modal>;
