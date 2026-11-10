@@ -153,10 +153,19 @@ test('SQLite完整客户端全组次数排序、丢弃确认、类型筛选与�
     await step(() => page.locator('.connection-row .tree-label').filter({ hasText: connectionName }).click()); await step(() => page.locator('.database-row .tree-label').filter({ hasText: /^main$/ }).click()); await step(() => page.locator('.object-row .tree-label').filter({ hasText: new RegExp('^' + tableName + '$') }).dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible());
     /** 真实菜单/字段选择零读取；开始后核原Main回包、完整640行及关闭不改变表页或标签。 */
     const statisticsProof: unknown[] = [];
-    const statistics = async (rows: string) => {
+    const statistics = async (rows: string, fromHeader = false) => {
       const before = await step(audit), beforeSettings = await settings();
-      await step(async () => (await navigationMenuItem(table(), { name: statisticsText.entry, exact: true }, check)).click());
-      const dialog = page.getByRole('dialog', { name: statisticsText.title, exact: true }); await step(() => expect(dialog).toBeVisible()); await step(() => dialog.getByLabel(statisticsText.column, { exact: true }).selectOption('n'));
+      const dialog = page.getByRole('dialog', { name: statisticsText.title, exact: true });
+      const column = dialog.getByLabel(statisticsText.column, { exact: true });
+      if (fromHeader) {
+        await step(() => table().getByRole('columnheader', { name: 'n', exact: true }).click({ button: 'right' }));
+        await step(() => page.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.columnStatistics, exact: true }).click());
+        await step(() => expect(column).toHaveValue('n'));
+        await step(() => dialog.screenshot({ path: info.outputPath('表页列标题预选统计.png') }));
+      } else {
+        await step(async () => (await navigationMenuItem(table(), { name: statisticsText.entry, exact: true }, check)).click());
+        await step(() => column.selectOption('n'));
+      }
       expect((await step(audit)).counts).toHaveLength(before.counts.length);
       await step(() => dialog.getByRole('button', { name: statisticsText.readRowCount, exact: true }).click());
       await step(() => expect(dialog.getByRole('status')).toHaveText(statisticsText.rowCountResult(rows)));
@@ -173,7 +182,7 @@ test('SQLite完整客户端全组次数排序、丢弃确认、类型筛选与�
       statisticsProof.push({ output, tablePageReadsAdded: 0, valueLookupsAdded: 0, tabChanged: false }); return output;
     };
     stage = '真实全筛选字段概况覆盖当前页外640行及五种存储类型';
-    const fullStatistics = await statistics('640'); expect(fullStatistics).toMatchObject({ nonNull: '638', nulls: '2' }); expect(fullStatistics.groups.map(group => [group.kind, group.count, group.distinct])).toEqual([['blob', '1', '1'], ['integer', '2', '1'], ['null', '2', '0'], ['real', '1', '1'], ['text', '634', '525']]);
+    const fullStatistics = await statistics('640', true); expect(fullStatistics).toMatchObject({ nonNull: '638', nulls: '2' }); expect(fullStatistics.groups.map(group => [group.kind, group.count, group.distinct])).toEqual([['blob', '1', '1'], ['integer', '2', '1'], ['null', '2', '0'], ['real', '1', '1'], ['text', '634', '525']]);
     await controls(true); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5')); await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
     stage = '列标题预选字段，读取完整候选及最多次数';
     const beforeHeader = await step(audit);

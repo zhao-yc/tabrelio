@@ -31,6 +31,7 @@ export const gridHeaderMenuZh = {
   findColumn: '在此列查找',
   filterColumn: '为此列添加筛选',
   columnValues: '按此列不同值筛选',
+  columnStatistics: '查看此列统计',
   filterDraftPending: '请先添加或取消正在编辑的条件，当前输入已保留。',
   hideColumn: '隐藏此列',
   showAllColumns: '显示所有列',

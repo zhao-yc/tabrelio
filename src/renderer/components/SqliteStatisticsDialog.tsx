@@ -7,13 +7,13 @@ import { invoke, uid, errorMessage } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import '../sqliteStatistics.css';
 
-interface Props { tabId: string; base: Omit<SqliteStatisticsInput, 'column' | 'taskId'>; columns: readonly string[]; current(): boolean; onClose(): void; onCleanup(reason: unknown): void; onCount?(rows: string): void; }
+interface Props { tabId: string; base: Omit<SqliteStatisticsInput, 'column' | 'taskId'>; columns: readonly string[]; initialColumn?: string; current(): boolean; onClose(): void; onCleanup(reason: unknown): void; onCount?(rows: string): void; }
 /** 极值只展示准确typed值，文本保留JSON转义，二进制显示完整hex，不按声明类型隐式转换。 */
 function preview(value: SqliteStatisticsValue): string { return value.kind === 'null' ? 'NULL' : value.kind === 'text' ? JSON.stringify(value.value) : value.kind === 'blob' ? 'X\'' + value.value + '\'' : value.value; }
 /** 打开和选择字段不读取，明确开始才统计；关闭在途操作等原任务与ACK，原占用不提前释放。 */
 export function SqliteStatisticsDialog(props: Props) {
   const origin = useRef(props).current, latest = useRef(props); latest.current = props;
-  const [view, setView] = useState<SqliteStatisticsView>({ busy: false, stopping: false, error: '' }), [column, setColumn] = useState(origin.columns[0] ?? ''), [closing, setClosing] = useState(false), [problem, setProblem] = useState('');
+  const [view, setView] = useState<SqliteStatisticsView>({ busy: false, stopping: false, error: '' }), [column, setColumn] = useState(origin.initialColumn ?? origin.columns[0] ?? ''), [closing, setClosing] = useState(false), [problem, setProblem] = useState('');
   const mounted = useRef(true), closingRef = useRef(false), closed = useRef(false), render = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = render; return () => { if (committed.current === render) committed.current = undefined; }; });
   const [controller] = useState(() => new SqliteStatisticsController({ base: origin.base, current: () => latest.current.base === origin.base && latest.current.columns === origin.columns && latest.current.tabId === origin.tabId && origin.current(), acquire: () => acquireWorkspaceBusy(origin.tabId), read: input => invoke('sqlite.statistics', input), countRows: input => invoke('sqlite.countRows', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: setView, cleanup: reason => origin.onCleanup(reason) }));

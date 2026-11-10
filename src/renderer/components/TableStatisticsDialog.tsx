@@ -20,15 +20,16 @@ type Operation = { taskId: string; promise: Promise<void>; cancelled: boolean; c
 type StatisticsReceipt = { output: TableStatisticsOutput; distinct: boolean };
 
 /** 勾选仅改变本地草稿；显式开始才按冻结筛选统计服务器全部匹配记录。 */
-export function TableStatisticsDialog({ base, intent, onClose, onActivity, onCount, services = tableStatisticsServices }: {
-  base: { connectionId: string; database: string; table: string }; intent: TableStatisticsIntent;
+export function TableStatisticsDialog({ base, intent, initialColumn, onClose, onActivity, onCount, services = tableStatisticsServices }: {
+  base: { connectionId: string; database: string; table: string }; intent: TableStatisticsIntent; initialColumn?: string;
   onClose(): void; onActivity(delta: 1 | -1): void; onCount?(count: string): void; services?: TableStatisticsServices;
 }) {
   const countOnly = onCount !== undefined;
   const origin = useRef({ base: { ...base }, intent, services, countOnly }).current;
   const countCallback = useRef(onCount); countCallback.current = onCount;
   if (origin.intent !== intent || origin.services !== services || origin.countOnly !== countOnly || origin.base.connectionId !== base.connectionId || origin.base.database !== base.database || origin.base.table !== base.table) origin.intent.invalidate();
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set()), selectedRef = useRef(selected); selectedRef.current = selected;
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set(initialColumn === undefined ? [] : [initialColumn]));
+  const selectedRef = useRef(selected); selectedRef.current = selected;
   const [distinct, setDistinct] = useState(false), distinctRef = useRef(distinct); distinctRef.current = distinct;
   const [histogram, setHistogram] = useState({ column: '', bins: 10 as TableHistogramRequest['bins'] }), histogramRef = useRef(histogram); histogramRef.current = histogram;
   const [receipt, setReceipt] = useState<StatisticsReceipt>(), [error, setError] = useState(''), [message, setMessage] = useState('');

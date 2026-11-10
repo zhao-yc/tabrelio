@@ -42,7 +42,7 @@ async function selectHistogram(column: string, bins: string): Promise<void> {
   await act(async () => callback(nodes[1], 'onChange')({ target: { value: bins } }));
 }
 /** 合成服务是RAM观察端；真实服务器聚合、事务隔离、权限与耗时由实库另验。 */
-async function mount(options: { statistics?: TableStatisticsServices['statistics']; objectKind?: 'table' | 'view'; services?: TableStatisticsServices } = {}) {
+async function mount(options: { initialColumn?: string; statistics?: TableStatisticsServices['statistics']; objectKind?: 'table' | 'view'; services?: TableStatisticsServices } = {}) {
   const base = { connectionId: 'connection', database: 'db', table: 'items' }, types = [['id', 'bigint unsigned'], ['amount', 'decimal(30,6)'], ['score', 'double'], ['doc', 'json'], ['payload', 'blob'], ...Array.from({ length: 9 }, (_, index) => ['extra' + index, 'int'])];
   const source: TableInfo = { database: base.database, name: base.table, objectKind: options.objectKind ?? 'table', engine: options.objectKind === 'view' ? '' : 'InnoDB', columns: types.map(([name, type]) => ({ name, type, nullable: true, defaultValue: null, extra: '', generated: false, comment: '' })), primaryKey: ['id'], editableKey: ['id'], foreignKeys: [], indexes: [], ddl: options.objectKind === 'view' ? 'CREATE VIEW items AS SELECT 1 AS id' : 'CREATE TABLE items (`id` bigint unsigned)' };
   const conditions: TableStatisticsConditions = { filters: [{ column: 'amount', operator: '>=', value: '9007199254740993.000001' }, { column: 'doc', operator: 'IS NULL', enabled: false }], filterMode: 'all', filterGroup: { mode: 'all', children: [0, { mode: 'any', children: [1] }] } };
@@ -54,9 +54,18 @@ async function mount(options: { statistics?: TableStatisticsServices['statistics
     return { ...counts, kind: 'numeric', min: name === 'score' ? 1.25 : '9007199254740993.000001', max: name === 'score' ? 2.5 : '999999999999999999.999999', sum: '1234567890123456789012345.123456', avg: '1234567890123456789.0123456789', approximate: name === 'score', ...(input.distinct ? { distinct: '2' } : {}) };
   }) as TableColumnStatistics[], warnings: [] }; }
   const statistics = vi.fn<TableStatisticsServices['statistics']>(options.statistics ?? (async input => output(input))), cancel = vi.fn(async () => {}), close = vi.fn(), activity = vi.fn(), services = options.services ?? { statistics, cancel };
-  const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await act(async () => { root!.render(<Dialog base={base} intent={intent} onClose={close} onActivity={activity} services={services}/>); });
+  const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await act(async () => { root!.render(<Dialog base={base} intent={intent} initialColumn={options.initialColumn} onClose={close} onActivity={activity} services={services}/>); });
   return { base, source, conditions, intent, statistics, cancel, close, activity, services, output, async render(nextBase = base) { await act(async () => { root!.render(<Dialog base={nextBase} intent={intent} onClose={close} onActivity={activity} services={services}/>); }); } };
 }
+
+it('表头预选指定列且仅显式开始后读取该列', async () => {
+  const fixture = await mount({ initialColumn: 'amount' });
+  expect(fixture.statistics).not.toHaveBeenCalled();
+  const checked = document.body.querySelectorAll('input').filter(node => node.checked);
+  expect(checked.map(node => node.getAttribute('aria-label'))).toEqual([text.selectColumn('amount')]);
+  await click(text.start);
+  expect(fixture.statistics).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ columns: ['amount'] }));
+});
 it('分布字段和区间只改草稿，独立于统计选列；大整数边界及零区间数量原样显示', async () => {
   const f = await mount(); await selectHistogram('id', '5'); expect(f.statistics).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(text.selected(0));
   f.statistics.mockImplementation(async input => ({ ...f.output(input), histogram: histogramReceipt(input.histogram!.bins) })); await click(text.start);

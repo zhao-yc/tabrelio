@@ -16,6 +16,7 @@ import { queryResultValueOptionsZh as valueText } from '../../src/renderer/local
 import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
 import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 
@@ -381,8 +382,9 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     /** 原菜单与真实表单共同验证草稿；应用、撤销、清除均不补读数据库。 */
     const openFiltering = async () => { await step(async () => (await navigationMenuItem(query(), { name: filterText.open, exact: true }, check)).click()); await step(() => expect(filtering).toBeVisible()); };
     const applyFiltering = async (expected: string[]) => { await step(() => filtering.getByRole('button', { name: filterText.apply, exact: true }).click()); await step(() => expect(filtering).toHaveCount(0)); await step(() => expect.poll(shownIntegers).toEqual(expected)); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'descending')); expect((await step(audit)).executions).toBe(1); };
-    await step(async () => (await navigationMenuItem(query(), { name: statisticsText.open, exact: true }, check)).click());
-    await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c4'));
+    await step(() => mixedHeader.click({ button: 'right' }));
+    await step(() => page.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.columnStatistics, exact: true }).click());
+    await step(() => expect(statistics().getByLabel(statisticsText.column, { exact: true })).toHaveValue('c4'));
     await step(() => statistics().getByRole('button', { name: statisticsText.frequency, exact: true }).click());
     const textFrequencyRow = frequency().getByRole('row').filter({ has: page.getByText('"2"', { exact: true }) });
     await step(() => textFrequencyRow.getByRole('button', { name: statisticsText.frequencyFilter, exact: true }).click());

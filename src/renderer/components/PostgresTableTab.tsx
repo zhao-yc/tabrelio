@@ -1337,7 +1337,8 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const columns = kind === 'values' ? valueColumns : page.columns;
     const column = key === undefined ? columns.find(item => item.name === filterColumn) : columns.find(item => item.key === key);
-    if (key !== undefined && (!column || !canFilterCell() || selectedFilter || columnDialog)) return;
+    if (key !== undefined && (!column || columnDialog ||
+        (kind === 'values' && (!canFilterCell() || selectedFilter)))) return;
     const current = () => issued.current === pageToken && layoutScope.current.current() && !lease.current &&
       (kind === 'statistics' || !recordDirty.current);
     setColumnDialog({ kind, source: { input: { ...target, pageToken }, columns, current,
@@ -1858,6 +1859,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
           available: key => valueColumns.some(column => column.key === key),
           open: key => openColumnReader('values', key),
         } : undefined}
+        onColumnStatistics={canReadStatistics && !columnDialog ? key => openColumnReader('statistics', key) : undefined}
         tableCopy={{ enabled: canFind, isCurrent: findIsCurrent }}
         onExportRange={result => { if (findIsCurrent()) setCollectedDialog({ result, scope: 'rectangle' }); }}
         insertSql={!page.truncated && isPostgresSqlExportRelation(page.relationKind)

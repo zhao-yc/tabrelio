@@ -344,7 +344,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   }), []);
   const [referenceDialog, setReferenceDialogState] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse'; column?: string; cellCurrent?(): boolean } | null>(null);
   const [childReferenceDialog, setChildReferenceDialog] = useState<ChildReferenceIntent | null>(null), childReferenceIntent = useRef<ChildReferenceIntent | null>(null);
-  const [tableStatisticsDialog, setTableStatisticsDialog] = useState<{ intent: TableStatisticsIntent; onCount?(count: string): void } | null>(null), tableStatisticsIntent = useRef<TableStatisticsIntent | null>(null);
+  const [tableStatisticsDialog, setTableStatisticsDialog] = useState<{ intent: TableStatisticsIntent; initialColumn?: string; onCount?(count: string): void } | null>(null), tableStatisticsIntent = useRef<TableStatisticsIntent | null>(null);
   const [pageCount, setPageCount] = useState<{ generation: number; refreshVersion: typeof refreshVersion; count: string }>();
   const [relationshipDialog, setRelationshipDialog] = useState<{ source: TableInfo; current(): boolean } | null>(null), relationshipRef = useRef<typeof relationshipDialog>(null);
   const [tableValueOptionsDialog, setTableValueOptionsDialog] = useState<{ intent: TableStatisticsIntent; column: string } | null>(null), tableValueOptionsIntent = useRef<TableStatisticsIntent | null>(null);
@@ -981,9 +981,10 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   const countPageAvailable = !!loadedCountPage && loadedCountPage.page === page && loadedCountPage.generation === loadGeneration.current && !restoredDraftView;
   const visiblePageCount = pageCount && countPageAvailable && pageCount.generation === loadGeneration.current && pageCount.refreshVersion === refreshVersion && !externalStale ? pageCount.count : undefined;
   /** 统计不要求活动行；冻结服务器筛选且保留本地草稿，表和视图均使用同一只读入口。 */
-  function openTableStatistics(countOnly = false) {
+  function openTableStatistics(countOnly = false, initialColumn?: string) {
     if (tableReadAction.current !== tableReadRender || blockedRef.current || tableStatisticsIntent.current || !statisticsAvailable || !connection || !info || !page || activeGridEditor.current || useWorkspace.getState().settings.activeTabId !== tab.id || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     if (countOnly && (!countPageAvailable || filteredSelectPage.current !== loadedCountPage || loadedCountPage.scope !== getRecordPageContext().scope)) return;
+    if (initialColumn !== undefined && !info.columns.some(column => column.name === initialColumn)) return;
     const source = info, originalPage = page, originalRows = rowsRef.current, originalSelection = selectionRef.current, generation = loadGeneration.current, version = connectionVersion, profile = connection;
     const currentTab = JSON.stringify(useWorkspace.getState().settings.tabs.find(item => item.id === tab.id));
     let intent: TableStatisticsIntent;
@@ -995,7 +996,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     const onCount = countOnly ? (count: string) => {
       if (intent.current()) setPageCount({ generation, refreshVersion, count });
     } : undefined;
-    tableStatisticsIntent.current = intent; batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); presetUiEpoch.current++; setTableStatisticsDialog({ intent, onCount });
+    tableStatisticsIntent.current = intent; batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); presetUiEpoch.current++; setTableStatisticsDialog({ intent, initialColumn, onCount });
   }
   /** 原窗口原任务结算后才关闭；旧关闭回调不能关闭后续统计实例。 */
   function closeTableStatistics(intent: TableStatisticsIntent) { if (tableStatisticsIntent.current !== intent) return; intent.invalidate(); tableStatisticsIntent.current = null; presetUiEpoch.current++; setTableStatisticsDialog(null); }
@@ -2396,6 +2397,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
         info.columns.some(column => column.name === name && tableValueOptionsColumnCapability(column.type) !== 'unsupported')),
       open: openTableValueOptions,
     },
+    columnStatistics: statisticsAvailable ? name => openTableStatistics(false, name) : undefined,
     visibility: page && !blocked ? { showType: showFieldType, showComment: showFieldComment,
       onShowTypeChange: setShowFieldType, onShowCommentChange: setShowFieldComment } : undefined,
     rowActions: (index, current) => {
@@ -2627,7 +2629,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     {foreignKeyJoinDialog?.mode === 'build' && <TableForeignKeyJoinDialog intent={foreignKeyJoinDialog.intent} fixed={foreignKeyJoinDialog.fixed} manual={foreignKeyJoinDialog.manual}
       onOpen={preview => 'parent' in preview && openForeignKeyJoinQuery(foreignKeyJoinDialog.intent, preview)} onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog.intent)}
       onActivity={foreignKeyJoinActivity} onViewApplied={onViewApplied} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
-    {tableStatisticsDialog && <TableStatisticsDialog base={base} intent={tableStatisticsDialog.intent} onCount={tableStatisticsDialog.onCount} onClose={() => closeTableStatistics(tableStatisticsDialog.intent)} onActivity={referenceActivity}/>}
+    {tableStatisticsDialog && <TableStatisticsDialog base={base} intent={tableStatisticsDialog.intent} initialColumn={tableStatisticsDialog.initialColumn} onCount={tableStatisticsDialog.onCount} onClose={() => closeTableStatistics(tableStatisticsDialog.intent)} onActivity={referenceActivity}/>}
     {relationshipDialog && <RelationshipDiagramDialog connectionId={tab.connectionId} source={relationshipDialog.source} current={relationshipDialog.current} onActivity={referenceActivity}
       onJoin={onOpenGeneratedQuery && !record.dirty && !record.pending && !externalStale && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb')
         ? draft => openForeignKeyJoin('outgoing', { owner: relationshipDialog, draft }) : undefined}

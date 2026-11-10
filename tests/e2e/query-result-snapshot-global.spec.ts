@@ -1,4 +1,5 @@
 import { test as base } from '@playwright/test';
+import { gridHeaderMenuZh as headerText } from '../../src/renderer/locales/gridHeaderMenu.zh-CN';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
 const enabled = !listing && process.env.DBARK_RESULT_SNAPSHOT_GLOBAL === '1';
@@ -178,6 +179,13 @@ function register(): void {
         const type = header.querySelector('.column-type')?.textContent ?? '';
         return { name: (header.textContent ?? '').replace(type, '').trim(), type };
       })))).toEqual([{ name: '重复列', type: 'VAR_STRING' }, { name: '重复列', type: 'VAR_STRING' }]);
+      await step(() => duplicateHeaders.nth(1).click({ button: 'right' }));
+      await step(() => viewer.getByRole('menu', { name: headerText.menu, exact: true }).getByRole('menuitem', { name: headerText.columnStatistics, exact: true }).click());
+      const columnStatistics = page.getByRole('dialog', { name: statisticsText.title, exact: true });
+      await step(() => expect(columnStatistics.getByLabel(statisticsText.column, { exact: true })).toHaveValue('constructor'));
+      await step(() => expect(columnStatistics.getByLabel(statisticsText.distinct, { exact: true })).toHaveText('2'));
+      await step(() => columnStatistics.getByRole('button', { name: statisticsText.close, exact: true }).click());
+      await step(() => expect(columnStatistics).toHaveCount(0));
       const bounds = await step(() => grid.boundingBox()), viewport = await step(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
       expect(bounds).not.toBeNull(); expect(bounds!.width).toBeGreaterThan(0); expect(bounds!.height).toBeGreaterThan(0); expect(bounds!.x).toBeLessThan(viewport.width); expect(bounds!.y).toBeLessThan(viewport.height); expect(bounds!.x + bounds!.width).toBeGreaterThan(0); expect(bounds!.y + bounds!.height).toBeGreaterThan(0);
       for (const value of ['原型键安全', '构造键安全', '18446744073709551615', '12345678901234567890.1234567890']) {

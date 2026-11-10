@@ -46,6 +46,7 @@ interface HeaderMenuSource {
   findColumn?(key: string): void;
   filterColumn?(key: string): void;
   valueOptions?: GridHeaderValueOptions;
+  columnStatistics?(key: string): void;
   resizeColumn?(key: string, width: number): void;
   resizeRows?: { height: number; apply(height: number): void };
   zoom?: ReturnType<typeof useGridZoom>;
@@ -296,6 +297,9 @@ export function useGridHeaderMenu(openMenu: ReturnType<typeof useGridCellActionM
     if (source.valueOptions?.available(column.key)) actions.push({ label: text.columnValues, run: () => {
       const options = latest.current.valueOptions;
       if (current() && options?.available(column.key)) options.open(column.key);
+    } });
+    if (source.columnStatistics) actions.push({ label: text.columnStatistics, run: () => {
+      if (current()) latest.current.columnStatistics?.(column.key);
     } });
     return openMenu(target, grid, { title: column.name, label: text.menu, targetRole: 'columnheader', current, actions }, point);
   }
