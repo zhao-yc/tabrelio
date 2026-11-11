@@ -10,12 +10,13 @@ import { PostgresColumnDefaultFields } from './PostgresColumnDefaultFields';
 import { PostgresColumnGenerationFields, PostgresGenerationExpression } from './PostgresColumnGenerationFields';
 
 /** 在原结构视图中编辑结构化草稿，输入、预览和实际提交分别锁定。 */
-export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
-  const { target, original, onClose } = props;
-  const [kind, setKind] = useState<keyof typeof text.actions>('add');
+export function PostgresColumnEditPanel(props: PostgresStructureEditProps & { initialRenameName?: string }) {
+  const { target, original, onClose, initialRenameName } = props;
+  const fromTree = initialRenameName !== undefined;
+  const [kind, setKind] = useState<keyof typeof text.actions>(fromTree ? 'rename' : 'add');
   const [changes, setChanges] = useState<PostgresColumnChange[]>([]);
   const [name, setName] = useState('');
-  const [from, setFrom] = useState('');
+  const [from, setFrom] = useState(initialRenameName ?? '');
   const [type, setType] = useState<PostgresColumnType['type'] | ''>('text');
   const [length, setLength] = useState(''), [precision, setPrecision] = useState(''), [scale, setScale] = useState('');
   const [nullable, setNullable] = useState(true), [comment, setComment] = useState('');
@@ -32,7 +33,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
   const version = original.serverVersion ?? 0;
   const generatedFields = fields.filter(field => field.generation && (version >= 170000 || (version >= 130000 && field.generation === 's')));
   const candidates = kind === 'generation' ? generatedFields : fields;
-  const selected = candidates.find(field => field.name === from) ?? candidates[0];
+  const selected = candidates.find(field => field.name === from) ?? (fromTree ? undefined : candidates[0]);
   const old = selected?.name ?? '';
   const replacementValue = replacement?.field === old ? replacement?.value : undefined;
   const canSetDefault = !!selected && !selected.identity && !selected.generation;
@@ -95,10 +96,11 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
   return <section aria-label={text.title} className="pg-column-edit">
     <h3>{text.title}</h3>
     <ErrorBox message={error || (unknown ? text.unknown : '')}/>
-    <fieldset disabled={busy || unknown || !!preview}>
+    {(!fromTree || !changes.length) && <fieldset disabled={busy || unknown || !!preview}>
       <legend>{text.actions[kind]}</legend>
       <div className="pg-column-edit-fields">
-        <label>{text.operation}<select aria-label={text.operation} value={kind} onChange={event => {
+        <label>{text.operation}<select aria-label={text.operation} value={kind} disabled={fromTree} onChange={event => {
+          if (fromTree) return;
           const action = event.target.value as keyof typeof text.actions;
           setKind(action);
           setName('');
@@ -117,7 +119,8 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
           {Object.entries(text.actions).map(([action, label]) =>
             <option key={action} value={action} disabled={action === 'generation' ? !generatedFields.length : action !== 'add' && !fields.length}>{label}</option>)}
         </select></label>
-        {kind !== 'add' && <label>{text.from}<select aria-label={text.from} value={old} onChange={event => {
+        {kind !== 'add' && <label>{text.from}<select aria-label={text.from} value={old} disabled={fromTree} onChange={event => {
+          if (fromTree) return;
           setFrom(event.target.value);
           setReplacement(undefined);
           setGenerationDraft(undefined);
@@ -125,7 +128,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
         }}>
           {candidates.map(field => <option key={field.name}>{field.name}</option>)}
         </select></label>}
-        {needsName && <label>{text.name}<input value={name} onChange={event => setName(event.target.value)}/></label>}
+        {needsName && <label>{text.name}<input autoFocus={fromTree} value={name} onChange={event => setName(event.target.value)}/></label>}
         {needsType && <>
           <label>{text.type}<select aria-label={text.type} value={type} onChange={event => {
             const next = event.target.value as PostgresColumnType['type'] | '';
@@ -175,7 +178,7 @@ export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
       {(kind === 'add' && generation?.mode === 'stored' ||
         kind === 'generation' && selected?.generation === 's' && !removingGeneration) && <p>{text.rewriteGeneration}</p>}
       <button disabled={!canStage || changes.length >= 16} onClick={stage}>{text.stage}</button>
-    </fieldset>
+    </fieldset>}
     {!!changes.length && <ol aria-label={text.draft}>{changes.map((change, index) =>
       <li key={index}>{change.kind === 'add' ? text.adding(change.field.name) : change.kind === 'rename'
         ? text.renaming(change.from, change.name) : text.modifying(change)}</li>)}</ol>}

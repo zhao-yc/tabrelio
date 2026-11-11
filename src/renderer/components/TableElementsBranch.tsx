@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Columns3, KeyRound, List, Link2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Columns3, KeyRound, List, Link2, Pencil } from 'lucide-react';
 import type { TableElements, TableElementsTarget } from '../../shared/tableElements';
 import { tableElementsZh as text } from '../locales/tableElements.zh-CN';
 import { errorMessage, invoke } from '../lib';
@@ -8,6 +8,7 @@ import type { StructureElement } from '../structureElementFocus';
 import { appModalSelector } from '../modalSelectors';
 import { useWorkspace } from '../store';
 import { ErrorBox, Spinner } from './ui';
+import { SidebarTreeRow } from './SidebarContextMenu';
 
 type Group = keyof TableElements;
 const groups: Group[] = ['columns', 'indexes', 'foreignKeys'];
@@ -65,11 +66,9 @@ export function TableElementsBranch({ connectionId, database, table, available, 
 
   const label = expanded ? text.collapse(table) : text.expand(table);
   /** 用户只能从仍展开的原目录进入设计器，刷新、折叠及断开立即收回该入口。 */
-  function design(element: StructureElement) {
-    if (!elements || catalogue.current !== elements || !expandedRef.current || !available() ||
-        sidebarConnectionEnd(connectionId) || document.querySelector(appModalSelector)) return;
-    onDesign?.(element);
-  }
+  const current = () => !!elements && catalogue.current === elements && expandedRef.current && available() &&
+    !sidebarConnectionEnd(connectionId) && !document.querySelector(appModalSelector);
+  function design(element: StructureElement) { if (current()) onDesign?.(element); }
   return <>{children(<button type="button" className="icon-button table-elements-toggle" aria-expanded={expanded}
     aria-label={label} title={label} onClick={toggle}>{expanded ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}</button>)}
     {expanded && <div className="table-elements-branch" role="group" aria-label={text.branch(table)}>
@@ -82,7 +81,8 @@ export function TableElementsBranch({ connectionId, database, table, available, 
               <span className="table-elements-count">{elements[group].length}</span>
             </button>
             {open && <div className="table-elements-list" role="group" aria-label={text[group]}>
-              {elements[group].length ? <ElementList elements={elements} group={group} onDesign={onDesign ? design : undefined}/> : <span className="tree-hint">{text.noElements}</span>}
+              {elements[group].length ? <ElementList elements={elements} group={group} onDesign={onDesign ? design : undefined}
+                parent={{ connectionId, database, table }} current={current}/> : <span className="tree-hint">{text.noElements}</span>}
             </div>}
           </div>;
         })}
@@ -90,15 +90,28 @@ export function TableElementsBranch({ connectionId, database, table, available, 
   </>;
 }
 
-function ElementList({ elements, group, onDesign }: { elements: TableElements; group: Group; onDesign?(element: StructureElement): void }) {
+function ElementList({ elements, group, onDesign, parent, current }: {
+  elements: TableElements; group: Group; parent: TableElementsTarget; current(): boolean;
+  onDesign?(element: StructureElement): void;
+}) {
   /** 单击留在树上，双击或原生键盘激活进入设计器。 */
-  const item = (name: string, description: string, content: ReactNode) => <li key={name}>
-    {onDesign ? <button type="button" className="table-element table-element-design"
+  const item = (name: string, description: string, content: ReactNode) => {
+    if (!onDesign) return <li key={name}><span className="table-element" title={description}>{content}</span></li>;
+    const rename = group === 'columns' ? () => onDesign({ group, name, rename: true }) : undefined;
+    const button = <button type="button" className={'table-element table-element-design' + (rename ? ' tree-label' : '')}
       title={description + ' · ' + text.design} aria-label={text.designNamed(name)} aria-description={description}
+      aria-keyshortcuts={rename ? 'F2' : undefined}
       onClick={event => { if (event.detail === 0) onDesign({ group, name }); }}
-      onDoubleClick={() => onDesign({ group, name })}>{content}</button>
-      : <span className="table-element" title={description}>{content}</span>}
-  </li>;
+      onKeyDown={event => {
+        if (rename && event.key === 'F2' && !event.repeat && !event.nativeEvent.isComposing) {
+          event.preventDefault(); event.stopPropagation(); rename();
+        }
+      }}
+      onDoubleClick={() => onDesign({ group, name })}>{content}</button>;
+    return <li key={name}>{rename ? <SidebarTreeRow elementMenu target={{ kind: 'table', name: parent.table, database: parent.database, connectionId: parent.connectionId }}
+      className="table-element-row" label={name} version={[elements, name]} isCurrent={current}
+      actions={<button aria-label={text.rename} onClick={rename}><Pencil size={12}/></button>}>{button}</SidebarTreeRow> : button}</li>;
+  };
   if (group === 'columns') return <ul>{elements.columns.map(column => {
     const type = column.type || text.noDeclaredType;
     const description = [column.name, type, column.primary && text.primary, column.generated && text.generated].filter(Boolean).join(' · ');

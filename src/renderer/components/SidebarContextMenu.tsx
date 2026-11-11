@@ -29,7 +29,7 @@ interface TreeContext {
   current(): SidebarNodeTarget | undefined;
   selected(target: SidebarNodeTarget): boolean;
   select(target: SidebarNodeTarget, lease?: RowLease): void;
-  open(target: SidebarNodeTarget, name: string, node: HTMLElement, lease: RowLease, actions: ReactNode, point?: { x: number; y: number }): void;
+  open(target: SidebarNodeTarget, name: string, node: HTMLElement, lease: RowLease, actions: ReactNode, point?: { x: number; y: number }, elementMenu?: boolean): void;
   beginIdentifierDrag(target: WorkbenchTarget, node: HTMLElement, lease: RowLease, data: DataTransfer): boolean;
   canDropIdentifier(tabId: string): boolean;
   dropIdentifier(tabId: string, data: DataTransfer, destination: ObjectIdentifierDrop): void;
@@ -205,18 +205,19 @@ export function SidebarTreeProvider({ children, queryInsertion }: { children: Re
   }
 
   /** 指针和键盘共用目标捕获；打开菜单不会调用节点的左键展开处理器。 */
-  function open(target: SidebarNodeTarget, name: string, node: HTMLElement, lease: RowLease, actions: ReactNode, point?: { x: number; y: number }) {
+  function open(target: SidebarNodeTarget, name: string, node: HTMLElement, lease: RowLease, actions: ReactNode, point?: { x: number; y: number }, elementMenu = false) {
     retire();
     if (!mounted.current || !node.isConnected || !lease.current() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const state = useWorkspace.getState(), profile = state.connections.find(profile => profile.id === target.connectionId);
     if (!profile) return;
-    select(target, lease);
+    if (!elementMenu) select(target, lease);
+    else if (!sameScope(target) && 'database' in target) state.select({ connectionId: target.connectionId, database: target.database });
     const bounds = node.getBoundingClientRect(), releases: Array<() => void> = [];
     const observer = new MutationObserver(records => { if (modalChanged(records)) retire(owner); });
     const owner: MenuOwner = { target: { ...target }, name, node, lease, actions, x: point?.x ?? bounds.left, y: point?.y ?? bounds.bottom,
       profile, revision: state.connectionVersions[target.connectionId] ?? 0, observer,
       release() { observer.disconnect(); for (const release of releases.splice(0)) release(); } };
-    const names = 'name' in target ? objectIdentifierCopy(profile.dialect, target.database, target) : undefined;
+    const names = !elementMenu && 'name' in target ? objectIdentifierCopy(profile.dialect, target.database, target) : undefined;
     if (names) {
       const { plain, qualified } = names;
       const copy = (value: string) => {
@@ -366,7 +367,7 @@ function SidebarSubmenu({ label, open, onOpen, onClose, children }: { label: str
 }
 
 /** 每个节点持有独立租约，目录代次变化或卸载永久撤销旧菜单；不依赖名称反查新对象。 */
-export function SidebarTreeRow({ target, label, className, version, actions, children, leading, isCurrent, allowIdentifierDrag }: { target: SidebarNodeTarget; label: string; className: string; version: readonly unknown[]; actions: ReactNode; children: ReactElement; leading?: ReactNode; isCurrent?: () => boolean; allowIdentifierDrag?: boolean }) {
+export function SidebarTreeRow({ target, label, className, version, actions, children, leading, isCurrent, allowIdentifierDrag, elementMenu = false }: { target: SidebarNodeTarget; label: string; className: string; version: readonly unknown[]; actions: ReactNode; children: ReactElement; leading?: ReactNode; isCurrent?: () => boolean; allowIdentifierDrag?: boolean; elementMenu?: boolean }) {
   const context = useContext(Context), row = useRef<HTMLDivElement>(null);
   const present = useRef(false);
   const lease = useRef<{ key: string; version: readonly unknown[]; token: object } | undefined>(undefined);
@@ -382,12 +383,12 @@ export function SidebarTreeRow({ target, label, className, version, actions, chi
   /** 右键与菜单键仅选择节点，不调用children的左键处理器。 */
   function menu(point?: { x: number; y: number }) {
     const node = row.current, captured = latest.current;
-    if (node) context?.open(captured.target, captured.label, node, proof(node, captured), captured.actions, point);
+    if (node) context?.open(captured.target, captured.label, node, proof(node, captured), captured.actions, point, elementMenu);
   }
   const button = children as ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
-  const queryable = target.kind === 'table' || target.kind === 'view';
+  const queryable = !elementMenu && (target.kind === 'table' || target.kind === 'view');
   const objectDraggable = allowIdentifierDrag && 'name' in target;
-  return <div ref={row} className={`tree-row ${className}${context?.selected(target) ? ' active' : ''}`} data-sidebar-node={key} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); menu(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined); }}>
+  return <div ref={row} className={`tree-row ${className}${!elementMenu && context?.selected(target) ? ' active' : ''}`} data-sidebar-node={elementMenu ? undefined : key} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); menu(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined); }}>
     {leading}
     {cloneElement(button, { title: button.props.title ?? label, 'aria-haspopup': 'menu', draggable: objectDraggable || undefined,
       onDragStart: objectDraggable ? (event: DragEvent<HTMLButtonElement>) => {
@@ -395,17 +396,18 @@ export function SidebarTreeRow({ target, label, className, version, actions, chi
         if (!node || captured.token !== token || captured.target.kind === 'connection' ||
             !context?.beginIdentifierDrag(captured.target, node, proof(node, captured), event.dataTransfer)) event.preventDefault();
       } : undefined,
-      'aria-keyshortcuts': queryable ? objectQueryKeyShortcuts() : undefined, onClick: (event: MouseEvent<HTMLButtonElement>) => {
+      'aria-keyshortcuts': queryable ? objectQueryKeyShortcuts() : button.props['aria-keyshortcuts'], onClick: (event: MouseEvent<HTMLButtonElement>) => {
       const node = row.current, captured = latest.current;
       if (!node || captured.token !== token) return;
       const lease = proof(node, captured); if (!lease.current()) return;
-      context?.select(captured.target, lease); button.props.onClick?.(event);
+      if (!elementMenu) context?.select(captured.target, lease);
+      button.props.onClick?.(event);
     }, onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
       if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); event.stopPropagation(); menu(); return; }
       const node = row.current, captured = latest.current;
       // 只使用有焦点的原行，刷新或卸载后不从全局选择补猜对象。
       if (node && captured.token === token && proof(node, captured).current() &&
-          (captured.target.kind === 'table' || captured.target.kind === 'view') && objectQueryShortcut(event)) {
+          queryable && (captured.target.kind === 'table' || captured.target.kind === 'view') && objectQueryShortcut(event)) {
         const { connectionId, database, name, kind } = captured.target;
         openObjectQuery(connectionId, database, { name, kind });
         return;

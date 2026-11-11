@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的字段节点支持右键或 F2 进入改名输入，从新目录重新确认原字段，沿用对应引擎的草稿、SQL 预览和确认提交。W02 增加从树重命名字段。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#navigation-pane)
+
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的对象树字段、索引可定位原表设计器，前三种引擎也可定位命名外键。新目录按原名确认唯一匹配，缺失时提示刷新。W02 增加结构子节点设计器入口。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#navigation-pane)
 
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 可从左侧表节点按需展开字段、索引及外键，核对生成列、主键与复合外键映射。原命名方案使用独立按钮。W02 增加表结构子节点。[Navicat 导航面板](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#navigation-pane)

@@ -9,5 +9,7 @@ export const tableElementsZh = {
   ordinal: (ordinal: number) => '外键 #' + ordinal,
   implicitPrimary: '目标主键', noDeclaredType: '未声明类型',
   design: '在设计器中定位', designNamed: (name: string) => '在设计器中定位 ' + name,
+  rename: '重命名字段',
+  renameUnavailable: (name: string) => '当前字段「' + name + '」没有可用的重命名操作。',
   missing: (name: string) => '最新目录中无法定位「' + name + '」，可刷新对象树核对。',
 } as const;

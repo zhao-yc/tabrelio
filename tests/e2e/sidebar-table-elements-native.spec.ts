@@ -11,6 +11,7 @@ import { foreignKeyPatchZh } from '../../src/renderer/locales/foreignKeyPatches.
 import { sqliteColumnsZh } from '../../src/renderer/locales/sqliteColumns.zh-CN';
 import { sqliteIndexesZh } from '../../src/renderer/locales/sqliteIndexes.zh-CN';
 import { postgresStructureZh } from '../../src/renderer/locales/postgresStructure.zh-CN';
+import { postgresColumnEditZh } from '../../src/renderer/locales/postgresColumnEdit.zh-CN';
 import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { clickSidebarAction } from './sidebar-menu';
 
@@ -20,6 +21,7 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
   const dialect = process.env.DBARK_TREE_ELEMENTS_DIALECT;
   test.skip(!dialect, '需显式启用表结构子节点专项');
   const sqlite = dialect === 'sqlite', postgres = dialect === 'postgresql';
+  const rename = process.env.DBARK_TREE_RENAME_NATIVE === '1';
   const database = sqlite ? 'main' : process.env.DBARK_TREE_ELEMENTS_DATABASE ?? '';
   const password = process.env.DBARK_TREE_ELEMENTS_PASSWORD ?? '', port = Number(process.env.DBARK_TREE_ELEMENTS_PORT);
   if (process.env.DBARK_EXECUTABLE_PATH || process.env.DBARK_DEV_URL || (sqlite ? process.env.DBARK_INTEGRATION_ENABLED !== '0' :
@@ -57,18 +59,18 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
       }, file);
     }
     const before = sqlite ? await readFile(file) : undefined;
-    const connectionId = await page.evaluate(async ({ profile, database, dialect }) => {
+    const connectionId = await page.evaluate(async ({ profile, database, dialect, rename }) => {
       const id = 'table-elements-sqlite';
       const picked = profile ? undefined : await window.dbark.invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: id });
       if (!profile && !picked) throw Error('缺少本例 SQLite 文件授权');
       const saved = await window.dbark.invoke('connections.save', profile ?? { id, dialect: 'sqlite', name: dialect!, group: '',
-        color: '#123456', sqlite: { fileToken: picked!.token, readOnly: true, busyTimeoutMs: 1000 } });
+        color: '#123456', sqlite: { fileToken: picked!.token, readOnly: !rename, busyTimeoutMs: 1000 } });
       const settings = await window.dbark.invoke('settings.get', {});
       await window.dbark.invoke('settings.save', { ...settings, sidebarWidth: 300, activeTabId: 'original', tabs: [
         { id: 'original', title: '原查询草稿', kind: 'query', connectionId: saved.id, database, sql: 'SELECT 123;' },
       ] });
       return saved.id;
-    }, { profile, database, dialect });
+    }, { profile, database, dialect, rename });
     await page.reload();
     const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
     const originalTabs = (await settings()).tabs;
@@ -165,12 +167,77 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     await expect(branch).toHaveCount(0);
     await expand.click();
     await expect(fields.getByText('derived', { exact: true })).toBeVisible();
+
+    if (rename) {
+      const oldName = 'marker', newName = 'marker_renamed';
+      const field = fields.getByRole('button', { name: text.designNamed(oldName), exact: true });
+      if (postgres || sqlite) await field.press('F2');
+      else {
+        await field.click({ button: 'right' });
+        const menu = page.getByRole('menu', { name: sidebarContextMenuZh.title(oldName), exact: true });
+        await expect(menu.getByRole('menuitem')).toHaveCount(1);
+        await menu.getByRole('menuitem', { name: text.rename, exact: true }).click();
+      }
+      const dialog = page.getByRole('dialog', { name: columnTitle, exact: true });
+      const input = dialog.getByRole('textbox', { name: postgres ? postgresColumnEditZh.name : sqlite ? sqliteColumnsZh.renameTo : columnPatchZh.name, exact: true });
+      await expect(input).toBeFocused();
+      if (postgres) {
+        await expect(dialog.getByRole('combobox', { name: postgresColumnEditZh.from, exact: true })).toHaveValue(oldName);
+        await expect(dialog.getByRole('combobox', { name: postgresColumnEditZh.operation, exact: true })).toHaveValue('rename');
+      } else await expect(input).toHaveValue(oldName);
+      await input.fill(newName);
+      await page.screenshot({ path: info.outputPath('字段改名输入.png') });
+      const stage = postgres ? postgresColumnEditZh.stage : sqlite ? sqliteColumnsZh.saveDesign : columnPatchZh.rowSave;
+      const preview = postgres ? postgresColumnEditZh.preview : sqlite ? sqliteColumnsZh.preview : columnPatchZh.preview;
+      const apply = postgres ? postgresColumnEditZh.apply : sqlite ? sqliteColumnsZh.apply : columnPatchZh.apply;
+      await dialog.getByRole('button', { name: stage, exact: true }).click();
+      await dialog.getByRole('button', { name: preview, exact: true }).click();
+      const sql = postgres || sqlite ? dialog.getByLabel(postgres ? postgresColumnEditZh.previewTitle : sqliteColumnsZh.previewTitle, { exact: true })
+        : dialog.locator('.monaco-editor .view-lines');
+      await expect(sql).toContainText(/(?:RENAME|CHANGE)\s+COLUMN/i);
+      await expect(sql).toContainText(newName);
+      const readFields = () => page.evaluate(async ({ connectionId, database, table }) =>
+        (await window.dbark.invoke('metadata.tableElements', { connectionId, database, table })).columns.map(column => column.name),
+      { connectionId, database, table: name });
+      expect(await readFields()).toContain(oldName);
+      expect(await readFields()).not.toContain(newName);
+      if (before) expect(await readFile(file)).toEqual(before);
+      await page.screenshot({ path: info.outputPath('字段改名预览.png') });
+      if (sqlite) {
+        await dialog.getByRole('textbox', { name: sqliteColumnsZh.confirmation, exact: true }).fill('main.a_small');
+      } else if (!postgres) {
+        const confirmations = dialog.locator('.column-patch-acks');
+        for (const label of [columnPatchZh.ackImplicit, columnPatchZh.ackWindow, columnPatchZh.ackDependencies]) {
+          const checkbox = confirmations.getByRole('checkbox', { name: label, exact: true });
+          if (await checkbox.count()) await checkbox.check();
+        }
+      }
+      await dialog.getByRole('button', { name: apply, exact: true }).click();
+      await expect.poll(readFields).toContain(newName);
+      expect(await readFields()).not.toContain(oldName);
+      if (!postgres) {
+        await expect(dialog.getByText(sqlite ? sqliteColumnsZh.committed : columnPatchZh.succeeded, { exact: true }).first()).toBeVisible();
+        await dialog.getByRole('button', { name: sqlite ? sqliteColumnsZh.close : columnPatchZh.close, exact: true }).click();
+      }
+      await expect(dialog).toHaveCount(0);
+      await expect(branch).toHaveCount(0);
+      await expand.click();
+      await expect(fields.getByRole('button', { name: text.designNamed(newName), exact: true })).toBeVisible();
+      await expect(fields.getByRole('button', { name: text.designNamed(oldName), exact: true })).toHaveCount(0);
+      if (sqlite) {
+        const disk = new DatabaseSync(file, { readOnly: true });
+        try { expect(disk.prepare('SELECT marker_renamed FROM a_small').get()).toEqual({ marker_renamed: 'catalog-marker' }); }
+        finally { disk.close(); }
+      }
+    }
     const rowLabel = row.locator('.tree-label');
     if (sqlite) await rowLabel.dblclick(); else await rowLabel.click();
-    await expect(page.getByRole('gridcell', { name: 'catalog-marker', exact: true }).first()).toBeVisible();
+    if (rename) await expect(page.getByRole('columnheader', { name: /^marker_renamed(?:\s|$)/ })).toBeVisible();
+    const cellName = sqlite && rename ? 'TEXT · catalog-marker' : 'catalog-marker';
+    await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);
-    if (before) expect(await readFile(file)).toEqual(before);
+    if (before && !rename) expect(await readFile(file)).toEqual(before);
     await confirmOwnedDesktopExit(info);
   } catch (reason) {
     retainOwnedDesktopResources(info);

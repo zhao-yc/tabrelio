@@ -5,7 +5,7 @@ import { postgresIdentifier } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
 import { postgresStructureZh as text } from '../locales/postgresStructure.zh-CN';
 import { tableElementsZh } from '../locales/tableElements.zh-CN';
-import { useStructureElementFocus } from '../structureElementFocus';
+import { findStructureElement, useStructureElementFocus } from '../structureElementFocus';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { PostgresMaterializedColumnNamesPanel } from './PostgresMaterializedColumnNamesPanel';
@@ -47,7 +47,7 @@ import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import './PostgresStructureDialog.css';
 
 type Section = keyof typeof text.sections;
-export interface PostgresStructureSearchFocus { section: Section; name?: string; constraintKind?: 'f'; }
+export interface PostgresStructureSearchFocus { section: Section; name?: string; constraintKind?: 'f'; rename?: true; }
 const editors = {
   materialized: { Panel: PostgresMaterializedRefreshPanel, label: refreshText.title },
   materializedColumns: { Panel: PostgresMaterializedColumnNamesPanel, label: postgresMaterializedColumnNamesZh.title },
@@ -86,6 +86,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
   const [section, setSection] = useState<Section>(searchFocus?.section ?? 'columns');
   const [attempt, setAttempt] = useState(0);
   const [editing, setEditing] = useState<keyof typeof editors>();
+  const [renameInput, setRenameInput] = useState<string>();
+  const renameStarted = useRef(false);
   const [dependencies, setDependencies] = useState(false);
   const [partitions, setPartitions] = useState(false);
   const [maintenance, setMaintenance] = useState(false);
@@ -103,6 +105,13 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
     : undefined;
   const elementFocus = useStructureElementFocus(searchFocus?.name, focusedItems);
   useEffect(() => { setEditing(undefined); }, [scope]);
+  /** 只用当前设计器目录确认原字段，允许编辑后才进入已存在的结构化改名面板。 */
+  useEffect(() => {
+    if (!searchFocus?.rename || !output || !output.editStamp || readOnly || renameStarted.current) return;
+    renameStarted.current = true;
+    const column = findStructureElement(output.columns, searchFocus.name);
+    if (column) { setRenameInput(column.name); setEditing('columns'); }
+  }, [searchFocus, output, readOnly]);
 
   useEffect(() => {
     if (dialect !== 'postgresql') return;
@@ -172,7 +181,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
       {busy && <Spinner text={text.loading}/>}
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
       {EditPanel && output && editStamp ? <EditPanel target={target} original={output} version={version}
-        onDirtyChange={onDirtyChange} onClose={() => { setEditing(undefined); setAttempt(value => value + 1); }}
+        {...(editing === 'columns' && renameInput !== undefined && { initialRenameName: renameInput })}
+        onDirtyChange={onDirtyChange} onClose={() => { setRenameInput(undefined); setEditing(undefined); setAttempt(value => value + 1); }}
         beforeManage={output.tableManage || editing === 'materializedColumns' ? (destination, truncateTables) => beforeTableManage(target, destination, truncateTables) : undefined}
         onResult={(message, unknown, receipt, attempted, truncateTables) => {
           if (editing === 'manage') {
@@ -181,6 +191,7 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
             return;
           }
           onEdited(target, message, unknown, version);
+          if (renameInput !== undefined && !unknown) { onClose(); return; }
           if (!unknown) { setEditing(undefined); setAttempt(value => value + 1); }
         }}/> : output && <>
         {output.materialized && <p className="muted">
@@ -196,6 +207,8 @@ export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose
             onClick={() => setSection(key)}>{text.sections[key]}</button>)}
         </nav>
         {searchFocus?.name !== undefined && elementFocus.missing && <ErrorBox message={tableElementsZh.missing(searchFocus.name)}/>}
+        {searchFocus?.rename && searchFocus.name !== undefined && !elementFocus.missing &&
+          (!output.editStamp || readOnly) && <ErrorBox message={tableElementsZh.renameUnavailable(searchFocus.name)}/>}
         {section === 'columns' && <CatalogTable empty={!output.columns.length} headers={[
           text.position, text.name, text.type, text.nullable, text.defaultExpression, text.generatedExpression, text.identity, text.collation, text.comment,
         ]}>{output.columns.map(column => <tr key={column.position}
