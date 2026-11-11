@@ -22,12 +22,54 @@ const profile: SqliteConnectionProfile = { id: 'file', name: '文件库', group:
 function fixture() {
   const child = Object.assign(new EventEmitter(), { postMessage: vi.fn(), kill: vi.fn(() => true) });
   ports.fork.mockReturnValue(child);
-  const profiles: ConnectionProfile[] = [profile], failed = vi.fn();
-  const broker = new EngineBroker(vi.fn(), failed, id => profiles.find(value => value.id === id));
+  const profiles: ConnectionProfile[] = [profile], failed = vi.fn(), opened = vi.fn();
+  const broker = new EngineBroker(vi.fn(), failed, id => profiles.find(value => value.id === id), opened);
   const reply = (error?: string) => child.emit('message', { id: child.postMessage.mock.calls.at(-1)![0].id, result: 'network', ...(error ? { error } : {}) });
-  return { child, broker, profiles, failed, reply };
+  return { child, broker, profiles, failed, opened, reply };
 }
 beforeEach(() => { vi.clearAllMocks(); ports.sqlite.mockReset().mockResolvedValue('sqlite'); ports.close.mockReset().mockResolvedValue(undefined); ports.force.mockReset().mockResolvedValue(undefined); });
+
+it('已打开快照只收录成功的已保存连接和工作区操作，网络退出保留 SQLite', async () => {
+  const { broker, profiles, child, reply, opened } = fixture();
+  const mysql: ConnectionProfile = { id: 'network', name: '网络', group: '', color: '', dialect: 'mysql', host: 'never.invalid', port: 1, user: '仅RAM' };
+  profiles.push(mysql);
+  expect(broker.openedConnections()).toEqual([]);
+  expect(ports.fork).not.toHaveBeenCalled();
+  await broker.request('connections.test', profile);
+  expect(opened).not.toHaveBeenCalled();
+  await broker.request('sqlite.tablePage', { connectionId: profile.id });
+  expect(opened).toHaveBeenLastCalledWith([profile.id]);
+  const rejected = broker.request('connections.open', { id: mysql.id, profile: mysql });
+  reply('预设连接失败');
+  await expect(rejected).rejects.toThrow('预设连接失败');
+  expect(broker.openedConnections()).toEqual([profile.id]);
+  const query = broker.request('sessions.open', { connectionId: mysql.id });
+  reply();
+  await query;
+  expect(opened).toHaveBeenLastCalledWith([profile.id, mysql.id]);
+  child.emit('exit', 1);
+  expect(broker.openedConnections()).toEqual([profile.id]);
+  expect(opened).toHaveBeenLastCalledWith([profile.id]);
+});
+
+it('关闭和配置替换撤销上一代打开资格，迟到成功及失败准备不能复活或清除新状态', async () => {
+  const { broker, opened } = fixture();
+  let resolveOpen!: (value: string) => void;
+  ports.sqlite.mockImplementationOnce(() => new Promise<string>(resolve => { resolveOpen = resolve; }));
+  const late = broker.request('connections.open', { id: profile.id, profile });
+  await broker.request('connections.close', { id: profile.id });
+  resolveOpen('旧打开回包');
+  await expect(late).resolves.toBe('旧打开回包');
+  expect(opened).not.toHaveBeenCalled();
+  await broker.request('connections.open', { id: profile.id, profile });
+  expect(broker.openedConnections()).toEqual([profile.id]);
+  ports.sqlite.mockRejectedValueOnce(Error('拒绝替换'));
+  await expect(broker.request('__connections.prepareSave', { id: profile.id, profile, transportChanged: true })).rejects.toThrow('拒绝替换');
+  expect(broker.openedConnections()).toEqual([profile.id]);
+  await broker.request('__connections.prepareSave', { id: profile.id, profile, transportChanged: true });
+  expect(opened).toHaveBeenLastCalledWith([]);
+  expect(broker.openedConnections()).toEqual([]);
+});
 
 it('未知对象结构取消不启动任何驱动或物理文件', async () => {
   const { broker } = fixture(); await broker.request('query.cancel', { taskId: 'object-definition:unknown' });

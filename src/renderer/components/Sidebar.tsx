@@ -43,6 +43,7 @@ import { sidebarLocateZh } from '../locales/sidebarLocate.zh-CN';
 import { sidebarViewZh } from '../locales/sidebarView.zh-CN';
 import { SidebarViewControls, type SidebarVendor } from './SidebarViewControls';
 import { sidebarStarLimit, type SidebarView } from '../../shared/sidebarView';
+import { useOpenedConnections } from '../useOpenedConnections';
 import type { StructureElement } from '../structureElementFocus';
 import type { TableElementsTarget } from '../../shared/tableElements';
 import { FavoriteButton, WorkbenchShelf, type OpenWorkbenchTarget } from './Workbench';
@@ -138,14 +139,19 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
   const activeTab = useWorkspace(state => state.settings.tabs.find(tab => tab.id === state.settings.activeTabId) ?? state.settings.tabs[0]);
   const view = useWorkspace(state => state.settings.sidebarView) ?? defaultSidebarView;
   const [search, setSearch] = useState(''), [vendor, setVendor] = useState<SidebarVendor>(''), [starredOnly, setStarredOnly] = useState(false);
+  const [openedOnly, setOpenedOnly] = useState(false);
+  const opened = useOpenedConnections(openedOnly);
   const collapseNodes = useRef(new Map<string, () => void>());
   const locate = useSidebarLocate();
   const location = sidebarLocation(activeTab, connections.find(profile => profile.id === activeTab?.connectionId));
   const starred = new Set(view.starred);
-  const visibleIds = new Set(connections.filter(profile => (!vendor || profile.dialect === vendor) && (!starredOnly || starred.has(profile.id))).map(profile => profile.id));
+  const openedIds = new Set(opened.ids);
+  const visibleIds = new Set(connections.filter(profile =>
+    (!vendor || profile.dialect === vendor) && (!starredOnly || starred.has(profile.id)) && (!openedOnly || openedIds.has(profile.id))
+  ).map(profile => profile.id));
   // 同一层兄弟使用原连接键，换组、筛选及扁平显示都保留原节点的目录和请求。
   const groups = connectionGroups(connections);
-  function clearFilters() { setVendor(''); setStarredOnly(false); }
+  function clearFilters() { setVendor(''); setStarredOnly(false); setOpenedOnly(false); }
   function collapseAll() {
     locate.cancel();
     for (const collapse of collapseNodes.current.values()) collapse();
@@ -164,7 +170,8 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
     <div className="search-box">
       <Search size={14}/><input aria-label={zh.sidebar.text003} value={search}
         onChange={event => { locate.cancel(); setSearch(event.target.value); }} placeholder={zh.sidebar.text004}/>
-      <SidebarViewControls vendor={vendor} starredOnly={starredOnly} flat={view.flat} onVendor={setVendor} onStarredOnly={setStarredOnly}
+      <SidebarViewControls vendor={vendor} starredOnly={starredOnly} openedOnly={openedOnly} flat={view.flat}
+        onVendor={setVendor} onStarredOnly={setStarredOnly} onOpenedOnly={setOpenedOnly}
         onFlat={flat => { const state = useWorkspace.getState(); state.updateSettings({ sidebarView: { ...(state.settings.sidebarView ?? defaultSidebarView), flat } }); }}
         onCollapse={collapseAll}/>
     </div>
@@ -190,7 +197,10 @@ export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, o
         ];
       })}
       {connections.length > 0 && visibleIds.size === 0 && <div className="sidebar-empty sidebar-filter-empty">
-        <p>{sidebarViewZh.noMatch}</p><button type="button" onClick={clearFilters}>{sidebarViewZh.reset}</button>
+        <p role="status">{openedOnly && !opened.ids
+          ? opened.failed ? sidebarViewZh.readOpenedFailed : sidebarViewZh.readingOpened
+          : sidebarViewZh.noMatch}</p>
+        <button type="button" onClick={clearFilters}>{sidebarViewZh.reset}</button>
       </div>}
       {connections.length === 0 && <div className="sidebar-empty"><Database size={30}/><p>{zh.sidebar.text005}</p><button onClick={onNewConnection}><Plus size={14}/>{zh.common.newConnection}</button></div>}
     </div>

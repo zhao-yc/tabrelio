@@ -23,6 +23,14 @@ const api: DesktopApi = {
     ipcRenderer.on('dbark:task', handler);
     return () => ipcRenderer.removeListener('dbark:task', handler);
   },
+  /** 只发布本机连接 ID 列表，隔离底层 IPC 及连接配置。 */
+  onOpenedConnections(listener) {
+    const handler = (_event: Electron.IpcRendererEvent, ids: unknown) => {
+      if (Array.isArray(ids) && ids.every(id => typeof id === 'string')) listener(ids);
+    };
+    ipcRenderer.on('dbark:connections-opened', handler);
+    return () => ipcRenderer.removeListener('dbark:connections-opened', handler);
+  },
   /** 内部生命周期与警告只传递固定事件内容，不暴露 IPC 对象。 */
   onMenu(listener) {
     const handler = (_event: Electron.IpcRendererEvent, action: string) => listener(action);

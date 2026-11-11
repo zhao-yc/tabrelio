@@ -2718,6 +2718,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'app.info': return { version: app.getVersion(), platform: process.platform, encryptionAvailable: safeStorage.isEncryptionAvailable(), dataPath: app.getPath('userData') };
     case 'app.setDirty': hasPendingEdits = input.dirty; return;
     case 'connections.list': return store.connections();
+    case 'connections.opened': return broker.openedConnections();
     case 'connections.export': return queryFileOperation(async () => {
       const path = resolveFileToken(files, input.fileToken, 'connection-export', 'json');
       const release = await exportReservations.acquire(path);
@@ -3765,7 +3766,9 @@ else {
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
     tableApplyReceipts = new TableApplyReceipts(store, () => persistAuxiliary(() => { throw Error('提交记录保存失败'); }));
-    broker = new EngineBroker(engineTaskEvent, engineExited, id => store.connections().find(profile => profile.id === id));
+    broker = new EngineBroker(engineTaskEvent, engineExited, id => store.connections().find(profile => profile.id === id), ids => {
+      if (window && !window.isDestroyed()) window.webContents.send('dbark:connections-opened', ids);
+    });
     connectionConfig = new ConnectionConfigManager(store, broker, {
       /** 主进程会话与尚未投递的长任务也必须为空；真实引擎继续检查建连、事务和独立任务。 */
       assertIdle: ids => {

@@ -267,6 +267,7 @@ export interface CommandMap {
   'connections.importReviewRelease': { input: { previewToken: string; confirmationToken: string }; output: void };
   'connections.importApply': { input: ConnectionImportApply; output: ConnectionImportResult };
   'connections.list': { input: Record<string, never>; output: ConnectionProfile[] };
+  'connections.opened': { input: Record<string, never>; output: string[] };
   'connections.organizationGet': { input: Record<string, never>; output: ConnectionOrganizationSnapshot };
   'connections.organizationApply': { input: ConnectionOrganizationApply; output: ConnectionOrganizationSnapshot };
   'connections.save': { input: ConnectionProfile; output: ConnectionProfile };
@@ -754,6 +755,8 @@ export type Command = keyof CommandMap;
 export interface DesktopApi {
   invoke<C extends Command>(command: C, input: CommandMap[C]['input'], receiveTableReadFailure?: import('./tableReadStatements').ReceiveTableReadFailure): Promise<CommandMap[C]['output']>;
   onTask(listener: (event: TaskEvent) => void): () => void;
+  /** 打开状态只交付连接 ID；页面刷新后可用 connections.opened 重新读取。 */
+  onOpenedConnections(listener: (ids: string[]) => void): () => void;
   onMenu(listener: (action: string) => void): () => void;
   /** 用户菜单命令携带准确状态代次，与内部保存状态及警告事件分开。 */
   onCommand(listener: (invocation: UiCommandInvocation) => void): () => void;

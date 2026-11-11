@@ -8,6 +8,9 @@ import { objectDefinitionTaskPrefix } from '../shared/objectDefinition';
 import { ExcelReadTasks } from '../engine/excelReadTasks';
 import type { ExcelSheetReadOptions } from '../engine/excelFiles';
 
+type ConnectionRoute = 'sqlite' | 'network';
+type OpenedConnection = { route: ConnectionRoute; pending: number; opened: boolean };
+
 /** 数据库执行与界面生命周期分离；进程故障时拒绝所有等待请求，绝不自动重试。 */
 export class EngineBroker {
   private child?: UtilityProcess;
@@ -16,10 +19,14 @@ export class EngineBroker {
   private pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
   private readonly sqlite: SqliteRuntime;
   private readonly workbookReads: ExcelReadTasks;
+  private readonly opened = new Map<string, OpenedConnection>();
+  private readonly closingConnections = new Map<string, number>();
   /** 仅对象定义使用跨方言编号；保留方言墓碑，迟到取消不能落到另一驱动。 */
   private readonly objectDefinitionRoutes = new Map<string, 'sqlite' | 'network'>();
   /** 接收任务事件和进程故障出口，不向渲染进程暴露底层消息通道。 */
-  constructor(private emit: (event: TaskEvent) => void, private failed: () => void, private readonly profile: (id: string) => ConnectionProfile | undefined = () => undefined) {
+  constructor(private emit: (event: TaskEvent) => void, private failed: () => void,
+    private readonly profile: (id: string) => ConnectionProfile | undefined = () => undefined,
+    private readonly openedChanged: (ids: string[]) => void = () => {}) {
     this.sqlite = new SqliteRuntime({ emit, resolveProfile: id => { const profile = this.profile(id); return profile?.dialect === 'sqlite' ? profile : undefined; } });
     this.workbookReads = new ExcelReadTasks(emit);
   }
@@ -28,6 +35,60 @@ export class EngineBroker {
   isSqliteConnection(id: string): boolean { return this.profile(id)?.dialect === 'sqlite' || this.sqlite.ownsConnection(id); }
   isSqliteSession(id: string): boolean { return this.sqlite.ownsSession(id); }
   isSqliteTask(id: string): boolean { return this.sqlite.ownsTask(id); }
+
+  /** 返回本应用确认打开的连接 ID；读取目录状态时无需发起数据库请求。 */
+  openedConnections(): string[] {
+    return [...this.opened].filter(([, state]) => state.opened).map(([id]) => id);
+  }
+
+  private publishOpened(): void {
+    try { this.openedChanged(this.openedConnections()); }
+    catch { /* 窗口已销毁时，状态仍可由后续渲染进程读取，不能使数据库操作失败。 */ }
+  }
+
+  private forgetOpened(id: string): void {
+    const state = this.opened.get(id);
+    this.opened.delete(id);
+    if (state?.opened) this.publishOpened();
+  }
+
+  private forgetOpenedRoute(route: ConnectionRoute): void {
+    let changed = false;
+    for (const [id, state] of this.opened) if (state.route === route) {
+      this.opened.delete(id);
+      changed ||= state.opened;
+    }
+    if (changed) this.publishOpened();
+  }
+
+  /** 同代的重复打开可以共享状态；断开、换目标或网络引擎退出后，旧响应失去发布资格。 */
+  private async observeOpen(id: string, route: ConnectionRoute, command: string, input: unknown): Promise<unknown> {
+    const state = this.opened.get(id) ?? { route, pending: 0, opened: false };
+    this.opened.set(id, state);
+    state.pending++;
+    try {
+      const result = await this.dispatch(command, input);
+      if (this.opened.get(id) === state && !state.opened) {
+        state.opened = true;
+        this.publishOpened();
+      }
+      return result;
+    } finally {
+      if (--state.pending === 0 && !state.opened && this.opened.get(id) === state) this.opened.delete(id);
+    }
+  }
+
+  /** 断开开始即撤销旧确认；并行的结束请求各自收尾，期间不会接受新的打开确认。 */
+  private async observeClose(id: string, command: string, input: unknown): Promise<unknown> {
+    this.closingConnections.set(id, (this.closingConnections.get(id) ?? 0) + 1);
+    this.forgetOpened(id);
+    try { return await this.dispatch(command, input); }
+    finally {
+      const remaining = this.closingConnections.get(id)! - 1;
+      if (remaining === 0) this.closingConnections.delete(id);
+      else this.closingConnections.set(id, remaining);
+    }
+  }
 
   /** 按需启动唯一数据库进程，退出时拒绝全部等待请求。 */
   start(): void {
@@ -44,7 +105,9 @@ export class EngineBroker {
       else if (message.error) pending.reject(new Error(message.error)); else pending.resolve(message.result);
     });
     child.on('exit', () => {
-      if (this.child === child) this.child = undefined;
+      if (this.child !== child) return;
+      this.child = undefined;
+      this.forgetOpenedRoute('network');
       for (const pending of this.pending.values()) pending.reject(new Error('数据库执行进程已退出，请重新连接；正在执行的写操作请先核对结果'));
       this.pending.clear(); if (!this.stopping) this.failed();
     });
@@ -52,6 +115,20 @@ export class EngineBroker {
 
   /** 以独立编号关联响应；发送失败立即清理等待记录。 */
   request(command: string, input: unknown): Promise<any> {
+    const target = input as { id?: string; connectionId?: string; profile?: ConnectionProfile; transportChanged?: boolean } | null;
+    if (command === 'connections.close' && target?.id) return this.observeClose(target.id, command, input);
+    if (command === '__connections.prepareSave' && target?.id && target.transportChanged) {
+      return this.dispatch(command, input).then(result => { this.forgetOpened(target.id!); return result; });
+    }
+    const openingId = command === 'connections.open' ? target?.id : ['sessions.open', 'table.page', 'postgres.table.page', 'sqlite.tablePage'].includes(command) ? target?.connectionId : undefined;
+    if (openingId && !this.closingConnections.has(openingId)) {
+      const sqlite = target?.profile?.dialect === 'sqlite' || this.isSqliteConnection(openingId);
+      return this.observeOpen(openingId, sqlite ? 'sqlite' : 'network', command, input);
+    }
+    return this.dispatch(command, input);
+  }
+
+  private dispatch(command: string, input: unknown): Promise<any> {
     const definition = input as { taskId?: unknown; connectionId?: unknown } | null;
     if (command === 'query.cancel' && typeof definition?.taskId === 'string' && definition.taskId.startsWith(objectDefinitionTaskPrefix)) {
       const route = this.objectDefinitionRoutes.get(definition.taskId);
@@ -119,7 +196,8 @@ export class EngineBroker {
       try {
         // 独立引擎同时开始收尾，保留网络shutdown的原即时投递与3000ms期限。
         const network = child ? Promise.race([this.networkRequest('__shutdown', {}), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(Error('数据库任务收尾尚未确认，已保留执行进程；请核对资源后重试退出')), 3000); })]) : Promise.resolve();
-        const results = await Promise.allSettled([network, this.sqlite.close(), this.workbookReads.cancelAll()]);
+        const sqlite = this.sqlite.close().then(() => this.forgetOpenedRoute('sqlite'));
+        const results = await Promise.allSettled([network, sqlite, this.workbookReads.cancelAll()]);
         const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
         if (failure) throw failure.reason;
         if (child && this.child === child) { this.stopping = true; if (child.kill() === false) throw Error('数据库执行进程未能终止，请重试退出'); }
@@ -133,7 +211,7 @@ export class EngineBroker {
 
   /** 仅产品明确的强制退出选择可调用；不把它当作服务器任务或资源已经终态的证明。 */
   async forceClose(): Promise<void> {
-    const sqlite = Promise.all([this.sqlite.forceClose(), this.workbookReads.cancelAll()]).then(() => undefined);
+    const sqlite = Promise.all([this.sqlite.forceClose().then(() => this.forgetOpenedRoute('sqlite')), this.workbookReads.cancelAll()]).then(() => undefined);
     void sqlite.catch(() => {}); // 网络强退失败时也继续观察已启动的准确SQLite收尾，避免未处理拒绝。
     if (!this.child) { await sqlite; return; }
     this.stopping = true;

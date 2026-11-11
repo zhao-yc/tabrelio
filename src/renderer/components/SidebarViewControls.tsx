@@ -6,13 +6,13 @@ import { sidebarViewZh as text } from '../locales/sidebarView.zh-CN';
 export type SidebarVendor = ConnectionProfile['dialect'] | '';
 
 /** 非模态筛选面板保留原树，离开或按 Esc 即可继续在树中操作。 */
-export function SidebarViewControls({ vendor, starredOnly, flat, onVendor, onStarredOnly, onFlat, onCollapse }: {
-  vendor: SidebarVendor; starredOnly: boolean; flat: boolean;
-  onVendor(value: SidebarVendor): void; onStarredOnly(value: boolean): void; onFlat(value: boolean): void; onCollapse(): void;
+export function SidebarViewControls({ vendor, starredOnly, openedOnly, flat, onVendor, onStarredOnly, onOpenedOnly, onFlat, onCollapse }: {
+  vendor: SidebarVendor; starredOnly: boolean; openedOnly: boolean; flat: boolean;
+  onVendor(value: SidebarVendor): void; onStarredOnly(value: boolean): void; onOpenedOnly(value: boolean): void; onFlat(value: boolean): void; onCollapse(): void;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null), trigger = useRef<HTMLButtonElement>(null);
-  const active = !!vendor || starredOnly;
+  const active = !!vendor || starredOnly || openedOnly;
   useEffect(() => {
     if (!open) return;
     const outside = (event: Event) => {
@@ -39,6 +39,7 @@ export function SidebarViewControls({ vendor, starredOnly, flat, onVendor, onSta
         {Object.entries(text.vendors).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>
       <label><input type="checkbox" checked={starredOnly} onChange={event => onStarredOnly(event.target.checked)}/>{text.starredOnly}</label>
+      <label><input type="checkbox" checked={openedOnly} onChange={event => onOpenedOnly(event.target.checked)}/>{text.openedOnly}</label>
       <label><input type="checkbox" checked={flat} onChange={event => onFlat(event.target.checked)}/>{text.flat}</label>
       <button type="button" className="sidebar-collapse" onClick={() => { onCollapse(); close(); }}>
         <ChevronsDownUp size={14}/>{text.collapse}

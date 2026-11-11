@@ -31,4 +31,14 @@ it('原preload仅发布白名单命令与代次，不透传原生事件且精确
   unsubscribe(); expect(handlers.size).toBe(0); expect(removeListener).toHaveBeenCalledOnce();
   await api.invoke('app.menuState', { revision: 12, commands: [{ id: 'execute', enabled: true }] });
   expect(request.mock.calls).toEqual([['dbark:request', { command: 'app.menuState', input: { revision: 12, commands: [{ id: 'execute', enabled: true }] } }]]);
+  const opened = vi.fn(), stop = api.onOpenedConnections(opened);
+  expect([...handlers.keys()]).toEqual(['dbark:connections-opened']);
+  const receiveOpened = handlers.get('dbark:connections-opened')!;
+  receiveOpened({ sender: '不能透传的原生对象' }, ['原连接']);
+  receiveOpened({}, [{ id: '不能透传的配置', password: '禁止' }]);
+  expect(opened.mock.calls).toEqual([[['原连接']]]);
+  stop();
+  expect(handlers.size).toBe(0);
+  await api.invoke('connections.opened', {});
+  expect(request).toHaveBeenLastCalledWith('dbark:request', { command: 'connections.opened', input: {} });
 });

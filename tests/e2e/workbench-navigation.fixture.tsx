@@ -27,7 +27,7 @@ window.dbark = {
     // 仅保存真实注册器发布的封闭快照，不从测试注入可执行回调或更改产品状态。
     if (command === 'app.menuState') { menuState = uiMenuStateSchema.parse(input); return Promise.resolve(); }
     return Promise.reject(Error('界面协议夹具遇到未预期的命令：' + command));
-  }) as DesktopApi['invoke'], onTask: () => () => {}, onMenu: () => () => {},
+  }) as DesktopApi['invoke'], onTask: () => () => {}, onMenu: () => () => {}, onOpenedConnections: () => () => {},
   onCommand(listener) { commandListeners.add(listener); return () => { commandListeners.delete(listener); }; },
   // 本夹具只挂载应用内导航组件，不接收系统通知；新的完整DesktopApi仍保留原拒绝未知命令门。
   onObjectUri: () => () => {}

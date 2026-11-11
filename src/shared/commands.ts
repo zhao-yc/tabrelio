@@ -211,7 +211,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.compare': true, 'schema.comparePreview': true, 'schema.compareRelease': true,
   'app.runtimeInfo': true, 'app.info': true, 'app.setDirty': true,
   'connections.export': true, 'connections.importPreview': true, 'connections.importReview': true, 'connections.importReviewRelease': true, 'connections.importApply': true,
-  'connections.list': true, 'connections.save': true, 'connections.delete': true, 'connections.test': true, 'connections.open': true, 'connections.close': true,
+  'connections.list': true, 'connections.opened': true, 'connections.save': true, 'connections.delete': true, 'connections.test': true, 'connections.open': true, 'connections.close': true,
   'metadata.databases': true, 'metadata.objects': true, 'metadata.table': true, 'metadata.ddl': true, 'metadata.schemaScript': true, 'metadata.completion': true,
   'metadata.tableElements': true,
   'metadata.routineInvocation': true,

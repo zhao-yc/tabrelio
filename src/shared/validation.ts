@@ -560,7 +560,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'connections.importReview': connectionImportReviewSchema,
   'connections.importReviewRelease': z.object({ previewToken: id, confirmationToken: id }).strict(),
   'connections.importApply': connectionImportApplySchema,
-  'connections.list': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
+  'connections.list': empty, 'connections.opened': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
   'connections.organizationGet': connectionOrganizationGetSchema, 'connections.organizationApply': connectionOrganizationApplySchema,
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),
   'serverMonitor.read': z.object({ connectionId: id, taskId: id, sessionLimit: z.number().int().min(1).max(serverMonitorLimits.sessions).optional() }).strict().superRefine((value, context) => {

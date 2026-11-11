@@ -7,6 +7,7 @@ import { tablePresetsZh } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { sidebarContextMenuZh } from '../../src/renderer/locales/sidebarContextMenu.zh-CN';
 import { sidebarLocateZh } from '../../src/renderer/locales/sidebarLocate.zh-CN';
 import { sidebarViewZh } from '../../src/renderer/locales/sidebarView.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import { columnPatchZh } from '../../src/renderer/locales/columnPatches.zh-CN';
 import { indexPatchZh } from '../../src/renderer/locales/indexPatches.zh-CN';
 import { foreignKeyPatchZh } from '../../src/renderer/locales/foreignKeyPatches.zh-CN';
@@ -79,7 +80,21 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
 
     const tree = page.locator('.sidebar');
     const key = (values: (string | null)[]) => '[data-sidebar-node=' + JSON.stringify(JSON.stringify(values)) + ']';
-    await tree.locator(key([connectionId, null, 'connection', null])).locator('.tree-label').click();
+    const connectionRow = tree.locator(key([connectionId, null, 'connection', null]));
+    const trigger = tree.getByRole('button', { name: sidebarViewZh.controls, exact: true });
+    const panel = tree.getByRole('group', { name: sidebarViewZh.controls, exact: true });
+    const openedOnly = panel.getByRole('checkbox', { name: sidebarViewZh.openedOnly, exact: true });
+    const openedIds = () => page.evaluate(() => window.dbark.invoke('connections.opened', {}));
+    expect(await openedIds()).toEqual([]);
+    await trigger.click();
+    await openedOnly.check();
+    await expect(connectionRow).toBeHidden();
+    await expect(tree.getByText(sidebarViewZh.noMatch, { exact: true })).toBeVisible();
+    await page.evaluate(id => window.dbark.invoke('connections.open', { id }), connectionId);
+    await expect(connectionRow).toBeVisible();
+    expect(await openedIds()).toEqual([connectionId]);
+    await trigger.press('Escape');
+    await connectionRow.locator('.tree-label').click();
     const databaseRow = tree.locator(key([connectionId, database, 'database', null]));
     await databaseRow.locator('.tree-label').click();
     const name = postgres ? '"public"."a_small"' : 'a_small';
@@ -247,9 +262,7 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
     expect((await settings()).tabs).toEqual(tableTabs);
     await page.screenshot({ path: info.outputPath('对象树定位表页.png') });
     if (sqlite) {
-      const trigger = tree.getByRole('button', { name: sidebarViewZh.controls, exact: true });
       await trigger.click();
-      const panel = tree.getByRole('group', { name: sidebarViewZh.controls, exact: true });
       const [panelBounds, treeBounds] = await Promise.all([panel.boundingBox(), tree.boundingBox()]);
       expect(panelBounds!.x).toBeGreaterThanOrEqual(treeBounds!.x);
       expect(panelBounds!.x + panelBounds!.width).toBeLessThanOrEqual(treeBounds!.x + treeBounds!.width);
@@ -263,6 +276,19 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
       await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
       expect((await settings()).tabs).toEqual(tableTabs);
     }
+    await trigger.click();
+    await openedOnly.check();
+    await expect(connectionRow).toBeVisible();
+    await page.screenshot({ path: info.outputPath('仅显示已打开连接.png') });
+    await panel.getByRole('button', { name: sidebarViewZh.collapse, exact: true }).click();
+    await expect(connectionRow.locator('.tree-label')).toHaveAttribute('aria-expanded', 'false');
+    await expect(connectionRow).toBeVisible();
+    await connectionRow.locator('.tree-label').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: zh.sidebar.text013, exact: true }).click();
+    await expect(connectionRow).toBeHidden();
+    expect(await openedIds()).toEqual([]);
+    await tree.getByRole('button', { name: sidebarViewZh.reset, exact: true }).click();
+    await expect(connectionRow).toBeVisible();
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);
     if (before && !rename) expect(await readFile(file)).toEqual(before);
