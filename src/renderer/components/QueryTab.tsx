@@ -290,6 +290,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [sqliteStatementTimeoutMs, setSqliteStatementTimeoutMs] = useState(0);
   const [collectWarnings, setCollectWarnings] = useState(false);
   const [collectStatus, setCollectStatus] = useState(false);
+  const [collectStages, setCollectStages] = useState(false);
   const [interruptedStatus, setInterruptedStatus] = useState<{ taskId: string; report: MysqlQueryStatusReport }>();
   const parameterCollectWarnings = useRef(false);
   const parameterContinueOnError = useRef(false), scriptFailureRanges = useRef(new Set<QueryFailure>());
@@ -1128,7 +1129,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       if(cancelledQuery.current===task.current)throw new Error(queryContextZh.cancelledBeforeSend);
       currentIntent?.assertCurrent();
       const input = { sessionId: session, sql: source, taskId: task.current, maxRows: settings.resultLimit, ...(sqlite && sqliteStatementTimeoutMs > 0 ? {sqliteStatementTimeoutMs} : {}), ...((mode === 'execute' || mode === 'explain-current') && currentIntent && !currentIntent.selectionOnly ? { currentStatement: { offset: currentIntent.offset } } : {}), ...(mode === 'execute' && continueAfterError && (!sqlite || !currentIntent || currentIntent.selectionOnly) ? { continueOnError: true as const } : {}), ...(mode === 'execute' && collectWarningDetails === true ? { collectWarnings: true as const } : {}),
-        ...(mode === 'execute' && !sqlite && collectStatus ? { collectStatus: true as const } : {}) };
+        ...(mode === 'execute' && !sqlite && collectStatus ? { collectStatus: true as const } : {}),
+        ...(mode === 'execute' && !sqlite && collectStages ? { collectStages: true as const } : {}) };
       // 文本计划复用首次捕获的 SQL，切换展示不会读取后来编辑的草稿。
       if (mode === 'explain' || mode === 'explain-text') explainSource.current = source;
       const result = parameters ? await invoke('query.executeParameterized', { ...input, parameters }) : mode === 'execute' ? await invoke('query.execute', input) : mode === 'analyze' ? await invoke('query.analyze', { ...input, acknowledged: true, expectedDatabase: analysisIntent!.database }) : await invoke('query.explain', { ...input, format: mode === 'explain-text' ? 'text' : 'auto' });
@@ -2807,6 +2809,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         {!sqlite && <label className="check" title={mysqlQueryStatusZh.hint}>
           <input type="checkbox" aria-label={mysqlQueryStatusZh.collect} checked={collectStatus} disabled={busy || parameterSource !== null}
             onChange={event => { if (!busyRef.current && parameterSource === null) setCollectStatus(event.target.checked); }}/>{mysqlQueryStatusZh.collect}
+        </label>}
+        {!sqlite && <label className="check" title={mysqlQueryStatusZh.stageHint}>
+          <input type="checkbox" aria-label={mysqlQueryStatusZh.collectStages} checked={collectStages} disabled={busy || parameterSource !== null}
+            onChange={event => { if (!busyRef.current && parameterSource === null) setCollectStages(event.target.checked); }}/>{mysqlQueryStatusZh.collectStages}
         </label>}<label className="check" title={sqlite ? queryContinueOnErrorZh.sqliteHint : queryContinueOnErrorZh.hint}><input type="checkbox" aria-label={queryContinueOnErrorZh.option} checked={continueOnError} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setContinueOnError(event.target.checked); }}/>{queryContinueOnErrorZh.option}</label>{sqlite && <label className="inline-field" title={sqliteZh.statementTimeoutHint}>{sqliteZh.statementTimeout}
         <input type="number" aria-label={sqliteZh.statementTimeout} min={0} max={sqliteStatementTimeoutMaximumMs} step={1}
           disabled={busy || parameterSource !== null} value={sqliteStatementTimeoutMs || ''} placeholder="0"

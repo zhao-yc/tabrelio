@@ -1,5 +1,6 @@
 export const mysqlQueryStatusZh = {
   collect: '采集执行状态',
+  collectStages: '采集服务端阶段',
   title: '执行状态',
   hint: '统计客户端发送和接收的 MySQL 协议字节，包含包头及实际收到的响应。耗时覆盖单条命令的收发，不包含会话准备或警告采集。',
   columns: ['语句序号', '状态', '耗时（ms）', '发送（字节）', '接收（字节）'],
@@ -11,4 +12,16 @@ export const mysqlQueryStatusZh = {
   interrupted: '任务异常结束。以下保留已结束命令的状态和已观测到的流量。',
   omitted: (count: number) => `另有 ${count} 条命令未列出。`,
   total: (sent: string, received: string) => `共发送 ${sent} 字节，接收 ${received} 字节`,
+  stageHint: '从独立连接读取 Performance Schema 已保留的阶段，包含执行状态采集。需要当前账号具备读取权限。',
+  stageTitle: '服务端阶段',
+  stageColumn: '阶段',
+  stageDuration: '服务端耗时（ms）',
+  stageEmpty: '无记录',
+  stageUntimed: '未计时',
+  stageLimited: '本语句仅显示最先读取的 64 条阶段。',
+  stageRetention: '阶段明细来自服务器已保留的记录，受采集配置与历史容量限制。',
+  stageDisabled: '服务器未启用所需的 Performance Schema 阶段采集。',
+  stageUnavailable: '无法读取完整的阶段诊断，请核对 Performance Schema 读取权限与连接。',
+  stageDetails: (ordinal: number) => `查看第 ${ordinal} 条语句的服务端阶段`,
+  stageTable: (ordinal: number) => `第 ${ordinal} 条语句的服务端阶段`,
 } as const;

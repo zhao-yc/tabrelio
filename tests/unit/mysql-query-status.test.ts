@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MysqlQueryStatusCollector } from '../../src/engine/mysqlQueryStatus';
-import { mysqlQueryStatusLimit, mysqlQueryStatusReportSchema } from '../../src/shared/mysqlQueryStatus';
+import { mysqlQueryStageLimit, mysqlQueryStatusLimit, mysqlQueryStatusReportSchema } from '../../src/shared/mysqlQueryStatus';
 
 describe('MySQL 查询状态', () => {
   it('终态快照保留成功事实，拒绝额外正文和无界事件', () => {
@@ -30,6 +30,19 @@ describe('MySQL 查询状态', () => {
       { ordinal: 1, status: 'completed', elapsedMs: expect.any(Number), traffic: { sent: 14, received: 39 } },
       { ordinal: 2, status: 'failed', elapsedMs: expect.any(Number), traffic: { sent: 14, received: 39 } },
     ] });
+  });
+
+  it('服务端阶段只通过有限的阶段名与计时，拒绝文本和超限阶段', () => {
+    const stage = { name: 'stage/sql/User sleep', elapsedMs: 80 };
+    const terminal = { entries: [{ ordinal: 1, status: 'completed', elapsedMs: 85, stages: { rows: [stage], limited: false } }],
+      omitted: 0, stageCollection: 'ready' };
+    expect(mysqlQueryStatusReportSchema.safeParse(terminal).success).toBe(true);
+    for (const rows of [[{ ...stage, sql: 'SELECT 1' }], [{ ...stage, name: 'SELECT 1' }],
+      [{ ...stage, elapsedMs: Infinity }], Array(mysqlQueryStageLimit + 1).fill(stage)]) {
+      const [entry] = terminal.entries;
+      expect(mysqlQueryStatusReportSchema.safeParse({ ...terminal,
+        entries: [{ ...entry, stages: { ...entry.stages, rows } }] }).success).toBe(false);
+    }
   });
 
   it('驱动不可用、无流量及无效计数不冒充零字节', () => {

@@ -68,6 +68,8 @@ import type { TableStatisticsInput } from '../shared/tableStatistics';
 import { incomingReferenceLimits, incomingReferenceMessages, type IncomingReferencesInput, type ChildReferencePageInput } from '../shared/incomingReferences';
 import { connect, execute, type ManagedConnection } from './connection';
 import { MysqlQueryStatusCollector } from './mysqlQueryStatus';
+import { MysqlQueryStages } from './mysqlQueryStages';
+import { mysqlQueryStatusLimit } from '../shared/mysqlQueryStatus';
 import { completionQuery } from './completionQuery';
 import { mysqlQueryEditRowDigest, mysqlQueryEditSchemaDigest, mysqlQueryKeysUnique, mysqlQueryRelationOrigin, mysqlQueryRelationSelect, mysqlQueryRelationSource, mysqlQueryRelationTarget, type MysqlQueryRelationSource } from './mysqlQueryRelation';
 import { mysqlQueryBatchEditSchema, mysqlQueryBatchLimits, mysqlQueryRecordEditSchema, mysqlQueryRecordRefSchema, mysqlQueryRelationSchema, mysqlQueryReplaceableColumn, mysqlQueryReplaceColumnsSchema, type MysqlQueryRelationInput } from '../shared/mysqlQueryRelation';
@@ -169,6 +171,7 @@ interface RunningTask {
   continueOnErrorMode?: boolean;
   collectWarningsMode?: boolean;
   queryStatus?: MysqlQueryStatusCollector;
+  queryStages?: MysqlQueryStages;
   relationFields?: FieldPacket[];
   relationTarget?: ReturnType<typeof mysqlQueryRelationTarget>;
   resultOrigins?: MysqlResultOrigins;
@@ -581,7 +584,7 @@ export class Engine {
         } finally { this.disconnecting.delete(input.id); }
       }
       case 'sessions.open': return this.withConnectionUse(input.connectionId, async () => {
-        const managed = await connect(this.profile(input.connectionId), input.database);
+        const managed = await connect(this.profile(input.connectionId), input.database, undefined, undefined, true);
         const sessionId = randomUUID();
         this.sessions.set(sessionId, { id: sessionId, connectionId: input.connectionId, managed, busy: false });
         return { sessionId };
@@ -704,7 +707,7 @@ export class Engine {
         const { profile: trustedProfile, ...request } = input;
         return this.withCopySourceTask(input.connectionId, input.taskId, context => readNetworkSchemaScript(context, request), '读取结构 SQL 草稿');
       }
-      case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement, 'query', input.continueOnError, input.collectWarnings, input.collectStatus), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
+      case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement, 'query', input.continueOnError, input.collectWarnings, input.collectStatus, input.collectStages), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.exportStream': {
         this.assertFile(input);
         return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => {
@@ -739,7 +742,7 @@ export class Engine {
         return completionSessionState(session.managed,session.busy);
       }
       case 'query.databaseSwitch': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '切换本查询默认库', task => switchQueryDatabase(input as QueryDatabaseSwitchInput, this.databaseSwitchContext(input.sessionId, managed, task))));
-      case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => this.queryScript(task, input.sql, input.maxRows, input.parameters, undefined, 'parameterized', input.continueOnError, input.collectWarnings, input.collectStatus), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
+      case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => this.queryScript(task, input.sql, input.maxRows, input.parameters, undefined, 'parameterized', input.continueOnError, input.collectWarnings, input.collectStatus, input.collectStages), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.temporaryState':{
         const session=this.sessions.get(input.sessionId);if(!session?.managed.sessionObjects)throw new Error('会话对象目录不存在，请重新连接');
         return session.managed.sessionObjects.snapshot(session.busy,session.managed.broken);
@@ -1660,6 +1663,7 @@ export class Engine {
     if (task.fileImport?.committing) { if (!task.fileImport.finalCommit) task.cancelled = true; return; }
     if (task.fileCommitStarted || task.tableApply?.commitMayHaveBeenSent || task.autocommitSubmitted) return;
     task.cancelled = true;this.insertConfirmations.cancel(id);
+    task.queryStages?.cancel();
     return this.stopTaskCommand(task);
   }
 
@@ -2221,18 +2225,27 @@ export class Engine {
   }
 
   /** 所有执行模式按实际交付的结果对象附上来源。警告、计划及内部诊断不冒充用户结果。 */
-  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean, collectStatus?: boolean): Promise<QueryOutcome> {
+  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean, collectStatus?: boolean, collectStages?: boolean): Promise<QueryOutcome> {
     if (!failureMode) return this.queryScriptStop(task, sql, maxRows, parameters, currentStatement);
     this.queryRelationSources.delete(task.managed);
     this.queryEdits.delete(task.managed);
     this.resultOriginSources.delete(task.managed);
     const capture = task.resultOrigins = new MysqlResultOrigins();
-    if (collectStatus === true) task.queryStatus = new MysqlQueryStatusCollector();
+    if (collectStatus === true || collectStages === true) task.queryStatus = new MysqlQueryStatusCollector();
+    if (collectStages === true && task.queryStatus)
+      task.queryStages = new MysqlQueryStages(task.managed, task.queryStatus.report);
     const ranges: NonNullable<QueryOutcome['mysqlResultSourceRanges']> = [];
     task.resultSourceRanges = ranges;
-    const outcome = continueOnError === true ? await this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings) :
-      collectWarnings === true ? await this.queryScriptWithWarnings(task, sql, maxRows, parameters, currentStatement, failureMode) :
-      await this.queryScriptStop(task, sql, maxRows, parameters, currentStatement, failureMode);
+    let outcome: QueryOutcome;
+    try {
+      if (task.queryStages) {
+        await task.queryStages.open();
+        this.checkCancelled(task);
+      }
+      outcome = continueOnError === true ? await this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings) :
+        collectWarnings === true ? await this.queryScriptWithWarnings(task, sql, maxRows, parameters, currentStatement, failureMode) :
+        await this.queryScriptStop(task, sql, maxRows, parameters, currentStatement, failureMode);
+    } finally { if (task.queryStages) await task.queryStages.close(); }
     const context = task.managed.broken ? undefined : task.managed.queryRowContext;
     const origins = capture.finish(outcome.results, !!context);
     if (context && origins) this.resultOriginSources.set(task.managed, { executionId: task.id, context, origins });
@@ -2567,6 +2580,13 @@ export class Engine {
   /** 多结果集按服务器序号隔离；IPC 每批至多 200 行，返回结果受用户上限约束。 */
   private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false, continuing?: { driverError(error: Error): void; commandEnded?(): void; commandSucceeded?(): void; affectedRows?(value: unknown): void }): Promise<QueryResult[]> {
     this.checkCancelled(task);
+    const statusEntries = task.queryStatus?.report.entries;
+    const statusIndex = statusEntries?.length ?? mysqlQueryStatusLimit;
+    let watermark: string | undefined;
+    if (task.queryStages && statusIndex < mysqlQueryStatusLimit) {
+      watermark = await task.queryStages.before();
+      this.checkCancelled(task);
+    }
     task.inFlight = true; task.generation++;
     const started = performance.now(), results: QueryResult[] = [], batches = new Map<number, DataRow[]>(), batchBytes = new Map<number, number>();
     const discarded = new Set<number>();
@@ -2698,7 +2718,10 @@ export class Engine {
     } finally {
       recordStatus?.('failed', submitted);
       if (task.managed.queryRelationStatement === relationStatement) task.managed.queryRelationStatement = undefined;
-      task.inFlight = false; await task.cancelPending;
+      task.inFlight = false;
+      const entry = statusEntries?.[statusIndex];
+      if (entry && watermark !== undefined) await task.queryStages?.after(watermark, entry);
+      await task.cancelPending;
     }
   }
 

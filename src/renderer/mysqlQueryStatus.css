@@ -2,5 +2,8 @@
 .mysql-query-status summary { cursor: pointer; }
 .mysql-query-status-body { max-height: min(28vh, 240px); overflow: auto; }
 .mysql-query-status-body p { margin: 6px 0; }
-.mysql-query-status-body table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-.mysql-query-status-body th, .mysql-query-status-body td { border-bottom: 1px solid var(--line); text-align: start; padding: 4px 8px; }
+.mysql-query-status-body table, .mysql-query-stage-content table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.mysql-query-status-body th, .mysql-query-status-body td,
+.mysql-query-stage-content th, .mysql-query-stage-content td { border-bottom: 1px solid var(--line); text-align: start; padding: 4px 8px; }
+.mysql-query-stage-content td:first-child { overflow-wrap: anywhere; }
+.mysql-query-stage-content td:last-child { white-space: nowrap; }

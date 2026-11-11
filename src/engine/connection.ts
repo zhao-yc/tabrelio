@@ -2,7 +2,7 @@ import { assertConnectionReady } from '../shared/connectionTransfer';
 import { assertTlsPassphrase } from '../shared/tlsCredentials';
 import { connectionTlsOptions, tlsConnectionError } from './connectionTls';
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import mysql, { type Connection, type ConnectionOptions, type FieldPacket } from 'mysql2';
 import { Client as SshClient, type ClientChannel } from 'ssh2';
 import type { ConnectionProfile, NetworkConnectionProfile, NetworkConnectionStatus } from '../shared/contracts';
@@ -29,6 +29,8 @@ export interface ManagedConnection {
   noBackslashEscapesKnown?: boolean;
   /** 会话级设置被用户修改后，不再用默认独立连接解释查询原值。 */
   queryRowContext?: string;
+  /** 握手属性仅用于独立观察连接核对原物理会话，不能用可复用的连接号代替。 */
+  queryTraceId?: string;
   /** 仅流式 SELECT 的同一物理结果可确认原表投影。 */
   queryRelationStatement?: { sql: string; direct: boolean };
   /** 独立只读任务可在建连、元数据和读取阶段取消整个连接。 */
@@ -165,7 +167,7 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 }
 
 /** 建立数据库连接前完成 SSH 主机校验和 TLS 文件加载；任何阶段失败都会释放隧道。 */
-export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.dialect === 'sqlite' ? undefined : profile.database, signal?: AbortSignal, onResources?: (resources: ConnectionResourceRecovery) => void): Promise<ManagedConnection> {
+export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.dialect === 'sqlite' ? undefined : profile.database, signal?: AbortSignal, onResources?: (resources: ConnectionResourceRecovery) => void, traceQuerySession = false): Promise<ManagedConnection> {
   // SQLite由独立文件驱动处理，必须在分配任何MySQL/SSH/TLS资源前拒绝误路由。
   if (profile.dialect === 'sqlite') throw new Error('SQLite连接不能交给MySQL网络驱动');
   if (profile.dialect === 'postgresql') throw new Error('PostgreSQL连接不能交给MySQL网络驱动');
@@ -225,11 +227,13 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
       key: profile.tls.keyPath ? await readFile(profile.tls.keyPath, { signal }) : undefined,
     }) : undefined;
     cancelled();
+    const queryTraceId = traceQuerySession ? randomUUID() : undefined;
     const options: ConnectionOptions = {
       host: profile.host, port: profile.port, user: profile.user, password: profile.password, database: database || undefined,
       stream, ssl: tls, connectTimeout: 15000, enableKeepAlive: true, keepAliveInitialDelay: 10000,
       charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, dateStrings: true,
       jsonStrings: true, multipleStatements: false, flags: ['FOUND_ROWS'],
+      ...(queryTraceId ? { connectAttributes: { tabrelio_query_trace: queryTraceId } } : {}),
       // 静态解析器配合 rowsAsArray 不把合法的 __proto__ 等字段名写入对象原型。
       disableEval: true,
       // JSON 保持服务器原始文本；JS 自动解析会损失 JSON 内部大整数的精度。
@@ -243,6 +247,7 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
     let closePending: Promise<void> | undefined;
     const managed: ManagedConnection = {
       connection: active, profile, status: { version: '', dialect: profile.dialect, connectionId: active.threadId }, broken: false, signal, resources: resources.recovery,
+      queryTraceId,
       ...(ssh ? { openSshChannel(request: AbortSignal) {
         const client = ssh;
         if (!client || sshClosed || managed.broken || closePending || signal?.aborted || request.aborted)
