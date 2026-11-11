@@ -1,0 +1,6 @@
+.html-cell-preview{min-width:0;flex-shrink:0;grid-column:1/-1;padding:6px 0}
+.grid-html-cell-preview{margin:0 8px 6px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.grid-html-cell-preview>header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.grid-html-cell-preview>header>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.html-cell-preview>p{margin:5px 0}
+.html-cell-frame{display:block;width:100%;height:clamp(140px,28vh,260px);border:1px solid var(--line);border-radius:4px;background:#fff}

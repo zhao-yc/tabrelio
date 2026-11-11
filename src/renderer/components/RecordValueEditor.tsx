@@ -8,6 +8,7 @@ import { RecordEnumerationPicker } from './RecordEnumerationPicker';
 import { recordTemporalSpec } from '../recordTemporal';
 import { RecordTemporalControls } from './RecordTemporalControls';
 import { BinaryCellViewer } from './BinaryCellViewer';
+import { HtmlCellPreviewToggle } from './HtmlCellPreview';
 
 /** 文本域保留词法内容与输入法行为，只读模式仍可聚焦、选择和复制。 */
 export function RecordValueEditor({ column, input, inserted, reason, focus, selectOnFocus, binaryStale = false, source, isCurrent, onChange }: { column: ColumnInfo; input: RecordInput; inserted: boolean; reason: string; focus: boolean; selectOnFocus?: boolean; binaryStale?: boolean; source?: readonly unknown[]; isCurrent?(): boolean; onChange(input: RecordInput): void }) {
@@ -30,6 +31,7 @@ export function RecordValueEditor({ column, input, inserted, reason, focus, sele
     {enumeration && <button type="button" onClick={() => setRawEnumeration(current => !current)}>{chooser ? enumerationText.raw : enumerationText.choose}</button>}
     {chooser ? <RecordEnumerationPicker key={column.name} enumeration={chooser} value={input.text} focus={focus} onChange={value => onChange({ mode: 'text', text: value })}/> : input.mode === 'binary' ? <BinaryCellViewer value={{ type: 'binary', base64: '' }} source={[...(source ?? []), column, input]} isCurrent={isCurrent} hexInput={input.text} label={`${column.name} · ${text.value}`} reason={reason} focus={focus} onHexChange={value => onChange({ mode: 'binary', text: value })}/> : <><label htmlFor={`${id}-value`}>{column.name} · {text.value}</label><textarea id={`${id}-value`} ref={field} className="record-field-input" aria-describedby={`${id}-reason`} readOnly={!!reason || input.mode === 'null' || input.mode === 'default'} value={input.text} onChange={event => onChange({ ...input, text: event.target.value })}/>{binaryColumn && (input.mode === 'null' || input.mode === 'default') && <BinaryCellViewer value={input.mode === 'null' ? null : undefined} reason={reason} source={[...(source ?? []), column, input]} isCurrent={isCurrent}/>}</>}
     {temporal && <RecordTemporalControls spec={temporal} value={input.text} onChange={value => onChange({ mode: 'text', text: value })}/>}
+    {input.mode === 'text' && !chooser && <HtmlCellPreviewToggle value={input.text}/>}
     <span id={`${id}-reason`} className="muted small">{reason || (input.mode === 'null' ? text.null : input.mode === 'default' ? text.default : `${input.text.length} / ${recordInputLimits.field}`)}</span>
   </div>;
 }

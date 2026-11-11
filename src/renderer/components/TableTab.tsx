@@ -2225,7 +2225,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     const sqlActions = tableRowSqlActions(row, current, rectangle);
     const fieldEditor = rectangle ? undefined : specializedFieldEditor(row, key);
     const chooseReference = !rectangle && cellReferenceKeys(row, key).length > 0;
-    return cellActionMenu.open(target, grid.current?.element, { title: key, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
+    return cellActionMenu.open(target, grid.current?.element, { title: key, current, webValue: rectangle ? undefined : ownCell(row.data, key),
+      focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
       ...(selectAll ? [selectAll] : []),
       ...(rectangle ? gridRangeCopyActions(format => {

@@ -12,6 +12,7 @@ import { BoundedRecordTextarea } from './BoundedRecordTextarea';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { PostgresRecordJsonTree } from './PostgresRecordJsonTree';
 import { BinaryCellViewer } from './BinaryCellViewer';
+import { HtmlCellPreviewToggle } from './HtmlCellPreview';
 import { binaryByteLength } from '../binaryCell';
 import { postgresBinaryEditBytes, postgresBinaryInputHex } from '../postgresBinaryInput';
 import { postgresByteaZh as byteaText } from '../locales/postgresBytea.zh-CN';
@@ -126,6 +127,7 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
           })}/>
         </div> : valueInput}
       </div>}
+      <HtmlCellPreviewToggle value={value?.mode === 'text' ? value.value : !value ? originalValue : undefined}/>
     </div>;
   })}</>;
 }

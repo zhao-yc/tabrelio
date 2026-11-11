@@ -379,7 +379,8 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
     const current = () => source.current === owner && checkedContext.current?.owner === owner &&
       !checkedContext.current.disabled && checkedContext.current.isCurrent() && orderRef.current.indices === order && noModal() &&
       (!rectangle || cellRange.rectangleCurrent(rectangle));
-    return cellActionMenu.open(target, grid.current?.element, { title: column.name, current, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
+    return cellActionMenu.open(target, grid.current?.element, { title: column.name, current,
+      webValue: !rectangle && raw?.kind === 'text' ? raw.value : undefined, focusTarget: rectangle ? cellRange.focusTarget : undefined, actions: [
       ...(selectRow ? [selectRow] : []),
       ...(selectAll ? [selectAll] : []),
       ...(rectangle ? gridRangeCopyActions(format => {

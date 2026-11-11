@@ -2,12 +2,16 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { gridDialogCurrent } from '../modalSelectors';
 import { gridQuickValueZh } from '../locales/gridQuickValue.zh-CN';
+import { htmlCellPreviewZh as webText } from '../locales/htmlCellPreview.zh-CN';
+import { htmlCellSource } from '../htmlCellPreview';
+import { GridHtmlCellPreview } from './HtmlCellPreview';
 import { useWorkspace } from '../store';
 import '../sidebarContextMenu.css';
 
 export interface GridCellAction { label: string; disabled?: boolean; run(): void; }
-interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; current(): boolean; focusTarget?(): HTMLElement | undefined; }
+interface Request { title: string; label?: string; targetRole?: 'columnheader'; actions: readonly GridCellAction[]; webValue?: unknown; current(): boolean; focusTarget?(): HTMLElement | undefined; }
 interface Owner extends Request { cell: HTMLElement; grid: HTMLElement; dialog?: Element; anchorLeft: number; anchorTop: number; scrollLeft: number; scrollTop: number; x: number; y: number; }
+interface WebPreview { title: string; value: string; cell: HTMLElement; current(): boolean; }
 
 export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat: boolean; keyCode: number; nativeEvent: { isComposing: boolean } }): boolean {
   const key = event.key.toLowerCase();
@@ -17,6 +21,7 @@ export function isGridContextKey(event: { key: string; shiftKey: boolean; repeat
 /** 菜单归属按物理格、工作区和调用方数据快照共同核对。动作失效时关闭，禁止迟到点击。 */
 export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
   const [owner, setOwner] = useState<Owner>();
+  const [webPreview, setWebPreview] = useState<WebPreview>();
   const active = useRef<Owner | undefined>(undefined);
 
   function close(request = active.current, focus = false): void {
@@ -26,16 +31,23 @@ export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
     if (focus && request.current()) (request.focusTarget?.() ?? request.cell).focus({ preventScroll: true });
   }
 
-  useLayoutEffect(() => { if (owner && !owner.current()) close(owner); });
   useLayoutEffect(() => {
-    if (!owner) return;
-    const stop = useWorkspace.subscribe(() => { if (!owner.current()) close(owner); });
+    if (owner && !owner.current()) close(owner);
+    if (webPreview && !webPreview.current()) setWebPreview(undefined);
+  });
+  useLayoutEffect(() => {
+    if (!owner && !webPreview) return;
+    const stop = useWorkspace.subscribe(() => {
+      if (owner && !owner.current()) close(owner);
+      if (webPreview && !webPreview.current()) setWebPreview(previous => previous === webPreview ? undefined : previous);
+    });
     return stop;
-  }, [owner]);
+  }, [owner, webPreview]);
   useLayoutEffect(() => () => { active.current = undefined; }, []);
 
   function open(target: EventTarget | null, grid: HTMLElement | null | undefined, request: Request, point?: { x: number; y: number }): boolean {
-    if (!grid || !(target instanceof Element) || !request.actions.length ||
+    const html = request.targetRole ? undefined : htmlCellSource(request.webValue);
+    if (!grid || !(target instanceof Element) || !request.actions.length && html === undefined ||
         target.closest('input,textarea,select,button,[contenteditable="true"]')) return false;
     const cell = target.closest<HTMLElement>(request.targetRole ? '[role="columnheader"]' : '[role="gridcell"]'), row = cell?.closest('[role="row"]');
     if (!cell || !row || cell.closest('[role="grid"]') !== grid) return false;
@@ -61,7 +73,11 @@ export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
     };
     if (!current()) return false;
     const rect = cell.getBoundingClientRect();
-    const next = { ...request, ...(point ?? { x: rect.left, y: rect.bottom }), cell, grid, dialog,
+    // 仅持有菜单命中的原文和单元格来源；预览不通过网格复制或提交路径。
+    const actions = html === undefined ? request.actions : [...request.actions, {
+      label: webText.open, run: () => { if (current()) setWebPreview({title: request.title, value: html, cell, current}); },
+    }];
+    const next = { ...request, actions, ...(point ?? { x: rect.left, y: rect.bottom }), cell, grid, dialog,
       anchorLeft: rect.left, anchorTop: rect.top, scrollLeft: grid.scrollLeft, scrollTop: grid.scrollTop, current };
     active.current = next;
     setOwner(next);
@@ -74,7 +90,12 @@ export function useGridCellActionMenu(ownDialog?: () => Element | undefined) {
       close(owner, true);
       if (owner.current()) action.run();
     }}/>;
-  return { open, menu };
+  const preview = webPreview && <GridHtmlCellPreview value={webPreview.value} title={webPreview.title}
+    onClose={() => {
+      setWebPreview(undefined);
+      if (webPreview.current()) webPreview.cell.focus({preventScroll: true});
+    }}/>;
+  return { open, menu: <>{menu}{preview}</> };
 }
 
 function GridCellMenu({ owner, close, choose }: { owner: Owner; close(focus: boolean): void; choose(action: GridCellAction): void; }) {

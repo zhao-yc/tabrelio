@@ -515,7 +515,9 @@ export function ResultsGrid({ columns, rows, headerDetails, columnNameDialect, o
       actions.push({ label: gridCellFileZh.action, disabled: value == null,
         run: () => { void saveGridCell(() => copyValue(cell.row, key), current); } });
     }
-    return cellActionMenu.open(target, gridRef.current?.element, { title: column.name, label: filter?.label, actions, current,
+    const display = presentCell?.(cell.row, key);
+    const webValue = rectangle || display?.copyError ? undefined : display ? display.value : ownCell(cell.row, key);
+    return cellActionMenu.open(target, gridRef.current?.element, { title: column.name, label: filter?.label, actions, current, webValue,
       focusTarget: rectangle ? cellRange.focusTarget : undefined }, point);
   }
 
