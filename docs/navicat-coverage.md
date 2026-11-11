@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。表格和查询结果可通过快捷键跳到当前行的首列或末列、当前列的首行或末行。加 Shift 可从原活动格扩选矩形，使用当前页或已载入结果的可见顺序。D01、D02、Q05 增加网格边缘定位及扩选。[Navicat 数据编辑器快捷键](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/hot_keys.html#data-editor)
+
 2026-11-12 源码增量。MySQL、MariaDB、PostgreSQL 和 SQLite 的手动 JOIN 构建器支持在各步骤搜索字段，拖放或依次选中左右字段添加等号比较。已有表别名、ON 分组、条件表单和 SQL 预览沿用原设计。O04 增加可视化字段关联。[Navicat 可视化查询构建器](https://www.navicat.com/en/products/query-editing?product=navicat-premium)
 
 2026-11-12 源码增量。对象浏览的表分类新增 ER 图。MySQL、MariaDB、PostgreSQL 和 SQLite 可按名称筛选表，查看外键、复合字段映射和未读目标，并从图中打开已读表的结构入口。W02 增加目录 ER 图入口，E01 增加四种数据库的关系查看。[Navicat 对象页 ER 图](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#er-diagram-view-available-only-in-enterprise-and-standard-edition)

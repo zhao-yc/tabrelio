@@ -10,7 +10,7 @@ import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 
-test('宽表按列名或序号定位未渲染的单元格与空结果表头', async ({}, info) => {
+test('宽表可跳到可见边缘并扩选，也能按名称或序号定位数据格与空结果表头', async ({}, info) => {
   const dialect = process.env.DBARK_COLUMN_JUMP_DIALECT;
   test.skip(!dialect, '需要显式启用列定位专项');
   const local = dialect === 'sqlite';
@@ -43,6 +43,7 @@ test('宽表按列名或序号定位未渲染的单元格与空结果表头', as
   const sql = 'SELECT ' + fields + ' FROM jump_subject ORDER BY id';
   const empty = 'SELECT ' + fields + ' FROM jump_subject WHERE 1 = 0';
   try {
+    await info.attach('本例原 Main 进程', { body: String(await desktop.evaluate(() => process.pid)), contentType: 'text/plain' });
     if (local) await desktop.evaluate(({ dialog, BrowserWindow }, filePath) => {
       const open = dialog.showOpenDialog;
       dialog.showOpenDialog = (async (...args: unknown[]) => {
@@ -80,6 +81,41 @@ test('宽表按列名或序号定位未渲染的单元格与空结果表头', as
       await input.fill(search);
       return input;
     };
+    /** 起点与末列分开定位，验证横向虚拟列和纵向焦点都使用数据格坐标。 */
+    async function checkGridEdges(scope: typeof query, label: typeof query, tail: typeof query, firstTail: typeof query) {
+      const focused = scope.locator('[role="gridcell"]:focus');
+      const firstColumn = Number(await label.getAttribute('aria-colindex')) - 1;
+      const row = await label.locator('..').getAttribute('aria-rowindex');
+      await label.click();
+      await page.keyboard.press('ControlOrMeta+ArrowLeft');
+      await expect(focused).toHaveAttribute('aria-colindex', String(firstColumn));
+      await expect(focused.locator('..')).toHaveAttribute('aria-rowindex', row!);
+      await page.keyboard.press('ControlOrMeta+ArrowRight');
+      await expect(tail).toBeFocused();
+      await page.keyboard.press('ControlOrMeta+Home');
+      await expect(firstTail).toBeFocused();
+      await page.keyboard.press('ControlOrMeta+PageDown');
+      await expect(tail).toBeFocused();
+      await page.keyboard.press('ControlOrMeta+Shift+PageUp');
+      await expect(firstTail).toBeFocused();
+      await expect(firstTail).toHaveClass(/\bgrid-cell-in-range\b/);
+      await expect(tail).toHaveClass(/\bgrid-cell-in-range\b/);
+      await page.keyboard.press('ControlOrMeta+Shift+ArrowLeft');
+      await expect(focused).toHaveAttribute('aria-colindex', String(firstColumn));
+      await expect(focused).toHaveClass(/\bgrid-cell-in-range\b/);
+      // 到达同一首列时，普通跳转也应收起原矩形。
+      await page.keyboard.press('ControlOrMeta+ArrowLeft');
+      await expect(focused).not.toHaveClass(/\bgrid-cell-in-range\b/);
+      await page.keyboard.press('ControlOrMeta+ArrowRight');
+      await expect(firstTail).toBeFocused();
+      await expect(firstTail).not.toHaveClass(/\bgrid-cell-in-range\b/);
+      await page.keyboard.press('ControlOrMeta+End');
+      await expect(tail).toBeFocused();
+      await page.keyboard.press('Control+ArrowUp');
+      await expect(firstTail).toBeFocused();
+      await page.keyboard.press('Control+ArrowDown');
+      await expect(tail).toBeFocused();
+    }
     for (const tab of local ? ['jump-table', 'jump-view'] : ['jump-table']) {
       if (tab === 'jump-view') await open(tab);
       const label = tableTab.getByRole('gridcell').filter({ hasText: /^(TEXT · )?row B$/ });
@@ -97,6 +133,10 @@ test('宽表按列名或序号定位未渲染的单元格与空结果表头', as
       // 同坐标再次定位也应把焦点从搜索框送回原格。
       await (await choose(tableTab, '#24')).press('Enter');
       await expect(target).toBeFocused();
+      await page.keyboard.press('ControlOrMeta+ArrowLeft');
+      const tailA = tableTab.getByRole('gridcell').filter({ hasText: /^(TEXT · )?tail-two-A$/ });
+      await checkGridEdges(tableTab, label, target, tailA);
+      await expect(target.locator('..').getByRole('checkbox')).toBeChecked();
     }
     await open('jump-query');
     const execute = async () => {
@@ -119,9 +159,18 @@ test('宽表按列名或序号定位未渲染的单元格与空结果表头', as
     await expect(input).toHaveCount(0);
     await expect(query.getByRole('gridcell', { name: 'tail-two-B', exact: true })).toBeFocused();
     await page.screenshot({ path: info.outputPath('跳到可见列.png') });
+    await page.keyboard.press('ControlOrMeta+ArrowLeft');
+    const tailB = query.getByRole('gridcell', { name: 'tail-two-B', exact: true });
+    const tailA = query.getByRole('gridcell', { name: 'tail-two-A', exact: true });
+    await checkGridEdges(query, rowB, tailB, tailA);
+    await page.keyboard.press('ControlOrMeta+Shift+Home');
+    await expect(tailA).toBeFocused();
+    await page.screenshot({ path: info.outputPath('网格边缘扩选.png') });
+    await page.keyboard.press('Escape');
     await (await navigationMenuItem(query, { name: layoutText.open, exact: true })).click();
     const layout = page.getByRole('dialog', { name: layoutText.title, exact: true });
     await layout.getByRole('checkbox', { name: layoutText.visible(22), exact: true }).uncheck();
+    await layout.getByRole('checkbox', { name: layoutText.visible(24), exact: true }).uncheck();
     await layout.getByRole('button', { name: layoutText.apply, exact: true }).click();
     await expect(layout).toBeHidden();
     const noMatch = await choose(query, 'col_20');
@@ -129,6 +178,10 @@ test('宽表按列名或序号定位未渲染的单元格与空结果表头', as
     await expect(go).toBeDisabled();
     await noMatch.press('Escape');
     await expect(query.getByRole('button', { name: text.open, exact: true })).toBeFocused();
+    await (await choose(query, 'label')).press('Enter');
+    await rowB.click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await expect(query.getByRole('gridcell', { name: 'tail-one-B', exact: true })).toBeFocused();
     expect(await history()).toEqual(before);
 
     await open('jump-empty');

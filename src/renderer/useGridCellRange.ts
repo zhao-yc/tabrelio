@@ -156,10 +156,14 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
   }
 
   function key(args: Extract<CellKeyDownArgs<Row>, { mode: 'ACTIVE' }>, event: CellKeyboardEvent): boolean {
-    const direction = arrowDirections.get(event.key);
-    const cancel = event.key === 'Escape' && (!!live.current.anchor || !!drag.current);
-    const all = event.key.toLowerCase() === 'a' && !event.shiftKey && event.ctrlKey !== event.metaKey;
-    if (!(all || cancel || event.shiftKey && direction) || event.altKey || !all && (event.ctrlKey || event.metaKey) ||
+    const modified = event.ctrlKey || event.metaKey, primary = event.ctrlKey !== event.metaKey;
+    const direction = event.shiftKey && !modified ? arrowDirections.get(event.key) : undefined;
+    const cancel = event.key === 'Escape' && !modified && (!!live.current.anchor || !!drag.current);
+    const all = event.key.toLowerCase() === 'a' && !event.shiftKey && primary;
+    // Command+上下方向键由 macOS 列排序使用，纵向直达也可用 Home、End 或 Page Up、Page Down。
+    const edge = primary && !(event.metaKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) ?
+      edgeDirections.get(event.key) : undefined;
+    if (!(all || cancel || direction || edge) || event.altKey ||
         event.nativeEvent.isComposing || event.keyCode === 229 || !allowed(event) || !current()) return false;
     const active = position(args.row, args.rowIdx, args.column?.key);
     if (!active) return false;
@@ -172,11 +176,14 @@ export function useGridCellRange<Row>(rows: readonly Row[], keys: readonly strin
       const selected = live.current.rectangle;
       if (selected?.top === 0 && selected.bottom === rows.length - 1 && selected.left === 0 && selected.right === keys.length - 1) clear();
       else select(active, active, fullRectangle());
-    } else if (direction) {
-      const next = { row: Math.max(0, Math.min(rows.length - 1, active.row + direction.row)),
-        column: Math.max(0, Math.min(keys.length - 1, active.column + direction.column)) };
+    } else if (edge || direction) {
+      const next = edge ? gridEdge(active, edge, rows.length, keys.length) :
+        { row: Math.max(0, Math.min(rows.length - 1, active.row + direction!.row)),
+          column: Math.max(0, Math.min(keys.length - 1, active.column + direction!.column)) };
+      // 边界以当前可见字段和已载入行计算，跳转不会改变行勾选或触发翻页。
+      if (!event.shiftKey) clear();
       if (!samePoint(active, next)) {
-        select(live.current.anchor ?? active, next);
+        if (event.shiftKey) select(live.current.anchor ?? active, next);
         args.setActivePosition({ rowIdx: next.row, idx: next.column + columnOffset }, { shouldFocus: true });
       }
     }
@@ -265,6 +272,23 @@ const arrowDirections = new Map<string, Point>([
   ['ArrowUp', { row: -1, column: 0 }], ['ArrowDown', { row: 1, column: 0 }],
   ['ArrowLeft', { row: 0, column: -1 }], ['ArrowRight', { row: 0, column: 1 }],
 ]);
+
+type GridEdge = 'first-column' | 'last-column' | 'first-row' | 'last-row';
+const edgeDirections = new Map<string, GridEdge>([
+  ['ArrowLeft', 'first-column'], ['ArrowRight', 'last-column'],
+  ['Home', 'first-row'], ['End', 'last-row'],
+  ['PageUp', 'first-row'], ['PageDown', 'last-row'],
+  ['ArrowUp', 'first-row'], ['ArrowDown', 'last-row'],
+]);
+
+function gridEdge(active: Point, edge: GridEdge, rowCount: number, columnCount: number): Point {
+  switch (edge) {
+    case 'first-column': return { row: active.row, column: 0 };
+    case 'last-column': return { row: active.row, column: columnCount - 1 };
+    case 'first-row': return { row: 0, column: active.column };
+    case 'last-row': return { row: rowCount - 1, column: active.column };
+  }
+}
 
 export function gridCellRangeClass(rectangle: GridCellRectangle | undefined, row: number | undefined, column: number): string | undefined {
   if (rectangle && row !== undefined && row >= rectangle.top && row <= rectangle.bottom && column >= rectangle.left && column <= rectangle.right)
