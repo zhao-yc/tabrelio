@@ -1276,20 +1276,27 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
-  /** 单元格编辑只接收当前可见、可写且有原行身份的字段；字节仍走原查看和记录表单。 */
-  function openInlineEdit(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
+  /** 所有单格编辑入口共用字段及原行身份校验；字节仍走原查看和记录表单。 */
+  function inlineEditTarget(cell: QueryResultCopyCell) {
     if (!canEditGrid || !page || inlineOwner.current || lease.current || issued.current !== page.pageToken ||
       !layoutScope.current.current() || page.rows[cell.index] !== cell.row ||
-      document.querySelector('[role="dialog"], [role="alertdialog"]')) return false;
+      document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const column = page.columns.find(column => column === cell.column);
     const rowKey = page.rowKeys?.[cell.index];
-    if (!column || column.generated || column.binary || !rowKey) return false;
+    if (!column || column.generated || column.binary || !rowKey) return;
     const raw = ownCell(cell.row, column.key);
-    if (raw === undefined || (raw !== null && typeof raw === 'object')) return false;
+    if (raw === undefined || (raw !== null && typeof raw === 'object')) return;
     const prior = draft.find(entry => entry.rowKey === rowKey)?.change;
-    if (prior?.kind === 'delete') return false;
+    if (prior?.kind === 'delete') return;
     const staged = prior?.kind === 'update' ? prior.fields.find(field => field.column === column.key)?.value : undefined;
-    if (staged?.mode === 'binary') return false;
+    if (staged?.mode === 'binary') return;
+    return { column, rowKey, raw, staged };
+  }
+
+  function openInlineEdit(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
+    const target = inlineEditTarget(cell);
+    if (!target) return false;
+    const { column, rowKey, raw, staged } = target;
     const originalText = raw === null ? '' : cellText(raw);
     const initial = staged ?? (raw === null ? { mode: 'null' } : { mode: 'text', value: originalText });
     const owner: InlineEdit = { scope: cellScope, cell, column, rowKey, anchor, originalText, initial, typed };
@@ -2007,6 +2014,7 @@ export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab:
         onFillRange={canEditGrid ? fillGridRange : undefined}
         quickValueActions={{ allowed: (cell, kind) => !!quickValueTarget(cell, kind), apply: setQuickValue }}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
+        canOpenCellEditor={canEditGrid ? cell => !!inlineEditTarget(cell) : undefined}
         cellReference={canEditGrid ? { label: referenceText.open, allowed: cell => !!gridReferenceTarget(cell), open: openGridReference } : undefined}
         onCellPaste={(cell, data, range) => {
           if (!canEditGrid || !cell.column) return;

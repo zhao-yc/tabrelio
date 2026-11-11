@@ -11,6 +11,7 @@ import { useGridHeaderMenu } from './GridHeaderMenu';
 import { gridRowSqlActions } from '../gridRowSqlActions';
 import { gridQuickValueAssignment, gridQuickValueKinds, mysqlQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
+import { gridCellEditZh } from '../locales/gridCellEdit.zh-CN';
 import { TableEditWorkspace, type TableEditBatch, type TableEditPage, type TableEditNavigation, type TableCheckedFill, type TableCheckedRecordEdit } from '../tableEditWorkspace';
 import { tableEditWorkspaceZh as workspaceText } from '../locales/tableEditWorkspace.zh-CN';
 import { TableEditWorkspaceBar } from './TableEditWorkspaceBar';
@@ -142,7 +143,7 @@ import { fitGridColumnWidths, gridResizeHandleColumn, type GridColumnFitSource }
 import { gridColumnWidthBatchZh } from '../locales/gridColumnWidthBatch.zh-CN';
 import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { isBinaryCell } from '../binaryCell';
-import { blocksBinaryTextInput, tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { blocksBinaryTextInput, tableCellEditorKey, tableCellKeyIsComposing } from '../tableCellKeyboard';
 import '../tableGrid.css';
 import { DataTypeColor } from './DataTypeColor';
 import { catalogColorType } from '../dataTypeColors';
@@ -2217,6 +2218,11 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     if (binary && blocksBinaryTextInput(event)) event.preventGridDefault();
     // 二进制不进入普通编辑器；TEXT保留原生IME输入，但组合事件不能触发查看、查找、清空或预览。
     if (composing) { if (binary) event.preventGridDefault(); return; }
+    if (!event.defaultPrevented && tableCellEditorKey(event)) {
+      event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
+      if (!event.repeat && !cellRange.rectangle && canOpenCellEditor(activeRow, activeColumn.key)) record.openCell(activeRow.id, activeColumn.key);
+      return;
+    }
     const target = event.target;
     const historyAction = draftHistoryKey(event, target instanceof HTMLElement && !!target.closest('[role="grid"]') && !target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],.monaco-editor'));
     if (historyAction) {
@@ -2226,7 +2232,7 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       event.preventGridDefault(); event.preventDefault(); openPageFind(event.key.toLowerCase() === 'h' ? 'replacement' : 'query');
     } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && specializedFieldEditor(activeRow, activeColumn.key)) {
       event.preventGridDefault(); event.preventDefault(); record.openCell(activeRow.id, activeColumn.key);
-    } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && binary) {
+    } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey && binary) {
       event.preventGridDefault(); event.preventDefault(); record.openCell(activeRow.id, activeColumn.key);
     } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.shiftKey && !event.altKey
       && !cellRange.rectangle && cellReferenceKeys(activeRow, activeColumn.key).length) {
@@ -2257,6 +2263,10 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
     return tableTabCurrent() && sortScopeRef.current === sortScope && rowsRef.current === rows && rows.includes(row) && !row.deleted &&
       layoutRevision.current === headerCopyLayoutRevision && !blockedRef.current && !activeGridEditor.current && !record.hasInput();
   }
+  /** 右键及快捷键只编辑当前仍可写的格，行号和生成列不提供入口。 */
+  function canOpenCellEditor(row: DraftRow, key: string): boolean {
+    return visibleKeys.includes(key) && cellActionCurrent(row) && !recordReadonlyReason(getRecordContext(), row, key);
+  }
   /** 原格从工具栏选择或菜单事件传入，写入仍沿用表页单步撤销。 */
   function setQuickValueAt(row: DraftRow, key: string, kind: GridQuickValue): void {
     if (!cellActionCurrent(row) || !canSetQuickValue(kind, row, key)) return;
@@ -2270,9 +2280,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
   }
   /** 类型控件沿用准确行和可见列的字段弹窗，提交仍由原草稿流程处理。 */
   function specializedFieldEditor(row: DraftRow, key: string): string | undefined {
-    const context = getRecordContext();
-    if (!cellActionCurrent(row) || !visibleKeys.includes(key) || recordReadonlyReason(context, row, key)) return;
-    const column = context.info?.columns.find(item => item.name === key);
+    if (!canOpenCellEditor(row, key)) return;
+    const column = getRecordContext().info?.columns.find(item => item.name === key);
     if (column?.enumeration) return enumerationText.choose;
     if (column && recordTemporalSpec(column.type, 'mysql')) return temporalText.action;
   }
@@ -2343,8 +2352,8 @@ export function TableTab({ tab, onViewApplied, onOpenGeneratedQuery, onQueryTemp
       ...(chooseReference ? [{ label: referenceZh.choose, run: () => {
         if (current()) openCellReference.current('choose', { row, key });
       } }] : []),
-      ...(fieldEditor ? [{ label: fieldEditor, run: () => {
-        if (current() && specializedFieldEditor(row, key) === fieldEditor) record.openCell(row.id, key);
+      ...(!rectangle && (fieldEditor || canOpenCellEditor(row, key)) ? [{ label: fieldEditor ?? gridCellEditZh.open, run: () => {
+        if (current() && canOpenCellEditor(row, key)) record.openCell(row.id, key);
       } }] : []),
       ...gridQuickValueKinds.map(kind => ({ label: quickValueText[kind], disabled: !canSetQuickValue(kind, row, key), run: () => setQuickValueAt(row, key, kind) })),
       { label: gridCellFileZh.action, disabled: ownCell(row.data, key) == null,

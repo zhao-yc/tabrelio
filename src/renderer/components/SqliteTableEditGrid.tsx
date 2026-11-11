@@ -1,11 +1,12 @@
 import { sqliteReferenceZh as referenceText } from '../locales/sqliteReference.zh-CN';
-import { tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { tableCellEditorKey, tableCellKeyIsComposing } from '../tableCellKeyboard';
 import { isGridContextKey, useGridCellActionMenu, type GridCellAction } from './GridCellActionMenu';
 import { sqliteRowIdColumn, sqliteRowIdKey } from './SqliteRowIdColumn';
 import { useGridHeaderMenu, type GridHeaderColumnVisibility, type GridHeaderFreeze, type GridHeaderValueOptions } from './GridHeaderMenu';
 import { gridRowSqlActions } from '../gridRowSqlActions';
 import { gridQuickValueKinds, sqliteQuickValueAllowed, type GridQuickValue } from '../gridQuickValue';
 import { gridQuickValueZh as quickValueText } from '../locales/gridQuickValue.zh-CN';
+import { gridCellEditZh } from '../locales/gridCellEdit.zh-CN';
 import { GridHeaderDetails } from './GridHeaderDetails';
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type MouseEvent, type Ref } from 'react';
 import { gridCellRangeClass, useGridCellRange, type GridCellRectangle, type GridRangeTarget } from '../useGridCellRange';
@@ -196,8 +197,15 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       return <span title={raw} className={matched ? 'grid-row-preview sqlite-find-hit' : 'grid-row-preview'} data-sqlite-find-current={matched ? 'true' : undefined}>{value && value.kind !== 'null' ? value.kind.toUpperCase() + ' · ' : ''}{precise ? <>{raw.slice(0, range.start)}<mark className="sqlite-find-range">{raw.slice(range.start, range.end) || '\u200b'}</mark>{raw.slice(range.end)}</> : raw}</span>;
     },
   })), ...(showRowId && page.rowIds ? [sqliteRowIdColumn(rowIdFor)] : [])];
-  /** F2和双击只打开本地typed编辑，不直接投递写入。 */
-  function edit(row: SqliteDraftRow, key: string): void { const column = Number(key.slice(1)); if (current(row) && !disabled && !row.deleted && /^c\d+$/.test(key) && page.columns[column] && !page.columns[column].generated) onEdit(row, column); }
+  /** 所有入口只打开可见原字段的类型化编辑器，写入仍走表页暂存流程。 */
+  function canEditCell(row: SqliteDraftRow, key: string): boolean {
+    const index = Number(key.slice(1));
+    return !disabled && !row.deleted && /^c\d+$/.test(key) && order.includes(index) &&
+      !!page.columns[index] && !page.columns[index].generated;
+  }
+  function edit(row: SqliteDraftRow, key: string): void {
+    if (current(row) && noModal() && canEditCell(row, key)) onEdit(row, Number(key.slice(1)));
+  }
   /** 复制沿当前可见列取原值；SQLite 类型化格式始终保留原始数据行。 */
   function clipboardContent(checked: SqliteDraftRow[], row: SqliteDraftRow | undefined, key: string, headers = false) {
     const index = Number(key.slice(1));
@@ -426,6 +434,9 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       ...(!rectangle && canChooseReference(row, index) ? [{ label: referenceText.choiceEntry, run: () => {
         if (current() && canChooseReference(row, index)) chooseReference.current?.(row, index);
       } }] : []),
+      ...(!rectangle && canEditCell(row, key) ? [{ label: gridCellEditZh.open, run: () => {
+        if (current() && canEditCell(row, key)) onEdit(row, index);
+      } }] : []),
       ...gridQuickValueKinds.map(kind => ({ label: quickValueText[kind], disabled: !onQuickValue || !sqliteQuickValueAllowed(column, !!edit.strict, kind),
         run: () => quickValue.current?.({ row, column: index }, kind) })),
       { label: gridCellFileZh.action, disabled: !raw || raw.kind === 'null',
@@ -551,6 +562,11 @@ export function SqliteTableEditGrid({ onChooseReference, showGridImages, onFindC
       if (isGridContextKey(event) && mode === 'ACTIVE' && !event.defaultPrevented && !event.isGridDefaultPrevented() &&
           openCellActions(row, column?.key, event.target)) {
         event.preventGridDefault(); event.preventDefault(); event.stopPropagation(); return;
+      }
+      if (mode === 'ACTIVE' && row && column && !event.defaultPrevented && !event.isGridDefaultPrevented() && tableCellEditorKey(event)) {
+        event.preventGridDefault(); event.preventDefault(); event.stopPropagation();
+        if (!event.repeat && !cellRange.rectangle) edit(row, column.key);
+        return;
       }
       if (mode === 'ACTIVE' && row && column && event.key === 'Enter' && (event.ctrlKey || event.metaKey) &&
           !event.altKey && !event.shiftKey && !event.repeat && !event.defaultPrevented && !event.isGridDefaultPrevented() &&

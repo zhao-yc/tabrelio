@@ -6,6 +6,8 @@ import { confirmOwnedDesktopExit, dataDir, desktop, expect, page, pageErrors, re
 import { navigationMenuItem } from './navigation-menu';
 import type { NetworkConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 import { gridQuickValueZh as text } from '../../src/renderer/locales/gridQuickValue.zh-CN';
+import { gridCellEditZh } from '../../src/renderer/locales/gridCellEdit.zh-CN';
+import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { sqliteTableEditZh as sqliteText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { draftHistoryZh } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
@@ -30,7 +32,7 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
   if (local) {
     const fixture = new DatabaseSync(file);
     try {
-      fixture.exec("CREATE TABLE update_subject(id INTEGER PRIMARY KEY, label TEXT, numeric_value INTEGER NOT NULL, uuid_value TEXT); INSERT INTO update_subject VALUES(1,'row A',17,NULL),(2,'row B',18,NULL);");
+      fixture.exec("CREATE TABLE update_subject(id INTEGER PRIMARY KEY, label TEXT, numeric_value INTEGER NOT NULL, uuid_value TEXT, derived INTEGER GENERATED ALWAYS AS (length(label)) STORED); INSERT INTO update_subject(id,label,numeric_value,uuid_value) VALUES(1,'row A',17,NULL),(2,'row B',18,NULL);");
     } finally { fixture.close(); }
   }
   const baseline = local ? await readFile(file) : undefined;
@@ -96,6 +98,43 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
       await clickAction(local ? sqliteTableBrowseZh.conditions : zh.table.text006);
     }
     const before = await jobs();
+    const pg = dialect === 'postgresql';
+    const editInput = page.getByRole('textbox', {
+      name: local ? sqliteText.value('label') : pg ? postgresTableZh.value : 'label · ' + recordViewZh.value, exact: true,
+    });
+    const stage = page.getByRole('button', {
+      name: local ? sqliteText.saveInput : pg ? postgresTableZh.stage : recordViewZh.stageCell, exact: true,
+    });
+    const cancel = page.getByRole('button', {
+      name: local ? sqliteText.cancelInput : pg ? postgresTableZh.cancel : recordViewZh.closeCell, exact: true,
+    });
+    // 右键命中的行与先前活动行不同，快捷键再次打开后须读取刚暂存的完整原文。
+    await other.click();
+    await cell.click({ button: 'right' });
+    await item(gridCellEditZh.open).click();
+    await expect(editInput).toHaveValue('row A');
+    const multiline = 'row A\n暂存的第二行';
+    await editInput.fill(multiline);
+    await page.screenshot({ path: info.outputPath('从右键打开单元格编辑器.png') });
+    await stage.click();
+    await expect(editInput).toBeHidden();
+    await cell.click();
+    await expect(cell).toBeFocused();
+    await page.keyboard.press('Alt+Enter');
+    await expect(editInput).toHaveValue(multiline);
+    await cancel.click();
+    await clickAction(undo);
+    await expect(cell).toHaveText(local ? 'TEXT · row A' : 'row A');
+    await expect(other).toBeVisible();
+    await cell.click();
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect(cell).toHaveClass(/grid-cell-in-range/);
+    await page.keyboard.press('Alt+Enter');
+    await expect(editInput).toBeHidden();
+    await expect(cell).toHaveClass(/grid-cell-in-range/);
+    await other.click();
+    expect(await jobs()).toEqual(before);
+
     await other.locator('..').getByRole('checkbox').check();
     if (local) {
       await grid.getByRole('gridcell').getByText('INTEGER · 17', { exact: true }).click();
@@ -107,7 +146,7 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     await cell.click({ button: 'right' });
     await expect(menu).toBeVisible();
     if (dialect === 'postgresql') {
-      await expect(item(tableCellFilterZh.equal)).toBeFocused();
+      await expect(menu.locator('button[role="menuitem"]:not(:disabled)').first()).toBeFocused();
       await item(tableCellFilterZh.equal).click();
       const advanced = tab.getByRole('region', { name: postgresTableZh.advancedFilter, exact: true });
       await expect(advanced.getByLabel(zh.table.text011, { exact: true })).toHaveValue('row A');
@@ -142,6 +181,14 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
       if (!index) throw Error('验收列位置缺失');
       return grid.locator(`[role="row"][aria-rowindex="${rowIndex}"] > [role="gridcell"][aria-colindex="${index}"]`);
     };
+    const generated = await namedCell('derived');
+    await generated.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    await expect(item(gridCellEditZh.open)).toBeHidden();
+    await page.keyboard.press('Escape');
+    await generated.click();
+    await page.keyboard.press('Alt+Enter');
+    await expect(cancel).toBeHidden();
     const restricted = await namedCell(local ? 'numeric_value' : 'scope');
     await restricted.click();
     await expect(await action(text.uuid)).toBeDisabled();
@@ -165,7 +212,6 @@ test('活动格快速赋值可撤销，UUID 经确认提交后读回', async ({}
     await page.screenshot({ path: info.outputPath('活动格 UUID 草稿.png') });
 
     // 只允许向上面的专用 SQLite 文件或独占回环库执行真实确认提交。
-    const pg = dialect === 'postgresql';
     await clickAction(local ? sqliteText.preview : pg ? postgresTableZh.preview : zh.table.text019);
     const review = page.getByRole('dialog', { name: local ? sqliteText.previewTitle : pg ? postgresTableZh.preview : zh.table.text031, exact: true });
     await expect(review).toBeVisible();
