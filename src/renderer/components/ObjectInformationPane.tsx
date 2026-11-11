@@ -14,13 +14,16 @@ import { connectionOrganizationZh } from '../../shared/connectionOrganization.zh
 import { sidebarConnectionEnd } from '../sidebarNodeRequests';
 import { useWorkspace } from '../store';
 import { readObjectDependencies, supportsObjectDependencies, type ObjectDependencies, type ObjectDependencyEntry, type DependencyDefinitionTarget } from '../objectDependencies';
+import { readObjectIdentifiers, supportsObjectIdentifiers, type ObjectIdentifiers } from '../objectIdentifiers';
+import type { OpenWorkbenchTarget } from '../workbenchNavigation';
 import { sidebarNodeKey, useSidebarSelection, type SidebarNodeTarget } from './SidebarContextMenu';
 import { SqlEditor } from './SqlEditor';
 import { DependencyDefinition } from './DependencyDefinition';
+import { ObjectIdentifierList } from './ObjectIdentifierList';
 import { ErrorBox, Spinner } from './ui';
 import '../objectInformation.css';
 
-type Mode = 'general' | 'structure' | 'ddl' | 'dependencies';
+type Mode = 'general' | 'structure' | 'ddl' | 'dependencies' | 'identifiers';
 type NamedTarget = Extract<SidebarNodeTarget, { name: string }>;
 type ReadMode = Exclude<Mode, 'general'>;
 
@@ -98,7 +101,7 @@ interface DependencyPage {
 }
 
 interface Source {
-  target: NamedTarget;
+  target: Exclude<SidebarNodeTarget, { kind: 'connection' }>;
   profile: ConnectionProfile;
   version: number;
   refreshKey: string;
@@ -106,7 +109,7 @@ interface Source {
   retry: number;
   dependencyPage?: DependencyPage;
 }
-type Result = { source: Source; value: string | TableElements | ObjectDependencies } | { source: Source; error: string };
+type Result = { source: Source; value: string | TableElements | ObjectDependencies | ObjectIdentifiers } | { source: Source; error: string };
 
 /** 拖动只预览显示宽度，放开才保存。窗口变窄时临时限宽，保留原偏好。 */
 function useInformationPaneWidth(expanded: boolean) {
@@ -188,12 +191,13 @@ function useInformationPaneWidth(expanded: boolean) {
 }
 
 /** 原对象行、连接修订及目录代次共同约束发布，旧选择不能继续连库或交付原定义。 */
-export function ObjectInformationPane({ refresh, connectionRefresh, objectRefresh, expanded, onToggleSize, onClose }: {
+export function ObjectInformationPane({ refresh, connectionRefresh, objectRefresh, expanded, onToggleSize, onOpenObject, onClose }: {
   refresh: number;
   connectionRefresh: Record<string, number>;
   objectRefresh: Record<string, number>;
   expanded: boolean;
   onToggleSize(): void;
+  onOpenObject: OpenWorkbenchTarget;
   onClose(): void;
 }) {
   const { pane, width, overlay, handle } = useInformationPaneWidth(expanded);
@@ -217,13 +221,14 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
   if (supportsStructure) modes.push('structure');
   if (supportsDdl) modes.push('ddl');
   if (supportsDependencies) modes.push('dependencies');
+  if (target && profile && supportsObjectIdentifiers(profile, target)) modes.push('identifiers');
   const shownMode = modes.includes(mode) ? mode : 'general';
   const latestRefresh = useRef(refreshKey); latestRefresh.current = refreshKey;
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); return () => { live.current = undefined; }; }, []);
   useEffect(() => {
     setDefinitionEditor(undefined);
     setPreview(undefined);
-    if (!target || !('name' in target) || !profile || shownMode === 'general') return;
+    if (!target || target.kind === 'connection' || !profile || shownMode === 'general') return;
     const source: Source = { target, profile, version, refreshKey, mode: shownMode, retry, dependencyPage };
     live.current = source;
     let taskId: string | undefined;
@@ -233,22 +238,30 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
         workspace.connections.includes(source.profile) && (workspace.connectionVersions[source.profile.id] ?? 0) === source.version;
     }
     async function read() {
-      const { connectionId, database, name, kind } = source.target;
+      const subject = source.target;
+      const { connectionId, database } = subject;
       if (!currentSource()) return;
       try {
         if (sidebarConnectionEnd(connectionId)) throw Error(tableElementsZh.ending);
-        let value: string | TableElements | ObjectDependencies | undefined;
-        if (source.mode === 'structure') value = await invoke('metadata.tableElements', { connectionId, database, table: name });
-        else if (source.mode === 'dependencies') value = await readObjectDependencies(source.profile, source.target, {
+        let value: string | TableElements | ObjectDependencies | ObjectIdentifiers | undefined;
+        if (source.mode === 'identifiers' && supportsObjectIdentifiers(source.profile, subject)) {
+          value = await readObjectIdentifiers(source.profile, subject, () => {
+            if (!currentSource()) return false;
+            if (sidebarConnectionEnd(connectionId)) throw Error(tableElementsZh.ending);
+            return true;
+          });
+        } else if (!('name' in subject)) return;
+        else if (source.mode === 'structure') value = await invoke('metadata.tableElements', { connectionId, database, table: subject.name });
+        else if (source.mode === 'dependencies') value = await readObjectDependencies(source.profile, subject, {
           current: currentSource, ownTask: id => { taskId = id; }, cursor: source.dependencyPage?.cursors.at(-1), digest: source.dependencyPage?.digest,
         });
         else if (source.profile.dialect === 'postgresql') {
-          value = await invoke('postgres.structure.definition', postgresDefinitionTargetSchema.parse({ connectionId, database, name, kind }));
+          value = await invoke('postgres.structure.definition', postgresDefinitionTargetSchema.parse({ connectionId, database, name: subject.name, kind: subject.kind }));
         } else {
           if (source.profile.dialect !== 'sqlite') await invoke('connections.open', { id: connectionId });
           if (!currentSource()) return;
           if (sidebarConnectionEnd(connectionId)) throw Error(tableElementsZh.ending);
-          value = await invoke('metadata.ddl', { connectionId, database, name, kind });
+          value = await invoke('metadata.ddl', { connectionId, database, name: subject.name, kind: subject.kind });
         }
         if (value !== undefined && currentSource()) {
           if (sidebarConnectionEnd(connectionId)) throw Error(tableElementsZh.ending);
@@ -281,7 +294,7 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
   const findReady = !!owned && definitionEditor?.source === owned.source;
 
   function choose(next: Mode) { if (next !== mode) { live.current = undefined; setResult(undefined); setPage(undefined); setMode(next); } }
-  function dependencySourceCurrent(source: Source) {
+  function actionSourceCurrent(source: Source) {
     const workspace = useWorkspace.getState();
     return live.current === source && latestRefresh.current === source.refreshKey && current() === source.target &&
       workspace.connections.includes(source.profile) && (workspace.connectionVersions[source.profile.id] ?? 0) === source.version &&
@@ -289,7 +302,7 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
   }
   /** 翻页只沿同一次原目录摘要推进；返回第一页同样核对源对象。 */
   function changeDependencyPage(cursor?: string) {
-    if (!owned || live.current !== owned.source || current() !== owned.source.target ||
+    if (!owned || owned.source.target.kind === 'database' || live.current !== owned.source || current() !== owned.source.target ||
         'error' in owned || typeof owned.value === 'string' || !('references' in owned.value) || !owned.value.page) return;
     const cursors = dependencyPage?.cursors ?? [];
     setPage({ target: owned.source.target, profile: owned.source.profile, refreshKey,
@@ -329,24 +342,26 @@ export function ObjectInformationPane({ refresh, connectionRefresh, objectRefres
         {modes.map(item =>
           <button type="button" key={item} aria-pressed={shownMode === item} onClick={() => choose(item)}>{text[item]}</button>)}
       </div>}
-      <div ref={content} className={`object-info-content${shownMode === 'ddl' ? ' object-info-ddl' : ''}`}>
+      <div ref={content} className={`object-info-content${shownMode === 'ddl' ? ' object-info-ddl' : ''}${shownMode === 'identifiers' ? ' object-info-identifier-content' : ''}`}>
         {shownMode === 'general' ? <dl>
           {target.kind !== 'connection' && <><dt>{text.connection}</dt><dd>{profile.name}</dd></>}
           {'name' in target && <><dt>{text.database}</dt><dd>{target.database}</dd></>}
           <dt>{text.vendor}</dt><dd>{sidebarViewZh.vendors[profile.dialect]}</dd>
           <dt>{text.group}</dt><dd>{connectionOrganizationZh.groupDisplay(profile.group ?? '')}</dd>
         </dl> : !owned ? <Spinner text={text.loading}/> : 'error' in owned ? <ErrorBox message={owned.error}/> :
+          typeof owned.value !== 'string' && 'identifiers' in owned.value ? <ObjectIdentifierList entries={owned.value.identifiers}
+            fields={owned.source.target.kind !== 'database'} current={() => actionSourceCurrent(owned.source)} onOpen={onOpenObject}/> :
           typeof owned.value !== 'string' ? 'references' in owned.value
             ? <>
               <div hidden={!!shownPreview}><DependencyList value={owned.value} page={(dependencyPage?.cursors.length ?? 0) + 1}
                 previous={() => changeDependencyPage()} next={changeDependencyPage}
                 open={(row, trigger) => {
-                  if (row.definition && dependencySourceCurrent(owned.source)) setPreview({
+                  if (row.definition && actionSourceCurrent(owned.source)) setPreview({
                     source: owned.source, identity: row.identity, target: row.definition, trigger, scrollTop: content.current?.scrollTop ?? 0,
                   });
                 }}/></div>
               {shownPreview && <DependencyDefinition target={shownPreview.target} profile={shownPreview.source.profile}
-                identity={shownPreview.identity} current={() => dependencySourceCurrent(shownPreview.source)} onBack={() => {
+                identity={shownPreview.identity} current={() => actionSourceCurrent(shownPreview.source)} onBack={() => {
                   returnFocus.current = shownPreview;
                   setPreview(undefined);
                 }}/>}

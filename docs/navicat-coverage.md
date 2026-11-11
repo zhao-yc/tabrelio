@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-12 源码增量。对象信息窗格新增「标识符」。在选中数据库中搜索表和视图并打开原数据页，在选中表或视图中查找字段。支持按方言复制 SQL 名称，长目录在窗格内分页。W02 增加标识符目录。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)
+
 2026-11-12 源码增量。对象信息窗格可拖动或用键盘调整宽度，正常宽度随本机设置恢复。可一键展开整个窗格，恢复时保留原宽度、信息页和只读定义。W02 增加信息窗格尺寸控制。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#expand-and-collapse-pane)
 
 2026-11-12 源码增量。对象信息窗格可直接预览依赖目录项的只读定义，返回时恢复原列表、页码和焦点。PostgreSQL 的定义读取核对目录 OID 及关系类型。W02 增加依赖对象定义的就地查看。[Navicat 信息窗格](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html#information-pane)

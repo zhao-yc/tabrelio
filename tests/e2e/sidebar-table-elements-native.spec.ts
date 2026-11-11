@@ -316,6 +316,34 @@ test('在原生对象树查看结构并定位原表设计器', async ({}, info) 
         await expect(outbound).toContainText('a_small');
       }
     }
+    const identifiers = inspector.getByRole('region', { name: information.identifiers, exact: true });
+    const identifierMode = inspector.getByRole('button', { name: information.identifiers, exact: true });
+    await databaseRow.locator('.tree-label').click({ button: 'right' });
+    await page.keyboard.press('Escape');
+    await identifierMode.click();
+    const relationSearch = identifiers.getByRole('searchbox', { name: information.searchRelationIdentifiers, exact: true });
+    await relationSearch.fill('visible_view');
+    await expect(identifiers.getByRole('listitem')).toHaveCount(1);
+    await expect(identifiers.getByRole('listitem')).toContainText('visible_view');
+    await page.screenshot({ path: info.outputPath('对象信息数据库标识符.png') });
+    const viewName = postgres ? '"public"."visible_view"' : 'visible_view';
+    await identifiers.getByRole('button', { name: information.openIdentifier(viewName), exact: true }).press('Enter');
+    const activeView = page.locator('.tab-strip [data-active-workspace-tab="true"]').filter({ hasText: viewName });
+    await expect(activeView).toBeVisible();
+    await expect(page.getByRole('gridcell', { name: '1', exact: true }).first()).toBeVisible();
+    await activeView.locator('.tab-close').click();
+    await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();
+    await view.locator('.tree-label').click({ button: 'right' });
+    await page.keyboard.press('Escape');
+    const fieldSearch = identifiers.getByRole('searchbox', { name: information.searchFieldIdentifiers, exact: true });
+    await fieldSearch.fill('id');
+    await expect(identifiers.getByRole('button', { name: information.copyIdentifier('id'), exact: true })).toBeVisible();
+    await rowLabel.click({ button: 'right' });
+    await page.keyboard.press('Escape');
+    await fieldSearch.fill('derived');
+    await expect(identifiers.getByRole('listitem')).toHaveCount(1);
+    await expect(identifiers.getByRole('listitem')).toContainText('derived');
+    await page.screenshot({ path: info.outputPath('对象信息字段标识符.png') });
     await inspector.getByRole('button', { name: information.close, exact: true }).click();
     await expect(inspector).toHaveCount(0);
     await expect(page.getByRole('gridcell', { name: cellName, exact: true }).first()).toBeVisible();

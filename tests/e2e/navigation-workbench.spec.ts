@@ -152,7 +152,7 @@ function register(): void {
           return { ok: true, result: undefined };
         }
         const read = ['connections.open', 'connections.close', 'metadata.databases', 'metadata.objects', 'metadata.table',
-          'metadata.tableElements', 'table.page', 'metadata.ddl', 'mysql.view.dependencies', 'table.incomingReferences', 'query.objectDefinition'].includes(command);
+          'metadata.tableElements', 'table.page', 'metadata.ddl', 'mysql.view.dependencies', 'table.incomingReferences', 'query.objectDefinition', 'workbench.resolve'].includes(command);
         if (read) {
           if ((payload.input.id ?? payload.input.connectionId) !== input.id) throw Error('合成读取拒绝其它连接');
           const profiles = await original(event, { command: 'connections.list', input: {} }) as { ok: boolean; result?: { id: string; host: string; port: number; user: string }[] }; check(event);
@@ -169,6 +169,11 @@ function register(): void {
           if (command === 'metadata.objects') {
             if (hold) { call.released = false; return new Promise(finish => held.push({ call, finish })); }
             return { ok: true, result: objects };
+          }
+          if (command === 'workbench.resolve') {
+            if (!database || !name || !['table', 'view'].includes(call.kind ?? '') ||
+                !objects.some(item => item.name === name && item.kind === call.kind)) throw Error('打开目标必须是本例目录中的表或视图');
+            return { ok: true, result: payload.input };
           }
           if (command === 'query.objectDefinition') {
             const taskId = payload.input.taskId;
@@ -588,8 +593,8 @@ function register(): void {
     await main(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1140, 680); });
     await expect.poll(() => runtime.page.evaluate(() => innerWidth)).toBe(1140);
     await expect(pane).toHaveAttribute('data-layout', 'docked');
+    await expect.poll(async () => Number(await resize.getAttribute('aria-valuemax'))).toBeLessThan(510);
     const clamped = Number(await resize.getAttribute('aria-valuemax'));
-    expect(clamped).toBeLessThan(510);
     await expect(resize).toHaveAttribute('aria-valuenow', String(clamped));
     await main(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1024, 680); });
     await expect(pane).toHaveAttribute('data-layout', 'overlay');
@@ -645,6 +650,69 @@ function register(): void {
     await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.releaseObjects([{ kind: 'table', name: '刷新后新对象' }]));
     await expect(browser().locator('.object-list-row')).toHaveCount(1); await expect(browser().locator('.object-list-row')).toContainText('刷新后新对象');
     await expect(old).toHaveCount(0); await originalPreserved();
+  });
+
+  test('信息窗格搜索并分页查看标识符，打开原视图，拒绝迟到的旧库目录', async () => {
+    const t = objectInformationZh;
+    const pane = runtime.page.getByRole('complementary', { name: t.title, exact: true });
+    const identifiers = pane.getByRole('region', { name: t.identifiers, exact: true });
+    const search = identifiers.getByRole('searchbox', { name: t.searchRelationIdentifiers, exact: true });
+    const mode = pane.getByRole('button', { name: t.identifiers, exact: true });
+    await openTree();
+    await row('database').locator('.tree-label').click({ button: 'right' });
+    await runtime.page.keyboard.press('Escape');
+    await native('object-information');
+    const originalCalls = (await audit()).calls;
+    await expect(mode).toBeVisible();
+    expect((await audit()).calls).toEqual(originalCalls);
+    await main((_) => {
+      const audit = (globalThis as AuditRoot).__navigationWorkbenchAudit!;
+      audit.replaceObjects(Array.from({ length: 51 }, (_, i) => ({ kind: 'table', name: '目录_' + String(i).padStart(2, '0') })));
+    });
+    await mode.click();
+    await expect(identifiers.getByRole('status')).toContainText(t.identifierRange(1, 50, 51));
+    await identifiers.getByRole('button', { name: t.nextIdentifiers, exact: true }).click();
+    await expect(identifiers.getByRole('list')).toContainText('目录_50');
+    await search.fill('目录_03');
+    await expect(identifiers.getByRole('status')).toContainText(t.identifierRange(1, 1, 1));
+    await expect(identifiers.getByRole('listitem')).toHaveCount(1);
+    expect((await audit()).calls.filter(call => call.command === 'metadata.objects').map(call => call.database)).toEqual([alpha]);
+
+    await main(() => (globalThis as AuditRoot).__navigationWorkbenchAudit!.holdObjects());
+    await pane.getByRole('button', { name: t.refresh, exact: true }).click();
+    await expect.poll(async () => (await audit()).pending).toBe(1);
+    await row('connection').locator('.tree-label').click({ button: 'right' });
+    await runtime.page.keyboard.press('Escape');
+    await expect(mode).toHaveCount(0);
+    const special = '导航.视`图';
+    await runtime.desktop.evaluate((_, name) => (globalThis as AuditRoot).__navigationWorkbenchAudit!.releaseObjects([{ kind: 'view', name }]), special);
+    await expect(identifiers).toHaveCount(0);
+    await row('database').locator('.tree-label').click({ button: 'right' });
+    await runtime.page.keyboard.press('Escape');
+    await expect(identifiers.getByRole('listitem')).toHaveCount(1);
+    const copy = identifiers.getByRole('button', { name: t.copyIdentifier(special), exact: true });
+    const clipboard = await copy.evaluate(button => {
+      if (Object.hasOwn(document, 'execCommand') || !(button instanceof HTMLButtonElement)) throw Error('复制捕获不可用');
+      const data = new DataTransfer();
+      Object.defineProperty(document, 'execCommand', { configurable: true, value(command: string) {
+        if (command !== 'copy') throw Error('只捕获本次标识符复制');
+        document.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }));
+        return true;
+      } });
+      try { button.click(); return data.getData('text/plain'); }
+      finally { Reflect.deleteProperty(document, 'execCommand'); }
+    });
+    expect(clipboard).toBe('`' + alpha + '`.`导航.视``图`');
+    await main(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1024, 680); });
+    await expect(pane).toHaveAttribute('data-layout', 'overlay');
+    await expect.poll(() => identifiers.evaluate(element => element.scrollWidth - element.clientWidth)).toBe(0);
+    await runtime.page.screenshot({ path: info.outputPath('数据库标识符.png') });
+    await identifiers.getByRole('button', { name: t.openIdentifier(special), exact: true }).press('Enter');
+    await expect(runtime.page.locator('.table-tab:visible .results-grid')).toBeVisible();
+    expect((await audit()).calls.filter(call => call.command === 'workbench.resolve')).toEqual([
+      { command: 'workbench.resolve', database: alpha, name: special, kind: 'view', released: true },
+    ]);
+    await originalPreserved();
   });
 
   test('最小窗口及600侧栏明暗布局无横向溢出，更多菜单支持键盘和真实帮助入口', async () => {
