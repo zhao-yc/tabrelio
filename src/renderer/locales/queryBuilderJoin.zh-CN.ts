@@ -18,4 +18,9 @@ export const queryBuilderJoinZh = {
   joinChooseField: '请选择字段',
   joinRemovePair: (index: number) => '删除第 ' + index + ' 条比较', joinRemoveLast: '移除最后一个关联来源',
   joinReferenced: '最后一个来源仍被筛选、排序或汇总引用，请先移除对应配置。',
+  fieldMapping: '可视化匹配字段', mappingSource: '已加入的来源', mappingLeftSearch: '搜索已加入字段', mappingRightSearch: '搜索目标字段',
+  mappingHint: '把左侧字段拖到右侧，或依次选择两侧字段，可添加等号条件。',
+  mappingEmpty: '没有匹配字段', mappingPairs: '已配置的字段比较', mappingDuplicate: '已存在相同的等号条件。',
+  mappingLimit: '已达到本步条件上限，可先删除现有条件。',
+  mappingAdded: (left: string, right: string) => `已添加条件 ${left} = ${right}`,
 } as const;

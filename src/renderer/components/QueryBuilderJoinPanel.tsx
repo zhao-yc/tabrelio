@@ -5,6 +5,7 @@ import { queryBuilderAlias, queryBuilderColumnKey, queryBuilderJoinKinds, queryB
 import { queryBuilderJoinZh as text } from '../locales/queryBuilderJoin.zh-CN';
 import { tableFilterGroupAfterChange, tableFilterGroupSummary, tableFilterGroupWithMode } from '../tableFilterGroups';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
+import { JoinFieldMapping, type JoinFieldLinkResult } from './JoinFieldMapping';
 import { Field } from './ui';
 import './QueryBuilderJoinPanel.css';
 
@@ -45,8 +46,8 @@ export function QueryBuilderJoinPanel<Step extends QueryBuilderJoinConditions>({
     <p className="muted small">{text.joinHint}</p>
     {joins.map(({ source: right, step }, index) => {
       const alias = queryBuilderAlias(index + 1);
-      const earlier = [source, ...joins.slice(0, index).map(item => item.source)].flatMap((item, position) =>
-        item.columns.map(column => queryBuilderColumnKey(position, column.name)));
+      const earlierSources = [source, ...joins.slice(0, index).map(item => item.source)];
+      const earlier = earlierSources.flatMap((item, position) => item.columns.map(column => queryBuilderColumnKey(position, column.name)));
       function changeKind(kind: QueryBuilderJoinConditions['kind']) {
         if (kind === step.kind) return;
         if (kind === 'CROSS') {
@@ -62,13 +63,24 @@ export function QueryBuilderJoinPanel<Step extends QueryBuilderJoinConditions>({
         change(index, { ...step, pairs: step.pairs.map((pair, i) => i === position ? { ...pair, ...patch } : pair) });
       }
       /** 保留原比较的分组位置，删除时重排索引，新增时放在根组末尾。 */
-      function resizePairs(position?: number) {
+      function resizePairs(position?: number, pair: QueryBuilderJoinConditions['pairs'][number] = { left: '', right: '', operator: '=' }) {
         const rules = manualJoinOnRules(step.pairs.length + (position === undefined ? 1 : 0));
         const previous = rules.slice(0, step.pairs.length);
-        const pairs = position === undefined ? [...step.pairs, { left: '', right: '', operator: '=' as const }] :
+        const pairs = position === undefined ? [...step.pairs, pair] :
           step.pairs.filter((_, i) => i !== position);
         const group = tableFilterGroupAfterChange(previous, rules.filter((_, i) => i !== position), step.group, step.mode);
         change(index, { ...step, pairs, group });
+      }
+      /** 空行保留原条件索引。新比较沿原增行路径进入 ON 根组。 */
+      function linkFields(position: number, column: string, target: string): JoinFieldLinkResult {
+        const left = queryBuilderColumnKey(position, column);
+        if (step.pairs.some(pair => pair.left === left && pair.right === target && pair.operator === '=')) return 'duplicate';
+        const empty = step.pairs.findIndex(pair => !pair.left && !pair.right);
+        const pair = { left, right: target, operator: '=' as const };
+        if (empty >= 0) editPair(empty, pair);
+        else if (step.pairs.length < queryBuilderJoinLimits.pairs) resizePairs(undefined, pair);
+        else return 'limit';
+        return 'added';
       }
       return <fieldset className="query-builder-join-step" key={alias} aria-label={text.joinStep(alias)}><legend>{text.joinStep(alias)} · {right.target.table}</legend>
         <fieldset disabled={editing !== undefined}>
@@ -83,6 +95,10 @@ export function QueryBuilderJoinPanel<Step extends QueryBuilderJoinConditions>({
               <option value="all">AND</option><option value="any">OR</option></select></Field>}
           </div>
           {step.kind === 'CROSS' ? <p className="muted small">{text.crossHint}</p> : <>
+          <JoinFieldMapping revision={step} disabled={disabled || editing !== undefined} current={current} link={linkFields}
+            left={earlierSources.map((item, position) => ({ label: queryBuilderAlias(position) + ' · ' + item.target.table, columns: item.columns }))}
+            right={{ label: alias + ' · ' + right.target.table, columns: right.columns }}
+            pairs={step.pairs.filter(pair => pair.left && pair.right)}/>
           {step.pairs.map((pair, position) => <div className="filter-inputs" key={position}>
             <select aria-label={text.joinLeft(position + 1)} value={pair.left} onChange={event => editPair(position, { left: event.target.value })}>
               <option value="">{text.joinChooseField}</option>

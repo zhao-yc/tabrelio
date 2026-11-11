@@ -16,6 +16,7 @@ import { queryViewDraftZh } from '../../src/renderer/locales/queryViewDraft.zh-C
 import { queryBuilderPaginationZh as pagination } from '../../src/renderer/locales/queryBuilderPagination.zh-CN';
 import { queryBuilderProjectionZh as projection } from '../../src/renderer/locales/queryBuilderProjection.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
+import { linkJoinFields } from './join-field-mapping';
 
 const enabled = process.env.DBARK_JOIN_ORDER_NATIVE === '1';
 test.skip(!enabled, 'JOIN排序离线原生组件专项默认关闭，未执行');
@@ -78,8 +79,11 @@ for (const scenario of ['open', 'single', 'cancel', 'stale', 'view-stale'] as co
         await builder.getByRole('button', { name: text.manualTables, exact: true }).click();
         await builder.getByRole('combobox', { name: text.manualTable, exact: true }).selectOption('payments');
         await builder.getByRole('button', { name: text.manualRead, exact: true }).click();
-        await builder.getByRole('combobox', { name: text.manualChild(1), exact: true }).selectOption('id');
-        await builder.getByRole('combobox', { name: text.manualParent(1), exact: true }).selectOption('order_id');
+        const mapping = await linkJoinFields(builder, 0, 'id', 'order_id', 'drag');
+        await expect(builder.getByRole('combobox', { name: text.manualChild(1), exact: true })).toHaveValue('id');
+        await expect(builder.getByRole('combobox', { name: text.manualParent(1), exact: true })).toHaveValue('order_id');
+        await mapping.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('mysql-builder-field-mapping.png') });
         await builder.getByText(projection.order, { exact: true }).click();
         await builder.getByRole('button', { name: projection.earlier('p.order_id'), exact: true }).click();
         await builder.getByRole('textbox', { name: projection.alias('p.order_id'), exact: true }).fill('目标订单');
@@ -377,8 +381,8 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       await step(() => third.getByRole('button', { name: text.manualTables, exact: true }).click());
       await step(() => third.getByRole('combobox', { name: text.manualTable, exact: true }).selectOption('other_payments'));
       await step(() => third.getByRole('button', { name: text.manualRead, exact: true }).click());
-      await step(() => third.getByRole('combobox', { name: text.additionalChild(1), exact: true }).selectOption('order_id'));
-      await step(() => third.getByRole('combobox', { name: text.manualParent(1), exact: true }).selectOption('order_id'));
+      await step(() => linkJoinFields(third, 1, 'order_id', 'order_id', 'keyboard'));
+      await step(() => expect(third.getByRole('combobox', { name: text.additionalPairSource(1), exact: true })).toHaveValue('1'));
       await step(() => third.getByRole('combobox', { name: text.joinKind, exact: true }).selectOption('LEFT'));
       await step(() => third.getByText(text.additionalColumns, { exact: false }).click());
       await step(() => third.getByRole('checkbox', { name: 'total', exact: true }).check());

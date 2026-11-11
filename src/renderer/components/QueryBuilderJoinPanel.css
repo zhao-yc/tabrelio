@@ -11,3 +11,36 @@
 :is(.query-builder-join-step, .sqlite-builder-filter) > .expanded-filter-panel .filter-chip > span {
   overflow-wrap: anywhere;
 }
+
+.join-field-mapping { margin-block: 8px 12px; }
+.join-field-mapping-body {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.join-field-mapping-body p { margin: 0 0 8px; color: var(--muted); }
+.join-field-mapping-body p[role="status"] { margin: 8px 0 0; color: var(--text); }
+.join-field-mapping-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.join-field-mapping-sides > div { min-width: 0; display: grid; grid-template-rows: 32px 30px auto; gap: 6px; }
+.join-field-mapping-sides :is(select, input) { width: 100%; min-width: 0; padding: 4px 7px; line-height: 18px; }
+.join-field-mapping-sides strong { align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.join-field-mapping-list {
+  height: 126px; overflow: auto; padding: 3px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--surface);
+}
+.join-field-mapping-list > button {
+  display: block; width: 100%; min-height: 25px; padding-inline: 7px;
+  border: 1px solid transparent; background: transparent; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace;
+}
+.join-field-mapping-list > button[draggable="true"] { cursor: grab; }
+.join-field-mapping-list > button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--surface-2); }
+.join-field-mapping-list > button:not([aria-disabled="true"]):hover { background: var(--surface-2); border-color: var(--line); }
+.join-field-mapping-list > span { display: block; padding: 6px; color: var(--muted); }
+.join-field-mapping-pairs { list-style: none; margin: 8px 0 0; padding: 0; max-height: 100px; overflow: auto; }
+.join-field-mapping-pairs li { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; }
+.join-field-mapping-pairs code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 6px; }
+.join-field-mapping-pairs code:first-child { text-align: right; }
+.join-field-mapping-pairs li > span { color: var(--accent); }

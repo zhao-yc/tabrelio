@@ -20,6 +20,8 @@ import { queryViewDraftZh as viewDraft } from '../../src/renderer/locales/queryV
 import { sqliteObjectsZh as objects } from '../../src/renderer/locales/sqliteObjects.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
+import { linkJoinFields } from './join-field-mapping';
+
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_SQLITE_QUERY_BUILDER_NATIVE !== '1', '需显式启用 SQLite 查询构建器专项');
 
@@ -238,11 +240,20 @@ test('SQLite 从新建查询选择表或视图，真实预览并拒绝已变化�
       await joinPanel.getByRole('button', { name: text.joinAdd, exact: true }).click();
       const step = joinPanel.getByRole('group', { name: text.joinStep(alias), exact: true });
       await step.getByLabel(text.joinKind, { exact: true }).selectOption('LEFT');
-      await step.getByLabel(text.joinLeft(1), { exact: true }).selectOption(left);
-      await step.getByLabel(text.joinRight(1), { exact: true }).selectOption('id');
+      const panel = await linkJoinFields(step, alias === 't2' ? 0 : 1, 'id', 'id', alias === 't2' ? 'drag' : 'keyboard');
+      await expect(step.getByLabel(text.joinLeft(1), { exact: true })).toHaveValue(left);
+      if (alias === 't2') {
+        await panel.getByRole('group').nth(0).getByRole('button', { name: 'id', exact: true }).press('Enter');
+        await panel.getByRole('group').nth(1).getByRole('button', { name: 'id', exact: true }).press('Enter');
+        await expect(panel.getByRole('status')).toHaveText(text.mappingDuplicate);
+        await expect(step.getByLabel(text.joinLeft(2), { exact: true })).toHaveCount(0);
+        await panel.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('sqlite-builder-field-mapping.png') });
+      }
     }
     const third = joinPanel.getByRole('group', { name: text.joinStep('t3'), exact: true });
-    for (const [position, right, operator] of [[2, 'alternate_id', '='], [3, 'id', '<=']] as const) {
+    await linkJoinFields(third, 0, 'id', 'alternate_id', 'keyboard');
+    for (const [position, right, operator] of [[3, 'id', '<=']] as const) {
       await third.getByRole('button', { name: text.joinAddPair, exact: true }).click();
       await third.getByLabel(text.joinLeft(position), { exact: true }).selectOption('t1.id');
       await third.getByLabel(text.joinRight(position), { exact: true }).selectOption(right);

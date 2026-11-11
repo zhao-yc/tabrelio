@@ -665,8 +665,8 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
     <UsageHelp><p>{{ LEFT: text.leftHint, RIGHT: text.rightHint, INNER: text.innerHint, CROSS: joinText.crossHint }[selection.kind]}</p>
       {(selection.kind === 'LEFT' || selection.kind === 'RIGHT') && <p>{text.unmatchedHint}</p>}{!selection.manual && <p>{text.relationship}</p>}<p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
     {selection.kind !== 'CROSS' && selection.manual && parent && <ManualJoinPairFields selection={selection.manual} child={origin.intent.source} parent={parent.info} disabled={busy || unavailable}
-      onMode={on => revise({ ...selection, manual: { ...selection.manual!, on } })} onGroups={trigger => openOnGroups(trigger)}
-      onAdd={() => { const manual = selection.manual!; revise({ ...selection, manual: replaceManualJoinPairs(manual, [...manual.pairs, newManualJoinPair()]) }); }}
+      current={editable} onMode={on => revise({ ...selection, manual: { ...selection.manual!, on } })} onGroups={trigger => openOnGroups(trigger)}
+      onAppend={pair => { const manual = selection.manual!; revise({ ...selection, manual: replaceManualJoinPairs(manual, [...manual.pairs, { ...pair, id: uid() }]) }); }}
       onChange={(id, patch) => { const manual = selection.manual!; revise({ ...selection, manual: { ...manual, pairs: manual.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) } }); }}
       onRemove={id => { const manual = selection.manual!; revise({ ...selection, manual: replaceManualJoinPairs(manual, manual.pairs.filter(pair => pair.id !== id)) }); }}/>}
     {selection.manual && parent && <>
@@ -674,7 +674,7 @@ export function TableForeignKeyJoinDialog({ intent, fixed, manual = false, singl
       {selection.additional.map((draft, index) => <AdditionalJoinFields key={draft.id} draft={draft} index={index}
         sources={[origin.intent.source, parent.info, ...selection.additional.slice(0, index).flatMap(step => step.info ? [step.info] : [])]}
         databases={databases} disabled={busy || unavailable} canRetarget={canRetargetAdditional(index)} targetReferenced={index === selection.additional.length - 1 && !canRetargetAdditional(index)}
-        showColumns={!selection.summaryEnabled} onRead={kind => run(kind, index)} onGroups={trigger => openOnGroups(trigger, index)}
+        showColumns={!selection.summaryEnabled} current={editable} onRead={kind => run(kind, index)} onGroups={trigger => openOnGroups(trigger, index)}
         onChange={value => {
           if ((value.database !== draft.database || value.table !== draft.table) && !canRetargetAdditional(index)) return;
           revise({ ...selection, additional: selection.additional.map(step => step === draft ? value : step) });

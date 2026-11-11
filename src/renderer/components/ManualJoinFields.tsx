@@ -10,6 +10,7 @@ import { foreignKeyJoinLimits, isManualJoinOperator, manualJoinAlias, manualJoin
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { queryBuilderJoinZh as joinText } from '../locales/queryBuilderJoin.zh-CN';
 import { uid } from '../lib';
+import { JoinFieldMapping, type JoinFieldLinkResult } from './JoinFieldMapping';
 import '../childReferences.css';
 
 export interface ManualJoinSelection {
@@ -82,15 +83,37 @@ export function replaceManualJoinPairs<T extends ManualJoinSelection>(draft: T, 
 }
 
 /** 输入是列身份，空选项保留未完成状态，不能作为 SQL 表达式。 */
-export function ManualJoinPairFields({ selection, child, parent, disabled, sourceOptions, onAdd, onChange, onRemove, onMode, onGroups }: {
+export function ManualJoinPairFields({ selection, child, parent, disabled, sourceOptions, current, onAppend, onChange, onRemove, onMode, onGroups }: {
   selection: ManualJoinSelection; child: TableInfo; parent: TableInfo; disabled: boolean;
   sourceOptions?: { defaultSource: number; tables: readonly TableInfo[] };
   onMode(on: ManualJoinOn): void; onGroups(trigger: HTMLButtonElement): void;
-  onAdd(): void; onChange(id: string, patch: Partial<AdditionalJoinPair>): void; onRemove(id: string): void;
+  current(): boolean; onAppend(pair: AdditionalJoinPair): void;
+  onChange(id: string, patch: Partial<AdditionalJoinPair>): void; onRemove(id: string): void;
 }) {
   const mode = selection.on?.mode ?? 'all', group = selection.on?.group;
+  const sources = sourceOptions?.tables ?? [child], defaultSource = sourceOptions?.defaultSource ?? 0;
+  const pairLimit = group ? FILTER_LIMITS.conditions : foreignKeyJoinLimits.manualPairs;
+  const relation = (info: TableInfo, index: number) => ({
+    label: manualJoinAlias(index) + ' · ' + info.database + '.' + info.name, columns: info.columns,
+  });
+  /** 复用原手动条件 ID，保证添加或填充空行后已有括号分组仍指向原比较。 */
+  function linkFields(source: number, child: string, parent: string): JoinFieldLinkResult {
+    if (selection.pairs.some(pair => (pair.source ?? defaultSource) === source && pair.child === child &&
+        pair.parent === parent && (pair.operator ?? '=') === '=')) return 'duplicate';
+    const empty = selection.pairs.find(pair => !pair.child && !pair.parent);
+    const pair = { child, parent, operator: '=' as const, ...(sourceOptions ? { source } : {}) };
+    if (empty) onChange(empty.id, pair);
+    else if (selection.pairs.length < pairLimit) onAppend(pair);
+    else return 'limit';
+    return 'added';
+  }
   return <fieldset disabled={disabled}>
     <legend>{text.manualPairs}</legend>
+    <JoinFieldMapping revision={selection} disabled={disabled} initialSource={defaultSource} current={current} link={linkFields}
+      left={sources.map(relation)} right={relation(parent, sources.length)}
+      pairs={selection.pairs.filter(pair => pair.child && pair.parent).map(pair => ({
+        left: manualJoinAlias(pair.source ?? defaultSource) + '.' + pair.child, right: pair.parent, operator: pair.operator ?? '=',
+      }))}/>
     <label>{text.manualOnMode}<select value={mode} onChange={event => {
       const next = event.target.value;
       if (next === 'all' || next === 'any') onMode({ mode: next, group: tableFilterGroupWithMode(group, next) });
@@ -132,7 +155,7 @@ export function ManualJoinPairFields({ selection, child, parent, disabled, sourc
         <button aria-label={text.manualRemove(index + 1)} onClick={() => onRemove(pair.id)}>×</button>
       </div>;
     })}
-    <button disabled={selection.pairs.length >= (group ? FILTER_LIMITS.conditions : foreignKeyJoinLimits.manualPairs)} onClick={onAdd}>{text.manualAddPair}</button>
+    <button disabled={selection.pairs.length >= pairLimit} onClick={() => onAppend({ child: '', parent: '' })}>{text.manualAddPair}</button>
   </fieldset>;
 }
 
@@ -154,9 +177,10 @@ export function manualJoinSteps(drafts: readonly AdditionalJoinDraft[]): ManualJ
 }
 
 /** 追加表复用目录和字段对控件。每个步骤的输出可单独增减。 */
-export function AdditionalJoinFields({ draft, index, sources, databases, disabled, canRetarget, targetReferenced, showColumns, onRead, onChange, onRemove, onGroups }: {
+export function AdditionalJoinFields({ draft, index, sources, databases, disabled, canRetarget, targetReferenced, showColumns, current, onRead, onChange, onRemove, onGroups }: {
   draft: AdditionalJoinDraft; index: number; sources: readonly TableInfo[]; databases: readonly string[];
   disabled: boolean; canRetarget: boolean; targetReferenced: boolean; showColumns: boolean;
+  current(): boolean;
   onGroups(trigger: HTMLButtonElement): void;
   onRead(kind: 'databases' | 'tables' | 'preview'): void; onChange(draft: AdditionalJoinDraft): void; onRemove(): void;
 }) {
@@ -179,8 +203,8 @@ export function AdditionalJoinFields({ draft, index, sources, databases, disable
     </select></label>
     {draft.kind === 'CROSS' && <p className="muted small">{joinText.crossHint}</p>}
     {draft.kind !== 'CROSS' && child && draft.info && <ManualJoinPairFields selection={draft} child={child} parent={draft.info} disabled={disabled} sourceOptions={{ defaultSource: draft.source, tables: sources }}
-      onMode={on => onChange({ ...draft, on })} onGroups={onGroups}
-      onAdd={() => onChange(replaceManualJoinPairs(draft, [...draft.pairs, newManualJoinPair()]))}
+      current={current} onMode={on => onChange({ ...draft, on })} onGroups={onGroups}
+      onAppend={pair => onChange(replaceManualJoinPairs(draft, [...draft.pairs, { ...pair, id: uid() }]))}
       onChange={(id, patch) => onChange({ ...draft, pairs: draft.pairs.map(pair => pair.id === id ? { ...pair, ...patch } : pair) })}
       onRemove={id => onChange(replaceManualJoinPairs(draft, draft.pairs.filter(pair => pair.id !== id)))}/>}
     {showColumns && draft.info && <AdditionalJoinColumns key={draft.info.database + '\0' + draft.info.name}

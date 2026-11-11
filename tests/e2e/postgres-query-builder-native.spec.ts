@@ -17,6 +17,8 @@ import { viewQueryInspectZh as inspect } from '../../src/renderer/locales/viewQu
 import { zh } from '../../src/renderer/locales/zh-CN';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 
+import { linkJoinFields } from './join-field-mapping';
+
 test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true });
 test.skip(process.env.DBARK_POSTGRES_QUERY_BUILDER_NATIVE !== '1', '需显式启用 PostgreSQL 查询构建器专项');
 
@@ -208,8 +210,12 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
       await joinPanel.getByRole('button', { name: text.joinAdd, exact: true }).click();
       const step = joinPanel.getByRole('group', { name: text.joinStep(alias), exact: true });
       await step.getByRole('combobox', { name: text.joinKind, exact: true }).selectOption('LEFT');
-      await step.getByRole('combobox', { name: text.joinLeft(1), exact: true }).selectOption(left);
-      await step.getByRole('combobox', { name: text.joinRight(1), exact: true }).selectOption('id');
+      const panel = await linkJoinFields(step, alias === 't2' ? 0 : 1, 'id', 'id', alias === 't2' ? 'drag' : 'keyboard');
+      await expect(step.getByRole('combobox', { name: text.joinLeft(1), exact: true })).toHaveValue(left);
+      if (alias === 't2') {
+        await panel.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: info.outputPath('postgres-builder-field-mapping.png') });
+      }
     }
     await addJoin('t2', 't1.id');
     await addJoin('t3', 't2.id');
@@ -220,7 +226,7 @@ test('PostgreSQL 新建查询按 schema 选表或视图，在真实只读事务�
       await third.getByRole('combobox', { name: text.joinRight(position), exact: true }).selectOption(right);
       await third.getByRole('combobox', { name: text.joinOperator(position), exact: true }).selectOption(operator);
     }
-    await addPair(2, 'alternate_id', '=');
+    await linkJoinFields(third, 0, 'id', 'alternate_id', 'keyboard');
     await addPair(3, 'id', '<=');
     const openGroups = third.getByRole('button', { name: text.joinGroups, exact: true });
     const groupEditor = third.getByRole('region', { name: text.joinGroupTitle, exact: true });
