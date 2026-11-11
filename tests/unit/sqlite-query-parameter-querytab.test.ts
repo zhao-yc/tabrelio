@@ -20,11 +20,13 @@ function fixture(continueOnError = false) {
   const workspace = { settings: { tabs: [tab], activeTabId: 'tab' }, connections: [profile], connectionVersions: { sqlite: 1 }, activeJobs: {} as Record<string, boolean>, setBusy: vi.fn(), setDirty: vi.fn() };
   const observe = () => { const form = ctx?.sqliteParameterForm.current; if (form) { try { ctx.handlers.assertSqliteParameterForm(form); } catch {} } };
   workspace.setBusy.mockImplementation((id: string, busy: boolean) => { workspace.activeJobs[id] = busy; observe(); });
-  const invoke = vi.fn(async (command: string, _input: any): Promise<any> => command === 'query.parameterNames' ? metadata() : command === 'query.completionState' ? { databaseKnown: true, database: 'main', broken: false, busy: false } : command === 'query.executeParameterized' ? { results: [], elapsedMs: 1, transactionOpen: true } : (() => { throw Error('意外IPC'); })());
+  const invoke = vi.fn(async (command: string, input: any): Promise<any> => command === 'query.parameterNames'
+    ? {...metadata(), ...(input.sqliteNavicatParameters ? {sqliteNavicatParameters: true} : {})}
+    : command === 'query.completionState' ? { databaseKnown: true, database: 'main', broken: false, busy: false } : command === 'query.executeParameterized' ? { results: [], elapsedMs: 1, transactionOpen: true } : (() => { throw Error('意外IPC'); })());
   const owner = { begin: vi.fn(() => ({})), recognized: vi.fn(), observe: vi.fn(), bind: vi.fn(), settled: vi.fn(() => false), close: vi.fn(), beforeLedger: vi.fn() }, ensureSession = vi.fn(async () => ctx.sessionRef.current), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   ctx = createContext({ sqlite: true, sqliteStatementTimeoutMs: 0, sqliteZh, parameterZh, queryContextZh, appDialogSelector, tab, settings: { resultLimit: 10 }, useWorkspace: { getState: () => workspace }, document: { querySelector: () => modal ? {} : null }, alive: { current: true }, closeRequestRef: { current: undefined }, busyRef: { current: false }, fileSource: { isBusy: () => fileBusy }, formatting: { current: null }, sessionRef: { current: 'sqlite:s' }, parameterSession: { current: '' }, sqliteParameterForm: { current: null }, parameterFailureSource: { current: undefined }, parameterContinueOnError: { current: false }, parameterCollectWarnings: { current: false }, parameterReusePort: { current: null }, parameterReuse: { current: owner }, continueOnError, collectWarnings: true, parameterReuseOwner: () => owner, parameterReuseInput: () => null,
     querySource: () => sql, clearFailureSource: vi.fn(), captureFailureSource: () => undefined, invalidateResultSelection: vi.fn(), setParameterSource: (source: string | null) => { ctx.parameterSource = source; }, uid: () => 'id-' + ++sequence, task: { current: '' }, cancelledQuery: { current: '' }, ensureSession, flushSettings, handleQueryError, invoke, rememberDatabase: vi.fn(), queryDatabaseFromSession: (state: any) => ({ state: 'known', database: state.database }), errorMessage: (reason: any) => reason.message, zh: { query: { text001: '请输入SQL' } },
-    setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(), explainSource: { current: '' }, confirmParameterReuse: vi.fn(),
+    setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(), setInterruptedStatus: vi.fn(), explainSource: { current: '' }, confirmParameterReuse: vi.fn(),
   });
   expect(methods.size).toBe(names.length); runInContext(ts.transpileModule([...methods.values()].join('\n') + '\nglobalThis.handlers={' + names.join(',') + '};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, ctx);
   runInContext('globalThis.bind=(sqliteParameterDialog,parameterSource)=>({onExecute:' + bindings.get('onExecute') + ',onClose:' + bindings.get('onClose') + ',loadNames:' + bindings.get('loadNames') + '});', ctx);
@@ -34,6 +36,19 @@ function fixture(continueOnError = false) {
 }
 
 describe('SQLite 参数执行原表单与物理会话真实QueryTab处理器', () => {
+  it('重新识别后只提交最新的 SQLite Navicat 模式及原模板', async () => {
+    const f = fixture(), sql = 'SELECT [$value], :value';
+    f.model(sql);
+    const form = await f.ready(), callbacks = f.ctx.bind(form, form.source);
+    await callbacks.loadNames(true);
+    expect(f.invoke).toHaveBeenCalledWith('query.parameterNames', {sessionId: 'sqlite:s', sql, sqliteNavicatParameters: true});
+    const parameters = [{name: 'value', type: 'null'}];
+    expect(() => callbacks.onExecute(parameters)).toThrow(parameterZh.sqliteSourceChanged);
+    callbacks.onExecute(parameters, true);
+    await vi.waitFor(() => expect(f.ctx.busyRef.current).toBe(false));
+    expect(f.runs()).toHaveLength(1);
+    expect(f.runs()[0][1]).toMatchObject({sql, parameters, sqliteNavicatParameters: true});
+  });
   it('明确打开仅捕获选区/全文并冻结false开关，原参数Modal不会阻止识别和执行', async () => {
     const f = fixture(); f.ctx.handlers.openParameters(); const form = f.ctx.sqliteParameterForm.current; expect(form.source).toBe('SELECT :value'); expect(f.invoke).not.toHaveBeenCalled(); expect(f.ctx.parameterContinueOnError.current).toBe(false); expect(f.ctx.parameterCollectWarnings.current).toBe(false); f.modal(true); await f.ctx.handlers.loadParameterNames(form); expect(f.invoke.mock.calls[0]).toEqual(['query.parameterNames', { sessionId: 'sqlite:s', sql: form.source }]); await f.submit(form); expect(f.runs()).toHaveLength(1); expect(f.runs()[0][1]).toMatchObject({ sessionId: 'sqlite:s', sql: 'SELECT :value', parameters: [{ name: 'value', type: 'date', value: '0001-01-01' }] }); expect(Object.hasOwn(f.runs()[0][1], 'continueOnError')).toBe(false); expect(Object.hasOwn(f.runs()[0][1], 'collectWarnings')).toBe(false); expect(f.workspace.setDirty).toHaveBeenCalledWith('tab', true);
   });

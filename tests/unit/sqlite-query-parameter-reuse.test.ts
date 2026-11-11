@@ -7,6 +7,15 @@ const info = (): QueryParameterNames => ({ dialect: 'sqlite', names: ['value'], 
 const params: QueryParameter[] = [{ name: 'value', type: 'date', value: '0001-01-01' }];
 function fixture() { let scope: QueryParameterReuseScope | null = { tabId: 'tab', connectionId: 'sqlite', connectionVersion: 1, sessionId: 'sqlite:s', editorIdentity: {}, modelIdentity: {}, modelVersion: 1, source: 'SELECT :value', rangeIdentity: 'all', savedSourceIdentity: null, fileSourceIdentity: null, defaultDatabaseIdentity: {} }; const cache = new QueryParameterReuseCache(() => scope), lease = cache.setOptIn(cache.begin()!, true)!; return { cache, lease, scope: () => scope!, set(next: QueryParameterReuseScope | null) { scope = next; cache.observe(); } }; }
 describe('SQLite 参数RAM元数据分发与隐私边界', () => {
+  it('仅在同一个明确识别模式下读取上一组值', () => {
+    const {cache, lease} = fixture();
+    const navicat = {...info(), sqliteNavicatParameters: true as const};
+    expect(cache.remember(lease, navicat, params)).toBe(true);
+    expect(cache.read(lease, info())).toBeNull();
+    expect(cache.read(lease, navicat)).toEqual(params);
+    expect(() => queryParameterInfo({...navicat, dialect: 'mysql'})).toThrow();
+    expect(() => queryParameterInfo({...navicat, sqliteNavicatParameters: false})).toThrow();
+  });
   it('按SQLite校验并保留原typed副本，不降级MySQL日期或把值变字面量', () => { const f = fixture(); expect(f.cache.remember(f.lease, info(), params)).toBe(true); const copy = f.cache.read(f.lease, info())!; expect(copy).toEqual(params); copy[0].value = '后改'; expect(f.cache.read(f.lease, info())).toEqual(params); });
   it('SQLite exact names不暂存extra或missing，失败清原组且不会发布部分参数', () => { const f = fixture(); expect(f.cache.remember(f.lease, info(), params)).toBe(true); expect(f.cache.remember(f.lease, info(), [...params, { name: 'extra', type: 'null' }])).toBe(false); expect(f.cache.read(f.lease, info())).toBeNull(); expect(f.cache.remember(f.lease, info(), [])).toBe(false); });
   it.each(['mysql', 'mariadb', 'absent'] as const)('dialect变为%s再恢复不能复活旧组，方言参与完整指纹', dialect => { const f = fixture(); expect(f.cache.remember(f.lease, info(), params)).toBe(true); const next = { ...info() }; if (dialect === 'absent') delete next.dialect; else next.dialect = dialect; expect(f.cache.read(f.lease, next)).toBeNull(); expect(f.cache.read(f.lease, info())).toBeNull(); expect(f.cache.remember(f.lease, info(), params)).toBe(false); });

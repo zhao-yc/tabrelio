@@ -14,7 +14,7 @@ export interface SqlLexicalMode {
   /** MariaDB 的 MSSQL 模式把方括号当标识符引号，模式未知时必须比较两种解释。 */
   bracketQuotes?: boolean | 'unknown';
 }
-export interface QueryParameterNames extends SqlLexicalMode { names: string[]; warnings: string[]; maxDecimalScale: 30 | 38; allowTimeEndpointFraction: boolean; dialect?: 'mysql' | 'mariadb' | 'sqlite'; }
+export interface QueryParameterNames extends SqlLexicalMode { names: string[]; warnings: string[]; maxDecimalScale: 30 | 38; allowTimeEndpointFraction: boolean; dialect?: 'mysql' | 'mariadb' | 'sqlite'; sqliteNavicatParameters?: true; }
 export const queryParameterLimits = { names: 200, occurrences: 100000, valueBytes: 64 * 1024, totalBytes: 1024 * 1024, sqlBytes: 20 * 1024 * 1024 } as const;
 const encoder = new TextEncoder();
 
@@ -74,14 +74,16 @@ export function validateQueryParameters(parameters: QueryParameter[], maxDecimal
 }
 
 /** 只按可信识别元数据选择验证器；旧无dialect输出保持原MySQL字面量语义。 */
-export function validateQueryParametersForInfo(parameters: readonly QueryParameter[], info: Pick<QueryParameterNames, 'dialect' | 'maxDecimalScale' | 'allowTimeEndpointFraction'> & { names?: readonly string[] }): void {
+export function validateQueryParametersForInfo(parameters: readonly QueryParameter[], info: Pick<QueryParameterNames, 'dialect' | 'maxDecimalScale' | 'allowTimeEndpointFraction' | 'sqliteNavicatParameters'> & { names?: readonly string[] }): void {
   if (!info || typeof info !== 'object' || Array.isArray(info) || ![Object.prototype, null].includes(Object.getPrototypeOf(info))) throw Error('查询参数类型元数据无效');
-  for (const key of Reflect.ownKeys(info)) { const descriptor = Object.getOwnPropertyDescriptor(info, key); if (typeof key !== 'string' || !['names', 'warnings', 'dialect', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'bracketQuotes', 'maxDecimalScale', 'allowTimeEndpointFraction'].includes(key) || !descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error('查询参数类型元数据无效'); }
+  for (const key of Reflect.ownKeys(info)) { const descriptor = Object.getOwnPropertyDescriptor(info, key); if (typeof key !== 'string' || !['names', 'warnings', 'dialect', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'bracketQuotes', 'maxDecimalScale', 'allowTimeEndpointFraction', 'sqliteNavicatParameters'].includes(key) || !descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error('查询参数类型元数据无效'); }
   const dialect = Object.getOwnPropertyDescriptor(info, 'dialect');
   if (dialect && (!dialect.enumerable || !('value' in dialect) || !['mysql', 'mariadb', 'sqlite'].includes(dialect.value))) throw Error('查询参数方言元数据无效');
   const brackets = Object.getOwnPropertyDescriptor(info, 'bracketQuotes');
   if (brackets && (dialect?.value !== 'mariadb' || ![true, false, 'unknown'].includes(brackets.value)))
     throw Error('查询参数方括号模式无效');
+  const sqliteNavicat = Object.getOwnPropertyDescriptor(info, 'sqliteNavicatParameters');
+  if (sqliteNavicat && (dialect?.value !== 'sqlite' || sqliteNavicat.value !== true)) throw Error('SQLite Navicat 参数模式无效');
   if (dialect?.value === 'sqlite') {
     const values = validateSqliteQueryParameters(parameters), names = Object.getOwnPropertyDescriptor(info, 'names');
     if (names) {

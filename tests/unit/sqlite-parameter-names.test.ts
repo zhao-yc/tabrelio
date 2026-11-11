@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { sqliteNamedParameterNames } from '../../src/engine/sqlite/parameters';
+import { sqliteNamedParameterNames, sqliteParameterPlan } from '../../src/engine/sqlite/parameters';
 
 describe('SQLite参数名纯词法与整篇预算', () => {
+  it('显式模板模式才转换方括号值参数，并保留原文偏移、引号和注释', () => {
+    const sql = 'SELECT[$key], :key, [$other], [$1列], "[$quoted]", \'[$literal]\' /* [$block] */ -- [$line]🚢\r\n;';
+    const compiled = 'SELECT :key , :key,  :other , [$1列], "[$quoted]", \'[$literal]\' /* [$block] */ -- [$line]🚢\r\n;';
+    expect(sqliteParameterPlan(sql)).toEqual({sql, names: ['key']});
+    expect(sqliteParameterPlan(sql, true)).toEqual({sql: compiled, names: ['key', 'other']});
+    expect(compiled.length).toBe(sql.length);
+    expect(Buffer.byteLength(compiled)).toBe(Buffer.byteLength(sql));
+    expect(sqliteNamedParameterNames(compiled)).toEqual(['key', 'other']);
+  });
   it('重复与跨语句按首现序返回，不把普通标识符内部美元或引用内假参数算进去', () => {
     expect(sqliteNamedParameterNames('SELECT :z,:a,:z,normal$column,"@quoted",[?方名],`$反名`,\':字;?\';INSERT INTO t VALUES(:a,:tail);')).toEqual(['z', 'a', 'tail']);
   });

@@ -39,7 +39,8 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   const insert = format === 'sql', fixedEncoding = insert || format === 'xlsx' || !!markup;
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
-  const [parameters, setParameters] = useState<QueryParameter[]>(), [editingParameters, setEditingParameters] = useState(false);
+  const [parameterGroup, setParameterGroup] = useState<{values: QueryParameter[]; sqliteNavicatParameters?: true}>();
+  const [editingParameters, setEditingParameters] = useState(false);
   const mapping = {table: insertTable, ...(insert && insertColumns ? {columns: insertColumns.replace(/\r?\n$/, '').split(/\r?\n/)} : {})};
   const sqliteTarget = insert && sqlite ? sqliteQueryInsertTargetSchema.safeParse({database: insertDatabase, ...mapping}) : undefined;
   const postgresTarget = insert && !sqlite ? postgresQueryInsertTargetSchema.safeParse({schema: insertDatabase, ...mapping}) : undefined;
@@ -109,9 +110,11 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       job = acquireWorkspaceBusy(source.tabId);
       if (!current()) throw Error(text.changed);
       const input = {connectionId: source.connectionId, sql: source.sql, taskId, fileToken: file.token,
-        encoding: fixedEncoding ? 'utf8' as const : encoding, ...csvExportOptions(format, delimiter), ...txtExportOptions(format, txtOptions), ...(parameters ? {parameters} : {})};
+        encoding: fixedEncoding ? 'utf8' as const : encoding, ...csvExportOptions(format, delimiter), ...txtExportOptions(format, txtOptions),
+        ...(parameterGroup ? {parameters: parameterGroup.values} : {})};
       const result = sqlite
-        ? await invoke('sqlite.queryExport', {...input, format, ...(sqliteTarget?.success ? {insertTarget: sqliteTarget.data} : {})})
+        ? await invoke('sqlite.queryExport', {...input, format, ...(sqliteTarget?.success ? {insertTarget: sqliteTarget.data} : {}),
+          ...(parameterGroup?.sqliteNavicatParameters ? {sqliteNavicatParameters: true as const} : {})})
         : await invoke('postgres.query.export', {...input, format, database: source.database,
           ...(postgresTarget?.success ? {insertTarget: postgresTarget.data} : {})});
       if (alive.current) setRows(result.rows);
@@ -130,12 +133,15 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   }
 
   if (editingParameters) return <QueryParametersDialog source={source.sql} syntaxHint={sqlite ? sqliteQueryExportZh.parameterHint : postgresZh.parameterHint}
-    initialParameters={parameters} submitLabel={text.applyParameters}
-    loadNames={() => sqlite ? invoke('sqlite.queryExportParameterNames', {sql: source.sql, ...(workbook ? {workbook: true as const} : {})})
+    initialParameters={parameterGroup?.values} submitLabel={text.applyParameters}
+    allowSqliteNavicat={sqlite} initialSqliteNavicatParameters={parameterGroup?.sqliteNavicatParameters}
+    loadNames={sqliteNavicatParameters => sqlite ? invoke('sqlite.queryExportParameterNames', {sql: source.sql,
+      ...(workbook ? {workbook: true as const} : {}), ...(sqliteNavicatParameters ? {sqliteNavicatParameters} : {})})
       : Promise.resolve(postgresExportParameterNames(source.sql, workbook))}
-    onClose={() => setEditingParameters(false)} onExecute={values => {
+    onClose={() => setEditingParameters(false)} onExecute={(values, sqliteNavicatParameters) => {
       if (!current()) throw Error(text.changed);
-      setParameters(values.map(value => ({...value}))); setFile(null); setRows(undefined); setEditingParameters(false);
+      setParameterGroup({values: values.map(value => ({...value})), sqliteNavicatParameters});
+      setFile(null); setRows(undefined); setEditingParameters(false);
     }} />;
 
   return <Modal title={text.title} wide onClose={() => { if (!picking.current && !task.current) onClose(); }}>
@@ -145,7 +151,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       <pre className="result-sql-preview" aria-label={text.source}>{source.sql.slice(0, 4000)}</pre>
       {source.sql.length > 4000 && <p>{text.sourcePrefix}</p>}
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
-      {parameters && <p>{text.parameterCount(parameters.length)}</p>}
+      {parameterGroup && <p>{text.parameterCount(parameterGroup.values.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
         onChange={event => { const value = event.target.value; if (['csv', 'json', 'xlsx', 'sql', ...dataFileFormats].includes(value)) setFormat(value as typeof format); setFile(null); setRows(undefined); }}>
         <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}

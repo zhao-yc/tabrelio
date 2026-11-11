@@ -59,9 +59,9 @@ test('SQLite 多条查询按顺序写入同一本 Excel', async ({}, info) => {
       Object.assign(globalThis, {restoreSqliteQueryWorkbook() { dialog.showOpenDialog = open; dialog.showSaveDialog = save; return [opens, saves]; }});
     }, {database, output});
     const sql = [
-      "SELECT :key AS value, ';' AS value;",
+      "SELECT [$key] AS value, ';' AS value;",
       'WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<205) SELECT i,id,payload FROM n CROSS JOIN workbook_source WHERE id=:key ORDER BY i;',
-      'SELECT :unused AS header WHERE 0;',
+      'SELECT [$unused] AS header WHERE 0;',
     ].join('\n');
     await page.evaluate(async ({id, sql}) => {
       const selected = await window.dbark.invoke('files.choose', {purpose: 'sqlite-database', sqliteConnectionId: id});
@@ -82,10 +82,21 @@ test('SQLite 多条查询按顺序写入同一本 Excel', async ({}, info) => {
     await expect(modal.getByText(text.workbookHint, {exact: true})).toBeVisible();
     await modal.getByRole('button', {name: text.parameters, exact: true}).click();
     const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+    const mode = form.getByRole('checkbox', {name: parameterZh.sqliteNavicatMode, exact: true});
+    await expect(form.getByLabel(parameterZh.type + ' key', {exact: true})).toBeVisible();
+    await expect(mode).not.toBeChecked();
+    await expect(form.getByLabel(parameterZh.value + ' unused', {exact: true})).toHaveCount(0);
+    await mode.check();
+    await expect(form.getByLabel(parameterZh.value + ' unused', {exact: true})).toBeVisible();
+    await form.screenshot({path: info.outputPath('SQLite Navicat 命名参数.png')});
     await form.getByLabel(parameterZh.type + ' key', {exact: true}).selectOption('integer');
     await form.getByLabel(parameterZh.value + ' key', {exact: true}).fill('9223372036854775807');
     await form.getByLabel(parameterZh.value + ' unused', {exact: true}).fill('本例空页参数');
     await form.getByRole('button', {name: text.applyParameters, exact: true}).click();
+    await modal.getByRole('button', {name: text.parameters, exact: true}).click();
+    await expect(mode).toBeChecked();
+    await expect(form.getByLabel(parameterZh.value + ' unused', {exact: true})).toHaveValue('本例空页参数');
+    await form.getByRole('button', {name: zh.common.cancel, exact: true}).click();
     await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
     await modal.getByRole('button', {name: text.start, exact: true}).click();
     await expect(modal.getByRole('status')).toHaveText(text.done(206));

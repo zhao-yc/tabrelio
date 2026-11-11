@@ -47,6 +47,39 @@ type Harness = Awaited<ReturnType<typeof open>>;
 const execute = (h: Harness, sql: string, parameters: QueryParameter[] = [], extra: Partial<CommandMap['query.executeParameterized']['input']> = {}) => h.session.executeParameterized({ sessionId: h.session.sessionId, taskId: randomUUID(), sql, parameters, maxRows: 1000, ...extra });
 
 describe('SQLite原查询会话的类型参数脚本', () => {
+  it('SQLite 原生方括号列与 Navicat 显式值绑定各按当前模式执行', async () => {
+    const h = await open(fixture());
+    const sql = 'SELECT [$value] AS result FROM (SELECT 7 AS "$value");';
+    expect(h.session.parameterNames({sessionId: h.session.sessionId, sql}).names).toEqual([]);
+    expect((await execute(h, sql)).results[0].rows).toEqual([{c0: '7'}]);
+    const sqliteNavicatParameters = true as const;
+    const parameters: QueryParameter[] = [{name: 'value', type: 'text', value: "🚢'); DELETE FROM control;--\0尾"}];
+    expect(h.session.parameterNames({sessionId: h.session.sessionId, sql, sqliteNavicatParameters}))
+      .toMatchObject({names: ['value'], sqliteNavicatParameters});
+    const outcome = await execute(h, sql, parameters, {sqliteNavicatParameters});
+    expect(outcome.results[0]).toMatchObject({statement: sql, rows: [{c0: parameters[0].value}]});
+    expect(outcome.sqliteResultReceipts?.[0].sourceRange).toEqual({start: 0, end: sql.length});
+    expect(h.events.filter(event => event.executionSql).at(-1)?.executionSql).toBe(sql.slice(0, -1));
+    expect(h.process.sent.filter(frame => frame.kind === 'execute').at(-1)).toMatchObject({
+      sql: 'SELECT  :value  AS result FROM (SELECT 7 AS "$value");', namedParameters: {':value': parameters[0].value},
+    });
+  });
+  it.each([false, true])('失败后是否继续为 %s 时定位到原模板，成功结果保留占位符', async continueOnError => {
+    const h = await open(fixture());
+    const before = "SELECT '🚢',[$v];", failed = 'SELEC [$v]', after = 'SELECT :v,[$v]';
+    const sql = before + '\r\n' + failed + ';\r\n' + after;
+    const params: QueryParameter[] = [{name: 'v', type: 'integer', value: '42'}];
+    const result = await execute(h, sql, params, {sqliteNavicatParameters: true, continueOnError});
+    const start = sql.indexOf(failed);
+    expect(result.failure?.sourceRange).toEqual({start, end: start + failed.length + Number(continueOnError)});
+    expect(result.results.map(value => value.statement)).toEqual(continueOnError ? [before, after] : [before]);
+    expect(result.results[0].rows).toEqual([{c0: '🚢', c1: '42'}]);
+    if (continueOnError) expect(result.results[1].rows).toEqual([{c0: '42', c1: '42'}]);
+    const currentStatement = {offset: sql.indexOf(after)};
+    const current = await execute(h, sql, params, {sqliteNavicatParameters: true, currentStatement});
+    expect(current.results[0].statement).toBe(after);
+    expect(current.sqliteResultReceipts?.[0].sourceRange).toEqual({start: currentStatement.offset, end: sql.length});
+  });
   it('识别不建立任务或投递SQL，九类型多语句真实绑定、重复名和隐私模板保持', async () => {
     const profile = fixture(), h = await open(profile), sql = 'INSERT INTO subject VALUES(:i,:t,:d,:b,:n,:yes,:day,:stamp,:duration); SELECT :i,:t,:d,hex(:b),:n,typeof(:yes),:day,:stamp,:duration,:i;', baseline = h.process.sent.length;
     expect(h.session.parameterNames({ sessionId: h.session.sessionId, sql })).toMatchObject({ dialect: 'sqlite', names: ['i', 't', 'd', 'b', 'n', 'yes', 'day', 'stamp', 'duration'], maxDecimalScale: 38 }); expect(h.process.sent).toHaveLength(baseline); expect(h.events).toEqual([]);

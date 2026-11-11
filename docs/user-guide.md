@@ -1168,6 +1168,8 @@ MySQL 和 MariaDB 的查询窗口也可选择「Excel（XLSX）：每个行结�
 
 MySQL 和 MariaDB 的「参数执行」及「新执行并完整导出」也识别 `[$name]`。例如 `SELECT [$id], :id;` 只需填一次 `id`。两种写法均使用表单中的参数类型和值，历史保留原模板。MariaDB 的 `MSSQL` 会话模式将方括号用作标识符引号，值参数使用 `:name`。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters)
 
+在 SQLite 的「参数执行」「参数执行当前语句」或完整查询导出的参数表单中，勾选「识别 Navicat 命名参数」即可使用 `[$name]`，与 `:name` 共享同名值。开关默认关闭，SQLite 仍可用 `[$name]` 引用同名列。开启后可用双引号引用该列，例如 `"$name"`。查询结果和历史保留原模板，Excel 导出的各工作表共用填写的同名参数值。[SQLite 标识符引号](https://www.sqlite.org/lang_keywords.html)
+
 ```sql
 SELECT :id AS id, :keyword AS keyword, :id AS repeated_id;
 ```

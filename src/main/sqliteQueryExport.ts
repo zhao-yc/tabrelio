@@ -5,7 +5,7 @@ import { resultExportColumns } from '../shared/resultExport';
 import { createExcelWorkbookWriter } from '../engine/excelFiles';
 import { csvExportDelimiter } from '../shared/csvExport';
 import { csvCell, csvHeader } from '../engine/files';
-import { sqliteNamedParameterNames, sqliteParameterInfo } from '../engine/sqlite/parameters';
+import { sqliteNamedParameterNames, sqliteParameterInfo, sqliteParameterPlan } from '../engine/sqlite/parameters';
 import { sqliteStatementRanges } from '../engine/sqlite/currentStatement';
 import { EXCEL_LIMITS } from '../shared/excelTransfer';
 import { sqliteLeadingKeyword } from '../shared/sqliteStatementScanner';
@@ -30,23 +30,23 @@ function sqliteQueryExportStatements(sql: string, workbook = false) {
 }
 
 /** 工作簿内重复名称只询问一次，执行时每条语句只绑定实际引用的值。 */
-export function sqliteQueryExportParameterNames(sql: string, workbook = false): QueryParameterNames {
+export function sqliteQueryExportParameterNames(sql: string, workbook = false, navicat = false): QueryParameterNames {
   sqliteQueryExportStatements(sql, workbook);
-  return sqliteParameterInfo(sql);
+  return sqliteParameterInfo(sql, navicat);
 }
 
 /** 打开源库前核对全部语句和参数。每条语句只发送原生驱动要求的实际绑定。 */
 export function sqliteQueryExportPlan(input: SqliteQueryExportInput) {
   const workbook = input.format === 'xlsx';
   const statements = sqliteQueryExportStatements(input.sql, workbook);
-  const names = sqliteNamedParameterNames(input.sql);
+  const {sql, names} = sqliteParameterPlan(input.sql, input.sqliteNavicatParameters);
   const values = validateSqliteQueryParameters(input.parameters ?? []);
-  if (values.size !== names.length || names.some(name => !values.has(name))) throw Error('SQLite 导出参数必须完整匹配模板中的 :name');
-  return statements.map(part => ({
-    sql: workbook ? part.sql : input.sql,
-    namedParameters: Object.fromEntries((workbook && statements.length > 1 ? sqliteNamedParameterNames(part.sql) : names)
-      .map(name => [':' + name, values.get(name)!])) as Record<string, SqliteValue>,
-  }));
+  if (values.size !== names.length || names.some(name => !values.has(name))) throw Error('SQLite 导出参数必须完整匹配模板中的参数名称');
+  return statements.map(part => {
+    const statement = workbook ? sql.slice(part.start, part.end) : sql;
+    const used = workbook && statements.length > 1 ? sqliteNamedParameterNames(statement) : names;
+    return {sql: statement, namedParameters: Object.fromEntries(used.map(name => [':' + name, values.get(name)!])) as Record<string, SqliteValue>};
+  });
 }
 
 /** 全部工作表沿同一物理只读连接。文件只暂存，由外层在原进程退出后发布。 */

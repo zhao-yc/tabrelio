@@ -6,7 +6,7 @@ import { sqliteDriverLimits, type SqliteCancellation, type SqliteStatementResult
 import { currentSqliteStatement, sqliteStatementRanges } from '../engine/sqlite/currentStatement';
 import { sqliteExplainSource } from '../engine/sqlite/explainSource';
 import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
-import { sqliteNamedParameterNames, sqliteParameterInfo } from '../engine/sqlite/parameters';
+import { sqliteParameterInfo, sqliteParameterPlan } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 import { validSqliteStatementTimeout } from '../shared/sqliteStatementTimeout';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
@@ -19,7 +19,7 @@ import { continueSqliteScript } from './sqliteContinueOnError';
 type ExecuteInput = CommandMap['query.execute']['input'];
 type ExplainInput = CommandMap['query.explain']['input'];
 type ParameterInput = CommandMap['query.executeParameterized']['input'];
-interface RunOptions { single: boolean; sourceRange?: { start: number; end: number }; explainView?: 'tree' | 'table'; namedParameters?: Record<string, SqliteValue>; parameterRanges?: { start: number; end: number }[]; continueRanges?: SqlStatementRange[]; }
+interface RunOptions { single: boolean; sourceRange?: { start: number; end: number }; explainView?: 'tree' | 'table'; namedParameters?: Record<string, SqliteValue>; parameterRanges?: { start: number; end: number }[]; continueRanges?: SqlStatementRange[]; originalSql?: string; }
 type SessionState = CommandMap['query.sessionState']['output'];
 type TransactionInput = CommandMap['query.transaction']['input'];
 export type SqliteCompletionState = Omit<CompletionSessionState, 'dialect'> & { dialect: 'sqlite' };
@@ -126,7 +126,7 @@ export class SqliteQuerySession {
   /** 参数识别只用SQLite完整词法与原会话身份；不prepare用户模板、不建立任务或读取MySQL模式。 */
   parameterNames(input: CommandMap['query.parameterNames']['input']): CommandMap['query.parameterNames']['output'] {
     this.available(input.sessionId);
-    return sqliteParameterInfo(this.locateCurrent(input)?.sql ?? input.sql);
+    return sqliteParameterInfo(this.locateCurrent(input)?.sql ?? input.sql, input.sqliteNavicatParameters);
   }
 
   /** 全组值及完整脚本先验证，再原生绑定；所有前序结果及事务均归原物理会话，不重放部分写入。 */
@@ -137,21 +137,23 @@ export class SqliteQuerySession {
     if (input.collectStatus === true) throw Error('SQLite 参数查询不支持 MySQL 协议流量统计，本次未发送 SQL');
     const selected = this.locateCurrent(input);
     const sql = selected?.sql ?? input.sql;
-    const names = sqliteNamedParameterNames(sql), values = validateSqliteQueryParameters(input.parameters);
+    const {sql: executionSql, names} = sqliteParameterPlan(sql, input.sqliteNavicatParameters);
+    const values = validateSqliteQueryParameters(input.parameters);
     if (values.size !== names.length || names.some(name => !values.has(name))) throw Error('SQLite参数必须准确覆盖模板全部名称，不接受缺少或额外的参数');
     const namedParameters: Record<string, SqliteValue> = Object.create(null);
     for (const name of names) namedParameters[':' + name] = values.get(name)!;
-    if (selected) return this.run(input, sql, {single: true, namedParameters, sourceRange: {start: selected.start, end: selected.end}});
+    const original = executionSql === sql ? {} : {originalSql: sql};
+    if (selected) return this.run(input, executionSql, {single: true, namedParameters, ...original, sourceRange: {start: selected.start, end: selected.end}});
     const ranges = sqliteStatementRanges(sql);
     const parameterRanges = ranges.map(range => ({start: range.start, end: range.end}));
-    return this.run(input, sql, {single: false, namedParameters, parameterRanges,
+    return this.run(input, executionSql, {single: false, namedParameters, parameterRanges, ...original,
       ...(input.continueOnError === true ? {continueRanges: ranges} : {})});
   }
 
   /** 查询与计划共用同一active任务、ACK、预算、原生终态和通知失效保护，不能绕开会话忙态或重放。 */
   private async run(input: Pick<ExecuteInput, 'taskId' | 'maxRows' | 'sqliteStatementTimeoutMs'>, sql: string, options: RunOptions): Promise<QueryOutcome> {
     // 任何明确执行均撤销此前目录建议，即使它最终报错或回滚；目录短读本身不推进此修订。
-    const {continueRanges} = options, {sqliteStatementTimeoutMs: statementTimeoutMs} = input;
+    const {continueRanges, originalSql} = options, {sqliteStatementTimeoutMs: statementTimeoutMs} = input;
     if (statementTimeoutMs !== undefined && !validSqliteStatementTimeout(statementTimeoutMs)) throw Error('SQLite 语句超时设置无效');
     if (continueRanges && !continueRanges.length) throw Error('SQLite 脚本中没有可执行语句');
     if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
@@ -189,7 +191,10 @@ export class SqliteQuerySession {
           const {producedRows, sourceRange} = fact.queryReceipt;
           receipts.push({...(ordinals ? {statementOrdinal: ordinals[index]} : {}), producedRows, changedRows: Number(changed), sourceRange: {start: base + sourceRange.start, end: base + sourceRange.end}});
         }
-        return { ...source, ...(!source.columns.length || changed > 0n ? { affectedRows: Number(changed) } : {}), truncated: source.truncated || fact.truncated,
+        // 编译前后偏移相同。原生回执确认边界后，结果 SQL 始终按用户原模板展示。
+        const range = fact.queryReceipt?.sourceRange;
+        const statement = originalSql !== undefined && range ? originalSql.slice(range.start, Math.min(range.end, range.start + 32768)) : source.statement;
+        return { ...source, statement, ...(!source.columns.length || changed > 0n ? { affectedRows: Number(changed) } : {}), truncated: source.truncated || fact.truncated,
           elapsedMs: fact.queryReceipt?.elapsedMs ?? performance.now() - operation.started };
       });
       const completedOrigins = origins.slice(0, facts.length);
@@ -201,7 +206,10 @@ export class SqliteQuerySession {
       if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
       // SQLite列可逐行改变存储类型，不能把声明亲和性伪装成结果中每个单元格的真实类型。
       const columns = statement.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' }));
-      const result: QueryResult = { columns, rows: [], sqliteStorage: { version: 1, rows: [] }, truncated: false, elapsedMs: 0, statement: statement.sql.slice(0, 32768) };
+      const range = options.parameterRanges?.[statement.index];
+      const displaySql = originalSql === undefined ? statement.sql : options.single ? originalSql
+        : range && !continueRanges ? originalSql.slice(range.start, range.end) : '';
+      const result: QueryResult = { columns, rows: [], sqliteStorage: { version: 1, rows: [] }, truncated: false, elapsedMs: 0, statement: displaySql.slice(0, 32768) };
       operation.results.push(result);
       // 只用原生准备语句的来源元数据。缺失、过长和不完整的元组不能猜为表列。
       const origin = options.explainView ? [] : statement.columns.map(({ database, table, column }) =>
@@ -214,7 +222,7 @@ export class SqliteQuerySession {
       } else origins.push(null);
       titles.push(columns.length && validQueryResultTitle(statement.title) ? statement.title : null);
       // 续执行中，失败语句可能发出部分行；在原生确认前留在本次缓冲。
-      if (!continueRanges) event({ resultIndex: statement.index, columns, executionSql: statement.sql });
+      if (!continueRanges) event({ resultIndex: statement.index, columns, executionSql: displaySql });
     };
     const onBatch: NonNullable<SqliteExecuteOptions['onBatch']> = batch => {
       const result = operation.results[batch.index]; if (!result) throw Error('SQLite结果行缺少原始列定义');

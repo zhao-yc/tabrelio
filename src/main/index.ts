@@ -1359,7 +1359,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if ((command === 'query.parameterNames' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('此当前语句操作只用于原 SQLite 查询会话');
-  if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql, input.workbook);
+  if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
+      input.sqliteNavicatParameters !== undefined && !broker.isSqliteSession(input.sessionId))
+    throw Error('此 Navicat 参数模式只用于原 SQLite 查询会话');
+  if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql, input.workbook, input.sqliteNavicatParameters);
   if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.')) {
     const session = sessions.get(input.sessionId);
     // 会话能力保留原事务和临时对象来源，仅允许创建该会话的真实文档发起。

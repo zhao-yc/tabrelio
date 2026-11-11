@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-11 源码增量。SQLite 参数执行、当前语句及完整查询导出可显式识别 `[$name]`，与 `:name` 共用同名绑定。默认保留 SQLite 方括号标识符语义，定位和历史使用原模板。Q05 和 Q06 仍为部分覆盖。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters) [SQLite 标识符引号](https://www.sqlite.org/lang_keywords.html)
+
 2026-11-11 源码增量。MySQL 和 MariaDB 的参数执行与完整流式导出支持 `[$name]`，可与 `:name` 共享同名值。MariaDB 的 MSSQL 会话模式保留方括号标识符语义。Q05 和 Q06 仍为部分覆盖。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters)
 
 2026-11-11 源码增量。PostgreSQL 查询执行与完整查询导出识别 `[$name]` 值参数，重复名称在查询及多工作表导出中共享一次输入。执行通过原生协议绑定，结果定位保留原模板。Q06、Q05 仍为部分覆盖。[Navicat 查询参数手册](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/query_results.html#query-parameters)

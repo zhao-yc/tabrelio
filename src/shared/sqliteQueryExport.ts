@@ -19,7 +19,8 @@ export function sqliteCurrentQueryExportSource(source: string, offset: number): 
 }
 
 const sql = z.string().min(1).max(queryParameterLimits.sqlBytes);
-export const sqliteQueryExportSourceSchema = z.object({ sql, workbook: z.literal(true).optional() }).strict();
+const sqliteNavicatParameters = z.literal(true).optional();
+export const sqliteQueryExportSourceSchema = z.object({ sql, workbook: z.literal(true).optional(), sqliteNavicatParameters }).strict();
 export type SqliteQueryExportSource = z.infer<typeof sqliteQueryExportSourceSchema>;
 const parameters = z.array(z.object({
   name: z.string().max(64), type: z.enum(queryParameterTypes), value: z.string().max(queryParameterLimits.valueBytes).optional(),
@@ -45,7 +46,7 @@ export const sqliteQueryExportSchema = z.object({
   connectionId: sqliteTableExportSchema.shape.connectionId, taskId: sqliteTableExportSchema.shape.taskId,
   fileToken: sqliteTableExportSchema.shape.fileToken, encoding: sqliteTableExportSchema.shape.encoding,
   sql, format: z.enum(['csv', 'json', 'xlsx', 'sql', ...dataFileFormats]), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
-  parameters: parameters.optional(), insertTarget: sqliteQueryInsertTargetSchema.optional(),
+  parameters: parameters.optional(), sqliteNavicatParameters, insertTarget: sqliteQueryInsertTargetSchema.optional(),
 }).strict()
   .refine(validTxtExport, txtExportZh.invalid)
   .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
